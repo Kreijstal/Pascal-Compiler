@@ -846,84 +846,6 @@ static void debug_check_type_presence(Tree_t *target)
         check_id, in_interface, in_implementation, target->type);
 }
 
-static char *find_include_file(const char *filename)
-{
-    if (filename == NULL)
-        return NULL;
-
-    if (access(filename, R_OK) == 0)
-        return strdup(filename);
-
-    int count = 0;
-    const char *const *paths = pascal_frontend_get_include_paths(&count);
-    if (paths == NULL || count <= 0)
-        return NULL;
-
-    char buf[PATH_MAX];
-    for (int i = 0; i < count; ++i)
-    {
-        if (paths[i] == NULL)
-            continue;
-        int written = snprintf(buf, sizeof(buf), "%s/%s", paths[i], filename);
-        if (written <= 0 || written >= (int)sizeof(buf))
-            continue;
-        if (access(buf, R_OK) == 0)
-            return strdup(buf);
-    }
-
-    return NULL;
-}
-
-static void merge_objpash_into_system(Tree_t *system_tree)
-{
-    if (system_tree == NULL || system_tree->type != TREE_UNIT)
-        return;
-
-    char *objpash_path = find_include_file("objpash.inc");
-    if (objpash_path == NULL)
-        return;
-
-    char tmp_template[] = "/tmp/kgpc_objpash_XXXXXX.pas";
-    int fd = mkstemps(tmp_template, 4);
-    if (fd < 0)
-    {
-        free(objpash_path);
-        return;
-    }
-
-    FILE *tmp = fdopen(fd, "w");
-    if (tmp == NULL)
-    {
-        close(fd);
-        unlink(tmp_template);
-        free(objpash_path);
-        return;
-    }
-
-    fprintf(tmp, "unit kgpc_objpash_import;\n");
-    fprintf(tmp, "interface\n");
-    fprintf(tmp, "{$I %s}\n", objpash_path);
-    fprintf(tmp, "implementation\n");
-    fprintf(tmp, "end.\n");
-    fclose(tmp);
-
-    Tree_t *obj_tree = NULL;
-    if (parse_pascal_file(tmp_template, &obj_tree, true) &&
-        obj_tree != NULL && obj_tree->type == TREE_UNIT)
-    {
-        mark_unit_type_decls(obj_tree->tree_data.unit_data.interface_type_decls, 1);
-        system_tree->tree_data.unit_data.interface_type_decls =
-            ConcatList(system_tree->tree_data.unit_data.interface_type_decls,
-                obj_tree->tree_data.unit_data.interface_type_decls);
-        obj_tree->tree_data.unit_data.interface_type_decls = NULL;
-    }
-
-    if (obj_tree != NULL)
-        destroy_tree(obj_tree);
-    unlink(tmp_template);
-    free(objpash_path);
-}
-
 /* Merges a loaded unit's declarations into the target tree.
  * The target can be either a TREE_PROGRAM_TYPE or TREE_UNIT. */
 static void merge_unit_into_target(Tree_t *target, Tree_t *unit_tree)
@@ -1118,9 +1040,6 @@ static void load_unit(Tree_t *program, const char *unit_name, UnitSet *visited)
 
     load_units_from_list(program, unit_tree->tree_data.unit_data.interface_uses, visited);
     load_units_from_list(program, unit_tree->tree_data.unit_data.implementation_uses, visited);
-
-    if (pascal_identifier_equals(unit_name, "System"))
-        merge_objpash_into_system(unit_tree);
 
     merge_unit_into_program(program, unit_tree);
     destroy_tree(unit_tree);

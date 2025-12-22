@@ -3807,6 +3807,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
     const int max_int_regs = kgpc_max_int_arg_regs();
     const int max_sse_regs = kgpc_max_sse_arg_regs();
     int stack_slot_count = 0;
+    int is_external_c_function = 0;
     if (total_args > 0)
     {
         arg_infos = (ArgInfo *)calloc((size_t)total_args, sizeof(ArgInfo));
@@ -3822,6 +3823,14 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
 
     if (arg_start_index < 0)
         arg_start_index = 0;
+
+    if (proc_type != NULL && proc_type->kind == TYPE_KIND_PROCEDURE &&
+        proc_type->info.proc_info.definition != NULL)
+    {
+        Tree_t *def = proc_type->info.proc_info.definition;
+        if (def->type == TREE_SUBPROGRAM || def->type == TREE_SUBPROGRAM_PROC || def->type == TREE_SUBPROGRAM_FUNC)
+            is_external_c_function = def->tree_data.subprogram_data.cname_flag;
+    }
 
     arg_num = 0;
     while(args != NULL)
@@ -4157,20 +4166,6 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
              * instead of checking if the procedure name contains "cdecl" or "external".
              * The procedure name is just "inet_ntoa", not "inet_ntoa_cdecl_external".
              */
-            int is_external_c_function = 0;
-            if (proc_type != NULL && proc_type->kind == TYPE_KIND_PROCEDURE &&
-                proc_type->info.proc_info.definition != NULL)
-            {
-                Tree_t *def = proc_type->info.proc_info.definition;
-                /* External function declarations use TREE_SUBPROGRAM, while full definitions
-                 * use TREE_SUBPROGRAM_PROC or TREE_SUBPROGRAM_FUNC. We need to check all three. */
-                if (def->type == TREE_SUBPROGRAM || def->type == TREE_SUBPROGRAM_PROC || def->type == TREE_SUBPROGRAM_FUNC)
-                {
-                    is_external_c_function = def->tree_data.subprogram_data.cname_flag;
-                }
-            }
-
-            
             if (is_external_c_function && record_size <= 8)
             {
                 /* Load address of the record copy */
@@ -4320,16 +4315,16 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         {
             int use_sse = (arg_infos[i].expected_type == REAL_TYPE &&
                 !arg_infos[i].is_pointer_like);
-            if (g_current_codegen_abi == KGPC_TARGET_ABI_WINDOWS)
+            if (g_current_codegen_abi == KGPC_TARGET_ABI_WINDOWS && is_external_c_function)
             {
-                /* Windows x64: SSE and INT have separate register files, but
-                 * argument positions do not consume the other class. The first
-                 * integer arg uses RCX, the first real arg uses XMM0, etc. */
+                /* Windows x64 C ABI: argument slots are positional across classes.
+                 * The Nth argument uses RCX/RDX/R8/R9 or XMM0-3 based on its type. */
+                int reg_slot = arg_start_index + i;
                 if (use_sse)
                 {
                     arg_infos[i].assigned_class = ARG_CLASS_SSE;
-                    if (next_sse < max_sse_regs)
-                        arg_infos[i].assigned_index = next_sse++;
+                    if (reg_slot < max_sse_regs)
+                        arg_infos[i].assigned_index = reg_slot;
                     else
                     {
                         arg_infos[i].assigned_index = -1;
@@ -4340,8 +4335,8 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 else
                 {
                     arg_infos[i].assigned_class = ARG_CLASS_INT;
-                    if (next_gpr < max_int_regs)
-                        arg_infos[i].assigned_index = next_gpr++;
+                    if (reg_slot < max_int_regs)
+                        arg_infos[i].assigned_index = reg_slot;
                     else
                     {
                         arg_infos[i].assigned_index = -1;
