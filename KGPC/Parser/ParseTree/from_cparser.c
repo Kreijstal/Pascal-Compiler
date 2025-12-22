@@ -377,11 +377,18 @@ void from_cparser_disable_pending_specializations(void) {
 
 static ast_t *unwrap_pascal_node(ast_t *node);
 static struct Expression *convert_expression(ast_t *expr_node);
+static int convert_type_spec(ast_t *type_spec, char **type_id_out,
+                             struct RecordType **record_out, TypeInfo *type_info);
 static int extract_constant_int(struct Expression *expr, long long *out_value);
 static struct Expression *convert_set_literal(ast_t *set_node);
 static char *pop_last_identifier(ListNode_t **ids);
+static int resolve_const_int_from_ast(const char *identifier, ast_t *const_section, int fallback_value);
+static int evaluate_simple_const_expr(const char *expr, ast_t *const_section, int *result);
 static int resolve_enum_ordinal_from_ast(const char *identifier, ast_t *type_section);
 static int resolve_enum_type_range_from_ast(const char *type_name, ast_t *type_section, int *out_start, int *out_end);
+static ast_t *find_type_decl_in_section(ast_t *type_section, const char *type_name);
+static int resolve_array_type_info_from_ast(const char *type_name, ast_t *type_section, TypeInfo *out_info, int depth);
+static void resolve_array_bounds(TypeInfo *info, ast_t *type_section, ast_t *const_section, const char *id_for_error);
 static ast_t *find_node_by_type(ast_t *node, int target_type);
 
 
@@ -1624,6 +1631,143 @@ static int resolve_const_int_in_node(const char *identifier, ast_t *node,
     if (resolve_const_int_in_node(identifier, node->next, const_section, out_value, depth) == 0)
         return 0;
     return -1;
+}
+
+static ast_t *find_type_decl_in_section(ast_t *type_section, const char *type_name) {
+    if (type_section == NULL || type_name == NULL)
+        return NULL;
+
+    for (ast_t *type_decl = type_section->child; type_decl != NULL; type_decl = type_decl->next) {
+        if (type_decl->typ != PASCAL_T_TYPE_DECL)
+            continue;
+        ast_t *id_node = type_decl->child;
+        if (id_node != NULL && id_node->typ == PASCAL_T_IDENTIFIER && id_node->sym != NULL &&
+            id_node->sym->name != NULL && strcasecmp(id_node->sym->name, type_name) == 0) {
+            return type_decl;
+        }
+    }
+    return NULL;
+}
+
+static int resolve_array_type_info_from_ast(const char *type_name, ast_t *type_section, TypeInfo *out_info, int depth) {
+    if (type_name == NULL || type_section == NULL || out_info == NULL)
+        return -1;
+    if (depth > 16)
+        return -1;
+
+    ast_t *type_decl = find_type_decl_in_section(type_section, type_name);
+    if (type_decl == NULL)
+        return -1;
+
+    ast_t *spec_node = type_decl->child;
+    while (spec_node != NULL && spec_node->typ != PASCAL_T_TYPE_SPEC)
+        spec_node = spec_node->next;
+    if (spec_node == NULL)
+        return -1;
+
+    TypeInfo tmp_info = {0};
+    char *tmp_id = NULL;
+    struct RecordType *tmp_record = NULL;
+    int mapped = convert_type_spec(spec_node, &tmp_id, &tmp_record, &tmp_info);
+    if (tmp_record != NULL)
+        destroy_record_type(tmp_record);
+
+    if (tmp_info.is_array) {
+        *out_info = tmp_info;
+        if (tmp_id != NULL)
+            free(tmp_id);
+        return 0;
+    }
+
+    destroy_type_info_contents(&tmp_info);
+    if (tmp_id != NULL)
+        free(tmp_id);
+
+    ast_t *spec_child = spec_node->child;
+    spec_child = unwrap_pascal_node(spec_child);
+    if (spec_child != NULL && spec_child->typ == PASCAL_T_IDENTIFIER && spec_child->sym != NULL &&
+        spec_child->sym->name != NULL) {
+        return resolve_array_type_info_from_ast(spec_child->sym->name, type_section, out_info, depth + 1);
+    }
+
+    (void)mapped;
+    return -1;
+}
+
+static void resolve_array_bounds(TypeInfo *info, ast_t *type_section, ast_t *const_section, const char *id_for_error) {
+    if (info == NULL)
+        return;
+    if (info->start != 0 || info->end != 0)
+        return;
+    if (info->array_dimensions == NULL || info->array_dimensions->cur == NULL)
+        return;
+
+    char *range_str = (char *)info->array_dimensions->cur;
+    char *range_copy = strdup(range_str);
+    if (range_copy == NULL)
+        return;
+
+    char *sep = strstr(range_copy, "..");
+    if (sep != NULL) {
+        *sep = '\0';
+        char *start_id = range_copy;
+        char *end_id = sep + 2;
+
+        while (*start_id == ' ' || *start_id == '\t') start_id++;
+        while (*end_id == ' ' || *end_id == '\t') end_id++;
+        char *p = start_id + strlen(start_id) - 1;
+        while (p > start_id && (*p == ' ' || *p == '\t')) *p-- = '\0';
+        p = end_id + strlen(end_id) - 1;
+        while (p > end_id && (*p == ' ' || *p == '\t')) *p-- = '\0';
+
+        int start_ordinal = resolve_enum_ordinal_from_ast(start_id, type_section);
+        int end_ordinal = resolve_enum_ordinal_from_ast(end_id, type_section);
+        if (start_ordinal >= 0 && end_ordinal >= 0) {
+            info->start = start_ordinal;
+            info->end = end_ordinal;
+        } else {
+            int start_val;
+            if (evaluate_simple_const_expr(start_id, const_section, &start_val) == 0) {
+                info->start = start_val;
+            } else {
+                int resolved_start = resolve_const_int_from_ast(start_id, const_section, 0);
+                if (resolved_start != 0 || strcmp(start_id, "0") == 0) {
+                    info->start = resolved_start;
+                } else {
+                    char *endptr;
+                    long num = strtol(start_id, &endptr, 10);
+                    if (*endptr == '\0' && num >= INT_MIN && num <= INT_MAX)
+                        info->start = (int)num;
+                }
+            }
+
+            int end_val;
+            if (evaluate_simple_const_expr(end_id, const_section, &end_val) == 0) {
+                info->end = end_val;
+            } else {
+                int resolved_end = resolve_const_int_from_ast(end_id, const_section, 0);
+                if (resolved_end != 0 || strcmp(end_id, "0") == 0) {
+                    info->end = resolved_end;
+                } else {
+                    char *endptr;
+                    long num = strtol(end_id, &endptr, 10);
+                    if (*endptr == '\0' && num >= INT_MIN && num <= INT_MAX)
+                        info->end = (int)num;
+                }
+            }
+        }
+    } else {
+        int enum_start, enum_end;
+        if (resolve_enum_type_range_from_ast(range_str, type_section, &enum_start, &enum_end) == 0) {
+            info->start = enum_start;
+            info->end = enum_end;
+        } else if (id_for_error != NULL) {
+            fprintf(stderr, "ERROR: Could not resolve array index type '%s' for %s.\n",
+                    range_str, id_for_error);
+        }
+    }
+
+    free(range_copy);
 }
 
 static int resolve_const_int_in_section(const char *identifier, ast_t *const_section,
@@ -4157,90 +4301,9 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
     int start = type_info->start;
     int end = type_info->end;
     
-    /* If both start and end are 0, check if we need to resolve identifiers.
-     * The array_dimensions list contains:
-     * - A range string like "January..December" or "C_Low..C_High", OR
-     * - A single type identifier like "color" (for array[color] where color is an enum)
-     */
-    if (start == 0 && end == 0 && type_info->array_dimensions != NULL && 
-        type_info->array_dimensions->cur != NULL) {
-        char *range_str = (char *)type_info->array_dimensions->cur;
-        /* Parse the range string to extract identifiers */
-        char *range_copy = strdup(range_str);
-        if (range_copy != NULL) {
-            char *sep = strstr(range_copy, "..");
-            if (sep != NULL) {
-                *sep = '\0';
-                char *start_id = range_copy;
-                char *end_id = sep + 2;
-                
-                /* Trim leading/trailing whitespace from identifiers */
-                while (*start_id == ' ' || *start_id == '\t') start_id++;
-                while (*end_id == ' ' || *end_id == '\t') end_id++;
-                char *p = start_id + strlen(start_id) - 1;
-                while (p > start_id && (*p == ' ' || *p == '\t')) *p-- = '\0';
-                p = end_id + strlen(end_id) - 1;
-                while (p > end_id && (*p == ' ' || *p == '\t')) *p-- = '\0';
-                
-                /* Try to resolve as enum literals first */
-                int start_ordinal = resolve_enum_ordinal_from_ast(start_id, type_section);
-                int end_ordinal = resolve_enum_ordinal_from_ast(end_id, type_section);
-                
-                if (start_ordinal >= 0 && end_ordinal >= 0) {
-                    /* Successfully resolved as enum literals */
-                    start = start_ordinal;
-                    end = end_ordinal;
-                } else {
-                    /* Try to evaluate start as const expression */
-                    int start_val;
-                    if (evaluate_simple_const_expr(start_id, const_section, &start_val) == 0) {
-                        start = start_val;
-                    } else {
-                        /* Try to resolve as const integer identifier */
-                        int resolved_start = resolve_const_int_from_ast(start_id, const_section, 0);
-                        if (resolved_start != 0 || strcmp(start_id, "0") == 0) {
-                            start = resolved_start;
-                        } else {
-                            /* Try numeric parsing as fallback */
-                            char *endptr;
-                            long num = strtol(start_id, &endptr, 10);
-                            if (*endptr == '\0' && num >= INT_MIN && num <= INT_MAX)
-                                start = (int)num;
-                        }
-                    }
-                    
-                    /* Try to evaluate end as const expression */
-                    int end_val;
-                    if (evaluate_simple_const_expr(end_id, const_section, &end_val) == 0) {
-                        end = end_val;
-                    } else {
-                        /* Try to resolve as const integer identifier */
-                        int resolved_end = resolve_const_int_from_ast(end_id, const_section, 0);
-                        if (resolved_end != 0 || strcmp(end_id, "0") == 0) {
-                            end = resolved_end;
-                        } else {
-                            /* Try numeric parsing as fallback */
-                            char *endptr;
-                            long num = strtol(end_id, &endptr, 10);
-                            if (*endptr == '\0' && num >= INT_MIN && num <= INT_MAX)
-                                end = (int)num;
-                        }
-                    }
-                }
-            } else {
-                /* Single identifier - resolve as an enum type to get its range */
-                int enum_start, enum_end;
-                if (resolve_enum_type_range_from_ast(range_str, type_section, &enum_start, &enum_end) == 0) {
-                    start = enum_start;
-                    end = enum_end;
-                } else {
-                    fprintf(stderr, "ERROR: Could not resolve array index type '%s' for const %s.\n",
-                            range_str, *id_ptr);
-                }
-            }
-            free(range_copy);
-        }
-    }
+    resolve_array_bounds(type_info, type_section, const_section, *id_ptr);
+    start = type_info->start;
+    end = type_info->end;
     
     int expected_count = -1;
     if (end >= start)
@@ -4287,6 +4350,22 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
     list_builder_init(&stmt_builder);
 
     int index = start;
+    TypeInfo element_array_info = {0};
+    int element_is_array = 0;
+    if (type_info->element_type == UNKNOWN_TYPE && type_info->element_type_id != NULL) {
+        if (resolve_array_type_info_from_ast(type_info->element_type_id, type_section, &element_array_info, 0) == 0 &&
+            element_array_info.is_array) {
+            element_is_array = 1;
+            if (element_array_info.array_dimensions != NULL &&
+                element_array_info.array_dimensions->next != NULL) {
+                fprintf(stderr, "ERROR: Unsupported multi-dimensional array element for const %s.\n", *id_ptr);
+                destroy_type_info_contents(&element_array_info);
+                return -1;
+            }
+            resolve_array_bounds(&element_array_info, type_section, const_section, type_info->element_type_id);
+        }
+    }
+
     if (is_string_initializer) {
         const char *str = (tuple_node->sym != NULL) ? tuple_node->sym->name : NULL;
         if (str == NULL)
@@ -4304,7 +4383,80 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
         ast_t *element = tuple_node->child;
         while (element != NULL) {
             ast_t *unwrapped = unwrap_pascal_node(element);
-            
+
+            if (element_is_array) {
+                if (unwrapped == NULL || unwrapped->typ != PASCAL_T_TUPLE) {
+                    fprintf(stderr, "ERROR: Const array %s expects tuple initializer for element %d.\n",
+                            *id_ptr, index);
+                    destroy_list(stmt_builder.head);
+                    destroy_type_info_contents(&element_array_info);
+                    return -1;
+                }
+
+                int inner_start = element_array_info.start;
+                int inner_end = element_array_info.end;
+                int inner_expected = -1;
+                if (inner_end >= inner_start)
+                    inner_expected = inner_end - inner_start + 1;
+
+                int inner_actual = 0;
+                for (ast_t *inner = unwrapped->child; inner != NULL; inner = inner->next)
+                    ++inner_actual;
+
+                if (inner_expected >= 0 && inner_actual != inner_expected) {
+                    if (inner_start == 0 && inner_end == 0 &&
+                        element_array_info.array_dimensions != NULL &&
+                        element_array_info.array_dimensions->cur != NULL) {
+                        const char *range_str = (const char *)element_array_info.array_dimensions->cur;
+                        int has_alpha = 0;
+                        for (const char *p = range_str; p != NULL && *p != '\0'; ++p) {
+                            if (isalpha((unsigned char)*p)) {
+                                has_alpha = 1;
+                                break;
+                            }
+                        }
+                        if (has_alpha) {
+                            inner_end = inner_start + inner_actual - 1;
+                            inner_expected = inner_actual;
+                        }
+                    }
+                }
+
+                if (inner_expected >= 0 && inner_actual != inner_expected) {
+                    fprintf(stderr,
+                            "ERROR: Const array %s element %d initializer count %d does not match declared range %d..%d.\n",
+                            *id_ptr, index, inner_actual, inner_start, inner_end);
+                    destroy_list(stmt_builder.head);
+                    destroy_type_info_contents(&element_array_info);
+                    return -1;
+                }
+
+                int inner_index = inner_start;
+                for (ast_t *inner = unwrapped->child; inner != NULL; inner = inner->next) {
+                    ast_t *inner_unwrapped = unwrap_pascal_node(inner);
+                    struct Expression *rhs = convert_expression(inner_unwrapped);
+                    if (rhs == NULL) {
+                        fprintf(stderr, "ERROR: Unsupported const array element in %s[%d].\n", *id_ptr, index);
+                        destroy_list(stmt_builder.head);
+                        destroy_type_info_contents(&element_array_info);
+                        return -1;
+                    }
+
+                    struct Expression *outer_index_expr = mk_inum(element->line, index);
+                    struct Expression *base_expr = mk_varid(element->line, strdup(*id_ptr));
+                    struct Expression *outer_access = mk_arrayaccess(element->line, base_expr, outer_index_expr);
+                    struct Expression *inner_index_expr = mk_inum(element->line, inner_index);
+                    struct Expression *lhs = mk_arrayaccess(element->line, outer_access, inner_index_expr);
+                    struct Statement *assign = mk_varassign(element->line, element->col, lhs, rhs);
+                    list_builder_append(&stmt_builder, assign, LIST_STMT);
+                    ++inner_index;
+                }
+
+                ++index;
+                element = element->next;
+                continue;
+            }
+
             /* Special handling for record constructors in const arrays */
             if (unwrapped != NULL && unwrapped->typ == PASCAL_T_RECORD_CONSTRUCTOR) {
                 /* Generate field assignments for each field in the record constructor */
@@ -4365,6 +4517,8 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
             element = element->next;
         }
     }
+
+    destroy_type_info_contents(&element_array_info);
 
     ListNode_t *assignments = list_builder_finish(&stmt_builder);
     struct Statement *initializer = NULL;

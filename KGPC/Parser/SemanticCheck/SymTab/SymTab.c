@@ -548,6 +548,36 @@ int AddBuiltinStringConst(SymTab_t *symtab, const char *id, const char *value)
     return result;
 }
 
+int AddBuiltinIntConst(SymTab_t *symtab, const char *id, long long value)
+{
+    assert(symtab != NULL);
+    assert(id != NULL);
+
+    int type_tag = INT_TYPE;
+    if (value > INT_MAX || value < INT_MIN)
+        type_tag = LONGINT_TYPE;
+
+    KgpcType *type = create_primitive_type(type_tag);
+    if (type == NULL)
+        return 1;
+
+    int result = AddIdentToTable(symtab->builtins, (char *)id, NULL, HASHTYPE_CONST, type);
+    if (result == 0)
+    {
+        HashNode_t *node = FindIdentInTable(symtab->builtins, (char *)id);
+        if (node != NULL)
+        {
+            node->is_constant = 1;
+            node->const_int_value = value;
+        }
+    }
+    else
+    {
+        destroy_kgpc_type(type);
+    }
+    return result;
+}
+
 /* Pops the current scope */
 void PopScope(SymTab_t *symtab)
 {

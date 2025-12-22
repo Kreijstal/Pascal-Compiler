@@ -28,16 +28,16 @@ begin
 end;
 
 var
-  comp: TComparer;
+  comparer: TComparer;
   proc: TProcessor;
 
 begin
   { Assign function pointers }
-  comp := @SimpleComparer;
+  comparer := @SimpleComparer;
   proc := @SimpleProcessor;
   
   { Call through function pointers }
-  WriteLn('Comparer result: ', comp(nil, nil));
+  WriteLn('Comparer result: ', comparer(nil, nil));
   proc(nil);
   
   WriteLn('Test completed');

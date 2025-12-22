@@ -6,7 +6,7 @@ uses
     ctypes;
 
 type
-    TDateTime = Int64;
+    TDateTime = System.TDateTime;
     AnsiString = string;
     PChar = ^Char;
     Uint64 = cuint64;
@@ -33,7 +33,6 @@ const
 
 procedure Sleep(milliseconds: integer);
 function GetTickCount64: longint;
-function MillisecondsBetween(startTick, endTick: TDateTime): Int64;
 function Now: TDateTime;
 function IntToStr(value: longint): AnsiString;
 function UpperCase(const S: AnsiString): AnsiString;
@@ -92,8 +91,8 @@ function kgpc_file_exists(path: PChar): Integer; external;
 function kgpc_directory_exists(path: PChar): Integer; external;
 procedure kgpc_sleep_ms(milliseconds: integer); external;
 function kgpc_get_tick_count64: NativeUInt; external;
-function kgpc_now: Int64; external;
-function kgpc_format_datetime(format: PChar; datetime_ms: Int64): AnsiString; external;
+function kgpc_now: Double; external;
+function kgpc_format_datetime(format: PChar; datetime: Double): AnsiString; external;
 function kgpc_string_compare(lhs: PChar; rhs: PChar): Integer; external;
 function kgpc_string_pos(SubStr: PChar; S: PChar): Integer; external;
 function kgpc_extract_file_path(path: PChar): AnsiString; external;
@@ -146,14 +145,6 @@ end;
 function GetTickCount64: longint;
 begin
     GetTickCount64 := kgpc_get_tick_count64();
-end;
-
-function MillisecondsBetween(startTick, endTick: TDateTime): Int64;
-begin
-    if endTick >= startTick then
-        MillisecondsBetween := endTick - startTick
-    else
-        MillisecondsBetween := startTick - endTick;
 end;
 
 function Now: TDateTime;
@@ -378,14 +369,8 @@ begin
 end;
 
 function FormatDateTime(const FormatStr: string; DateTime: TDateTime): AnsiString;
-var
-    dt_value: Int64;
 begin
-    if DateTime < 0 then
-        dt_value := 0
-    else
-        dt_value := DateTime;
-    FormatDateTime := kgpc_format_datetime(ToPChar(FormatStr), dt_value);
+    FormatDateTime := kgpc_format_datetime(ToPChar(FormatStr), DateTime);
 end;
 
 function DateTimeToStr(DateTime: TDateTime): AnsiString;
@@ -400,9 +385,8 @@ end;
 
 function UnixToDateTime(UnixTime: Int64): TDateTime;
 begin
-    { Unix time is seconds since 1970-01-01 00:00:00 UTC }
-    { TDateTime is milliseconds since 1970-01-01 00:00:00 UTC }
-    UnixToDateTime := UnixTime * 1000;
+    { FPC: seconds since 1970-01-01 -> TDateTime days since 1899-12-30 }
+    UnixToDateTime := (UnixTime / 86400.0) + 25569.0;
 end;
 
 function Format(const Fmt: string; const Args: array of const): string;

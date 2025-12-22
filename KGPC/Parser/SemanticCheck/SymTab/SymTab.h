@@ -86,6 +86,9 @@ int AddBuiltinRealConst(SymTab_t *symtab, const char *id, double value);
 /* Adds a built-in string constant */
 int AddBuiltinStringConst(SymTab_t *symtab, const char *id, const char *value);
 
+/* Adds a built-in integer constant */
+int AddBuiltinIntConst(SymTab_t *symtab, const char *id, long long value);
+
 /* Searches for an identifier and sets the hash_return that contains the id and type information */
 /* Returns -1 and sets hash_return to NULL if not found */
 /* Returns >= 0 tells what scope level it was found at */

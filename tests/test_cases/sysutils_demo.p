@@ -1,6 +1,6 @@
 program sysutils_demo;
 
-uses SysUtils;
+uses SysUtils, DateUtils;
 
 var
     startTick: longint;
@@ -13,9 +13,9 @@ begin
     startTick := GetTickCount64();
     Sleep(1);
     afterSleep := GetTickCount64();
-    diff := MillisecondsBetween(42, 10);
+    diff := MillisecondsBetween(0.0, 32.0 / 86400000.0);
     writeln(diff);
-    if MillisecondsBetween(startTick, afterSleep) < 0 then
+    if (afterSleep - startTick) < 0 then
         sleptOk := 0
     else
         sleptOk := 1;

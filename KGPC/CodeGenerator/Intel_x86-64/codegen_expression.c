@@ -216,15 +216,35 @@ static int builtin_arg_expects_string(const char *procedure_name, int arg_index)
     return 0;
 }
 
-static int codegen_param_expected_type(Tree_t *decl)
+static int codegen_param_expected_type(Tree_t *decl, SymTab_t *symtab)
 {
     if (decl == NULL)
         return UNKNOWN_TYPE;
 
+    HashNode_t *type_node = NULL;
+    char *type_id = NULL;
+
     if (decl->type == TREE_VAR_DECL)
-        return decl->tree_data.var_decl_data.type;
+    {
+        type_id = decl->tree_data.var_decl_data.type_id;
+        if (decl->tree_data.var_decl_data.type != UNKNOWN_TYPE)
+            return decl->tree_data.var_decl_data.type;
+    }
     if (decl->type == TREE_ARR_DECL)
-        return decl->tree_data.arr_decl_data.type;
+    {
+        type_id = decl->tree_data.arr_decl_data.type_id;
+        if (decl->tree_data.arr_decl_data.type != UNKNOWN_TYPE)
+            return decl->tree_data.arr_decl_data.type;
+    }
+
+    if (type_id != NULL && symtab != NULL &&
+        FindIdent(&type_node, symtab, type_id) >= 0 && type_node != NULL &&
+        type_node->type != NULL)
+    {
+        int resolved = kgpc_type_get_legacy_tag(type_node->type);
+        if (resolved != UNKNOWN_TYPE)
+            return resolved;
+    }
 
     return UNKNOWN_TYPE;
 }
@@ -3787,6 +3807,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
     const int max_int_regs = kgpc_max_int_arg_regs();
     const int max_sse_regs = kgpc_max_sse_arg_regs();
     int stack_slot_count = 0;
+    int is_external_c_function = 0;
     if (total_args > 0)
     {
         arg_infos = (ArgInfo *)calloc((size_t)total_args, sizeof(ArgInfo));
@@ -3802,6 +3823,14 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
 
     if (arg_start_index < 0)
         arg_start_index = 0;
+
+    if (proc_type != NULL && proc_type->kind == TYPE_KIND_PROCEDURE &&
+        proc_type->info.proc_info.definition != NULL)
+    {
+        Tree_t *def = proc_type->info.proc_info.definition;
+        if (def->type == TREE_SUBPROGRAM || def->type == TREE_SUBPROGRAM_PROC || def->type == TREE_SUBPROGRAM_FUNC)
+            is_external_c_function = def->tree_data.subprogram_data.cname_flag;
+    }
 
     arg_num = 0;
     while(args != NULL)
@@ -3850,7 +3879,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         /* Also check if we're passing a static array argument (even if not declared as var param) */
         int is_array_arg = (arg_expr != NULL && arg_expr->is_array_expr && !arg_expr->array_is_dynamic);
 
-        int expected_type = codegen_param_expected_type(formal_arg_decl);
+        int expected_type = codegen_param_expected_type(formal_arg_decl, ctx->symtab);
         if (expected_type == UNKNOWN_TYPE && procedure_name != NULL)
             expected_type = codegen_expected_type_for_builtin(procedure_name);
         if (expected_type == UNKNOWN_TYPE && procedure_name != NULL &&
@@ -4137,20 +4166,6 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
              * instead of checking if the procedure name contains "cdecl" or "external".
              * The procedure name is just "inet_ntoa", not "inet_ntoa_cdecl_external".
              */
-            int is_external_c_function = 0;
-            if (proc_type != NULL && proc_type->kind == TYPE_KIND_PROCEDURE &&
-                proc_type->info.proc_info.definition != NULL)
-            {
-                Tree_t *def = proc_type->info.proc_info.definition;
-                /* External function declarations use TREE_SUBPROGRAM, while full definitions
-                 * use TREE_SUBPROGRAM_PROC or TREE_SUBPROGRAM_FUNC. We need to check all three. */
-                if (def->type == TREE_SUBPROGRAM || def->type == TREE_SUBPROGRAM_PROC || def->type == TREE_SUBPROGRAM_FUNC)
-                {
-                    is_external_c_function = def->tree_data.subprogram_data.cname_flag;
-                }
-            }
-
-            
             if (is_external_c_function && record_size <= 8)
             {
                 /* Load address of the record copy */
@@ -4300,16 +4315,16 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         {
             int use_sse = (arg_infos[i].expected_type == REAL_TYPE &&
                 !arg_infos[i].is_pointer_like);
-            if (g_current_codegen_abi == KGPC_TARGET_ABI_WINDOWS)
+            if (g_current_codegen_abi == KGPC_TARGET_ABI_WINDOWS && is_external_c_function)
             {
-                /* Windows x64: SSE and INT have separate register files, but
-                 * argument positions do not consume the other class. The first
-                 * integer arg uses RCX, the first real arg uses XMM0, etc. */
+                /* Windows x64 C ABI: argument slots are positional across classes.
+                 * The Nth argument uses RCX/RDX/R8/R9 or XMM0-3 based on its type. */
+                int reg_slot = arg_start_index + i;
                 if (use_sse)
                 {
                     arg_infos[i].assigned_class = ARG_CLASS_SSE;
-                    if (next_sse < max_sse_regs)
-                        arg_infos[i].assigned_index = next_sse++;
+                    if (reg_slot < max_sse_regs)
+                        arg_infos[i].assigned_index = reg_slot;
                     else
                     {
                         arg_infos[i].assigned_index = -1;
@@ -4320,8 +4335,8 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 else
                 {
                     arg_infos[i].assigned_class = ARG_CLASS_INT;
-                    if (next_gpr < max_int_regs)
-                        arg_infos[i].assigned_index = next_gpr++;
+                    if (reg_slot < max_int_regs)
+                        arg_infos[i].assigned_index = reg_slot;
                     else
                     {
                         arg_infos[i].assigned_index = -1;

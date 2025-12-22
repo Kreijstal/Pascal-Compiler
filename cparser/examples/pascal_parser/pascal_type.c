@@ -31,6 +31,7 @@ static combinator_t* make_generic_type_prefix(void) {
 }
 
 static combinator_t* create_record_field_type_spec(void);
+static combinator_t* create_record_method_directives(void);
 
 static combinator_t* create_nested_method_directives(void) {
     combinator_t* directive = multi(new_combinator(), PASCAL_T_NONE,
@@ -773,15 +774,38 @@ combinator_t* class_type(tag_t tag) {
         sep_by(create_type_ref_parser(), token(match(",")))
     ));
 
-    combinator_t* class_parser = seq(new_combinator(), tag,
+    combinator_t* class_modifier = multi(new_combinator(), PASCAL_T_NONE,
+        token(keyword_ci("sealed")),
+        token(keyword_ci("abstract")),
+        token(keyword_ci("helper")),
+        NULL
+    );
+    combinator_t* class_modifiers = many(class_modifier);
+
+    combinator_t* class_full = seq(new_combinator(), tag,
         token(keyword_ci("class")),
+        class_modifiers,
         parent_class,  // optional parent class
         class_body_parser,
         token(keyword_ci("end")),
         NULL
     );
 
-    return map(class_parser, build_class_ast);
+    combinator_t* class_forward = seq(new_combinator(), tag,
+        token(keyword_ci("class")),
+        class_modifiers,
+        parent_class,
+        peek(token(match(";"))),
+        NULL
+    );
+
+    combinator_t* class_choice = multi(new_combinator(), 0,
+        class_forward,
+        class_full,
+        NULL
+    );
+
+    return map(class_choice, build_class_ast);
 }
 
 combinator_t* interface_type(tag_t tag) {
@@ -844,7 +868,7 @@ combinator_t* interface_type(tag_t tag) {
         sep_by(create_type_ref_parser(), token(match(",")))
     ));
 
-    combinator_t* interface_parser = seq(new_combinator(), tag,
+    combinator_t* interface_full = seq(new_combinator(), tag,
         token(keyword_ci("interface")),
         parent_interface,  // optional parent interface
         interface_body_parser,
@@ -852,7 +876,20 @@ combinator_t* interface_type(tag_t tag) {
         NULL
     );
 
-    return map(interface_parser, build_class_ast);  // Reuse same AST builder
+    combinator_t* interface_forward = seq(new_combinator(), tag,
+        token(keyword_ci("interface")),
+        parent_interface,
+        peek(token(match(";"))),
+        NULL
+    );
+
+    combinator_t* interface_choice = multi(new_combinator(), 0,
+        interface_forward,
+        interface_full,
+        NULL
+    );
+
+    return map(interface_choice, build_class_ast);  // Reuse same AST builder
 }
 
 // Parser function for type_name with optional [size] subscript for string types
@@ -957,6 +994,25 @@ static combinator_t* create_record_field_type_spec(void) {
         token(cident(PASCAL_T_IDENTIFIER)),
         NULL
     );
+}
+
+static combinator_t* create_record_method_directives(void) {
+    combinator_t* record_method_directive_keyword = multi(new_combinator(), PASCAL_T_NONE,
+        token(create_keyword_parser("static", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("overload", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("inline", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("deprecated", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("platform", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("library", PASCAL_T_IDENTIFIER)),
+        NULL
+    );
+    combinator_t* record_method_directive = seq(new_combinator(), PASCAL_T_METHOD_DIRECTIVE,
+        record_method_directive_keyword,
+        optional(token(pascal_string(PASCAL_T_STRING))),
+        token(match(";")),
+        NULL
+    );
+    return many(record_method_directive);
 }
 
 typedef struct {
@@ -1247,6 +1303,7 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
 
     // Parse method declarations (class operators) for advanced records
     // Create a parser for class operator declarations in records
+    combinator_t* record_method_directives_for_operator = create_record_method_directives();
     combinator_t* record_operator_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
         optional(token(keyword_ci("class"))),
         token(keyword_ci("operator")),
@@ -1255,6 +1312,7 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
         token(match(":")),
         create_type_ref_parser(),
         token(match(";")),
+        record_method_directives_for_operator,
         NULL
     );
     set_combinator_name(record_operator_decl, "record_operator_decl");
@@ -1305,22 +1363,7 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
     );
 
     // Method directives for advanced record members (e.g., overload; static; inline;)
-    combinator_t* record_method_directive_keyword = multi(new_combinator(), PASCAL_T_NONE,
-        token(create_keyword_parser("static", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("overload", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("inline", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("deprecated", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("platform", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("library", PASCAL_T_IDENTIFIER)),
-        NULL
-    );
-    combinator_t* record_method_directive = seq(new_combinator(), PASCAL_T_METHOD_DIRECTIVE,
-        record_method_directive_keyword,
-        optional(token(pascal_string(PASCAL_T_STRING))),
-        token(match(";")),
-        NULL
-    );
-    combinator_t* record_method_directives = many(record_method_directive);
+    combinator_t* record_method_directives = create_record_method_directives();
 
     // Simple procedure header inside a record (with optional class prefix and method directives)
     combinator_t* adv_proc_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
@@ -1346,8 +1389,23 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
         NULL
     );
 
+    // Class operator header inside a record (with optional class prefix and method directives)
+    combinator_t* record_method_directives_for_operator_member = create_record_method_directives();
+    combinator_t* adv_operator_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
+        optional(token(keyword_ci("class"))),
+        token(keyword_ci("operator")),
+        token(operator_name(PASCAL_T_IDENTIFIER)),
+        create_pascal_param_parser(),
+        token(match(":")),
+        create_type_ref_parser(),
+        token(match(";")),
+        record_method_directives_for_operator_member,
+        NULL
+    );
+
     // Simple property declaration inside a record (e.g., property Current: T read GetCurrent;)
     combinator_t* adv_property_decl = seq(new_combinator(), PASCAL_T_NONE,
+        optional(token(keyword_ci("class"))),
         token(keyword_ci("property")),
         token(cident(PASCAL_T_IDENTIFIER)),
         token(match(":")),
@@ -1366,11 +1424,35 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
         NULL
     );
 
+    // Constructor/destructor headers inside a record (with optional class prefix and method directives)
+    combinator_t* adv_ctor_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
+        optional(token(keyword_ci("class"))),
+        token(keyword_ci("constructor")),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        create_pascal_param_parser(),
+        token(match(";")),
+        record_method_directives,
+        NULL
+    );
+
+    combinator_t* adv_dtor_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
+        optional(token(keyword_ci("class"))),
+        token(keyword_ci("destructor")),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        create_pascal_param_parser(),
+        token(match(";")),
+        record_method_directives,
+        NULL
+    );
+
     combinator_t* adv_member = multi(new_combinator(), PASCAL_T_NONE,
         access_modifier,
         adv_field_decl,
         adv_proc_decl,
         adv_func_decl,
+        adv_ctor_decl,
+        adv_dtor_decl,
+        adv_operator_decl,
         adv_property_decl,
         NULL
     );
@@ -1420,6 +1502,85 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
                 while (last_field->next != NULL)
                     last_field = last_field->next;
                 last_field->next = first_kept;
+            }
+        }
+    }
+
+    /* Allow trailing field/variant declarations after advanced members (FPC allows interleaving). */
+    pascal_word_slice_t tail_word;
+    bool parse_tail_items = false;
+    if (pascal_peek_word(in, &tail_word)) {
+        if (!pascal_word_equals_ci(&tail_word, "end"))
+            parse_tail_items = true;
+    }
+
+    if (parse_tail_items) {
+        combinator_t* tail_field_name_list = sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(",")));
+        combinator_t* tail_field_type = create_record_field_type_spec();
+        combinator_t* tail_field_hint_directive = optional(seq(new_combinator(), PASCAL_T_NONE,
+            multi(new_combinator(), PASCAL_T_NONE,
+                token(keyword_ci("deprecated")),
+                token(keyword_ci("platform")),
+                token(keyword_ci("library")),
+                token(keyword_ci("experimental")),
+                NULL
+            ),
+            optional(token(pascal_string(PASCAL_T_STRING))),
+            NULL
+        ));
+
+        combinator_t* tail_field_decl = seq(new_combinator(), PASCAL_T_FIELD_DECL,
+            tail_field_name_list,
+            token(match(":")),
+            tail_field_type,
+            tail_field_hint_directive,
+            NULL
+        );
+        set_combinator_name(tail_field_decl, "record_field_decl_tail");
+
+        combinator_t** tail_record_item_ref = safe_malloc(sizeof(combinator_t*));
+        *tail_record_item_ref = new_combinator();
+
+        combinator_t* tail_variant_tag = create_variant_tag_parser(tail_field_type);
+        combinator_t* tail_variant_branch = create_variant_branch_parser(tail_record_item_ref);
+
+        variant_part_args* tail_variant_args = safe_malloc(sizeof(variant_part_args));
+        tail_variant_args->tag = PASCAL_T_VARIANT_PART;
+        tail_variant_args->tag_parser = tail_variant_tag;
+        tail_variant_args->branch_parser = tail_variant_branch;
+
+        combinator_t* tail_variant_part = new_combinator();
+        tail_variant_part->fn = variant_part_fn;
+        tail_variant_part->args = tail_variant_args;
+        tail_variant_part->type = COMB_VARIANT_PART;
+        set_combinator_name(tail_variant_part, "variant_part_tail");
+
+        multi(*tail_record_item_ref, PASCAL_T_NONE,
+            tail_variant_part,
+            tail_field_decl,
+            NULL
+        );
+
+        combinator_t* tail_record_items = sep_end_by(lazy_owned(tail_record_item_ref), token(match(";")));
+        ParseResult tail_items_res = parse(in, tail_record_items);
+        ast_t* tail_fields_ast = NULL;
+        if (tail_items_res.is_success) {
+            tail_fields_ast = (tail_items_res.value.ast == ast_nil) ? NULL : tail_items_res.value.ast;
+        } else {
+            discard_failure(tail_items_res);
+        }
+
+        free_combinator(tail_record_items);
+        free(tail_record_item_ref);
+
+        if (tail_fields_ast != NULL) {
+            if (fields_ast == NULL) {
+                fields_ast = tail_fields_ast;
+            } else {
+                ast_t* last_field = fields_ast;
+                while (last_field->next != NULL)
+                    last_field = last_field->next;
+                last_field->next = tail_fields_ast;
             }
         }
     }
