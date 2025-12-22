@@ -1502,18 +1502,46 @@ void init_pascal_unit_parser(combinator_t** p) {
         NULL
     ));
 
+    // FPC linkage clause for unit-level variables: "public name 'alias'" or "external name 'alias'"
+    // This comes after the semicolon in patterns like: "var x: type; public name 'alias';"
+    combinator_t* unit_var_linkage_clause = optional(seq(new_combinator(), PASCAL_T_NONE,
+        multi(new_combinator(), PASCAL_T_NONE,
+            seq(new_combinator(), PASCAL_T_NONE,
+                token(keyword_ci("public")),
+                token(keyword_ci("name")),
+                token(pascal_string(PASCAL_T_STRING)),
+                NULL
+            ),
+            seq(new_combinator(), PASCAL_T_NONE,
+                token(keyword_ci("external")),
+                optional(token(pascal_string(PASCAL_T_STRING))),  // optional lib name
+                optional(seq(new_combinator(), PASCAL_T_NONE,
+                    token(keyword_ci("name")),
+                    token(pascal_string(PASCAL_T_STRING)),
+                    NULL
+                )),
+                NULL
+            ),
+            NULL
+        ),
+        token(match(";")),  // trailing semicolon after linkage clause
+        NULL
+    ));
+
     combinator_t* typed_var_decl = seq(new_combinator(), PASCAL_T_VAR_DECL,
         sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))), // variable name(s)
         token(match(":")),                          // colon
         type_definition,                             // full type definitions (array, record, etc.)
+        var_hint_directive,                          // optional hint directive BEFORE initializer (FPC allows this)
         optional(seq(new_combinator(), PASCAL_T_NONE,
             token(match("=")),                       // optional initializer
             lazy(var_expr_parser),                   // initializer expression
             NULL
         )),
         absolute_clause,                             // optional absolute clause
-        var_hint_directive,                          // optional hint directive
+        var_hint_directive,                          // optional hint directive AFTER initializer
         optional(token(match(";"))),                // optional semicolon
+        unit_var_linkage_clause,                    // optional public/external name clause
         NULL
     );
 
@@ -1655,13 +1683,43 @@ void init_pascal_unit_parser(combinator_t** p) {
         bracket_directive_value,              // optional : value
         NULL
     );
-    combinator_t* bracket_directives = optional(seq(new_combinator(), PASCAL_T_NONE,
+    // Required bracket directive (for internproc, internconst, etc.) - with semicolon
+    combinator_t* bracket_directive_required = seq(new_combinator(), PASCAL_T_NONE,
         token(match("[")),
         sep_by(bracket_directive_item, token(match(","))),
         token(match("]")),
         token(match(";")),
         NULL
-    ));
+    );
+    set_combinator_name(bracket_directive_required, "bracket_directive_required");
+
+    // Optional bracket directives (for use after function body)
+    combinator_t* bracket_directives = optional(bracket_directive_required);
+
+    // Header-only bracket directives: [internproc:N], [internconst:N], [compilerproc], etc.
+    // These indicate NO body follows. Calling convention directives like [cdecl] are NOT header-only.
+    combinator_t* internproc_directive = seq(new_combinator(), PASCAL_T_NONE,
+        token(match("[")),
+        multi(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("internproc")),
+            token(keyword_ci("internconst")),
+            token(keyword_ci("compilerproc")),
+            NULL
+        ),
+        optional(seq(new_combinator(), PASCAL_T_NONE,
+            token(match(":")),
+            multi(new_combinator(), PASCAL_T_NONE,
+                token(pascal_string(PASCAL_T_STRING)),
+                token(cident(PASCAL_T_IDENTIFIER)),
+                NULL
+            ),
+            NULL
+        )),
+        token(match("]")),
+        token(match(";")),
+        NULL
+    );
+    set_combinator_name(internproc_directive, "internproc_directive");
 
     combinator_t* routine_directive = seq(new_combinator(), PASCAL_T_NONE,
         directive_keyword,
@@ -1671,6 +1729,16 @@ void init_pascal_unit_parser(combinator_t** p) {
     );
 
     combinator_t* routine_directives = many(routine_directive);
+    
+    // A directive that indicates no body follows - either keyword-based or bracket-based
+    // NOTE: Only truly header-only directives are matched here; calling convention
+    // directives like [cdecl] should NOT be matched here as they can have bodies.
+    combinator_t* headeronly_directive = multi(new_combinator(), PASCAL_T_NONE,
+        routine_directive,             // keyword directive like forward; or external;
+        internproc_directive,          // bracket directive like [internproc:value] that means NO body
+        NULL
+    );
+    set_combinator_name(headeronly_directive, "headeronly_directive");
 
     // Directives that indicate no body should follow - preserve the directive keyword in AST
     // combinator_t* no_body_directive = multi(new_combinator(), PASCAL_T_IDENTIFIER,
@@ -1680,16 +1748,17 @@ void init_pascal_unit_parser(combinator_t** p) {
     //     NULL
     // );
 
-    // Forward/external/assembler declaration parsers for interface and implementation sections
+    // Forward/external/assembler/internproc declaration parsers for interface and implementation sections
     // These match procedure/function headers with special directives and NO body
+    // Supports both keyword directives (forward;) and bracket directives ([internproc:value];)
     combinator_t* headeronly_procedure_decl = seq(new_combinator(), PASCAL_T_PROCEDURE_DECL,
         optional(token(keyword_ci("class"))),
         token(keyword_ci("procedure")),
         token(cident(PASCAL_T_IDENTIFIER)),
         optional(param_list),
         token(match(";")),
-        routine_directive,                           // forward/external/assembler directive with arguments
-        many(routine_directive),                     // additional directives (overload, etc.)
+        headeronly_directive,                        // forward/external/[internproc:...] directive
+        many(multi(new_combinator(), PASCAL_T_NONE, routine_directive, bracket_directive_required, NULL)),
         NULL
     );
     set_combinator_name(headeronly_procedure_decl, "headeronly_procedure_decl");
@@ -1702,18 +1771,27 @@ void init_pascal_unit_parser(combinator_t** p) {
         token(match(":")),
         token(cident(PASCAL_T_RETURN_TYPE)),
         token(match(";")),
-        routine_directive,                           // forward/external/assembler directive with arguments
-        many(routine_directive),                     // additional directives (overload, etc.)
+        headeronly_directive,                        // forward/external/[internproc:...] directive
+        many(multi(new_combinator(), PASCAL_T_NONE, routine_directive, bracket_directive_required, NULL)),
         NULL
     );
     set_combinator_name(headeronly_function_decl, "headeronly_function_decl");
+
+    // Interface procedure/function headers that support both keyword directives (inline; forward;)
+    // and bracket directives ([internproc:value];) used by FPC
+    combinator_t* interface_directives = many(multi(new_combinator(), PASCAL_T_NONE,
+        routine_directive,             // keyword directives like inline; overload;
+        bracket_directive_required,    // FPC bracket directives like [internproc:value];
+        NULL
+    ));
+    set_combinator_name(interface_directives, "interface_directives");
 
     combinator_t* procedure_header = seq(new_combinator(), PASCAL_T_PROCEDURE_DECL,
         token(keyword_ci("procedure")),
         token(cident(PASCAL_T_IDENTIFIER)),
         param_list,
         token(match(";")),
-        routine_directives,
+        interface_directives,
         NULL);
 
     combinator_t* function_header = seq(new_combinator(), PASCAL_T_FUNCTION_DECL,
@@ -1723,7 +1801,7 @@ void init_pascal_unit_parser(combinator_t** p) {
         token(match(":")),
         token(cident(PASCAL_T_RETURN_TYPE)),
         token(match(";")),
-        routine_directives,
+        interface_directives,
         NULL);
 
     // Operator overload declaration (header-only) in interface section.
