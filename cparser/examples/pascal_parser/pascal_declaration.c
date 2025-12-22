@@ -1540,7 +1540,7 @@ void init_pascal_unit_parser(combinator_t** p) {
         )),
         absolute_clause,                             // optional absolute clause
         var_hint_directive,                          // optional hint directive AFTER initializer
-        token(match(";")),                          // semicolon (required before linkage clause)
+        optional(token(match(";"))),                // optional semicolon
         unit_var_linkage_clause,                    // optional public/external name clause
         NULL
     );
