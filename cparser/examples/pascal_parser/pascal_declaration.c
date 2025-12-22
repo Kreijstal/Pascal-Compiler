@@ -1692,9 +1692,34 @@ void init_pascal_unit_parser(combinator_t** p) {
         NULL
     );
     set_combinator_name(bracket_directive_required, "bracket_directive_required");
-    
+
     // Optional bracket directives (for use after function body)
     combinator_t* bracket_directives = optional(bracket_directive_required);
+
+    // Header-only bracket directives: [internproc:N], [internconst:N], [compilerproc], etc.
+    // These indicate NO body follows. Calling convention directives like [cdecl] are NOT header-only.
+    combinator_t* internproc_directive = seq(new_combinator(), PASCAL_T_NONE,
+        token(match("[")),
+        multi(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("internproc")),
+            token(keyword_ci("internconst")),
+            token(keyword_ci("compilerproc")),
+            NULL
+        ),
+        optional(seq(new_combinator(), PASCAL_T_NONE,
+            token(match(":")),
+            multi(new_combinator(), PASCAL_T_NONE,
+                token(pascal_string(PASCAL_T_STRING)),
+                token(cident(PASCAL_T_IDENTIFIER)),
+                NULL
+            ),
+            NULL
+        )),
+        token(match("]")),
+        token(match(";")),
+        NULL
+    );
+    set_combinator_name(internproc_directive, "internproc_directive");
 
     combinator_t* routine_directive = seq(new_combinator(), PASCAL_T_NONE,
         directive_keyword,
@@ -1706,9 +1731,11 @@ void init_pascal_unit_parser(combinator_t** p) {
     combinator_t* routine_directives = many(routine_directive);
     
     // A directive that indicates no body follows - either keyword-based or bracket-based
+    // NOTE: Only truly header-only directives are matched here; calling convention
+    // directives like [cdecl] should NOT be matched here as they can have bodies.
     combinator_t* headeronly_directive = multi(new_combinator(), PASCAL_T_NONE,
         routine_directive,             // keyword directive like forward; or external;
-        bracket_directive_required,    // bracket directive like [internproc:value];
+        internproc_directive,          // bracket directive like [internproc:value] that means NO body
         NULL
     );
     set_combinator_name(headeronly_directive, "headeronly_directive");
