@@ -1942,6 +1942,29 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                             if (literal_node->cur != NULL)
                             {
                                 char *literal_name = (char *)literal_node->cur;
+                                
+                                /* Check if this enum literal already exists (e.g., from prelude) */
+                                HashNode_t *existing = NULL;
+                                if (FindIdent(&existing, symtab, literal_name) != -1 && existing != NULL)
+                                {
+                                    /* If it exists as a constant with the same value, skip silently */
+                                    if (existing->is_constant && existing->const_int_value == ordinal)
+                                    {
+                                        /* Same enum literal from prelude - not an error */
+                                        literal_node = literal_node->next;
+                                        ++ordinal;
+                                        continue;
+                                    }
+                                    /* Different value - this is a real conflict */
+                                    fprintf(stderr,
+                                            "Error on line %d, redeclaration of enum literal %s with different value!\n",
+                                            tree->line_num, literal_name);
+                                    ++errors;
+                                    literal_node = literal_node->next;
+                                    ++ordinal;
+                                    continue;
+                                }
+                                
                                 /* Use typed API with shared enum KgpcType - all literals reference same type */
                                 if (PushConstOntoScope_Typed(symtab, literal_name, ordinal, alias_info->kgpc_type) > 0)
                                 {

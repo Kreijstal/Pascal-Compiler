@@ -1506,13 +1506,13 @@ void init_pascal_unit_parser(combinator_t** p) {
     // This comes after the semicolon in patterns like: "var x: type; public name 'alias';"
     combinator_t* unit_var_linkage_clause = optional(seq(new_combinator(), PASCAL_T_NONE,
         multi(new_combinator(), PASCAL_T_NONE,
-            seq(new_combinator(), PASCAL_T_NONE,
+            map(seq(new_combinator(), PASCAL_T_NONE,
                 token(keyword_ci("public")),
                 token(keyword_ci("name")),
                 token(pascal_string(PASCAL_T_STRING)),
                 NULL
-            ),
-            seq(new_combinator(), PASCAL_T_NONE,
+            ), wrap_public_name_clause),
+            map(seq(new_combinator(), PASCAL_T_NONE,
                 token(keyword_ci("external")),
                 optional(token(pascal_string(PASCAL_T_STRING))),  // optional lib name
                 optional(seq(new_combinator(), PASCAL_T_NONE,
@@ -1521,7 +1521,7 @@ void init_pascal_unit_parser(combinator_t** p) {
                     NULL
                 )),
                 NULL
-            ),
+            ), wrap_external_name_clause),
             NULL
         ),
         token(match(";")),  // trailing semicolon after linkage clause
