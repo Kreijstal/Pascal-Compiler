@@ -6,7 +6,7 @@ function GetUnitValue: LongInt;
 procedure SetUnitValue(v: LongInt);
 property UnitValue: LongInt read GetUnitValue write SetUnitValue;
 
-procedure AddUnitValue(delta: LongInt); [cdecl];
+procedure AddUnitValue(delta: LongInt);
 
 implementation
 
@@ -23,7 +23,7 @@ begin
   UnitValueStore := v;
 end;
 
-procedure AddUnitValue(delta: LongInt); [cdecl];
+procedure AddUnitValue(delta: LongInt);
 begin
   UnitValueStore := UnitValueStore + delta;
 end;

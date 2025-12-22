@@ -2025,17 +2025,17 @@ void init_pascal_unit_parser(combinator_t** p) {
     combinator_t* interface_declarations = many(interface_declaration);
     
     combinator_t* procedure_definitions = multi(new_combinator(), PASCAL_T_NONE,
+        headeronly_procedure_decl,
         method_procedure_impl,
         procedure_impl,
-        headeronly_procedure_decl,
         NULL
     );
     set_combinator_name(procedure_definitions, "procedure_definition_choice");
 
     combinator_t* function_definitions = multi(new_combinator(), PASCAL_T_NONE,
+        headeronly_function_decl,
         method_function_impl,
         function_impl,
-        headeronly_function_decl,
         NULL
     );
     set_combinator_name(function_definitions, "function_definition_choice");
