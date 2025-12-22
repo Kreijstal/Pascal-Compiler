@@ -2129,15 +2129,17 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                         if (alias->kgpc_type != NULL)
                         {
                             kgpc_type = alias->kgpc_type;
-                            kgpc_type_retain(kgpc_type);
+                            /* Don't retain here - we'll pass it to PushTypeOntoScope_Typed which
+                             * will retain if needed. The alias already owns a reference. */
                         }
                         else
                         {
                             kgpc_type = create_primitive_type(ENUM_TYPE);
                             if (kgpc_type != NULL)
                             {
+                                /* Store in alias - alias now owns this reference */
                                 alias->kgpc_type = kgpc_type;
-                                kgpc_type_retain(kgpc_type);
+                                kgpc_type_retain(kgpc_type);  /* Alias holds reference */
                             }
                         }
                         
@@ -2149,9 +2151,10 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             if (tree->tree_data.type_decl_data.kgpc_type == NULL)
                             {
                                 tree->tree_data.type_decl_data.kgpc_type = kgpc_type;
-                                kgpc_type_retain(kgpc_type);
+                                kgpc_type_retain(kgpc_type);  /* Tree holds reference */
                             }
                             
+                            /* PushTypeOntoScope_Typed will retain kgpc_type when adding to symbol table */
                             int result = PushTypeOntoScope_Typed(symtab, (char *)type_id, kgpc_type);
                             if (result > 0)
                                 errors += result;
