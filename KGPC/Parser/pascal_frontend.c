@@ -382,8 +382,12 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
         // FPC feature flags
         "FPC_HAS_FEATURE_DYNARRAYS", "FPC_HAS_FEATURE_ANSISTRINGS", 
         "FPC_HAS_FEATURE_WIDESTRINGS", "FPC_HAS_FEATURE_CLASSES",
-        "FPC_HAS_FEATURE_EXCEPTIONS", "FPC_HAS_FEATURE_RTTI",
-        "FPC_HAS_FEATURE_HEAP", "FPC_HAS_FEATURE_TEXTIO"
+        "FPC_HAS_FEATURE_OBJECTS", "FPC_HAS_FEATURE_EXCEPTIONS",
+        "FPC_HAS_FEATURE_RTTI", "FPC_HAS_FEATURE_HEAP",
+        "FPC_HAS_FEATURE_TEXTIO", "FPC_HAS_FEATURE_FILEIO",
+        "FPC_HAS_FEATURE_CONSOLEIO", "FPC_HAS_FEATURE_RANDOM",
+        "FPC_HAS_FEATURE_VARIANTS", "FPC_HAS_FEATURE_INITFINAL",
+        "FPC_HAS_FEATURE_EXITCODE"
     };
     for (size_t i = 0; i < sizeof(default_symbols) / sizeof(default_symbols[0]); ++i)
     {

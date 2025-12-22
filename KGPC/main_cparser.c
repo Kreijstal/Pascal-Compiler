@@ -60,6 +60,7 @@ int line_num = 1;
 int col_num = 1;
 char *file_to_parse = NULL;
 static UnitSearchPaths g_unit_paths;
+static bool g_skip_stdlib = false;
 
 /* Ensure program-defined subprograms are emitted even if reachability misses them */
 static void mark_program_subs_used(Tree_t *program)
@@ -107,6 +108,7 @@ static void print_usage(const char *prog_name)
     fprintf(stderr, "    -I<path>              Add include path for preprocessor\n");
     fprintf(stderr, "    -Fu<path>             Add unit search path (FPC compatible)\n");
     fprintf(stderr, "    --no-vendor-units     Disable built-in KGPC vendor units\n");
+    fprintf(stderr, "    --no-stdlib           Disable implicit KGPC stdlib prelude\n");
     fprintf(stderr, "    -D<symbol>[=<value>]  Define preprocessor symbol\n");
 }
 
@@ -178,9 +180,9 @@ static char *resolve_stdlib_path(const char *argv0)
             return dup;
     }
 
-    if (access("KGPC/stdlib.p", R_OK) == 0)
+    if (access("KGPC/Units/system.p", R_OK) == 0)
     {
-        char *dup = strdup("KGPC/stdlib.p");
+        char *dup = strdup("KGPC/Units/system.p");
         if (dup != NULL)
             return dup;
     }
@@ -189,7 +191,7 @@ static char *resolve_stdlib_path(const char *argv0)
     if (source_root != NULL)
     {
         char candidate[PATH_MAX];
-        int written = snprintf(candidate, sizeof(candidate), "%s/KGPC/stdlib.p", source_root);
+        int written = snprintf(candidate, sizeof(candidate), "%s/KGPC/Units/system.p", source_root);
         if (written > 0 && written < (int)sizeof(candidate) && access(candidate, R_OK) == 0)
         {
             char *dup = strdup(candidate);
@@ -210,9 +212,9 @@ static char *resolve_stdlib_path(const char *argv0)
         if (dir != NULL)
         {
             const char *relative_candidates[] = {
-                "../../KGPC/stdlib.p",
-                "../KGPC/stdlib.p",
-                "../stdlib.p",
+                "../../KGPC/Units/system.p",
+                "../KGPC/Units/system.p",
+                "../Units/system.p",
             };
 
             for (size_t i = 0; i < sizeof(relative_candidates) / sizeof(relative_candidates[0]); ++i)
@@ -396,6 +398,10 @@ static void set_flags(char **optional_args, int count)
             /* Disable built-in KGPC vendor units */
             unit_search_paths_disable_vendor(&g_unit_paths);
         }
+        else if (strcmp(arg, "--no-stdlib") == 0 || strcmp(arg, "--no-prelude") == 0)
+        {
+            g_skip_stdlib = true;
+        }
         else if (arg[0] == '-' && arg[1] == 'D' && arg[2] != '\0')
         {
             /* Define: -DSYMBOL or -DSYMBOL=VALUE */
@@ -537,6 +543,91 @@ static bool unit_set_add(UnitSet *set, char *name)
     set->names[set->count++] = name;
     return true;
 }
+
+static ListNode_t *get_prelude_subprograms(Tree_t *prelude)
+{
+    if (prelude == NULL)
+        return NULL;
+    if (prelude->type == TREE_PROGRAM_TYPE)
+        return prelude->tree_data.program_data.subprograms;
+    if (prelude->type == TREE_UNIT)
+        return prelude->tree_data.unit_data.subprograms;
+    return NULL;
+}
+
+static ListNode_t *get_prelude_type_decls(Tree_t *prelude)
+{
+    if (prelude == NULL)
+        return NULL;
+    if (prelude->type == TREE_PROGRAM_TYPE)
+        return prelude->tree_data.program_data.type_declaration;
+    if (prelude->type == TREE_UNIT)
+        return prelude->tree_data.unit_data.interface_type_decls;
+    return NULL;
+}
+
+static ListNode_t *get_prelude_const_decls(Tree_t *prelude)
+{
+    if (prelude == NULL)
+        return NULL;
+    if (prelude->type == TREE_PROGRAM_TYPE)
+        return prelude->tree_data.program_data.const_declaration;
+    if (prelude->type == TREE_UNIT)
+        return prelude->tree_data.unit_data.interface_const_decls;
+    return NULL;
+}
+
+static ListNode_t *get_prelude_var_decls(Tree_t *prelude)
+{
+    if (prelude == NULL)
+        return NULL;
+    if (prelude->type == TREE_PROGRAM_TYPE)
+        return prelude->tree_data.program_data.var_declaration;
+    if (prelude->type == TREE_UNIT)
+        return prelude->tree_data.unit_data.interface_var_decls;
+    return NULL;
+}
+
+static void clear_prelude_subprograms(Tree_t *prelude)
+{
+    if (prelude == NULL)
+        return;
+    if (prelude->type == TREE_PROGRAM_TYPE)
+        prelude->tree_data.program_data.subprograms = NULL;
+    else if (prelude->type == TREE_UNIT)
+        prelude->tree_data.unit_data.subprograms = NULL;
+}
+
+static void clear_prelude_type_decls(Tree_t *prelude)
+{
+    if (prelude == NULL)
+        return;
+    if (prelude->type == TREE_PROGRAM_TYPE)
+        prelude->tree_data.program_data.type_declaration = NULL;
+    else if (prelude->type == TREE_UNIT)
+        prelude->tree_data.unit_data.interface_type_decls = NULL;
+}
+
+static void clear_prelude_const_decls(Tree_t *prelude)
+{
+    if (prelude == NULL)
+        return;
+    if (prelude->type == TREE_PROGRAM_TYPE)
+        prelude->tree_data.program_data.const_declaration = NULL;
+    else if (prelude->type == TREE_UNIT)
+        prelude->tree_data.unit_data.interface_const_decls = NULL;
+}
+
+static void clear_prelude_var_decls(Tree_t *prelude)
+{
+    if (prelude == NULL)
+        return;
+    if (prelude->type == TREE_PROGRAM_TYPE)
+        prelude->tree_data.program_data.var_declaration = NULL;
+    else if (prelude->type == TREE_UNIT)
+        prelude->tree_data.unit_data.interface_var_decls = NULL;
+}
+
 
 static char *lowercase_copy(const char *name)
 {
@@ -711,6 +802,128 @@ static ListNode_t **get_finalization_list(Tree_t *target)
     return NULL;
 }
 
+static int type_list_contains(ListNode_t *list, const char *type_id)
+{
+    ListNode_t *node = list;
+    while (node != NULL)
+    {
+        if (node->type == LIST_TREE && node->cur != NULL)
+        {
+            Tree_t *decl = (Tree_t *)node->cur;
+            if (decl->type == TREE_TYPE_DECL &&
+                decl->tree_data.type_decl_data.id != NULL &&
+                pascal_identifier_equals(decl->tree_data.type_decl_data.id, type_id))
+            {
+                return 1;
+            }
+        }
+        node = node->next;
+    }
+    return 0;
+}
+
+static void debug_check_type_presence(Tree_t *target)
+{
+    const char *check_id = getenv("KGPC_DEBUG_CHECK_TYPE");
+    if (check_id == NULL || check_id[0] == '\0' || target == NULL)
+        return;
+
+    ListNode_t *interface_types = NULL;
+    ListNode_t *implementation_types = NULL;
+    if (target->type == TREE_PROGRAM_TYPE)
+    {
+        interface_types = target->tree_data.program_data.type_declaration;
+    }
+    else if (target->type == TREE_UNIT)
+    {
+        interface_types = target->tree_data.unit_data.interface_type_decls;
+        implementation_types = target->tree_data.unit_data.implementation_type_decls;
+    }
+
+    int in_interface = type_list_contains(interface_types, check_id);
+    int in_implementation = type_list_contains(implementation_types, check_id);
+    fprintf(stderr, "[KGPC] type '%s' present: interface=%d implementation=%d target=%d\n",
+        check_id, in_interface, in_implementation, target->type);
+}
+
+static char *find_include_file(const char *filename)
+{
+    if (filename == NULL)
+        return NULL;
+
+    if (access(filename, R_OK) == 0)
+        return strdup(filename);
+
+    int count = 0;
+    const char *const *paths = pascal_frontend_get_include_paths(&count);
+    if (paths == NULL || count <= 0)
+        return NULL;
+
+    char buf[PATH_MAX];
+    for (int i = 0; i < count; ++i)
+    {
+        if (paths[i] == NULL)
+            continue;
+        int written = snprintf(buf, sizeof(buf), "%s/%s", paths[i], filename);
+        if (written <= 0 || written >= (int)sizeof(buf))
+            continue;
+        if (access(buf, R_OK) == 0)
+            return strdup(buf);
+    }
+
+    return NULL;
+}
+
+static void merge_objpash_into_system(Tree_t *system_tree)
+{
+    if (system_tree == NULL || system_tree->type != TREE_UNIT)
+        return;
+
+    char *objpash_path = find_include_file("objpash.inc");
+    if (objpash_path == NULL)
+        return;
+
+    char tmp_template[] = "/tmp/kgpc_objpash_XXXXXX.pas";
+    int fd = mkstemps(tmp_template, 4);
+    if (fd < 0)
+    {
+        free(objpash_path);
+        return;
+    }
+
+    FILE *tmp = fdopen(fd, "w");
+    if (tmp == NULL)
+    {
+        close(fd);
+        unlink(tmp_template);
+        free(objpash_path);
+        return;
+    }
+
+    fprintf(tmp, "unit kgpc_objpash_import;\n");
+    fprintf(tmp, "interface\n");
+    fprintf(tmp, "{$I %s}\n", objpash_path);
+    fprintf(tmp, "implementation\n");
+    fprintf(tmp, "end.\n");
+    fclose(tmp);
+
+    Tree_t *obj_tree = NULL;
+    if (parse_pascal_file(tmp_template, &obj_tree, true) &&
+        obj_tree != NULL && obj_tree->type == TREE_UNIT)
+    {
+        mark_unit_type_decls(obj_tree->tree_data.unit_data.interface_type_decls, 1);
+        system_tree->tree_data.unit_data.interface_type_decls =
+            ConcatList(system_tree->tree_data.unit_data.interface_type_decls,
+                obj_tree->tree_data.unit_data.interface_type_decls);
+        obj_tree->tree_data.unit_data.interface_type_decls = NULL;
+    }
+
+    if (obj_tree != NULL)
+        destroy_tree(obj_tree);
+    unlink(tmp_template);
+    free(objpash_path);
+}
+
 /* Merges a loaded unit's declarations into the target tree.
  * The target can be either a TREE_PROGRAM_TYPE or TREE_UNIT. */
 static void merge_unit_into_target(Tree_t *target, Tree_t *unit_tree)
@@ -749,10 +962,10 @@ static void merge_unit_into_target(Tree_t *target, Tree_t *unit_tree)
             dbg = dbg->next;
         }
     }
-    /* Append interface types AFTER existing types to preserve dependency order.
-     * Dependencies (like ctypes) are loaded before dependents (like Windows),
-     * so ctypes types should be processed first when predeclare_types runs. */
-    *type_list = ConcatList(*type_list, unit_tree->tree_data.unit_data.interface_type_decls);
+    /* Prepend imported types so dependencies are processed BEFORE target types.
+     * Units are loaded in dependency order (ctypes before Windows), so placing
+     * imported types first ensures predeclare_types sees them in time. */
+    *type_list = ConcatList(unit_tree->tree_data.unit_data.interface_type_decls, *type_list);
     unit_tree->tree_data.unit_data.interface_type_decls = NULL;
 
     mark_unit_const_decls(unit_tree->tree_data.unit_data.interface_const_decls, 1);
@@ -774,16 +987,12 @@ static void merge_unit_into_target(Tree_t *target, Tree_t *unit_tree)
             dbg = dbg->next;
         }
     }
-    /* IMPORTANT: Append imported constants so dependencies are processed FIRST.
-     * Since units are loaded in dependency order (UnixType before BaseUnix),
-     * appending means UnixType's constants are earlier in the list and are
-     * pushed to the symbol table before BaseUnix's constants need them.
-     * This allows const X = ImportedUnit.Y to work correctly. */
-    *const_list = ConcatList(*const_list, unit_tree->tree_data.unit_data.interface_const_decls);
+    /* Prepend imported constants so dependencies are available first. */
+    *const_list = ConcatList(unit_tree->tree_data.unit_data.interface_const_decls, *const_list);
     unit_tree->tree_data.unit_data.interface_const_decls = NULL;
 
     mark_unit_var_decls(unit_tree->tree_data.unit_data.interface_var_decls, 1);
-    *var_list = ConcatList(*var_list, unit_tree->tree_data.unit_data.interface_var_decls);
+    *var_list = ConcatList(unit_tree->tree_data.unit_data.interface_var_decls, *var_list);
     unit_tree->tree_data.unit_data.interface_var_decls = NULL;
 
     mark_unit_type_decls(unit_tree->tree_data.unit_data.implementation_type_decls, 0);
@@ -804,21 +1013,21 @@ static void merge_unit_into_target(Tree_t *target, Tree_t *unit_tree)
             dbg = dbg->next;
         }
     }
-    /* Append implementation types to preserve dependency order */
-    *type_list = ConcatList(*type_list, unit_tree->tree_data.unit_data.implementation_type_decls);
+    /* Prepend implementation types to keep dependencies ahead of targets. */
+    *type_list = ConcatList(unit_tree->tree_data.unit_data.implementation_type_decls, *type_list);
     unit_tree->tree_data.unit_data.implementation_type_decls = NULL;
 
     mark_unit_const_decls(unit_tree->tree_data.unit_data.implementation_const_decls, 0);
-    /* Append implementation constants to maintain dependency order */
-    *const_list = ConcatList(*const_list, unit_tree->tree_data.unit_data.implementation_const_decls);
+    /* Prepend implementation constants to keep dependencies ahead of targets. */
+    *const_list = ConcatList(unit_tree->tree_data.unit_data.implementation_const_decls, *const_list);
     unit_tree->tree_data.unit_data.implementation_const_decls = NULL;
 
     mark_unit_var_decls(unit_tree->tree_data.unit_data.implementation_var_decls, 0);
-    *var_list = ConcatList(*var_list, unit_tree->tree_data.unit_data.implementation_var_decls);
+    *var_list = ConcatList(unit_tree->tree_data.unit_data.implementation_var_decls, *var_list);
     unit_tree->tree_data.unit_data.implementation_var_decls = NULL;
 
     mark_unit_subprograms(unit_tree->tree_data.unit_data.subprograms);
-    *sub_list = ConcatList(*sub_list, unit_tree->tree_data.unit_data.subprograms);
+    *sub_list = ConcatList(unit_tree->tree_data.unit_data.subprograms, *sub_list);
     unit_tree->tree_data.unit_data.subprograms = NULL;
 
     /* Only programs accumulate initialization/finalization */
@@ -845,6 +1054,21 @@ static void merge_unit_into_program(Tree_t *program, Tree_t *unit_tree)
 }
 
 static void load_units_from_list(Tree_t *program, ListNode_t *uses, UnitSet *visited);
+
+static void load_prelude_uses(Tree_t *program, Tree_t *prelude, UnitSet *visited)
+{
+    if (prelude == NULL || visited == NULL)
+        return;
+    if (prelude->type == TREE_PROGRAM_TYPE)
+    {
+        load_units_from_list(program, prelude->tree_data.program_data.uses_units, visited);
+    }
+    else if (prelude->type == TREE_UNIT)
+    {
+        load_units_from_list(program, prelude->tree_data.unit_data.interface_uses, visited);
+        load_units_from_list(program, prelude->tree_data.unit_data.implementation_uses, visited);
+    }
+}
 
 static void load_unit(Tree_t *program, const char *unit_name, UnitSet *visited)
 {
@@ -897,6 +1121,9 @@ static void load_unit(Tree_t *program, const char *unit_name, UnitSet *visited)
     load_units_from_list(program, unit_tree->tree_data.unit_data.interface_uses, visited);
     load_units_from_list(program, unit_tree->tree_data.unit_data.implementation_uses, visited);
 
+    if (pascal_identifier_equals(unit_name, "System"))
+        merge_objpash_into_system(unit_tree);
+
     merge_unit_into_program(program, unit_tree);
     destroy_tree(unit_tree);
 }
@@ -940,14 +1167,19 @@ int main(int argc, char **argv)
     if (time_passes_flag())
         atexit(emit_timing_summary);
 
-    char *stdlib_path = resolve_stdlib_path(argv[0]);
-    if (stdlib_path == NULL)
+    bool use_stdlib = !g_skip_stdlib;
+    char *stdlib_path = NULL;
+    if (use_stdlib)
     {
-        fprintf(stderr, "Error: Unable to locate stdlib.p. Set KGPC_STDLIB or run from the project root.\n");
-        clear_dump_ast_path();
-        unit_search_paths_destroy(&g_unit_paths);
-        arena_destroy(arena);
-        return 1;
+        stdlib_path = resolve_stdlib_path(argv[0]);
+        if (stdlib_path == NULL)
+        {
+            fprintf(stderr, "Error: Unable to locate system.p. Set KGPC_STDLIB or run from the project root.\n");
+            clear_dump_ast_path();
+            unit_search_paths_destroy(&g_unit_paths);
+            arena_destroy(arena);
+            return 1;
+        }
     }
 
     bool parse_only = parse_only_flag();
@@ -955,25 +1187,28 @@ int main(int argc, char **argv)
 
     Tree_t *prelude_tree = NULL;
     bool track_time = time_passes_flag();
-    double stdlib_start = track_time ? current_time_seconds() : 0.0;
-    bool parsed_stdlib = parse_pascal_file(stdlib_path, &prelude_tree, convert_to_tree);
-    if (track_time)
+    if (use_stdlib)
     {
-        g_time_parse_stdlib += current_time_seconds() - stdlib_start;
-        ++g_count_parse_stdlib;
-    }
-    if (!parsed_stdlib)
-    {
-        if (prelude_tree != NULL)
-            destroy_tree(prelude_tree);
-        free(stdlib_path);
-        clear_dump_ast_path();
-        pascal_frontend_cleanup();
-        unit_search_paths_destroy(&g_unit_paths);
-        return 1;
-    }
+        double stdlib_start = track_time ? current_time_seconds() : 0.0;
+        bool parsed_stdlib = parse_pascal_file(stdlib_path, &prelude_tree, convert_to_tree);
+        if (track_time)
+        {
+            g_time_parse_stdlib += current_time_seconds() - stdlib_start;
+            ++g_count_parse_stdlib;
+        }
+        if (!parsed_stdlib)
+        {
+            if (prelude_tree != NULL)
+                destroy_tree(prelude_tree);
+            free(stdlib_path);
+            clear_dump_ast_path();
+            pascal_frontend_cleanup();
+            unit_search_paths_destroy(&g_unit_paths);
+            return 1;
+        }
 
-    unit_search_paths_set_vendor(&g_unit_paths, stdlib_path);
+        unit_search_paths_set_vendor(&g_unit_paths, stdlib_path);
+    }
 
     Tree_t *user_tree = NULL;
     double user_start = track_time ? current_time_seconds() : 0.0;
@@ -1051,7 +1286,7 @@ int main(int argc, char **argv)
         return 0;
     }
 
-    if (prelude_tree == NULL || user_tree == NULL)
+    if (user_tree == NULL || (use_stdlib && prelude_tree == NULL))
     {
         if (prelude_tree != NULL)
             destroy_tree(prelude_tree);
@@ -1069,49 +1304,52 @@ int main(int argc, char **argv)
     {
         fprintf(stderr, "Compiling unit: %s\n", user_tree->tree_data.unit_data.unit_id);
         
-        /* For units, we still need to merge stdlib for built-in functions and types */
-        ListNode_t *prelude_subs = prelude_tree->tree_data.program_data.subprograms;
-        if (prelude_subs != NULL)
-            mark_stdlib_var_params(prelude_subs);
-        if (prelude_subs != NULL)
+        if (use_stdlib && prelude_tree != NULL)
         {
-            mark_unit_subprograms(prelude_subs);
-            ListNode_t *last = prelude_subs;
-            while (last->next != NULL)
-                last = last->next;
-            last->next = user_tree->tree_data.unit_data.subprograms;
-            user_tree->tree_data.unit_data.subprograms = prelude_subs;
-            prelude_tree->tree_data.program_data.subprograms = NULL;
-        }
-        
-        /* Merge stdlib types into unit for FPC compatibility (SizeInt, PAnsiChar, etc.) */
-        ListNode_t *prelude_types = prelude_tree->tree_data.program_data.type_declaration;
-        if (prelude_types != NULL)
-        {
-            mark_unit_type_decls(prelude_types, 1);  /* Mark as exported from unit */
-            user_tree->tree_data.unit_data.interface_type_decls =
-                ConcatList(prelude_types, user_tree->tree_data.unit_data.interface_type_decls);
-            prelude_tree->tree_data.program_data.type_declaration = NULL;
-        }
+            /* For units, we still need to merge prelude for built-in functions and types */
+            ListNode_t *prelude_subs = get_prelude_subprograms(prelude_tree);
+            if (prelude_subs != NULL)
+                mark_stdlib_var_params(prelude_subs);
+            if (prelude_subs != NULL)
+            {
+                mark_unit_subprograms(prelude_subs);
+                ListNode_t *last = prelude_subs;
+                while (last->next != NULL)
+                    last = last->next;
+                last->next = user_tree->tree_data.unit_data.subprograms;
+                user_tree->tree_data.unit_data.subprograms = prelude_subs;
+                clear_prelude_subprograms(prelude_tree);
+            }
+            
+            /* Merge prelude types into unit for FPC compatibility (SizeInt, PAnsiChar, etc.) */
+            ListNode_t *prelude_types = get_prelude_type_decls(prelude_tree);
+            if (prelude_types != NULL)
+            {
+                mark_unit_type_decls(prelude_types, 1);  /* Mark as exported from unit */
+                user_tree->tree_data.unit_data.interface_type_decls =
+                    ConcatList(prelude_types, user_tree->tree_data.unit_data.interface_type_decls);
+                clear_prelude_type_decls(prelude_tree);
+            }
 
-        /* Merge stdlib constants into unit for FPC compatibility (fmClosed, fmInput, etc.) */
-        ListNode_t *prelude_consts = prelude_tree->tree_data.program_data.const_declaration;
-        if (prelude_consts != NULL)
-        {
-            mark_unit_const_decls(prelude_consts, 1);  /* Mark as exported from unit */
-            user_tree->tree_data.unit_data.interface_const_decls =
-                ConcatList(prelude_consts, user_tree->tree_data.unit_data.interface_const_decls);
-            prelude_tree->tree_data.program_data.const_declaration = NULL;
-        }
+            /* Merge prelude constants into unit for FPC compatibility (fmClosed, fmInput, etc.) */
+            ListNode_t *prelude_consts = get_prelude_const_decls(prelude_tree);
+            if (prelude_consts != NULL)
+            {
+                mark_unit_const_decls(prelude_consts, 1);  /* Mark as exported from unit */
+                user_tree->tree_data.unit_data.interface_const_decls =
+                    ConcatList(prelude_consts, user_tree->tree_data.unit_data.interface_const_decls);
+                clear_prelude_const_decls(prelude_tree);
+            }
 
-        /* Merge stdlib variables into unit */
-        ListNode_t *prelude_vars = prelude_tree->tree_data.program_data.var_declaration;
-        if (prelude_vars != NULL)
-        {
-            mark_unit_var_decls(prelude_vars, 1);  /* Mark as exported from unit */
-            user_tree->tree_data.unit_data.interface_var_decls =
-                ConcatList(prelude_vars, user_tree->tree_data.unit_data.interface_var_decls);
-            prelude_tree->tree_data.program_data.var_declaration = NULL;
+            /* Merge prelude variables into unit */
+            ListNode_t *prelude_vars = get_prelude_var_decls(prelude_tree);
+            if (prelude_vars != NULL)
+            {
+                mark_unit_var_decls(prelude_vars, 1);  /* Mark as exported from unit */
+                user_tree->tree_data.unit_data.interface_var_decls =
+                    ConcatList(prelude_vars, user_tree->tree_data.unit_data.interface_var_decls);
+                clear_prelude_var_decls(prelude_tree);
+            }
         }
 
         /* Load used units */
@@ -1119,12 +1357,18 @@ int main(int argc, char **argv)
         unit_set_init(&visited_units);
         
         /* NOTE: For FPC compatibility, system types (SizeInt, PAnsiChar, etc.)
-         * are now included in stdlib.p and available to all compilations.
+         * are now included in the system prelude and available to all compilations.
          * Explicit system unit loading is not needed. */
         
         /* Load units from interface and implementation uses clauses */
+        if (!use_stdlib &&
+            !pascal_identifier_equals(user_tree->tree_data.unit_data.unit_id, "System"))
+        {
+            load_unit(user_tree, "System", &visited_units);
+        }
         load_units_from_list(user_tree, user_tree->tree_data.unit_data.interface_uses, &visited_units);
         load_units_from_list(user_tree, user_tree->tree_data.unit_data.implementation_uses, &visited_units);
+        debug_check_type_presence(user_tree);
         unit_set_destroy(&visited_units);
         
         int sem_result = 0;
@@ -1137,7 +1381,8 @@ int main(int argc, char **argv)
         {
             fprintf(stderr, "Semantic check failed for unit.\n");
             DestroySymTab(symtab);
-            destroy_tree(prelude_tree);
+            if (prelude_tree != NULL)
+                destroy_tree(prelude_tree);
             destroy_tree(user_tree);
             free(stdlib_path);
             clear_dump_ast_path();
@@ -1155,7 +1400,8 @@ int main(int argc, char **argv)
         {
             fprintf(stderr, "ERROR: Failed to open output file: %s\n", output_file);
             DestroySymTab(symtab);
-            destroy_tree(prelude_tree);
+            if (prelude_tree != NULL)
+                destroy_tree(prelude_tree);
             destroy_tree(user_tree);
             free(stdlib_path);
             clear_dump_ast_path();
@@ -1183,7 +1429,8 @@ int main(int argc, char **argv)
         {
             fprintf(stderr, "ERROR: Code generation failed for unit.\n");
             DestroySymTab(symtab);
-            destroy_tree(prelude_tree);
+            if (prelude_tree != NULL)
+                destroy_tree(prelude_tree);
             destroy_tree(user_tree);
             free(stdlib_path);
             clear_dump_ast_path();
@@ -1193,7 +1440,8 @@ int main(int argc, char **argv)
         }
         
         DestroySymTab(symtab);
-        destroy_tree(prelude_tree);
+        if (prelude_tree != NULL)
+            destroy_tree(prelude_tree);
         destroy_tree(user_tree);
         free(stdlib_path);
         if (ast_nil != NULL)
@@ -1209,7 +1457,7 @@ int main(int argc, char **argv)
     }
 
     /* Normal program compilation continues below */
-    ListNode_t *prelude_subs = prelude_tree->tree_data.program_data.subprograms;
+    ListNode_t *prelude_subs = NULL;
     ListNode_t *user_subs = user_tree->tree_data.program_data.subprograms;
     UnitSet visited_units;
     unit_set_init(&visited_units);
@@ -1219,51 +1467,58 @@ int main(int argc, char **argv)
     user_tree->tree_data.program_data.type_declaration = NULL;
     user_tree->tree_data.program_data.const_declaration = NULL;
     user_tree->tree_data.program_data.var_declaration = NULL;
-    if (prelude_subs != NULL)
-        mark_stdlib_var_params(prelude_subs);
-    if (prelude_subs != NULL)
+    if (use_stdlib && prelude_tree != NULL)
     {
-        /* Mark prelude (stdlib.p) subprograms as library procedures so they don't
-         * incorrectly get static links when merged into user programs */
-        mark_unit_subprograms(prelude_subs);
-        
-        ListNode_t *last = prelude_subs;
-        while (last->next != NULL)
-            last = last->next;
-        last->next = user_subs;
-        user_tree->tree_data.program_data.subprograms = prelude_subs;
-        prelude_tree->tree_data.program_data.subprograms = NULL;
-    }
+        prelude_subs = get_prelude_subprograms(prelude_tree);
+        if (prelude_subs != NULL)
+            mark_stdlib_var_params(prelude_subs);
+        if (prelude_subs != NULL)
+        {
+            /* Mark prelude (system.p) subprograms as library procedures so they don't
+             * incorrectly get static links when merged into user programs */
+            mark_unit_subprograms(prelude_subs);
+            
+            ListNode_t *last = prelude_subs;
+            while (last->next != NULL)
+                last = last->next;
+            last->next = user_subs;
+            user_tree->tree_data.program_data.subprograms = prelude_subs;
+            clear_prelude_subprograms(prelude_tree);
+        }
 
-    /* Merge stdlib types into program for FPC compatibility (SizeInt, PAnsiChar, etc.) */
-    ListNode_t *prelude_types = prelude_tree->tree_data.program_data.type_declaration;
-    if (prelude_types != NULL)
-    {
-        user_tree->tree_data.program_data.type_declaration =
-            ConcatList(prelude_types, user_tree->tree_data.program_data.type_declaration);
-        prelude_tree->tree_data.program_data.type_declaration = NULL;
-    }
+        /* Merge prelude types into program for FPC compatibility (SizeInt, PAnsiChar, etc.) */
+        ListNode_t *prelude_types = get_prelude_type_decls(prelude_tree);
+        if (prelude_types != NULL)
+        {
+            user_tree->tree_data.program_data.type_declaration =
+                ConcatList(prelude_types, user_tree->tree_data.program_data.type_declaration);
+            clear_prelude_type_decls(prelude_tree);
+        }
 
-    /* Merge stdlib constants into program */
-    ListNode_t *prelude_consts = prelude_tree->tree_data.program_data.const_declaration;
-    if (prelude_consts != NULL)
-    {
-        user_tree->tree_data.program_data.const_declaration =
-            ConcatList(prelude_consts, user_tree->tree_data.program_data.const_declaration);
-        prelude_tree->tree_data.program_data.const_declaration = NULL;
-    }
+        /* Merge prelude constants into program */
+        ListNode_t *prelude_consts = get_prelude_const_decls(prelude_tree);
+        if (prelude_consts != NULL)
+        {
+            user_tree->tree_data.program_data.const_declaration =
+                ConcatList(prelude_consts, user_tree->tree_data.program_data.const_declaration);
+            clear_prelude_const_decls(prelude_tree);
+        }
 
-    /* Merge stdlib variables into program */
-    ListNode_t *prelude_vars = prelude_tree->tree_data.program_data.var_declaration;
-    if (prelude_vars != NULL)
-    {
-        user_tree->tree_data.program_data.var_declaration =
-            ConcatList(prelude_vars, user_tree->tree_data.program_data.var_declaration);
-        prelude_tree->tree_data.program_data.var_declaration = NULL;
-    }
+        /* Merge prelude variables into program */
+        ListNode_t *prelude_vars = get_prelude_var_decls(prelude_tree);
+        if (prelude_vars != NULL)
+        {
+            user_tree->tree_data.program_data.var_declaration =
+                ConcatList(prelude_vars, user_tree->tree_data.program_data.var_declaration);
+            clear_prelude_var_decls(prelude_tree);
+        }
 
-    load_units_from_list(user_tree, prelude_tree->tree_data.program_data.uses_units, &visited_units);
+        load_prelude_uses(user_tree, prelude_tree, &visited_units);
+    }
+    if (!use_stdlib)
+        load_unit(user_tree, "System", &visited_units);
     load_units_from_list(user_tree, user_tree->tree_data.program_data.uses_units, &visited_units);
+    debug_check_type_presence(user_tree);
     user_tree->tree_data.program_data.type_declaration =
         ConcatList(user_tree->tree_data.program_data.type_declaration, user_types);
     user_tree->tree_data.program_data.const_declaration =
@@ -1299,7 +1554,8 @@ int main(int argc, char **argv)
         {
             fprintf(stderr, "ERROR: Failed to open output file: %s\n", output_file);
             DestroySymTab(symtab);
-            destroy_tree(prelude_tree);
+            if (prelude_tree != NULL)
+                destroy_tree(prelude_tree);
             destroy_tree(user_tree);
             clear_dump_ast_path();
             unit_search_paths_destroy(&g_unit_paths);
@@ -1339,7 +1595,8 @@ int main(int argc, char **argv)
     }
 
     DestroySymTab(symtab);
-    destroy_tree(prelude_tree);
+    if (prelude_tree != NULL)
+        destroy_tree(prelude_tree);
     destroy_tree(user_tree);
     free(stdlib_path);
 

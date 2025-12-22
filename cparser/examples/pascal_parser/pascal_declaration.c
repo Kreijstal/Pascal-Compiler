@@ -277,6 +277,14 @@ static ParseResult keyword_dispatch_fn(input_t* in, void* args, char* parser_nam
             continue;
         }
         if (pascal_word_equals_ci(&word, entry->keyword)) {
+            if (getenv("KGPC_DEBUG_KEYWORD_DISPATCH") != NULL &&
+                strcasecmp(entry->keyword, "type") == 0) {
+                char* matched = strndup(word.start, word.length);
+                fprintf(stderr, "[KGPC] keyword_dispatch matched '%s' in %s\n",
+                    matched != NULL ? matched : "<null>",
+                    parser_name != NULL ? parser_name : "<unknown>");
+                free(matched);
+            }
             return parse(in, entry->parser);
         }
     }
@@ -284,6 +292,11 @@ static ParseResult keyword_dispatch_fn(input_t* in, void* args, char* parser_nam
         return parse(in, dispatch->fallback_parser);
     }
     char* unexpected = strndup(word.start, word.length);
+    if (getenv("KGPC_DEBUG_KEYWORD_DISPATCH") != NULL) {
+        fprintf(stderr, "[KGPC] keyword_dispatch unexpected '%s' in %s\n",
+            unexpected != NULL ? unexpected : "<null>",
+            parser_name != NULL ? parser_name : "<unknown>");
+    }
     return make_failure_v2(in, parser_name, strdup("Unexpected keyword in dispatcher"), unexpected);
 }
 
@@ -1713,6 +1726,33 @@ void init_pascal_unit_parser(combinator_t** p) {
         routine_directives,
         NULL);
 
+    // Operator overload declaration (header-only) in interface section.
+    // Supports both ": ReturnType" and "ResultName: ReturnType" syntaxes.
+    combinator_t* operator_param_list = create_simple_param_list();
+    combinator_t* operator_result = multi(new_combinator(), PASCAL_T_NONE,
+        seq(new_combinator(), PASCAL_T_NONE,
+            token(match(":")),
+            token(cident(PASCAL_T_RETURN_TYPE)),
+            NULL
+        ),
+        seq(new_combinator(), PASCAL_T_NONE,
+            token(cident(PASCAL_T_IDENTIFIER)),
+            token(match(":")),
+            token(cident(PASCAL_T_RETURN_TYPE)),
+            NULL
+        ),
+        NULL
+    );
+    combinator_t* operator_header = seq(new_combinator(), PASCAL_T_FUNCTION_DECL,
+        token(keyword_ci("operator")),
+        token(operator_name(PASCAL_T_IDENTIFIER)),
+        operator_param_list,
+        operator_result,
+        token(match(";")),
+        routine_directives,
+        NULL
+    );
+
     // Simple procedure implementation for unit (with required body)
     combinator_t* procedure_impl = seq(new_combinator(), PASCAL_T_PROCEDURE_DECL,
         optional(token(keyword_ci("class"))),
@@ -1923,6 +1963,7 @@ void init_pascal_unit_parser(combinator_t** p) {
     register_keyword_entry(interface_dispatch_args, 9, &interface_entry_index, "procedure", procedure_header);
     register_keyword_entry(interface_dispatch_args, 9, &interface_entry_index, "function", function_header);
     register_keyword_entry(interface_dispatch_args, 9, &interface_entry_index, "property", interface_property_decl);
+    register_keyword_entry(interface_dispatch_args, 9, &interface_entry_index, "operator", operator_header);
     interface_dispatch_args->entry_count = interface_entry_index;
 
     combinator_t* interface_declaration = new_combinator();

@@ -56,6 +56,27 @@ static int semcheck_map_builtin_type_name_local(const char *id)
         return INT64_TYPE;
     if (pascal_identifier_equals(id, "Real"))
         return REAL_TYPE;
+    if (pascal_identifier_equals(id, "Single") ||
+        pascal_identifier_equals(id, "Double") ||
+        pascal_identifier_equals(id, "Extended"))
+        return REAL_TYPE;
+    if (pascal_identifier_equals(id, "Byte") ||
+        pascal_identifier_equals(id, "ShortInt") ||
+        pascal_identifier_equals(id, "SmallInt") ||
+        pascal_identifier_equals(id, "Word") ||
+        pascal_identifier_equals(id, "LongWord") ||
+        pascal_identifier_equals(id, "Cardinal") ||
+        pascal_identifier_equals(id, "DWord") ||
+        pascal_identifier_equals(id, "Int8") ||
+        pascal_identifier_equals(id, "UInt8") ||
+        pascal_identifier_equals(id, "Int16") ||
+        pascal_identifier_equals(id, "UInt16") ||
+        pascal_identifier_equals(id, "Int32") ||
+        pascal_identifier_equals(id, "UInt32"))
+        return INT_TYPE;
+    if (pascal_identifier_equals(id, "QWord") ||
+        pascal_identifier_equals(id, "UInt64"))
+        return INT64_TYPE;
     if (pascal_identifier_equals(id, "String") ||
         pascal_identifier_equals(id, "AnsiString") ||
         pascal_identifier_equals(id, "RawByteString") ||
@@ -1262,6 +1283,26 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                 {
                     *out_value = node->const_int_value;
                     return 0;
+                }
+                struct Expression *record_expr = expr->expr_data.record_access_data.record_expr;
+                if (record_expr != NULL && record_expr->type == EXPR_VAR_ID &&
+                    record_expr->expr_data.id != NULL)
+                {
+                    size_t qualified_len = strlen(record_expr->expr_data.id) + 1 + strlen(field_id) + 1;
+                    char *qualified = (char *)malloc(qualified_len);
+                    if (qualified != NULL)
+                    {
+                        snprintf(qualified, qualified_len, "%s.%s",
+                            record_expr->expr_data.id, field_id);
+                        if (FindIdent(&node, symtab, qualified) >= 0 &&
+                            node != NULL && node->hash_type == HASHTYPE_CONST)
+                        {
+                            *out_value = node->const_int_value;
+                            free(qualified);
+                            return 0;
+                        }
+                        free(qualified);
+                    }
                 }
             }
             fprintf(stderr, "Error: qualified constant '%s' is undefined or not a const.\n",
@@ -3010,6 +3051,12 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                             fprintf(stderr, "DEBUG: semcheck_compute_record_size FAILED for %s: result=%d\n",
                                 tree->tree_data.type_decl_data.id, size_result);
 #endif
+                            if (getenv("KGPC_DEBUG_SEMSTEPS") != NULL)
+                            {
+                                fprintf(stderr, "[SemCheck] record size failed for %s (line %d)\n",
+                                        tree->tree_data.type_decl_data.id ? tree->tree_data.type_decl_data.id : "<null>",
+                                        tree->line_num);
+                            }
                             return_val += 1;
                         }
                     }
@@ -3148,6 +3195,12 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                 {
                                     fprintf(stderr, "[KGPC] Size computation FAILED for %s\n",
                                         tree->tree_data.type_decl_data.id);
+                                }
+                                if (getenv("KGPC_DEBUG_SEMSTEPS") != NULL)
+                                {
+                                    fprintf(stderr, "[SemCheck] alias record size failed for %s (line %d)\n",
+                                            tree->tree_data.type_decl_data.id ? tree->tree_data.type_decl_data.id : "<null>",
+                                            tree->line_num);
                                 }
                                 return_val += 1;
                             }
@@ -3797,6 +3850,19 @@ void semcheck_add_builtins(SymTab_t *symtab)
     /* Platform newline constants to support System/ObjPas resourcestring concatenations */
     AddBuiltinStringConst(symtab, "LineEnding", "\n");
     AddBuiltinStringConst(symtab, "sLineBreak", "\n");
+
+    /* Unix/Linux baseline limits needed by unix.pp aliases (UT.*) */
+    AddBuiltinIntConst(symtab, "ARG_MAX", 131072);
+    AddBuiltinIntConst(symtab, "NAME_MAX", 255);
+    AddBuiltinIntConst(symtab, "PATH_MAX", 4095);
+    AddBuiltinIntConst(symtab, "SYS_NMLN", 65);
+    AddBuiltinIntConst(symtab, "SIG_MAXSIG", 128);
+    AddBuiltinIntConst(symtab, "PRIO_PROCESS", 0);
+    AddBuiltinIntConst(symtab, "PRIO_PGRP", 1);
+    AddBuiltinIntConst(symtab, "PRIO_USER", 2);
+    AddBuiltinIntConst(symtab, "UTSNAME_LENGTH", 65);
+    AddBuiltinIntConst(symtab, "fmClosed", 0xD7B0);
+    AddBuiltinIntConst(symtab, "fmInput", 0xD7B1);
     
     /* Integer boundary constants - required by FPC's objpas.pp and system.pp */
     {
@@ -3859,8 +3925,8 @@ void semcheck_add_builtins(SymTab_t *symtab)
         }
     }
     
-    /* Primitive core types required to semcheck stdlib.p and user code.
-     * Everything else should live in KGPC/stdlib.p (aliases, pointer helpers, etc.). */
+    /* Primitive core types required to semcheck system.p and user code.
+     * Everything else should live in KGPC/Units/system.p (aliases, pointer helpers, etc.). */
     add_builtin_from_vartype(symtab, "Integer", HASHVAR_INTEGER);
     add_builtin_from_vartype(symtab, "LongInt", HASHVAR_LONGINT);
     add_builtin_type_owned(symtab, "Int64", create_primitive_type_with_size(INT64_TYPE, 8));
@@ -3877,7 +3943,27 @@ void semcheck_add_builtins(SymTab_t *symtab)
     /* Primitive pointer type */
     add_builtin_type_owned(symtab, "Pointer", create_primitive_type(POINTER_TYPE));
 
-    /* File/Text primitives (sizes align with stdlib TextRec/FileRec layout) */
+    /* Common ordinal aliases (match KGPC system.p sizes) */
+    add_builtin_type_owned(symtab, "Byte", create_primitive_type_with_size(INT_TYPE, 1));
+    add_builtin_type_owned(symtab, "ShortInt", create_primitive_type_with_size(INT_TYPE, 1));
+    add_builtin_type_owned(symtab, "SmallInt", create_primitive_type_with_size(INT_TYPE, 2));
+    add_builtin_type_owned(symtab, "Word", create_primitive_type_with_size(INT_TYPE, 2));
+    add_builtin_type_owned(symtab, "LongWord", create_primitive_type_with_size(INT_TYPE, 4));
+    add_builtin_type_owned(symtab, "Cardinal", create_primitive_type_with_size(INT_TYPE, 4));
+    add_builtin_type_owned(symtab, "DWord", create_primitive_type_with_size(INT_TYPE, 4));
+    add_builtin_type_owned(symtab, "QWord", create_primitive_type_with_size(INT64_TYPE, 8));
+    add_builtin_type_owned(symtab, "UInt64", create_primitive_type_with_size(INT64_TYPE, 8));
+    add_builtin_type_owned(symtab, "Int8", create_primitive_type_with_size(INT_TYPE, 1));
+    add_builtin_type_owned(symtab, "UInt8", create_primitive_type_with_size(INT_TYPE, 1));
+    add_builtin_type_owned(symtab, "Int16", create_primitive_type_with_size(INT_TYPE, 2));
+    add_builtin_type_owned(symtab, "UInt16", create_primitive_type_with_size(INT_TYPE, 2));
+    add_builtin_type_owned(symtab, "Int32", create_primitive_type_with_size(INT_TYPE, 4));
+    add_builtin_type_owned(symtab, "UInt32", create_primitive_type_with_size(INT_TYPE, 4));
+    add_builtin_type_owned(symtab, "Single", create_primitive_type_with_size(REAL_TYPE, 8));
+    add_builtin_type_owned(symtab, "Double", create_primitive_type_with_size(REAL_TYPE, 8));
+    add_builtin_type_owned(symtab, "Extended", create_primitive_type_with_size(REAL_TYPE, 8));
+
+    /* File/Text primitives (sizes align with system.p TextRec/FileRec layout) */
     char *file_name = strdup("file");
     if (file_name != NULL) {
         KgpcType *file_type = create_primitive_type_with_size(FILE_TYPE, 368);
@@ -3886,6 +3972,22 @@ void semcheck_add_builtins(SymTab_t *symtab)
         destroy_kgpc_type(file_type);
         free(file_name);
     }
+    char *file_upper = strdup("File");
+    if (file_upper != NULL) {
+        KgpcType *file_type = create_primitive_type_with_size(FILE_TYPE, 368);
+        assert(file_type != NULL && "Failed to create file type");
+        AddBuiltinType_Typed(symtab, file_upper, file_type);
+        destroy_kgpc_type(file_type);
+        free(file_upper);
+    }
+    char *typed_file = strdup("TypedFile");
+    if (typed_file != NULL) {
+        KgpcType *typed_file_type = create_primitive_type_with_size(FILE_TYPE, 368);
+        assert(typed_file_type != NULL && "Failed to create typed file type");
+        AddBuiltinType_Typed(symtab, typed_file, typed_file_type);
+        destroy_kgpc_type(typed_file_type);
+        free(typed_file);
+    }
     char *text_name = strdup("text");
     if (text_name != NULL) {
         KgpcType *text_type = create_primitive_type_with_size(TEXT_TYPE, 632);
@@ -3893,6 +3995,14 @@ void semcheck_add_builtins(SymTab_t *symtab)
         AddBuiltinType_Typed(symtab, text_name, text_type);
         destroy_kgpc_type(text_type);
         free(text_name);
+    }
+    char *text_upper = strdup("Text");
+    if (text_upper != NULL) {
+        KgpcType *text_type = create_primitive_type_with_size(TEXT_TYPE, 632);
+        assert(text_type != NULL && "Failed to create text type");
+        AddBuiltinType_Typed(symtab, text_upper, text_type);
+        destroy_kgpc_type(text_type);
+        free(text_upper);
     }
 
     AddBuiltinRealConst(symtab, "Pi", acos(-1.0));
@@ -3941,6 +4051,86 @@ void semcheck_add_builtins(SymTab_t *symtab)
         AddBuiltinProc_Typed(symtab, readln_name, readln_type);
         destroy_kgpc_type(readln_type);
         free(readln_name);
+    }
+    char *halt_name = strdup("Halt");
+    if (halt_name != NULL) {
+        KgpcType *halt_type = create_procedure_type(NULL, NULL);
+        assert(halt_type != NULL && "Failed to create Halt procedure type");
+        AddBuiltinProc_Typed(symtab, halt_name, halt_type);
+        destroy_kgpc_type(halt_type);
+        free(halt_name);
+    }
+    char *assign_name = strdup("Assign");
+    if (assign_name != NULL) {
+        KgpcType *assign_type = create_procedure_type(NULL, NULL);
+        assert(assign_type != NULL && "Failed to create Assign procedure type");
+        AddBuiltinProc_Typed(symtab, assign_name, assign_type);
+        destroy_kgpc_type(assign_type);
+        free(assign_name);
+    }
+    char *close_name = strdup("Close");
+    if (close_name != NULL) {
+        KgpcType *close_type = create_procedure_type(NULL, NULL);
+        assert(close_type != NULL && "Failed to create Close procedure type");
+        AddBuiltinProc_Typed(symtab, close_name, close_type);
+        destroy_kgpc_type(close_type);
+        free(close_name);
+    }
+    char *settextcp_name = strdup("SetTextCodePage");
+    if (settextcp_name != NULL) {
+        KgpcType *settextcp_type = create_procedure_type(NULL, NULL);
+        assert(settextcp_type != NULL && "Failed to create SetTextCodePage procedure type");
+        AddBuiltinProc_Typed(symtab, settextcp_name, settextcp_type);
+        destroy_kgpc_type(settextcp_type);
+        free(settextcp_name);
+    }
+    char *getmem_proc = strdup("GetMem");
+    if (getmem_proc != NULL) {
+        KgpcType *getmem_type = create_procedure_type(NULL, NULL);
+        assert(getmem_type != NULL && "Failed to create GetMem procedure type");
+        AddBuiltinProc_Typed(symtab, getmem_proc, getmem_type);
+        destroy_kgpc_type(getmem_type);
+        free(getmem_proc);
+    }
+    char *move_proc = strdup("Move");
+    if (move_proc != NULL) {
+        KgpcType *move_type = create_procedure_type(NULL, NULL);
+        assert(move_type != NULL && "Failed to create Move procedure type");
+        AddBuiltinProc_Typed(symtab, move_proc, move_type);
+        destroy_kgpc_type(move_type);
+        free(move_proc);
+    }
+    char *realloc_proc = strdup("ReallocMem");
+    if (realloc_proc != NULL) {
+        KgpcType *realloc_type = create_procedure_type(NULL, NULL);
+        assert(realloc_type != NULL && "Failed to create ReallocMem procedure type");
+        AddBuiltinProc_Typed(symtab, realloc_proc, realloc_type);
+        destroy_kgpc_type(realloc_type);
+        free(realloc_proc);
+    }
+    char *setcodepage_proc = strdup("SetCodePage");
+    if (setcodepage_proc != NULL) {
+        KgpcType *setcodepage_type = create_procedure_type(NULL, NULL);
+        assert(setcodepage_type != NULL && "Failed to create SetCodePage procedure type");
+        AddBuiltinProc_Typed(symtab, setcodepage_proc, setcodepage_type);
+        destroy_kgpc_type(setcodepage_type);
+        free(setcodepage_proc);
+    }
+    char *interlocked_proc = strdup("InterlockedExchangeAdd");
+    if (interlocked_proc != NULL) {
+        KgpcType *interlocked_type = create_procedure_type(NULL, NULL);
+        assert(interlocked_type != NULL && "Failed to create InterlockedExchangeAdd procedure type");
+        AddBuiltinProc_Typed(symtab, interlocked_proc, interlocked_type);
+        destroy_kgpc_type(interlocked_type);
+        free(interlocked_proc);
+    }
+    char *freemem_proc = strdup("FreeMem");
+    if (freemem_proc != NULL) {
+        KgpcType *freemem_type = create_procedure_type(NULL, NULL);
+        assert(freemem_type != NULL && "Failed to create FreeMem procedure type");
+        AddBuiltinProc_Typed(symtab, freemem_proc, freemem_type);
+        destroy_kgpc_type(freemem_type);
+        free(freemem_proc);
     }
     char *val_name = strdup("Val");
     if (val_name != NULL) {
@@ -4076,6 +4266,47 @@ void semcheck_add_builtins(SymTab_t *symtab)
         AddBuiltinFunction_Typed(symtab, length_name, length_type);
         destroy_kgpc_type(length_type);
         free(length_name);
+    }
+
+    char *getmem_func = strdup("GetMem");
+    if (getmem_func != NULL) {
+        KgpcType *return_type = create_primitive_type(POINTER_TYPE);
+        assert(return_type != NULL && "Failed to create return type for GetMem");
+        KgpcType *getmem_type = create_procedure_type(NULL, return_type);
+        assert(getmem_type != NULL && "Failed to create GetMem function type");
+        AddBuiltinFunction_Typed(symtab, getmem_func, getmem_type);
+        destroy_kgpc_type(getmem_type);
+        free(getmem_func);
+    }
+    char *interlocked_func = strdup("InterlockedExchangeAdd");
+    if (interlocked_func != NULL) {
+        KgpcType *return_type = kgpc_type_from_var_type(HASHVAR_LONGINT);
+        assert(return_type != NULL && "Failed to create return type for InterlockedExchangeAdd");
+        KgpcType *interlocked_type = create_procedure_type(NULL, return_type);
+        assert(interlocked_type != NULL && "Failed to create InterlockedExchangeAdd function type");
+        AddBuiltinFunction_Typed(symtab, interlocked_func, interlocked_type);
+        destroy_kgpc_type(interlocked_type);
+        free(interlocked_func);
+    }
+    char *to_singlebyte = strdup("ToSingleByteFileSystemEncodedFileName");
+    if (to_singlebyte != NULL) {
+        KgpcType *return_type = kgpc_type_from_var_type(HASHVAR_PCHAR);
+        assert(return_type != NULL && "Failed to create return type for ToSingleByteFileSystemEncodedFileName");
+        KgpcType *to_singlebyte_type = create_procedure_type(NULL, return_type);
+        assert(to_singlebyte_type != NULL && "Failed to create ToSingleByteFileSystemEncodedFileName function type");
+        AddBuiltinFunction_Typed(symtab, to_singlebyte, to_singlebyte_type);
+        destroy_kgpc_type(to_singlebyte_type);
+        free(to_singlebyte);
+    }
+    char *array_to_ppchar = strdup("ArrayStringToPPchar");
+    if (array_to_ppchar != NULL) {
+        KgpcType *return_type = create_primitive_type(POINTER_TYPE);
+        assert(return_type != NULL && "Failed to create return type for ArrayStringToPPchar");
+        KgpcType *array_to_ppchar_type = create_procedure_type(NULL, return_type);
+        assert(array_to_ppchar_type != NULL && "Failed to create ArrayStringToPPchar function type");
+        AddBuiltinFunction_Typed(symtab, array_to_ppchar, array_to_ppchar_type);
+        destroy_kgpc_type(array_to_ppchar_type);
+        free(array_to_ppchar);
     }
 
     char *copy_name = strdup("Copy");
@@ -4282,7 +4513,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         }
     }
 
-    /* Builtins are now in stdlib.p */
+    /* Builtins are now in system.p */
 }
 
 /* Semantic check for a program */
@@ -4401,6 +4632,7 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
 int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
 {
     int return_val;
+    const char *debug_steps = getenv("KGPC_DEBUG_SEMSTEPS");
     assert(tree != NULL);
     assert(symtab != NULL);
     assert(tree->type == TREE_UNIT);
@@ -4410,41 +4642,97 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
     PushScope(symtab);
 
     /* Check interface section */
+    int before = return_val;
     return_val += predeclare_enum_literals(symtab, tree->tree_data.unit_data.interface_type_decls);
+    if (debug_steps != NULL && return_val != before)
+        fprintf(stderr, "[SemCheck] interface enum predeclare +%d (total %d)\n",
+                return_val - before, return_val);
     /* Pre-declare types so they're available for const expressions like High(MyType) */
+    before = return_val;
     return_val += predeclare_types(symtab, tree->tree_data.unit_data.interface_type_decls);
+    if (debug_steps != NULL && return_val != before)
+        fprintf(stderr, "[SemCheck] interface type predeclare +%d (total %d)\n",
+                return_val - before, return_val);
     
     /* Check implementation section - predeclare types BEFORE subprograms */
+    before = return_val;
     return_val += predeclare_enum_literals(symtab, tree->tree_data.unit_data.implementation_type_decls);
+    if (debug_steps != NULL && return_val != before)
+        fprintf(stderr, "[SemCheck] impl enum predeclare +%d (total %d)\n",
+                return_val - before, return_val);
     /* Pre-declare types so they're available for const expressions like High(MyType) */
+    before = return_val;
     return_val += predeclare_types(symtab, tree->tree_data.unit_data.implementation_type_decls);
+    if (debug_steps != NULL && return_val != before)
+        fprintf(stderr, "[SemCheck] impl type predeclare +%d (total %d)\n",
+                return_val - before, return_val);
     
     /* Now predeclare subprograms AFTER all types (interface + implementation) are predeclared.
      * This ensures function return types referencing implementation types can be resolved.
      * The same subprograms list is shared by interface and implementation. */
+    before = return_val;
     return_val += predeclare_subprograms(symtab, tree->tree_data.unit_data.subprograms, 0, NULL);
+    if (debug_steps != NULL && return_val != before)
+        fprintf(stderr, "[SemCheck] subprogram predeclare +%d (total %d)\n",
+                return_val - before, return_val);
     
     /* Continue interface section processing */
+    before = return_val;
     return_val += semcheck_const_decls(symtab, tree->tree_data.unit_data.interface_const_decls);
+    if (debug_steps != NULL && return_val != before)
+        fprintf(stderr, "[SemCheck] interface consts +%d (total %d)\n",
+                return_val - before, return_val);
+    before = return_val;
     return_val += semcheck_type_decls(symtab, tree->tree_data.unit_data.interface_type_decls);
+    if (debug_steps != NULL && return_val != before)
+        fprintf(stderr, "[SemCheck] interface types +%d (total %d)\n",
+                return_val - before, return_val);
+    before = return_val;
     return_val += semcheck_decls(symtab, tree->tree_data.unit_data.interface_var_decls);
+    if (debug_steps != NULL && return_val != before)
+        fprintf(stderr, "[SemCheck] interface vars +%d (total %d)\n",
+                return_val - before, return_val);
 
     /* Continue implementation section processing */
+    before = return_val;
     return_val += semcheck_const_decls(symtab, tree->tree_data.unit_data.implementation_const_decls);
+    if (debug_steps != NULL && return_val != before)
+        fprintf(stderr, "[SemCheck] impl consts +%d (total %d)\n",
+                return_val - before, return_val);
+    before = return_val;
     return_val += semcheck_type_decls(symtab, tree->tree_data.unit_data.implementation_type_decls);
+    if (debug_steps != NULL && return_val != before)
+        fprintf(stderr, "[SemCheck] impl types +%d (total %d)\n",
+                return_val - before, return_val);
+    before = return_val;
     return_val += semcheck_decls(symtab, tree->tree_data.unit_data.implementation_var_decls);
+    if (debug_steps != NULL && return_val != before)
+        fprintf(stderr, "[SemCheck] impl vars +%d (total %d)\n",
+                return_val - before, return_val);
 
     /* Check subprograms */
+    before = return_val;
     return_val += semcheck_subprograms(symtab, tree->tree_data.unit_data.subprograms, 0, NULL);
+    if (debug_steps != NULL && return_val != before)
+        fprintf(stderr, "[SemCheck] subprograms +%d (total %d)\n",
+                return_val - before, return_val);
 
     /* Check initialization section if present */
     if (tree->tree_data.unit_data.initialization != NULL) {
+        before = return_val;
         return_val += semcheck_stmt(symtab, tree->tree_data.unit_data.initialization, INT_MAX);
+        if (debug_steps != NULL && return_val != before)
+            fprintf(stderr, "[SemCheck] initialization +%d (total %d)\n",
+                    return_val - before, return_val);
     }
 
     /* Check finalization section if present */
     if (tree->tree_data.unit_data.finalization != NULL) {
+        before = return_val;
         return_val += semcheck_stmt(symtab, tree->tree_data.unit_data.finalization, INT_MAX);
+        if (debug_steps != NULL && return_val != before)
+            fprintf(stderr, "[SemCheck] finalization +%d (total %d)\n",
+                    return_val - before, return_val);
     }
 
     return return_val;
@@ -5717,6 +6005,43 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     /**** Check the subprogram internals now ****/
 
     /* Greater than 0 signifies an error */
+    if (func_return > 0)
+    {
+        int current_has_body = (subprogram->tree_data.subprogram_data.statement_list != NULL);
+        HashNode_t *existing_decl = NULL;
+        if (FindIdent(&existing_decl, symtab, id_to_use_for_lookup) == 0 &&
+            existing_decl != NULL &&
+            existing_decl->mangled_id != NULL &&
+            subprogram->tree_data.subprogram_data.mangled_id != NULL &&
+            strcmp(existing_decl->mangled_id, subprogram->tree_data.subprogram_data.mangled_id) == 0)
+        {
+            func_return = 0;
+        }
+        else
+        {
+            ListNode_t *candidates = FindAllIdents(symtab, id_to_use_for_lookup);
+            ListNode_t *iter = candidates;
+            while (iter != NULL)
+            {
+                HashNode_t *candidate = (HashNode_t *)iter->cur;
+                if (candidate != NULL && candidate->type != NULL &&
+                    candidate->type->kind == TYPE_KIND_PROCEDURE)
+                {
+                    Tree_t *def = candidate->type->info.proc_info.definition;
+                    int existing_has_body = (def != NULL &&
+                        def->tree_data.subprogram_data.statement_list != NULL);
+                    if (existing_has_body != current_has_body)
+                    {
+                        func_return = 0;
+                        break;
+                    }
+                }
+                iter = iter->next;
+            }
+            if (candidates != NULL)
+                DestroyList(candidates);
+        }
+    }
     if(func_return > 0)
     {
         fprintf(stderr, "On line %d: redeclaration of name %s!\n",
@@ -5968,6 +6293,37 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
         if (already_exists)
             return 0;  /* Already declared - skip to avoid duplicates */
     }
+
+    /* If a declaration already exists for this name/signature, skip predeclaring
+     * the matching implementation body. */
+    {
+        int current_has_body = (subprogram->tree_data.subprogram_data.statement_list != NULL);
+        int current_param_count = ListLength(subprogram->tree_data.subprogram_data.args_var);
+        ListNode_t *all_matches = FindAllIdents(symtab, id_to_use_for_lookup);
+        ListNode_t *cur = all_matches;
+        while (cur != NULL)
+        {
+            HashNode_t *candidate = (HashNode_t *)cur->cur;
+            if (candidate != NULL && candidate->type != NULL &&
+                candidate->type->kind == TYPE_KIND_PROCEDURE)
+            {
+                Tree_t *def = candidate->type->info.proc_info.definition;
+                int existing_has_body = (def != NULL &&
+                    def->tree_data.subprogram_data.statement_list != NULL);
+                int existing_param_count = ListLength(candidate->type->info.proc_info.params);
+                if (existing_param_count == current_param_count &&
+                    existing_has_body != current_has_body)
+                {
+                    if (all_matches != NULL)
+                        DestroyList(all_matches);
+                    return 0;
+                }
+            }
+            cur = cur->next;
+        }
+        if (all_matches != NULL)
+            DestroyList(all_matches);
+    }
     
     /**** PLACE SUBPROGRAM ON THE CURRENT SCOPE ****/
     if(sub_type == TREE_SUBPROGRAM_PROC)
@@ -6109,6 +6465,15 @@ int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scop
         assert(cur->cur != NULL);
         assert(cur->type == LIST_TREE);
         Tree_t *child = (Tree_t *)cur->cur;
+        if (child != NULL &&
+            child->tree_data.subprogram_data.statement_list == NULL &&
+            child->tree_data.subprogram_data.cname_flag == 0 &&
+            child->tree_data.subprogram_data.cname_override == NULL)
+        {
+            /* Interface/forward declaration with no body. */
+            cur = cur->next;
+            continue;
+        }
         return_val += semcheck_subprogram(symtab, child, max_scope_lev);
         if (parent_subprogram != NULL &&
             child != NULL &&

@@ -1,1 +1,1 @@
-/* This file is intentionally left empty after refactoring builtins to stdlib.p */
+/* This file is intentionally left empty after refactoring builtins to system.p */

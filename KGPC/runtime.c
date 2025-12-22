@@ -4374,3 +4374,8 @@ void kgpc_sincos_bits(int64_t angle_bits, double *sin_out, double *cos_out)
     if (cos_out != NULL)
         *cos_out = cos(angle);
 }
+
+void Halt(int64_t code)
+{
+    exit((int)code);
+}

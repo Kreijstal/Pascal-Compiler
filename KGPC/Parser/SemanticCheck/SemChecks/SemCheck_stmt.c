@@ -1044,6 +1044,209 @@ static int semcheck_builtin_read_like(SymTab_t *symtab, struct Statement *stmt, 
     return return_val;
 }
 
+static int semcheck_builtin_untyped_call(SymTab_t *symtab, struct Statement *stmt,
+    int max_scope_lev, int first_arg_mutate)
+{
+    int return_val = 0;
+    if (stmt == NULL)
+        return 0;
+
+    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+    int arg_index = 0;
+    while (args != NULL)
+    {
+        struct Expression *expr = (struct Expression *)args->cur;
+        int expr_type = UNKNOWN_TYPE;
+        int mutate_flag = (arg_index == 0 && first_arg_mutate) ? MUTATE : NO_MUTATE;
+        return_val += semcheck_expr_main(&expr_type, symtab, expr, max_scope_lev, mutate_flag);
+        args = args->next;
+        ++arg_index;
+    }
+
+    return return_val;
+}
+
+static int semcheck_builtin_assign(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    return semcheck_builtin_untyped_call(symtab, stmt, max_scope_lev, 1);
+}
+
+static int semcheck_builtin_close(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    return semcheck_builtin_untyped_call(symtab, stmt, max_scope_lev, 1);
+}
+
+static int semcheck_builtin_settextcodepage(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    return semcheck_builtin_untyped_call(symtab, stmt, max_scope_lev, 1);
+}
+
+static int semcheck_builtin_halt(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    if (stmt == NULL)
+        return 0;
+
+    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+    if (args == NULL)
+    {
+        struct Expression *zero_expr = mk_inum(stmt->line_num, 0);
+        if (zero_expr == NULL)
+        {
+            fprintf(stderr, "Error on line %d, failed to allocate Halt argument.\n", stmt->line_num);
+            return 1;
+        }
+        stmt->stmt_data.procedure_call_data.expr_args = CreateListNode(zero_expr, LIST_EXPR);
+        return 0;
+    }
+
+    if (args->next != NULL)
+    {
+        fprintf(stderr, "Error on line %d, Halt expects zero or one argument.\n", stmt->line_num);
+        return 1;
+    }
+
+    int return_val = 0;
+    struct Expression *code_expr = (struct Expression *)args->cur;
+    int code_type = UNKNOWN_TYPE;
+    return_val += semcheck_expr_main(&code_type, symtab, code_expr, max_scope_lev, NO_MUTATE);
+    return return_val;
+}
+
+static int semcheck_builtin_getmem(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    if (stmt == NULL)
+        return 0;
+
+    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+    int arg_count = ListLength(args);
+    if (arg_count < 1 || arg_count > 2)
+    {
+        fprintf(stderr, "Error on line %d, GetMem expects one or two arguments.\n", stmt->line_num);
+        return 1;
+    }
+
+    int return_val = 0;
+    if (arg_count == 1)
+    {
+        struct Expression *size_expr = (struct Expression *)args->cur;
+        int size_type = UNKNOWN_TYPE;
+        return_val += semcheck_expr_main(&size_type, symtab, size_expr, max_scope_lev, NO_MUTATE);
+        return return_val;
+    }
+
+    struct Expression *target_expr = (struct Expression *)args->cur;
+    struct Expression *size_expr = (struct Expression *)args->next->cur;
+    int target_type = UNKNOWN_TYPE;
+    int size_type = UNKNOWN_TYPE;
+    return_val += semcheck_expr_main(&target_type, symtab, target_expr, max_scope_lev, MUTATE);
+    return_val += semcheck_expr_main(&size_type, symtab, size_expr, max_scope_lev, NO_MUTATE);
+    return return_val;
+}
+
+static int semcheck_builtin_freemem(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    if (stmt == NULL)
+        return 0;
+
+    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+    int arg_count = ListLength(args);
+    if (arg_count < 1 || arg_count > 2)
+    {
+        fprintf(stderr, "Error on line %d, FreeMem expects one or two arguments.\n", stmt->line_num);
+        return 1;
+    }
+
+    int return_val = 0;
+    if (args != NULL)
+    {
+        struct Expression *ptr_expr = (struct Expression *)args->cur;
+        int ptr_type = UNKNOWN_TYPE;
+        return_val += semcheck_expr_main(&ptr_type, symtab, ptr_expr, max_scope_lev, NO_MUTATE);
+        if (args->next != NULL)
+        {
+            struct Expression *size_expr = (struct Expression *)args->next->cur;
+            int size_type = UNKNOWN_TYPE;
+            return_val += semcheck_expr_main(&size_type, symtab, size_expr, max_scope_lev, NO_MUTATE);
+        }
+    }
+
+    return return_val;
+}
+
+static int semcheck_builtin_move(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    if (stmt == NULL)
+        return 0;
+
+    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+    if (args == NULL || args->next == NULL || args->next->next == NULL || args->next->next->next != NULL)
+    {
+        fprintf(stderr, "Error on line %d, Move expects exactly three arguments.\n", stmt->line_num);
+        return 1;
+    }
+
+    int return_val = 0;
+    struct Expression *src_expr = (struct Expression *)args->cur;
+    struct Expression *dst_expr = (struct Expression *)args->next->cur;
+    struct Expression *count_expr = (struct Expression *)args->next->next->cur;
+    int src_type = UNKNOWN_TYPE;
+    int dst_type = UNKNOWN_TYPE;
+    int count_type = UNKNOWN_TYPE;
+    return_val += semcheck_expr_main(&src_type, symtab, src_expr, max_scope_lev, NO_MUTATE);
+    return_val += semcheck_expr_main(&dst_type, symtab, dst_expr, max_scope_lev, MUTATE);
+    return_val += semcheck_expr_main(&count_type, symtab, count_expr, max_scope_lev, NO_MUTATE);
+    return return_val;
+}
+
+static int semcheck_builtin_reallocmem(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    if (stmt == NULL)
+        return 0;
+
+    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+    if (args == NULL || args->next == NULL || args->next->next != NULL)
+    {
+        fprintf(stderr, "Error on line %d, ReallocMem expects exactly two arguments.\n", stmt->line_num);
+        return 1;
+    }
+
+    int return_val = 0;
+    struct Expression *target_expr = (struct Expression *)args->cur;
+    struct Expression *size_expr = (struct Expression *)args->next->cur;
+    int target_type = UNKNOWN_TYPE;
+    int size_type = UNKNOWN_TYPE;
+    return_val += semcheck_expr_main(&target_type, symtab, target_expr, max_scope_lev, NO_MUTATE);
+    return_val += semcheck_expr_main(&size_type, symtab, size_expr, max_scope_lev, NO_MUTATE);
+    return return_val;
+}
+
+static int semcheck_builtin_setcodepage(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    return semcheck_builtin_untyped_call(symtab, stmt, max_scope_lev, 0);
+}
+
+static int semcheck_builtin_interlockedexchangeadd(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    if (stmt == NULL)
+        return 0;
+
+    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+    if (args == NULL || args->next == NULL || args->next->next != NULL)
+    {
+        fprintf(stderr, "Error on line %d, InterlockedExchangeAdd expects exactly two arguments.\n", stmt->line_num);
+        return 1;
+    }
+
+    int return_val = 0;
+    struct Expression *target_expr = (struct Expression *)args->cur;
+    struct Expression *value_expr = (struct Expression *)args->next->cur;
+    int target_type = UNKNOWN_TYPE;
+    int value_type = UNKNOWN_TYPE;
+    return_val += semcheck_expr_main(&target_type, symtab, target_expr, max_scope_lev, NO_MUTATE);
+    return_val += semcheck_expr_main(&value_type, symtab, value_expr, max_scope_lev, NO_MUTATE);
+    return return_val;
+}
+
 static int semcheck_builtin_new(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
     int return_val = 0;
@@ -2118,7 +2321,88 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     proc_id = stmt->stmt_data.procedure_call_data.id;
     args_given = stmt->stmt_data.procedure_call_data.expr_args;
 
+    /* FPC Bootstrap Feature: Handle unit-qualified procedure calls.
+     * When the parser sees Unit.Procedure(args), it creates a procedure call with id "__Procedure"
+     * and passes Unit as the first argument (as if it were a method call).
+     * We need to detect this pattern and transform it back to a direct procedure call.
+     *
+     * Pattern: proc_id starts with "__", first arg is a VAR_ID that doesn't exist in symbol table
+     * (it's the unit name), and the procedure name (without "__" prefix) exists in symbol table.
+     */
+    if (proc_id != NULL && strncmp(proc_id, "__", 2) == 0 && args_given != NULL)
+    {
+        struct Expression *first_arg = (struct Expression *)args_given->cur;
+        if (first_arg != NULL && first_arg->type == EXPR_VAR_ID && first_arg->expr_data.id != NULL)
+        {
+            char *potential_unit_name = first_arg->expr_data.id;
+            HashNode_t *unit_check = NULL;
+
+            /* Check if the first argument is NOT a known variable (i.e., it's a unit qualifier) */
+            if (FindIdent(&unit_check, symtab, potential_unit_name) == -1)
+            {
+                /* First arg is not a known identifier - might be a unit qualifier.
+                 * Try to look up the procedure name without the "__" prefix. */
+                char *real_proc_name = strdup(proc_id + 2);  /* Skip the "__" prefix */
+                if (real_proc_name == NULL)
+                {
+                    /* strdup failed - skip transformation, will report error later */
+                }
+                else
+                {
+                    ListNode_t *proc_candidates = FindAllIdents(symtab, real_proc_name);
+
+                    if (proc_candidates != NULL)
+                    {
+                        /* Found the procedure by name. Transform the call:
+                         * 1. Remove the first argument (the unit qualifier)
+                         * 2. Change proc_id to the real procedure name (without "__")
+                         */
+                        /* Save the remaining args before modifying the list */
+                        ListNode_t *remaining_args = args_given->next;
+
+                        /* Free the unit qualifier expression and list node.
+                         * Note: remaining_args holds the saved pointer value, so
+                         * freeing args_given doesn't affect it. */
+                        destroy_expr(first_arg);
+                        args_given->cur = NULL;
+                        free(args_given);
+
+                        /* Update the statement with the transformed call */
+                        stmt->stmt_data.procedure_call_data.expr_args = remaining_args;
+
+                        /* Update proc_id - we already have real_proc_name allocated */
+                        free(proc_id);
+                        proc_id = real_proc_name;
+                        stmt->stmt_data.procedure_call_data.id = proc_id;
+                        args_given = remaining_args;
+
+                        DestroyList(proc_candidates);
+
+                        /* Continue with normal procedure call handling using the transformed call */
+                    }
+                    else
+                    {
+                        /* Procedure not found - free real_proc_name and fall through to report error */
+                        free(real_proc_name);
+                    }
+                }
+            }
+        }
+    }
+
+    if (proc_id != NULL && pascal_identifier_equals(proc_id, "SetCodePage"))
+        return semcheck_builtin_setcodepage(symtab, stmt, max_scope_lev);
+
+    if (proc_id != NULL && pascal_identifier_equals(proc_id, "ReallocMem"))
+        return semcheck_builtin_reallocmem(symtab, stmt, max_scope_lev);
+
     int handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "Halt",
+        semcheck_builtin_halt, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
+
+    handled_builtin = 0;
     return_val += try_resolve_builtin_procedure(symtab, stmt, "SetLength",
         semcheck_builtin_setlength, max_scope_lev, &handled_builtin);
     if (handled_builtin)
@@ -2145,6 +2429,60 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     handled_builtin = 0;
     return_val += try_resolve_builtin_procedure(symtab, stmt, "readln",
         semcheck_builtin_read_like, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
+
+    handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "Assign",
+        semcheck_builtin_assign, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
+
+    handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "Close",
+        semcheck_builtin_close, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
+
+    handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "SetTextCodePage",
+        semcheck_builtin_settextcodepage, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
+
+    handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "GetMem",
+        semcheck_builtin_getmem, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
+
+    handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "FreeMem",
+        semcheck_builtin_freemem, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
+
+    handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "Move",
+        semcheck_builtin_move, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
+
+    handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "ReallocMem",
+        semcheck_builtin_reallocmem, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
+
+    handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "SetCodePage",
+        semcheck_builtin_setcodepage, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
+
+    handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "InterlockedExchangeAdd",
+        semcheck_builtin_interlockedexchangeadd, max_scope_lev, &handled_builtin);
     if (handled_builtin)
         return return_val;
 
@@ -2207,75 +2545,6 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
         semcheck_builtin_dispose, max_scope_lev, &handled_builtin);
     if (handled_builtin)
         return return_val;
-
-    /* FPC Bootstrap Feature: Handle unit-qualified procedure calls.
-     * When the parser sees Unit.Procedure(args), it creates a procedure call with id "__Procedure"
-     * and passes Unit as the first argument (as if it were a method call).
-     * We need to detect this pattern and transform it back to a direct procedure call.
-     * 
-     * Pattern: proc_id starts with "__", first arg is a VAR_ID that doesn't exist in symbol table
-     * (it's the unit name), and the procedure name (without "__" prefix) exists in symbol table.
-     */
-    if (proc_id != NULL && strncmp(proc_id, "__", 2) == 0 && args_given != NULL)
-    {
-        struct Expression *first_arg = (struct Expression *)args_given->cur;
-        if (first_arg != NULL && first_arg->type == EXPR_VAR_ID && first_arg->expr_data.id != NULL)
-        {
-            char *potential_unit_name = first_arg->expr_data.id;
-            HashNode_t *unit_check = NULL;
-            
-            /* Check if the first argument is NOT a known variable (i.e., it's a unit qualifier) */
-            if (FindIdent(&unit_check, symtab, potential_unit_name) == -1)
-            {
-                /* First arg is not a known identifier - might be a unit qualifier.
-                 * Try to look up the procedure name without the "__" prefix. */
-                char *real_proc_name = strdup(proc_id + 2);  /* Skip the "__" prefix */
-                if (real_proc_name == NULL)
-                {
-                    /* strdup failed - skip transformation, will report error later */
-                }
-                else
-                {
-                    ListNode_t *proc_candidates = FindAllIdents(symtab, real_proc_name);
-                    
-                    if (proc_candidates != NULL)
-                    {
-                        /* Found the procedure by name. Transform the call:
-                         * 1. Remove the first argument (the unit qualifier)
-                         * 2. Change proc_id to the real procedure name (without "__")
-                         */
-                        /* Save the remaining args before modifying the list */
-                        ListNode_t *remaining_args = args_given->next;
-                        
-                        /* Free the unit qualifier expression and list node.
-                         * Note: remaining_args holds the saved pointer value, so
-                         * freeing args_given doesn't affect it. */
-                        destroy_expr(first_arg);
-                        args_given->cur = NULL;
-                        free(args_given);
-                        
-                        /* Update the statement with the transformed call */
-                        stmt->stmt_data.procedure_call_data.expr_args = remaining_args;
-                        
-                        /* Update proc_id - we already have real_proc_name allocated */
-                        free(proc_id);
-                        proc_id = real_proc_name;
-                        stmt->stmt_data.procedure_call_data.id = proc_id;
-                        args_given = remaining_args;
-                        
-                        DestroyList(proc_candidates);
-                        
-                        /* Continue with normal procedure call handling using the transformed call */
-                    }
-                    else
-                    {
-                        /* Procedure not found - free real_proc_name and fall through to report error */
-                        free(real_proc_name);
-                    }
-                }
-            }
-        }
-    }
 
     /* Handle procedural fields on records (advanced records) similarly to function calls */
     if (proc_id != NULL && args_given != NULL)
