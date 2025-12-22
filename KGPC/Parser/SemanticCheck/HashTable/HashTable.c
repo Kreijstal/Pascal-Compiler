@@ -106,6 +106,8 @@ static int add_ident_to_table_internal(HashTable_t *table, const HashTableParams
     {
         /* Check for collisions */
         ListNode_t *cur = list;
+        ListNode_t *last = NULL;
+        int append_after_type = 0;
         while (cur != NULL)
         {
             HashNode_t *existing_node = (HashNode_t *)cur->cur;
@@ -116,7 +118,13 @@ static int add_ident_to_table_internal(HashTable_t *table, const HashTableParams
                     free(canonical_id);
                     return 1;
                 }
+                if (existing_node->hash_type == HASHTYPE_TYPE &&
+                    is_procedure_or_function(params->hash_type))
+                {
+                    append_after_type = 1;
+                }
             }
+            last = cur;
             cur = cur->next;
         }
 
@@ -134,7 +142,14 @@ static int add_ident_to_table_internal(HashTable_t *table, const HashTableParams
         if (params->type != NULL)
             kgpc_type_retain(params->type);
         hash_node->canonical_id = canonical_id;
-        table->table[hash] = PushListNodeFront(list, CreateListNode(hash_node, LIST_UNSPECIFIED));
+        if (append_after_type && last != NULL)
+        {
+            last->next = CreateListNode(hash_node, LIST_UNSPECIFIED);
+        }
+        else
+        {
+            table->table[hash] = PushListNodeFront(list, CreateListNode(hash_node, LIST_UNSPECIFIED));
+        }
         return 0;
     }
 }
@@ -428,6 +443,12 @@ static int check_collision_allowance(HashNode_t* existing_node, enum HashType ne
 
     /* Allow collision if both are procedures/functions (overloading) */
     if (is_new_proc_func && is_existing_proc_func) {
+        return 1;
+    }
+
+    /* Allow type/procedure name sharing (separate namespaces in Pascal). */
+    if ((is_new_proc_func && existing_node->hash_type == HASHTYPE_TYPE) ||
+        (new_hash_type == HASHTYPE_TYPE && is_existing_proc_func)) {
         return 1;
     }
     

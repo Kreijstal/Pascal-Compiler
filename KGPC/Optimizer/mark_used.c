@@ -11,10 +11,11 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdint.h>
+#include "identifier_utils.h"
 
 /* Hash table to map mangled_id -> Tree_t* (subprogram) */
 typedef struct {
-    char *mangled_id;
+    char *canonical_id;
     Tree_t *subprogram;
 } SubprogramEntry;
 
@@ -31,6 +32,12 @@ static void map_init(SubprogramMap *map) {
 }
 
 static void map_destroy(SubprogramMap *map) {
+    if (map == NULL)
+        return;
+    for (int i = 0; i < map->count; i++) {
+        free(map->entries[i].canonical_id);
+        map->entries[i].canonical_id = NULL;
+    }
     free(map->entries);
     map->entries = NULL;
     map->count = 0;
@@ -39,30 +46,42 @@ static void map_destroy(SubprogramMap *map) {
 
 static void map_add(SubprogramMap *map, const char *mangled_id, Tree_t *subprogram) {
     if (mangled_id == NULL || subprogram == NULL) return;
+    char *canonical_id = pascal_identifier_lower_dup(mangled_id);
+    if (canonical_id == NULL)
+        return;
     
     if (map->count >= map->capacity) {
         int new_capacity = map->capacity == 0 ? 64 : map->capacity * 2;
         SubprogramEntry *new_entries = realloc(map->entries, new_capacity * sizeof(SubprogramEntry));
-        if (new_entries == NULL) return;
+        if (new_entries == NULL) {
+            free(canonical_id);
+            return;
+        }
         map->entries = new_entries;
         map->capacity = new_capacity;
     }
     
-    map->entries[map->count].mangled_id = (char*)mangled_id;
+    map->entries[map->count].canonical_id = canonical_id;
     map->entries[map->count].subprogram = subprogram;
     map->count++;
 }
 
 static Tree_t* map_find(SubprogramMap *map, const char *mangled_id) {
     if (mangled_id == NULL) return NULL;
+    char *lookup_id = pascal_identifier_lower_dup(mangled_id);
+    if (lookup_id == NULL)
+        return NULL;
 
     Tree_t *fallback = NULL;
     for (int i = 0; i < map->count; i++) {
-        if (map->entries[i].mangled_id != NULL &&
-            strcmp(map->entries[i].mangled_id, mangled_id) == 0) {
+        if (map->entries[i].canonical_id != NULL &&
+            strcmp(map->entries[i].canonical_id, lookup_id) == 0) {
             Tree_t *sub = map->entries[i].subprogram;
             if (sub != NULL && sub->tree_data.subprogram_data.statement_list != NULL)
+            {
+                free(lookup_id);
                 return sub;
+            }
             if (fallback == NULL)
                 fallback = sub;
         }
@@ -73,14 +92,18 @@ static Tree_t* map_find(SubprogramMap *map, const char *mangled_id) {
     for (int i = 0; i < map->count; i++) {
         Tree_t *sub = map->entries[i].subprogram;
         if (sub != NULL && sub->tree_data.subprogram_data.id != NULL &&
-            strcmp(sub->tree_data.subprogram_data.id, mangled_id) == 0) {
+            pascal_identifier_equals(sub->tree_data.subprogram_data.id, mangled_id)) {
             if (sub->tree_data.subprogram_data.statement_list != NULL)
+            {
+                free(lookup_id);
                 return sub;
+            }
             if (id_fallback == NULL)
                 id_fallback = sub;
         }
     }
 
+    free(lookup_id);
     if (fallback != NULL)
         return fallback;
     return id_fallback;

@@ -327,9 +327,9 @@ int main(int argc, char **argv)
     unit_search_paths_init(&g_unit_paths);
     unit_search_paths_set_user(&g_unit_paths, argv[1]);
 
-    file_to_parse = "KGPC/stdlib.p";
+    file_to_parse = "KGPC/Units/system.p";
     unit_search_paths_set_vendor(&g_unit_paths, file_to_parse);
-    prelude_tree = ParsePascalOnly("KGPC/stdlib.p");
+    prelude_tree = ParsePascalOnly("KGPC/Units/system.p");
     file_to_parse = argv[1];
     user_tree = ParsePascalOnly(argv[1]);
 
@@ -338,7 +338,11 @@ int main(int argc, char **argv)
         UnitSet visited_units;
         unit_set_init(&visited_units);
 
-        ListNode_t *prelude_subs = prelude_tree->tree_data.program_data.subprograms;
+        ListNode_t *prelude_subs = NULL;
+        if (prelude_tree->type == TREE_PROGRAM_TYPE)
+            prelude_subs = prelude_tree->tree_data.program_data.subprograms;
+        else if (prelude_tree->type == TREE_UNIT)
+            prelude_subs = prelude_tree->tree_data.unit_data.subprograms;
         ListNode_t *user_subs = user_tree->tree_data.program_data.subprograms;
 
         if (prelude_subs == NULL)
@@ -347,7 +351,7 @@ int main(int argc, char **argv)
         }
         else
         {
-            /* Mark prelude (stdlib.p) subprograms as library procedures so they don't
+            /* Mark prelude (system.p) subprograms as library procedures so they don't
              * incorrectly get static links when merged into user programs */
             mark_unit_subprograms(prelude_subs);
             
@@ -360,10 +364,21 @@ int main(int argc, char **argv)
             user_tree->tree_data.program_data.subprograms = prelude_subs;
         }
         // Since we moved the user_subs list, we need to avoid a double free
-        if(prelude_tree != NULL)
-            prelude_tree->tree_data.program_data.subprograms = NULL;
+        if (prelude_tree != NULL)
+        {
+            if (prelude_tree->type == TREE_PROGRAM_TYPE)
+                prelude_tree->tree_data.program_data.subprograms = NULL;
+            else if (prelude_tree->type == TREE_UNIT)
+                prelude_tree->tree_data.unit_data.subprograms = NULL;
+        }
 
-        load_units_from_list(user_tree, prelude_tree->tree_data.program_data.uses_units, &visited_units);
+        if (prelude_tree->type == TREE_PROGRAM_TYPE)
+            load_units_from_list(user_tree, prelude_tree->tree_data.program_data.uses_units, &visited_units);
+        else if (prelude_tree->type == TREE_UNIT)
+        {
+            load_units_from_list(user_tree, prelude_tree->tree_data.unit_data.interface_uses, &visited_units);
+            load_units_from_list(user_tree, prelude_tree->tree_data.unit_data.implementation_uses, &visited_units);
+        }
         load_units_from_list(user_tree, user_tree->tree_data.program_data.uses_units, &visited_units);
 
         unit_set_destroy(&visited_units);

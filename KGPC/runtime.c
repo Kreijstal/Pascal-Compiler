@@ -3107,7 +3107,7 @@ void kgpc_str_int64(int64_t value, char **target)
     *target = result;
 }
 
-int64_t kgpc_now(void)
+double kgpc_now(void)
 {
 #ifdef _WIN32
     FILETIME ft;
@@ -3115,14 +3115,32 @@ int64_t kgpc_now(void)
     GetSystemTimeAsFileTime(&ft);
     uli.LowPart = ft.dwLowDateTime;
     uli.HighPart = ft.dwHighDateTime;
+    if (uli.QuadPart == 0)
+    {
+        time_t fallback = time(NULL);
+        if (fallback < 0)
+            return 0;
+        double unix_seconds = (double)fallback;
+        return (unix_seconds / 86400.0) + 25569.0;
+    }
+    if (uli.QuadPart <= 116444736000000000ULL)
+    {
+        time_t fallback = time(NULL);
+        if (fallback < 0)
+            return 0;
+        double unix_seconds = (double)fallback;
+        return (unix_seconds / 86400.0) + 25569.0;
+    }
     /* FILETIME is in 100-nanosecond intervals since January 1, 1601. */
     uint64_t ticks = uli.QuadPart - 116444736000000000ULL;
-    return (int64_t)(ticks / 10000ULL);
+    double unix_seconds = (double)ticks / 10000000.0;
+    return (unix_seconds / 86400.0) + 25569.0;
 #else
     struct timespec ts;
     if (clock_gettime(CLOCK_REALTIME, &ts) != 0)
         return 0;
-    return (int64_t)ts.tv_sec * 1000LL + (int64_t)(ts.tv_nsec / 1000000LL);
+    double unix_seconds = (double)ts.tv_sec + ((double)ts.tv_nsec / 1000000000.0);
+    return (unix_seconds / 86400.0) + 25569.0;
 #endif
 }
 
@@ -3163,27 +3181,98 @@ static int match_token_ci(const char *cursor, const char *token)
     return 1;
 }
 
-char *kgpc_format_datetime(const char *format, int64_t datetime_ms)
+static void kgpc_fill_tm_from_unix_seconds(struct tm *out, int64_t seconds)
+{
+    if (out == NULL)
+        return;
+
+    int64_t days = seconds / 86400;
+    int64_t rem = seconds % 86400;
+    if (rem < 0)
+    {
+        rem += 86400;
+        days -= 1;
+    }
+
+    int hour = (int)(rem / 3600);
+    rem %= 3600;
+    int minute = (int)(rem / 60);
+    int second = (int)(rem % 60);
+
+    int64_t z = days + 719468;
+    int64_t era = (z >= 0 ? z : z - 146096) / 146097;
+    unsigned doe = (unsigned)(z - era * 146097);
+    unsigned yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    int year = (int)(yoe) + (int)era * 400;
+    unsigned doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    unsigned mp = (5 * doy + 2) / 153;
+    unsigned day = doy - (153 * mp + 2) / 5 + 1;
+    unsigned month = mp + (mp < 10 ? 3 : -9);
+    year += (month <= 2);
+
+    memset(out, 0, sizeof(*out));
+    out->tm_year = year - 1900;
+    out->tm_mon = (int)month - 1;
+    out->tm_mday = (int)day;
+    out->tm_hour = hour;
+    out->tm_min = minute;
+    out->tm_sec = second;
+    out->tm_isdst = -1;
+}
+
+char *kgpc_format_datetime(const char *format, double datetime)
 {
     if (format == NULL)
         format = "";
 
-    time_t seconds = (time_t)(datetime_ms / 1000);
-    int millis = (int)(datetime_ms % 1000);
-    if (millis < 0)
+    double unix_seconds = (datetime - 25569.0) * 86400.0;
+    double whole_seconds = floor(unix_seconds);
+    double frac = unix_seconds - whole_seconds;
+    if (frac < 0.0)
     {
-        millis += 1000;
-        seconds -= 1;
+        frac += 1.0;
+        whole_seconds -= 1.0;
+    }
+    time_t seconds = (time_t)whole_seconds;
+    int millis = (int)floor((frac * 1000.0) + 0.5);
+    if (millis >= 1000)
+    {
+        millis = 0;
+        seconds += 1;
     }
 
     struct tm tm_value;
 #ifdef _WIN32
     errno_t err = localtime_s(&tm_value, &seconds);
     if (err != 0)
-        return kgpc_alloc_empty_string();
+    {
+        struct tm *fallback = localtime(&seconds);
+        if (fallback != NULL)
+        {
+            tm_value = *fallback;
+        }
+        else
+        {
+            errno_t gmt_err = gmtime_s(&tm_value, &seconds);
+            if (gmt_err != 0)
+            {
+                struct tm *gmt_fallback = gmtime(&seconds);
+                if (gmt_fallback != NULL)
+                {
+                    tm_value = *gmt_fallback;
+                }
+                else
+                {
+                    kgpc_fill_tm_from_unix_seconds(&tm_value, (int64_t)seconds);
+                }
+            }
+        }
+    }
 #else
     if (localtime_r(&seconds, &tm_value) == NULL)
-        return kgpc_alloc_empty_string();
+    {
+        kgpc_fill_tm_from_unix_seconds(&tm_value, (int64_t)seconds);
+    }
 #endif
 
     size_t capacity = 64;
@@ -4363,4 +4452,9 @@ void kgpc_sincos_bits(int64_t angle_bits, double *sin_out, double *cos_out)
         *sin_out = sin(angle);
     if (cos_out != NULL)
         *cos_out = cos(angle);
+}
+
+void Halt(int64_t code)
+{
+    exit((int)code);
 }

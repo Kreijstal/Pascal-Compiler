@@ -7405,10 +7405,14 @@ int semcheck_varid(int *type_return,
             if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                 fprintf(stderr, "[SemCheck] semcheck_varid: scope_return=%d max_scope_lev=%d\n", scope_return, max_scope_lev);
             }
-            fprintf(stderr, "Error on line %d, cannot change \"%s\", invalid scope!\n",
-                expr->line_num, id);
-            fprintf(stderr, "[Was it defined above a function declaration?]\n\n");
-            ++return_val;
+            if (hash_return->hash_type != HASHTYPE_CONST &&
+                hash_return->hash_type != HASHTYPE_TYPE)
+            {
+                fprintf(stderr, "Error on line %d, cannot change \"%s\", invalid scope!\n",
+                    expr->line_num, id);
+                fprintf(stderr, "[Was it defined above a function declaration?]\n\n");
+                ++return_val;
+            }
         }
         int is_function_result = (mutating != NO_MUTATE &&
             hash_return->hash_type == HASHTYPE_FUNCTION);
@@ -8024,6 +8028,138 @@ int semcheck_funccall(int *type_return,
 
     if (id != NULL && pascal_identifier_equals(id, "SizeOf"))
         return semcheck_builtin_sizeof(type_return, symtab, expr, max_scope_lev);
+
+    if (id != NULL && pascal_identifier_equals(id, "GetMem"))
+    {
+        ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+        if (args == NULL || args->next != NULL)
+        {
+            fprintf(stderr, "Error on line %d, GetMem expects exactly one argument.\n",
+                expr->line_num);
+            *type_return = UNKNOWN_TYPE;
+            return 1;
+        }
+
+        struct Expression *size_expr = (struct Expression *)args->cur;
+        int size_type = UNKNOWN_TYPE;
+        int error_count = semcheck_expr_main(&size_type, symtab, size_expr, max_scope_lev, NO_MUTATE);
+        if (error_count != 0)
+        {
+            *type_return = UNKNOWN_TYPE;
+            return error_count;
+        }
+
+        HashNode_t *best_match = NULL;
+        ListNode_t *candidates = FindAllIdents(symtab, "GetMem");
+        for (ListNode_t *cur = candidates; cur != NULL; cur = cur->next)
+        {
+            HashNode_t *candidate = (HashNode_t *)cur->cur;
+            if (candidate == NULL)
+                continue;
+            if (candidate->hash_type != HASHTYPE_FUNCTION)
+                continue;
+            if (candidate->type == NULL || candidate->type->kind != TYPE_KIND_PROCEDURE)
+                continue;
+            ListNode_t *params = kgpc_type_get_procedure_params(candidate->type);
+            if (ListLength(params) != 1)
+                continue;
+            best_match = candidate;
+            break;
+        }
+        if (candidates != NULL)
+            DestroyList(candidates);
+
+        semcheck_reset_function_call_cache(expr);
+        if (best_match != NULL && best_match->mangled_id != NULL)
+        {
+            if (expr->expr_data.function_call_data.mangled_id != NULL)
+            {
+                free(expr->expr_data.function_call_data.mangled_id);
+                expr->expr_data.function_call_data.mangled_id = NULL;
+            }
+            expr->expr_data.function_call_data.mangled_id = strdup(best_match->mangled_id);
+            if (expr->expr_data.function_call_data.mangled_id == NULL)
+            {
+                fprintf(stderr, "Error: failed to allocate mangled name for GetMem.\n");
+                *type_return = UNKNOWN_TYPE;
+                return 1;
+            }
+            semcheck_set_function_call_target(expr, best_match);
+        }
+        else
+        {
+            char *mangled_name = MangleFunctionNameFromCallSite("GetMem", args, symtab, max_scope_lev);
+            if (mangled_name != NULL)
+            {
+                if (expr->expr_data.function_call_data.mangled_id != NULL)
+                {
+                    free(expr->expr_data.function_call_data.mangled_id);
+                    expr->expr_data.function_call_data.mangled_id = NULL;
+                }
+                expr->expr_data.function_call_data.mangled_id = mangled_name;
+            }
+        }
+        *type_return = POINTER_TYPE;
+        expr->resolved_type = POINTER_TYPE;
+        return 0;
+    }
+
+    if (id != NULL && pascal_identifier_equals(id, "ToSingleByteFileSystemEncodedFileName"))
+    {
+        ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+        if (args == NULL || args->next != NULL)
+        {
+            fprintf(stderr, "Error on line %d, ToSingleByteFileSystemEncodedFileName expects exactly one argument.\n",
+                expr->line_num);
+            *type_return = UNKNOWN_TYPE;
+            return 1;
+        }
+
+        int error_count = 0;
+        struct Expression *arg_expr = (struct Expression *)args->cur;
+        int arg_type = UNKNOWN_TYPE;
+        error_count += semcheck_expr_main(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
+        if (error_count != 0)
+        {
+            *type_return = UNKNOWN_TYPE;
+            return error_count;
+        }
+
+        semcheck_reset_function_call_cache(expr);
+        *type_return = STRING_TYPE;
+        expr->resolved_type = STRING_TYPE;
+        return 0;
+    }
+
+    if (id != NULL && pascal_identifier_equals(id, "ArrayStringToPPchar"))
+    {
+        ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+        if (args == NULL || args->next == NULL || args->next->next != NULL)
+        {
+            fprintf(stderr, "Error on line %d, ArrayStringToPPchar expects exactly two arguments.\n",
+                expr->line_num);
+            *type_return = UNKNOWN_TYPE;
+            return 1;
+        }
+
+        int error_count = 0;
+        struct Expression *arr_expr = (struct Expression *)args->cur;
+        struct Expression *reserve_expr = (struct Expression *)args->next->cur;
+        int arr_type = UNKNOWN_TYPE;
+        int reserve_type = UNKNOWN_TYPE;
+        error_count += semcheck_expr_main(&arr_type, symtab, arr_expr, max_scope_lev, NO_MUTATE);
+        error_count += semcheck_expr_main(&reserve_type, symtab, reserve_expr, max_scope_lev, NO_MUTATE);
+        if (error_count != 0)
+        {
+            *type_return = UNKNOWN_TYPE;
+            return error_count;
+        }
+
+        semcheck_reset_function_call_cache(expr);
+        *type_return = POINTER_TYPE;
+        expr->resolved_type = POINTER_TYPE;
+        return 0;
+    }
 
     if (id != NULL && pascal_identifier_equals(id, "Chr"))
         return semcheck_builtin_chr(type_return, symtab, expr, max_scope_lev);
@@ -8679,6 +8815,9 @@ method_call_resolved:
                         current_score += 0;
                     else if (formal_type == LONGINT_TYPE && call_type == INT_TYPE)
                         current_score += 1;
+                    else if (formal_type == INT64_TYPE &&
+                        (call_type == LONGINT_TYPE || call_type == INT_TYPE))
+                        current_score += 2;
                     else if (formal_type == STRING_TYPE && call_type == CHAR_TYPE)
                         current_score += 1; /* Allow implicit char-to-string promotion */
                     else
