@@ -5620,6 +5620,12 @@ next_identifier:
                                 inferred_var_type = HASHVAR_REAL;
                                 normalized_type = REAL_TYPE;
                                 break;
+                            case CHAR_TYPE:
+                                inferred_var_type = HASHVAR_CHAR;
+                                normalized_type = CHAR_TYPE;
+                                if (tree->tree_data.var_decl_data.type_id == NULL)
+                                    tree->tree_data.var_decl_data.type_id = strdup("char");
+                                break;
                             case STRING_TYPE:
                                 inferred_var_type = HASHVAR_PCHAR;
                                 normalized_type = STRING_TYPE;
@@ -5674,6 +5680,11 @@ next_identifier:
                                 {
                                     compatible = 1;
                                 }
+                            }
+
+                            if (!compatible && current_var_type == HASHVAR_PCHAR && expr_type == CHAR_TYPE)
+                            {
+                                compatible = 1;
                             }
                             
                             /* Allow pointer type initializers (including nil) for pointer variables.

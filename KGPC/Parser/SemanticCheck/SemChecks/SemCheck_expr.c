@@ -7691,6 +7691,8 @@ int semcheck_arrayaccess(int *type_return,
         else if (element_type == RECORD_TYPE)
         {
             expr->record_type = array_expr->array_element_record_type;
+            if (expr->record_type == NULL && array_expr->array_element_type_id != NULL)
+                expr->record_type = semcheck_lookup_record_type(symtab, array_expr->array_element_type_id);
         }
     }
 

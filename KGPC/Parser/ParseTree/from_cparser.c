@@ -4608,6 +4608,28 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_build
     if (cur != NULL && cur->typ == PASCAL_T_TYPE_SPEC) {
         convert_type_spec(cur, &type_id, NULL, &type_info);
         cur = cur->next;
+    } else if (cur != NULL && cur->typ == PASCAL_T_NONE) {
+        ast_t *type_node = cur->child;
+        while (type_node != NULL &&
+               type_node->typ != PASCAL_T_TYPE_SPEC &&
+               type_node->typ != PASCAL_T_IDENTIFIER) {
+            type_node = type_node->next;
+        }
+        if (type_node != NULL) {
+            if (type_node->typ == PASCAL_T_TYPE_SPEC) {
+                convert_type_spec(type_node, &type_id, NULL, &type_info);
+            } else if (type_node->typ == PASCAL_T_IDENTIFIER) {
+                char *type_name = dup_symbol(type_node);
+                if (type_name != NULL) {
+                    int mapped = map_type_name(type_name, &type_id);
+                    if (mapped == UNKNOWN_TYPE && type_id == NULL)
+                        type_id = type_name;
+                    else
+                        free(type_name);
+                }
+            }
+            cur = cur->next;
+        }
     }
 
     ast_t *value_node = unwrap_pascal_node(cur);
