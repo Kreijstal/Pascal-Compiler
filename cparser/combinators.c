@@ -372,13 +372,18 @@ static ParseResult many_fn(input_t * in, void * args, char* parser_name) {
             break;
         }
         if (debug_many) {
-            fprintf(stderr, "[MANY] iter=%d SUCCESS, new pos=%d line=%d\n", iter, in->start, in->line);
+            fprintf(stderr, "[MANY] iter=%d SUCCESS, new pos=%d line=%d ast=%p (ast_nil=%p) typ=%d\n",
+                    iter, in->start, in->line, (void*)res.value.ast, (void*)ast_nil,
+                    res.value.ast ? res.value.ast->typ : -1);
         }
-        if (head == NULL) {
-            head = tail = res.value.ast;
-        } else {
-            tail->next = res.value.ast;
-            tail = tail->next;
+        // Skip ast_nil results - they represent "matched but no output"
+        if (res.value.ast != NULL && res.value.ast != ast_nil) {
+            if (head == NULL) {
+                head = tail = res.value.ast;
+            } else {
+                tail->next = res.value.ast;
+                tail = tail->next;
+            }
         }
         iter++;
     }
