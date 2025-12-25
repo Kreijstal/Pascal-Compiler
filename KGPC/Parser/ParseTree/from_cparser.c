@@ -3878,15 +3878,21 @@ static ListNode_t *convert_param(ast_t *param_node) {
     /* Convert default value if present */
     struct Statement *default_init = NULL;
     if (default_value_node != NULL) {
-        /* PASCAL_T_DEFAULT_VALUE has structure: "=" token, expression */
-        ast_t *eq_tok = default_value_node->child;
-        ast_t *expr_node = (eq_tok != NULL) ? eq_tok->next : NULL;
+        /* PASCAL_T_DEFAULT_VALUE's child IS the expression (no "=" token since match returns ast_nil) */
+        ast_t *expr_node = default_value_node->child;
+        if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL) {
+            fprintf(stderr, "[convert_param] default_value_node=%p expr_node=%p\n",
+                (void*)default_value_node, (void*)expr_node);
+        }
         if (expr_node != NULL) {
             struct Expression *default_expr = convert_expression(expr_node);
             if (default_expr != NULL) {
                 /* Wrap expression in a var_assign statement with NULL var for storage */
                 default_init = mk_varassign(default_value_node->line, default_value_node->col, 
                                             NULL, default_expr);
+                if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL) {
+                    fprintf(stderr, "[convert_param] Created default_init=%p\n", (void*)default_init);
+                }
             }
         }
     }

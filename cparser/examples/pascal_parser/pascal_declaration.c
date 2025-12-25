@@ -33,7 +33,7 @@ static ParseResult debug_print_fn(input_t* in, void* args, char* parser_name) {
                 msg, in->line, in->col, in->buffer[in->start], (unsigned char)in->buffer[in->start]);
         fclose(f);
     }
-    return make_success(NULL);
+    return make_success(ast_nil);
 }
 
 combinator_t* debug_print(char* msg) {
@@ -839,6 +839,10 @@ static combinator_t* get_param_default_expr_parser(void) {
         g_param_default_expr_parser = (combinator_t**)safe_malloc(sizeof(combinator_t*));
         *g_param_default_expr_parser = new_combinator();
         init_pascal_expression_parser(g_param_default_expr_parser, NULL);
+        if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL) {
+            fprintf(stderr, "[get_param_default_expr_parser] Initialized expr parser at %p -> %p\n",
+                (void*)g_param_default_expr_parser, (void*)*g_param_default_expr_parser);
+        }
     }
     return lazy(g_param_default_expr_parser);
 }
@@ -860,12 +864,16 @@ static combinator_t* create_param_type_spec(void) {
 
     // Default value for parameter: = expression
     // Supports default parameter values like: procedure Test(x: Integer = 10);
-    combinator_t* default_value = optional(seq(new_combinator(), PASCAL_T_DEFAULT_VALUE,
+    // NOTE: The inner seq has PASCAL_T_DEFAULT_VALUE so it creates a wrapper node
+    combinator_t* default_value_inner = seq(new_combinator(), PASCAL_T_DEFAULT_VALUE,
         token(match("=")),
         get_param_default_expr_parser(),
         NULL
-    ));
+    );
+    combinator_t* default_value = optional(default_value_inner);
 
+    // NOTE: The outer seq has PASCAL_T_NONE so children are flattened into a linked list
+    // Result structure: TYPE_SPEC -> DEFAULT_VALUE (if present)
     return optional(seq(new_combinator(), PASCAL_T_NONE,
         token(match(":")),
         type_reference,

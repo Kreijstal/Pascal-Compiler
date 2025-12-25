@@ -1263,8 +1263,10 @@ void destroy_stmt(struct Statement *stmt)
     switch(stmt->type)
     {
         case STMT_VAR_ASSIGN:
-          destroy_expr(stmt->stmt_data.var_assign_data.var);
-          destroy_expr(stmt->stmt_data.var_assign_data.expr);
+          if (stmt->stmt_data.var_assign_data.var != NULL)
+              destroy_expr(stmt->stmt_data.var_assign_data.var);
+          if (stmt->stmt_data.var_assign_data.expr != NULL)
+              destroy_expr(stmt->stmt_data.var_assign_data.expr);
           break;
 
         case STMT_PROCEDURE_CALL:

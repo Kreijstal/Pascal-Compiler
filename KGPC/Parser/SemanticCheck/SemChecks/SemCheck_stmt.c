@@ -3629,9 +3629,26 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
         }
         else if(true_args != NULL && args_given == NULL)
         {
-            fprintf(stderr, "Error on line %d, on procedure call %s, not enough arguments given!\n\n",
-                stmt->line_num, proc_id);
-            ++return_val;
+            /* Check if all remaining parameters have default values */
+            int all_have_defaults = 1;
+            ListNode_t *remaining = true_args;
+            while (remaining != NULL)
+            {
+                Tree_t *decl = (Tree_t *)remaining->cur;
+                if (!param_has_default_value(decl))
+                {
+                    all_have_defaults = 0;
+                    break;
+                }
+                remaining = remaining->next;
+            }
+            
+            if (!all_have_defaults)
+            {
+                fprintf(stderr, "Error on line %d, on procedure call %s, not enough arguments given!\n\n",
+                    stmt->line_num, proc_id);
+                ++return_val;
+            }
         }
     }
 
