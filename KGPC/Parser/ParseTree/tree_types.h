@@ -355,6 +355,7 @@ enum ExprType {
     EXPR_NIL,
     EXPR_SET,
     EXPR_ARRAY_LITERAL,
+    EXPR_RECORD_CONSTRUCTOR,
     EXPR_POINTER_DEREF,
     EXPR_ADDR,
     EXPR_TYPECAST,
@@ -473,6 +474,13 @@ struct Expression
             int elements_semchecked;
         } array_literal_data;
 
+        struct RecordConstructor
+        {
+            ListNode_t *fields; /* LIST_UNSPECIFIED nodes pointing to RecordConstructorField* */
+            int field_count;
+            int fields_semchecked;
+        } record_constructor_data;
+
         /* Pointer dereference */
         struct PointerDeref
         {
@@ -554,6 +562,23 @@ struct SetElement
 {
     struct Expression *lower;
     struct Expression *upper;
+};
+
+struct RecordConstructorField
+{
+    char *field_id;
+    struct Expression *value;
+    long long field_offset;
+    int field_type;
+    char *field_type_id;
+    struct RecordType *field_record_type;
+    int field_is_array;
+    int array_start;
+    int array_end;
+    int array_element_type;
+    char *array_element_type_id;
+    int array_is_open;
+    struct RecordType *array_element_record_type;
 };
 
 

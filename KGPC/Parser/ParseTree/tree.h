@@ -310,6 +310,7 @@ struct Expression *mk_nil(int line_num);
 struct SetElement *mk_set_element(struct Expression *lower, struct Expression *upper);
 void destroy_set_element(struct SetElement *element);
 struct Expression *mk_set(int line_num, unsigned int bitmask, ListNode_t *elements, int is_constant);
+struct Expression *mk_record_constructor(int line_num, ListNode_t *fields, int field_count);
 
 struct Expression *mk_typecast(int line_num, int target_type, char *target_type_id,
     struct Expression *expr);

@@ -416,6 +416,12 @@ static int semcheck_typecheck_array_literal(struct Expression *expr, SymTab_t *s
     int max_scope_lev, int expected_type, const char *expected_type_id, int line_num);
 int semcheck_prepare_array_literal_argument(Tree_t *formal_decl, struct Expression *arg_expr,
     SymTab_t *symtab, int max_scope_lev, int line_num);
+int semcheck_prepare_record_constructor_argument(Tree_t *formal_decl, struct Expression *arg_expr,
+    SymTab_t *symtab, int max_scope_lev, int line_num);
+static int semcheck_typecheck_record_constructor(struct Expression *expr, SymTab_t *symtab,
+    int max_scope_lev, struct RecordType *record_type, int line_num);
+static struct RecordType *semcheck_record_type_from_decl(Tree_t *decl, SymTab_t *symtab);
+static KgpcType *semcheck_field_expected_kgpc_type(SymTab_t *symtab, struct RecordField *field);
 
 static int semcheck_try_indexed_property_getter(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating)
@@ -1242,6 +1248,299 @@ int semcheck_prepare_array_literal_argument(Tree_t *formal_decl, struct Expressi
         expected_type, expected_type_id, line_num);
 }
 
+static struct RecordType *semcheck_record_type_from_decl(Tree_t *decl, SymTab_t *symtab)
+{
+    if (decl == NULL || symtab == NULL)
+        return NULL;
+
+    if (decl->type == TREE_VAR_DECL)
+    {
+        if (decl->tree_data.var_decl_data.inline_record_type != NULL)
+            return decl->tree_data.var_decl_data.inline_record_type;
+    }
+
+    {
+        int owns_type = 0;
+        KgpcType *resolved = resolve_type_from_vardecl(decl, symtab, &owns_type);
+        if (resolved != NULL)
+        {
+            struct RecordType *record_type = NULL;
+            if (kgpc_type_is_record(resolved))
+                record_type = kgpc_type_get_record(resolved);
+            else if (kgpc_type_is_pointer(resolved) && resolved->info.points_to != NULL &&
+                kgpc_type_is_record(resolved->info.points_to))
+                record_type = kgpc_type_get_record(resolved->info.points_to);
+
+            if (owns_type)
+                destroy_kgpc_type(resolved);
+
+            if (record_type != NULL)
+                return record_type;
+        }
+    }
+
+    if (decl->type == TREE_VAR_DECL)
+    {
+        if (decl->tree_data.var_decl_data.cached_kgpc_type != NULL)
+        {
+            KgpcType *cached = decl->tree_data.var_decl_data.cached_kgpc_type;
+            if (kgpc_type_is_record(cached))
+                return kgpc_type_get_record(cached);
+            if (kgpc_type_is_pointer(cached))
+            {
+                KgpcType *pointee = cached->info.points_to;
+                if (pointee != NULL && kgpc_type_is_record(pointee))
+                    return kgpc_type_get_record(pointee);
+            }
+        }
+
+        if (decl->tree_data.var_decl_data.type_id != NULL)
+            return semcheck_lookup_record_type(symtab, decl->tree_data.var_decl_data.type_id);
+    }
+
+    return NULL;
+}
+
+static KgpcType *semcheck_field_expected_kgpc_type(SymTab_t *symtab, struct RecordField *field)
+{
+    if (symtab == NULL || field == NULL)
+        return NULL;
+
+    if (field->is_array)
+    {
+        KgpcType *element_type = NULL;
+        if (field->array_element_type == RECORD_TYPE && field->nested_record != NULL)
+        {
+            element_type = create_record_type(field->nested_record);
+        }
+        else if (field->array_element_type_id != NULL)
+        {
+            HashNode_t *type_node = NULL;
+            if (FindIdent(&type_node, symtab, field->array_element_type_id) >= 0 &&
+                type_node != NULL)
+            {
+                if (type_node->type != NULL)
+                {
+                    kgpc_type_retain(type_node->type);
+                    element_type = type_node->type;
+                }
+                else
+                {
+                    struct TypeAlias *alias = hashnode_get_type_alias(type_node);
+                    if (alias != NULL)
+                        element_type = create_kgpc_type_from_type_alias(alias, symtab);
+                }
+            }
+        }
+        if (element_type == NULL && field->array_element_type != UNKNOWN_TYPE)
+            element_type = create_primitive_type(field->array_element_type);
+        if (element_type == NULL)
+            return NULL;
+        return create_array_type(element_type, field->array_start, field->array_end);
+    }
+
+    if (field->nested_record != NULL)
+        return create_record_type(field->nested_record);
+
+    if (field->type_id != NULL)
+    {
+        HashNode_t *type_node = NULL;
+        if (FindIdent(&type_node, symtab, field->type_id) >= 0 && type_node != NULL)
+        {
+            if (type_node->type != NULL)
+            {
+                kgpc_type_retain(type_node->type);
+                return type_node->type;
+            }
+            else
+            {
+                struct TypeAlias *alias = hashnode_get_type_alias(type_node);
+                if (alias != NULL)
+                    return create_kgpc_type_from_type_alias(alias, symtab);
+            }
+        }
+    }
+
+    if (field->type != UNKNOWN_TYPE)
+        return create_primitive_type(field->type);
+
+    return NULL;
+}
+
+static int semcheck_typecheck_record_constructor(struct Expression *expr, SymTab_t *symtab,
+    int max_scope_lev, struct RecordType *record_type, int line_num)
+{
+    if (expr == NULL || symtab == NULL)
+        return 0;
+
+    if (record_type == NULL)
+    {
+        fprintf(stderr, "Error on line %d, unable to infer record type for constructor.\n",
+            line_num);
+        expr->resolved_type = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    expr->record_type = record_type;
+    expr->resolved_type = RECORD_TYPE;
+    if (expr->resolved_kgpc_type != NULL)
+        destroy_kgpc_type(expr->resolved_kgpc_type);
+    expr->resolved_kgpc_type = create_record_type(record_type);
+
+    int error_count = 0;
+    ListNode_t *cur = expr->expr_data.record_constructor_data.fields;
+    while (cur != NULL)
+    {
+        struct RecordConstructorField *field = (struct RecordConstructorField *)cur->cur;
+        if (field == NULL || field->field_id == NULL || field->value == NULL)
+        {
+            ++error_count;
+            cur = cur->next;
+            continue;
+        }
+
+        for (ListNode_t *prev = expr->expr_data.record_constructor_data.fields;
+             prev != cur; prev = prev->next)
+        {
+            struct RecordConstructorField *prior = (struct RecordConstructorField *)prev->cur;
+            if (prior != NULL && prior->field_id != NULL &&
+                pascal_identifier_equals(prior->field_id, field->field_id))
+            {
+                fprintf(stderr, "Error on line %d, duplicate record constructor field %s.\n",
+                    line_num, field->field_id);
+                ++error_count;
+                break;
+            }
+        }
+
+        struct RecordField *field_desc = NULL;
+        long long field_offset = 0;
+        if (resolve_record_field(symtab, record_type, field->field_id,
+                &field_desc, &field_offset, line_num, 0) != 0 || field_desc == NULL)
+        {
+            ++error_count;
+            cur = cur->next;
+            continue;
+        }
+
+        field->field_offset = field_offset;
+        field->field_type = field_desc->type;
+        field->field_record_type = field_desc->nested_record;
+        if (field_desc->nested_record != NULL)
+            field->field_type = RECORD_TYPE;
+        if (field_desc->nested_record == NULL && field_desc->type_id != NULL)
+        {
+            struct RecordType *resolved_record = semcheck_lookup_record_type(symtab, field_desc->type_id);
+            if (resolved_record != NULL)
+            {
+                field->field_record_type = resolved_record;
+                field->field_type = RECORD_TYPE;
+            }
+        }
+
+        if (field_desc->type_id != NULL)
+        {
+            free(field->field_type_id);
+            field->field_type_id = strdup(field_desc->type_id);
+        }
+
+        field->field_is_array = field_desc->is_array;
+        field->array_start = field_desc->array_start;
+        field->array_end = field_desc->array_end;
+        field->array_is_open = field_desc->array_is_open;
+        field->array_element_type = field_desc->array_element_type;
+        field->array_element_record_type = NULL;
+        if (field_desc->array_element_type_id != NULL)
+        {
+            free(field->array_element_type_id);
+            field->array_element_type_id = strdup(field_desc->array_element_type_id);
+        }
+        if (field_desc->array_element_type == RECORD_TYPE && field_desc->nested_record != NULL)
+            field->array_element_record_type = field_desc->nested_record;
+        if (field->array_element_record_type == NULL && field_desc->array_element_type_id != NULL)
+        {
+            struct RecordType *resolved_elem = semcheck_lookup_record_type(symtab, field_desc->array_element_type_id);
+            if (resolved_elem != NULL)
+            {
+                field->array_element_record_type = resolved_elem;
+                field->array_element_type = RECORD_TYPE;
+            }
+        }
+
+        if (field->value->type == EXPR_RECORD_CONSTRUCTOR && field->value->record_type == NULL)
+        {
+            if (field->field_type == RECORD_TYPE)
+                field->value->record_type = field->field_record_type;
+            else if (field->field_is_array && field->array_element_type == RECORD_TYPE)
+                field->value->record_type = field->array_element_record_type;
+        }
+
+        int value_type = UNKNOWN_TYPE;
+        error_count += semcheck_expr_main(&value_type, symtab, field->value, max_scope_lev, NO_MUTATE);
+
+        int expected_owned = 1;
+        KgpcType *expected_type = semcheck_field_expected_kgpc_type(symtab, field_desc);
+        if (expected_type == NULL)
+        {
+            fprintf(stderr, "Error on line %d, unable to resolve type for field %s.\n",
+                line_num, field->field_id);
+            ++error_count;
+        }
+        else
+        {
+            int value_owned = 0;
+            KgpcType *value_type_kgpc = semcheck_resolve_expression_kgpc_type(
+                symtab, field->value, max_scope_lev, NO_MUTATE, &value_owned);
+            if (value_type_kgpc == NULL)
+            {
+                fprintf(stderr, "Error on line %d, unable to resolve type for field %s.\n",
+                    line_num, field->field_id);
+                ++error_count;
+            }
+            else if (!are_types_compatible_for_assignment(expected_type, value_type_kgpc, symtab))
+            {
+                fprintf(stderr,
+                    "Error on line %d, incompatible types in record constructor for %s "
+                    "(expected %s, got %s).\n",
+                    line_num, field->field_id,
+                    kgpc_type_to_string(expected_type),
+                    kgpc_type_to_string(value_type_kgpc));
+                ++error_count;
+            }
+            if (value_owned && value_type_kgpc != NULL)
+                destroy_kgpc_type(value_type_kgpc);
+        }
+        if (expected_owned && expected_type != NULL)
+            destroy_kgpc_type(expected_type);
+
+        cur = cur->next;
+    }
+
+    expr->expr_data.record_constructor_data.fields_semchecked = 1;
+    return error_count;
+}
+
+int semcheck_prepare_record_constructor_argument(Tree_t *formal_decl, struct Expression *arg_expr,
+    SymTab_t *symtab, int max_scope_lev, int line_num)
+{
+    if (formal_decl == NULL || arg_expr == NULL || symtab == NULL)
+        return 0;
+
+    if (arg_expr->type != EXPR_RECORD_CONSTRUCTOR)
+        return 0;
+
+    struct RecordType *record_type = semcheck_record_type_from_decl(formal_decl, symtab);
+    if (record_type == NULL)
+    {
+        fprintf(stderr, "Error on line %d, unable to infer record type for constructor.\n",
+            line_num);
+        return 1;
+    }
+
+    return semcheck_typecheck_record_constructor(arg_expr, symtab, max_scope_lev,
+        record_type, line_num);
+}
+
 static int ensure_with_capacity(void)
 {
     if (with_context_count < with_context_capacity)
@@ -1405,6 +1704,85 @@ struct Expression *clone_expression(const struct Expression *expr)
             break;
         case EXPR_NIL:
             break;
+        case EXPR_RECORD_CONSTRUCTOR:
+        {
+            clone->expr_data.record_constructor_data.field_count =
+                expr->expr_data.record_constructor_data.field_count;
+            clone->expr_data.record_constructor_data.fields_semchecked =
+                expr->expr_data.record_constructor_data.fields_semchecked;
+
+            ListNode_t *field_head = NULL;
+            ListNode_t *field_tail = NULL;
+            ListNode_t *cur = expr->expr_data.record_constructor_data.fields;
+            while (cur != NULL)
+            {
+                struct RecordConstructorField *field =
+                    (struct RecordConstructorField *)cur->cur;
+                struct RecordConstructorField *field_clone = NULL;
+                if (field != NULL)
+                {
+                    field_clone = (struct RecordConstructorField *)calloc(1, sizeof(*field_clone));
+                    if (field_clone == NULL)
+                    {
+                        destroy_expr(clone);
+                        return NULL;
+                    }
+                    field_clone->field_id = field->field_id != NULL ? strdup(field->field_id) : NULL;
+                    field_clone->value = clone_expression(field->value);
+                    field_clone->field_offset = field->field_offset;
+                    field_clone->field_type = field->field_type;
+                    field_clone->field_type_id = field->field_type_id != NULL ?
+                        strdup(field->field_type_id) : NULL;
+                    field_clone->field_record_type = field->field_record_type;
+                    field_clone->field_is_array = field->field_is_array;
+                    field_clone->array_start = field->array_start;
+                    field_clone->array_end = field->array_end;
+                    field_clone->array_element_type = field->array_element_type;
+                    field_clone->array_element_type_id = field->array_element_type_id != NULL ?
+                        strdup(field->array_element_type_id) : NULL;
+                    field_clone->array_is_open = field->array_is_open;
+                    field_clone->array_element_record_type = field->array_element_record_type;
+                    if ((field->field_id != NULL && field_clone->field_id == NULL) ||
+                        (field->field_type_id != NULL && field_clone->field_type_id == NULL) ||
+                        (field->array_element_type_id != NULL &&
+                         field_clone->array_element_type_id == NULL) ||
+                        (field->value != NULL && field_clone->value == NULL))
+                    {
+                        destroy_expr(clone);
+                        return NULL;
+                    }
+                }
+
+                ListNode_t *node = CreateListNode(field_clone, LIST_UNSPECIFIED);
+                if (node == NULL)
+                {
+                    if (field_clone != NULL)
+                    {
+                        if (field_clone->value != NULL)
+                            destroy_expr(field_clone->value);
+                        free(field_clone->field_id);
+                        free(field_clone->field_type_id);
+                        free(field_clone->array_element_type_id);
+                        free(field_clone);
+                    }
+                    destroy_expr(clone);
+                    return NULL;
+                }
+                if (field_head == NULL)
+                {
+                    field_head = node;
+                    field_tail = node;
+                }
+                else
+                {
+                    field_tail->next = node;
+                    field_tail = node;
+                }
+                cur = cur->next;
+            }
+            clone->expr_data.record_constructor_data.fields = field_head;
+            break;
+        }
         default:
             destroy_expr(clone);
             return NULL;
@@ -6418,6 +6796,30 @@ int semcheck_expr_main(int *type_return,
             return 0;
         }
 
+        case EXPR_RECORD_CONSTRUCTOR:
+        {
+            if (expr->record_type == NULL)
+            {
+                fprintf(stderr, "Error on line %d, unable to infer record type for constructor.\n",
+                    expr->line_num);
+                *type_return = UNKNOWN_TYPE;
+                return 1;
+            }
+            if (!expr->expr_data.record_constructor_data.fields_semchecked)
+            {
+                int rc_err = semcheck_typecheck_record_constructor(expr, symtab, max_scope_lev,
+                    expr->record_type, expr->line_num);
+                if (rc_err != 0)
+                {
+                    *type_return = UNKNOWN_TYPE;
+                    return rc_err;
+                }
+            }
+            expr->resolved_type = RECORD_TYPE;
+            *type_return = RECORD_TYPE;
+            return 0;
+        }
+
         case EXPR_ANONYMOUS_FUNCTION:
         case EXPR_ANONYMOUS_PROCEDURE:
         {
@@ -8929,6 +9331,13 @@ method_call_resolved:
                         final_status = ++return_val;
                         goto funccall_cleanup;
                     }
+                    if (semcheck_prepare_record_constructor_argument(formal_decl, call_expr,
+                            symtab, max_scope_lev, expr->line_num) != 0)
+                    {
+                        *type_return = UNKNOWN_TYPE;
+                        final_status = ++return_val;
+                        goto funccall_cleanup;
+                    }
                     semcheck_expr_main(&call_type, symtab, call_expr, max_scope_lev, NO_MUTATE);
                     if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                          fprintf(stderr, "[SemCheck] semcheck_funccall: call_expr=%p type=%d id=%s record_type=%p\n", 
@@ -9348,6 +9757,14 @@ skip_overload_resolution:
                     args_to_validate = args_to_validate->next;
                     continue;
                 }
+            }
+            if (semcheck_prepare_record_constructor_argument(arg_decl, current_arg_expr,
+                    symtab, max_scope_lev, expr->line_num) != 0)
+            {
+                ++return_val;
+                true_args_to_validate = true_args_to_validate->next;
+                args_to_validate = args_to_validate->next;
+                continue;
             }
 
             return_val += semcheck_expr_main(&arg_type,

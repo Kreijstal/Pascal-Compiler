@@ -1210,6 +1210,7 @@ int codegen_expr_is_addressable(const struct Expression *expr)
         case EXPR_ARRAY_ACCESS:
         case EXPR_RECORD_ACCESS:
         case EXPR_POINTER_DEREF:
+        case EXPR_RECORD_CONSTRUCTOR:
             return 1;
         case EXPR_AS:
             if (expr->expr_data.as_data.expr != NULL)
@@ -2744,6 +2745,14 @@ ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGen
             CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
             #endif
             return inst_list;
+        case EXPR_RECORD_CONSTRUCTOR:
+        {
+            Register_t *addr_reg = NULL;
+            inst_list = codegen_address_for_expr(expr, inst_list, ctx, &addr_reg);
+            if (addr_reg != NULL)
+                free_reg(get_reg_stack(), addr_reg);
+            return inst_list;
+        }
         case EXPR_ADDR:
             CODEGEN_DEBUG("DEBUG: Processing address-of expression\n");
             inst_list = codegen_expr_via_tree(expr, inst_list, ctx);

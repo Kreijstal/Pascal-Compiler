@@ -395,6 +395,13 @@ static int remove_var_decls_set(SymTab_t *symtab, const IdSet *ids, ListNode_t *
             decl_ids = decl_ids->next;
         }
 
+        if (var_decl->tree_data.var_decl_data.ids == NULL &&
+            var_decl->tree_data.var_decl_data.initializer != NULL)
+        {
+            destroy_stmt(var_decl->tree_data.var_decl_data.initializer);
+            var_decl->tree_data.var_decl_data.initializer = NULL;
+        }
+
         var_decls = var_decls->next;
     }
 
@@ -762,6 +769,11 @@ void set_vars_lists(SymTab_t *symtab, ListNode_t *vars, ListNode_t **vars_to_che
             {
                 assert(FindIdent(&node, symtab, (char *)ids->cur) == 0);
                 assert(node != NULL);
+                if (node->defined_in_unit)
+                {
+                    ids = ids->next;
+                    continue;
+                }
                 if(node->referenced == 0 && node->hash_type != HASHTYPE_FUNCTION_RETURN)
                 {
                     add_to_list(vars_to_remove, ids->cur);

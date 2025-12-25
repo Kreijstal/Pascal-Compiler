@@ -459,6 +459,19 @@ static int check_collision_allowance(HashNode_t* existing_node, enum HashType ne
         (new_hash_type == HASHTYPE_VAR || new_hash_type == HASHTYPE_ARRAY)) {
         return 1;
     }
+
+    /* Allow local constants to shadow imported unit constants. */
+    if (existing_node->hash_type == HASHTYPE_CONST &&
+        existing_node->defined_in_unit &&
+        new_hash_type == HASHTYPE_CONST) {
+        return 1;
+    }
+
+    /* Allow const shadowing in the same scope (unit/system consts share the program scope). */
+    if (existing_node->hash_type == HASHTYPE_CONST &&
+        new_hash_type == HASHTYPE_CONST) {
+        return 1;
+    }
     
     /* No other collisions allowed */
     return 0;

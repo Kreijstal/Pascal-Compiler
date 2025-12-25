@@ -28,6 +28,7 @@
 #include "../../Optimizer/optimizer.h"
 #include "../ParseTree/tree.h"
 #include "../ParseTree/tree_types.h"
+#include "../ParseTree/KgpcType.h"
 #include "../ParseTree/type_tags.h"
 #include "../ParseTree/KgpcType.h"
 #include "../ParseTree/from_cparser.h"
@@ -5593,6 +5594,25 @@ next_identifier:
                     else
                     {
                         int expr_type = UNKNOWN_TYPE;
+                        if (init_expr->type == EXPR_RECORD_CONSTRUCTOR && init_expr->record_type == NULL)
+                        {
+                            struct RecordType *record_type = NULL;
+                            if (var_node->type != NULL && kgpc_type_is_record(var_node->type))
+                                record_type = kgpc_type_get_record(var_node->type);
+                            else if (var_node->type != NULL && kgpc_type_is_pointer(var_node->type) &&
+                                var_node->type->info.points_to != NULL &&
+                                kgpc_type_is_record(var_node->type->info.points_to))
+                                record_type = kgpc_type_get_record(var_node->type->info.points_to);
+                            else if (tree->tree_data.var_decl_data.type_id != NULL)
+                            {
+                                HashNode_t *type_node = NULL;
+                                if (FindIdent(&type_node, symtab,
+                                        tree->tree_data.var_decl_data.type_id) >= 0 &&
+                                    type_node != NULL)
+                                    record_type = hashnode_get_record_type(type_node);
+                            }
+                            init_expr->record_type = record_type;
+                        }
                         return_val += semcheck_expr_main(&expr_type, symtab, init_expr, INT_MAX, NO_MUTATE);
 
                     if (expr_type == UNKNOWN_TYPE)
@@ -5639,6 +5659,10 @@ next_identifier:
                             case POINTER_TYPE:
                                 inferred_var_type = HASHVAR_POINTER;
                                 normalized_type = POINTER_TYPE;
+                                break;
+                            case RECORD_TYPE:
+                                inferred_var_type = HASHVAR_RECORD;
+                                normalized_type = RECORD_TYPE;
                                 break;
                             default:
                                 fprintf(stderr, "Error on line %d, unsupported inferred type for %s.\n",

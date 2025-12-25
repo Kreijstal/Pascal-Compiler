@@ -478,6 +478,22 @@ static int codegen_align_to(int value, int alignment)
     return value + (alignment - remainder);
 }
 
+static unsigned long codegen_next_record_ctor_temp_id(void)
+{
+    static unsigned long counter = 0;
+    return ++counter;
+}
+
+static StackNode_t *codegen_alloc_record_ctor_temp(long long size)
+{
+    if (size <= 0 || size > INT_MAX)
+        return NULL;
+
+    char label[32];
+    snprintf(label, sizeof(label), "record_ctor_%lu", codegen_next_record_ctor_temp_id());
+    return add_l_x(label, (int)size);
+}
+
 static int expr_is_dynamic_array(const struct Expression *expr)
 {
     return (expr != NULL && expr->is_array_expr && expr->array_is_dynamic);
@@ -1108,6 +1124,103 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
     else if (expr->type == EXPR_RECORD_ACCESS)
     {
         inst_list = codegen_record_field_address(expr, inst_list, ctx, out_reg);
+        goto cleanup;
+    }
+    else if (expr->type == EXPR_RECORD_CONSTRUCTOR)
+    {
+        long long record_size = 0;
+        if (codegen_get_record_size(ctx, expr, &record_size) != 0 || record_size <= 0)
+        {
+            codegen_report_error(ctx,
+                "ERROR: Unable to determine size for record constructor.");
+            goto cleanup;
+        }
+
+        StackNode_t *temp_slot = codegen_alloc_record_ctor_temp(record_size);
+        if (temp_slot == NULL)
+        {
+            codegen_report_error(ctx,
+                "ERROR: Unable to allocate temporary storage for record constructor.");
+            goto cleanup;
+        }
+
+        const char *dest_arg_reg = codegen_target_is_windows() ? "%rcx" : "%rdi";
+        const char *val_arg_reg = codegen_target_is_windows() ? "%rdx" : "%rsi";
+        const char *size_arg_reg = codegen_target_is_windows() ? "%r8"  : "%rdx";
+        char buffer[128];
+
+        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+            temp_slot->offset, dest_arg_reg);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\txorq\t%%rax, %%rax\n");
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", val_arg_reg);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n", record_size, size_arg_reg);
+        inst_list = add_inst(inst_list, buffer);
+
+        inst_list = codegen_vect_reg(inst_list, 0);
+        inst_list = add_inst(inst_list, "\tcall\tmemset\n");
+        free_arg_regs();
+
+        struct Expression *temp_var = mk_varid(expr->line_num, strdup(temp_slot->label));
+        if (temp_var == NULL)
+            goto cleanup;
+        temp_var->record_type = expr->record_type;
+        temp_var->resolved_type = RECORD_TYPE;
+
+        ListNode_t *field_node = expr->expr_data.record_constructor_data.fields;
+        while (field_node != NULL)
+        {
+            struct RecordConstructorField *field =
+                (struct RecordConstructorField *)field_node->cur;
+            if (field != NULL && field->field_id != NULL && field->value != NULL)
+            {
+                struct Expression *field_access =
+                    mk_recordaccess(expr->line_num, temp_var, strdup(field->field_id));
+                if (field_access == NULL)
+                    goto cleanup;
+                field_access->expr_data.record_access_data.field_offset = field->field_offset;
+                field_access->resolved_type = field->field_type;
+                if (field->field_type == RECORD_TYPE)
+                    field_access->record_type = field->field_record_type;
+
+                if (field->field_is_array)
+                {
+                    field_access->is_array_expr = 1;
+                    field_access->array_lower_bound = field->array_start;
+                    field_access->array_upper_bound = field->array_end;
+                    field_access->array_is_dynamic = field->array_is_open;
+                    field_access->array_element_type = field->array_element_type;
+                    if (field->array_element_type_id != NULL)
+                        field_access->array_element_type_id = strdup(field->array_element_type_id);
+                    field_access->array_element_record_type = field->array_element_record_type;
+                }
+
+                struct Statement *assign_stmt = mk_varassign(expr->line_num, expr->col_num,
+                    field_access, field->value);
+                if (assign_stmt == NULL)
+                    goto cleanup;
+                inst_list = codegen_var_assignment(assign_stmt, inst_list, ctx);
+            }
+            field_node = field_node->next;
+        }
+
+        Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (addr_reg == NULL)
+        {
+            addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+            if (addr_reg == NULL)
+            {
+                inst_list = codegen_fail_register(ctx, inst_list, out_reg,
+                    "ERROR: Unable to allocate register for record constructor address.");
+                goto cleanup;
+            }
+        }
+        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+            temp_slot->offset, addr_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        *out_reg = addr_reg;
         goto cleanup;
     }
     else if (expr->type == EXPR_POINTER_DEREF)
@@ -1801,19 +1914,21 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
         return inst_list;
 
     Register_t *dest_reg = NULL;
-    inst_list = codegen_address_for_expr(dest_expr, inst_list, ctx, &dest_reg);
-    if (codegen_had_error(ctx) || dest_reg == NULL)
-    {
-        if (dest_reg != NULL)
-            free_reg(get_reg_stack(), dest_reg);
-        return inst_list;
-    }
-
+    Register_t *src_reg = NULL;
+    int src_is_record_ctor = (src_expr != NULL && src_expr->type == EXPR_RECORD_CONSTRUCTOR);
     int dest_is_char_set = expr_is_char_set_ctx(dest_expr, ctx);
 
     /* Default(TRecord) intrinsic: zero-initialize destination without evaluating source */
     if (src_expr->is_default_initializer)
     {
+        inst_list = codegen_address_for_expr(dest_expr, inst_list, ctx, &dest_reg);
+        if (codegen_had_error(ctx) || dest_reg == NULL)
+        {
+            if (dest_reg != NULL)
+                free_reg(get_reg_stack(), dest_reg);
+            return inst_list;
+        }
+
         const char *dest_arg_reg = codegen_target_is_windows() ? "%rcx" : "%rdi";
         const char *val_arg_reg = codegen_target_is_windows() ? "%rdx" : "%rsi";
         const char *size_arg_reg = codegen_target_is_windows() ? "%r8"  : "%rdx";
@@ -1838,6 +1953,14 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
 
     if (!codegen_expr_is_addressable(src_expr))
     {
+        inst_list = codegen_address_for_expr(dest_expr, inst_list, ctx, &dest_reg);
+        if (codegen_had_error(ctx) || dest_reg == NULL)
+        {
+            if (dest_reg != NULL)
+                free_reg(get_reg_stack(), dest_reg);
+            return inst_list;
+        }
+
         if (src_expr->type == EXPR_FUNCTION_CALL)
         {
             struct KgpcType *func_type = NULL;
@@ -2119,14 +2242,37 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
         return inst_list;
     }
 
-    Register_t *src_reg = NULL;
-    inst_list = codegen_address_for_expr(src_expr, inst_list, ctx, &src_reg);
-    if (codegen_had_error(ctx) || src_reg == NULL)
+    if (src_is_record_ctor)
     {
+        inst_list = codegen_address_for_expr(src_expr, inst_list, ctx, &src_reg);
+        if (codegen_had_error(ctx) || src_reg == NULL)
+        {
+            if (src_reg != NULL)
+                free_reg(get_reg_stack(), src_reg);
+            return inst_list;
+        }
+    }
+
+    inst_list = codegen_address_for_expr(dest_expr, inst_list, ctx, &dest_reg);
+    if (codegen_had_error(ctx) || dest_reg == NULL)
+    {
+        if (dest_reg != NULL)
+            free_reg(get_reg_stack(), dest_reg);
         if (src_reg != NULL)
             free_reg(get_reg_stack(), src_reg);
-        free_reg(get_reg_stack(), dest_reg);
         return inst_list;
+    }
+
+    if (!src_is_record_ctor)
+    {
+        inst_list = codegen_address_for_expr(src_expr, inst_list, ctx, &src_reg);
+        if (codegen_had_error(ctx) || src_reg == NULL)
+        {
+            if (src_reg != NULL)
+                free_reg(get_reg_stack(), src_reg);
+            free_reg(get_reg_stack(), dest_reg);
+            return inst_list;
+        }
     }
 
     Register_t *count_reg = get_free_reg(get_reg_stack(), &inst_list);
@@ -4625,6 +4771,9 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                 return codegen_assign_static_array(var_expr, assign_expr, inst_list, ctx);
         }
     }
+
+    if (assign_expr != NULL && assign_expr->type == EXPR_RECORD_CONSTRUCTOR)
+        return codegen_assign_record_value(var_expr, assign_expr, inst_list, ctx);
 
     if (expr_get_type_tag(var_expr) == RECORD_TYPE)
         return codegen_assign_record_value(var_expr, assign_expr, inst_list, ctx);

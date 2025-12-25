@@ -2240,6 +2240,40 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
     /* NOTE: Grammar will make sure the left side is a variable */
     /* Left side var assigns must abide by scoping rules */
     return_val += semcheck_expr_main(&type_first, symtab, var, max_scope_lev, MUTATE);
+    if (expr != NULL && expr->type == EXPR_RECORD_CONSTRUCTOR && expr->record_type == NULL)
+    {
+        struct RecordType *record_type = var != NULL ? var->record_type : NULL;
+        if (record_type == NULL && var != NULL && var->resolved_kgpc_type != NULL)
+        {
+            KgpcType *lhs_type = var->resolved_kgpc_type;
+            if (kgpc_type_is_record(lhs_type))
+                record_type = kgpc_type_get_record(lhs_type);
+            else if (kgpc_type_is_pointer(lhs_type) && lhs_type->info.points_to != NULL &&
+                kgpc_type_is_record(lhs_type->info.points_to))
+                record_type = kgpc_type_get_record(lhs_type->info.points_to);
+        }
+        if (record_type == NULL && var != NULL && var->type == EXPR_VAR_ID &&
+            var->expr_data.id != NULL)
+        {
+            HashNode_t *var_node = NULL;
+            if (FindIdent(&var_node, symtab, var->expr_data.id) >= 0 && var_node != NULL)
+            {
+                record_type = hashnode_get_record_type(var_node);
+                if (record_type == NULL)
+                {
+                    struct TypeAlias *alias = hashnode_get_type_alias(var_node);
+                    if (alias != NULL && alias->target_type_id != NULL)
+                    {
+                        HashNode_t *target_node = NULL;
+                        if (FindIdent(&target_node, symtab, alias->target_type_id) >= 0 &&
+                            target_node != NULL)
+                            record_type = hashnode_get_record_type(target_node);
+                    }
+                }
+            }
+        }
+        expr->record_type = record_type;
+    }
     return_val += semcheck_expr_main(&type_second, symtab, expr, INT_MAX, NO_MUTATE);
 
     if (getenv("KGPC_DEBUG_SEMCHECK") != NULL && expr != NULL && expr->type == EXPR_FUNCTION_CALL &&
@@ -2896,144 +2930,154 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     if (proc_id != NULL && args_given != NULL)
     {
         struct Expression *receiver_expr = (struct Expression *)args_given->cur;
-        int recv_type = UNKNOWN_TYPE;
-        semcheck_expr_main(&recv_type, symtab, receiver_expr, max_scope_lev, NO_MUTATE);
-
-        struct RecordType *recv_record = NULL;
-        if (recv_type == RECORD_TYPE)
-            recv_record = receiver_expr->record_type;
-        else if (recv_type == POINTER_TYPE)
+        if (receiver_expr != NULL && receiver_expr->type == EXPR_RECORD_CONSTRUCTOR &&
+            receiver_expr->record_type == NULL)
         {
-            if (receiver_expr->record_type != NULL)
+            receiver_expr = NULL;
+        }
+        if (receiver_expr != NULL)
+        {
+            int recv_type = UNKNOWN_TYPE;
+            semcheck_expr_main(&recv_type, symtab, receiver_expr, max_scope_lev, NO_MUTATE);
+
+            struct RecordType *recv_record = NULL;
+            if (recv_type == RECORD_TYPE)
                 recv_record = receiver_expr->record_type;
-            else if (receiver_expr->resolved_kgpc_type != NULL &&
-                     receiver_expr->resolved_kgpc_type->kind == TYPE_KIND_POINTER)
+            else if (recv_type == POINTER_TYPE)
             {
-                KgpcType *pointee = receiver_expr->resolved_kgpc_type->info.points_to;
-                if (pointee != NULL && kgpc_type_is_record(pointee))
-                    recv_record = kgpc_type_get_record(pointee);
-            }
-        }
-        if (recv_record == NULL && receiver_expr->type == EXPR_VAR_ID && receiver_expr->expr_data.id != NULL)
-        {
-            HashNode_t *recv_node = NULL;
-            if (FindIdent(&recv_node, symtab, receiver_expr->expr_data.id) == 0 && recv_node != NULL)
-            {
-                recv_record = semcheck_stmt_get_record_type_from_node(recv_node);
-                if (recv_record == NULL && recv_node->type != NULL &&
-                    recv_node->type->kind == TYPE_KIND_POINTER &&
-                    recv_node->type->info.points_to != NULL &&
-                    kgpc_type_is_record(recv_node->type->info.points_to))
+                if (receiver_expr->record_type != NULL)
+                    recv_record = receiver_expr->record_type;
+                else if (receiver_expr->resolved_kgpc_type != NULL &&
+                         receiver_expr->resolved_kgpc_type->kind == TYPE_KIND_POINTER)
                 {
-                    recv_record = kgpc_type_get_record(recv_node->type->info.points_to);
+                    KgpcType *pointee = receiver_expr->resolved_kgpc_type->info.points_to;
+                    if (pointee != NULL && kgpc_type_is_record(pointee))
+                        recv_record = kgpc_type_get_record(pointee);
                 }
             }
-        }
-
-        if (recv_record != NULL)
-        {
-            const char *field_lookup = proc_id;
-            while (field_lookup != NULL && field_lookup[0] == '_' && field_lookup[1] == '_')
-                field_lookup += 2;
-
-            struct RecordField *field_desc = NULL;
-            long long field_offset = 0;
-            if (resolve_record_field(symtab, recv_record, field_lookup, &field_desc,
-                                     &field_offset, stmt->line_num, 1) == 0 &&
-                field_desc != NULL)
+            if (recv_record == NULL && receiver_expr->type == EXPR_VAR_ID &&
+                receiver_expr->expr_data.id != NULL)
             {
-                int is_proc_field = (field_desc->type == PROCEDURE);
-                KgpcType *proc_type = NULL;
-                if (field_desc->type_id != NULL)
+                HashNode_t *recv_node = NULL;
+                if (FindIdent(&recv_node, symtab, receiver_expr->expr_data.id) == 0 &&
+                    recv_node != NULL)
                 {
-                    HashNode_t *type_node = NULL;
-                    if (FindIdent(&type_node, symtab, field_desc->type_id) == 0 &&
-                        type_node != NULL && type_node->type != NULL &&
-                        type_node->type->kind == TYPE_KIND_PROCEDURE)
+                    recv_record = semcheck_stmt_get_record_type_from_node(recv_node);
+                    if (recv_record == NULL && recv_node->type != NULL &&
+                        recv_node->type->kind == TYPE_KIND_POINTER &&
+                        recv_node->type->info.points_to != NULL &&
+                        kgpc_type_is_record(recv_node->type->info.points_to))
                     {
-                        proc_type = type_node->type;
-                        kgpc_type_retain(proc_type);
-                        is_proc_field = 1;
+                        recv_record = kgpc_type_get_record(recv_node->type->info.points_to);
                     }
                 }
+            }
 
-                if (is_proc_field)
+            if (recv_record != NULL)
+            {
+                const char *field_lookup = proc_id;
+                while (field_lookup != NULL && field_lookup[0] == '_' && field_lookup[1] == '_')
+                    field_lookup += 2;
+
+                struct RecordField *field_desc = NULL;
+                long long field_offset = 0;
+                if (resolve_record_field(symtab, recv_record, field_lookup, &field_desc,
+                                         &field_offset, stmt->line_num, 1) == 0 &&
+                    field_desc != NULL)
                 {
-                    /* Remove receiver argument */
-                    ListNode_t *remaining_args = args_given->next;
-                    stmt->stmt_data.procedure_call_data.expr_args = remaining_args;
-                    args_given->cur = NULL;
-                    free(args_given);
-
-                    /* Build record access expression for the procedural field */
-                    struct Expression *proc_expr = (struct Expression *)calloc(1, sizeof(struct Expression));
-                    if (proc_expr == NULL)
+                    int is_proc_field = (field_desc->type == PROCEDURE);
+                    KgpcType *proc_type = NULL;
+                    if (field_desc->type_id != NULL)
                     {
-                        fprintf(stderr, "Error on line %d: failed to allocate procedural field expression.\n",
-                            stmt->line_num);
-                        if (proc_type != NULL) destroy_kgpc_type(proc_type);
-                        return ++return_val;
-                    }
-                    proc_expr->line_num = stmt->line_num;
-                    proc_expr->type = EXPR_RECORD_ACCESS;
-                    proc_expr->expr_data.record_access_data.record_expr = receiver_expr;
-                    proc_expr->expr_data.record_access_data.field_id = strdup(field_lookup);
-                    proc_expr->expr_data.record_access_data.field_offset = (int)field_offset;
-                    proc_expr->record_type = recv_record;
-                    proc_expr->resolved_type = PROCEDURE;
-
-                    /* Validate argument count/types if we know the procedural signature */
-                    if (proc_type != NULL)
-                    {
-                        ListNode_t *formal_params = kgpc_type_get_procedure_params(proc_type);
-                        if (ListLength(formal_params) != ListLength(remaining_args))
+                        HashNode_t *type_node = NULL;
+                        if (FindIdent(&type_node, symtab, field_desc->type_id) == 0 &&
+                            type_node != NULL && type_node->type != NULL &&
+                            type_node->type->kind == TYPE_KIND_PROCEDURE)
                         {
-                            fprintf(stderr, "Error on line %d, call to procedural field %s: expected %d arguments, got %d\n",
-                                stmt->line_num, proc_id, ListLength(formal_params), ListLength(remaining_args));
-                            destroy_expr(proc_expr);
-                            destroy_kgpc_type(proc_type);
+                            proc_type = type_node->type;
+                            kgpc_type_retain(proc_type);
+                            is_proc_field = 1;
+                        }
+                    }
+
+                    if (is_proc_field)
+                    {
+                        /* Remove receiver argument */
+                        ListNode_t *remaining_args = args_given->next;
+                        stmt->stmt_data.procedure_call_data.expr_args = remaining_args;
+                        args_given->cur = NULL;
+                        free(args_given);
+
+                        /* Build record access expression for the procedural field */
+                        struct Expression *proc_expr = (struct Expression *)calloc(1, sizeof(struct Expression));
+                        if (proc_expr == NULL)
+                        {
+                            fprintf(stderr, "Error on line %d: failed to allocate procedural field expression.\n",
+                                stmt->line_num);
+                            if (proc_type != NULL) destroy_kgpc_type(proc_type);
                             return ++return_val;
                         }
+                        proc_expr->line_num = stmt->line_num;
+                        proc_expr->type = EXPR_RECORD_ACCESS;
+                        proc_expr->expr_data.record_access_data.record_expr = receiver_expr;
+                        proc_expr->expr_data.record_access_data.field_id = strdup(field_lookup);
+                        proc_expr->expr_data.record_access_data.field_offset = (int)field_offset;
+                        proc_expr->record_type = recv_record;
+                        proc_expr->resolved_type = PROCEDURE;
 
-                        ListNode_t *formal = formal_params;
-                        ListNode_t *actual = remaining_args;
-                        int arg_idx = 0;
-                        while (formal != NULL && actual != NULL)
+                        /* Validate argument count/types if we know the procedural signature */
+                        if (proc_type != NULL)
                         {
-                            Tree_t *formal_decl = (Tree_t *)formal->cur;
-                            struct Expression *actual_expr = (struct Expression *)actual->cur;
-                            int formal_type = resolve_param_type(formal_decl, symtab);
-                            int actual_type = UNKNOWN_TYPE;
-                            semcheck_expr_main(&actual_type, symtab, actual_expr, max_scope_lev, NO_MUTATE);
-                            if (formal_type != UNKNOWN_TYPE && actual_type != UNKNOWN_TYPE &&
-                                formal_type != actual_type)
+                            ListNode_t *formal_params = kgpc_type_get_procedure_params(proc_type);
+                            if (ListLength(formal_params) != ListLength(remaining_args))
                             {
-                                if (!((formal_type == LONGINT_TYPE && actual_type == INT_TYPE) ||
-                                      (formal_type == INT_TYPE && actual_type == LONGINT_TYPE) ||
-                                      (formal_type == POINTER_TYPE) || (actual_type == POINTER_TYPE)))
-                                {
-                                    fprintf(stderr, "Warning on line %d, argument %d type mismatch in call to procedural field %s\n",
-                                        stmt->line_num, arg_idx + 1, proc_id);
-                                }
+                                fprintf(stderr, "Error on line %d, call to procedural field %s: expected %d arguments, got %d\n",
+                                    stmt->line_num, proc_id, ListLength(formal_params), ListLength(remaining_args));
+                                destroy_expr(proc_expr);
+                                destroy_kgpc_type(proc_type);
+                                return ++return_val;
                             }
-                            formal = formal->next;
-                            actual = actual->next;
-                            arg_idx++;
+
+                            ListNode_t *formal = formal_params;
+                            ListNode_t *actual = remaining_args;
+                            int arg_idx = 0;
+                            while (formal != NULL && actual != NULL)
+                            {
+                                Tree_t *formal_decl = (Tree_t *)formal->cur;
+                                struct Expression *actual_expr = (struct Expression *)actual->cur;
+                                int formal_type = resolve_param_type(formal_decl, symtab);
+                                int actual_type = UNKNOWN_TYPE;
+                                semcheck_expr_main(&actual_type, symtab, actual_expr, max_scope_lev, NO_MUTATE);
+                                if (formal_type != UNKNOWN_TYPE && actual_type != UNKNOWN_TYPE &&
+                                    formal_type != actual_type)
+                                {
+                                    if (!((formal_type == LONGINT_TYPE && actual_type == INT_TYPE) ||
+                                          (formal_type == INT_TYPE && actual_type == LONGINT_TYPE) ||
+                                          (formal_type == POINTER_TYPE) || (actual_type == POINTER_TYPE)))
+                                    {
+                                        fprintf(stderr, "Warning on line %d, argument %d type mismatch in call to procedural field %s\n",
+                                            stmt->line_num, arg_idx + 1, proc_id);
+                                    }
+                                }
+                                formal = formal->next;
+                                actual = actual->next;
+                                arg_idx++;
+                            }
+
+                            stmt->stmt_data.procedure_call_data.call_kgpc_type = proc_type;
+                            stmt->stmt_data.procedure_call_data.call_hash_type = HASHTYPE_VAR;
+                            stmt->stmt_data.procedure_call_data.is_call_info_valid = 1;
+                        }
+                        else
+                        {
+                            stmt->stmt_data.procedure_call_data.call_hash_type = HASHTYPE_VAR;
                         }
 
-                        stmt->stmt_data.procedure_call_data.call_kgpc_type = proc_type;
-                        stmt->stmt_data.procedure_call_data.call_hash_type = HASHTYPE_VAR;
-                        stmt->stmt_data.procedure_call_data.is_call_info_valid = 1;
+                        stmt->stmt_data.procedure_call_data.is_procedural_var_call = 1;
+                        stmt->stmt_data.procedure_call_data.procedural_var_symbol = NULL;
+                        stmt->stmt_data.procedure_call_data.procedural_var_expr = proc_expr;
+                        return return_val;
                     }
-                    else
-                    {
-                        stmt->stmt_data.procedure_call_data.call_hash_type = HASHTYPE_VAR;
-                    }
-
-                    stmt->stmt_data.procedure_call_data.is_procedural_var_call = 1;
-                    stmt->stmt_data.procedure_call_data.procedural_var_symbol = NULL;
-                    stmt->stmt_data.procedure_call_data.procedural_var_expr = proc_expr;
-                    return return_val;
                 }
             }
         }
@@ -3507,8 +3551,38 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                         int expected_owned = 0;
                         int actual_owned = 0;
                         KgpcType *expected = resolve_type_from_vardecl(param_decl, symtab, &expected_owned);
-                        KgpcType *actual = semcheck_resolve_expression_kgpc_type(symtab, arg_expr,
-                            INT_MAX, NO_MUTATE, &actual_owned);
+                        KgpcType *actual = NULL;
+                        struct RecordType *saved_record_type = NULL;
+
+                        if (arg_expr != NULL && arg_expr->type == EXPR_RECORD_CONSTRUCTOR &&
+                            arg_expr->record_type == NULL)
+                        {
+                            saved_record_type = arg_expr->record_type;
+                            if (expected != NULL)
+                            {
+                                struct RecordType *record_type = NULL;
+                                if (kgpc_type_is_record(expected))
+                                    record_type = kgpc_type_get_record(expected);
+                                else if (kgpc_type_is_pointer(expected) &&
+                                    expected->info.points_to != NULL &&
+                                    kgpc_type_is_record(expected->info.points_to))
+                                    record_type = kgpc_type_get_record(expected->info.points_to);
+
+                                if (record_type != NULL)
+                                {
+                                    arg_expr->record_type = record_type;
+                                    actual = expected;
+                                    actual_owned = 0;
+                                }
+                            }
+                        }
+
+                        if (actual == NULL && arg_expr != NULL &&
+                            !(arg_expr->type == EXPR_RECORD_CONSTRUCTOR && arg_expr->record_type == NULL))
+                        {
+                            actual = semcheck_resolve_expression_kgpc_type(symtab, arg_expr,
+                                INT_MAX, NO_MUTATE, &actual_owned);
+                        }
 
                         if (expected == NULL)
                         {
@@ -3528,6 +3602,17 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                             {
                                 score += 1;
                             }
+                        }
+
+                        if (arg_expr != NULL && arg_expr->type == EXPR_RECORD_CONSTRUCTOR &&
+                            saved_record_type != NULL)
+                        {
+                            arg_expr->record_type = saved_record_type;
+                        }
+                        else if (arg_expr != NULL && arg_expr->type == EXPR_RECORD_CONSTRUCTOR &&
+                            saved_record_type == NULL && actual == expected && actual != NULL)
+                        {
+                            arg_expr->record_type = NULL;
                         }
 
                         if (expected_owned && expected != NULL)
@@ -3781,6 +3866,14 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                         true_arg_ids = true_arg_ids->next;
                         continue;
                     }
+                }
+                if (semcheck_prepare_record_constructor_argument(arg_decl, arg_expr,
+                        symtab, INT_MAX, stmt->line_num) != 0)
+                {
+                    ++return_val;
+                    args_given = args_given->next;
+                    true_arg_ids = true_arg_ids->next;
+                    continue;
                 }
                 
                 /* ALWAYS resolve both sides to KgpcType for proper type checking */

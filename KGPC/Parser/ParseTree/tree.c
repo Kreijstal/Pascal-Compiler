@@ -969,6 +969,24 @@ void expr_print(struct Expression *expr, FILE *f, int num_indent)
           break;
         }
 
+        case EXPR_RECORD_CONSTRUCTOR:
+        {
+          fprintf(f, "[RECORD_CONSTRUCTOR count=%d]\n",
+              expr->expr_data.record_constructor_data.field_count);
+          ListNode_t *cur = expr->expr_data.record_constructor_data.fields;
+          while (cur != NULL)
+          {
+              struct RecordConstructorField *field = (struct RecordConstructorField *)cur->cur;
+              print_indent(f, num_indent + 1);
+              fprintf(f, "[FIELD:%s]:\n",
+                  field != NULL && field->field_id != NULL ? field->field_id : "<unknown>");
+              if (field != NULL && field->value != NULL)
+                  expr_print(field->value, f, num_indent + 2);
+              cur = cur->next;
+          }
+          break;
+        }
+
         case EXPR_POINTER_DEREF:
           fprintf(f, "[POINTER_DEREF]\n");
           ++num_indent;
@@ -1517,6 +1535,29 @@ void destroy_expr(struct Expression *expr)
             cur = next;
           }
           expr->expr_data.array_literal_data.elements = NULL;
+          break;
+        }
+
+        case EXPR_RECORD_CONSTRUCTOR:
+        {
+          ListNode_t *cur = expr->expr_data.record_constructor_data.fields;
+          while (cur != NULL)
+          {
+            struct RecordConstructorField *field = (struct RecordConstructorField *)cur->cur;
+            if (field != NULL)
+            {
+                if (field->value != NULL)
+                    destroy_expr(field->value);
+                free(field->field_id);
+                free(field->field_type_id);
+                free(field->array_element_type_id);
+                free(field);
+            }
+            ListNode_t *next = cur->next;
+            free(cur);
+            cur = next;
+          }
+          expr->expr_data.record_constructor_data.fields = NULL;
           break;
         }
 
@@ -2746,6 +2787,19 @@ struct Expression *mk_set(int line_num, unsigned int bitmask, ListNode_t *elemen
     new_expr->expr_data.set_data.bitmask = bitmask;
     new_expr->expr_data.set_data.elements = elements;
     new_expr->expr_data.set_data.is_constant = is_constant;
+
+    return new_expr;
+}
+
+struct Expression *mk_record_constructor(int line_num, ListNode_t *fields, int field_count)
+{
+    struct Expression *new_expr = (struct Expression *)malloc(sizeof(struct Expression));
+    assert(new_expr != NULL);
+
+    init_expression(new_expr, line_num, EXPR_RECORD_CONSTRUCTOR);
+    new_expr->expr_data.record_constructor_data.fields = fields;
+    new_expr->expr_data.record_constructor_data.field_count = field_count;
+    new_expr->expr_data.record_constructor_data.fields_semchecked = 0;
 
     return new_expr;
 }

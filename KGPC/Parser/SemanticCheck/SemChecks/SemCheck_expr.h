@@ -54,6 +54,8 @@ void semcheck_mark_static_link_needed(int scope_level, HashNode_t *node);
 void semcheck_mark_call_requires_static_link(HashNode_t *node);
 int semcheck_prepare_array_literal_argument(Tree_t *formal_decl, struct Expression *arg_expr,
     SymTab_t *symtab, int max_scope_lev, int line_num);
+int semcheck_prepare_record_constructor_argument(Tree_t *formal_decl, struct Expression *arg_expr,
+    SymTab_t *symtab, int max_scope_lev, int line_num);
 
 int semcheck_compute_record_size(SymTab_t *symtab, struct RecordType *record,
     long long *size_out, int line_num);

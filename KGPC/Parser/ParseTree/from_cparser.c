@@ -5960,10 +5960,83 @@ static struct Expression *convert_expression(ast_t *expr_node) {
     case PASCAL_T_TUPLE:
         return convert_expression(expr_node->child);
     case PASCAL_T_RECORD_CONSTRUCTOR:
-        // For now, return NULL for record constructors - they need proper implementation
-        fprintf(stderr, "WARNING: Record constructors are not yet supported in code generation at line %d\n", 
-                expr_node->line);
+    {
+        ListNode_t *fields = NULL;
+        ListNode_t *fields_tail = NULL;
+        int field_count = 0;
+
+        for (ast_t *field_assignment = expr_node->child;
+             field_assignment != NULL;
+             field_assignment = field_assignment->next)
+        {
+            if (field_assignment->typ != PASCAL_T_ASSIGNMENT)
+                continue;
+
+            ast_t *field_name_node = field_assignment->child;
+            ast_t *field_value_node = (field_name_node != NULL) ? field_name_node->next : NULL;
+            if (field_name_node == NULL || field_value_node == NULL ||
+                field_name_node->sym == NULL || field_name_node->sym->name == NULL)
+            {
+                fprintf(stderr, "ERROR: Malformed record constructor field at line %d.\n",
+                    expr_node->line);
+                goto record_ctor_cleanup;
+            }
+
+            struct Expression *field_value = convert_expression(field_value_node);
+            if (field_value == NULL)
+            {
+                fprintf(stderr, "ERROR: Failed to convert record constructor field value at line %d.\n",
+                    expr_node->line);
+                goto record_ctor_cleanup;
+            }
+
+            struct RecordConstructorField *field = (struct RecordConstructorField *)calloc(1, sizeof(struct RecordConstructorField));
+            if (field == NULL)
+                goto record_ctor_cleanup;
+            field->field_id = strdup(field_name_node->sym->name);
+            field->value = field_value;
+
+            ListNode_t *node = CreateListNode(field, LIST_UNSPECIFIED);
+            if (node == NULL)
+                goto record_ctor_cleanup;
+            if (fields == NULL)
+            {
+                fields = node;
+                fields_tail = node;
+            }
+            else
+            {
+                fields_tail->next = node;
+                fields_tail = node;
+            }
+            ++field_count;
+        }
+
+        return mk_record_constructor(expr_node->line, fields, field_count);
+
+record_ctor_cleanup:
+        if (fields != NULL)
+        {
+            ListNode_t *cur = fields;
+            while (cur != NULL)
+            {
+                struct RecordConstructorField *field = (struct RecordConstructorField *)cur->cur;
+                if (field != NULL)
+                {
+                    if (field->value != NULL)
+                        destroy_expr(field->value);
+                    free(field->field_id);
+                    free(field->field_type_id);
+                    free(field->array_element_type_id);
+                    free(field);
+                }
+                ListNode_t *next = cur->next;
+                free(cur);
+                cur = next;
+            }
+        }
         return NULL;
+    }
     case PASCAL_T_FIELD_WIDTH:
         return convert_field_width_expr(expr_node);
     case PASCAL_T_TYPECAST:
