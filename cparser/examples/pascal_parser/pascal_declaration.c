@@ -25,6 +25,8 @@ static char* strndup(const char* s, size_t n)
 }
 #endif
 
+extern ast_t* ast_nil;
+
 static ParseResult debug_print_fn(input_t* in, void* args, char* parser_name) {
     char* msg = (char*)args;
     FILE* f = fopen("/tmp/parser_trace.log", "a");
@@ -42,8 +44,6 @@ combinator_t* debug_print(char* msg) {
     comb->args = strdup(msg);
     return comb;
 }
-
-extern ast_t* ast_nil;
 
 // Helper to create simple keyword AST nodes for modifiers
 static void set_combinator_name(combinator_t* comb, const char* name) {

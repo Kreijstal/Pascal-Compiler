@@ -660,7 +660,7 @@ static size_t with_context_count = 0;
 static size_t with_context_capacity = 0;
 
 static int ensure_with_capacity(void);
-static struct Expression *clone_expression(const struct Expression *expr);
+struct Expression *clone_expression(const struct Expression *expr);
 static struct RecordType *resolve_record_type_for_with(SymTab_t *symtab,
     struct Expression *context_expr, int expr_type, int line_num);
 static int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
@@ -1258,7 +1258,7 @@ static int ensure_with_capacity(void)
     return 0;
 }
 
-static struct Expression *clone_expression(const struct Expression *expr)
+struct Expression *clone_expression(const struct Expression *expr)
 {
     if (expr == NULL)
         return NULL;
@@ -7815,6 +7815,69 @@ static int count_required_params(ListNode_t *params)
     return required;
 }
 
+static int append_default_args(ListNode_t **args_head, ListNode_t *formal_params, int line_num)
+{
+    if (args_head == NULL)
+        return 0;
+
+    ListNode_t *formal = formal_params;
+    ListNode_t *actual = *args_head;
+    ListNode_t *tail = *args_head;
+
+    while (tail != NULL && tail->next != NULL)
+        tail = tail->next;
+
+    while (formal != NULL && actual != NULL)
+    {
+        formal = formal->next;
+        actual = actual->next;
+    }
+
+    while (formal != NULL)
+    {
+        Tree_t *param_decl = (Tree_t *)formal->cur;
+        if (!param_has_default_value(param_decl))
+            break;
+
+        struct Expression *default_expr = get_param_default_value(param_decl);
+        if (default_expr == NULL)
+        {
+            fprintf(stderr, "Error on line %d, missing default value expression.\n", line_num);
+            return 1;
+        }
+
+        struct Expression *default_clone = clone_expression(default_expr);
+        if (default_clone == NULL)
+        {
+            fprintf(stderr, "Error on line %d, failed to clone default argument expression.\n", line_num);
+            return 1;
+        }
+
+        ListNode_t *node = CreateListNode(default_clone, LIST_EXPR);
+        if (node == NULL)
+        {
+            destroy_expr(default_clone);
+            fprintf(stderr, "Error on line %d, failed to allocate default argument node.\n", line_num);
+            return 1;
+        }
+
+        if (*args_head == NULL)
+        {
+            *args_head = node;
+            tail = node;
+        }
+        else
+        {
+            tail->next = node;
+            tail = node;
+        }
+
+        formal = formal->next;
+    }
+
+    return 0;
+}
+
 /** FUNC_CALL **/
 int semcheck_funccall(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating)
@@ -9166,6 +9229,14 @@ skip_overload_resolution:
         else
         {
             expr->record_type = NULL;
+        }
+
+        if (hash_return->type != NULL && hash_return->type->kind == TYPE_KIND_PROCEDURE)
+        {
+            ListNode_t *formal_params = kgpc_type_get_procedure_params(hash_return->type);
+            if (append_default_args(&args_given, formal_params, expr->line_num) != 0)
+                ++return_val;
+            expr->expr_data.function_call_data.args_expr = args_given;
         }
 
         /***** THEN VERIFY ARGS INSIDE *****/

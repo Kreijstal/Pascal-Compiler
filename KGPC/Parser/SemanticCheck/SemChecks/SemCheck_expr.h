@@ -39,6 +39,8 @@ int semcheck_expr_main(int *type_return,
 KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Expression *expr,
     int max_scope_lev, int mutating, int *owns_type);
 
+struct Expression *clone_expression(const struct Expression *expr);
+
 void set_hash_meta(HashNode_t *node, int mutating);
 
 int semcheck_with_push(struct Expression *context_expr, struct RecordType *record_type);

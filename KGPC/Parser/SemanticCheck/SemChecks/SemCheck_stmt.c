@@ -72,6 +72,93 @@ static int param_has_default_value(Tree_t *decl)
     return 0;
 }
 
+/* Helper to get the default value expression from a parameter */
+static struct Expression *get_param_default_value(Tree_t *decl)
+{
+    if (decl == NULL)
+        return NULL;
+
+    struct Statement *init = NULL;
+
+    if (decl->type == TREE_VAR_DECL)
+    {
+        init = decl->tree_data.var_decl_data.initializer;
+    }
+    else if (decl->type == TREE_ARR_DECL)
+    {
+        init = decl->tree_data.arr_decl_data.initializer;
+    }
+
+    /* The default value is stored as a STMT_VAR_ASSIGN with NULL var, containing the expression */
+    if (init != NULL && init->type == STMT_VAR_ASSIGN)
+        return init->stmt_data.var_assign_data.expr;
+
+    return NULL;
+}
+
+static int append_default_args(ListNode_t **args_head, ListNode_t *formal_params, int line_num)
+{
+    if (args_head == NULL)
+        return 0;
+
+    ListNode_t *formal = formal_params;
+    ListNode_t *actual = *args_head;
+    ListNode_t *tail = *args_head;
+
+    while (tail != NULL && tail->next != NULL)
+        tail = tail->next;
+
+    while (formal != NULL && actual != NULL)
+    {
+        formal = formal->next;
+        actual = actual->next;
+    }
+
+    while (formal != NULL)
+    {
+        Tree_t *param_decl = (Tree_t *)formal->cur;
+        if (!param_has_default_value(param_decl))
+            break;
+
+        struct Expression *default_expr = get_param_default_value(param_decl);
+        if (default_expr == NULL)
+        {
+            fprintf(stderr, "Error on line %d, missing default value expression.\n", line_num);
+            return 1;
+        }
+
+        struct Expression *default_clone = clone_expression(default_expr);
+        if (default_clone == NULL)
+        {
+            fprintf(stderr, "Error on line %d, failed to clone default argument expression.\n", line_num);
+            return 1;
+        }
+
+        ListNode_t *node = CreateListNode(default_clone, LIST_EXPR);
+        if (node == NULL)
+        {
+            destroy_expr(default_clone);
+            fprintf(stderr, "Error on line %d, failed to allocate default argument node.\n", line_num);
+            return 1;
+        }
+
+        if (*args_head == NULL)
+        {
+            *args_head = node;
+            tail = node;
+        }
+        else
+        {
+            tail->next = node;
+            tail = node;
+        }
+
+        formal = formal->next;
+    }
+
+    return 0;
+}
+
 /* Helper to count required parameters (those without defaults) */
 static int count_required_params(ListNode_t *params)
 {
@@ -3637,6 +3724,14 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     else
     {
         sym_return->referenced += 1; /* Moved here: only access if sym_return is valid */
+
+        if (sym_return->type != NULL && sym_return->type->kind == TYPE_KIND_PROCEDURE)
+        {
+            ListNode_t *formal_params = kgpc_type_get_procedure_params(sym_return->type);
+            if (append_default_args(&args_given, formal_params, stmt->line_num) != 0)
+                ++return_val;
+            stmt->stmt_data.procedure_call_data.expr_args = args_given;
+        }
 
         if(scope_return > max_scope_lev)
         {
