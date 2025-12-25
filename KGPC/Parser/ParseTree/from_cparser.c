@@ -5154,6 +5154,9 @@ static void convert_routine_body(ast_t *body_node, ListNode_t **const_decls,
         if (node != NULL) {
             switch (node->typ) {
             case PASCAL_T_TYPE_SECTION:
+                if (getenv("KGPC_DEBUG_TYPE_SECTION") != NULL) {
+                    fprintf(stderr, "[KGPC] convert_routine_body TYPE_SECTION at line=%d\n", node->line);
+                }
                 if (type_decl_list != NULL)
                     append_type_decls_from_section(node, type_decl_list, nested_subs);
                 type_section_ast = node;  /* Save for const array enum resolution */
@@ -5290,6 +5293,22 @@ static void append_type_decls_from_section(ast_t *type_section, ListNode_t **des
     ListNode_t **tail = dest;
     while (*tail != NULL)
         tail = &(*tail)->next;
+
+    if (getenv("KGPC_DEBUG_TYPE_SECTION") != NULL) {
+        fprintf(stderr, "[KGPC] append_type_decls_from_section: type_section->typ=%d child=%p line=%d\n",
+                type_section->typ, (void*)type_section->child, type_section->line);
+
+        /* Count children and print info for each */
+        int child_count = 0;
+        for (ast_t *c = type_section->child; c != NULL; c = c->next) {
+            char *c_id = dup_first_identifier_in_node(c);
+            fprintf(stderr, "[KGPC]   child[%d] typ=%d (%s) line=%d id=%s\n",
+                    child_count++, c->typ, pascal_tag_to_string(c->typ),
+                    c->line, c_id != NULL ? c_id : "<none>");
+            if (c_id != NULL) free(c_id);
+        }
+        fprintf(stderr, "[KGPC]   total children: %d\n", child_count);
+    }
 
     ast_t *type_decl = type_section->child;
     while (type_decl != NULL) {
@@ -7416,6 +7435,9 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
             break;
         }
         case PASCAL_T_TYPE_SECTION:
+            if (getenv("KGPC_DEBUG_TYPE_SECTION") != NULL) {
+                fprintf(stderr, "[KGPC] convert_function TYPE_SECTION at line=%d\n", node->line);
+            }
             append_type_decls_from_section(node, &type_decls, &nested_subs);
             type_section_ast = node;  /* Save for const array enum resolution */
             break;
@@ -8291,6 +8313,9 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                             append_uses_from_section(node_cursor, &interface_uses);
                             break;
                         case PASCAL_T_TYPE_SECTION:
+                            if (getenv("KGPC_DEBUG_TYPE_SECTION") != NULL) {
+                                fprintf(stderr, "[KGPC] interface TYPE_SECTION at line=%d\n", node_cursor->line);
+                            }
                             interface_type_section_ast = node_cursor;  /* Save for const array enum resolution */
                             append_type_decls_from_section(node_cursor, &interface_type_decls, NULL);
                             break;

@@ -340,11 +340,26 @@ static ParseResult many_fn(input_t * in, void * args, char* parser_name) {
     combinator_t* p = (combinator_t*)args;
     ast_t* head = NULL;
     ast_t* tail = NULL;
+    int debug_many = (getenv("KGPC_DEBUG_MANY") != NULL);
+    int iter = 0;
     while (1) {
         InputState state;
         save_input_state(in, &state);
+        if (debug_many) {
+            // Show what's next in input
+            const char* next_input = in->buffer + in->start;
+            int preview_len = 40;
+            if (in->length - in->start < preview_len) preview_len = in->length - in->start;
+            fprintf(stderr, "[MANY] iter=%d parser='%s' pos=%d line=%d next='%.*s'\n",
+                    iter, parser_name ? parser_name : (p->name ? p->name : "unknown"),
+                    in->start, in->line, preview_len, next_input);
+        }
         ParseResult res = parse(in, p);
         if (!res.is_success) {
+            if (debug_many) {
+                fprintf(stderr, "[MANY] iter=%d FAILED: %s\n", iter,
+                        res.value.error ? res.value.error->message : "unknown error");
+            }
             restore_input_state(in, &state);
             free_error(res.value.error);
             break;
@@ -356,12 +371,19 @@ static ParseResult many_fn(input_t * in, void * args, char* parser_name) {
             free_ast(res.value.ast);
             break;
         }
+        if (debug_many) {
+            fprintf(stderr, "[MANY] iter=%d SUCCESS, new pos=%d line=%d\n", iter, in->start, in->line);
+        }
         if (head == NULL) {
             head = tail = res.value.ast;
         } else {
             tail->next = res.value.ast;
             tail = tail->next;
         }
+        iter++;
+    }
+    if (debug_many) {
+        fprintf(stderr, "[MANY] finished with %d items\n", iter);
     }
     return make_success(head ? head : ast_nil);
 }

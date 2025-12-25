@@ -716,6 +716,9 @@ combinator_t* class_type(tag_t tag) {
     
     combinator_t* nested_type_spec = multi(new_combinator(), PASCAL_T_TYPE_SPEC,
         nested_class_type,
+        record_type(PASCAL_T_RECORD_TYPE),          // Support nested record types
+        enumerated_type(PASCAL_T_ENUMERATED_TYPE),  // Support nested enumeration types
+        pointer_type(PASCAL_T_POINTER_TYPE),        // Support nested pointer types
         token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
         NULL
     );
