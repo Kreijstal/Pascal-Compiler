@@ -98,6 +98,78 @@ static int count_required_params(ListNode_t *params)
     return required;
 }
 
+/* Helper to get the default value expression from a parameter */
+static struct Expression *get_param_default_value_stmt(Tree_t *decl)
+{
+    if (decl == NULL)
+        return NULL;
+    
+    struct Statement *init = NULL;
+    
+    if (decl->type == TREE_VAR_DECL)
+    {
+        init = decl->tree_data.var_decl_data.initializer;
+    }
+    else if (decl->type == TREE_ARR_DECL)
+    {
+        init = decl->tree_data.arr_decl_data.initializer;
+    }
+    
+    /* The default value is stored as a STMT_VAR_ASSIGN with NULL var, containing the expression */
+    if (init != NULL && init->type == STMT_VAR_ASSIGN)
+    {
+        return init->stmt_data.var_assign_data.expr;
+    }
+    
+    return NULL;
+}
+
+/* Copy a default value expression for use as an argument */
+static struct Expression *copy_default_expr(struct Expression *src)
+{
+    if (src == NULL)
+        return NULL;
+    
+    struct Expression *copy = NULL;
+    
+    switch (src->type)
+    {
+        case EXPR_INUM:
+            copy = mk_inum(src->line_num, src->expr_data.i_num);
+            break;
+        case EXPR_RNUM:
+            copy = mk_rnum(src->line_num, src->expr_data.r_num);
+            break;
+        case EXPR_STRING:
+            if (src->expr_data.string != NULL)
+                copy = mk_string(src->line_num, strdup(src->expr_data.string));
+            break;
+        case EXPR_BOOL:
+            copy = mk_bool(src->line_num, src->expr_data.bool_value);
+            break;
+        case EXPR_CHAR_CODE:
+            copy = mk_charcode(src->line_num, src->expr_data.char_code);
+            break;
+        case EXPR_NIL:
+            copy = (struct Expression *)malloc(sizeof(struct Expression));
+            if (copy != NULL) {
+                memset(copy, 0, sizeof(struct Expression));
+                copy->type = EXPR_NIL;
+                copy->line_num = src->line_num;
+            }
+            break;
+        default:
+            /* For complex expressions, we can't easily copy them.
+             * Return NULL and let the caller handle the error. */
+            if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL) {
+                fprintf(stderr, "[SemCheck] copy_default_expr: unsupported expr type %d\n", src->type);
+            }
+            break;
+    }
+    
+    return copy;
+}
+
 static int semcheck_loop_depth = 0;
 /* Debug helpers used for corruption watchdog logging. */
 static struct Statement *g_debug_watch_stmt = NULL;
@@ -3435,6 +3507,73 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
             stmt->stmt_data.procedure_call_data.is_call_info_valid == 1);
         stmt->stmt_data.procedure_call_data.is_call_info_valid = 1;
         semcheck_mark_call_requires_static_link(resolved_proc);
+        
+        /* Fill in missing arguments with default values */
+        if (resolved_proc->type != NULL && resolved_proc->type->kind == TYPE_KIND_PROCEDURE)
+        {
+            ListNode_t *formal_params = resolved_proc->type->info.proc_info.params;
+            ListNode_t *call_args = stmt->stmt_data.procedure_call_data.expr_args;
+            int given_count = ListLength(call_args);
+            int formal_count = ListLength(formal_params);
+            
+            if (given_count < formal_count)
+            {
+                /* Need to add default arguments */
+                ListNode_t *formal_cur = formal_params;
+                int arg_index = 0;
+                
+                /* Skip to the position after the last given argument */
+                while (arg_index < given_count && formal_cur != NULL)
+                {
+                    arg_index++;
+                    formal_cur = formal_cur->next;
+                }
+                
+                /* For each remaining formal parameter, add its default value */
+                ListNode_t *args_tail = call_args;
+                while (args_tail != NULL && args_tail->next != NULL)
+                    args_tail = args_tail->next;
+                
+                while (formal_cur != NULL)
+                {
+                    Tree_t *param_decl = (Tree_t *)formal_cur->cur;
+                    struct Expression *default_expr = get_param_default_value_stmt(param_decl);
+                    
+                    if (default_expr != NULL)
+                    {
+                        struct Expression *copy = copy_default_expr(default_expr);
+                        if (copy != NULL)
+                        {
+                            ListNode_t *new_arg = CreateListNode(copy, LIST_EXPR);
+                            if (args_tail != NULL)
+                            {
+                                args_tail->next = new_arg;
+                                args_tail = new_arg;
+                            }
+                            else
+                            {
+                                /* No arguments given, start the list */
+                                stmt->stmt_data.procedure_call_data.expr_args = new_arg;
+                                args_tail = new_arg;
+                            }
+                            
+                            if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL) {
+                                fprintf(stderr, "[SemCheck] Added default arg %d for %s\n", 
+                                    arg_index, proc_id != NULL ? proc_id : "(null)");
+                            }
+                        }
+                        else
+                        {
+                            fprintf(stderr, "Warning: Could not copy default value for parameter %d of %s\n",
+                                arg_index, proc_id != NULL ? proc_id : "(null)");
+                        }
+                    }
+                    
+                    arg_index++;
+                    formal_cur = formal_cur->next;
+                }
+            }
+        }
         
         sym_return = resolved_proc;
         scope_return = 0; // FIXME: This needs to be properly calculated
