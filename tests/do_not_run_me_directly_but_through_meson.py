@@ -47,6 +47,17 @@ try:
 except ValueError:
     EXEC_TIMEOUT = 10
 
+# Timeout for compiler/linker subprocesses when running under Wine/MinGW.
+# Can be overridden via environment variables for slow environments.
+try:
+    COMPILER_TIMEOUT = int(os.environ.get("KGPC_COMPILER_TIMEOUT", "120"))
+except ValueError:
+    COMPILER_TIMEOUT = 120
+try:
+    LINK_TIMEOUT = int(os.environ.get("KGPC_LINK_TIMEOUT", "60"))
+except ValueError:
+    LINK_TIMEOUT = 60
+
 # Meson exposes toggleable behaviour via environment variables so CI can
 # selectively disable particularly slow checks such as the valgrind leak test.
 RUN_VALGRIND_TESTS = os.environ.get("RUN_VALGRIND_TESTS", "false").lower() in (
@@ -227,6 +238,8 @@ def run_executable_with_valgrind(executable_args, **kwargs):
         command = valgrind_cmd + command
         print(f"--- Running executable with valgrind: {' '.join(command)} ---", file=sys.stderr)
 
+        if IS_WINE and "timeout" not in kwargs:
+            kwargs["timeout"] = EXEC_TIMEOUT
         return subprocess.run(command, **kwargs)
 
     # Prefer running with stdout/stderr attached to a pseudo-terminal so Crt / ANSI
@@ -321,6 +334,8 @@ def run_executable_with_valgrind(executable_args, **kwargs):
                 os.close(slave_fd)
             os.close(master_fd)
 
+    if IS_WINE and "timeout" not in kwargs:
+        kwargs["timeout"] = EXEC_TIMEOUT
     return subprocess.run(command, **kwargs)
 
 
@@ -399,7 +414,14 @@ def run_compiler(input_file, output_file, flags=None):
     
     start = time.perf_counter()
     try:
-        result = subprocess.run(command, check=True, capture_output=True, text=True)
+        run_kwargs = {
+            "check": True,
+            "capture_output": True,
+            "text": True,
+        }
+        if IS_WINE:
+            run_kwargs["timeout"] = COMPILER_TIMEOUT
+        result = subprocess.run(command, **run_kwargs)
         duration = time.perf_counter() - start
         COMPILER_RUNS.append(
             {
@@ -886,12 +908,14 @@ class TestCompiler(unittest.TestCase):
             command.extend(list(extra_link_args))
             if not IS_WINDOWS_ABI:
                 command.append("-lm")
-            subprocess.run(
-                command,
-                check=True,
-                capture_output=True,
-                text=True,
-            )
+            compile_kwargs = {
+                "check": True,
+                "capture_output": True,
+                "text": True,
+            }
+            if IS_WINE:
+                compile_kwargs["timeout"] = LINK_TIMEOUT
+            subprocess.run(command, **compile_kwargs)
         except subprocess.CalledProcessError as e:
             self.fail(f"{self.c_compiler_display} compilation failed: {e.stderr}")
 
