@@ -78,7 +78,7 @@ type
     { Signal action record for Linux x86-64 }
     psigactionrec = ^sigactionrec;
     sigactionrec = record
-        sa_handler: sigactionhandler_t;
+        sa_handler: signalhandler_t;
         sa_flags: culong;
         sa_restorer: sigrestorerhandler_t;
         sa_mask: sigset_t;
@@ -107,6 +107,7 @@ function kgpc_unix_wait_process(pid: cint): cint; external;
 function kgpc_unix_w_exitcode(return_code: integer; signal_code: integer): integer; external;
 function kgpc_unix_w_stopcode(signal_code: integer): integer; external;
 function kgpc_unix_wifstopped(status: integer): cint; external;
+function kgpc_unix_sigaction(sig: cint; act: psigactionrec; oact: psigactionrec): cint; external;
 
 function GetHostName: string;
 begin
@@ -140,8 +141,7 @@ end;
 
 function fpsigaction(sig: cint; act: psigactionrec; oact: psigactionrec): cint;
 begin
-    { Stub implementation - returns 0 (success) for now }
-    fpsigaction := 0;
+    fpsigaction := kgpc_unix_sigaction(sig, act, oact);
 end;
 
 end.

@@ -1581,7 +1581,7 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
     );
 
     // Class var declaration inside advanced record (e.g., class var FInstance: TObject;)
-    combinator_t* adv_class_var_decl = seq(new_combinator(), PASCAL_T_NONE,
+    combinator_t* adv_class_var_decl = seq(new_combinator(), PASCAL_T_FIELD_DECL,
         token(keyword_ci("class")),
         token(keyword_ci("var")),
         sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
