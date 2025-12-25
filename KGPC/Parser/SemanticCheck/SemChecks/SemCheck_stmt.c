@@ -45,6 +45,59 @@ static inline struct RecordType* semcheck_stmt_get_record_type_from_node(HashNod
 #include "../../ParseTree/from_cparser.h"
 #include "../../../identifier_utils.h"
 
+/* Helper to check if a parameter has a default value */
+static int param_has_default_value(Tree_t *decl)
+{
+    if (decl == NULL)
+        return 0;
+    
+    if (decl->type == TREE_VAR_DECL)
+    {
+        /* Default value is stored in the initializer field */
+        if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL) {
+            fprintf(stderr, "[SemCheck] param_has_default_value: TREE_VAR_DECL, initializer=%p\n",
+                (void*)decl->tree_data.var_decl_data.initializer);
+        }
+        return decl->tree_data.var_decl_data.initializer != NULL;
+    }
+    else if (decl->type == TREE_ARR_DECL)
+    {
+        if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL) {
+            fprintf(stderr, "[SemCheck] param_has_default_value: TREE_ARR_DECL, initializer=%p\n",
+                (void*)decl->tree_data.arr_decl_data.initializer);
+        }
+        return decl->tree_data.arr_decl_data.initializer != NULL;
+    }
+    
+    return 0;
+}
+
+/* Helper to count required parameters (those without defaults) */
+static int count_required_params(ListNode_t *params)
+{
+    int required = 0;
+    int total = 0;
+    ListNode_t *cur = params;
+    
+    /* Once we see a parameter with a default, all following must also have defaults */
+    while (cur != NULL)
+    {
+        Tree_t *param_decl = (Tree_t *)cur->cur;
+        total++;
+        if (!param_has_default_value(param_decl))
+            required++;
+        else
+            break;  /* All remaining params have defaults */
+        cur = cur->next;
+    }
+    
+    if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL) {
+        fprintf(stderr, "[SemCheck] count_required_params: total=%d required=%d\n", total, required);
+    }
+    
+    return required;
+}
+
 static int semcheck_loop_depth = 0;
 /* Debug helpers used for corruption watchdog logging. */
 static struct Statement *g_debug_watch_stmt = NULL;
@@ -3266,23 +3319,28 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                 ListNode_t *param = NULL;
                 if (candidate->type != NULL && candidate->type->kind == TYPE_KIND_PROCEDURE)
                     param = candidate->type->info.proc_info.params;
-                ListNode_t *param_count = param;
-                while (param_count != NULL)
+                ListNode_t *param_count_iter = param;
+                while (param_count_iter != NULL)
                 {
                     candidate_param_count++;
-                    param_count = param_count->next;
+                    param_count_iter = param_count_iter->next;
                 }
+                
+                /* Count required parameters (those without default values) */
+                int required_params = count_required_params(param);
 
-                if (candidate_param_count == call_arg_count)
+                /* Match if given args is at least required count and at most total params */
+                if (call_arg_count >= required_params && call_arg_count <= candidate_param_count)
                 {
                     if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
                     {
-                        fprintf(stderr, "[SemCheck] proccall candidate %s params=%d\n",
-                            candidate->id != NULL ? candidate->id : "(null)", candidate_param_count);
+                        fprintf(stderr, "[SemCheck] proccall candidate %s params=%d required=%d\n",
+                            candidate->id != NULL ? candidate->id : "(null)", candidate_param_count, required_params);
                     }
                     int score = 0;
                     ListNode_t *param_iter = param;
                     ListNode_t *arg_iter = call_args;
+                    /* Score only the provided arguments */
                     while (param_iter != NULL && arg_iter != NULL)
                     {
                         Tree_t *param_decl = (Tree_t *)param_iter->cur;
@@ -3321,6 +3379,11 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                         param_iter = param_iter->next;
                         arg_iter = arg_iter->next;
                     }
+                    
+                    /* Add small penalty for using default parameters (prefer exact match) */
+                    int missing_args = candidate_param_count - call_arg_count;
+                    if (missing_args > 0)
+                        score += missing_args;  /* Small penalty per default param used */
 
                     if (score < best_score)
                     {

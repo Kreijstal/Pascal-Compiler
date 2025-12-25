@@ -718,10 +718,19 @@ static combinator_t* create_optional_modifier(void) {
     return optional(modifier_choice);
 }
 
-static ast_t* detach_type_spec(ast_t* identifier_start, ast_t** out_type_spec) {
+static ast_t* detach_type_spec(ast_t* identifier_start, ast_t** out_type_spec, ast_t** out_default_value) {
     ast_t* prev = NULL;
     ast_t* cursor = identifier_start;
+    if (out_default_value != NULL) {
+        *out_default_value = NULL;
+    }
     while (cursor != NULL) {
+        if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL) {
+            fprintf(stderr, "[detach_type_spec] cursor=%p typ=%d next=%p next_typ=%d\n",
+                (void*)cursor, cursor->typ,
+                (void*)(cursor->next),
+                cursor->next ? cursor->next->typ : -1);
+        }
         if (cursor->typ == PASCAL_T_TYPE_SPEC) {
             if (prev != NULL) {
                 prev->next = NULL;
@@ -729,7 +738,15 @@ static ast_t* detach_type_spec(ast_t* identifier_start, ast_t** out_type_spec) {
                 identifier_start = NULL;
             }
             *out_type_spec = cursor;
-            cursor->next = NULL;
+            /* Check if next node is a default value */
+            if (cursor->next != NULL && cursor->next->typ == PASCAL_T_DEFAULT_VALUE) {
+                if (out_default_value != NULL) {
+                    *out_default_value = cursor->next;
+                }
+                cursor->next = NULL;
+            } else {
+                cursor->next = NULL;
+            }
             return identifier_start;
         }
         prev = cursor;
@@ -756,6 +773,7 @@ static ast_t* structure_param_node(ast_t* ast) {
     ast_t* modifier = NULL;
     ast_t* identifier_start = ast;
     ast_t* type_spec = NULL;
+    ast_t* default_value = NULL;
 
     if (is_modifier_keyword(ast)) {
         modifier = ast;
@@ -763,7 +781,12 @@ static ast_t* structure_param_node(ast_t* ast) {
         modifier->next = NULL;
     }
 
-    identifier_start = detach_type_spec(identifier_start, &type_spec);
+    identifier_start = detach_type_spec(identifier_start, &type_spec, &default_value);
+    
+    if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL) {
+        fprintf(stderr, "[structure_param_node] type_spec=%p default_value=%p\n",
+            (void*)type_spec, (void*)default_value);
+    }
 
     if (modifier == NULL)
         modifier = create_placeholder_modifier(identifier_start != NULL ? identifier_start : type_spec);
@@ -785,6 +808,16 @@ static ast_t* structure_param_node(ast_t* ast) {
     if (type_spec != NULL) {
         tail->next = type_spec;
         tail = type_spec;
+    }
+
+    /* Attach default value node if present */
+    if (default_value != NULL) {
+        tail->next = default_value;
+        tail = default_value;
+        #ifdef DEBUG_DEFAULT_PARAMS
+        fprintf(stderr, "[structure_param_node] attached default_value, now type_spec->next=%p\n",
+            type_spec ? (void*)type_spec->next : NULL);
+        #endif
     }
 
     if (tail != NULL)

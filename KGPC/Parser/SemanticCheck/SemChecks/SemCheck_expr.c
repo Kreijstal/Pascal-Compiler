@@ -7750,6 +7750,71 @@ int resolve_param_type(Tree_t *decl, SymTab_t *symtab)
     return UNKNOWN_TYPE;
 }
 
+/* Helper to check if a parameter has a default value */
+static int param_has_default_value(Tree_t *decl)
+{
+    if (decl == NULL)
+        return 0;
+    
+    if (decl->type == TREE_VAR_DECL)
+    {
+        /* Default value is stored in the initializer field */
+        return decl->tree_data.var_decl_data.initializer != NULL;
+    }
+    else if (decl->type == TREE_ARR_DECL)
+    {
+        return decl->tree_data.arr_decl_data.initializer != NULL;
+    }
+    
+    return 0;
+}
+
+/* Helper to get the default value expression from a parameter */
+static struct Expression *get_param_default_value(Tree_t *decl)
+{
+    if (decl == NULL)
+        return NULL;
+    
+    struct Statement *init = NULL;
+    
+    if (decl->type == TREE_VAR_DECL)
+    {
+        init = decl->tree_data.var_decl_data.initializer;
+    }
+    else if (decl->type == TREE_ARR_DECL)
+    {
+        init = decl->tree_data.arr_decl_data.initializer;
+    }
+    
+    /* The default value is stored as a STMT_VAR_ASSIGN with NULL var, containing the expression */
+    if (init != NULL && init->type == STMT_VAR_ASSIGN)
+    {
+        return init->stmt_data.var_assign_data.expr;
+    }
+    
+    return NULL;
+}
+
+/* Helper to count required parameters (those without defaults) */
+static int count_required_params(ListNode_t *params)
+{
+    int required = 0;
+    ListNode_t *cur = params;
+    
+    /* Once we see a parameter with a default, all following must also have defaults */
+    while (cur != NULL)
+    {
+        Tree_t *param_decl = (Tree_t *)cur->cur;
+        if (!param_has_default_value(param_decl))
+            required++;
+        else
+            break;  /* All remaining params have defaults */
+        cur = cur->next;
+    }
+    
+    return required;
+}
+
 /** FUNC_CALL **/
 int semcheck_funccall(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating)
@@ -8768,17 +8833,24 @@ method_call_resolved:
 
             /* Get formal arguments from KgpcType instead of deprecated args field */
             ListNode_t *candidate_args = kgpc_type_get_procedure_params(candidate->type);
+            int total_params = ListLength(candidate_args);
+            int required_params = count_required_params(candidate_args);
+            int given_count = ListLength(args_given);
+            
             if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
-                fprintf(stderr, "[SemCheck] semcheck_funccall: candidate %s args=%d given=%d\n", 
-                    candidate->id, ListLength(candidate_args), ListLength(args_given));
+                fprintf(stderr, "[SemCheck] semcheck_funccall: candidate %s args=%d required=%d given=%d\n", 
+                    candidate->id, total_params, required_params, given_count);
             }
-            if (ListLength(candidate_args) == ListLength(args_given))
+            
+            /* Match if given args is at least required count and at most total params */
+            if (given_count >= required_params && given_count <= total_params)
             {
                 int current_score = 0;
                 ListNode_t *formal_args = candidate_args;
                 ListNode_t *call_args = args_given;
 
-                while(formal_args != NULL)
+                /* Score only the provided arguments */
+                while(formal_args != NULL && call_args != NULL)
                 {
                     Tree_t *formal_decl = (Tree_t *)formal_args->cur;
                     int formal_type = resolve_param_type(formal_decl, symtab);
@@ -8826,6 +8898,11 @@ method_call_resolved:
                     formal_args = formal_args->next;
                     call_args = call_args->next;
                 }
+                
+                /* Add small penalty for using default parameters (prefer exact match) */
+                int missing_args = total_params - given_count;
+                if (missing_args > 0)
+                    current_score += missing_args;  /* Small penalty per default param used */
 
                 if(current_score < best_score)
                 {

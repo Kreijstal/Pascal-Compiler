@@ -3848,6 +3848,7 @@ static ListNode_t *convert_param(ast_t *param_node) {
     char *type_id = NULL;
     int var_type = UNKNOWN_TYPE;
     TypeInfo type_info = {0};
+    ast_t *default_value_node = NULL;
 
     if (type_node == NULL || type_node->typ != PASCAL_T_TYPE_SPEC) {
         if (!(is_var_param || is_const_param)) {
@@ -3862,6 +3863,32 @@ static ListNode_t *convert_param(ast_t *param_node) {
     {
         /* ARCHITECTURAL FIX: Pass TypeInfo to preserve array information */
         var_type = convert_type_spec(type_node, &type_id, NULL, &type_info);
+        /* Check for default value node after type spec */
+        if (type_node->next != NULL && type_node->next->typ == PASCAL_T_DEFAULT_VALUE) {
+            default_value_node = type_node->next;
+        }
+        if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL) {
+            fprintf(stderr, "[convert_param] type_node=%p type_node->next=%p next_typ=%d\n",
+                (void*)type_node, 
+                (void*)(type_node ? type_node->next : NULL),
+                (type_node && type_node->next) ? type_node->next->typ : -1);
+        }
+    }
+
+    /* Convert default value if present */
+    struct Statement *default_init = NULL;
+    if (default_value_node != NULL) {
+        /* PASCAL_T_DEFAULT_VALUE has structure: "=" token, expression */
+        ast_t *eq_tok = default_value_node->child;
+        ast_t *expr_node = (eq_tok != NULL) ? eq_tok->next : NULL;
+        if (expr_node != NULL) {
+            struct Expression *default_expr = convert_expression(expr_node);
+            if (default_expr != NULL) {
+                /* Wrap expression in a var_assign statement with NULL var for storage */
+                default_init = mk_varassign(default_value_node->line, default_value_node->col, 
+                                            NULL, default_expr);
+            }
+        }
     }
 
     ListBuilder result_builder;
@@ -3888,11 +3915,12 @@ static ListNode_t *convert_param(ast_t *param_node) {
             /* Set var parameter flag on array declaration */
             if (is_var_param && param_decl != NULL)
                 param_decl->tree_data.arr_decl_data.type = var_type; // Store this for compatibility
+            /* Note: array parameters with default values are rare but could be supported */
         }
         else
         {
             param_decl = mk_vardecl(param_node->line, id_node, var_type, type_id_copy,
-                is_var_param, 0, NULL, NULL, NULL, NULL);
+                is_var_param, 0, default_init, NULL, NULL, NULL);
         }
         
         list_builder_append(&result_builder, param_decl, LIST_TREE);
