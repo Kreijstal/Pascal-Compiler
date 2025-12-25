@@ -184,7 +184,8 @@ char *kgpc_unix_get_domainname_string(void)
 
 struct kgpc_sigaction
 {
-    void (*sa_handler)(int);
+    /* Use a distinct name to avoid sa_handler macro collisions. */
+    void (*handler)(int);
     unsigned long sa_flags;
     void (*sa_restorer)(void);
     sigset_t sa_mask;
@@ -208,7 +209,7 @@ int kgpc_unix_sigaction(int sig, const struct kgpc_sigaction *act,
     if (act != NULL)
     {
         memset(&native_act, 0, sizeof(native_act));
-        native_act.sa_handler = act->sa_handler;
+        native_act.sa_handler = act->handler;
         native_act.sa_flags = (int)act->sa_flags;
 #if defined(__linux__)
         native_act.sa_restorer = act->sa_restorer;
@@ -226,7 +227,7 @@ int kgpc_unix_sigaction(int sig, const struct kgpc_sigaction *act,
     int result = sigaction(sig, native_act_ptr, native_oact_ptr);
     if (result == 0 && oact != NULL)
     {
-        oact->sa_handler = native_oact.sa_handler;
+        oact->handler = native_oact.sa_handler;
         oact->sa_flags = (unsigned long)native_oact.sa_flags;
 #if defined(__linux__)
         oact->sa_restorer = native_oact.sa_restorer;
