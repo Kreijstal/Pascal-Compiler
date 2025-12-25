@@ -2837,6 +2837,82 @@ void test_pascal_record_type(void) {
     free_input(input);
 }
 
+static bool field_decl_has_identifier(ast_t* field_decl, const char* name) {
+    for (ast_t* child = field_decl->child; child != NULL; child = child->next) {
+        if (child->typ == PASCAL_T_IDENTIFIER && child->sym != NULL &&
+            strcmp(child->sym->name, name) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void test_pascal_advanced_record_class_var(void) {
+    combinator_t* p = get_program_parser();
+
+    input_t* input = new_input();
+    char* program = load_pascal_snippet("advanced_record_class_var.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free_input(input);
+        return;
+    }
+    input->buffer = program;
+    input->length = strlen(program);
+
+    ParseResult res = parse(input, p);
+
+    TEST_ASSERT(res.is_success);
+
+    if (res.is_success) {
+        ast_t* program_decl = res.value.ast;
+        TEST_ASSERT(program_decl->typ == PASCAL_T_PROGRAM_DECL);
+
+        ast_t* current = program_decl->child;
+        while (current && current->typ != PASCAL_T_TYPE_SECTION) {
+            current = current->next;
+        }
+        TEST_ASSERT(current != NULL);
+        TEST_ASSERT(current->typ == PASCAL_T_TYPE_SECTION);
+
+        ast_t* type_decl = current->child;
+        TEST_ASSERT(type_decl->typ == PASCAL_T_TYPE_DECL);
+
+        ast_t* type_name = type_decl->child;
+        TEST_ASSERT(type_name->typ == PASCAL_T_IDENTIFIER);
+        TEST_ASSERT(strcmp(type_name->sym->name, "TAdvRecord") == 0);
+
+        ast_t* type_spec = type_name->next;
+        TEST_ASSERT(type_spec->typ == PASCAL_T_TYPE_SPEC);
+
+        ast_t* record_type = type_spec->child;
+        TEST_ASSERT(record_type->typ == PASCAL_T_RECORD_TYPE);
+
+        bool found_class_var = false;
+        bool found_value_field = false;
+        for (ast_t* field = record_type->child; field != NULL; field = field->next) {
+            if (field->typ != PASCAL_T_FIELD_DECL) {
+                continue;
+            }
+            if (field_decl_has_identifier(field, "FInstance")) {
+                found_class_var = true;
+            }
+            if (field_decl_has_identifier(field, "Value")) {
+                found_value_field = true;
+            }
+        }
+
+        TEST_ASSERT(found_class_var);
+        TEST_ASSERT(found_value_field);
+
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+    free(input->buffer);
+    free_input(input);
+}
+
 // Test simple case statement
 void test_pascal_simple_case_statement(void) {
     combinator_t* p = create_statement_parser();
@@ -5096,6 +5172,7 @@ TEST_LIST = {
     { "test_pascal_function_multiple_params", test_pascal_function_multiple_params },
     // Failing tests for missing features
     { "test_pascal_record_type", test_pascal_record_type },
+    { "test_pascal_advanced_record_class_var", test_pascal_advanced_record_class_var },
     { "test_pascal_unit_declaration", test_pascal_unit_declaration },
     { "test_pascal_pointer_type_declaration", test_pascal_pointer_type_declaration },
     { "test_pascal_method_implementation", test_pascal_method_implementation },

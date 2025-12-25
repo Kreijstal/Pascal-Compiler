@@ -1342,8 +1342,9 @@ void init_pascal_unit_parser(combinator_t** p) {
     combinator_t* const_value = lazy(const_expr_parser);
 
     // Hint directives for constants: deprecated, platform, library
-    // Pattern: deprecated ['message'] | platform | library
-    combinator_t* const_hint_directive = optional(seq(new_combinator(), PASCAL_T_NONE,
+    // Pattern: (deprecated ['message'] | platform | library | experimental | unimplemented)*
+    // Supports multiple directives like "platform deprecated"
+    combinator_t* single_const_hint = seq(new_combinator(), PASCAL_T_NONE,
         multi(new_combinator(), PASCAL_T_NONE,
             token(keyword_ci("deprecated")),
             token(keyword_ci("platform")),
@@ -1354,7 +1355,8 @@ void init_pascal_unit_parser(combinator_t** p) {
         ),
         optional(token(pascal_string(PASCAL_T_STRING))),  // optional message for deprecated
         NULL
-    ));
+    );
+    combinator_t* const_hint_directive = many(single_const_hint);
 
     combinator_t* const_decl = seq(new_combinator(), PASCAL_T_CONST_DECL,
         token(cident(PASCAL_T_IDENTIFIER)),          // constant name
@@ -1506,13 +1508,13 @@ void init_pascal_unit_parser(combinator_t** p) {
     // This comes after the semicolon in patterns like: "var x: type; public name 'alias';"
     combinator_t* unit_var_linkage_clause = optional(seq(new_combinator(), PASCAL_T_NONE,
         multi(new_combinator(), PASCAL_T_NONE,
-            seq(new_combinator(), PASCAL_T_NONE,
+            map(seq(new_combinator(), PASCAL_T_NONE,
                 token(keyword_ci("public")),
                 token(keyword_ci("name")),
                 token(pascal_string(PASCAL_T_STRING)),
                 NULL
-            ),
-            seq(new_combinator(), PASCAL_T_NONE,
+            ), wrap_public_name_clause),
+            map(seq(new_combinator(), PASCAL_T_NONE,
                 token(keyword_ci("external")),
                 optional(token(pascal_string(PASCAL_T_STRING))),  // optional lib name
                 optional(seq(new_combinator(), PASCAL_T_NONE,
@@ -1521,7 +1523,7 @@ void init_pascal_unit_parser(combinator_t** p) {
                     NULL
                 )),
                 NULL
-            ),
+            ), wrap_external_name_clause),
             NULL
         ),
         token(match(";")),  // trailing semicolon after linkage clause
@@ -1623,6 +1625,7 @@ void init_pascal_unit_parser(combinator_t** p) {
         token(create_keyword_parser("library", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("local", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("forward", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("rtlproc", PASCAL_T_IDENTIFIER)),  // FPC RTL procedure directive
         NULL
     );
 
@@ -1831,6 +1834,47 @@ void init_pascal_unit_parser(combinator_t** p) {
         NULL
     );
 
+    // Generic type parameter list for generic functions/procedures
+    combinator_t* generic_type_params = seq(new_combinator(), PASCAL_T_TYPE_PARAM_LIST,
+        token(match("<")),
+        sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
+        token(match(">")),
+        NULL
+    );
+
+    // Generic procedure header: generic procedure ProcName<T>(param: T); inline; overload;
+    combinator_t* generic_procedure_header = seq(new_combinator(), PASCAL_T_PROCEDURE_DECL,
+        token(keyword_ci("generic")),
+        token(keyword_ci("procedure")),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        generic_type_params,
+        param_list,
+        token(match(";")),
+        interface_directives,
+        NULL
+    );
+
+    // Generic function header: generic function FuncName<T>(param: T): T; inline; overload;
+    combinator_t* generic_function_header = seq(new_combinator(), PASCAL_T_FUNCTION_DECL,
+        token(keyword_ci("generic")),
+        token(keyword_ci("function")),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        generic_type_params,
+        param_list,
+        token(match(":")),
+        token(cident(PASCAL_T_RETURN_TYPE)),
+        token(match(";")),
+        interface_directives,
+        NULL
+    );
+
+    // Combined generic header that handles both procedure and function
+    combinator_t* generic_header = multi(new_combinator(), PASCAL_T_NONE,
+        generic_procedure_header,
+        generic_function_header,
+        NULL
+    );
+
     // Simple procedure implementation for unit (with required body)
     combinator_t* procedure_impl = seq(new_combinator(), PASCAL_T_PROCEDURE_DECL,
         optional(token(keyword_ci("class"))),
@@ -2030,18 +2074,19 @@ void init_pascal_unit_parser(combinator_t** p) {
     );
 
     // Interface section declarations: uses, const, type, procedure/function headers
-    keyword_dispatch_args_t* interface_dispatch_args = create_keyword_dispatch(9);
+    keyword_dispatch_args_t* interface_dispatch_args = create_keyword_dispatch(11);
     size_t interface_entry_index = 0;
-    register_keyword_entry(interface_dispatch_args, 9, &interface_entry_index, "uses", uses_section);
-    register_keyword_entry(interface_dispatch_args, 9, &interface_entry_index, "const", const_section);
-    register_keyword_entry(interface_dispatch_args, 9, &interface_entry_index, "resourcestring", resourcestring_section);
-    register_keyword_entry(interface_dispatch_args, 9, &interface_entry_index, "type", type_section);
-    register_keyword_entry(interface_dispatch_args, 9, &interface_entry_index, "threadvar", threadvar_section);
-    register_keyword_entry(interface_dispatch_args, 9, &interface_entry_index, "var", var_section);
-    register_keyword_entry(interface_dispatch_args, 9, &interface_entry_index, "procedure", procedure_header);
-    register_keyword_entry(interface_dispatch_args, 9, &interface_entry_index, "function", function_header);
-    register_keyword_entry(interface_dispatch_args, 9, &interface_entry_index, "property", interface_property_decl);
-    register_keyword_entry(interface_dispatch_args, 9, &interface_entry_index, "operator", operator_header);
+    register_keyword_entry(interface_dispatch_args, 11, &interface_entry_index, "uses", uses_section);
+    register_keyword_entry(interface_dispatch_args, 11, &interface_entry_index, "const", const_section);
+    register_keyword_entry(interface_dispatch_args, 11, &interface_entry_index, "resourcestring", resourcestring_section);
+    register_keyword_entry(interface_dispatch_args, 11, &interface_entry_index, "type", type_section);
+    register_keyword_entry(interface_dispatch_args, 11, &interface_entry_index, "threadvar", threadvar_section);
+    register_keyword_entry(interface_dispatch_args, 11, &interface_entry_index, "var", var_section);
+    register_keyword_entry(interface_dispatch_args, 11, &interface_entry_index, "procedure", procedure_header);
+    register_keyword_entry(interface_dispatch_args, 11, &interface_entry_index, "function", function_header);
+    register_keyword_entry(interface_dispatch_args, 11, &interface_entry_index, "property", interface_property_decl);
+    register_keyword_entry(interface_dispatch_args, 11, &interface_entry_index, "operator", operator_header);
+    register_keyword_entry(interface_dispatch_args, 11, &interface_entry_index, "generic", generic_header);
     interface_dispatch_args->entry_count = interface_entry_index;
 
     combinator_t* interface_declaration = new_combinator();

@@ -80,7 +80,10 @@ kgpc_cparser_exe = executable('kgpc', kgpc_cparser_sources,
 
 gmp_dep = dependency('gmp', required: get_option('with_gmp'))
 
-runtime_sources = ['runtime.c', 'runtime_unix.c']
+runtime_sources = ['runtime.c']
+if not host_machine.system().startswith('windows')
+  runtime_sources += 'runtime_unix.c'
+endif
 runtime_deps = []
 runtime_c_args = []
 

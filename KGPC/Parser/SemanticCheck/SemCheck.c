@@ -1942,6 +1942,29 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                             if (literal_node->cur != NULL)
                             {
                                 char *literal_name = (char *)literal_node->cur;
+                                
+                                /* Check if this enum literal already exists (e.g., from prelude) */
+                                HashNode_t *existing = NULL;
+                                if (FindIdent(&existing, symtab, literal_name) != -1 && existing != NULL)
+                                {
+                                    /* If it exists as a constant with the same value, skip silently */
+                                    if (existing->is_constant && existing->const_int_value == ordinal)
+                                    {
+                                        /* Same enum literal from prelude - not an error */
+                                        literal_node = literal_node->next;
+                                        ++ordinal;
+                                        continue;
+                                    }
+                                    /* Different value - this is a real conflict */
+                                    fprintf(stderr,
+                                            "Error on line %d, redeclaration of enum literal %s with different value!\n",
+                                            tree->line_num, literal_name);
+                                    ++errors;
+                                    literal_node = literal_node->next;
+                                    ++ordinal;
+                                    continue;
+                                }
+                                
                                 /* Use typed API with shared enum KgpcType - all literals reference same type */
                                 if (PushConstOntoScope_Typed(symtab, literal_name, ordinal, alias_info->kgpc_type) > 0)
                                 {
@@ -2096,9 +2119,52 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                         continue;
                     }
 
+                    /* Pre-declare enum types so they can be used as function return types.
+                     * This creates a stub entry - the actual enum literals are registered
+                     * separately in predeclare_enum_literals(). */
+                    if (alias->is_enum)
+                    {
+                        KgpcType *kgpc_type = NULL;
+                        /* Check if already created during predeclare_enum_literals */
+                        if (alias->kgpc_type != NULL)
+                        {
+                            kgpc_type = alias->kgpc_type;
+                            /* Don't retain here - we'll pass it to PushTypeOntoScope_Typed which
+                             * will retain if needed. The alias already owns a reference. */
+                        }
+                        else
+                        {
+                            kgpc_type = create_primitive_type(ENUM_TYPE);
+                            if (kgpc_type != NULL)
+                            {
+                                /* Store in alias - alias now owns this reference */
+                                alias->kgpc_type = kgpc_type;
+                                kgpc_type_retain(kgpc_type);  /* Alias holds reference */
+                            }
+                        }
+                        
+                        if (kgpc_type != NULL)
+                        {
+                            /* Attach the type_alias so scoped enum lookup can find enum_literals */
+                            kgpc_type_set_type_alias(kgpc_type, alias);
+                            
+                            if (tree->tree_data.type_decl_data.kgpc_type == NULL)
+                            {
+                                tree->tree_data.type_decl_data.kgpc_type = kgpc_type;
+                                kgpc_type_retain(kgpc_type);  /* Tree holds reference */
+                            }
+                            
+                            /* PushTypeOntoScope_Typed will retain kgpc_type when adding to symbol table */
+                            int result = PushTypeOntoScope_Typed(symtab, (char *)type_id, kgpc_type);
+                            if (result > 0)
+                                errors += result;
+                        }
+                        cur = cur->next;
+                        continue;
+                    }
+
                     /* Skip other complex types - let semcheck_type_decls handle them */
-                    if (alias->is_enum || alias->is_array || alias->is_set || 
-                        alias->is_file)
+                    if (alias->is_array || alias->is_set || alias->is_file)
                     {
                         cur = cur->next;
                         continue;

@@ -32,6 +32,7 @@ static combinator_t* make_generic_type_prefix(void) {
 
 static combinator_t* create_record_field_type_spec(void);
 static combinator_t* create_record_method_directives(void);
+static combinator_t* create_class_method_directives(void);
 
 static combinator_t* create_nested_method_directives(void) {
     combinator_t* directive = multi(new_combinator(), PASCAL_T_NONE,
@@ -436,27 +437,22 @@ combinator_t* class_type(tag_t tag) {
 
     // Method declarations (simplified - just headers for now)
     combinator_t* constructor_decl = seq(new_combinator(), PASCAL_T_CONSTRUCTOR_DECL,
+        optional(token(keyword_ci("class"))),  // Support class constructor
         token(keyword_ci("constructor")),
         token(cident(PASCAL_T_IDENTIFIER)),
         create_pascal_param_parser(),
         token(match(";")),
+        create_class_method_directives(),  // Support virtual, override, etc.
         NULL
     );
 
     combinator_t* destructor_decl = seq(new_combinator(), PASCAL_T_DESTRUCTOR_DECL,
+        optional(token(keyword_ci("class"))),  // Support class destructor
         token(keyword_ci("destructor")),
         token(cident(PASCAL_T_IDENTIFIER)),
         create_pascal_param_parser(),
         token(match(";")),
-        optional(seq(new_combinator(), PASCAL_T_NONE,
-            multi(new_combinator(), PASCAL_T_METHOD_DIRECTIVE,
-                token(keyword_ci("virtual")),
-                token(keyword_ci("override")),
-                NULL
-            ),
-            optional(token(match(";"))),
-            NULL
-        )),
+        create_class_method_directives(),  // Support virtual, override, etc.
         NULL
     );
 
@@ -467,15 +463,7 @@ combinator_t* class_type(tag_t tag) {
         create_method_type_param_list(),  // Optional type parameters for generic methods
         create_pascal_param_parser(),
         token(match(";")),
-        optional(seq(new_combinator(), PASCAL_T_NONE,
-            multi(new_combinator(), PASCAL_T_METHOD_DIRECTIVE,
-                token(keyword_ci("virtual")),
-                token(keyword_ci("override")),
-                NULL
-            ),
-            optional(token(match(";"))),
-            NULL
-        )),
+        create_class_method_directives(),  // Support virtual, override, reintroduce, etc.
         NULL
     );
 
@@ -488,15 +476,7 @@ combinator_t* class_type(tag_t tag) {
         token(match(":")),
         create_type_ref_parser(),  // Support both simple and constructed types
         token(match(";")),
-        optional(seq(new_combinator(), PASCAL_T_NONE,
-            multi(new_combinator(), PASCAL_T_METHOD_DIRECTIVE,
-                token(keyword_ci("virtual")),
-                token(keyword_ci("override")),
-                NULL
-            ),
-            optional(token(match(";"))),
-            NULL
-        )),
+        create_class_method_directives(),  // Support virtual, override, reintroduce, etc.
         NULL
     );
 
@@ -525,6 +505,7 @@ combinator_t* class_type(tag_t tag) {
     ));
 
     combinator_t* property_decl = seq(new_combinator(), PASCAL_T_PROPERTY_DECL,
+        optional(token(keyword_ci("class"))),  // Support class properties
         token(keyword_ci("property")),
         token(cident(PASCAL_T_IDENTIFIER)), // property name
         property_indexer,
@@ -565,12 +546,27 @@ combinator_t* class_type(tag_t tag) {
     class_member->args = class_dispatch;
     set_combinator_name(class_member, "class_member");
 
-    // Access sections: private, public, protected, published
-    combinator_t* access_keyword = multi(new_combinator(), PASCAL_T_ACCESS_MODIFIER,
+    // Access sections: private, public, protected, published, strict private, strict protected
+    // Handle strict modifiers first (two-word) then single-word modifiers
+    combinator_t* strict_access = seq(new_combinator(), PASCAL_T_ACCESS_MODIFIER,
+        token(keyword_ci("strict")),
+        multi(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("private")),
+            token(keyword_ci("protected")),
+            NULL
+        ),
+        NULL
+    );
+    combinator_t* simple_access = multi(new_combinator(), PASCAL_T_ACCESS_MODIFIER,
         token(keyword_ci("private")),
         token(keyword_ci("public")),
         token(keyword_ci("protected")),
         token(keyword_ci("published")),
+        NULL
+    );
+    combinator_t* access_keyword = multi(new_combinator(), PASCAL_T_NONE,
+        strict_access,
+        simple_access,
         NULL
     );
 
@@ -716,6 +712,11 @@ combinator_t* class_type(tag_t tag) {
     
     combinator_t* nested_type_spec = multi(new_combinator(), PASCAL_T_TYPE_SPEC,
         nested_class_type,
+        record_type(PASCAL_T_RECORD_TYPE),          // Support nested record types
+        enumerated_type(PASCAL_T_ENUMERATED_TYPE),  // Support nested enumeration types
+        pointer_type(PASCAL_T_POINTER_TYPE),        // Support nested pointer types
+        function_type(PASCAL_T_FUNCTION_TYPE),      // Support nested function types
+        procedure_type(PASCAL_T_PROCEDURE_TYPE),    // Support nested procedure types
         token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
         NULL
     );
@@ -752,10 +753,60 @@ combinator_t* class_type(tag_t tag) {
         NULL
     );
 
+    // Nested const section in class body: const DefaultCapacity = 64;
+    // Initialize expression parser for class const expressions
+    combinator_t** class_const_expr_parser = (combinator_t**)safe_malloc(sizeof(combinator_t*));
+    *class_const_expr_parser = new_combinator();
+    init_pascal_expression_parser(class_const_expr_parser, NULL);
+
+    combinator_t* nested_const_decl = seq(new_combinator(), PASCAL_T_CONST_DECL,
+        token(cident(PASCAL_T_IDENTIFIER)),
+        optional(seq(new_combinator(), PASCAL_T_NONE,
+            token(match(":")),
+            create_type_ref_parser(),
+            NULL
+        )),
+        token(match("=")),
+        lazy(class_const_expr_parser),
+        optional(token(match(";"))),
+        NULL
+    );
+
+    combinator_t* nested_const_section = seq(new_combinator(), PASCAL_T_CONST_SECTION,
+        token(keyword_ci("const")),
+        many(nested_const_decl),
+        NULL
+    );
+
+    // Class var section: class var Field1, Field2: Type;
+    combinator_t* class_var_decl = seq(new_combinator(), PASCAL_T_FIELD_DECL,
+        sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
+        token(match(":")),
+        create_type_ref_parser(),
+        token(match(";")),
+        NULL
+    );
+    combinator_t* class_var_section = seq(new_combinator(), PASCAL_T_NONE,
+        token(keyword_ci("class")),
+        token(keyword_ci("var")),
+        many(class_var_decl),
+        NULL
+    );
+
+    // Plain var section inside class: var FField: Type;
+    combinator_t* plain_var_section = seq(new_combinator(), PASCAL_T_NONE,
+        token(keyword_ci("var")),
+        many(class_var_decl),
+        NULL
+    );
+
     // Skip comments and whitespace in class body
     combinator_t* class_element = multi(new_combinator(), PASCAL_T_NONE,
-        nested_type_section,  // Nested type declarations
-        class_member,         // Regular class members
+        nested_type_section,   // Nested type declarations
+        nested_const_section,  // Nested const declarations
+        class_var_section,     // Class var declarations (class var)
+        plain_var_section,     // Plain var declarations (instance var)
+        class_member,          // Regular class members
         NULL
     );
 
@@ -1013,6 +1064,32 @@ static combinator_t* create_record_method_directives(void) {
         NULL
     );
     return many(record_method_directive);
+}
+
+// Method directives for class methods - includes virtual, override, reintroduce, etc.
+static combinator_t* create_class_method_directives(void) {
+    combinator_t* class_method_directive_keyword = multi(new_combinator(), PASCAL_T_NONE,
+        token(create_keyword_parser("virtual", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("override", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("reintroduce", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("overload", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("static", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("inline", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("abstract", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("deprecated", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("platform", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("library", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("dynamic", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("message", PASCAL_T_IDENTIFIER)),
+        NULL
+    );
+    combinator_t* class_method_directive = seq(new_combinator(), PASCAL_T_METHOD_DIRECTIVE,
+        class_method_directive_keyword,
+        optional(token(pascal_string(PASCAL_T_STRING))),  // Some directives have string args
+        token(match(";")),
+        NULL
+    );
+    return many(class_method_directive);
 }
 
 typedef struct {
@@ -1353,11 +1430,20 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
         NULL
     );
 
-    // Simple field declaration with trailing ';'
-    combinator_t* adv_field_decl = seq(new_combinator(), PASCAL_T_NONE,
+    // Field directive keywords like platform, deprecated
+    combinator_t* field_directive = multi(new_combinator(), PASCAL_T_NONE,
+        token(create_keyword_parser("platform", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("deprecated", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("experimental", PASCAL_T_IDENTIFIER)),
+        NULL
+    );
+
+    // Simple field declaration with trailing ';' and optional directives
+    combinator_t* adv_field_decl = seq(new_combinator(), PASCAL_T_FIELD_DECL,
         sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
         token(match(":")),
         create_record_field_type_spec(),
+        many(field_directive),  // Optional field directives like platform
         token(match(";")),
         NULL
     );
@@ -1404,7 +1490,7 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
     );
 
     // Simple property declaration inside a record (e.g., property Current: T read GetCurrent;)
-    combinator_t* adv_property_decl = seq(new_combinator(), PASCAL_T_NONE,
+    combinator_t* adv_property_decl = seq(new_combinator(), PASCAL_T_PROPERTY_DECL,
         optional(token(keyword_ci("class"))),
         token(keyword_ci("property")),
         token(cident(PASCAL_T_IDENTIFIER)),
@@ -1445,8 +1531,71 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
         NULL
     );
 
+    // Nested type declaration inside advanced record (e.g., type TNestedType = Integer;)
+    combinator_t* adv_nested_type_decl = seq(new_combinator(), PASCAL_T_TYPE_DECL,
+        token(cident(PASCAL_T_IDENTIFIER)),
+        token(match("=")),
+        multi(new_combinator(), PASCAL_T_TYPE_SPEC,
+            record_type(PASCAL_T_RECORD_TYPE),
+            enumerated_type(PASCAL_T_ENUMERATED_TYPE),
+            pointer_type(PASCAL_T_POINTER_TYPE),
+            range_type(PASCAL_T_RANGE_TYPE),
+            token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
+            NULL
+        ),
+        optional(token(match(";"))),
+        NULL
+    );
+
+    // Nested type section inside advanced record (e.g., public type TNestedType = Integer;)
+    combinator_t* adv_nested_type_section = seq(new_combinator(), PASCAL_T_NESTED_TYPE_SECTION,
+        token(keyword_ci("type")),
+        many(adv_nested_type_decl),
+        NULL
+    );
+    set_combinator_name(adv_nested_type_section, "adv_nested_type_section");
+
+    // Nested const declaration inside advanced record (e.g., MyConst = 42;)
+    combinator_t** adv_const_expr_parser = (combinator_t**)safe_malloc(sizeof(combinator_t*));
+    *adv_const_expr_parser = new_combinator();
+    init_pascal_expression_parser(adv_const_expr_parser, NULL);
+
+    combinator_t* adv_nested_const_decl = seq(new_combinator(), PASCAL_T_CONST_DECL,
+        token(cident(PASCAL_T_IDENTIFIER)),
+        optional(seq(new_combinator(), PASCAL_T_NONE,
+            token(match(":")),
+            create_type_ref_parser(),
+            NULL
+        )),
+        token(match("=")),
+        lazy(adv_const_expr_parser),
+        optional(token(match(";"))),
+        NULL
+    );
+
+    // Nested const section inside advanced record (e.g., public const MyConst = 42;)
+    combinator_t* adv_nested_const_section = seq(new_combinator(), PASCAL_T_CONST_SECTION,
+        token(keyword_ci("const")),
+        many(adv_nested_const_decl),
+        NULL
+    );
+
+    // Class var declaration inside advanced record (e.g., class var FInstance: TObject;)
+    combinator_t* adv_class_var_decl = seq(new_combinator(), PASCAL_T_FIELD_DECL,
+        token(keyword_ci("class")),
+        token(keyword_ci("var")),
+        sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
+        token(match(":")),
+        create_record_field_type_spec(),
+        token(match(";")),
+        NULL
+    );
+
     combinator_t* adv_member = multi(new_combinator(), PASCAL_T_NONE,
         access_modifier,
+        adv_nested_type_section,    // Support nested type sections
+        adv_nested_const_section,   // Support nested const sections
+        adv_class_var_decl,         // Support class var declarations
         adv_field_decl,
         adv_proc_decl,
         adv_func_decl,
@@ -1458,7 +1607,28 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
     );
 
     combinator_t* adv_members = many(adv_member);
+    if (getenv("KGPC_DEBUG_RECORD") != NULL) {
+        const char* next_input = in->buffer + in->start;
+        int preview_len = 60;
+        if (in->length - in->start < preview_len) preview_len = in->length - in->start;
+        fprintf(stderr, "[RECORD] before adv_members, pos=%d line=%d next='%.*s'\n",
+                in->start, in->line, preview_len, next_input);
+    }
     ParseResult adv_res = parse(in, adv_members);
+    if (getenv("KGPC_DEBUG_RECORD") != NULL) {
+        fprintf(stderr, "[RECORD] adv_res.is_success=%d\n", adv_res.is_success);
+        if (adv_res.is_success) {
+            fprintf(stderr, "[RECORD] adv_res.value.ast=%p (ast_nil=%p)\n",
+                    (void*)adv_res.value.ast, (void*)ast_nil);
+            // Print AST chain
+            ast_t* node = adv_res.value.ast;
+            int idx = 0;
+            while (node != NULL && node != ast_nil) {
+                fprintf(stderr, "[RECORD]   node[%d] type=%d\n", idx++, node->typ);
+                node = node->next;
+            }
+        }
+    }
     ast_t* adv_members_ast = NULL;
     if (adv_res.is_success) {
         if (adv_res.value.ast != ast_nil)
@@ -1470,13 +1640,17 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
     
     /* Add advanced member declarations to fields list */
     if (adv_members_ast != NULL) {
-        /* Only keep METHOD_DECL nodes */
+        /* Keep meaningful AST nodes, discard access modifiers and ast_nil */
         ast_t *adv_cur = adv_members_ast;
         ast_t *last_kept = NULL;
         ast_t *first_kept = NULL;
         while (adv_cur != NULL) {
             ast_t *next_node = adv_cur->next;
-            if (adv_cur->typ == PASCAL_T_METHOD_DECL) {
+            if (adv_cur->typ == PASCAL_T_METHOD_DECL ||
+                adv_cur->typ == PASCAL_T_FIELD_DECL ||
+                adv_cur->typ == PASCAL_T_PROPERTY_DECL ||
+                adv_cur->typ == PASCAL_T_NESTED_TYPE_SECTION ||
+                adv_cur->typ == PASCAL_T_CONST_SECTION) {
                 adv_cur->next = NULL;
                 if (first_kept == NULL) {
                     first_kept = adv_cur;
@@ -1486,7 +1660,7 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
                     last_kept = adv_cur;
                 }
             } else {
-                /* Discard non-METHOD_DECL nodes */
+                /* Discard other nodes (e.g., access modifiers) */
                 adv_cur->next = NULL;
                 free_ast(adv_cur);
             }
@@ -1911,10 +2085,11 @@ static ParseResult set_type_fn(input_t* in, void* args, char* parser_name) {
     free_ast(of_result.value.ast);
 
     // Parse element type (identifier or subrange like 1..10)
+    // Use pascal_qualified_identifier to support nested types like TRecord.TNestedType
     combinator_t* element_type = multi(new_combinator(), PASCAL_T_NONE,
         enumerated_type(PASCAL_T_ENUMERATED_TYPE),
         token(range_type(PASCAL_T_RANGE_TYPE)),
-        token(cident(PASCAL_T_IDENTIFIER)),
+        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
         NULL
     );
     ParseResult element_result = parse(in, element_type);
