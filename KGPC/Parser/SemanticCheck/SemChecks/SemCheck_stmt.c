@@ -750,7 +750,10 @@ static int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, 
                     is_dynamic = hashnode_is_dynamic_array(array_node);
                 }
                 
-                if (array_node->hash_type == HASHTYPE_ARRAY && is_dynamic)
+                if (is_dynamic &&
+                    (array_node->hash_type == HASHTYPE_ARRAY ||
+                     array_node->hash_type == HASHTYPE_VAR ||
+                     array_node->hash_type == HASHTYPE_FUNCTION_RETURN))
                 {
                     is_valid_array = 1;
                 }

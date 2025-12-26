@@ -1274,6 +1274,11 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
         between(token(match("(")), token(match(")")), lazy(p)), // expression
         NULL
     );
+    combinator_t* typecast_with_suffixes = map(seq(new_combinator(), PASCAL_T_NONE,
+        typecast,
+        suffixes,
+        NULL
+    ), build_array_or_pointer_chain);
 
     // Boolean literal parsers
     combinator_t* boolean_true = map(token(keyword_ci("true")), wrap_true_literal);
@@ -1320,6 +1325,7 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
         token(boolean_true),                      // Boolean true
         token(boolean_false),                     // Boolean false
         nil_literal,                              // Nil literal
+        typecast_with_suffixes,                   // Type casts with suffixes (e.g., shortstring(x)[1])
         typecast,                                 // Type casts Integer(x) - try before func_call
         array_access,                             // Array access (supports pointer dereference)
         func_call,                                // Function calls func(x)
@@ -1399,7 +1405,7 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
     // Precedence 7: Unary operators
     expr_insert(*p, 7, PASCAL_T_NEG, EXPR_PREFIX, ASSOC_NONE, token(match("-")));
     expr_insert(*p, 7, PASCAL_T_POS, EXPR_PREFIX, ASSOC_NONE, token(match("+")));
-    expr_insert(*p, 7, PASCAL_T_NOT, EXPR_PREFIX, ASSOC_NONE, token(match("not")));
+    expr_insert(*p, 7, PASCAL_T_NOT, EXPR_PREFIX, ASSOC_NONE, token(keyword_ci("not")));
     expr_insert(*p, 7, PASCAL_T_ADDR, EXPR_PREFIX, ASSOC_NONE, token(match("@")));
 
     // Field width operator for formatted output: expression:width (same precedence as unary)

@@ -4239,6 +4239,18 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
                 inline_alias->file_type_id = strdup(type_info.file_type_id);
         }
     }
+    if (inline_alias == NULL && type_info.is_set)
+    {
+        inline_alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
+        if (inline_alias != NULL)
+        {
+            inline_alias->is_set = 1;
+            inline_alias->set_element_type = type_info.set_element_type;
+            inline_alias->base_type = SET_TYPE;
+            if (type_info.set_element_type_id != NULL)
+                inline_alias->set_element_type_id = strdup(type_info.set_element_type_id);
+        }
+    }
 
     /* Scan for external/public name modifiers (FPC bootstrap compatibility) */
     char *cname_override = NULL;

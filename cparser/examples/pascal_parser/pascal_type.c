@@ -123,6 +123,18 @@ static ParseResult class_member_dispatch_fn(input_t* in, void* args, char* parse
     const char* keyword_start = buffer + word_start;
     size_t keyword_len = word_len;
 
+    if (slice_equals_keyword_ci(keyword_start, keyword_len, "generic")) {
+        if (!read_identifier_slice(buffer, length, pos, &word_start, &word_len)) {
+            if (dispatch->field_parser != NULL) {
+                return parse(in, dispatch->field_parser);
+            }
+            return make_failure_v2(in, parser_name, strdup("Expected keyword after 'generic'"), NULL);
+        }
+        pos = skip_pascal_layout_preview(in, word_start + (int)word_len);
+        keyword_start = buffer + word_start;
+        keyword_len = word_len;
+    }
+
     if (slice_equals_keyword_ci(keyword_start, keyword_len, "class")) {
         if (!read_identifier_slice(buffer, length, pos, &word_start, &word_len)) {
             if (dispatch->field_parser != NULL) {
@@ -203,16 +215,28 @@ static ParseResult array_type_fn(input_t* in, void* args, char* parser_name) {
     InputState state;
     save_input_state(in, &state);
 
-    bool is_packed = false;
-    combinator_t* packed_keyword = token(keyword_ci("packed"));
-    ParseResult packed_res = parse(in, packed_keyword);
-    if (packed_res.is_success) {
-        is_packed = true;
-        free_ast(packed_res.value.ast);
+    const char* pack_sym = NULL;
+    combinator_t* bitpacked_keyword = token(keyword_ci("bitpacked"));
+    ParseResult bitpacked_res = parse(in, bitpacked_keyword);
+    if (bitpacked_res.is_success) {
+        pack_sym = "bitpacked";
+        free_ast(bitpacked_res.value.ast);
     } else {
-        discard_failure(packed_res);
+        discard_failure(bitpacked_res);
     }
-    free_combinator(packed_keyword);
+    free_combinator(bitpacked_keyword);
+
+    if (pack_sym == NULL) {
+        combinator_t* packed_keyword = token(keyword_ci("packed"));
+        ParseResult packed_res = parse(in, packed_keyword);
+        if (packed_res.is_success) {
+            pack_sym = "packed";
+            free_ast(packed_res.value.ast);
+        } else {
+            discard_failure(packed_res);
+        }
+        free_combinator(packed_keyword);
+    }
 
     // Parse "ARRAY" keyword (case insensitive)
     combinator_t* array_keyword = token(keyword_ci("array"));
@@ -320,7 +344,7 @@ static ParseResult array_type_fn(input_t* in, void* args, char* parser_name) {
     // Build AST
     ast_t* array_ast = new_ast();
     array_ast->typ = pargs->tag;
-    array_ast->sym = is_packed ? sym_lookup("packed") : NULL;
+    array_ast->sym = pack_sym ? sym_lookup(pack_sym) : NULL;
     array_ast->child = indices_ast;
     if (indices_ast) {
         // Link element type as the last child
@@ -458,6 +482,7 @@ combinator_t* class_type(tag_t tag) {
     );
 
     combinator_t* procedure_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
+        optional(token(keyword_ci("generic"))),
         optional(token(keyword_ci("class"))),
         token(keyword_ci("procedure")),
         token(cident(PASCAL_T_IDENTIFIER)),
@@ -469,6 +494,7 @@ combinator_t* class_type(tag_t tag) {
     );
 
     combinator_t* function_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
+        optional(token(keyword_ci("generic"))),
         optional(token(keyword_ci("class"))),
         token(keyword_ci("function")),
         token(cident(PASCAL_T_IDENTIFIER)),
@@ -716,6 +742,10 @@ combinator_t* class_type(tag_t tag) {
         record_type(PASCAL_T_RECORD_TYPE),          // Support nested record types
         enumerated_type(PASCAL_T_ENUMERATED_TYPE),  // Support nested enumeration types
         pointer_type(PASCAL_T_POINTER_TYPE),        // Support nested pointer types
+        array_type(PASCAL_T_ARRAY_TYPE),
+        set_type(PASCAL_T_SET),
+        range_type(PASCAL_T_RANGE_TYPE),
+        file_type(PASCAL_T_FILE_TYPE),
         function_type(PASCAL_T_FUNCTION_TYPE),      // Support nested function types
         procedure_type(PASCAL_T_PROCEDURE_TYPE),    // Support nested procedure types
         token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
@@ -868,6 +898,7 @@ combinator_t* interface_type(tag_t tag) {
         create_method_type_param_list(),  // Optional type parameters for generic methods
         create_pascal_param_parser(),
         token(match(";")),
+        create_class_method_directives(),
         NULL
     );
 
@@ -879,6 +910,7 @@ combinator_t* interface_type(tag_t tag) {
         token(match(":")),
         create_type_ref_parser(),  // Support both simple and constructed types
         token(match(";")),
+        create_class_method_directives(),
         NULL
     );
 
@@ -920,9 +952,18 @@ combinator_t* interface_type(tag_t tag) {
         sep_by(create_type_ref_parser(), token(match(",")))
     ));
 
+    // Optional GUID attribute list: ['{...}']
+    combinator_t* interface_guid = optional(seq(new_combinator(), PASCAL_T_NONE,
+        token(match("[")),
+        sep_by(token(pascal_string(PASCAL_T_STRING)), token(match(","))),
+        token(match("]")),
+        NULL
+    ));
+
     combinator_t* interface_full = seq(new_combinator(), tag,
         token(keyword_ci("interface")),
         parent_interface,  // optional parent interface
+        interface_guid,    // optional GUID attribute
         interface_body_parser,
         token(keyword_ci("end")),
         NULL
@@ -931,6 +972,7 @@ combinator_t* interface_type(tag_t tag) {
     combinator_t* interface_forward = seq(new_combinator(), tag,
         token(keyword_ci("interface")),
         parent_interface,
+        interface_guid,
         peek(token(match(";"))),
         NULL
     );
@@ -953,7 +995,11 @@ static ParseResult type_name_fn(input_t* in, void* args, char* parser_name) {
     save_input_state(in, &state);
     
     // Try each built-in type
-    const char* type_keywords[] = {"integer", "real", "boolean", "char", "string", "byte", "word", "longint", NULL};
+    const char* type_keywords[] = {
+        "integer", "real", "boolean", "char", "string", "shortstring", "ansistring",
+        "unicodestring", "widestring", "rawbytestring", "byte", "word", "longint",
+        "pointer", NULL
+    };
     
     for (int i = 0; type_keywords[i] != NULL; i++) {
         combinator_t* keyword_parser = create_keyword_parser(type_keywords[i], tag);
@@ -1054,7 +1100,15 @@ static combinator_t* create_record_method_directives(void) {
         token(create_keyword_parser("static", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("overload", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("inline", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("cdecl", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("stdcall", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("register", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("safecall", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("pascal", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("export", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("external", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("deprecated", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("unimplemented", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("platform", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("library", PASCAL_T_IDENTIFIER)),
         NULL
@@ -1078,7 +1132,15 @@ static combinator_t* create_class_method_directives(void) {
         token(create_keyword_parser("static", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("inline", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("abstract", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("cdecl", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("stdcall", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("register", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("safecall", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("pascal", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("export", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("external", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("deprecated", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("unimplemented", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("platform", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("library", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("dynamic", PASCAL_T_IDENTIFIER)),
@@ -1319,6 +1381,70 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
     free_ast(record_res.value.ast);
     free_combinator(record_keyword);
 
+    /* Optional record helper clause: "helper for <Type>" */
+    bool is_helper = false;
+    pascal_word_slice_t helper_word;
+    if (pascal_peek_word_after(in, in->start, &helper_word) &&
+        pascal_word_equals_ci(&helper_word, "helper")) {
+        is_helper = true;
+        combinator_t* helper_kw = token(keyword_ci("helper"));
+        ParseResult helper_res = parse(in, helper_kw);
+        if (helper_res.is_success) {
+            free_ast(helper_res.value.ast);
+        } else {
+            discard_failure(helper_res);
+        }
+        free_combinator(helper_kw);
+
+        combinator_t* for_kw = token(keyword_ci("for"));
+        ParseResult for_res = parse(in, for_kw);
+        if (for_res.is_success) {
+            free_ast(for_res.value.ast);
+            combinator_t* helper_base = create_type_ref_parser();
+            ParseResult base_res = parse(in, helper_base);
+            if (base_res.is_success) {
+                free_ast(base_res.value.ast);
+            } else {
+                discard_failure(base_res);
+            }
+            free_combinator(helper_base);
+        } else {
+            discard_failure(for_res);
+        }
+        free_combinator(for_kw);
+    }
+
+    /* For record helpers, be permissive and skip the helper body.
+     * This avoids failing on complex helper method declarations. */
+    if (is_helper) {
+        combinator_t* helper_body = optional(until(token(keyword_ci("end")), PASCAL_T_NONE));
+        ParseResult helper_body_res = parse(in, helper_body);
+        if (helper_body_res.is_success && helper_body_res.value.ast != ast_nil) {
+            free_ast(helper_body_res.value.ast);
+        } else if (!helper_body_res.is_success) {
+            discard_failure(helper_body_res);
+        }
+        free_combinator(helper_body);
+
+        combinator_t* end_keyword = token(keyword_ci("end"));
+        ParseResult end_res = parse(in, end_keyword);
+        if (!end_res.is_success) {
+            discard_failure(end_res);
+            free_combinator(end_keyword);
+            return fail_with_message("Expected 'end' after record helper body", in, &state, parser_name);
+        }
+        free_ast(end_res.value.ast);
+        free_combinator(end_keyword);
+
+        ast_t* record_ast = new_ast();
+        record_ast->typ = pargs->tag;
+        record_ast->sym = is_packed ? sym_lookup("packed") : NULL;
+        record_ast->child = NULL;
+        record_ast->next = NULL;
+        set_ast_position(record_ast, in);
+        return make_success(record_ast);
+    }
+
     combinator_t* field_name_list = sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(",")));
     combinator_t* field_type = create_record_field_type_spec();
     
@@ -1368,55 +1494,56 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
         NULL
     );
 
-    combinator_t* record_items = sep_end_by(lazy_owned(record_item_ref), token(match(";")));
-    ParseResult items_res = parse(in, record_items);
     ast_t* fields_ast = NULL;
-    if (items_res.is_success) {
-        fields_ast = (items_res.value.ast == ast_nil) ? NULL : items_res.value.ast;
-    } else {
-        discard_failure(items_res);
-    }
-
-    free_combinator(record_items);
-    free(record_item_ref);
-
-    // Parse method declarations (class operators) for advanced records
-    // Create a parser for class operator declarations in records
-    combinator_t* record_method_directives_for_operator = create_record_method_directives();
-    combinator_t* record_operator_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
-        optional(token(keyword_ci("class"))),
-        token(keyword_ci("operator")),
-        token(operator_name(PASCAL_T_IDENTIFIER)),
-        create_pascal_param_parser(),
-        token(match(":")),
-        create_type_ref_parser(),
-        token(match(";")),
-        record_method_directives_for_operator,
-        NULL
-    );
-    set_combinator_name(record_operator_decl, "record_operator_decl");
-    
-    // Parse zero or more method declarations
-    combinator_t* method_list = many(record_operator_decl);
-    ParseResult methods_res = parse(in, method_list);
-    ast_t* methods_ast = NULL;
-    if (methods_res.is_success) {
-        methods_ast = (methods_res.value.ast == ast_nil) ? NULL : methods_res.value.ast;
-    } else {
-        discard_failure(methods_res);
-    }
-    free_combinator(method_list);
-    
-    // Attach methods to fields list if any exist
-    if (methods_ast != NULL) {
-        if (fields_ast == NULL) {
-            fields_ast = methods_ast;
+    if (!is_helper) {
+        combinator_t* record_items = sep_end_by(lazy(record_item_ref), token(match(";")));
+        ParseResult items_res = parse(in, record_items);
+        if (items_res.is_success) {
+            fields_ast = (items_res.value.ast == ast_nil) ? NULL : items_res.value.ast;
         } else {
-            // Append methods to end of fields list
-            ast_t* last_field = fields_ast;
-            while (last_field->next != NULL)
-                last_field = last_field->next;
-            last_field->next = methods_ast;
+            discard_failure(items_res);
+        }
+        free_combinator(record_items);
+    }
+    if (!is_helper) {
+        // Parse method declarations (class operators) for advanced records
+        // Create a parser for class operator declarations in records
+        combinator_t* record_method_directives_for_operator = create_record_method_directives();
+        combinator_t* record_operator_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
+            optional(token(keyword_ci("class"))),
+            token(keyword_ci("operator")),
+            token(operator_name(PASCAL_T_IDENTIFIER)),
+            create_pascal_param_parser(),
+            token(match(":")),
+            create_type_ref_parser(),
+            token(match(";")),
+            record_method_directives_for_operator,
+            NULL
+        );
+        set_combinator_name(record_operator_decl, "record_operator_decl");
+        
+        // Parse zero or more method declarations
+        combinator_t* method_list = many(record_operator_decl);
+        ParseResult methods_res = parse(in, method_list);
+        ast_t* methods_ast = NULL;
+        if (methods_res.is_success) {
+            methods_ast = (methods_res.value.ast == ast_nil) ? NULL : methods_res.value.ast;
+        } else {
+            discard_failure(methods_res);
+        }
+        free_combinator(method_list);
+        
+        // Attach methods to fields list if any exist
+        if (methods_ast != NULL) {
+            if (fields_ast == NULL) {
+                fields_ast = methods_ast;
+            } else {
+                // Append methods to end of fields list
+                ast_t* last_field = fields_ast;
+                while (last_field->next != NULL)
+                    last_field = last_field->next;
+                last_field->next = methods_ast;
+            }
         }
     }
 
@@ -1541,6 +1668,8 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
             record_type(PASCAL_T_RECORD_TYPE),
             enumerated_type(PASCAL_T_ENUMERATED_TYPE),
             pointer_type(PASCAL_T_POINTER_TYPE),
+            procedure_type(PASCAL_T_PROCEDURE_TYPE),
+            function_type(PASCAL_T_FUNCTION_TYPE),
             range_type(PASCAL_T_RANGE_TYPE),
             token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
             NULL
@@ -1598,6 +1727,7 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
         adv_nested_type_section,    // Support nested type sections
         adv_nested_const_section,   // Support nested const sections
         adv_class_var_decl,         // Support class var declarations
+        variant_part,               // Allow variant sections after visibility blocks
         adv_field_decl,
         adv_proc_decl,
         adv_func_decl,
@@ -1760,6 +1890,7 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
             }
         }
     }
+    free(record_item_ref);
 
     combinator_t* end_keyword = token(keyword_ci("end"));
     ParseResult end_res = parse(in, end_keyword);
@@ -2289,6 +2420,22 @@ static ParseResult subroutine_type_fn(input_t* in, void* args, char* parser_name
         return_ast->typ = PASCAL_T_RETURN_TYPE;
         return_ast->child = type_res.value.ast;
         set_ast_position(return_ast, in);
+    }
+
+    // 3.5 Optional "of object" for method pointer types (procedure of object)
+    {
+        combinator_t* of_object = optional(seq(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("of")),
+            token(keyword_ci("object")),
+            NULL
+        ));
+        ParseResult of_object_res = parse(in, of_object);
+        if (of_object_res.is_success && of_object_res.value.ast != ast_nil) {
+            free_ast(of_object_res.value.ast);
+        } else if (!of_object_res.is_success) {
+            discard_failure(of_object_res);
+        }
+        free_combinator(of_object);
     }
 
     // 4. Optionally consume calling convention/directive keywords (e.g., stdcall, cdecl)

@@ -423,6 +423,19 @@ static int semcheck_builtin_power(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev);
 static int semcheck_typecheck_array_literal(struct Expression *expr, SymTab_t *symtab,
     int max_scope_lev, int expected_type, const char *expected_type_id, int line_num);
+
+static const char *semcheck_normalize_char_type_id(const char *id)
+{
+    if (id == NULL)
+        return NULL;
+    if (pascal_identifier_equals(id, "UnicodeChar") ||
+        pascal_identifier_equals(id, "WideChar") ||
+        pascal_identifier_equals(id, "Char"))
+        return "WideChar";
+    if (pascal_identifier_equals(id, "AnsiChar"))
+        return "AnsiChar";
+    return id;
+}
 int semcheck_prepare_array_literal_argument(Tree_t *formal_decl, struct Expression *arg_expr,
     SymTab_t *symtab, int max_scope_lev, int line_num);
 int semcheck_prepare_record_constructor_argument(Tree_t *formal_decl, struct Expression *arg_expr,
@@ -525,7 +538,10 @@ static int semcheck_map_builtin_type_name(SymTab_t *symtab, const char *id)
         return STRING_TYPE;
     if (pascal_identifier_equals(id, "ShortString"))
         return SHORTSTRING_TYPE;
-    if (pascal_identifier_equals(id, "Char"))
+    if (pascal_identifier_equals(id, "Char") ||
+        pascal_identifier_equals(id, "AnsiChar") ||
+        pascal_identifier_equals(id, "WideChar") ||
+        pascal_identifier_equals(id, "UnicodeChar"))
         return CHAR_TYPE;
     if (pascal_identifier_equals(id, "Boolean"))
         return BOOL;
@@ -2334,7 +2350,7 @@ static int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
 
     int index_type = UNKNOWN_TYPE;
     error_count += semcheck_expr_main(&index_type, symtab, index_expr, max_scope_lev, NO_MUTATE);
-    if (error_count == 0 && index_type != INT_TYPE && index_type != LONGINT_TYPE)
+    if (error_count == 0 && !is_integer_type(index_type))
     {
         fprintf(stderr, "Error on line %d, Copy index must be an integer.\n", expr->line_num);
         error_count++;
@@ -2342,7 +2358,7 @@ static int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
 
     int count_type = UNKNOWN_TYPE;
     error_count += semcheck_expr_main(&count_type, symtab, count_expr, max_scope_lev, NO_MUTATE);
-    if (error_count == 0 && count_type != INT_TYPE && count_type != LONGINT_TYPE)
+    if (error_count == 0 && !is_integer_type(count_type))
     {
         fprintf(stderr, "Error on line %d, Copy count must be an integer.\n", expr->line_num);
         error_count++;
@@ -3163,6 +3179,72 @@ static int semcheck_builtin_upcase(int *type_return, SymTab_t *symtab,
 
     *type_return = UNKNOWN_TYPE;
     return error_count;
+}
+
+static int semcheck_builtin_predsucc(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev, int is_succ)
+{
+    assert(type_return != NULL);
+    assert(symtab != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_FUNCTION_CALL);
+
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    if (args == NULL || args->next != NULL)
+    {
+        fprintf(stderr, "Error on line %d, %s expects exactly one argument.\n",
+            expr->line_num, is_succ ? "Succ" : "Pred");
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    struct Expression *arg_expr = (struct Expression *)args->cur;
+    int arg_type = UNKNOWN_TYPE;
+    int error_count = semcheck_expr_main(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
+    if (error_count == 0 &&
+        arg_type != INT_TYPE && arg_type != LONGINT_TYPE && arg_type != INT64_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, %s expects an integer argument.\n",
+            expr->line_num, is_succ ? "Succ" : "Pred");
+        ++error_count;
+    }
+
+    if (error_count != 0)
+    {
+        *type_return = UNKNOWN_TYPE;
+        return error_count;
+    }
+
+    /* Rewrite Pred/Succ to arg +/- 1 */
+    struct Expression *rhs = mk_inum(expr->line_num, 1);
+    if (rhs == NULL)
+    {
+        fprintf(stderr, "Error on line %d, failed to build %s expression.\n",
+            expr->line_num, is_succ ? "Succ" : "Pred");
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    DestroyList(args);
+    if (expr->expr_data.function_call_data.id != NULL)
+    {
+        free(expr->expr_data.function_call_data.id);
+        expr->expr_data.function_call_data.id = NULL;
+    }
+    if (expr->expr_data.function_call_data.mangled_id != NULL)
+    {
+        free(expr->expr_data.function_call_data.mangled_id);
+        expr->expr_data.function_call_data.mangled_id = NULL;
+    }
+    memset(&expr->expr_data.function_call_data, 0, sizeof(expr->expr_data.function_call_data));
+
+    expr->type = EXPR_ADDOP;
+    expr->expr_data.addop_data.addop_type = is_succ ? PLUS : MINUS;
+    expr->expr_data.addop_data.left_expr = arg_expr;
+    expr->expr_data.addop_data.right_term = rhs;
+    semcheck_reset_function_call_cache(expr);
+
+    return semcheck_expr_main(type_return, symtab, expr, max_scope_lev, NO_MUTATE);
 }
 
 static int semcheck_builtin_odd(int *type_return, SymTab_t *symtab,
@@ -6397,6 +6479,16 @@ int set_type_from_hashtype(int *type, HashNode_t *hash_node)
                 *type = kgpc_type_get_primitive_tag(elem_type);
                 return 0;
             }
+            if (elem_type != NULL && elem_type->kind == TYPE_KIND_POINTER)
+            {
+                *type = POINTER_TYPE;
+                return 0;
+            }
+            if (elem_type != NULL && elem_type->kind == TYPE_KIND_RECORD)
+            {
+                *type = RECORD_TYPE;
+                return 0;
+            }
             *type = UNKNOWN_TYPE;
             return 0;
         }
@@ -7992,6 +8084,30 @@ int semcheck_varid(int *type_return,
             }
         }
 
+        if (with_status != 0 && id != NULL)
+        {
+            HashNode_t *self_node = NULL;
+            if (FindIdent(&self_node, symtab, "Self") == 0 && self_node != NULL)
+            {
+                struct RecordType *self_record = get_record_type_from_node(self_node);
+                if (self_record != NULL)
+                {
+                    HashNode_t *method_node = semcheck_find_class_method(symtab, self_record, id, NULL);
+                    if (method_node != NULL)
+                    {
+                        expr->type = EXPR_FUNCTION_CALL;
+                        memset(&expr->expr_data.function_call_data, 0,
+                            sizeof(expr->expr_data.function_call_data));
+                        expr->expr_data.function_call_data.id = strdup(id);
+                        expr->expr_data.function_call_data.args_expr = NULL;
+                        expr->expr_data.function_call_data.mangled_id = NULL;
+                        semcheck_reset_function_call_cache(expr);
+                        return semcheck_funccall(type_return, symtab, expr, max_scope_lev, mutating);
+                    }
+                }
+            }
+        }
+
         if (with_status == -1)
         {
             semantic_error(expr->line_num, expr->col_num,
@@ -8083,7 +8199,15 @@ int semcheck_varid(int *type_return,
         }
         else
         {
-            node_is_array = hashnode_is_array(hash_return);
+            if (hash_return->type != NULL &&
+                (kgpc_type_is_array(hash_return->type) || kgpc_type_is_array_of_const(hash_return->type)))
+            {
+                node_is_array = 1;
+            }
+            else
+            {
+                node_is_array = hashnode_is_array(hash_return);
+            }
         }
 
         if(hash_return->hash_type != HASHTYPE_VAR &&
@@ -8146,6 +8270,13 @@ int semcheck_varid(int *type_return,
             
             semcheck_set_pointer_info(expr, subtype, type_id);
             expr->record_type = NULL;
+            if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+            {
+                fprintf(stderr,
+                    "[SemCheck] semcheck_varid: id=%s pointer_subtype=%d subtype_id=%s\n",
+                    id ? id : "<null>", expr->pointer_subtype,
+                    expr->pointer_subtype_id ? expr->pointer_subtype_id : "<null>");
+            }
             if (expr->pointer_subtype_id != NULL)
             {
                 HashNode_t *target_node = NULL;
@@ -8402,6 +8533,74 @@ int resolve_param_type(Tree_t *decl, SymTab_t *symtab)
         return type_tag;
 
     return UNKNOWN_TYPE;
+}
+
+static const char *semcheck_get_param_type_id(Tree_t *decl)
+{
+    if (decl == NULL)
+        return NULL;
+    if (decl->type == TREE_VAR_DECL)
+        return decl->tree_data.var_decl_data.type_id;
+    if (decl->type == TREE_ARR_DECL)
+        return decl->tree_data.arr_decl_data.type_id;
+    return NULL;
+}
+
+static int semcheck_get_pointer_param_subtype(Tree_t *decl, SymTab_t *symtab)
+{
+    int owns_type = 0;
+    int subtype = UNKNOWN_TYPE;
+    KgpcType *kgpc_type = resolve_type_from_vardecl(decl, symtab, &owns_type);
+    if (kgpc_type != NULL && kgpc_type_is_pointer(kgpc_type))
+        subtype = kgpc_type_get_pointer_subtype_tag(kgpc_type);
+    if (owns_type && kgpc_type != NULL)
+        destroy_kgpc_type(kgpc_type);
+    return subtype;
+}
+
+static int semcheck_candidates_share_signature(SymTab_t *symtab, HashNode_t *a, HashNode_t *b)
+{
+    if (a == NULL || b == NULL || a->type == NULL || b->type == NULL)
+        return 0;
+
+    ListNode_t *args_a = kgpc_type_get_procedure_params(a->type);
+    ListNode_t *args_b = kgpc_type_get_procedure_params(b->type);
+    if (ListLength(args_a) != ListLength(args_b))
+        return 0;
+
+    while (args_a != NULL && args_b != NULL)
+    {
+        Tree_t *decl_a = (Tree_t *)args_a->cur;
+        Tree_t *decl_b = (Tree_t *)args_b->cur;
+        int type_a = resolve_param_type(decl_a, symtab);
+        int type_b = resolve_param_type(decl_b, symtab);
+        if (type_a != type_b)
+            return 0;
+        if (type_a == POINTER_TYPE)
+        {
+            const char *id_a = semcheck_get_param_type_id(decl_a);
+            const char *id_b = semcheck_get_param_type_id(decl_b);
+            if (id_a != NULL || id_b != NULL)
+            {
+                if (id_a == NULL || id_b == NULL ||
+                    !pascal_identifier_equals(id_a, id_b))
+                    return 0;
+            }
+            else
+            {
+                int sub_a = semcheck_get_pointer_param_subtype(decl_a, symtab);
+                int sub_b = semcheck_get_pointer_param_subtype(decl_b, symtab);
+                if (sub_a != UNKNOWN_TYPE && sub_b != UNKNOWN_TYPE && sub_a != sub_b)
+                    return 0;
+                if (sub_a == UNKNOWN_TYPE || sub_b == UNKNOWN_TYPE)
+                    return 0;
+            }
+        }
+        args_a = args_a->next;
+        args_b = args_b->next;
+    }
+
+    return 1;
 }
 
 /* Helper to check if a parameter has a default value */
@@ -8971,6 +9170,12 @@ int semcheck_funccall(int *type_return,
     if (id != NULL && pascal_identifier_equals(id, "Ord"))
         return semcheck_builtin_ord(type_return, symtab, expr, max_scope_lev);
 
+    if (id != NULL && pascal_identifier_equals(id, "Pred"))
+        return semcheck_builtin_predsucc(type_return, symtab, expr, max_scope_lev, 0);
+
+    if (id != NULL && pascal_identifier_equals(id, "Succ"))
+        return semcheck_builtin_predsucc(type_return, symtab, expr, max_scope_lev, 1);
+
     if (id != NULL && pascal_identifier_equals(id, "Length"))
         return semcheck_builtin_length(type_return, symtab, expr, max_scope_lev);
 
@@ -9222,7 +9427,17 @@ int semcheck_funccall(int *type_return,
             "Floor", "kgpc_floor", LONGINT_TYPE);
 
     if (id != NULL && pascal_identifier_equals(id, "UpCase"))
-        return semcheck_builtin_upcase(type_return, symtab, expr, max_scope_lev);
+    {
+        ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+        if (args != NULL && args->next == NULL)
+        {
+            struct Expression *arg_expr = (struct Expression *)args->cur;
+            int arg_type = UNKNOWN_TYPE;
+            int error_count = semcheck_expr_main(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
+            if (error_count == 0 && arg_type == CHAR_TYPE)
+                return semcheck_builtin_upcase(type_return, symtab, expr, max_scope_lev);
+        }
+    }
 
     if (id != NULL && pascal_identifier_equals(id, "Odd"))
         return semcheck_builtin_odd(type_return, symtab, expr, max_scope_lev);
@@ -9649,6 +9864,182 @@ method_call_resolved:
                         call_type = formal_type;
                     }
 
+                    int pointer_penalty = 0;
+                    if (formal_type == POINTER_TYPE && call_type == POINTER_TYPE && call_expr != NULL)
+                    {
+                        const char *formal_type_id = NULL;
+                        int formal_owned = 0;
+                        KgpcType *formal_kgpc = resolve_type_from_vardecl(formal_decl, symtab, &formal_owned);
+                        int formal_subtype = UNKNOWN_TYPE;
+                        const char *formal_subtype_id = NULL;
+                        struct TypeAlias *formal_alias = NULL;
+                        const char *formal_elem_type_id = NULL;
+
+                        if (formal_decl != NULL && formal_decl->type == TREE_VAR_DECL)
+                            formal_type_id = formal_decl->tree_data.var_decl_data.type_id;
+                        else if (formal_decl != NULL && formal_decl->type == TREE_ARR_DECL)
+                            formal_elem_type_id = formal_decl->tree_data.arr_decl_data.type_id;
+
+                        if (formal_kgpc != NULL && kgpc_type_is_pointer(formal_kgpc))
+                        {
+                            formal_subtype = kgpc_type_get_pointer_subtype_tag(formal_kgpc);
+                            if (formal_subtype == RECORD_TYPE)
+                            {
+                                KgpcType *points_to = formal_kgpc->info.points_to;
+                                if (points_to != NULL && kgpc_type_is_record(points_to))
+                                {
+                                    struct RecordType *rec = kgpc_type_get_record(points_to);
+                                    if (rec != NULL)
+                                        formal_subtype_id = rec->type_id;
+                                }
+                            }
+                        }
+                        if (formal_subtype == UNKNOWN_TYPE)
+                        {
+                            if (formal_type_id != NULL)
+                            {
+                                HashNode_t *type_node = NULL;
+                                if (FindIdent(&type_node, symtab, (char *)formal_type_id) != -1 &&
+                                    type_node != NULL)
+                                {
+                                    formal_alias = get_type_alias_from_node(type_node);
+                                }
+                            }
+                            if (formal_alias != NULL && formal_alias->is_pointer)
+                            {
+                                formal_subtype = formal_alias->pointer_type;
+                                formal_subtype_id = formal_alias->pointer_type_id;
+                            }
+                            if (formal_subtype == UNKNOWN_TYPE && formal_subtype_id != NULL)
+                            {
+                                int mapped = semcheck_map_builtin_type_name(symtab, formal_subtype_id);
+                                if (mapped != UNKNOWN_TYPE)
+                                    formal_subtype = mapped;
+                            }
+                        }
+                        if (formal_subtype == UNKNOWN_TYPE && formal_elem_type_id != NULL)
+                        {
+                            HashNode_t *elem_node = NULL;
+                            if (FindIdent(&elem_node, symtab, (char *)formal_elem_type_id) != -1 &&
+                                elem_node != NULL)
+                            {
+                                struct TypeAlias *elem_alias = get_type_alias_from_node(elem_node);
+                                if (elem_alias != NULL && elem_alias->is_pointer)
+                                {
+                                    formal_subtype = elem_alias->pointer_type;
+                                    formal_subtype_id = elem_alias->pointer_type_id;
+                                }
+                            }
+                            if (formal_subtype_id == NULL && formal_elem_type_id[0] == 'P' &&
+                                formal_elem_type_id[1] != '\0')
+                            {
+                                formal_subtype_id = formal_elem_type_id + 1;
+                            }
+                            if (formal_subtype == UNKNOWN_TYPE && formal_subtype_id != NULL)
+                            {
+                                int mapped = semcheck_map_builtin_type_name(symtab, formal_subtype_id);
+                                if (mapped != UNKNOWN_TYPE)
+                                    formal_subtype = mapped;
+                            }
+                        }
+                        if (formal_subtype_id == NULL && formal_type_id != NULL &&
+                            formal_type_id[0] == 'P' && formal_type_id[1] != '\0')
+                        {
+                            formal_subtype_id = formal_type_id + 1;
+                        }
+
+                        int call_subtype = call_expr->pointer_subtype;
+                        const char *call_subtype_id = call_expr->pointer_subtype_id;
+                        const char *call_elem_type_id = NULL;
+                        if (call_expr->is_array_expr)
+                            call_elem_type_id = call_expr->array_element_type_id;
+                        if (call_subtype == UNKNOWN_TYPE && call_expr->resolved_kgpc_type != NULL &&
+                            kgpc_type_is_pointer(call_expr->resolved_kgpc_type))
+                        {
+                            call_subtype = kgpc_type_get_pointer_subtype_tag(call_expr->resolved_kgpc_type);
+                        }
+                        if (call_subtype == UNKNOWN_TYPE && call_subtype_id != NULL)
+                        {
+                            HashNode_t *type_node = NULL;
+                            if (FindIdent(&type_node, symtab, (char *)call_subtype_id) != -1 &&
+                                type_node != NULL)
+                            {
+                                set_type_from_hashtype(&call_subtype, type_node);
+                            }
+                            if (call_subtype == UNKNOWN_TYPE)
+                            {
+                                int mapped = semcheck_map_builtin_type_name(symtab, call_subtype_id);
+                                if (mapped != UNKNOWN_TYPE)
+                                    call_subtype = mapped;
+                            }
+                        }
+                        if (call_subtype == UNKNOWN_TYPE && call_elem_type_id != NULL)
+                        {
+                            HashNode_t *elem_node = NULL;
+                            if (FindIdent(&elem_node, symtab, (char *)call_elem_type_id) != -1 &&
+                                elem_node != NULL)
+                            {
+                                struct TypeAlias *elem_alias = get_type_alias_from_node(elem_node);
+                                if (elem_alias != NULL && elem_alias->is_pointer)
+                                {
+                                    call_subtype = elem_alias->pointer_type;
+                                    call_subtype_id = elem_alias->pointer_type_id;
+                                }
+                            }
+                            if (call_subtype_id == NULL && call_elem_type_id[0] == 'P' &&
+                                call_elem_type_id[1] != '\0')
+                            {
+                                call_subtype_id = call_elem_type_id + 1;
+                            }
+                            if (call_subtype == UNKNOWN_TYPE && call_subtype_id != NULL)
+                            {
+                                int mapped = semcheck_map_builtin_type_name(symtab, call_subtype_id);
+                                if (mapped != UNKNOWN_TYPE)
+                                    call_subtype = mapped;
+                            }
+                        }
+
+                        if (formal_subtype != UNKNOWN_TYPE && call_subtype != UNKNOWN_TYPE)
+                        {
+                            if (formal_subtype != call_subtype)
+                            {
+                                pointer_penalty = 1000;
+                            }
+                            else if (formal_subtype_id != NULL && call_subtype_id != NULL)
+                            {
+                                const char *formal_norm = semcheck_normalize_char_type_id(formal_subtype_id);
+                                const char *call_norm = semcheck_normalize_char_type_id(call_subtype_id);
+                                if (formal_norm != NULL && call_norm != NULL)
+                                {
+                                    if (strcasecmp(formal_norm, call_norm) != 0)
+                                        pointer_penalty = 1000;
+                                }
+                                else if (strcasecmp(formal_subtype_id, call_subtype_id) != 0)
+                                {
+                                    pointer_penalty = 1000;
+                                }
+                            }
+                        }
+                        else if (formal_subtype_id != NULL && call_subtype_id != NULL &&
+                            strcasecmp(formal_subtype_id, call_subtype_id) != 0)
+                        {
+                            pointer_penalty = 1000;
+                        }
+                        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+                        {
+                            fprintf(stderr,
+                                "[SemCheck] funccall ptrmatch: formal_sub=%d id=%s call_sub=%d id=%s penalty=%d\n",
+                                formal_subtype,
+                                formal_subtype_id ? formal_subtype_id : "<null>",
+                                call_subtype,
+                                call_subtype_id ? call_subtype_id : "<null>",
+                                pointer_penalty);
+                        }
+
+                        if (formal_owned && formal_kgpc != NULL)
+                            destroy_kgpc_type(formal_kgpc);
+                    }
+
                     int is_string_literal = (call_expr != NULL && call_expr->type == EXPR_STRING);
                     if (formal_type == UNKNOWN_TYPE || formal_type == BUILTIN_ANY_TYPE)
                         current_score += 0;
@@ -9666,6 +10057,8 @@ method_call_resolved:
                         current_score += 1; /* Allow implicit char-to-string promotion */
                     else
                         current_score += 1000; // Mismatch
+
+                    current_score += pointer_penalty;
 
                     formal_args = formal_args->next;
                     call_args = call_args->next;
@@ -9702,6 +10095,11 @@ method_call_resolved:
                             if (best_params == cand_params)
                                 is_duplicate = 1;
                         }
+                    }
+                    if (!is_duplicate && best_match != NULL &&
+                        semcheck_candidates_share_signature(symtab, best_match, candidate))
+                    {
+                        is_duplicate = 1;
                     }
                     if (!is_duplicate)
                         num_best_matches++;
