@@ -82,6 +82,18 @@ type
   TextBuf = array[0..255] of AnsiChar;
   TTextBuf = TextBuf;
 
+  { Root class for ObjPas compatibility }
+  TObject = class
+  end;
+
+  { GUID type for SysUtils compatibility }
+  TGUID = record
+    D1: LongWord;
+    D2: Word;
+    D3: Word;
+    D4: array[0..7] of Byte;
+  end;
+
   TextRec = record
     Handle: THandle;
     Mode: LongInt;
@@ -157,6 +169,9 @@ type
   { Text line break style enumeration }
   TTextLineBreakStyle = (tlbsLF, tlbsCRLF, tlbsCR);
 
+  { Unix signal hook state used by SysUtils }
+  TSignalState = (ssNotHooked, ssHooked, ssOverridden);
+
   { Exception is defined in vendor unit sysutils.p - don't define here to avoid duplication }
   ExceptAddr = Pointer;
   TExceptAddr = ExceptAddr;
@@ -166,6 +181,13 @@ const
   TextRecNameLength = 256;
   TextRecBufSize = 256;
 
+  DirectorySeparator: AnsiChar = '/';
+  DriveSeparator: AnsiChar = #0;
+  PathSeparator: AnsiChar = ':';
+  AllowDirectorySeparators: set of AnsiChar = ['\', '/'];
+  AllowDriveSeparators: set of AnsiChar = [];
+  MaxPathLen = 4096;
+
   DefaultSystemCodePage = 65001;
   DefaultFileSystemCodePage = 65001;
 
@@ -173,6 +195,18 @@ const
   fmInput = $D7B1;
   fmOutput = $D7B2;
   fmInOut = $D7B3;
+
+  RTL_SIGINT = 0;
+  RTL_SIGFPE = 1;
+  RTL_SIGSEGV = 2;
+  RTL_SIGILL = 3;
+  RTL_SIGBUS = 4;
+  RTL_SIGQUIT = 5;
+  RTL_SIGLAST = RTL_SIGQUIT;
+  RTL_SIGDEFAULT = -1;
+
+var
+  IsLibrary: Boolean = False;
 
 { ============================================================================
   Compiler Intrinsic Functions

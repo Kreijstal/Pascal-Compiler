@@ -190,10 +190,77 @@ static void mark_unit_subprograms(ListNode_t *sub_list)
     }
 }
 
+static void mark_unit_type_decls(ListNode_t *type_list, int is_public)
+{
+    ListNode_t *node = type_list;
+    while (node != NULL)
+    {
+        if (node->type == LIST_TREE && node->cur != NULL)
+        {
+            Tree_t *decl = (Tree_t *)node->cur;
+            if (decl->type == TREE_TYPE_DECL)
+            {
+                decl->tree_data.type_decl_data.defined_in_unit = 1;
+                decl->tree_data.type_decl_data.unit_is_public = is_public ? 1 : 0;
+            }
+        }
+        node = node->next;
+    }
+}
+
+static void mark_unit_const_decls(ListNode_t *const_list, int is_public)
+{
+    ListNode_t *node = const_list;
+    while (node != NULL)
+    {
+        if (node->type == LIST_TREE && node->cur != NULL)
+        {
+            Tree_t *decl = (Tree_t *)node->cur;
+            if (decl->type == TREE_CONST_DECL)
+            {
+                decl->tree_data.const_decl_data.defined_in_unit = 1;
+                decl->tree_data.const_decl_data.unit_is_public = is_public ? 1 : 0;
+            }
+        }
+        node = node->next;
+    }
+}
+
+static void mark_unit_var_decls(ListNode_t *var_list, int is_public)
+{
+    ListNode_t *node = var_list;
+    while (node != NULL)
+    {
+        if (node->type == LIST_TREE && node->cur != NULL)
+        {
+            Tree_t *decl = (Tree_t *)node->cur;
+            if (decl->type == TREE_VAR_DECL)
+            {
+                decl->tree_data.var_decl_data.defined_in_unit = 1;
+                decl->tree_data.var_decl_data.unit_is_public = is_public ? 1 : 0;
+            }
+            else if (decl->type == TREE_ARR_DECL)
+            {
+                decl->tree_data.arr_decl_data.defined_in_unit = 1;
+                decl->tree_data.arr_decl_data.unit_is_public = is_public ? 1 : 0;
+            }
+        }
+        node = node->next;
+    }
+}
+
 static void merge_unit_into_program(Tree_t *program, Tree_t *unit_tree)
 {
     if (program == NULL || unit_tree == NULL)
         return;
+
+    mark_unit_type_decls(unit_tree->tree_data.unit_data.interface_type_decls, 1);
+    mark_unit_const_decls(unit_tree->tree_data.unit_data.interface_const_decls, 1);
+    mark_unit_var_decls(unit_tree->tree_data.unit_data.interface_var_decls, 1);
+
+    mark_unit_type_decls(unit_tree->tree_data.unit_data.implementation_type_decls, 0);
+    mark_unit_const_decls(unit_tree->tree_data.unit_data.implementation_const_decls, 0);
+    mark_unit_var_decls(unit_tree->tree_data.unit_data.implementation_var_decls, 0);
 
     program->tree_data.program_data.type_declaration =
         ConcatList(program->tree_data.program_data.type_declaration,
@@ -249,7 +316,9 @@ static void load_unit(Tree_t *program, const char *unit_name, UnitSet *visited)
     if (!unit_set_add(visited, normalized))
         return;
 
-    char *path = build_unit_path(normalized);
+    char *path = build_unit_path(unit_name);
+    if (path == NULL && normalized != NULL && strcmp(unit_name, normalized) != 0)
+        path = build_unit_path(normalized);
     if (path == NULL)
         return;
 
@@ -337,39 +406,52 @@ int main(int argc, char **argv)
     {
         UnitSet visited_units;
         unit_set_init(&visited_units);
-
-        ListNode_t *prelude_subs = NULL;
-        if (prelude_tree->type == TREE_PROGRAM_TYPE)
-            prelude_subs = prelude_tree->tree_data.program_data.subprograms;
-        else if (prelude_tree->type == TREE_UNIT)
-            prelude_subs = prelude_tree->tree_data.unit_data.subprograms;
-        ListNode_t *user_subs = user_tree->tree_data.program_data.subprograms;
-
-        if (prelude_subs == NULL)
+        if (prelude_tree->type == TREE_UNIT)
         {
-            // user_tree is already correct
+            char *prelude_name = lowercase_copy(prelude_tree->tree_data.unit_data.unit_id);
+            if (prelude_name != NULL)
+                unit_set_add(&visited_units, prelude_name);
+        }
+
+        if (prelude_tree->type == TREE_UNIT)
+        {
+            merge_unit_into_program(user_tree, prelude_tree);
         }
         else
         {
-            /* Mark prelude (system.p) subprograms as library procedures so they don't
-             * incorrectly get static links when merged into user programs */
-            mark_unit_subprograms(prelude_subs);
-            
-            ListNode_t *last_node = prelude_subs;
-            while(last_node->next != NULL)
-            {
-                last_node = last_node->next;
-            }
-            last_node->next = user_subs;
-            user_tree->tree_data.program_data.subprograms = prelude_subs;
-        }
-        // Since we moved the user_subs list, we need to avoid a double free
-        if (prelude_tree != NULL)
-        {
+            ListNode_t *prelude_subs = NULL;
             if (prelude_tree->type == TREE_PROGRAM_TYPE)
-                prelude_tree->tree_data.program_data.subprograms = NULL;
+                prelude_subs = prelude_tree->tree_data.program_data.subprograms;
             else if (prelude_tree->type == TREE_UNIT)
-                prelude_tree->tree_data.unit_data.subprograms = NULL;
+                prelude_subs = prelude_tree->tree_data.unit_data.subprograms;
+            ListNode_t *user_subs = user_tree->tree_data.program_data.subprograms;
+
+            if (prelude_subs == NULL)
+            {
+                // user_tree is already correct
+            }
+            else
+            {
+                /* Mark prelude (system.p) subprograms as library procedures so they don't
+                 * incorrectly get static links when merged into user programs */
+                mark_unit_subprograms(prelude_subs);
+                
+                ListNode_t *last_node = prelude_subs;
+                while(last_node->next != NULL)
+                {
+                    last_node = last_node->next;
+                }
+                last_node->next = user_subs;
+                user_tree->tree_data.program_data.subprograms = prelude_subs;
+            }
+            // Since we moved the user_subs list, we need to avoid a double free
+            if (prelude_tree != NULL)
+            {
+                if (prelude_tree->type == TREE_PROGRAM_TYPE)
+                    prelude_tree->tree_data.program_data.subprograms = NULL;
+                else if (prelude_tree->type == TREE_UNIT)
+                    prelude_tree->tree_data.unit_data.subprograms = NULL;
+            }
         }
 
         if (prelude_tree->type == TREE_PROGRAM_TYPE)

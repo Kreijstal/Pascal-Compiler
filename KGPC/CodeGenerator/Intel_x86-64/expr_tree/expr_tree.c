@@ -2920,44 +2920,44 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
             }
             else if(type == XOR)
             {
-                snprintf(buffer, sizeof(buffer), "\txor%c\t%s, %s\n", arith_suffix, right, left);
+                snprintf(buffer, sizeof(buffer), "\txor%c\t%s, %s\n", arith_suffix, op_right, op_left);
                 inst_list = add_inst(inst_list, buffer);
             }
             else if(type == SHL)
             {
                 char right32[16];
-                const char *count = use_qword_op ? reg64_to_reg32(right, right32, sizeof(right32)) : right;
+                const char *count = use_qword_op ? reg64_to_reg32(op_right, right32, sizeof(right32)) : op_right;
                 snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%ecx\n", count);
                 inst_list = add_inst(inst_list, buffer);
                 /* Use SAL to match FPC's emitted mnemonics for left shifts */
-                snprintf(buffer, sizeof(buffer), "\tsal%c\t%%cl, %s\n", arith_suffix, left);
+                snprintf(buffer, sizeof(buffer), "\tsal%c\t%%cl, %s\n", arith_suffix, op_left);
                 inst_list = add_inst(inst_list, buffer);
             }
             else if(type == SHR)
             {
                 char right32[16];
-                const char *count = use_qword_op ? reg64_to_reg32(right, right32, sizeof(right32)) : right;
+                const char *count = use_qword_op ? reg64_to_reg32(op_right, right32, sizeof(right32)) : op_right;
                 snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%ecx\n", count);
                 inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, sizeof(buffer), "\tsar%c\t%%cl, %s\n", arith_suffix, left);
+                snprintf(buffer, sizeof(buffer), "\tsar%c\t%%cl, %s\n", arith_suffix, op_left);
                 inst_list = add_inst(inst_list, buffer);
             }
             else if(type == ROL)
             {
                 char right32[16];
-                const char *count = use_qword_op ? reg64_to_reg32(right, right32, sizeof(right32)) : right;
+                const char *count = use_qword_op ? reg64_to_reg32(op_right, right32, sizeof(right32)) : op_right;
                 snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%ecx\n", count);
                 inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, sizeof(buffer), "\trol%c\t%%cl, %s\n", arith_suffix, left);
+                snprintf(buffer, sizeof(buffer), "\trol%c\t%%cl, %s\n", arith_suffix, op_left);
                 inst_list = add_inst(inst_list, buffer);
             }
             else if(type == ROR)
             {
                 char right32[16];
-                const char *count = use_qword_op ? reg64_to_reg32(right, right32, sizeof(right32)) : right;
+                const char *count = use_qword_op ? reg64_to_reg32(op_right, right32, sizeof(right32)) : op_right;
                 snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%ecx\n", count);
                 inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, sizeof(buffer), "\tror%c\t%%cl, %s\n", arith_suffix, left);
+                snprintf(buffer, sizeof(buffer), "\tror%c\t%%cl, %s\n", arith_suffix, op_left);
                 inst_list = add_inst(inst_list, buffer);
             }
             else

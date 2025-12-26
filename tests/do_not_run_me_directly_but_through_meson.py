@@ -1038,8 +1038,9 @@ class TestCompiler(unittest.TestCase):
         # In the unoptimized version, we expect the variables x and y to be allocated.
         # Global variables are allocated in the BSS section, not on the stack.
         # We should see .comm directives for both variables.
-        self.assertIn(".comm\t__kgpc_program_var_x_1", unoptimized_asm)
-        self.assertIn(".comm\t__kgpc_program_var_y_2", unoptimized_asm)
+        import re
+        self.assertRegex(unoptimized_asm, r"\.comm\t__kgpc_program_var_x_\d+")
+        self.assertRegex(unoptimized_asm, r"\.comm\t__kgpc_program_var_y_\d+")
 
         # --- Run with -O2 optimization ---
         optimized_output_file = os.path.join(
@@ -1054,7 +1055,7 @@ class TestCompiler(unittest.TestCase):
         self.assertLess(len(optimized_asm), len(unoptimized_asm))
         
         # Additionally, we should not see the unused variable y in the optimized version
-        self.assertNotIn(".comm\t__kgpc_program_var_y_2", optimized_asm)
+        self.assertIsNone(re.search(r"\.comm\t__kgpc_program_var_y_\d+", optimized_asm))
 
     def test_parser_ast_dump_matches_golden(self):
         """Ensures the AST dump matches the golden files for representative programs."""

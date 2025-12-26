@@ -4,6 +4,8 @@
 #include "parser.h"
 #include "combinators.h"
 
+extern ast_t* ast_nil;
+
 // Helper function to create parameter parser (reduces code duplication)
 combinator_t* create_pascal_param_parser(void);
 

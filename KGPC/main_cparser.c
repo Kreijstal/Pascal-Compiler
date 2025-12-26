@@ -1002,7 +1002,9 @@ static void load_unit(Tree_t *program, const char *unit_name, UnitSet *visited)
     if (!unit_set_add(visited, normalized))
         return;
 
-    char *path = build_unit_path(normalized);
+    char *path = build_unit_path(unit_name);
+    if (path == NULL && normalized != NULL && strcmp(unit_name, normalized) != 0)
+        path = build_unit_path(normalized);
     if (path == NULL)
         return;
     fprintf(stderr, "Loading unit %s from %s\n", unit_name, path);
