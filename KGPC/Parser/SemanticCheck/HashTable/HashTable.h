@@ -69,6 +69,7 @@ typedef struct HashNode
     int mutated;
 
     int is_constant;
+    int is_typed_const;
     long long const_int_value;
     double const_real_value;
     char *const_string_value;  /* Owned by HashNode, must be freed */

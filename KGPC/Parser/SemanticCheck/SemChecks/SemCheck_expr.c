@@ -38,6 +38,14 @@
 #include "../../../identifier_utils.h"
 #include "../../../format_arg.h"
 
+static const char *semcheck_base_type_name(const char *id)
+{
+    if (id == NULL)
+        return NULL;
+    const char *dot = strrchr(id, '.');
+    return (dot != NULL && dot[1] != '\0') ? (dot + 1) : id;
+}
+
 int is_type_ir(int *type);
 static int types_numeric_compatible(int lhs, int rhs);
 static void semcheck_coerce_char_string_operands(int *type_first, struct Expression *expr1,
@@ -386,6 +394,7 @@ static void semcheck_set_array_info_from_alias(struct Expression *expr, SymTab_t
 static void semcheck_set_array_info_from_hashnode(struct Expression *expr, SymTab_t *symtab,
     HashNode_t *node, int line_num);
 static struct RecordType *semcheck_lookup_record_type(SymTab_t *symtab, const char *type_id);
+static HashNode_t *semcheck_find_preferred_type_node(SymTab_t *symtab, const char *type_id);
 static int semcheck_pointer_deref(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
 static int semcheck_convert_set_literal_to_array_literal(struct Expression *expr);
@@ -788,8 +797,8 @@ static struct RecordType *semcheck_lookup_record_type(SymTab_t *symtab, const ch
     if (symtab == NULL || type_id == NULL)
         return NULL;
 
-    HashNode_t *type_node = NULL;
-    if (FindIdent(&type_node, symtab, (char *)type_id) == -1 || type_node == NULL)
+    HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, type_id);
+    if (type_node == NULL)
         return NULL;
 
     struct RecordType *record = get_record_type_from_node(type_node);
@@ -808,6 +817,31 @@ static struct RecordType *semcheck_lookup_record_type(SymTab_t *symtab, const ch
     }
 
     return NULL;
+}
+
+static HashNode_t *semcheck_find_preferred_type_node(SymTab_t *symtab, const char *type_id)
+{
+    if (symtab == NULL || type_id == NULL)
+        return NULL;
+
+    ListNode_t *matches = FindAllIdents(symtab, (char *)type_id);
+    HashNode_t *best = NULL;
+    ListNode_t *cur = matches;
+    while (cur != NULL)
+    {
+        HashNode_t *node = (HashNode_t *)cur->cur;
+        if (node != NULL && node->hash_type == HASHTYPE_TYPE)
+        {
+            if (best == NULL)
+                best = node;
+            else if (best->defined_in_unit && !node->defined_in_unit)
+                best = node;
+        }
+        cur = cur->next;
+    }
+    if (matches != NULL)
+        DestroyList(matches);
+    return best;
 }
 
 static void semcheck_set_array_info_from_alias(struct Expression *expr, SymTab_t *symtab,
@@ -1467,12 +1501,82 @@ static int semcheck_typecheck_record_constructor(struct Expression *expr, SymTab
             }
         }
 
+        if (!field->field_is_array && field_desc->type_id != NULL)
+        {
+            HashNode_t *alias_node = NULL;
+            if (FindIdent(&alias_node, symtab, field_desc->type_id) != -1 && alias_node != NULL)
+            {
+                struct TypeAlias *alias = get_type_alias_from_node(alias_node);
+                if (alias != NULL && alias->is_array)
+                {
+                    field->field_is_array = 1;
+                    field->array_start = alias->array_start;
+                    field->array_end = alias->array_end;
+                    field->array_is_open = alias->is_open_array;
+                    field->array_element_type = alias->array_element_type;
+                    if (alias->array_element_type_id != NULL)
+                    {
+                        free(field->array_element_type_id);
+                        field->array_element_type_id = strdup(alias->array_element_type_id);
+                    }
+                }
+            }
+        }
+
         if (field->value->type == EXPR_RECORD_CONSTRUCTOR && field->value->record_type == NULL)
         {
             if (field->field_type == RECORD_TYPE)
                 field->value->record_type = field->field_record_type;
             else if (field->field_is_array && field->array_element_type == RECORD_TYPE)
                 field->value->record_type = field->array_element_record_type;
+        }
+
+        if (field->field_is_array && field->value != NULL)
+        {
+            if (field->value->type == EXPR_SET)
+            {
+                if (semcheck_convert_set_literal_to_array_literal(field->value) != 0)
+                {
+                    fprintf(stderr, "Error on line %d, array field %s cannot use set ranges.\n",
+                        line_num, field->field_id);
+                    ++error_count;
+                }
+            }
+
+            if (field->value->type == EXPR_ARRAY_LITERAL)
+            {
+                if (field->value->array_element_type == UNKNOWN_TYPE)
+                    field->value->array_element_type = field->array_element_type;
+                if (field->value->array_element_type_id == NULL &&
+                    field->array_element_type_id != NULL)
+                    field->value->array_element_type_id = strdup(field->array_element_type_id);
+
+                int arr_err = semcheck_typecheck_array_literal(field->value, symtab, max_scope_lev,
+                    field->array_element_type, field->array_element_type_id, line_num);
+                if (arr_err != 0)
+                {
+                    error_count += arr_err;
+                }
+                else if (!field->array_is_open)
+                {
+                    int expected_count = field->array_end - field->array_start + 1;
+                    int actual_count = field->value->expr_data.array_literal_data.element_count;
+                    if (expected_count != actual_count)
+                    {
+                        fprintf(stderr,
+                            "Error on line %d, array field %s expects %d elements, got %d.\n",
+                            line_num, field->field_id, expected_count, actual_count);
+                        ++error_count;
+                    }
+                    else
+                    {
+                        field->value->array_lower_bound = field->array_start;
+                        field->value->array_upper_bound = field->array_end;
+                        field->value->array_is_dynamic = 0;
+                        field->value->is_array_expr = 1;
+                    }
+                }
+            }
         }
 
         int value_type = UNKNOWN_TYPE;
@@ -3380,6 +3484,114 @@ static int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
     }
 
     struct Expression *arg_expr = (struct Expression *)args->cur;
+    if (arg_expr != NULL && arg_expr->type == EXPR_VAR_ID && arg_expr->expr_data.id != NULL)
+    {
+        const char *type_name = semcheck_base_type_name(arg_expr->expr_data.id);
+        HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, type_name);
+        if (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+        {
+            struct TypeAlias *alias = get_type_alias_from_node(type_node);
+            long long low = 0;
+            long long high = 0;
+            int have_bounds = 0;
+            int result_type = INT_TYPE;
+
+            if (alias != NULL && alias->is_range && alias->range_known)
+            {
+                low = alias->range_start;
+                high = alias->range_end;
+                have_bounds = 1;
+                if (low < -2147483648LL || high > 2147483647LL)
+                    result_type = INT64_TYPE;
+            }
+            else if (pascal_identifier_equals(type_name, "Int64"))
+            {
+                low = (-9223372036854775807LL - 1);
+                high = 9223372036854775807LL;
+                have_bounds = 1;
+                result_type = INT64_TYPE;
+            }
+            else if (pascal_identifier_equals(type_name, "QWord") ||
+                     pascal_identifier_equals(type_name, "UInt64"))
+            {
+                low = 0;
+                high = (long long)0xFFFFFFFFFFFFFFFFULL;
+                have_bounds = 1;
+                result_type = INT64_TYPE;
+            }
+            else if (pascal_identifier_equals(type_name, "LongInt"))
+            {
+                low = -2147483648LL;
+                high = 2147483647LL;
+                have_bounds = 1;
+                result_type = LONGINT_TYPE;
+            }
+            else if (pascal_identifier_equals(type_name, "Integer"))
+            {
+                low = -2147483648LL;
+                high = 2147483647LL;
+                have_bounds = 1;
+                result_type = INT_TYPE;
+            }
+            else if (pascal_identifier_equals(type_name, "Cardinal") ||
+                     pascal_identifier_equals(type_name, "LongWord") ||
+                     pascal_identifier_equals(type_name, "DWord"))
+            {
+                low = 0;
+                high = 4294967295LL;
+                have_bounds = 1;
+                result_type = INT64_TYPE;
+            }
+            else if (pascal_identifier_equals(type_name, "SmallInt"))
+            {
+                low = -32768LL;
+                high = 32767LL;
+                have_bounds = 1;
+            }
+            else if (pascal_identifier_equals(type_name, "Word"))
+            {
+                low = 0;
+                high = 65535LL;
+                have_bounds = 1;
+            }
+            else if (pascal_identifier_equals(type_name, "ShortInt"))
+            {
+                low = -128LL;
+                high = 127LL;
+                have_bounds = 1;
+            }
+            else if (pascal_identifier_equals(type_name, "Byte"))
+            {
+                low = 0;
+                high = 255LL;
+                have_bounds = 1;
+            }
+            else if (pascal_identifier_equals(type_name, "Boolean"))
+            {
+                low = 0;
+                high = 1;
+                have_bounds = 1;
+                result_type = BOOL;
+            }
+            else if (pascal_identifier_equals(type_name, "Char") ||
+                     pascal_identifier_equals(type_name, "AnsiChar"))
+            {
+                low = 0;
+                high = 255;
+                have_bounds = 1;
+                result_type = CHAR_TYPE;
+            }
+
+            if (have_bounds)
+            {
+                semcheck_replace_call_with_integer_literal(expr, is_high ? high : low);
+                expr->resolved_type = result_type;
+                *type_return = result_type;
+                return 0;
+            }
+        }
+    }
+
     int arg_type = UNKNOWN_TYPE;
     int error_count = semcheck_expr_main(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
     if (error_count != 0)
@@ -3456,7 +3668,7 @@ static int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
     }
     if (arg_type == LONGINT_TYPE)
     {
-        semcheck_replace_call_with_integer_literal(expr, is_high ? 9223372036854775807LL : (-9223372036854775807LL - 1));
+        semcheck_replace_call_with_integer_literal(expr, is_high ? 2147483647LL : -2147483648LL);
         expr->resolved_type = LONGINT_TYPE;
         *type_return = LONGINT_TYPE;
         return 0;
@@ -4415,8 +4627,8 @@ static int resolve_type_identifier(int *out_type, SymTab_t *symtab,
     if (type_id == NULL)
         return 0;
 
-    HashNode_t *type_node = NULL;
-    if (FindIdent(&type_node, symtab, (char *)type_id) == -1 || type_node == NULL)
+    HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, type_id);
+    if (type_node == NULL)
     {
         fprintf(stderr, "Error on line %d, typecast references unknown type %s!\n\n",
             line_num, type_id);
@@ -6714,6 +6926,29 @@ int semcheck_expr_main(int *type_return,
         case EXPR_POINTER_DEREF:
             return_val += semcheck_pointer_deref(type_return, symtab, expr, max_scope_lev, mutating);
             break;
+        case EXPR_ADDR_OF_PROC:
+        {
+            *type_return = POINTER_TYPE;
+            expr->resolved_type = POINTER_TYPE;
+            if (expr->resolved_kgpc_type == NULL)
+            {
+                KgpcType *proc_type = NULL;
+                if (expr->expr_data.addr_of_proc_data.procedure_symbol != NULL &&
+                    expr->expr_data.addr_of_proc_data.procedure_symbol->type != NULL)
+                    proc_type = expr->expr_data.addr_of_proc_data.procedure_symbol->type;
+
+                if (proc_type != NULL)
+                {
+                    kgpc_type_retain(proc_type);
+                    expr->resolved_kgpc_type = create_pointer_type(proc_type);
+                }
+                else
+                {
+                    expr->resolved_kgpc_type = create_pointer_type(NULL);
+                }
+            }
+            break;
+        }
         case EXPR_ADDR:
             return_val += semcheck_addressof(type_return, symtab, expr, max_scope_lev, mutating);
             break;
@@ -6990,12 +7225,26 @@ int semcheck_relop(int *type_return,
     /* Type must be a bool (this only happens with a NOT operator) */
     if (expr2 == NULL)
     {
-        if (type_first != BOOL)
+        if (type_first == BOOL)
         {
-            fprintf(stderr, "Error on line %d, expected relational type after \"NOT\"!\n\n",
-                expr->line_num);
-            ++return_val;
+            *type_return = BOOL;
+            return return_val;
         }
+        if (is_integer_type(type_first))
+        {
+            struct Expression *operand = expr->expr_data.relop_data.left;
+            struct Expression *neg_one = mk_inum(expr->line_num, -1);
+            expr->type = EXPR_MULOP;
+            expr->expr_data.mulop_data.mulop_type = XOR;
+            expr->expr_data.mulop_data.left_term = operand;
+            expr->expr_data.mulop_data.right_factor = neg_one;
+            return semcheck_mulop(type_return, symtab, expr, max_scope_lev, mutating);
+        }
+        fprintf(stderr, "Error on line %d, expected relational type after \"NOT\"!\n\n",
+            expr->line_num);
+        ++return_val;
+        *type_return = UNKNOWN_TYPE;
+        return return_val;
     }
     else
     {
@@ -7115,7 +7364,8 @@ int semcheck_relop(int *type_return,
                 int string_ok = (is_string_type(type_first) && is_string_type(type_second));
                 int char_ok = (type_first == CHAR_TYPE && type_second == CHAR_TYPE);
                 int pointer_ok = (type_first == POINTER_TYPE && type_second == POINTER_TYPE);
-                if (!numeric_ok && !boolean_ok && !string_ok && !char_ok && !pointer_ok)
+                int enum_ok = (type_first == ENUM_TYPE && type_second == ENUM_TYPE);
+                if (!numeric_ok && !boolean_ok && !string_ok && !char_ok && !pointer_ok && !enum_ok)
                 {
                     fprintf(stderr, "Error on line %d, equality comparison requires matching numeric, boolean, string, character, or pointer types!\n\n",
                         expr->line_num);
@@ -7131,8 +7381,9 @@ int semcheck_relop(int *type_return,
                 int string_ok = (is_string_type(type_first) && is_string_type(type_second));
                 int char_ok = (type_first == CHAR_TYPE && type_second == CHAR_TYPE);
                 int pointer_ok = (type_first == POINTER_TYPE && type_second == POINTER_TYPE);
+                int enum_ok = (type_first == ENUM_TYPE && type_second == ENUM_TYPE);
 
-                if(!numeric_ok && !string_ok && !char_ok && !pointer_ok)
+                if(!numeric_ok && !string_ok && !char_ok && !pointer_ok && !enum_ok)
                 {
                     fprintf(stderr,
                         "Error on line %d, expected compatible numeric, string, or character types between relational op!\n\n",
@@ -7767,7 +8018,6 @@ int semcheck_varid(int *type_return,
                 hash_return != NULL && hash_return->type != NULL ?
                     hash_return->type->kind : -1);
         }
-
         /* If this is a function being used in an expression context (not being assigned to),
            convert it to a function call with no arguments.
            

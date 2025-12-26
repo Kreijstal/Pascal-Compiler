@@ -22,6 +22,29 @@
 #include "../SemanticCheck/HashTable/HashTable.h"
 #include "../SemanticCheck/SymTab/SymTab.h"
 
+static HashNode_t *kgpc_find_type_node(SymTab_t *symtab, const char *type_id)
+{
+    if (symtab == NULL || type_id == NULL)
+        return NULL;
+
+    /* Prefer type identifiers even if a variable with the same name exists. */
+    ListNode_t *cur = symtab->stack_head;
+    while (cur != NULL)
+    {
+        HashTable_t *table = (HashTable_t *)cur->cur;
+        HashNode_t *node = FindIdentInTable(table, (char *)type_id);
+        if (node != NULL && node->hash_type == HASHTYPE_TYPE)
+            return node;
+        cur = cur->next;
+    }
+
+    HashNode_t *builtin = FindIdentInTable(symtab->builtins, (char *)type_id);
+    if (builtin != NULL && builtin->hash_type == HASHTYPE_TYPE)
+        return builtin;
+
+    return NULL;
+}
+
 // --- Constructor Implementations ---
 
 KgpcType* create_primitive_type(int primitive_tag) {
@@ -148,9 +171,8 @@ KgpcType* create_kgpc_type_from_type_alias(struct TypeAlias *alias, struct SymTa
             element_type = create_primitive_type(element_type_tag);
         } else if (alias->array_element_type_id != NULL && symtab != NULL) {
             /* Type reference - try to resolve it */
-            HashNode_t *element_node = NULL;
-            if (FindIdent(&element_node, symtab, alias->array_element_type_id) >= 0 &&
-                element_node != NULL && element_node->type != NULL) {
+            HashNode_t *element_node = kgpc_find_type_node(symtab, alias->array_element_type_id);
+            if (element_node != NULL && element_node->type != NULL) {
                 /* Use the resolved type (don't clone, just reference) */
                 element_type = element_node->type;
             } else {
@@ -178,9 +200,8 @@ KgpcType* create_kgpc_type_from_type_alias(struct TypeAlias *alias, struct SymTa
             pointee_type = create_primitive_type(pointer_type_tag);
         } else if (alias->pointer_type_id != NULL && symtab != NULL) {
             /* Type reference - try to resolve it */
-            HashNode_t *pointee_node = NULL;
-            if (FindIdent(&pointee_node, symtab, alias->pointer_type_id) >= 0 &&
-                pointee_node != NULL && pointee_node->type != NULL) {
+            HashNode_t *pointee_node = kgpc_find_type_node(symtab, alias->pointer_type_id);
+            if (pointee_node != NULL && pointee_node->type != NULL) {
                 /* Use the resolved type (don't clone, just reference) */
                 pointee_type = pointee_node->type;
             } else {
@@ -248,9 +269,8 @@ KgpcType* create_kgpc_type_from_type_alias(struct TypeAlias *alias, struct SymTa
     
     /* Handle type reference aliases: type MyType = SomeOtherType */
     if (alias->target_type_id != NULL && symtab != NULL) {
-        HashNode_t *target_node = NULL;
-        if (FindIdent(&target_node, symtab, alias->target_type_id) >= 0 &&
-            target_node != NULL && target_node->type != NULL) {
+        HashNode_t *target_node = kgpc_find_type_node(symtab, alias->target_type_id);
+        if (target_node != NULL && target_node->type != NULL) {
             /* Return the target's KgpcType (reference, not clone) */
             kgpc_type_retain(target_node->type);
             return target_node->type;
@@ -379,9 +399,8 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
         else if (elem_type_id != NULL && symtab != NULL)
         {
             /* Look up named element type in symbol table */
-            struct HashNode *elem_node = NULL;
-            if (FindIdent(&elem_node, symtab, elem_type_id) != -1 && 
-                elem_node != NULL && elem_node->type != NULL)
+            struct HashNode *elem_node = kgpc_find_type_node(symtab, elem_type_id);
+            if (elem_node != NULL && elem_node->type != NULL)
             {
                 elem_type = elem_node->type;
             }
@@ -410,9 +429,8 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
         int pointee_shared = 0;
         if (symtab != NULL)
         {
-            struct HashNode *type_node = NULL;
-            if (FindIdent(&type_node, symtab, (char *)type_id) != -1 &&
-                type_node != NULL && type_node->type != NULL)
+            struct HashNode *type_node = kgpc_find_type_node(symtab, type_id);
+            if (type_node != NULL && type_node->type != NULL)
             {
                 pointee_type = type_node->type;
                 pointee_shared = 1;
@@ -463,9 +481,8 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
     /* Handle named type references using the symbol table */
     if (type_id != NULL && symtab != NULL) {
         /* Look up the named type in the symbol table */
-        struct HashNode *type_node = NULL;
-        if (FindIdent(&type_node, symtab, (char *)type_id) != -1 && 
-            type_node != NULL && type_node->type != NULL) {
+        struct HashNode *type_node = kgpc_find_type_node(symtab, type_id);
+        if (type_node != NULL && type_node->type != NULL) {
             /* Return a shared reference from the symbol table - caller doesn't own it */
             if (owns_type != NULL)
                 *owns_type = 0;

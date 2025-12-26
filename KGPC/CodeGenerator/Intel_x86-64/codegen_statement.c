@@ -205,6 +205,12 @@ static int expr_value_requires_64bit(const struct Expression *expr, CodeGenConte
         HashNode_t *node = NULL;
         if (FindIdent(&node, ctx->symtab, expr->expr_data.id) >= 0 && node != NULL)
         {
+            if (node->type != NULL)
+            {
+                long long type_size = kgpc_type_sizeof(node->type);
+                if (type_size >= 8)
+                    return 1;
+            }
             if (node->hash_type == HASHTYPE_CONST)
             {
                 long long val = node->const_int_value;
@@ -228,6 +234,10 @@ static int expr_is_unsigned_type(const struct Expression *expr)
     {
         const char *target_type_id = expr->resolved_kgpc_type->type_alias->target_type_id;
         if (is_unsigned_type_name(target_type_id))
+            return 1;
+        if (expr->resolved_kgpc_type->type_alias->is_range &&
+            expr->resolved_kgpc_type->type_alias->range_known &&
+            expr->resolved_kgpc_type->type_alias->range_start >= 0)
             return 1;
     }
     
@@ -1195,6 +1205,40 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
                     if (field->array_element_type_id != NULL)
                         field_access->array_element_type_id = strdup(field->array_element_type_id);
                     field_access->array_element_record_type = field->array_element_record_type;
+                }
+
+                if (field->field_is_array &&
+                    field->value->type == EXPR_ARRAY_LITERAL)
+                {
+                    ListNode_t *element_node = field->value->expr_data.array_literal_data.elements;
+                    int index = field->array_start;
+                    while (element_node != NULL && index <= field->array_end)
+                    {
+                        struct Expression *element_expr = (struct Expression *)element_node->cur;
+                        struct Expression *index_expr = mk_inum(expr->line_num, index);
+                        struct Expression *array_access = mk_arrayaccess(expr->line_num,
+                            field_access, index_expr);
+                        if (array_access == NULL)
+                            goto cleanup;
+                        array_access->is_array_expr = 1;
+                        array_access->array_lower_bound = field->array_start;
+                        array_access->array_upper_bound = field->array_end;
+                        array_access->array_is_dynamic = field->array_is_open;
+                        array_access->array_element_type = field->array_element_type;
+                        if (field->array_element_type_id != NULL)
+                            array_access->array_element_type_id = strdup(field->array_element_type_id);
+                        array_access->array_element_record_type = field->array_element_record_type;
+
+                        struct Statement *assign_stmt = mk_varassign(expr->line_num, expr->col_num,
+                            array_access, element_expr);
+                        if (assign_stmt == NULL)
+                            goto cleanup;
+                        inst_list = codegen_var_assignment(assign_stmt, inst_list, ctx);
+                        element_node = element_node->next;
+                        ++index;
+                    }
+                    field_node = field_node->next;
+                    continue;
                 }
 
                 struct Statement *assign_stmt = mk_varassign(expr->line_num, expr->col_num,

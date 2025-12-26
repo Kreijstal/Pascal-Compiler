@@ -396,6 +396,7 @@ static HashNode_t* create_hash_node(char* id, char* mangled_id,
     hash_node->referenced = 0;
     hash_node->mutated = 0;
     hash_node->is_constant = 0;
+    hash_node->is_typed_const = 0;
     hash_node->const_int_value = 0;
     hash_node->const_string_value = NULL;
     hash_node->const_set_value = NULL;
@@ -464,6 +465,13 @@ static int check_collision_allowance(HashNode_t* existing_node, enum HashType ne
     if (existing_node->hash_type == HASHTYPE_CONST &&
         existing_node->defined_in_unit &&
         new_hash_type == HASHTYPE_CONST) {
+        return 1;
+    }
+
+    /* Allow local types to shadow imported unit types. */
+    if (existing_node->hash_type == HASHTYPE_TYPE &&
+        existing_node->defined_in_unit &&
+        new_hash_type == HASHTYPE_TYPE) {
         return 1;
     }
 

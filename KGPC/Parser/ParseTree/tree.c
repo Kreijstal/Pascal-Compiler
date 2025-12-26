@@ -2057,6 +2057,8 @@ Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type, char *type_id,
     new_tree->tree_data.var_decl_data.is_var_param = is_var_param;
     new_tree->tree_data.var_decl_data.inferred_type = inferred_type;
     new_tree->tree_data.var_decl_data.initializer = initializer;
+    new_tree->tree_data.var_decl_data.is_typed_const = 0;
+    new_tree->tree_data.var_decl_data.currency_scaled = 0;
     new_tree->tree_data.var_decl_data.inline_record_type = inline_record_type;
     new_tree->tree_data.var_decl_data.inline_type_alias = inline_type_alias;
     new_tree->tree_data.var_decl_data.cached_kgpc_type = NULL;
@@ -2651,6 +2653,24 @@ struct Expression *mk_pointer_deref(int line_num, struct Expression *pointer_exp
 
     init_expression(new_expr, line_num, EXPR_POINTER_DEREF);
     new_expr->expr_data.pointer_deref_data.pointer_expr = pointer_expr;
+
+    return new_expr;
+}
+
+struct Expression *mk_array_literal(int line_num, ListNode_t *elements, int element_count)
+{
+    struct Expression *new_expr;
+    new_expr = (struct Expression *)malloc(sizeof(struct Expression));
+    assert(new_expr != NULL);
+
+    init_expression(new_expr, line_num, EXPR_ARRAY_LITERAL);
+    new_expr->expr_data.array_literal_data.elements = elements;
+    new_expr->expr_data.array_literal_data.element_count = element_count;
+    new_expr->expr_data.array_literal_data.elements_semchecked = 0;
+    new_expr->is_array_expr = 1;
+    new_expr->array_is_dynamic = 1;
+    new_expr->array_lower_bound = 0;
+    new_expr->array_upper_bound = element_count - 1;
 
     return new_expr;
 }

@@ -4670,6 +4670,29 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_build
                                                               lhs, init_expr);
             Tree_t *decl = mk_vardecl(const_decl_node->line, ids, typed_const_tag, type_id, 0, 0,
                                       initializer_stmt, NULL, NULL, NULL);
+            decl->tree_data.var_decl_data.is_typed_const = 1;
+            list_builder_append(var_builder, decl, LIST_TREE);
+
+            destroy_type_info_contents(&type_info);
+            return NULL;
+        }
+        if (value_node != NULL && value_node->typ != PASCAL_T_RECORD_CONSTRUCTOR) {
+            struct Expression *init_expr = convert_expression(value_node);
+            if (init_expr == NULL) {
+                fprintf(stderr, "ERROR: Unsupported typed const expression for %s.\n", id);
+                free(id);
+                free(type_id);
+                destroy_type_info_contents(&type_info);
+                return NULL;
+            }
+
+            ListNode_t *ids = CreateListNode(id, LIST_STRING);
+            struct Expression *lhs = mk_varid(const_decl_node->line, strdup(id));
+            struct Statement *initializer_stmt = mk_varassign(const_decl_node->line, const_decl_node->col,
+                                                              lhs, init_expr);
+            Tree_t *decl = mk_vardecl(const_decl_node->line, ids, typed_const_tag, type_id, 0, 0,
+                                      initializer_stmt, NULL, NULL, NULL);
+            decl->tree_data.var_decl_data.is_typed_const = 1;
             list_builder_append(var_builder, decl, LIST_TREE);
 
             destroy_type_info_contents(&type_info);
@@ -4731,6 +4754,7 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_build
         ListNode_t *var_ids = CreateListNode(id, LIST_STRING);
         Tree_t *var_decl = mk_vardecl(const_decl_node->line, var_ids, var_type,
             type_id, 0, 0, initializer, NULL, NULL, NULL);
+        var_decl->tree_data.var_decl_data.is_typed_const = 1;
         
         if (var_builder != NULL)
             list_builder_append(var_builder, var_decl, LIST_TREE);
@@ -5958,7 +5982,52 @@ static struct Expression *convert_expression(ast_t *expr_node) {
     case PASCAL_T_NOT:
         return mk_relop(expr_node->line, NOT, convert_expression(expr_node->child), NULL);
     case PASCAL_T_TUPLE:
-        return convert_expression(expr_node->child);
+    {
+        ListNode_t *elements = NULL;
+        ListNode_t *tail = NULL;
+        int count = 0;
+
+        for (ast_t *elem = expr_node->child; elem != NULL; elem = elem->next)
+        {
+            ast_t *unwrapped = unwrap_pascal_node(elem);
+            if (unwrapped == NULL)
+                continue;
+            struct Expression *elem_expr = convert_expression(unwrapped);
+            if (elem_expr == NULL)
+                goto tuple_cleanup;
+
+            ListNode_t *node = CreateListNode(elem_expr, LIST_EXPR);
+            if (node == NULL)
+            {
+                destroy_expr(elem_expr);
+                goto tuple_cleanup;
+            }
+            if (elements == NULL)
+            {
+                elements = node;
+                tail = node;
+            }
+            else
+            {
+                tail->next = node;
+                tail = node;
+            }
+            ++count;
+        }
+
+        return mk_array_literal(expr_node->line, elements, count);
+
+tuple_cleanup:
+        while (elements != NULL)
+        {
+            ListNode_t *next = elements->next;
+            if (elements->cur != NULL)
+                destroy_expr((struct Expression *)elements->cur);
+            free(elements);
+            elements = next;
+        }
+        return NULL;
+    }
     case PASCAL_T_RECORD_CONSTRUCTOR:
     {
         ListNode_t *fields = NULL;

@@ -120,6 +120,8 @@ typedef struct Tree
             int is_var_param;
             int inferred_type;
             struct Statement *initializer;
+            int is_typed_const;
+            int currency_scaled;
             struct RecordType *inline_record_type;  /* For inline record declarations */
             struct TypeAlias *inline_type_alias;   /* For inline complex aliases (file of T, etc.) */
             struct KgpcType *cached_kgpc_type;   /* Retained type info for codegen fallback */
@@ -292,6 +294,8 @@ struct Expression *mk_arrayaccess(int line_num, struct Expression *array_expr, s
 struct Expression *mk_recordaccess(int line_num, struct Expression *record_expr, char *field_id);
 
 struct Expression *mk_pointer_deref(int line_num, struct Expression *pointer_expr);
+
+struct Expression *mk_array_literal(int line_num, ListNode_t *elements, int element_count);
 
 struct Expression *mk_addressof(int line_num, struct Expression *expr);
 

@@ -1894,6 +1894,16 @@ static ListNode_t *codegen_expr_tree_value(struct Expression *expr, ListNode_t *
     {
         if (expr->type == EXPR_IS)
             return codegen_emit_is_expr(expr, inst_list, ctx, out_reg);
+        if (expr->type == EXPR_ARRAY_LITERAL)
+        {
+            Register_t *tmp_reg = NULL;
+            inst_list = codegen_materialize_array_literal(expr, inst_list, ctx, &tmp_reg);
+            if (out_reg != NULL)
+                *out_reg = tmp_reg;
+            else if (tmp_reg != NULL)
+                free_reg(get_reg_stack(), tmp_reg);
+            return inst_list;
+        }
         if (expr->type == EXPR_AS)
         {
             Register_t *addr_reg = NULL;
@@ -2763,6 +2773,18 @@ ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGen
         case EXPR_ADDR_OF_PROC:
             CODEGEN_DEBUG("DEBUG: Processing address-of-procedure expression\n");
             inst_list = codegen_expr_via_tree(expr, inst_list, ctx);
+            #ifdef DEBUG_CODEGEN
+            CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+            #endif
+            return inst_list;
+        case EXPR_ARRAY_LITERAL:
+            CODEGEN_DEBUG("DEBUG: Processing array literal expression\n");
+            {
+                Register_t *tmp_reg = NULL;
+                inst_list = codegen_materialize_array_literal(expr, inst_list, ctx, &tmp_reg);
+                if (tmp_reg != NULL)
+                    free_reg(get_reg_stack(), tmp_reg);
+            }
             #ifdef DEBUG_CODEGEN
             CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
             #endif
