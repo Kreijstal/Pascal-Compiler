@@ -1427,6 +1427,9 @@ int main(int argc, char **argv)
         ListNode_t *prelude_vars = get_prelude_var_decls(prelude_tree);
         if (prelude_vars != NULL)
         {
+            /* Mark prelude vars as coming from a unit, so they're recognized
+             * as available for const expressions like Ord(DirectorySeparator) */
+            mark_unit_var_decls(prelude_vars, 1);
             user_tree->tree_data.program_data.var_declaration =
                 ConcatList(prelude_vars, user_tree->tree_data.program_data.var_declaration);
             clear_prelude_var_decls(prelude_tree);

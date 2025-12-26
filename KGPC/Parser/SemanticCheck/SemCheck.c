@@ -509,6 +509,68 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls);
 int semcheck_decls(SymTab_t *symtab, ListNode_t *decls);
 int semcheck_const_decls(SymTab_t *symtab, ListNode_t *const_decls);
 
+/* Collect typed const declarations from a var_declaration list.
+ * If from_unit_only is true, only collect those with defined_in_unit=1.
+ * If from_unit_only is false, only collect those with defined_in_unit=0. */
+static ListNode_t *collect_typed_const_decls_filtered(SymTab_t *symtab, ListNode_t *decls, int from_unit_only)
+{
+    ListNode_t *head = NULL;
+    ListNode_t *tail = NULL;
+    ListNode_t *cur = decls;
+    while (cur != NULL)
+    {
+        if (cur->type == LIST_TREE && cur->cur != NULL)
+        {
+            Tree_t *tree = (Tree_t *)cur->cur;
+            if (tree->type == TREE_VAR_DECL &&
+                tree->tree_data.var_decl_data.is_typed_const)
+            {
+                /* Filter by origin */
+                int is_from_unit = tree->tree_data.var_decl_data.defined_in_unit;
+                if ((from_unit_only && !is_from_unit) || (!from_unit_only && is_from_unit))
+                {
+                    cur = cur->next;
+                    continue;
+                }
+                
+                int allow = 1;
+                const char *type_id = tree->tree_data.var_decl_data.type_id;
+                if (type_id != NULL)
+                {
+                    HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, type_id);
+                    if (type_node == NULL &&
+                        semcheck_map_builtin_type_name_local(type_id) == UNKNOWN_TYPE)
+                    {
+                        allow = 0;
+                    }
+                }
+                else if (tree->tree_data.var_decl_data.type == UNKNOWN_TYPE)
+                {
+                    allow = 0;
+                }
+
+                if (allow)
+                {
+                    ListNode_t *node = CreateListNode(tree, LIST_TREE);
+                    if (head == NULL)
+                    {
+                        head = node;
+                        tail = node;
+                    }
+                    else
+                    {
+                        tail->next = node;
+                        tail = node;
+                    }
+                }
+            }
+        }
+        cur = cur->next;
+    }
+    return head;
+}
+
+/* Backward-compatible wrapper - collects all typed const decls */
 static ListNode_t *collect_typed_const_decls(SymTab_t *symtab, ListNode_t *decls)
 {
     ListNode_t *head = NULL;
@@ -1542,7 +1604,8 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                 else if (arg->type == EXPR_VAR_ID)
                 {
                     HashNode_t *node = NULL;
-                    if (FindIdent(&node, symtab, arg->expr_data.id) >= 0 && 
+                    int found_scope = FindIdent(&node, symtab, arg->expr_data.id);
+                    if (found_scope >= 0 && 
                         node != NULL &&
                         (node->hash_type == HASHTYPE_CONST || node->is_typed_const))
                     {
@@ -4274,6 +4337,15 @@ void semcheck_add_builtins(SymTab_t *symtab)
     add_builtin_type_owned(symtab, "Int64", create_primitive_type_with_size(INT64_TYPE, 8));
     add_builtin_from_vartype(symtab, "Real", HASHVAR_REAL);
     add_builtin_from_vartype(symtab, "Boolean", HASHVAR_BOOLEAN);
+    /* FPC-compatible extended boolean types */
+    add_builtin_type_owned(symtab, "Boolean8", create_primitive_type_with_size(BOOL, 1));
+    add_builtin_type_owned(symtab, "Boolean16", create_primitive_type_with_size(BOOL, 2));
+    add_builtin_type_owned(symtab, "Boolean32", create_primitive_type_with_size(BOOL, 4));
+    add_builtin_type_owned(symtab, "Boolean64", create_primitive_type_with_size(BOOL, 8));
+    add_builtin_type_owned(symtab, "ByteBool", create_primitive_type_with_size(BOOL, 1));
+    add_builtin_type_owned(symtab, "WordBool", create_primitive_type_with_size(BOOL, 2));
+    add_builtin_type_owned(symtab, "LongBool", create_primitive_type_with_size(BOOL, 4));
+    add_builtin_type_owned(symtab, "QWordBool", create_primitive_type_with_size(BOOL, 8));
     add_builtin_from_vartype(symtab, "Char", HASHVAR_CHAR);
     add_builtin_type_owned(symtab, "WideChar", create_primitive_type_with_size(CHAR_TYPE, 2));
     add_builtin_from_vartype(symtab, "String", HASHVAR_PCHAR);
@@ -4912,18 +4984,44 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
             debug_cur = debug_cur->next;
         }
     }
-    ListNode_t *typed_consts = collect_typed_const_decls(symtab,
-        tree->tree_data.program_data.var_declaration);
-    if (typed_consts != NULL)
+    
+    /* Three-pass processing for constants to handle all reference patterns:
+     * 
+     * Pass 1: Process typed constants FROM IMPORTED UNITS/PRELUDE first.
+     *   These include DirectorySeparator, PathSeparator, etc. from system.p.
+     *   Local untyped constants may reference these (e.g., Ord(DirectorySeparator)).
+     *   
+     * Pass 2: Process regular (untyped) const declarations.
+     *   These need the unit typed constants from pass 1.
+     *   Local typed constants may reference these (e.g., StackMargin: ptruint = STACK_MARGIN_MAX).
+     *   
+     * Pass 3: Process LOCAL typed constants (not from units).
+     *   These may reference the untyped constants from pass 2.
+     */
+    
+    /* Pass 1: Imported unit typed constants (e.g., DirectorySeparator from system.p) */
+    ListNode_t *unit_typed_consts = collect_typed_const_decls_filtered(symtab,
+        tree->tree_data.program_data.var_declaration, 1);  /* from_unit_only=true */
+    if (unit_typed_consts != NULL)
     {
-        return_val += semcheck_decls(symtab, typed_consts);
-        DestroyList(typed_consts);
+        return_val += semcheck_decls(symtab, unit_typed_consts);
+        DestroyList(unit_typed_consts);
     }
-
+    
+    /* Pass 2: Regular (untyped) const declarations */
     return_val += semcheck_const_decls(symtab, tree->tree_data.program_data.const_declaration);
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after consts: %d\n", return_val);
 #endif
+
+    /* Pass 3: Local typed constants (can reference both unit typed consts and local untyped consts) */
+    ListNode_t *local_typed_consts = collect_typed_const_decls_filtered(symtab,
+        tree->tree_data.program_data.var_declaration, 0);  /* from_unit_only=false */
+    if (local_typed_consts != NULL)
+    {
+        return_val += semcheck_decls(symtab, local_typed_consts);
+        DestroyList(local_typed_consts);
+    }
 
     return_val += semcheck_type_decls(symtab, tree->tree_data.program_data.type_declaration);
 #ifdef DEBUG
@@ -5031,6 +5129,16 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
                 return_val - before, return_val);
     
     /* Continue interface section processing */
+    /* Process regular (untyped) const declarations FIRST.
+     * Typed constants may reference regular constants in their initializers,
+     * so regular constants must be in the symbol table before typed constants are evaluated. */
+    before = return_val;
+    return_val += semcheck_const_decls(symtab, tree->tree_data.unit_data.interface_const_decls);
+    if (debug_steps != NULL && return_val != before)
+        fprintf(stderr, "[SemCheck] interface consts +%d (total %d)\n",
+                return_val - before, return_val);
+                
+    /* Now process interface typed constants - they can reference regular constants */
     before = return_val;
     ListNode_t *typed_iface_consts = collect_typed_const_decls(symtab,
         tree->tree_data.unit_data.interface_var_decls);
@@ -5039,11 +5147,6 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
         return_val += semcheck_decls(symtab, typed_iface_consts);
         DestroyList(typed_iface_consts);
     }
-
-    return_val += semcheck_const_decls(symtab, tree->tree_data.unit_data.interface_const_decls);
-    if (debug_steps != NULL && return_val != before)
-        fprintf(stderr, "[SemCheck] interface consts +%d (total %d)\n",
-                return_val - before, return_val);
     before = return_val;
     return_val += semcheck_type_decls(symtab, tree->tree_data.unit_data.interface_type_decls);
     if (debug_steps != NULL && return_val != before)
@@ -5056,6 +5159,14 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
                 return_val - before, return_val);
 
     /* Continue implementation section processing */
+    /* Process regular (untyped) const declarations FIRST for the same reason as interface */
+    before = return_val;
+    return_val += semcheck_const_decls(symtab, tree->tree_data.unit_data.implementation_const_decls);
+    if (debug_steps != NULL && return_val != before)
+        fprintf(stderr, "[SemCheck] impl consts +%d (total %d)\n",
+                return_val - before, return_val);
+                
+    /* Now process implementation typed constants */
     before = return_val;
     ListNode_t *typed_impl_consts = collect_typed_const_decls(symtab,
         tree->tree_data.unit_data.implementation_var_decls);
@@ -5064,11 +5175,6 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
         return_val += semcheck_decls(symtab, typed_impl_consts);
         DestroyList(typed_impl_consts);
     }
-
-    return_val += semcheck_const_decls(symtab, tree->tree_data.unit_data.implementation_const_decls);
-    if (debug_steps != NULL && return_val != before)
-        fprintf(stderr, "[SemCheck] impl consts +%d (total %d)\n",
-                return_val - before, return_val);
     before = return_val;
     return_val += semcheck_type_decls(symtab, tree->tree_data.unit_data.implementation_type_decls);
     if (debug_steps != NULL && return_val != before)

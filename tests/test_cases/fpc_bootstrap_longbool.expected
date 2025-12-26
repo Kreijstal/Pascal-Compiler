@@ -1,0 +1,11 @@
+LongBool size: 4
+WordBool size: 2
+ByteBool size: 1
+QWordBool size: 8
+Boolean16 size: 2
+Boolean32 size: 4
+Boolean64 size: 8
+LongBool is True
+WordBool is True
+ByteBool is True
+QWordBool is True
