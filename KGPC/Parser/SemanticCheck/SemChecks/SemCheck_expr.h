@@ -39,6 +39,8 @@ int semcheck_expr_main(int *type_return,
 KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Expression *expr,
     int max_scope_lev, int mutating, int *owns_type);
 
+struct Expression *clone_expression(const struct Expression *expr);
+
 void set_hash_meta(HashNode_t *node, int mutating);
 
 int semcheck_with_push(struct Expression *context_expr, struct RecordType *record_type);
@@ -51,6 +53,8 @@ struct RecordType *semcheck_with_resolve_record_type(SymTab_t *symtab,
 void semcheck_mark_static_link_needed(int scope_level, HashNode_t *node);
 void semcheck_mark_call_requires_static_link(HashNode_t *node);
 int semcheck_prepare_array_literal_argument(Tree_t *formal_decl, struct Expression *arg_expr,
+    SymTab_t *symtab, int max_scope_lev, int line_num);
+int semcheck_prepare_record_constructor_argument(Tree_t *formal_decl, struct Expression *arg_expr,
     SymTab_t *symtab, int max_scope_lev, int line_num);
 
 int semcheck_compute_record_size(SymTab_t *symtab, struct RecordType *record,

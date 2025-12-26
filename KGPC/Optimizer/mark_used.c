@@ -313,6 +313,19 @@ static void mark_expr_calls(struct Expression *expr, SubprogramMap *map) {
             }
             break;
             
+        case EXPR_RECORD_CONSTRUCTOR:
+            if (expr->expr_data.record_constructor_data.fields != NULL) {
+                ListNode_t *field = expr->expr_data.record_constructor_data.fields;
+                while (field != NULL) {
+                    struct RecordConstructorField *entry =
+                        (struct RecordConstructorField *)field->cur;
+                    if (entry != NULL && entry->value != NULL)
+                        mark_expr_calls(entry->value, map);
+                    field = field->next;
+                }
+            }
+            break;
+            
         default:
             /* Leaf nodes - nothing to traverse */
             break;

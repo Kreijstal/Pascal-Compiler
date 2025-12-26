@@ -120,6 +120,8 @@ typedef struct Tree
             int is_var_param;
             int inferred_type;
             struct Statement *initializer;
+            int is_typed_const;
+            int currency_scaled;
             struct RecordType *inline_record_type;  /* For inline record declarations */
             struct TypeAlias *inline_type_alias;   /* For inline complex aliases (file of T, etc.) */
             struct KgpcType *cached_kgpc_type;   /* Retained type info for codegen fallback */
@@ -293,6 +295,8 @@ struct Expression *mk_recordaccess(int line_num, struct Expression *record_expr,
 
 struct Expression *mk_pointer_deref(int line_num, struct Expression *pointer_expr);
 
+struct Expression *mk_array_literal(int line_num, ListNode_t *elements, int element_count);
+
 struct Expression *mk_addressof(int line_num, struct Expression *expr);
 
 struct Expression *mk_functioncall(int line_num, char *id, ListNode_t *args);
@@ -310,6 +314,7 @@ struct Expression *mk_nil(int line_num);
 struct SetElement *mk_set_element(struct Expression *lower, struct Expression *upper);
 void destroy_set_element(struct SetElement *element);
 struct Expression *mk_set(int line_num, unsigned int bitmask, ListNode_t *elements, int is_constant);
+struct Expression *mk_record_constructor(int line_num, ListNode_t *fields, int field_count);
 
 struct Expression *mk_typecast(int line_num, int target_type, char *target_type_id,
     struct Expression *expr);

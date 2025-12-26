@@ -38,6 +38,14 @@
 #include "../../../identifier_utils.h"
 #include "../../../format_arg.h"
 
+static const char *semcheck_base_type_name(const char *id)
+{
+    if (id == NULL)
+        return NULL;
+    const char *dot = strrchr(id, '.');
+    return (dot != NULL && dot[1] != '\0') ? (dot + 1) : id;
+}
+
 int is_type_ir(int *type);
 static int types_numeric_compatible(int lhs, int rhs);
 static void semcheck_coerce_char_string_operands(int *type_first, struct Expression *expr1,
@@ -386,6 +394,7 @@ static void semcheck_set_array_info_from_alias(struct Expression *expr, SymTab_t
 static void semcheck_set_array_info_from_hashnode(struct Expression *expr, SymTab_t *symtab,
     HashNode_t *node, int line_num);
 static struct RecordType *semcheck_lookup_record_type(SymTab_t *symtab, const char *type_id);
+static HashNode_t *semcheck_find_preferred_type_node(SymTab_t *symtab, const char *type_id);
 static int semcheck_pointer_deref(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
 static int semcheck_convert_set_literal_to_array_literal(struct Expression *expr);
@@ -416,6 +425,12 @@ static int semcheck_typecheck_array_literal(struct Expression *expr, SymTab_t *s
     int max_scope_lev, int expected_type, const char *expected_type_id, int line_num);
 int semcheck_prepare_array_literal_argument(Tree_t *formal_decl, struct Expression *arg_expr,
     SymTab_t *symtab, int max_scope_lev, int line_num);
+int semcheck_prepare_record_constructor_argument(Tree_t *formal_decl, struct Expression *arg_expr,
+    SymTab_t *symtab, int max_scope_lev, int line_num);
+static int semcheck_typecheck_record_constructor(struct Expression *expr, SymTab_t *symtab,
+    int max_scope_lev, struct RecordType *record_type, int line_num);
+static struct RecordType *semcheck_record_type_from_decl(Tree_t *decl, SymTab_t *symtab);
+static KgpcType *semcheck_field_expected_kgpc_type(SymTab_t *symtab, struct RecordField *field);
 
 static int semcheck_try_indexed_property_getter(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating)
@@ -660,7 +675,7 @@ static size_t with_context_count = 0;
 static size_t with_context_capacity = 0;
 
 static int ensure_with_capacity(void);
-static struct Expression *clone_expression(const struct Expression *expr);
+struct Expression *clone_expression(const struct Expression *expr);
 static struct RecordType *resolve_record_type_for_with(SymTab_t *symtab,
     struct Expression *context_expr, int expr_type, int line_num);
 static int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
@@ -782,8 +797,8 @@ static struct RecordType *semcheck_lookup_record_type(SymTab_t *symtab, const ch
     if (symtab == NULL || type_id == NULL)
         return NULL;
 
-    HashNode_t *type_node = NULL;
-    if (FindIdent(&type_node, symtab, (char *)type_id) == -1 || type_node == NULL)
+    HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, type_id);
+    if (type_node == NULL)
         return NULL;
 
     struct RecordType *record = get_record_type_from_node(type_node);
@@ -802,6 +817,31 @@ static struct RecordType *semcheck_lookup_record_type(SymTab_t *symtab, const ch
     }
 
     return NULL;
+}
+
+static HashNode_t *semcheck_find_preferred_type_node(SymTab_t *symtab, const char *type_id)
+{
+    if (symtab == NULL || type_id == NULL)
+        return NULL;
+
+    ListNode_t *matches = FindAllIdents(symtab, (char *)type_id);
+    HashNode_t *best = NULL;
+    ListNode_t *cur = matches;
+    while (cur != NULL)
+    {
+        HashNode_t *node = (HashNode_t *)cur->cur;
+        if (node != NULL && node->hash_type == HASHTYPE_TYPE)
+        {
+            if (best == NULL)
+                best = node;
+            else if (best->defined_in_unit && !node->defined_in_unit)
+                best = node;
+        }
+        cur = cur->next;
+    }
+    if (matches != NULL)
+        DestroyList(matches);
+    return best;
 }
 
 static void semcheck_set_array_info_from_alias(struct Expression *expr, SymTab_t *symtab,
@@ -1242,6 +1282,369 @@ int semcheck_prepare_array_literal_argument(Tree_t *formal_decl, struct Expressi
         expected_type, expected_type_id, line_num);
 }
 
+static struct RecordType *semcheck_record_type_from_decl(Tree_t *decl, SymTab_t *symtab)
+{
+    if (decl == NULL || symtab == NULL)
+        return NULL;
+
+    if (decl->type == TREE_VAR_DECL)
+    {
+        if (decl->tree_data.var_decl_data.inline_record_type != NULL)
+            return decl->tree_data.var_decl_data.inline_record_type;
+    }
+
+    {
+        int owns_type = 0;
+        KgpcType *resolved = resolve_type_from_vardecl(decl, symtab, &owns_type);
+        if (resolved != NULL)
+        {
+            struct RecordType *record_type = NULL;
+            if (kgpc_type_is_record(resolved))
+                record_type = kgpc_type_get_record(resolved);
+            else if (kgpc_type_is_pointer(resolved) && resolved->info.points_to != NULL &&
+                kgpc_type_is_record(resolved->info.points_to))
+                record_type = kgpc_type_get_record(resolved->info.points_to);
+
+            if (owns_type)
+                destroy_kgpc_type(resolved);
+
+            if (record_type != NULL)
+                return record_type;
+        }
+    }
+
+    if (decl->type == TREE_VAR_DECL)
+    {
+        if (decl->tree_data.var_decl_data.cached_kgpc_type != NULL)
+        {
+            KgpcType *cached = decl->tree_data.var_decl_data.cached_kgpc_type;
+            if (kgpc_type_is_record(cached))
+                return kgpc_type_get_record(cached);
+            if (kgpc_type_is_pointer(cached))
+            {
+                KgpcType *pointee = cached->info.points_to;
+                if (pointee != NULL && kgpc_type_is_record(pointee))
+                    return kgpc_type_get_record(pointee);
+            }
+        }
+
+        if (decl->tree_data.var_decl_data.type_id != NULL)
+            return semcheck_lookup_record_type(symtab, decl->tree_data.var_decl_data.type_id);
+    }
+
+    return NULL;
+}
+
+static KgpcType *semcheck_field_expected_kgpc_type(SymTab_t *symtab, struct RecordField *field)
+{
+    if (symtab == NULL || field == NULL)
+        return NULL;
+
+    if (field->is_array)
+    {
+        KgpcType *element_type = NULL;
+        if (field->array_element_type == RECORD_TYPE && field->nested_record != NULL)
+        {
+            element_type = create_record_type(field->nested_record);
+        }
+        else if (field->array_element_type_id != NULL)
+        {
+            HashNode_t *type_node = NULL;
+            if (FindIdent(&type_node, symtab, field->array_element_type_id) >= 0 &&
+                type_node != NULL)
+            {
+                if (type_node->type != NULL)
+                {
+                    kgpc_type_retain(type_node->type);
+                    element_type = type_node->type;
+                }
+                else
+                {
+                    struct TypeAlias *alias = hashnode_get_type_alias(type_node);
+                    if (alias != NULL)
+                        element_type = create_kgpc_type_from_type_alias(alias, symtab);
+                }
+            }
+        }
+        if (element_type == NULL && field->array_element_type != UNKNOWN_TYPE)
+            element_type = create_primitive_type(field->array_element_type);
+        if (element_type == NULL)
+            return NULL;
+        return create_array_type(element_type, field->array_start, field->array_end);
+    }
+
+    if (field->nested_record != NULL)
+        return create_record_type(field->nested_record);
+
+    if (field->type_id != NULL)
+    {
+        HashNode_t *type_node = NULL;
+        if (FindIdent(&type_node, symtab, field->type_id) >= 0 && type_node != NULL)
+        {
+            if (type_node->type != NULL)
+            {
+                kgpc_type_retain(type_node->type);
+                return type_node->type;
+            }
+            else
+            {
+                struct TypeAlias *alias = hashnode_get_type_alias(type_node);
+                if (alias != NULL)
+                    return create_kgpc_type_from_type_alias(alias, symtab);
+            }
+        }
+    }
+
+    if (field->type != UNKNOWN_TYPE)
+        return create_primitive_type(field->type);
+
+    return NULL;
+}
+
+static int semcheck_typecheck_record_constructor(struct Expression *expr, SymTab_t *symtab,
+    int max_scope_lev, struct RecordType *record_type, int line_num)
+{
+    if (expr == NULL || symtab == NULL)
+        return 0;
+
+    if (record_type == NULL)
+    {
+        fprintf(stderr, "Error on line %d, unable to infer record type for constructor.\n",
+            line_num);
+        expr->resolved_type = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    expr->record_type = record_type;
+    expr->resolved_type = RECORD_TYPE;
+    if (expr->resolved_kgpc_type != NULL)
+        destroy_kgpc_type(expr->resolved_kgpc_type);
+    expr->resolved_kgpc_type = create_record_type(record_type);
+
+    int error_count = 0;
+    ListNode_t *cur = expr->expr_data.record_constructor_data.fields;
+    while (cur != NULL)
+    {
+        struct RecordConstructorField *field = (struct RecordConstructorField *)cur->cur;
+        if (field == NULL || field->field_id == NULL || field->value == NULL)
+        {
+            ++error_count;
+            cur = cur->next;
+            continue;
+        }
+
+        for (ListNode_t *prev = expr->expr_data.record_constructor_data.fields;
+             prev != cur; prev = prev->next)
+        {
+            struct RecordConstructorField *prior = (struct RecordConstructorField *)prev->cur;
+            if (prior != NULL && prior->field_id != NULL &&
+                pascal_identifier_equals(prior->field_id, field->field_id))
+            {
+                fprintf(stderr, "Error on line %d, duplicate record constructor field %s.\n",
+                    line_num, field->field_id);
+                ++error_count;
+                break;
+            }
+        }
+
+        struct RecordField *field_desc = NULL;
+        long long field_offset = 0;
+        if (resolve_record_field(symtab, record_type, field->field_id,
+                &field_desc, &field_offset, line_num, 0) != 0 || field_desc == NULL)
+        {
+            ++error_count;
+            cur = cur->next;
+            continue;
+        }
+
+        field->field_offset = field_offset;
+        field->field_type = field_desc->type;
+        field->field_record_type = field_desc->nested_record;
+        if (field_desc->nested_record != NULL)
+            field->field_type = RECORD_TYPE;
+        if (field_desc->nested_record == NULL && field_desc->type_id != NULL)
+        {
+            struct RecordType *resolved_record = semcheck_lookup_record_type(symtab, field_desc->type_id);
+            if (resolved_record != NULL)
+            {
+                field->field_record_type = resolved_record;
+                field->field_type = RECORD_TYPE;
+            }
+        }
+
+        if (field_desc->type_id != NULL)
+        {
+            free(field->field_type_id);
+            field->field_type_id = strdup(field_desc->type_id);
+        }
+
+        field->field_is_array = field_desc->is_array;
+        field->array_start = field_desc->array_start;
+        field->array_end = field_desc->array_end;
+        field->array_is_open = field_desc->array_is_open;
+        field->array_element_type = field_desc->array_element_type;
+        field->array_element_record_type = NULL;
+        if (field_desc->array_element_type_id != NULL)
+        {
+            free(field->array_element_type_id);
+            field->array_element_type_id = strdup(field_desc->array_element_type_id);
+        }
+        if (field_desc->array_element_type == RECORD_TYPE && field_desc->nested_record != NULL)
+            field->array_element_record_type = field_desc->nested_record;
+        if (field->array_element_record_type == NULL && field_desc->array_element_type_id != NULL)
+        {
+            struct RecordType *resolved_elem = semcheck_lookup_record_type(symtab, field_desc->array_element_type_id);
+            if (resolved_elem != NULL)
+            {
+                field->array_element_record_type = resolved_elem;
+                field->array_element_type = RECORD_TYPE;
+            }
+        }
+
+        if (!field->field_is_array && field_desc->type_id != NULL)
+        {
+            HashNode_t *alias_node = NULL;
+            if (FindIdent(&alias_node, symtab, field_desc->type_id) != -1 && alias_node != NULL)
+            {
+                struct TypeAlias *alias = get_type_alias_from_node(alias_node);
+                if (alias != NULL && alias->is_array)
+                {
+                    field->field_is_array = 1;
+                    field->array_start = alias->array_start;
+                    field->array_end = alias->array_end;
+                    field->array_is_open = alias->is_open_array;
+                    field->array_element_type = alias->array_element_type;
+                    if (alias->array_element_type_id != NULL)
+                    {
+                        free(field->array_element_type_id);
+                        field->array_element_type_id = strdup(alias->array_element_type_id);
+                    }
+                }
+            }
+        }
+
+        if (field->value->type == EXPR_RECORD_CONSTRUCTOR && field->value->record_type == NULL)
+        {
+            if (field->field_type == RECORD_TYPE)
+                field->value->record_type = field->field_record_type;
+            else if (field->field_is_array && field->array_element_type == RECORD_TYPE)
+                field->value->record_type = field->array_element_record_type;
+        }
+
+        if (field->field_is_array && field->value != NULL)
+        {
+            if (field->value->type == EXPR_SET)
+            {
+                if (semcheck_convert_set_literal_to_array_literal(field->value) != 0)
+                {
+                    fprintf(stderr, "Error on line %d, array field %s cannot use set ranges.\n",
+                        line_num, field->field_id);
+                    ++error_count;
+                }
+            }
+
+            if (field->value->type == EXPR_ARRAY_LITERAL)
+            {
+                if (field->value->array_element_type == UNKNOWN_TYPE)
+                    field->value->array_element_type = field->array_element_type;
+                if (field->value->array_element_type_id == NULL &&
+                    field->array_element_type_id != NULL)
+                    field->value->array_element_type_id = strdup(field->array_element_type_id);
+
+                int arr_err = semcheck_typecheck_array_literal(field->value, symtab, max_scope_lev,
+                    field->array_element_type, field->array_element_type_id, line_num);
+                if (arr_err != 0)
+                {
+                    error_count += arr_err;
+                }
+                else if (!field->array_is_open)
+                {
+                    int expected_count = field->array_end - field->array_start + 1;
+                    int actual_count = field->value->expr_data.array_literal_data.element_count;
+                    if (expected_count != actual_count)
+                    {
+                        fprintf(stderr,
+                            "Error on line %d, array field %s expects %d elements, got %d.\n",
+                            line_num, field->field_id, expected_count, actual_count);
+                        ++error_count;
+                    }
+                    else
+                    {
+                        field->value->array_lower_bound = field->array_start;
+                        field->value->array_upper_bound = field->array_end;
+                        field->value->array_is_dynamic = 0;
+                        field->value->is_array_expr = 1;
+                    }
+                }
+            }
+        }
+
+        int value_type = UNKNOWN_TYPE;
+        error_count += semcheck_expr_main(&value_type, symtab, field->value, max_scope_lev, NO_MUTATE);
+
+        int expected_owned = 1;
+        KgpcType *expected_type = semcheck_field_expected_kgpc_type(symtab, field_desc);
+        if (expected_type == NULL)
+        {
+            fprintf(stderr, "Error on line %d, unable to resolve type for field %s.\n",
+                line_num, field->field_id);
+            ++error_count;
+        }
+        else
+        {
+            int value_owned = 0;
+            KgpcType *value_type_kgpc = semcheck_resolve_expression_kgpc_type(
+                symtab, field->value, max_scope_lev, NO_MUTATE, &value_owned);
+            if (value_type_kgpc == NULL)
+            {
+                fprintf(stderr, "Error on line %d, unable to resolve type for field %s.\n",
+                    line_num, field->field_id);
+                ++error_count;
+            }
+            else if (!are_types_compatible_for_assignment(expected_type, value_type_kgpc, symtab))
+            {
+                fprintf(stderr,
+                    "Error on line %d, incompatible types in record constructor for %s "
+                    "(expected %s, got %s).\n",
+                    line_num, field->field_id,
+                    kgpc_type_to_string(expected_type),
+                    kgpc_type_to_string(value_type_kgpc));
+                ++error_count;
+            }
+            if (value_owned && value_type_kgpc != NULL)
+                destroy_kgpc_type(value_type_kgpc);
+        }
+        if (expected_owned && expected_type != NULL)
+            destroy_kgpc_type(expected_type);
+
+        cur = cur->next;
+    }
+
+    expr->expr_data.record_constructor_data.fields_semchecked = 1;
+    return error_count;
+}
+
+int semcheck_prepare_record_constructor_argument(Tree_t *formal_decl, struct Expression *arg_expr,
+    SymTab_t *symtab, int max_scope_lev, int line_num)
+{
+    if (formal_decl == NULL || arg_expr == NULL || symtab == NULL)
+        return 0;
+
+    if (arg_expr->type != EXPR_RECORD_CONSTRUCTOR)
+        return 0;
+
+    struct RecordType *record_type = semcheck_record_type_from_decl(formal_decl, symtab);
+    if (record_type == NULL)
+    {
+        fprintf(stderr, "Error on line %d, unable to infer record type for constructor.\n",
+            line_num);
+        return 1;
+    }
+
+    return semcheck_typecheck_record_constructor(arg_expr, symtab, max_scope_lev,
+        record_type, line_num);
+}
+
 static int ensure_with_capacity(void)
 {
     if (with_context_count < with_context_capacity)
@@ -1258,7 +1661,7 @@ static int ensure_with_capacity(void)
     return 0;
 }
 
-static struct Expression *clone_expression(const struct Expression *expr)
+struct Expression *clone_expression(const struct Expression *expr)
 {
     if (expr == NULL)
         return NULL;
@@ -1405,6 +1808,85 @@ static struct Expression *clone_expression(const struct Expression *expr)
             break;
         case EXPR_NIL:
             break;
+        case EXPR_RECORD_CONSTRUCTOR:
+        {
+            clone->expr_data.record_constructor_data.field_count =
+                expr->expr_data.record_constructor_data.field_count;
+            clone->expr_data.record_constructor_data.fields_semchecked =
+                expr->expr_data.record_constructor_data.fields_semchecked;
+
+            ListNode_t *field_head = NULL;
+            ListNode_t *field_tail = NULL;
+            ListNode_t *cur = expr->expr_data.record_constructor_data.fields;
+            while (cur != NULL)
+            {
+                struct RecordConstructorField *field =
+                    (struct RecordConstructorField *)cur->cur;
+                struct RecordConstructorField *field_clone = NULL;
+                if (field != NULL)
+                {
+                    field_clone = (struct RecordConstructorField *)calloc(1, sizeof(*field_clone));
+                    if (field_clone == NULL)
+                    {
+                        destroy_expr(clone);
+                        return NULL;
+                    }
+                    field_clone->field_id = field->field_id != NULL ? strdup(field->field_id) : NULL;
+                    field_clone->value = clone_expression(field->value);
+                    field_clone->field_offset = field->field_offset;
+                    field_clone->field_type = field->field_type;
+                    field_clone->field_type_id = field->field_type_id != NULL ?
+                        strdup(field->field_type_id) : NULL;
+                    field_clone->field_record_type = field->field_record_type;
+                    field_clone->field_is_array = field->field_is_array;
+                    field_clone->array_start = field->array_start;
+                    field_clone->array_end = field->array_end;
+                    field_clone->array_element_type = field->array_element_type;
+                    field_clone->array_element_type_id = field->array_element_type_id != NULL ?
+                        strdup(field->array_element_type_id) : NULL;
+                    field_clone->array_is_open = field->array_is_open;
+                    field_clone->array_element_record_type = field->array_element_record_type;
+                    if ((field->field_id != NULL && field_clone->field_id == NULL) ||
+                        (field->field_type_id != NULL && field_clone->field_type_id == NULL) ||
+                        (field->array_element_type_id != NULL &&
+                         field_clone->array_element_type_id == NULL) ||
+                        (field->value != NULL && field_clone->value == NULL))
+                    {
+                        destroy_expr(clone);
+                        return NULL;
+                    }
+                }
+
+                ListNode_t *node = CreateListNode(field_clone, LIST_UNSPECIFIED);
+                if (node == NULL)
+                {
+                    if (field_clone != NULL)
+                    {
+                        if (field_clone->value != NULL)
+                            destroy_expr(field_clone->value);
+                        free(field_clone->field_id);
+                        free(field_clone->field_type_id);
+                        free(field_clone->array_element_type_id);
+                        free(field_clone);
+                    }
+                    destroy_expr(clone);
+                    return NULL;
+                }
+                if (field_head == NULL)
+                {
+                    field_head = node;
+                    field_tail = node;
+                }
+                else
+                {
+                    field_tail->next = node;
+                    field_tail = node;
+                }
+                cur = cur->next;
+            }
+            clone->expr_data.record_constructor_data.fields = field_head;
+            break;
+        }
         default:
             destroy_expr(clone);
             return NULL;
@@ -3002,6 +3484,114 @@ static int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
     }
 
     struct Expression *arg_expr = (struct Expression *)args->cur;
+    if (arg_expr != NULL && arg_expr->type == EXPR_VAR_ID && arg_expr->expr_data.id != NULL)
+    {
+        const char *type_name = semcheck_base_type_name(arg_expr->expr_data.id);
+        HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, type_name);
+        if (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+        {
+            struct TypeAlias *alias = get_type_alias_from_node(type_node);
+            long long low = 0;
+            long long high = 0;
+            int have_bounds = 0;
+            int result_type = INT_TYPE;
+
+            if (alias != NULL && alias->is_range && alias->range_known)
+            {
+                low = alias->range_start;
+                high = alias->range_end;
+                have_bounds = 1;
+                if (low < -2147483648LL || high > 2147483647LL)
+                    result_type = INT64_TYPE;
+            }
+            else if (pascal_identifier_equals(type_name, "Int64"))
+            {
+                low = (-9223372036854775807LL - 1);
+                high = 9223372036854775807LL;
+                have_bounds = 1;
+                result_type = INT64_TYPE;
+            }
+            else if (pascal_identifier_equals(type_name, "QWord") ||
+                     pascal_identifier_equals(type_name, "UInt64"))
+            {
+                low = 0;
+                high = (long long)0xFFFFFFFFFFFFFFFFULL;
+                have_bounds = 1;
+                result_type = INT64_TYPE;
+            }
+            else if (pascal_identifier_equals(type_name, "LongInt"))
+            {
+                low = -2147483648LL;
+                high = 2147483647LL;
+                have_bounds = 1;
+                result_type = LONGINT_TYPE;
+            }
+            else if (pascal_identifier_equals(type_name, "Integer"))
+            {
+                low = -2147483648LL;
+                high = 2147483647LL;
+                have_bounds = 1;
+                result_type = INT_TYPE;
+            }
+            else if (pascal_identifier_equals(type_name, "Cardinal") ||
+                     pascal_identifier_equals(type_name, "LongWord") ||
+                     pascal_identifier_equals(type_name, "DWord"))
+            {
+                low = 0;
+                high = 4294967295LL;
+                have_bounds = 1;
+                result_type = INT64_TYPE;
+            }
+            else if (pascal_identifier_equals(type_name, "SmallInt"))
+            {
+                low = -32768LL;
+                high = 32767LL;
+                have_bounds = 1;
+            }
+            else if (pascal_identifier_equals(type_name, "Word"))
+            {
+                low = 0;
+                high = 65535LL;
+                have_bounds = 1;
+            }
+            else if (pascal_identifier_equals(type_name, "ShortInt"))
+            {
+                low = -128LL;
+                high = 127LL;
+                have_bounds = 1;
+            }
+            else if (pascal_identifier_equals(type_name, "Byte"))
+            {
+                low = 0;
+                high = 255LL;
+                have_bounds = 1;
+            }
+            else if (pascal_identifier_equals(type_name, "Boolean"))
+            {
+                low = 0;
+                high = 1;
+                have_bounds = 1;
+                result_type = BOOL;
+            }
+            else if (pascal_identifier_equals(type_name, "Char") ||
+                     pascal_identifier_equals(type_name, "AnsiChar"))
+            {
+                low = 0;
+                high = 255;
+                have_bounds = 1;
+                result_type = CHAR_TYPE;
+            }
+
+            if (have_bounds)
+            {
+                semcheck_replace_call_with_integer_literal(expr, is_high ? high : low);
+                expr->resolved_type = result_type;
+                *type_return = result_type;
+                return 0;
+            }
+        }
+    }
+
     int arg_type = UNKNOWN_TYPE;
     int error_count = semcheck_expr_main(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
     if (error_count != 0)
@@ -3078,7 +3668,7 @@ static int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
     }
     if (arg_type == LONGINT_TYPE)
     {
-        semcheck_replace_call_with_integer_literal(expr, is_high ? 9223372036854775807LL : (-9223372036854775807LL - 1));
+        semcheck_replace_call_with_integer_literal(expr, is_high ? 2147483647LL : -2147483648LL);
         expr->resolved_type = LONGINT_TYPE;
         *type_return = LONGINT_TYPE;
         return 0;
@@ -4037,8 +4627,8 @@ static int resolve_type_identifier(int *out_type, SymTab_t *symtab,
     if (type_id == NULL)
         return 0;
 
-    HashNode_t *type_node = NULL;
-    if (FindIdent(&type_node, symtab, (char *)type_id) == -1 || type_node == NULL)
+    HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, type_id);
+    if (type_node == NULL)
     {
         fprintf(stderr, "Error on line %d, typecast references unknown type %s!\n\n",
             line_num, type_id);
@@ -6336,6 +6926,29 @@ int semcheck_expr_main(int *type_return,
         case EXPR_POINTER_DEREF:
             return_val += semcheck_pointer_deref(type_return, symtab, expr, max_scope_lev, mutating);
             break;
+        case EXPR_ADDR_OF_PROC:
+        {
+            *type_return = POINTER_TYPE;
+            expr->resolved_type = POINTER_TYPE;
+            if (expr->resolved_kgpc_type == NULL)
+            {
+                KgpcType *proc_type = NULL;
+                if (expr->expr_data.addr_of_proc_data.procedure_symbol != NULL &&
+                    expr->expr_data.addr_of_proc_data.procedure_symbol->type != NULL)
+                    proc_type = expr->expr_data.addr_of_proc_data.procedure_symbol->type;
+
+                if (proc_type != NULL)
+                {
+                    kgpc_type_retain(proc_type);
+                    expr->resolved_kgpc_type = create_pointer_type(proc_type);
+                }
+                else
+                {
+                    expr->resolved_kgpc_type = create_pointer_type(NULL);
+                }
+            }
+            break;
+        }
         case EXPR_ADDR:
             return_val += semcheck_addressof(type_return, symtab, expr, max_scope_lev, mutating);
             break;
@@ -6415,6 +7028,30 @@ int semcheck_expr_main(int *type_return,
             expr->array_is_dynamic = 1;
             expr->resolved_type = POINTER_TYPE;
             *type_return = POINTER_TYPE;
+            return 0;
+        }
+
+        case EXPR_RECORD_CONSTRUCTOR:
+        {
+            if (expr->record_type == NULL)
+            {
+                fprintf(stderr, "Error on line %d, unable to infer record type for constructor.\n",
+                    expr->line_num);
+                *type_return = UNKNOWN_TYPE;
+                return 1;
+            }
+            if (!expr->expr_data.record_constructor_data.fields_semchecked)
+            {
+                int rc_err = semcheck_typecheck_record_constructor(expr, symtab, max_scope_lev,
+                    expr->record_type, expr->line_num);
+                if (rc_err != 0)
+                {
+                    *type_return = UNKNOWN_TYPE;
+                    return rc_err;
+                }
+            }
+            expr->resolved_type = RECORD_TYPE;
+            *type_return = RECORD_TYPE;
             return 0;
         }
 
@@ -6588,12 +7225,26 @@ int semcheck_relop(int *type_return,
     /* Type must be a bool (this only happens with a NOT operator) */
     if (expr2 == NULL)
     {
-        if (type_first != BOOL)
+        if (type_first == BOOL)
         {
-            fprintf(stderr, "Error on line %d, expected relational type after \"NOT\"!\n\n",
-                expr->line_num);
-            ++return_val;
+            *type_return = BOOL;
+            return return_val;
         }
+        if (is_integer_type(type_first))
+        {
+            struct Expression *operand = expr->expr_data.relop_data.left;
+            struct Expression *neg_one = mk_inum(expr->line_num, -1);
+            expr->type = EXPR_MULOP;
+            expr->expr_data.mulop_data.mulop_type = XOR;
+            expr->expr_data.mulop_data.left_term = operand;
+            expr->expr_data.mulop_data.right_factor = neg_one;
+            return semcheck_mulop(type_return, symtab, expr, max_scope_lev, mutating);
+        }
+        fprintf(stderr, "Error on line %d, expected relational type after \"NOT\"!\n\n",
+            expr->line_num);
+        ++return_val;
+        *type_return = UNKNOWN_TYPE;
+        return return_val;
     }
     else
     {
@@ -6713,7 +7364,8 @@ int semcheck_relop(int *type_return,
                 int string_ok = (is_string_type(type_first) && is_string_type(type_second));
                 int char_ok = (type_first == CHAR_TYPE && type_second == CHAR_TYPE);
                 int pointer_ok = (type_first == POINTER_TYPE && type_second == POINTER_TYPE);
-                if (!numeric_ok && !boolean_ok && !string_ok && !char_ok && !pointer_ok)
+                int enum_ok = (type_first == ENUM_TYPE && type_second == ENUM_TYPE);
+                if (!numeric_ok && !boolean_ok && !string_ok && !char_ok && !pointer_ok && !enum_ok)
                 {
                     fprintf(stderr, "Error on line %d, equality comparison requires matching numeric, boolean, string, character, or pointer types!\n\n",
                         expr->line_num);
@@ -6729,8 +7381,9 @@ int semcheck_relop(int *type_return,
                 int string_ok = (is_string_type(type_first) && is_string_type(type_second));
                 int char_ok = (type_first == CHAR_TYPE && type_second == CHAR_TYPE);
                 int pointer_ok = (type_first == POINTER_TYPE && type_second == POINTER_TYPE);
+                int enum_ok = (type_first == ENUM_TYPE && type_second == ENUM_TYPE);
 
-                if(!numeric_ok && !string_ok && !char_ok && !pointer_ok)
+                if(!numeric_ok && !string_ok && !char_ok && !pointer_ok && !enum_ok)
                 {
                     fprintf(stderr,
                         "Error on line %d, expected compatible numeric, string, or character types between relational op!\n\n",
@@ -7365,7 +8018,6 @@ int semcheck_varid(int *type_return,
                 hash_return != NULL && hash_return->type != NULL ?
                     hash_return->type->kind : -1);
         }
-
         /* If this is a function being used in an expression context (not being assigned to),
            convert it to a function call with no arguments.
            
@@ -7691,6 +8343,8 @@ int semcheck_arrayaccess(int *type_return,
         else if (element_type == RECORD_TYPE)
         {
             expr->record_type = array_expr->array_element_record_type;
+            if (expr->record_type == NULL && array_expr->array_element_type_id != NULL)
+                expr->record_type = semcheck_lookup_record_type(symtab, array_expr->array_element_type_id);
         }
     }
 
@@ -7748,6 +8402,134 @@ int resolve_param_type(Tree_t *decl, SymTab_t *symtab)
         return type_tag;
 
     return UNKNOWN_TYPE;
+}
+
+/* Helper to check if a parameter has a default value */
+static int param_has_default_value(Tree_t *decl)
+{
+    if (decl == NULL)
+        return 0;
+    
+    if (decl->type == TREE_VAR_DECL)
+    {
+        /* Default value is stored in the initializer field */
+        return decl->tree_data.var_decl_data.initializer != NULL;
+    }
+    else if (decl->type == TREE_ARR_DECL)
+    {
+        return decl->tree_data.arr_decl_data.initializer != NULL;
+    }
+    
+    return 0;
+}
+
+/* Helper to get the default value expression from a parameter */
+static struct Expression *get_param_default_value(Tree_t *decl)
+{
+    if (decl == NULL)
+        return NULL;
+    
+    struct Statement *init = NULL;
+    
+    if (decl->type == TREE_VAR_DECL)
+    {
+        init = decl->tree_data.var_decl_data.initializer;
+    }
+    else if (decl->type == TREE_ARR_DECL)
+    {
+        init = decl->tree_data.arr_decl_data.initializer;
+    }
+    
+    /* The default value is stored as a STMT_VAR_ASSIGN with NULL var, containing the expression */
+    if (init != NULL && init->type == STMT_VAR_ASSIGN)
+    {
+        return init->stmt_data.var_assign_data.expr;
+    }
+    
+    return NULL;
+}
+
+/* Helper to count required parameters (those without defaults) */
+static int count_required_params(ListNode_t *params)
+{
+    int required = 0;
+    ListNode_t *cur = params;
+    
+    /* Once we see a parameter with a default, all following must also have defaults */
+    while (cur != NULL)
+    {
+        Tree_t *param_decl = (Tree_t *)cur->cur;
+        if (!param_has_default_value(param_decl))
+            required++;
+        else
+            break;  /* All remaining params have defaults */
+        cur = cur->next;
+    }
+    
+    return required;
+}
+
+static int append_default_args(ListNode_t **args_head, ListNode_t *formal_params, int line_num)
+{
+    if (args_head == NULL)
+        return 0;
+
+    ListNode_t *formal = formal_params;
+    ListNode_t *actual = *args_head;
+    ListNode_t *tail = *args_head;
+
+    while (tail != NULL && tail->next != NULL)
+        tail = tail->next;
+
+    while (formal != NULL && actual != NULL)
+    {
+        formal = formal->next;
+        actual = actual->next;
+    }
+
+    while (formal != NULL)
+    {
+        Tree_t *param_decl = (Tree_t *)formal->cur;
+        if (!param_has_default_value(param_decl))
+            break;
+
+        struct Expression *default_expr = get_param_default_value(param_decl);
+        if (default_expr == NULL)
+        {
+            fprintf(stderr, "Error on line %d, missing default value expression.\n", line_num);
+            return 1;
+        }
+
+        struct Expression *default_clone = clone_expression(default_expr);
+        if (default_clone == NULL)
+        {
+            fprintf(stderr, "Error on line %d, failed to clone default argument expression.\n", line_num);
+            return 1;
+        }
+
+        ListNode_t *node = CreateListNode(default_clone, LIST_EXPR);
+        if (node == NULL)
+        {
+            destroy_expr(default_clone);
+            fprintf(stderr, "Error on line %d, failed to allocate default argument node.\n", line_num);
+            return 1;
+        }
+
+        if (*args_head == NULL)
+        {
+            *args_head = node;
+            tail = node;
+        }
+        else
+        {
+            tail->next = node;
+            tail = node;
+        }
+
+        formal = formal->next;
+    }
+
+    return 0;
 }
 
 /** FUNC_CALL **/
@@ -8768,17 +9550,24 @@ method_call_resolved:
 
             /* Get formal arguments from KgpcType instead of deprecated args field */
             ListNode_t *candidate_args = kgpc_type_get_procedure_params(candidate->type);
+            int total_params = ListLength(candidate_args);
+            int required_params = count_required_params(candidate_args);
+            int given_count = ListLength(args_given);
+            
             if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
-                fprintf(stderr, "[SemCheck] semcheck_funccall: candidate %s args=%d given=%d\n", 
-                    candidate->id, ListLength(candidate_args), ListLength(args_given));
+                fprintf(stderr, "[SemCheck] semcheck_funccall: candidate %s args=%d required=%d given=%d\n", 
+                    candidate->id, total_params, required_params, given_count);
             }
-            if (ListLength(candidate_args) == ListLength(args_given))
+            
+            /* Match if given args is at least required count and at most total params */
+            if (given_count >= required_params && given_count <= total_params)
             {
                 int current_score = 0;
                 ListNode_t *formal_args = candidate_args;
                 ListNode_t *call_args = args_given;
 
-                while(formal_args != NULL)
+                /* Score only the provided arguments */
+                while(formal_args != NULL && call_args != NULL)
                 {
                     Tree_t *formal_decl = (Tree_t *)formal_args->cur;
                     int formal_type = resolve_param_type(formal_decl, symtab);
@@ -8786,6 +9575,13 @@ method_call_resolved:
                     int call_type;
                     struct Expression *call_expr = (struct Expression *)call_args->cur;
                     if (semcheck_prepare_array_literal_argument(formal_decl, call_expr,
+                            symtab, max_scope_lev, expr->line_num) != 0)
+                    {
+                        *type_return = UNKNOWN_TYPE;
+                        final_status = ++return_val;
+                        goto funccall_cleanup;
+                    }
+                    if (semcheck_prepare_record_constructor_argument(formal_decl, call_expr,
                             symtab, max_scope_lev, expr->line_num) != 0)
                     {
                         *type_return = UNKNOWN_TYPE;
@@ -8826,6 +9622,11 @@ method_call_resolved:
                     formal_args = formal_args->next;
                     call_args = call_args->next;
                 }
+                
+                /* Add small penalty for using default parameters (prefer exact match) */
+                int missing_args = total_params - given_count;
+                if (missing_args > 0)
+                    current_score += missing_args;  /* Small penalty per default param used */
 
                 if(current_score < best_score)
                 {
@@ -9091,6 +9892,14 @@ skip_overload_resolution:
             expr->record_type = NULL;
         }
 
+        if (hash_return->type != NULL && hash_return->type->kind == TYPE_KIND_PROCEDURE)
+        {
+            ListNode_t *formal_params = kgpc_type_get_procedure_params(hash_return->type);
+            if (append_default_args(&args_given, formal_params, expr->line_num) != 0)
+                ++return_val;
+            expr->expr_data.function_call_data.args_expr = args_given;
+        }
+
         /***** THEN VERIFY ARGS INSIDE *****/
         cur_arg = 0;
         /* Get formal arguments from KgpcType instead of deprecated args field */
@@ -9198,6 +10007,14 @@ skip_overload_resolution:
                     args_to_validate = args_to_validate->next;
                     continue;
                 }
+            }
+            if (semcheck_prepare_record_constructor_argument(arg_decl, current_arg_expr,
+                    symtab, max_scope_lev, expr->line_num) != 0)
+            {
+                ++return_val;
+                true_args_to_validate = true_args_to_validate->next;
+                args_to_validate = args_to_validate->next;
+                continue;
             }
 
             return_val += semcheck_expr_main(&arg_type,

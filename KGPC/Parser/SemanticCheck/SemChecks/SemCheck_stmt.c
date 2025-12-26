@@ -45,6 +45,218 @@ static inline struct RecordType* semcheck_stmt_get_record_type_from_node(HashNod
 #include "../../ParseTree/from_cparser.h"
 #include "../../../identifier_utils.h"
 
+/* Helper to check if a parameter has a default value */
+static int param_has_default_value(Tree_t *decl)
+{
+    if (decl == NULL)
+        return 0;
+    
+    if (decl->type == TREE_VAR_DECL)
+    {
+        /* Default value is stored in the initializer field */
+        if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL) {
+            fprintf(stderr, "[SemCheck] param_has_default_value: TREE_VAR_DECL, initializer=%p\n",
+                (void*)decl->tree_data.var_decl_data.initializer);
+        }
+        return decl->tree_data.var_decl_data.initializer != NULL;
+    }
+    else if (decl->type == TREE_ARR_DECL)
+    {
+        if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL) {
+            fprintf(stderr, "[SemCheck] param_has_default_value: TREE_ARR_DECL, initializer=%p\n",
+                (void*)decl->tree_data.arr_decl_data.initializer);
+        }
+        return decl->tree_data.arr_decl_data.initializer != NULL;
+    }
+    
+    return 0;
+}
+
+/* Helper to get the default value expression from a parameter */
+static struct Expression *get_param_default_value(Tree_t *decl)
+{
+    if (decl == NULL)
+        return NULL;
+
+    struct Statement *init = NULL;
+
+    if (decl->type == TREE_VAR_DECL)
+    {
+        init = decl->tree_data.var_decl_data.initializer;
+    }
+    else if (decl->type == TREE_ARR_DECL)
+    {
+        init = decl->tree_data.arr_decl_data.initializer;
+    }
+
+    /* The default value is stored as a STMT_VAR_ASSIGN with NULL var, containing the expression */
+    if (init != NULL && init->type == STMT_VAR_ASSIGN)
+        return init->stmt_data.var_assign_data.expr;
+
+    return NULL;
+}
+
+static int append_default_args(ListNode_t **args_head, ListNode_t *formal_params, int line_num)
+{
+    if (args_head == NULL)
+        return 0;
+
+    ListNode_t *formal = formal_params;
+    ListNode_t *actual = *args_head;
+    ListNode_t *tail = *args_head;
+
+    while (tail != NULL && tail->next != NULL)
+        tail = tail->next;
+
+    while (formal != NULL && actual != NULL)
+    {
+        formal = formal->next;
+        actual = actual->next;
+    }
+
+    while (formal != NULL)
+    {
+        Tree_t *param_decl = (Tree_t *)formal->cur;
+        if (!param_has_default_value(param_decl))
+            break;
+
+        struct Expression *default_expr = get_param_default_value(param_decl);
+        if (default_expr == NULL)
+        {
+            fprintf(stderr, "Error on line %d, missing default value expression.\n", line_num);
+            return 1;
+        }
+
+        struct Expression *default_clone = clone_expression(default_expr);
+        if (default_clone == NULL)
+        {
+            fprintf(stderr, "Error on line %d, failed to clone default argument expression.\n", line_num);
+            return 1;
+        }
+
+        ListNode_t *node = CreateListNode(default_clone, LIST_EXPR);
+        if (node == NULL)
+        {
+            destroy_expr(default_clone);
+            fprintf(stderr, "Error on line %d, failed to allocate default argument node.\n", line_num);
+            return 1;
+        }
+
+        if (*args_head == NULL)
+        {
+            *args_head = node;
+            tail = node;
+        }
+        else
+        {
+            tail->next = node;
+            tail = node;
+        }
+
+        formal = formal->next;
+    }
+
+    return 0;
+}
+
+/* Helper to count required parameters (those without defaults) */
+static int count_required_params(ListNode_t *params)
+{
+    int required = 0;
+    int total = 0;
+    ListNode_t *cur = params;
+    
+    /* Once we see a parameter with a default, all following must also have defaults */
+    while (cur != NULL)
+    {
+        Tree_t *param_decl = (Tree_t *)cur->cur;
+        total++;
+        if (!param_has_default_value(param_decl))
+            required++;
+        else
+            break;  /* All remaining params have defaults */
+        cur = cur->next;
+    }
+    
+    if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL) {
+        fprintf(stderr, "[SemCheck] count_required_params: total=%d required=%d\n", total, required);
+    }
+    
+    return required;
+}
+
+/* Helper to get the default value expression from a parameter */
+static struct Expression *get_param_default_value_stmt(Tree_t *decl)
+{
+    if (decl == NULL)
+        return NULL;
+    
+    struct Statement *init = NULL;
+    
+    if (decl->type == TREE_VAR_DECL)
+    {
+        init = decl->tree_data.var_decl_data.initializer;
+    }
+    else if (decl->type == TREE_ARR_DECL)
+    {
+        init = decl->tree_data.arr_decl_data.initializer;
+    }
+    
+    /* The default value is stored as a STMT_VAR_ASSIGN with NULL var, containing the expression */
+    if (init != NULL && init->type == STMT_VAR_ASSIGN)
+    {
+        return init->stmt_data.var_assign_data.expr;
+    }
+    
+    return NULL;
+}
+
+/* Copy a default value expression for use as an argument */
+static struct Expression *copy_default_expr(struct Expression *src)
+{
+    if (src == NULL)
+        return NULL;
+    
+    struct Expression *copy = NULL;
+    
+    switch (src->type)
+    {
+        case EXPR_INUM:
+            copy = mk_inum(src->line_num, src->expr_data.i_num);
+            break;
+        case EXPR_RNUM:
+            copy = mk_rnum(src->line_num, src->expr_data.r_num);
+            break;
+        case EXPR_STRING:
+            if (src->expr_data.string != NULL)
+                copy = mk_string(src->line_num, strdup(src->expr_data.string));
+            break;
+        case EXPR_BOOL:
+            copy = mk_bool(src->line_num, src->expr_data.bool_value);
+            break;
+        case EXPR_CHAR_CODE:
+            copy = mk_charcode(src->line_num, src->expr_data.char_code);
+            break;
+        case EXPR_NIL:
+            copy = (struct Expression *)malloc(sizeof(struct Expression));
+            if (copy != NULL) {
+                memset(copy, 0, sizeof(struct Expression));
+                copy->type = EXPR_NIL;
+                copy->line_num = src->line_num;
+            }
+            break;
+        default:
+            /* For complex expressions, we can't easily copy them.
+             * Return NULL and let the caller handle the error. */
+            if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL) {
+                fprintf(stderr, "[SemCheck] copy_default_expr: unsupported expr type %d\n", src->type);
+            }
+            break;
+    }
+    
+    return copy;
+}
+
 static int semcheck_loop_depth = 0;
 /* Debug helpers used for corruption watchdog logging. */
 static struct Statement *g_debug_watch_stmt = NULL;
@@ -2028,6 +2240,40 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
     /* NOTE: Grammar will make sure the left side is a variable */
     /* Left side var assigns must abide by scoping rules */
     return_val += semcheck_expr_main(&type_first, symtab, var, max_scope_lev, MUTATE);
+    if (expr != NULL && expr->type == EXPR_RECORD_CONSTRUCTOR && expr->record_type == NULL)
+    {
+        struct RecordType *record_type = var != NULL ? var->record_type : NULL;
+        if (record_type == NULL && var != NULL && var->resolved_kgpc_type != NULL)
+        {
+            KgpcType *lhs_type = var->resolved_kgpc_type;
+            if (kgpc_type_is_record(lhs_type))
+                record_type = kgpc_type_get_record(lhs_type);
+            else if (kgpc_type_is_pointer(lhs_type) && lhs_type->info.points_to != NULL &&
+                kgpc_type_is_record(lhs_type->info.points_to))
+                record_type = kgpc_type_get_record(lhs_type->info.points_to);
+        }
+        if (record_type == NULL && var != NULL && var->type == EXPR_VAR_ID &&
+            var->expr_data.id != NULL)
+        {
+            HashNode_t *var_node = NULL;
+            if (FindIdent(&var_node, symtab, var->expr_data.id) >= 0 && var_node != NULL)
+            {
+                record_type = hashnode_get_record_type(var_node);
+                if (record_type == NULL)
+                {
+                    struct TypeAlias *alias = hashnode_get_type_alias(var_node);
+                    if (alias != NULL && alias->target_type_id != NULL)
+                    {
+                        HashNode_t *target_node = NULL;
+                        if (FindIdent(&target_node, symtab, alias->target_type_id) >= 0 &&
+                            target_node != NULL)
+                            record_type = hashnode_get_record_type(target_node);
+                    }
+                }
+            }
+        }
+        expr->record_type = record_type;
+    }
     return_val += semcheck_expr_main(&type_second, symtab, expr, INT_MAX, NO_MUTATE);
 
     if (getenv("KGPC_DEBUG_SEMCHECK") != NULL && expr != NULL && expr->type == EXPR_FUNCTION_CALL &&
@@ -2684,144 +2930,154 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     if (proc_id != NULL && args_given != NULL)
     {
         struct Expression *receiver_expr = (struct Expression *)args_given->cur;
-        int recv_type = UNKNOWN_TYPE;
-        semcheck_expr_main(&recv_type, symtab, receiver_expr, max_scope_lev, NO_MUTATE);
-
-        struct RecordType *recv_record = NULL;
-        if (recv_type == RECORD_TYPE)
-            recv_record = receiver_expr->record_type;
-        else if (recv_type == POINTER_TYPE)
+        if (receiver_expr != NULL && receiver_expr->type == EXPR_RECORD_CONSTRUCTOR &&
+            receiver_expr->record_type == NULL)
         {
-            if (receiver_expr->record_type != NULL)
+            receiver_expr = NULL;
+        }
+        if (receiver_expr != NULL)
+        {
+            int recv_type = UNKNOWN_TYPE;
+            semcheck_expr_main(&recv_type, symtab, receiver_expr, max_scope_lev, NO_MUTATE);
+
+            struct RecordType *recv_record = NULL;
+            if (recv_type == RECORD_TYPE)
                 recv_record = receiver_expr->record_type;
-            else if (receiver_expr->resolved_kgpc_type != NULL &&
-                     receiver_expr->resolved_kgpc_type->kind == TYPE_KIND_POINTER)
+            else if (recv_type == POINTER_TYPE)
             {
-                KgpcType *pointee = receiver_expr->resolved_kgpc_type->info.points_to;
-                if (pointee != NULL && kgpc_type_is_record(pointee))
-                    recv_record = kgpc_type_get_record(pointee);
-            }
-        }
-        if (recv_record == NULL && receiver_expr->type == EXPR_VAR_ID && receiver_expr->expr_data.id != NULL)
-        {
-            HashNode_t *recv_node = NULL;
-            if (FindIdent(&recv_node, symtab, receiver_expr->expr_data.id) == 0 && recv_node != NULL)
-            {
-                recv_record = semcheck_stmt_get_record_type_from_node(recv_node);
-                if (recv_record == NULL && recv_node->type != NULL &&
-                    recv_node->type->kind == TYPE_KIND_POINTER &&
-                    recv_node->type->info.points_to != NULL &&
-                    kgpc_type_is_record(recv_node->type->info.points_to))
+                if (receiver_expr->record_type != NULL)
+                    recv_record = receiver_expr->record_type;
+                else if (receiver_expr->resolved_kgpc_type != NULL &&
+                         receiver_expr->resolved_kgpc_type->kind == TYPE_KIND_POINTER)
                 {
-                    recv_record = kgpc_type_get_record(recv_node->type->info.points_to);
+                    KgpcType *pointee = receiver_expr->resolved_kgpc_type->info.points_to;
+                    if (pointee != NULL && kgpc_type_is_record(pointee))
+                        recv_record = kgpc_type_get_record(pointee);
                 }
             }
-        }
-
-        if (recv_record != NULL)
-        {
-            const char *field_lookup = proc_id;
-            while (field_lookup != NULL && field_lookup[0] == '_' && field_lookup[1] == '_')
-                field_lookup += 2;
-
-            struct RecordField *field_desc = NULL;
-            long long field_offset = 0;
-            if (resolve_record_field(symtab, recv_record, field_lookup, &field_desc,
-                                     &field_offset, stmt->line_num, 1) == 0 &&
-                field_desc != NULL)
+            if (recv_record == NULL && receiver_expr->type == EXPR_VAR_ID &&
+                receiver_expr->expr_data.id != NULL)
             {
-                int is_proc_field = (field_desc->type == PROCEDURE);
-                KgpcType *proc_type = NULL;
-                if (field_desc->type_id != NULL)
+                HashNode_t *recv_node = NULL;
+                if (FindIdent(&recv_node, symtab, receiver_expr->expr_data.id) == 0 &&
+                    recv_node != NULL)
                 {
-                    HashNode_t *type_node = NULL;
-                    if (FindIdent(&type_node, symtab, field_desc->type_id) == 0 &&
-                        type_node != NULL && type_node->type != NULL &&
-                        type_node->type->kind == TYPE_KIND_PROCEDURE)
+                    recv_record = semcheck_stmt_get_record_type_from_node(recv_node);
+                    if (recv_record == NULL && recv_node->type != NULL &&
+                        recv_node->type->kind == TYPE_KIND_POINTER &&
+                        recv_node->type->info.points_to != NULL &&
+                        kgpc_type_is_record(recv_node->type->info.points_to))
                     {
-                        proc_type = type_node->type;
-                        kgpc_type_retain(proc_type);
-                        is_proc_field = 1;
+                        recv_record = kgpc_type_get_record(recv_node->type->info.points_to);
                     }
                 }
+            }
 
-                if (is_proc_field)
+            if (recv_record != NULL)
+            {
+                const char *field_lookup = proc_id;
+                while (field_lookup != NULL && field_lookup[0] == '_' && field_lookup[1] == '_')
+                    field_lookup += 2;
+
+                struct RecordField *field_desc = NULL;
+                long long field_offset = 0;
+                if (resolve_record_field(symtab, recv_record, field_lookup, &field_desc,
+                                         &field_offset, stmt->line_num, 1) == 0 &&
+                    field_desc != NULL)
                 {
-                    /* Remove receiver argument */
-                    ListNode_t *remaining_args = args_given->next;
-                    stmt->stmt_data.procedure_call_data.expr_args = remaining_args;
-                    args_given->cur = NULL;
-                    free(args_given);
-
-                    /* Build record access expression for the procedural field */
-                    struct Expression *proc_expr = (struct Expression *)calloc(1, sizeof(struct Expression));
-                    if (proc_expr == NULL)
+                    int is_proc_field = (field_desc->type == PROCEDURE);
+                    KgpcType *proc_type = NULL;
+                    if (field_desc->type_id != NULL)
                     {
-                        fprintf(stderr, "Error on line %d: failed to allocate procedural field expression.\n",
-                            stmt->line_num);
-                        if (proc_type != NULL) destroy_kgpc_type(proc_type);
-                        return ++return_val;
-                    }
-                    proc_expr->line_num = stmt->line_num;
-                    proc_expr->type = EXPR_RECORD_ACCESS;
-                    proc_expr->expr_data.record_access_data.record_expr = receiver_expr;
-                    proc_expr->expr_data.record_access_data.field_id = strdup(field_lookup);
-                    proc_expr->expr_data.record_access_data.field_offset = (int)field_offset;
-                    proc_expr->record_type = recv_record;
-                    proc_expr->resolved_type = PROCEDURE;
-
-                    /* Validate argument count/types if we know the procedural signature */
-                    if (proc_type != NULL)
-                    {
-                        ListNode_t *formal_params = kgpc_type_get_procedure_params(proc_type);
-                        if (ListLength(formal_params) != ListLength(remaining_args))
+                        HashNode_t *type_node = NULL;
+                        if (FindIdent(&type_node, symtab, field_desc->type_id) == 0 &&
+                            type_node != NULL && type_node->type != NULL &&
+                            type_node->type->kind == TYPE_KIND_PROCEDURE)
                         {
-                            fprintf(stderr, "Error on line %d, call to procedural field %s: expected %d arguments, got %d\n",
-                                stmt->line_num, proc_id, ListLength(formal_params), ListLength(remaining_args));
-                            destroy_expr(proc_expr);
-                            destroy_kgpc_type(proc_type);
+                            proc_type = type_node->type;
+                            kgpc_type_retain(proc_type);
+                            is_proc_field = 1;
+                        }
+                    }
+
+                    if (is_proc_field)
+                    {
+                        /* Remove receiver argument */
+                        ListNode_t *remaining_args = args_given->next;
+                        stmt->stmt_data.procedure_call_data.expr_args = remaining_args;
+                        args_given->cur = NULL;
+                        free(args_given);
+
+                        /* Build record access expression for the procedural field */
+                        struct Expression *proc_expr = (struct Expression *)calloc(1, sizeof(struct Expression));
+                        if (proc_expr == NULL)
+                        {
+                            fprintf(stderr, "Error on line %d: failed to allocate procedural field expression.\n",
+                                stmt->line_num);
+                            if (proc_type != NULL) destroy_kgpc_type(proc_type);
                             return ++return_val;
                         }
+                        proc_expr->line_num = stmt->line_num;
+                        proc_expr->type = EXPR_RECORD_ACCESS;
+                        proc_expr->expr_data.record_access_data.record_expr = receiver_expr;
+                        proc_expr->expr_data.record_access_data.field_id = strdup(field_lookup);
+                        proc_expr->expr_data.record_access_data.field_offset = (int)field_offset;
+                        proc_expr->record_type = recv_record;
+                        proc_expr->resolved_type = PROCEDURE;
 
-                        ListNode_t *formal = formal_params;
-                        ListNode_t *actual = remaining_args;
-                        int arg_idx = 0;
-                        while (formal != NULL && actual != NULL)
+                        /* Validate argument count/types if we know the procedural signature */
+                        if (proc_type != NULL)
                         {
-                            Tree_t *formal_decl = (Tree_t *)formal->cur;
-                            struct Expression *actual_expr = (struct Expression *)actual->cur;
-                            int formal_type = resolve_param_type(formal_decl, symtab);
-                            int actual_type = UNKNOWN_TYPE;
-                            semcheck_expr_main(&actual_type, symtab, actual_expr, max_scope_lev, NO_MUTATE);
-                            if (formal_type != UNKNOWN_TYPE && actual_type != UNKNOWN_TYPE &&
-                                formal_type != actual_type)
+                            ListNode_t *formal_params = kgpc_type_get_procedure_params(proc_type);
+                            if (ListLength(formal_params) != ListLength(remaining_args))
                             {
-                                if (!((formal_type == LONGINT_TYPE && actual_type == INT_TYPE) ||
-                                      (formal_type == INT_TYPE && actual_type == LONGINT_TYPE) ||
-                                      (formal_type == POINTER_TYPE) || (actual_type == POINTER_TYPE)))
-                                {
-                                    fprintf(stderr, "Warning on line %d, argument %d type mismatch in call to procedural field %s\n",
-                                        stmt->line_num, arg_idx + 1, proc_id);
-                                }
+                                fprintf(stderr, "Error on line %d, call to procedural field %s: expected %d arguments, got %d\n",
+                                    stmt->line_num, proc_id, ListLength(formal_params), ListLength(remaining_args));
+                                destroy_expr(proc_expr);
+                                destroy_kgpc_type(proc_type);
+                                return ++return_val;
                             }
-                            formal = formal->next;
-                            actual = actual->next;
-                            arg_idx++;
+
+                            ListNode_t *formal = formal_params;
+                            ListNode_t *actual = remaining_args;
+                            int arg_idx = 0;
+                            while (formal != NULL && actual != NULL)
+                            {
+                                Tree_t *formal_decl = (Tree_t *)formal->cur;
+                                struct Expression *actual_expr = (struct Expression *)actual->cur;
+                                int formal_type = resolve_param_type(formal_decl, symtab);
+                                int actual_type = UNKNOWN_TYPE;
+                                semcheck_expr_main(&actual_type, symtab, actual_expr, max_scope_lev, NO_MUTATE);
+                                if (formal_type != UNKNOWN_TYPE && actual_type != UNKNOWN_TYPE &&
+                                    formal_type != actual_type)
+                                {
+                                    if (!((formal_type == LONGINT_TYPE && actual_type == INT_TYPE) ||
+                                          (formal_type == INT_TYPE && actual_type == LONGINT_TYPE) ||
+                                          (formal_type == POINTER_TYPE) || (actual_type == POINTER_TYPE)))
+                                    {
+                                        fprintf(stderr, "Warning on line %d, argument %d type mismatch in call to procedural field %s\n",
+                                            stmt->line_num, arg_idx + 1, proc_id);
+                                    }
+                                }
+                                formal = formal->next;
+                                actual = actual->next;
+                                arg_idx++;
+                            }
+
+                            stmt->stmt_data.procedure_call_data.call_kgpc_type = proc_type;
+                            stmt->stmt_data.procedure_call_data.call_hash_type = HASHTYPE_VAR;
+                            stmt->stmt_data.procedure_call_data.is_call_info_valid = 1;
+                        }
+                        else
+                        {
+                            stmt->stmt_data.procedure_call_data.call_hash_type = HASHTYPE_VAR;
                         }
 
-                        stmt->stmt_data.procedure_call_data.call_kgpc_type = proc_type;
-                        stmt->stmt_data.procedure_call_data.call_hash_type = HASHTYPE_VAR;
-                        stmt->stmt_data.procedure_call_data.is_call_info_valid = 1;
+                        stmt->stmt_data.procedure_call_data.is_procedural_var_call = 1;
+                        stmt->stmt_data.procedure_call_data.procedural_var_symbol = NULL;
+                        stmt->stmt_data.procedure_call_data.procedural_var_expr = proc_expr;
+                        return return_val;
                     }
-                    else
-                    {
-                        stmt->stmt_data.procedure_call_data.call_hash_type = HASHTYPE_VAR;
-                    }
-
-                    stmt->stmt_data.procedure_call_data.is_procedural_var_call = 1;
-                    stmt->stmt_data.procedure_call_data.procedural_var_symbol = NULL;
-                    stmt->stmt_data.procedure_call_data.procedural_var_expr = proc_expr;
-                    return return_val;
                 }
             }
         }
@@ -3266,23 +3522,28 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                 ListNode_t *param = NULL;
                 if (candidate->type != NULL && candidate->type->kind == TYPE_KIND_PROCEDURE)
                     param = candidate->type->info.proc_info.params;
-                ListNode_t *param_count = param;
-                while (param_count != NULL)
+                ListNode_t *param_count_iter = param;
+                while (param_count_iter != NULL)
                 {
                     candidate_param_count++;
-                    param_count = param_count->next;
+                    param_count_iter = param_count_iter->next;
                 }
+                
+                /* Count required parameters (those without default values) */
+                int required_params = count_required_params(param);
 
-                if (candidate_param_count == call_arg_count)
+                /* Match if given args is at least required count and at most total params */
+                if (call_arg_count >= required_params && call_arg_count <= candidate_param_count)
                 {
                     if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
                     {
-                        fprintf(stderr, "[SemCheck] proccall candidate %s params=%d\n",
-                            candidate->id != NULL ? candidate->id : "(null)", candidate_param_count);
+                        fprintf(stderr, "[SemCheck] proccall candidate %s params=%d required=%d\n",
+                            candidate->id != NULL ? candidate->id : "(null)", candidate_param_count, required_params);
                     }
                     int score = 0;
                     ListNode_t *param_iter = param;
                     ListNode_t *arg_iter = call_args;
+                    /* Score only the provided arguments */
                     while (param_iter != NULL && arg_iter != NULL)
                     {
                         Tree_t *param_decl = (Tree_t *)param_iter->cur;
@@ -3290,8 +3551,38 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                         int expected_owned = 0;
                         int actual_owned = 0;
                         KgpcType *expected = resolve_type_from_vardecl(param_decl, symtab, &expected_owned);
-                        KgpcType *actual = semcheck_resolve_expression_kgpc_type(symtab, arg_expr,
-                            INT_MAX, NO_MUTATE, &actual_owned);
+                        KgpcType *actual = NULL;
+                        struct RecordType *saved_record_type = NULL;
+
+                        if (arg_expr != NULL && arg_expr->type == EXPR_RECORD_CONSTRUCTOR &&
+                            arg_expr->record_type == NULL)
+                        {
+                            saved_record_type = arg_expr->record_type;
+                            if (expected != NULL)
+                            {
+                                struct RecordType *record_type = NULL;
+                                if (kgpc_type_is_record(expected))
+                                    record_type = kgpc_type_get_record(expected);
+                                else if (kgpc_type_is_pointer(expected) &&
+                                    expected->info.points_to != NULL &&
+                                    kgpc_type_is_record(expected->info.points_to))
+                                    record_type = kgpc_type_get_record(expected->info.points_to);
+
+                                if (record_type != NULL)
+                                {
+                                    arg_expr->record_type = record_type;
+                                    actual = expected;
+                                    actual_owned = 0;
+                                }
+                            }
+                        }
+
+                        if (actual == NULL && arg_expr != NULL &&
+                            !(arg_expr->type == EXPR_RECORD_CONSTRUCTOR && arg_expr->record_type == NULL))
+                        {
+                            actual = semcheck_resolve_expression_kgpc_type(symtab, arg_expr,
+                                INT_MAX, NO_MUTATE, &actual_owned);
+                        }
 
                         if (expected == NULL)
                         {
@@ -3313,6 +3604,17 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                             }
                         }
 
+                        if (arg_expr != NULL && arg_expr->type == EXPR_RECORD_CONSTRUCTOR &&
+                            saved_record_type != NULL)
+                        {
+                            arg_expr->record_type = saved_record_type;
+                        }
+                        else if (arg_expr != NULL && arg_expr->type == EXPR_RECORD_CONSTRUCTOR &&
+                            saved_record_type == NULL && actual == expected && actual != NULL)
+                        {
+                            arg_expr->record_type = NULL;
+                        }
+
                         if (expected_owned && expected != NULL)
                             destroy_kgpc_type(expected);
                         if (actual_owned && actual != NULL)
@@ -3321,6 +3623,11 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                         param_iter = param_iter->next;
                         arg_iter = arg_iter->next;
                     }
+                    
+                    /* Add small penalty for using default parameters (prefer exact match) */
+                    int missing_args = candidate_param_count - call_arg_count;
+                    if (missing_args > 0)
+                        score += missing_args;  /* Small penalty per default param used */
 
                     if (score < best_score)
                     {
@@ -3372,6 +3679,73 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
             stmt->stmt_data.procedure_call_data.is_call_info_valid == 1);
         stmt->stmt_data.procedure_call_data.is_call_info_valid = 1;
         semcheck_mark_call_requires_static_link(resolved_proc);
+        
+        /* Fill in missing arguments with default values */
+        if (resolved_proc->type != NULL && resolved_proc->type->kind == TYPE_KIND_PROCEDURE)
+        {
+            ListNode_t *formal_params = resolved_proc->type->info.proc_info.params;
+            ListNode_t *call_args = stmt->stmt_data.procedure_call_data.expr_args;
+            int given_count = ListLength(call_args);
+            int formal_count = ListLength(formal_params);
+            
+            if (given_count < formal_count)
+            {
+                /* Need to add default arguments */
+                ListNode_t *formal_cur = formal_params;
+                int arg_index = 0;
+                
+                /* Skip to the position after the last given argument */
+                while (arg_index < given_count && formal_cur != NULL)
+                {
+                    arg_index++;
+                    formal_cur = formal_cur->next;
+                }
+                
+                /* For each remaining formal parameter, add its default value */
+                ListNode_t *args_tail = call_args;
+                while (args_tail != NULL && args_tail->next != NULL)
+                    args_tail = args_tail->next;
+                
+                while (formal_cur != NULL)
+                {
+                    Tree_t *param_decl = (Tree_t *)formal_cur->cur;
+                    struct Expression *default_expr = get_param_default_value_stmt(param_decl);
+                    
+                    if (default_expr != NULL)
+                    {
+                        struct Expression *copy = copy_default_expr(default_expr);
+                        if (copy != NULL)
+                        {
+                            ListNode_t *new_arg = CreateListNode(copy, LIST_EXPR);
+                            if (args_tail != NULL)
+                            {
+                                args_tail->next = new_arg;
+                                args_tail = new_arg;
+                            }
+                            else
+                            {
+                                /* No arguments given, start the list */
+                                stmt->stmt_data.procedure_call_data.expr_args = new_arg;
+                                args_tail = new_arg;
+                            }
+                            
+                            if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL) {
+                                fprintf(stderr, "[SemCheck] Added default arg %d for %s\n", 
+                                    arg_index, proc_id != NULL ? proc_id : "(null)");
+                            }
+                        }
+                        else
+                        {
+                            fprintf(stderr, "Warning: Could not copy default value for parameter %d of %s\n",
+                                arg_index, proc_id != NULL ? proc_id : "(null)");
+                        }
+                    }
+                    
+                    arg_index++;
+                    formal_cur = formal_cur->next;
+                }
+            }
+        }
         
         sym_return = resolved_proc;
         scope_return = 0; // FIXME: This needs to be properly calculated
@@ -3436,6 +3810,14 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     {
         sym_return->referenced += 1; /* Moved here: only access if sym_return is valid */
 
+        if (sym_return->type != NULL && sym_return->type->kind == TYPE_KIND_PROCEDURE)
+        {
+            ListNode_t *formal_params = kgpc_type_get_procedure_params(sym_return->type);
+            if (append_default_args(&args_given, formal_params, stmt->line_num) != 0)
+                ++return_val;
+            stmt->stmt_data.procedure_call_data.expr_args = args_given;
+        }
+
         if(scope_return > max_scope_lev)
         {
             fprintf(stderr, "Error on line %d, %s cannot be called in the current context!\n\n",
@@ -3484,6 +3866,14 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                         true_arg_ids = true_arg_ids->next;
                         continue;
                     }
+                }
+                if (semcheck_prepare_record_constructor_argument(arg_decl, arg_expr,
+                        symtab, INT_MAX, stmt->line_num) != 0)
+                {
+                    ++return_val;
+                    args_given = args_given->next;
+                    true_arg_ids = true_arg_ids->next;
+                    continue;
                 }
                 
                 /* ALWAYS resolve both sides to KgpcType for proper type checking */
@@ -3566,9 +3956,26 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
         }
         else if(true_args != NULL && args_given == NULL)
         {
-            fprintf(stderr, "Error on line %d, on procedure call %s, not enough arguments given!\n\n",
-                stmt->line_num, proc_id);
-            ++return_val;
+            /* Check if all remaining parameters have default values */
+            int all_have_defaults = 1;
+            ListNode_t *remaining = true_args;
+            while (remaining != NULL)
+            {
+                Tree_t *decl = (Tree_t *)remaining->cur;
+                if (!param_has_default_value(decl))
+                {
+                    all_have_defaults = 0;
+                    break;
+                }
+                remaining = remaining->next;
+            }
+            
+            if (!all_have_defaults)
+            {
+                fprintf(stderr, "Error on line %d, on procedure call %s, not enough arguments given!\n\n",
+                    stmt->line_num, proc_id);
+                ++return_val;
+            }
         }
     }
 

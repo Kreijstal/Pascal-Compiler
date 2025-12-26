@@ -298,21 +298,29 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
     ListNode_t* arg_cur = args_expr;
     while (arg_cur != NULL) {
         struct Expression *arg_expr = (struct Expression *)arg_cur->cur;
-        int type;
-        semcheck_expr_main(&type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
-
-        enum VarType resolved_type = ConvertParserTypeToVarType(type);
-        if (arg_expr != NULL && arg_expr->resolved_kgpc_type != NULL)
+        enum VarType resolved_type = HASHVAR_UNTYPED;
+        if (arg_expr != NULL && arg_expr->type == EXPR_RECORD_CONSTRUCTOR)
         {
-            KgpcType *kgpc_type = arg_expr->resolved_kgpc_type;
-            if (kgpc_type_is_array(kgpc_type) || kgpc_type_is_array_of_const(kgpc_type))
-                resolved_type = HASHVAR_ARRAY;
-            else if (kgpc_type->kind == TYPE_KIND_RECORD)
-                resolved_type = HASHVAR_RECORD;
-            else if (kgpc_type->kind == TYPE_KIND_POINTER)
-                resolved_type = HASHVAR_POINTER;
-            else if (kgpc_type->kind == TYPE_KIND_PROCEDURE)
-                resolved_type = HASHVAR_PROCEDURE;
+            resolved_type = HASHVAR_RECORD;
+        }
+        else
+        {
+            int type;
+            semcheck_expr_main(&type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
+
+            resolved_type = ConvertParserTypeToVarType(type);
+            if (arg_expr != NULL && arg_expr->resolved_kgpc_type != NULL)
+            {
+                KgpcType *kgpc_type = arg_expr->resolved_kgpc_type;
+                if (kgpc_type_is_array(kgpc_type) || kgpc_type_is_array_of_const(kgpc_type))
+                    resolved_type = HASHVAR_ARRAY;
+                else if (kgpc_type->kind == TYPE_KIND_RECORD)
+                    resolved_type = HASHVAR_RECORD;
+                else if (kgpc_type->kind == TYPE_KIND_POINTER)
+                    resolved_type = HASHVAR_POINTER;
+                else if (kgpc_type->kind == TYPE_KIND_PROCEDURE)
+                    resolved_type = HASHVAR_PROCEDURE;
+            }
         }
 
         int* type_ptr = malloc(sizeof(int));
