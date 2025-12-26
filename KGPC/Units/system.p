@@ -73,6 +73,8 @@ type
   UnicodeString = String;
   WideString = String;
   RawByteString = String;   { Alias for String type - KGPC doesn't distinguish encoding }
+  PAnsiString = ^AnsiString;
+  PString = ^String;
   { ShortString: length-prefixed string[255] compatible layout.
     Note: most bootstrap-compatible aliases live in KGPC/stdlib.p (the implicit prelude). }
   ShortString = array[0..255] of Char;
@@ -84,6 +86,8 @@ type
 
   { Root class for ObjPas compatibility }
   TObject = class
+  end;
+  TInterfacedObject = class(TObject)
   end;
 
   { GUID type for SysUtils compatibility }
@@ -172,6 +176,12 @@ type
   { Unix signal hook state used by SysUtils }
   TSignalState = (ssNotHooked, ssHooked, ssOverridden);
 
+  { Extended boolean aliases (sized boolean types) }
+  ByteBool = Boolean8;
+  WordBool = Boolean16;
+  LongBool = Boolean32;
+  QWordBool = Boolean64;
+
   { Exception is defined in vendor unit sysutils.p - don't define here to avoid duplication }
   ExceptAddr = Pointer;
   TExceptAddr = ExceptAddr;
@@ -181,9 +191,12 @@ const
   TextRecNameLength = 256;
   TextRecBufSize = 256;
 
+  LineEnding = #10;
+  sLineBreak = LineEnding;
   DirectorySeparator: AnsiChar = '/';
   DriveSeparator: AnsiChar = #0;
   PathSeparator: AnsiChar = ':';
+  ExtensionSeparator: AnsiChar = '.';
   AllowDirectorySeparators: set of AnsiChar = ['\', '/'];
   AllowDriveSeparators: set of AnsiChar = [];
   MaxPathLen = 4096;
@@ -195,6 +208,16 @@ const
   fmInput = $D7B1;
   fmOutput = $D7B2;
   fmInOut = $D7B3;
+
+  ARG_MAX = 131072;
+  NAME_MAX = 255;
+  PATH_MAX = 4095;
+  SYS_NMLN = 65;
+  SIG_MAXSIG = 128;
+  PRIO_PROCESS = 0;
+  PRIO_PGRP = 1;
+  PRIO_USER = 2;
+  UTSNAME_LENGTH = 65;
 
   RTL_SIGINT = 0;
   RTL_SIGFPE = 1;

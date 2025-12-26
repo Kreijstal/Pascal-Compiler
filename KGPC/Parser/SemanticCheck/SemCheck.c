@@ -103,6 +103,8 @@ static int semcheck_map_builtin_type_name_local(const char *id)
         return POINTER_TYPE;
     if (pascal_identifier_equals(id, "CodePointer"))
         return POINTER_TYPE;
+    if (pascal_identifier_equals(id, "TClass"))
+        return POINTER_TYPE;
     if (pascal_identifier_equals(id, "file"))
         return FILE_TYPE;
     return UNKNOWN_TYPE;
@@ -268,6 +270,23 @@ static ListNode_t *semcheck_create_builtin_param(const char *name, int type_tag)
         return NULL;
 
     Tree_t *decl = mk_vardecl(0, ids, type_tag, NULL, 0, 0, NULL, NULL, NULL, NULL);
+    if (decl == NULL)
+        return NULL;
+
+    return CreateListNode(decl, LIST_TREE);
+}
+
+static ListNode_t *semcheck_create_builtin_param_var(const char *name, int type_tag)
+{
+    char *param_name = strdup(name);
+    if (param_name == NULL)
+        return NULL;
+
+    ListNode_t *ids = CreateListNode(param_name, LIST_STRING);
+    if (ids == NULL)
+        return NULL;
+
+    Tree_t *decl = mk_vardecl(0, ids, type_tag, NULL, 1, 0, NULL, NULL, NULL, NULL);
     if (decl == NULL)
         return NULL;
 
@@ -819,6 +838,9 @@ static int expression_is_string(struct Expression *expr)
 }
 
 static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long long *out_value);
+static int resolve_scoped_enum_literal(SymTab_t *symtab, const char *type_name,
+    const char *literal_name, long long *out_value);
+static char *build_qualified_identifier_from_expr(struct Expression *expr);
 
 /* Evaluate a set literal into a byte array (supports up to 0..255) */
 static int evaluate_set_const_bytes(SymTab_t *symtab, struct Expression *expr,
@@ -1518,24 +1540,50 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                     return 0;
                 }
                 struct Expression *record_expr = expr->expr_data.record_access_data.record_expr;
-                if (record_expr != NULL && record_expr->type == EXPR_VAR_ID &&
-                    record_expr->expr_data.id != NULL)
+                if (record_expr != NULL)
                 {
-                    size_t qualified_len = strlen(record_expr->expr_data.id) + 1 + strlen(field_id) + 1;
-                    char *qualified = (char *)malloc(qualified_len);
-                    if (qualified != NULL)
+                    char *owner_name = build_qualified_identifier_from_expr(record_expr);
+                    if (owner_name != NULL)
                     {
-                        snprintf(qualified, qualified_len, "%s.%s",
-                            record_expr->expr_data.id, field_id);
-                        if (FindIdent(&node, symtab, qualified) >= 0 &&
-                            node != NULL &&
-                            (node->hash_type == HASHTYPE_CONST || node->is_typed_const))
+                        long long enum_value = 0;
+                        if (resolve_scoped_enum_literal(symtab, owner_name,
+                            field_id, &enum_value))
                         {
-                            *out_value = node->const_int_value;
-                            free(qualified);
+                            *out_value = enum_value;
+                            free(owner_name);
                             return 0;
                         }
-                        free(qualified);
+                    }
+
+                    if (owner_name != NULL)
+                    {
+                        size_t qualified_len = strlen(owner_name) + 1 + strlen(field_id) + 1;
+                        char *qualified = (char *)malloc(qualified_len);
+                        if (qualified != NULL)
+                        {
+                            snprintf(qualified, qualified_len, "%s.%s", owner_name, field_id);
+                            if (FindIdent(&node, symtab, qualified) >= 0 &&
+                                node != NULL &&
+                                (node->hash_type == HASHTYPE_CONST || node->is_typed_const))
+                            {
+                                *out_value = node->const_int_value;
+                                free(qualified);
+                                free(owner_name);
+                                return 0;
+                            }
+                            free(qualified);
+                        }
+                        free(owner_name);
+                        owner_name = NULL;
+                    }
+
+                    long long enum_value = 0;
+                    if (record_expr->type == EXPR_VAR_ID && record_expr->expr_data.id != NULL &&
+                        resolve_scoped_enum_literal(symtab, record_expr->expr_data.id,
+                            field_id, &enum_value))
+                    {
+                        *out_value = enum_value;
+                        return 0;
                     }
                 }
             }
@@ -1548,6 +1596,34 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
             /* Handle Ord() function for constant expressions */
             char *id = expr->expr_data.function_call_data.id;
             ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+
+            if (id != NULL && args != NULL && args->next == NULL)
+            {
+                HashNode_t *type_node = NULL;
+                int found_type = (FindIdent(&type_node, symtab, id) >= 0 &&
+                    type_node != NULL && type_node->hash_type == HASHTYPE_TYPE);
+                const char *base_id = semcheck_base_type_name(id);
+                if (!found_type && base_id != NULL && base_id != id)
+                {
+                    found_type = (FindIdent(&type_node, symtab, (char *)base_id) >= 0 &&
+                        type_node != NULL && type_node->hash_type == HASHTYPE_TYPE);
+                }
+
+                if (found_type || semcheck_map_builtin_type_name_local(id) != UNKNOWN_TYPE)
+                {
+                    struct Expression *arg = (struct Expression *)args->cur;
+                    long long inner_value = 0;
+                    if (evaluate_const_expr(symtab, arg, &inner_value) != 0)
+                    {
+                        double real_value = 0.0;
+                        if (evaluate_real_const_expr(symtab, arg, &real_value) != 0)
+                            return 1;
+                        inner_value = (long long)real_value;
+                    }
+                    *out_value = inner_value;
+                    return 0;
+                }
+            }
             
             if (id != NULL && pascal_identifier_equals(id, "Ord"))
             {
@@ -2862,7 +2938,10 @@ static int add_class_padding_field(struct RecordType *record_info, long long pad
     padding->is_hidden = 1;
 
     ListNode_t *node = CreateListNode(padding, LIST_RECORD_FIELD);
-    record_info->fields = PushListNodeBack(record_info->fields, node);
+    if (record_info->fields == NULL)
+        record_info->fields = node;
+    else
+        record_info->fields = PushListNodeBack(record_info->fields, node);
     return 0;
 }
 
@@ -3212,6 +3291,100 @@ static int resolve_const_identifier(SymTab_t *symtab, const char *id, long long 
     }
     
     return 1;
+}
+
+static int resolve_scoped_enum_literal(SymTab_t *symtab, const char *type_name,
+    const char *literal_name, long long *out_value)
+{
+    if (symtab == NULL || type_name == NULL || literal_name == NULL || out_value == NULL)
+        return 0;
+
+    const char *current_type = type_name;
+    for (int depth = 0; depth < 8; ++depth)
+    {
+        HashNode_t *type_node = NULL;
+        if (FindIdent(&type_node, symtab, (char *)current_type) < 0 || type_node == NULL ||
+            type_node->hash_type != HASHTYPE_TYPE)
+        {
+            const char *base = semcheck_base_type_name(current_type);
+            if (base == NULL || base == current_type ||
+                FindIdent(&type_node, symtab, (char *)base) < 0 || type_node == NULL ||
+                type_node->hash_type != HASHTYPE_TYPE)
+            {
+                break;
+            }
+        }
+
+        if (type_node->type == NULL)
+            return 0;
+        struct TypeAlias *alias = kgpc_type_get_type_alias(type_node->type);
+        if (alias != NULL && alias->is_enum && alias->enum_literals != NULL)
+        {
+            int ordinal = 0;
+            ListNode_t *literal_node = alias->enum_literals;
+            while (literal_node != NULL)
+            {
+                if (literal_node->cur != NULL &&
+                    pascal_identifier_equals((char *)literal_node->cur, literal_name))
+                {
+                    *out_value = ordinal;
+                    return 1;
+                }
+                ++ordinal;
+                literal_node = literal_node->next;
+            }
+            return 0;
+        }
+
+        if (alias == NULL || alias->target_type_id == NULL ||
+            pascal_identifier_equals(alias->target_type_id, current_type))
+            break;
+        current_type = alias->target_type_id;
+    }
+
+    {
+        const char *base_name = semcheck_base_type_name(type_name);
+        if (base_name != NULL && pascal_identifier_equals(base_name, "TEndian"))
+        {
+            if (pascal_identifier_equals(literal_name, "Little"))
+            {
+                *out_value = 0;
+                return 1;
+            }
+            if (pascal_identifier_equals(literal_name, "Big"))
+            {
+                *out_value = 1;
+                return 1;
+            }
+        }
+    }
+
+    return 0;
+}
+
+static char *build_qualified_identifier_from_expr(struct Expression *expr)
+{
+    if (expr == NULL)
+        return NULL;
+    if (expr->type == EXPR_VAR_ID && expr->expr_data.id != NULL)
+        return strdup(expr->expr_data.id);
+    if (expr->type != EXPR_RECORD_ACCESS)
+        return NULL;
+
+    struct Expression *record_expr = expr->expr_data.record_access_data.record_expr;
+    char *field_id = expr->expr_data.record_access_data.field_id;
+    if (record_expr == NULL || field_id == NULL)
+        return NULL;
+
+    char *base = build_qualified_identifier_from_expr(record_expr);
+    if (base == NULL)
+        return NULL;
+    size_t qualified_len = strlen(base) + 1 + strlen(field_id) + 1;
+    char *qualified = (char *)malloc(qualified_len);
+    if (qualified != NULL)
+        snprintf(qualified, qualified_len, "%s.%s", base, field_id);
+    free(base);
+    return qualified;
 }
 
 /* Resolves array bounds specified as constant identifiers in a KgpcType
@@ -4242,6 +4415,29 @@ static void add_builtin_type_owned(SymTab_t *symtab, const char *name, KgpcType 
     destroy_kgpc_type(type);
 }
 
+static void add_builtin_alias_type(SymTab_t *symtab, const char *name, int base_type,
+    int storage_size)
+{
+    if (symtab == NULL || name == NULL)
+        return;
+
+    struct TypeAlias *alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
+    if (alias == NULL)
+        return;
+    alias->base_type = base_type;
+    alias->storage_size = storage_size;
+
+    KgpcType *type = create_primitive_type(base_type);
+    if (type == NULL)
+    {
+        free(alias);
+        return;
+    }
+    kgpc_type_set_type_alias(type, alias);
+    AddBuiltinType_Typed(symtab, (char *)name, type);
+    destroy_kgpc_type(type);
+}
+
 static void add_builtin_from_vartype(SymTab_t *symtab, const char *name, enum VarType vt)
 {
     KgpcType *t = kgpc_type_from_var_type(vt);
@@ -4252,22 +4448,43 @@ static void add_builtin_from_vartype(SymTab_t *symtab, const char *name, enum Va
 void semcheck_add_builtins(SymTab_t *symtab)
 {
 
-    /* Platform newline constants to support System/ObjPas resourcestring concatenations */
-    AddBuiltinStringConst(symtab, "LineEnding", "\n");
-    AddBuiltinStringConst(symtab, "sLineBreak", "\n");
+    if (!stdlib_loaded_flag())
+    {
+        /* Platform newline constants to support System/ObjPas resourcestring concatenations */
+        AddBuiltinStringConst(symtab, "LineEnding", "\n");
+        AddBuiltinStringConst(symtab, "sLineBreak", "\n");
+        AddBuiltinCharConst(symtab, "DirectorySeparator", '/');
+        AddBuiltinCharConst(symtab, "DriveSeparator", 0);
+        AddBuiltinCharConst(symtab, "PathSeparator", ':');
+        AddBuiltinCharConst(symtab, "ExtensionSeparator", '.');
+        AddBuiltinIntConst(symtab, "MaxPathLen", 4096);
 
-    /* Unix/Linux baseline limits needed by unix.pp aliases (UT.*) */
-    AddBuiltinIntConst(symtab, "ARG_MAX", 131072);
-    AddBuiltinIntConst(symtab, "NAME_MAX", 255);
-    AddBuiltinIntConst(symtab, "PATH_MAX", 4095);
-    AddBuiltinIntConst(symtab, "SYS_NMLN", 65);
-    AddBuiltinIntConst(symtab, "SIG_MAXSIG", 128);
-    AddBuiltinIntConst(symtab, "PRIO_PROCESS", 0);
-    AddBuiltinIntConst(symtab, "PRIO_PGRP", 1);
-    AddBuiltinIntConst(symtab, "PRIO_USER", 2);
-    AddBuiltinIntConst(symtab, "UTSNAME_LENGTH", 65);
-    AddBuiltinIntConst(symtab, "fmClosed", 0xD7B0);
-    AddBuiltinIntConst(symtab, "fmInput", 0xD7B1);
+        /* Unix/Linux baseline limits needed by unix.pp aliases (UT.*) */
+        AddBuiltinIntConst(symtab, "ARG_MAX", 131072);
+        AddBuiltinIntConst(symtab, "NAME_MAX", 255);
+        AddBuiltinIntConst(symtab, "PATH_MAX", 4095);
+        AddBuiltinIntConst(symtab, "SYS_NMLN", 65);
+        AddBuiltinIntConst(symtab, "SIG_MAXSIG", 128);
+        AddBuiltinIntConst(symtab, "PRIO_PROCESS", 0);
+        AddBuiltinIntConst(symtab, "PRIO_PGRP", 1);
+        AddBuiltinIntConst(symtab, "PRIO_USER", 2);
+        AddBuiltinIntConst(symtab, "UTSNAME_LENGTH", 65);
+        AddBuiltinIntConst(symtab, "fmClosed", 0xD7B0);
+        AddBuiltinIntConst(symtab, "fmInput", 0xD7B1);
+
+        /* Sysutils signal helpers (interface declarations may be skipped during parsing). */
+        AddBuiltinIntConst(symtab, "RTL_SIGINT", 0);
+        AddBuiltinIntConst(symtab, "RTL_SIGFPE", 1);
+        AddBuiltinIntConst(symtab, "RTL_SIGSEGV", 2);
+        AddBuiltinIntConst(symtab, "RTL_SIGILL", 3);
+        AddBuiltinIntConst(symtab, "RTL_SIGBUS", 4);
+        AddBuiltinIntConst(symtab, "RTL_SIGQUIT", 5);
+        AddBuiltinIntConst(symtab, "RTL_SIGLAST", 5);
+        AddBuiltinIntConst(symtab, "RTL_SIGDEFAULT", -1);
+        AddBuiltinIntConst(symtab, "ssNotHooked", 0);
+        AddBuiltinIntConst(symtab, "ssHooked", 1);
+        AddBuiltinIntConst(symtab, "ssOverridden", 2);
+    }
     
     /* Integer boundary constants - required by FPC's objpas.pp and system.pp */
     {
@@ -4335,17 +4552,19 @@ void semcheck_add_builtins(SymTab_t *symtab)
     add_builtin_from_vartype(symtab, "Integer", HASHVAR_INTEGER);
     add_builtin_from_vartype(symtab, "LongInt", HASHVAR_LONGINT);
     add_builtin_type_owned(symtab, "Int64", create_primitive_type_with_size(INT64_TYPE, 8));
+    if (!stdlib_loaded_flag())
+        add_builtin_alias_type(symtab, "Currency", INT64_TYPE, 8);
     add_builtin_from_vartype(symtab, "Real", HASHVAR_REAL);
     add_builtin_from_vartype(symtab, "Boolean", HASHVAR_BOOLEAN);
     /* FPC-compatible extended boolean types */
-    add_builtin_type_owned(symtab, "Boolean8", create_primitive_type_with_size(BOOL, 1));
-    add_builtin_type_owned(symtab, "Boolean16", create_primitive_type_with_size(BOOL, 2));
-    add_builtin_type_owned(symtab, "Boolean32", create_primitive_type_with_size(BOOL, 4));
-    add_builtin_type_owned(symtab, "Boolean64", create_primitive_type_with_size(BOOL, 8));
-    add_builtin_type_owned(symtab, "ByteBool", create_primitive_type_with_size(BOOL, 1));
-    add_builtin_type_owned(symtab, "WordBool", create_primitive_type_with_size(BOOL, 2));
-    add_builtin_type_owned(symtab, "LongBool", create_primitive_type_with_size(BOOL, 4));
-    add_builtin_type_owned(symtab, "QWordBool", create_primitive_type_with_size(BOOL, 8));
+    add_builtin_alias_type(symtab, "Boolean8", BOOL, 1);
+    add_builtin_alias_type(symtab, "Boolean16", BOOL, 2);
+    add_builtin_alias_type(symtab, "Boolean32", BOOL, 4);
+    add_builtin_alias_type(symtab, "Boolean64", BOOL, 8);
+    if (!stdlib_loaded_flag())
+    {
+        add_builtin_alias_type(symtab, "TSignalState", INT_TYPE, 4);
+    }
     add_builtin_from_vartype(symtab, "Char", HASHVAR_CHAR);
     add_builtin_type_owned(symtab, "WideChar", create_primitive_type_with_size(CHAR_TYPE, 2));
     add_builtin_from_vartype(symtab, "String", HASHVAR_PCHAR);
@@ -4353,13 +4572,46 @@ void semcheck_add_builtins(SymTab_t *symtab)
     add_builtin_from_vartype(symtab, "RawByteString", HASHVAR_PCHAR);
     add_builtin_from_vartype(symtab, "UnicodeString", HASHVAR_PCHAR);
     add_builtin_from_vartype(symtab, "WideString", HASHVAR_PCHAR);
-    add_builtin_type_owned(symtab, "PAnsiString",
-        create_pointer_type(create_primitive_type(STRING_TYPE)));
-    add_builtin_type_owned(symtab, "PString",
-        create_pointer_type(create_primitive_type(STRING_TYPE)));
+    if (!stdlib_loaded_flag())
+    {
+        add_builtin_type_owned(symtab, "PAnsiString",
+            create_pointer_type(create_primitive_type(STRING_TYPE)));
+        add_builtin_type_owned(symtab, "PString",
+            create_pointer_type(create_primitive_type(STRING_TYPE)));
+    }
 
     /* Primitive pointer type */
     add_builtin_type_owned(symtab, "Pointer", create_primitive_type(POINTER_TYPE));
+    if (!stdlib_loaded_flag())
+    {
+        add_builtin_alias_type(symtab, "TClass", POINTER_TYPE, (int)sizeof(void *));
+        struct RecordType *tobject = (struct RecordType *)calloc(1, sizeof(struct RecordType));
+        if (tobject != NULL)
+        {
+            tobject->is_class = 1;
+            tobject->type_id = strdup("TObject");
+            KgpcType *tobject_type = create_record_type(tobject);
+            if (tobject_type != NULL)
+            {
+                AddBuiltinType_Typed(symtab, strdup("TObject"), tobject_type);
+                destroy_kgpc_type(tobject_type);
+            }
+        }
+
+        struct RecordType *tinterfaced = (struct RecordType *)calloc(1, sizeof(struct RecordType));
+        if (tinterfaced != NULL)
+        {
+            tinterfaced->is_class = 1;
+            tinterfaced->type_id = strdup("TInterfacedObject");
+            tinterfaced->parent_class_name = strdup("TObject");
+            KgpcType *tinterfaced_type = create_record_type(tinterfaced);
+            if (tinterfaced_type != NULL)
+            {
+                AddBuiltinType_Typed(symtab, strdup("TInterfacedObject"), tinterfaced_type);
+                destroy_kgpc_type(tinterfaced_type);
+            }
+        }
+    }
 
     /* Common ordinal aliases (match KGPC system.p sizes) */
     add_builtin_type_owned(symtab, "Byte", create_primitive_type_with_size(INT_TYPE, 1));
@@ -4534,14 +4786,6 @@ void semcheck_add_builtins(SymTab_t *symtab)
         destroy_kgpc_type(setcodepage_type);
         free(setcodepage_proc);
     }
-    char *interlocked_proc = strdup("InterlockedExchangeAdd");
-    if (interlocked_proc != NULL) {
-        KgpcType *interlocked_type = create_procedure_type(NULL, NULL);
-        assert(interlocked_type != NULL && "Failed to create InterlockedExchangeAdd procedure type");
-        AddBuiltinProc_Typed(symtab, interlocked_proc, interlocked_type);
-        destroy_kgpc_type(interlocked_type);
-        free(interlocked_proc);
-    }
     char *freemem_proc = strdup("FreeMem");
     if (freemem_proc != NULL) {
         KgpcType *freemem_type = create_procedure_type(NULL, NULL);
@@ -4696,15 +4940,34 @@ void semcheck_add_builtins(SymTab_t *symtab)
         destroy_kgpc_type(getmem_type);
         free(getmem_func);
     }
-    char *interlocked_func = strdup("InterlockedExchangeAdd");
-    if (interlocked_func != NULL) {
-        KgpcType *return_type = kgpc_type_from_var_type(HASHVAR_LONGINT);
-        assert(return_type != NULL && "Failed to create return type for InterlockedExchangeAdd");
-        KgpcType *interlocked_type = create_procedure_type(NULL, return_type);
-        assert(interlocked_type != NULL && "Failed to create InterlockedExchangeAdd function type");
-        AddBuiltinFunction_Typed(symtab, interlocked_func, interlocked_type);
-        destroy_kgpc_type(interlocked_type);
-        free(interlocked_func);
+    {
+        const char *interlocked_name = "InterlockedExchangeAdd";
+
+        ListNode_t *param_target = semcheck_create_builtin_param_var("Target", LONGINT_TYPE);
+        ListNode_t *param_value = semcheck_create_builtin_param("Source", LONGINT_TYPE);
+        ListNode_t *params = ConcatList(param_target, param_value);
+        KgpcType *return_type = create_primitive_type(LONGINT_TYPE);
+        KgpcType *interlocked_type = create_procedure_type(params, return_type);
+        if (interlocked_type != NULL)
+        {
+            AddBuiltinFunction_Typed(symtab, strdup(interlocked_name), interlocked_type);
+            destroy_kgpc_type(interlocked_type);
+        }
+        if (params != NULL)
+            DestroyList(params);
+
+        param_target = semcheck_create_builtin_param_var("Target", INT64_TYPE);
+        param_value = semcheck_create_builtin_param("Source", INT64_TYPE);
+        params = ConcatList(param_target, param_value);
+        return_type = create_primitive_type(INT64_TYPE);
+        interlocked_type = create_procedure_type(params, return_type);
+        if (interlocked_type != NULL)
+        {
+            AddBuiltinFunction_Typed(symtab, strdup(interlocked_name), interlocked_type);
+            destroy_kgpc_type(interlocked_type);
+        }
+        if (params != NULL)
+            DestroyList(params);
     }
     char *to_singlebyte = strdup("ToSingleByteFileSystemEncodedFileName");
     if (to_singlebyte != NULL) {

@@ -108,7 +108,7 @@ static void print_usage(const char *prog_name)
     fprintf(stderr, "    -I<path>              Add include path for preprocessor\n");
     fprintf(stderr, "    -Fu<path>             Add unit search path (FPC compatible)\n");
     fprintf(stderr, "    --no-vendor-units     Disable built-in KGPC vendor units\n");
-    fprintf(stderr, "    --no-stdlib           Disable implicit KGPC stdlib prelude\n");
+    fprintf(stderr, "    --no-stdlib           Disable KGPC stdlib; load minimal prelude instead\n");
     fprintf(stderr, "    -D<symbol>[=<value>]  Define preprocessor symbol\n");
 }
 
@@ -215,6 +215,62 @@ static char *resolve_stdlib_path(const char *argv0)
                 "../../KGPC/Units/system.p",
                 "../KGPC/Units/system.p",
                 "../Units/system.p",
+            };
+
+            for (size_t i = 0; i < sizeof(relative_candidates) / sizeof(relative_candidates[0]); ++i)
+            {
+                char candidate[PATH_MAX];
+                int written = snprintf(candidate, sizeof(candidate), "%s/%s", dir, relative_candidates[i]);
+                if (written > 0 && written < (int)sizeof(candidate) && access(candidate, R_OK) == 0)
+                {
+                    char *dup = strdup(candidate);
+                    if (dup != NULL)
+                        return dup;
+                }
+            }
+        }
+    }
+
+    return NULL;
+}
+
+static char *resolve_prelude_path(const char *argv0)
+{
+    if (access("KGPC/Units/prelude.p", R_OK) == 0)
+    {
+        char *dup = strdup("KGPC/Units/prelude.p");
+        if (dup != NULL)
+            return dup;
+    }
+
+    const char *source_root = getenv("MESON_SOURCE_ROOT");
+    if (source_root != NULL)
+    {
+        char candidate[PATH_MAX];
+        int written = snprintf(candidate, sizeof(candidate), "%s/KGPC/Units/prelude.p", source_root);
+        if (written > 0 && written < (int)sizeof(candidate) && access(candidate, R_OK) == 0)
+        {
+            char *dup = strdup(candidate);
+            if (dup != NULL)
+                return dup;
+        }
+    }
+
+    char exe_path[PATH_MAX];
+    ssize_t len = get_executable_path(exe_path, sizeof(exe_path), argv0);
+    if (len > 0)
+    {
+        char exe_dir[PATH_MAX];
+        strncpy(exe_dir, exe_path, sizeof(exe_dir));
+        exe_dir[sizeof(exe_dir) - 1] = '\0';
+
+        char *dir = dirname(exe_dir);
+        if (dir != NULL)
+        {
+            const char *relative_candidates[] = {
+                "../../KGPC/Units/prelude.p",
+                "../KGPC/Units/prelude.p",
+                "../Units/prelude.p",
             };
 
             for (size_t i = 0; i < sizeof(relative_candidates) / sizeof(relative_candidates[0]); ++i)
@@ -1087,29 +1143,30 @@ int main(int argc, char **argv)
         atexit(emit_timing_summary);
 
     bool use_stdlib = !g_skip_stdlib;
-    char *stdlib_path = NULL;
+    char *prelude_path = NULL;
     if (use_stdlib)
+        prelude_path = resolve_stdlib_path(argv[0]);
+    else
+        prelude_path = resolve_prelude_path(argv[0]);
+    if (prelude_path == NULL)
     {
-        stdlib_path = resolve_stdlib_path(argv[0]);
-        if (stdlib_path == NULL)
-        {
-            fprintf(stderr, "Error: Unable to locate system.p. Set KGPC_STDLIB or run from the project root.\n");
-            clear_dump_ast_path();
-            unit_search_paths_destroy(&g_unit_paths);
-            arena_destroy(arena);
-            return 1;
-        }
+        fprintf(stderr, "Error: Unable to locate %s. Set KGPC_STDLIB or run from the project root.\n",
+            use_stdlib ? "system.p" : "prelude.p");
+        clear_dump_ast_path();
+        unit_search_paths_destroy(&g_unit_paths);
+        arena_destroy(arena);
+        return 1;
     }
+    set_stdlib_loaded_flag(1);
 
     bool parse_only = parse_only_flag();
     bool convert_to_tree = !parse_only || dump_ast_path() != NULL;
 
     Tree_t *prelude_tree = NULL;
     bool track_time = time_passes_flag();
-    if (use_stdlib)
     {
         double stdlib_start = track_time ? current_time_seconds() : 0.0;
-        bool parsed_stdlib = parse_pascal_file(stdlib_path, &prelude_tree, convert_to_tree);
+        bool parsed_stdlib = parse_pascal_file(prelude_path, &prelude_tree, convert_to_tree);
         if (track_time)
         {
             g_time_parse_stdlib += current_time_seconds() - stdlib_start;
@@ -1119,14 +1176,17 @@ int main(int argc, char **argv)
         {
             if (prelude_tree != NULL)
                 destroy_tree(prelude_tree);
-            free(stdlib_path);
+            free(prelude_path);
             clear_dump_ast_path();
             pascal_frontend_cleanup();
             unit_search_paths_destroy(&g_unit_paths);
             return 1;
         }
 
-        unit_search_paths_set_vendor(&g_unit_paths, stdlib_path);
+        if (use_stdlib)
+            unit_search_paths_set_vendor(&g_unit_paths, prelude_path);
+        else
+            unit_search_paths_disable_vendor(&g_unit_paths);
     }
 
     Tree_t *user_tree = NULL;
@@ -1145,7 +1205,7 @@ int main(int argc, char **argv)
             destroy_tree(prelude_tree);
         if (user_tree != NULL)
             destroy_tree(user_tree);
-        free(stdlib_path);
+        free(prelude_path);
         clear_dump_ast_path();
         pascal_frontend_cleanup();
         unit_search_paths_destroy(&g_unit_paths);
@@ -1158,7 +1218,7 @@ int main(int argc, char **argv)
             destroy_tree(prelude_tree);
         if (user_tree != NULL)
             destroy_tree(user_tree);
-        free(stdlib_path);
+        free(prelude_path);
         clear_dump_ast_path();
         if (ast_nil != NULL)
         {
@@ -1180,7 +1240,7 @@ int main(int argc, char **argv)
                 destroy_tree(prelude_tree);
             if (user_tree != NULL)
                 destroy_tree(user_tree);
-            free(stdlib_path);
+            free(prelude_path);
             clear_dump_ast_path();
             pascal_frontend_cleanup();
             unit_search_paths_destroy(&g_unit_paths);
@@ -1193,7 +1253,7 @@ int main(int argc, char **argv)
             destroy_tree(prelude_tree);
         if (user_tree != NULL)
             destroy_tree(user_tree);
-        free(stdlib_path);
+        free(prelude_path);
         if (ast_nil != NULL)
         {
             free(ast_nil);
@@ -1205,13 +1265,13 @@ int main(int argc, char **argv)
         return 0;
     }
 
-    if (user_tree == NULL || (use_stdlib && prelude_tree == NULL))
+    if (user_tree == NULL || prelude_tree == NULL)
     {
         if (prelude_tree != NULL)
             destroy_tree(prelude_tree);
         if (user_tree != NULL)
             destroy_tree(user_tree);
-        free(stdlib_path);
+        free(prelude_path);
         clear_dump_ast_path();
         pascal_frontend_cleanup();
         unit_search_paths_destroy(&g_unit_paths);
@@ -1223,7 +1283,7 @@ int main(int argc, char **argv)
     {
         fprintf(stderr, "Compiling unit: %s\n", user_tree->tree_data.unit_data.unit_id);
         
-        if (use_stdlib && prelude_tree != NULL)
+        if (prelude_tree != NULL)
         {
             /* For units, we still need to merge prelude for built-in functions and types */
             ListNode_t *prelude_subs = get_prelude_subprograms(prelude_tree);
@@ -1303,7 +1363,7 @@ int main(int argc, char **argv)
             if (prelude_tree != NULL)
                 destroy_tree(prelude_tree);
             destroy_tree(user_tree);
-            free(stdlib_path);
+            free(prelude_path);
             clear_dump_ast_path();
             pascal_frontend_cleanup();
             unit_search_paths_destroy(&g_unit_paths);
@@ -1322,7 +1382,7 @@ int main(int argc, char **argv)
             if (prelude_tree != NULL)
                 destroy_tree(prelude_tree);
             destroy_tree(user_tree);
-            free(stdlib_path);
+            free(prelude_path);
             clear_dump_ast_path();
             unit_search_paths_destroy(&g_unit_paths);
             return 1;
@@ -1351,7 +1411,7 @@ int main(int argc, char **argv)
             if (prelude_tree != NULL)
                 destroy_tree(prelude_tree);
             destroy_tree(user_tree);
-            free(stdlib_path);
+            free(prelude_path);
             clear_dump_ast_path();
             pascal_frontend_cleanup();
             unit_search_paths_destroy(&g_unit_paths);
@@ -1362,7 +1422,7 @@ int main(int argc, char **argv)
         if (prelude_tree != NULL)
             destroy_tree(prelude_tree);
         destroy_tree(user_tree);
-        free(stdlib_path);
+        free(prelude_path);
         if (ast_nil != NULL)
         {
             free(ast_nil);
@@ -1386,7 +1446,7 @@ int main(int argc, char **argv)
     user_tree->tree_data.program_data.type_declaration = NULL;
     user_tree->tree_data.program_data.const_declaration = NULL;
     user_tree->tree_data.program_data.var_declaration = NULL;
-    if (use_stdlib && prelude_tree != NULL)
+    if (prelude_tree != NULL)
     {
         prelude_subs = get_prelude_subprograms(prelude_tree);
         if (prelude_subs != NULL)
@@ -1520,7 +1580,7 @@ int main(int argc, char **argv)
     if (prelude_tree != NULL)
         destroy_tree(prelude_tree);
     destroy_tree(user_tree);
-    free(stdlib_path);
+    free(prelude_path);
 
     if (ast_nil != NULL)
     {

@@ -375,7 +375,8 @@ static combinator_t* create_type_ref_parser(void) {
         type_arg_list,
         NULL
     );
-    combinator_t* simple_type = token(cident(PASCAL_T_IDENTIFIER));
+    // Allow qualified identifiers like BU.stat and System.THandle as simple type refs.
+    combinator_t* simple_type = token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER));
     
     // Include array types, records, and other complex type specs
     // This allows class fields to have types like "array of T"
@@ -1041,6 +1042,7 @@ static combinator_t* create_record_field_type_spec(void) {
         procedure_type(PASCAL_T_PROCEDURE_TYPE),  /* Allow procedure/function fields with calling conventions */
         function_type(PASCAL_T_FUNCTION_TYPE),
         type_name(PASCAL_T_IDENTIFIER),
+        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
         token(pascal_identifier(PASCAL_T_IDENTIFIER)),
         token(cident(PASCAL_T_IDENTIFIER)),
         NULL

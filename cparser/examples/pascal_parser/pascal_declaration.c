@@ -293,9 +293,11 @@ static ParseResult keyword_dispatch_fn(input_t* in, void* args, char* parser_nam
     }
     char* unexpected = strndup(word.start, word.length);
     if (getenv("KGPC_DEBUG_KEYWORD_DISPATCH") != NULL) {
-        fprintf(stderr, "[KGPC] keyword_dispatch unexpected '%s' in %s\n",
+        fprintf(stderr, "[KGPC] keyword_dispatch unexpected '%s' in %s at %d:%d\n",
             unexpected != NULL ? unexpected : "<null>",
-            parser_name != NULL ? parser_name : "<unknown>");
+            parser_name != NULL ? parser_name : "<unknown>",
+            in != NULL ? in->line : 0,
+            in != NULL ? in->col : 0);
     }
     return make_failure_v2(in, parser_name, strdup("Unexpected keyword in dispatcher"), unexpected);
 }
@@ -480,6 +482,10 @@ static ParseResult type_definition_dispatch_fn(input_t* in, void* args, char* pa
         if (pascal_word_equals_ci(&word, "class")) {
             pascal_word_slice_t next;
             if (pascal_peek_word_after(in, word.end_pos, &next)) {
+                // "class helper" is parsed via helper parser
+                if (dispatch->helper_parser && pascal_word_equals_ci(&next, "helper")) {
+                    return run_type_branch(in, dispatch->helper_parser);
+                }
                 // "class of" is a class reference type
                 if (dispatch->class_of_parser && pascal_word_equals_ci(&next, "of")) {
                     return run_type_branch(in, dispatch->class_of_parser);
@@ -490,8 +496,17 @@ static ParseResult type_definition_dispatch_fn(input_t* in, void* args, char* pa
                 return run_type_branch(in, dispatch->class_parser);
             }
         }
-        if (dispatch->record_parser && pascal_word_equals_ci(&word, "record")) {
-            return run_type_branch(in, dispatch->record_parser);
+        if (pascal_word_equals_ci(&word, "record")) {
+            pascal_word_slice_t next;
+            if (pascal_peek_word_after(in, word.end_pos, &next)) {
+                // "record helper" is parsed via helper parser
+                if (dispatch->helper_parser && pascal_word_equals_ci(&next, "helper")) {
+                    return run_type_branch(in, dispatch->helper_parser);
+                }
+            }
+            if (dispatch->record_parser) {
+                return run_type_branch(in, dispatch->record_parser);
+            }
         }
         if (dispatch->object_parser && pascal_word_equals_ci(&word, "object")) {
             return run_type_branch(in, dispatch->object_parser);
@@ -1257,38 +1272,23 @@ void init_pascal_unit_parser(combinator_t** p) {
         NULL
     );
 
-    combinator_t* helper_param_list = create_pascal_param_parser();
+    /* Helper bodies can contain a wide variety of declarations. Be permissive and
+     * consume tokens until the terminating "end" keyword. */
+    combinator_t* helper_body = optional(until(token(keyword_ci("end")), PASCAL_T_NONE));
 
-    combinator_t* helper_procedure_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
-        token(keyword_ci("procedure")),
-        token(cident(PASCAL_T_IDENTIFIER)),
-        helper_param_list,
-        token(match(";")),
-        NULL
-    );
-
-    combinator_t* helper_function_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
-        token(keyword_ci("function")),
-        token(cident(PASCAL_T_IDENTIFIER)),
-        helper_param_list,
-        token(match(":")),
-        token(cident(PASCAL_T_IDENTIFIER)),
-        token(match(";")),
-        NULL
-    );
-
-    combinator_t* helper_member = many(multi(new_combinator(), PASCAL_T_NONE,
-        helper_procedure_decl,
-        helper_function_decl,
-        NULL
-    ));
-
-    combinator_t* type_helper_type = seq(new_combinator(), PASCAL_T_CLASS_TYPE,
+    combinator_t* helper_kind = multi(new_combinator(), PASCAL_T_NONE,
         token(keyword_ci("type")),
+        token(keyword_ci("record")),
+        token(keyword_ci("class")),
+        NULL
+    );
+
+    combinator_t* type_helper_type = seq(new_combinator(), PASCAL_T_RECORD_TYPE,
+        helper_kind,
         token(keyword_ci("helper")),
         token(keyword_ci("for")),
-        token(cident(PASCAL_T_IDENTIFIER)),
-        helper_member,
+        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
+        helper_body,
         token(keyword_ci("end")),
         NULL
     );

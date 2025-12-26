@@ -386,6 +386,7 @@ static int resolve_const_int_from_ast(const char *identifier, ast_t *const_secti
 static int evaluate_simple_const_expr(const char *expr, ast_t *const_section, int *result);
 static int resolve_enum_ordinal_from_ast(const char *identifier, ast_t *type_section);
 static int resolve_enum_type_range_from_ast(const char *type_name, ast_t *type_section, int *out_start, int *out_end);
+static int resolve_enum_literal_in_type(const char *type_name, const char *literal, ast_t *type_section);
 static ast_t *find_type_decl_in_section(ast_t *type_section, const char *type_name);
 static int resolve_array_type_info_from_ast(const char *type_name, ast_t *type_section, TypeInfo *out_info, int depth);
 static void resolve_array_bounds(TypeInfo *info, ast_t *type_section, ast_t *const_section, const char *id_for_error);
@@ -1502,6 +1503,48 @@ static int resolve_enum_ordinal_from_ast(const char *identifier, ast_t *type_sec
     return -1; /* Not found */
 }
 
+/* Helper to resolve an enum literal within a specific enumerated type.
+ * Returns ordinal value if found, -1 otherwise. */
+static int resolve_enum_literal_in_type(const char *type_name, const char *literal, ast_t *type_section) {
+    if (type_name == NULL || literal == NULL || type_section == NULL)
+        return -1;
+
+    ast_t *type_decl = type_section->child;
+    while (type_decl != NULL) {
+        if (type_decl->typ == PASCAL_T_TYPE_DECL) {
+            ast_t *id_node = type_decl->child;
+            if (id_node != NULL && id_node->typ == PASCAL_T_IDENTIFIER &&
+                id_node->sym != NULL && id_node->sym->name != NULL &&
+                strcasecmp(id_node->sym->name, type_name) == 0) {
+                ast_t *type_spec_node = id_node->next;
+                while (type_spec_node != NULL &&
+                       type_spec_node->typ != PASCAL_T_TYPE_SPEC &&
+                       type_spec_node->typ != PASCAL_T_ENUMERATED_TYPE) {
+                    type_spec_node = type_spec_node->next;
+                }
+                ast_t *spec = type_spec_node;
+                if (spec != NULL && spec->typ == PASCAL_T_TYPE_SPEC && spec->child != NULL)
+                    spec = spec->child;
+                if (spec != NULL && spec->typ == PASCAL_T_ENUMERATED_TYPE) {
+                    int ordinal = 0;
+                    for (ast_t *lit = spec->child; lit != NULL; lit = lit->next) {
+                        if (lit->typ == PASCAL_T_IDENTIFIER && lit->sym != NULL &&
+                            lit->sym->name != NULL &&
+                            strcasecmp(lit->sym->name, literal) == 0) {
+                            return ordinal;
+                        }
+                        ordinal++;
+                    }
+                }
+                return -1;
+            }
+        }
+        type_decl = type_decl->next;
+    }
+
+    return -1;
+}
+
 /* Helper function to resolve the range of an enumerated type by type name.
  * For example, if color = (red, blue, yellow), then resolve_enum_type_range_from_ast("color", ...)
  * will set out_start=0 and out_end=2 (for 3 values: red, blue, yellow).
@@ -1775,6 +1818,24 @@ static int resolve_const_int_in_section(const char *identifier, ast_t *const_sec
     if (identifier == NULL || const_section == NULL || out_value == NULL)
         return -1;
     return resolve_const_int_in_node(identifier, const_section->child, const_section, out_value, depth);
+}
+
+static int type_name_exists_in_section(const char *name, ast_t *type_section) {
+    if (name == NULL || type_section == NULL)
+        return 0;
+    ast_t *type_decl = type_section->child;
+    while (type_decl != NULL) {
+        if (type_decl->typ == PASCAL_T_TYPE_DECL) {
+            ast_t *id_node = type_decl->child;
+            if (id_node != NULL && id_node->typ == PASCAL_T_IDENTIFIER &&
+                id_node->sym != NULL && id_node->sym->name != NULL &&
+                strcasecmp(id_node->sym->name, name) == 0) {
+                return 1;
+            }
+        }
+        type_decl = type_decl->next;
+    }
+    return 0;
 }
 
 static int evaluate_const_int_expr(ast_t *expr, int *out_value, int depth) {
@@ -4766,6 +4827,40 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_build
     int const_value = 0;
     if (evaluate_const_int_expr(value_node, &const_value, 0) == 0) {
         register_const_int(id, const_value);
+    } else {
+        /* Handle scoped enum literals like TEnum.Value */
+        ast_t *unwrapped_value = unwrap_pascal_node(value_node);
+        if (unwrapped_value != NULL && unwrapped_value->typ == PASCAL_T_MEMBER_ACCESS) {
+            ast_t *base = unwrap_pascal_node(unwrapped_value->child);
+            if (base != NULL && base->typ == PASCAL_T_IDENTIFIER &&
+                base->sym != NULL && base->sym->name != NULL &&
+                unwrapped_value->sym != NULL && unwrapped_value->sym->name != NULL) {
+                int ordinal = resolve_enum_literal_in_type(
+                    base->sym->name, unwrapped_value->sym->name, type_section);
+                if (ordinal >= 0) {
+                    register_const_int(id, ordinal);
+                }
+            }
+        } else if (unwrapped_value != NULL && unwrapped_value->typ == PASCAL_T_FUNC_CALL) {
+            /* Treat TypeName(expr) as a typecast in const expressions. */
+            const char *callee = (unwrapped_value->sym != NULL) ? unwrapped_value->sym->name : NULL;
+            int is_type = 0;
+            if (callee != NULL) {
+                if (map_type_name(callee, NULL) != UNKNOWN_TYPE)
+                    is_type = 1;
+                else if (type_name_exists_in_section(callee, type_section))
+                    is_type = 1;
+            }
+
+            if (is_type) {
+                ast_t *args = unwrap_pascal_node(unwrapped_value->child);
+                ast_t *arg = (args != NULL) ? unwrap_pascal_node(args->child) : NULL;
+                if (arg != NULL && (args->child == NULL || args->child->next == NULL)) {
+                    if (evaluate_const_int_expr(arg, &const_value, 0) == 0)
+                        register_const_int(id, const_value);
+                }
+            }
+        }
     }
 
     struct Expression *value_expr = convert_expression(value_node);
@@ -4797,14 +4892,17 @@ static void append_const_decls_from_section(ast_t *const_section, ListNode_t **d
 
     ast_t *const_decl = const_section->child;
     while (const_decl != NULL) {
-        if (const_decl->typ == PASCAL_T_CONST_DECL) {
+        ast_t *node = unwrap_pascal_node(const_decl);
+        if (node == NULL)
+            node = const_decl;
+        if (node != NULL && node->typ == PASCAL_T_CONST_DECL) {
             if (kgpc_debug_decl_scan_enabled()) {
-                ast_t *id_node = const_decl->child;
+                ast_t *id_node = node->child;
                 if (id_node != NULL && id_node->sym != NULL) {
                     fprintf(stderr, "[KGPC] const decl: %s\n", id_node->sym->name);
                 }
             }
-            Tree_t *decl = convert_const_decl(const_decl, var_builder, type_section, const_section);
+            Tree_t *decl = convert_const_decl(node, var_builder, type_section, const_section);
             if (decl != NULL) {
                 ListNode_t *node = CreateListNode(decl, LIST_TREE);
                 *tail = node;

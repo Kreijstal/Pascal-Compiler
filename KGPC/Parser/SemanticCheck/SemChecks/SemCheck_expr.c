@@ -8423,6 +8423,28 @@ static int param_has_default_value(Tree_t *decl)
     return 0;
 }
 
+static int semcheck_candidate_is_builtin(SymTab_t *symtab, HashNode_t *node)
+{
+    if (symtab == NULL || node == NULL || node->id == NULL)
+        return 0;
+
+    ListNode_t *matches = FindAllIdentsInTable(symtab->builtins, node->id);
+    int is_builtin = 0;
+    ListNode_t *cur = matches;
+    while (cur != NULL)
+    {
+        if (cur->cur == node)
+        {
+            is_builtin = 1;
+            break;
+        }
+        cur = cur->next;
+    }
+    if (matches != NULL)
+        DestroyList(matches);
+    return is_builtin;
+}
+
 /* Helper to get the default value expression from a parameter */
 static struct Expression *get_param_default_value(Tree_t *decl)
 {
@@ -9421,6 +9443,27 @@ constructor_resolved:
 
     overload_candidates = FindAllIdents(symtab, id);
 
+    int prefer_non_builtin = 0;
+    if (overload_candidates != NULL)
+    {
+        ListNode_t *cur = overload_candidates;
+        while (cur != NULL)
+        {
+            HashNode_t *candidate = (HashNode_t *)cur->cur;
+            if (candidate != NULL &&
+                (candidate->hash_type == HASHTYPE_FUNCTION ||
+                 candidate->hash_type == HASHTYPE_PROCEDURE))
+            {
+                if (!semcheck_candidate_is_builtin(symtab, candidate))
+                {
+                    prefer_non_builtin = 1;
+                    break;
+                }
+            }
+            cur = cur->next;
+        }
+    }
+
     /* Check if this is a call through a procedural variable */
     /* If 'id' resolves to a variable with a procedural type, handle it specially */
     if (overload_candidates != NULL && overload_candidates->cur != NULL)
@@ -9547,6 +9590,11 @@ method_call_resolved:
                 cur = cur->next;
                 continue;
             }
+            if (prefer_non_builtin && semcheck_candidate_is_builtin(symtab, candidate))
+            {
+                cur = cur->next;
+                continue;
+            }
 
             /* Get formal arguments from KgpcType instead of deprecated args field */
             ListNode_t *candidate_args = kgpc_type_get_procedure_params(candidate->type);
@@ -9636,7 +9684,27 @@ method_call_resolved:
                 }
                 else if (current_score == best_score)
                 {
-                    num_best_matches++;
+                    int is_duplicate = 0;
+                    if (best_match != NULL)
+                    {
+                        if (best_match->mangled_id != NULL &&
+                            candidate->mangled_id != NULL &&
+                            strcmp(best_match->mangled_id, candidate->mangled_id) == 0)
+                        {
+                            is_duplicate = 1;
+                        }
+                        else if ((best_match->mangled_id == NULL || candidate->mangled_id == NULL) &&
+                            best_match->id != NULL && candidate->id != NULL &&
+                            strcmp(best_match->id, candidate->id) == 0)
+                        {
+                            int best_params = ListLength(kgpc_type_get_procedure_params(best_match->type));
+                            int cand_params = ListLength(kgpc_type_get_procedure_params(candidate->type));
+                            if (best_params == cand_params)
+                                is_duplicate = 1;
+                        }
+                    }
+                    if (!is_duplicate)
+                        num_best_matches++;
                 }
             }
             cur = cur->next;
