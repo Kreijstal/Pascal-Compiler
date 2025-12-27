@@ -2032,7 +2032,10 @@ static bool parse_factor(const char **cursor,
         if (strcmp(type_name, "NATIVEINT") == 0 || strcmp(type_name, "NATIVEUINT") == 0 ||
             strcmp(type_name, "SIZEINT") == 0 || strcmp(type_name, "SIZEUINT") == 0 ||
             strcmp(type_name, "PTRINT") == 0 || strcmp(type_name, "PTRUINT") == 0 ||
-            strcmp(type_name, "INTPTR") == 0 || strcmp(type_name, "UINTPTR") == 0) {
+            strcmp(type_name, "INTPTR") == 0 || strcmp(type_name, "UINTPTR") == 0 ||
+            strcmp(type_name, "TCONSTPTRUINT") == 0 || strcmp(type_name, "TCONSTPTRINT") == 0 ||
+            strcmp(type_name, "PUINT") == 0 || strcmp(type_name, "PINT") == 0 ||
+            strcmp(type_name, "AINT") == 0 || strcmp(type_name, "ASIZEINT") == 0) {
             size = cpu64 ? 8 : 4;
             found = true;
         }

@@ -103,6 +103,8 @@ static int semcheck_map_builtin_type_name_local(const char *id)
         return POINTER_TYPE;
     if (pascal_identifier_equals(id, "CodePointer"))
         return POINTER_TYPE;
+    if (pascal_identifier_equals(id, "TClass"))
+        return POINTER_TYPE;
     if (pascal_identifier_equals(id, "file"))
         return FILE_TYPE;
     return UNKNOWN_TYPE;
@@ -268,6 +270,23 @@ static ListNode_t *semcheck_create_builtin_param(const char *name, int type_tag)
         return NULL;
 
     Tree_t *decl = mk_vardecl(0, ids, type_tag, NULL, 0, 0, NULL, NULL, NULL, NULL);
+    if (decl == NULL)
+        return NULL;
+
+    return CreateListNode(decl, LIST_TREE);
+}
+
+static ListNode_t *semcheck_create_builtin_param_var(const char *name, int type_tag)
+{
+    char *param_name = strdup(name);
+    if (param_name == NULL)
+        return NULL;
+
+    ListNode_t *ids = CreateListNode(param_name, LIST_STRING);
+    if (ids == NULL)
+        return NULL;
+
+    Tree_t *decl = mk_vardecl(0, ids, type_tag, NULL, 1, 0, NULL, NULL, NULL, NULL);
     if (decl == NULL)
         return NULL;
 
@@ -509,7 +528,10 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls);
 int semcheck_decls(SymTab_t *symtab, ListNode_t *decls);
 int semcheck_const_decls(SymTab_t *symtab, ListNode_t *const_decls);
 
-static ListNode_t *collect_typed_const_decls(SymTab_t *symtab, ListNode_t *decls)
+/* Collect typed const declarations from a var_declaration list.
+ * If from_unit_only is true, only collect those with defined_in_unit=1.
+ * If from_unit_only is false, only collect those with defined_in_unit=0. */
+static ListNode_t *collect_typed_const_decls_filtered(SymTab_t *symtab, ListNode_t *decls, int from_unit_only)
 {
     ListNode_t *head = NULL;
     ListNode_t *tail = NULL;
@@ -522,6 +544,14 @@ static ListNode_t *collect_typed_const_decls(SymTab_t *symtab, ListNode_t *decls
             if (tree->type == TREE_VAR_DECL &&
                 tree->tree_data.var_decl_data.is_typed_const)
             {
+                /* Filter by origin */
+                int is_from_unit = tree->tree_data.var_decl_data.defined_in_unit;
+                if ((from_unit_only && !is_from_unit) || (!from_unit_only && is_from_unit))
+                {
+                    cur = cur->next;
+                    continue;
+                }
+                
                 int allow = 1;
                 const char *type_id = tree->tree_data.var_decl_data.type_id;
                 if (type_id != NULL)
@@ -536,6 +566,16 @@ static ListNode_t *collect_typed_const_decls(SymTab_t *symtab, ListNode_t *decls
                 else if (tree->tree_data.var_decl_data.type == UNKNOWN_TYPE)
                 {
                     allow = 0;
+                }
+
+                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL && tree->tree_data.var_decl_data.ids != NULL)
+                {
+                    const char *first_id = tree->tree_data.var_decl_data.ids->cur ?
+                        (const char *)tree->tree_data.var_decl_data.ids->cur : "<null>";
+                    fprintf(stderr, "[SemCheck] collect_typed_const: id=%s type_id=%s type=%d allow=%d inline_alias=%p\n",
+                        first_id, type_id ? type_id : "<null>",
+                        tree->tree_data.var_decl_data.type, allow,
+                        (void*)tree->tree_data.var_decl_data.inline_type_alias);
                 }
 
                 if (allow)
@@ -558,6 +598,7 @@ static ListNode_t *collect_typed_const_decls(SymTab_t *symtab, ListNode_t *decls
     }
     return head;
 }
+
 static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls);
 static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls);
 static int predeclare_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scope_lev, Tree_t *parent_subprogram);
@@ -738,25 +779,45 @@ static int expression_contains_real_literal_impl(SymTab_t *symtab, struct Expres
 }
 
 /* Helper to check if an expression is a string expression */
-static int expression_is_string(struct Expression *expr)
+static int expression_is_string(SymTab_t *symtab, struct Expression *expr)
 {
     if (expr == NULL)
         return 0;
     
     if (expr->type == EXPR_STRING || expr->type == EXPR_CHAR_CODE)
         return 1;
+
+    if (expr->type == EXPR_VAR_ID && symtab != NULL && expr->expr_data.id != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindIdent(&node, symtab, expr->expr_data.id) != -1 && node != NULL)
+        {
+            if ((node->hash_type == HASHTYPE_CONST || node->is_typed_const) &&
+                node->const_string_value != NULL)
+                return 1;
+            if (node->type != NULL && node->type->kind == TYPE_KIND_PRIMITIVE)
+            {
+                int tag = kgpc_type_get_primitive_tag(node->type);
+                if (tag == STRING_TYPE || tag == SHORTSTRING_TYPE)
+                    return 1;
+            }
+        }
+    }
     
     if (expr->type == EXPR_ADDOP && expr->expr_data.addop_data.addop_type == PLUS)
     {
         /* String concatenation */
-        return expression_is_string(expr->expr_data.addop_data.left_expr) ||
-               expression_is_string(expr->expr_data.addop_data.right_term);
+        return expression_is_string(symtab, expr->expr_data.addop_data.left_expr) ||
+               expression_is_string(symtab, expr->expr_data.addop_data.right_term);
     }
     
     return 0;
 }
 
 static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long long *out_value);
+static int resolve_scoped_enum_literal(SymTab_t *symtab, const char *type_name,
+    const char *literal_name, long long *out_value);
+static char *build_qualified_identifier_from_expr(struct Expression *expr);
 
 /* Evaluate a set literal into a byte array (supports up to 0..255) */
 static int evaluate_set_const_bytes(SymTab_t *symtab, struct Expression *expr,
@@ -1268,6 +1329,19 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
             if (FindIdent(&node, symtab, expr->expr_data.id) >= 0 && node != NULL &&
                 (node->hash_type == HASHTYPE_CONST || node->is_typed_const))
             {
+                if (node->const_string_value != NULL)
+                {
+                    if (node->const_string_value[0] == '\0')
+                    {
+                        *out_value = 0;
+                        return 0;
+                    }
+                    if (node->const_string_value[1] == '\0')
+                    {
+                        *out_value = (unsigned char)node->const_string_value[0];
+                        return 0;
+                    }
+                }
                 *out_value = node->const_int_value;
                 return 0;
             }
@@ -1456,24 +1530,50 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                     return 0;
                 }
                 struct Expression *record_expr = expr->expr_data.record_access_data.record_expr;
-                if (record_expr != NULL && record_expr->type == EXPR_VAR_ID &&
-                    record_expr->expr_data.id != NULL)
+                if (record_expr != NULL)
                 {
-                    size_t qualified_len = strlen(record_expr->expr_data.id) + 1 + strlen(field_id) + 1;
-                    char *qualified = (char *)malloc(qualified_len);
-                    if (qualified != NULL)
+                    char *owner_name = build_qualified_identifier_from_expr(record_expr);
+                    if (owner_name != NULL)
                     {
-                        snprintf(qualified, qualified_len, "%s.%s",
-                            record_expr->expr_data.id, field_id);
-                        if (FindIdent(&node, symtab, qualified) >= 0 &&
-                            node != NULL &&
-                            (node->hash_type == HASHTYPE_CONST || node->is_typed_const))
+                        long long enum_value = 0;
+                        if (resolve_scoped_enum_literal(symtab, owner_name,
+                            field_id, &enum_value))
                         {
-                            *out_value = node->const_int_value;
-                            free(qualified);
+                            *out_value = enum_value;
+                            free(owner_name);
                             return 0;
                         }
-                        free(qualified);
+                    }
+
+                    if (owner_name != NULL)
+                    {
+                        size_t qualified_len = strlen(owner_name) + 1 + strlen(field_id) + 1;
+                        char *qualified = (char *)malloc(qualified_len);
+                        if (qualified != NULL)
+                        {
+                            snprintf(qualified, qualified_len, "%s.%s", owner_name, field_id);
+                            if (FindIdent(&node, symtab, qualified) >= 0 &&
+                                node != NULL &&
+                                (node->hash_type == HASHTYPE_CONST || node->is_typed_const))
+                            {
+                                *out_value = node->const_int_value;
+                                free(qualified);
+                                free(owner_name);
+                                return 0;
+                            }
+                            free(qualified);
+                        }
+                        free(owner_name);
+                        owner_name = NULL;
+                    }
+
+                    long long enum_value = 0;
+                    if (record_expr->type == EXPR_VAR_ID && record_expr->expr_data.id != NULL &&
+                        resolve_scoped_enum_literal(symtab, record_expr->expr_data.id,
+                            field_id, &enum_value))
+                    {
+                        *out_value = enum_value;
+                        return 0;
                     }
                 }
             }
@@ -1486,6 +1586,34 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
             /* Handle Ord() function for constant expressions */
             char *id = expr->expr_data.function_call_data.id;
             ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+
+            if (id != NULL && args != NULL && args->next == NULL)
+            {
+                HashNode_t *type_node = NULL;
+                int found_type = (FindIdent(&type_node, symtab, id) >= 0 &&
+                    type_node != NULL && type_node->hash_type == HASHTYPE_TYPE);
+                const char *base_id = semcheck_base_type_name(id);
+                if (!found_type && base_id != NULL && base_id != id)
+                {
+                    found_type = (FindIdent(&type_node, symtab, (char *)base_id) >= 0 &&
+                        type_node != NULL && type_node->hash_type == HASHTYPE_TYPE);
+                }
+
+                if (found_type || semcheck_map_builtin_type_name_local(id) != UNKNOWN_TYPE)
+                {
+                    struct Expression *arg = (struct Expression *)args->cur;
+                    long long inner_value = 0;
+                    if (evaluate_const_expr(symtab, arg, &inner_value) != 0)
+                    {
+                        double real_value = 0.0;
+                        if (evaluate_real_const_expr(symtab, arg, &real_value) != 0)
+                            return 1;
+                        inner_value = (long long)real_value;
+                    }
+                    *out_value = inner_value;
+                    return 0;
+                }
+            }
             
             if (id != NULL && pascal_identifier_equals(id, "Ord"))
             {
@@ -1542,7 +1670,8 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                 else if (arg->type == EXPR_VAR_ID)
                 {
                     HashNode_t *node = NULL;
-                    if (FindIdent(&node, symtab, arg->expr_data.id) >= 0 && 
+                    int found_scope = FindIdent(&node, symtab, arg->expr_data.id);
+                    if (found_scope >= 0 && 
                         node != NULL &&
                         (node->hash_type == HASHTYPE_CONST || node->is_typed_const))
                     {
@@ -1942,8 +2071,8 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                 return 1;
             }
             
-            /* Handle Cardinal, LongWord, DWord, QWord, Int64, UInt64 and other integer typecasts 
-             * for constant expressions (FPC bootstrap: Cardinal(not Cardinal(0))) */
+            /* Handle Cardinal, LongWord, DWord, QWord, Int64, UInt64, HRESULT and other integer typecasts
+             * for constant expressions (FPC bootstrap: Cardinal(not Cardinal(0)), HRESULT($80020004)) */
             if (id != NULL && (pascal_identifier_equals(id, "Cardinal") ||
                                pascal_identifier_equals(id, "LongWord") ||
                                pascal_identifier_equals(id, "DWord") ||
@@ -1956,7 +2085,8 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                                pascal_identifier_equals(id, "SizeUInt") ||
                                pascal_identifier_equals(id, "ShortInt") ||
                                pascal_identifier_equals(id, "SmallInt") ||
-                               pascal_identifier_equals(id, "LongInt")))
+                               pascal_identifier_equals(id, "LongInt") ||
+                               pascal_identifier_equals(id, "HRESULT")))
             {
                 if (args == NULL || args->next != NULL)
                 {
@@ -1994,8 +2124,10 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                 {
                     *out_value = (short)(int_value & 0xFFFF);
                 }
-                else if (pascal_identifier_equals(id, "LongInt"))
+                else if (pascal_identifier_equals(id, "LongInt") ||
+                         pascal_identifier_equals(id, "HRESULT"))
                 {
+                    /* LongInt and HRESULT are 32-bit signed integers */
                     *out_value = (int)(int_value & 0xFFFFFFFFULL);
                 }
                 else
@@ -2005,7 +2137,44 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                 }
                 return 0;
             }
-            
+
+            if (id != NULL && args != NULL && args->next == NULL)
+            {
+                HashNode_t *type_node = NULL;
+                if (FindIdent(&type_node, symtab, id) >= 0 && type_node != NULL && type_node->type != NULL)
+                {
+                    int legacy_tag = kgpc_type_get_legacy_tag(type_node->type);
+                    if (legacy_tag == UNKNOWN_TYPE && type_node->type->type_alias != NULL)
+                        legacy_tag = type_node->type->type_alias->base_type;
+                    if (legacy_tag != UNKNOWN_TYPE)
+                    {
+                        struct Expression *arg = (struct Expression *)args->cur;
+                        long long int_value;
+                        if (arg == NULL)
+                        {
+                            fprintf(stderr, "Error: %s argument is NULL.\n", id);
+                            return 1;
+                        }
+                        if (evaluate_const_expr(symtab, arg, &int_value) != 0)
+                        {
+                            fprintf(stderr, "Error: %s argument must be a const expression.\n", id);
+                            return 1;
+                        }
+                        if (type_node->type->type_alias != NULL)
+                        {
+                            int storage_size = type_node->type->type_alias->storage_size;
+                            if (storage_size > 0 && storage_size < 8)
+                            {
+                                unsigned long long mask = (1ULL << (storage_size * 8)) - 1ULL;
+                                int_value = (long long)((unsigned long long)int_value & mask);
+                            }
+                        }
+                        *out_value = int_value;
+                        return 0;
+                    }
+                }
+            }
+
             if (id != NULL)
                 fprintf(stderr, "Error: const expression uses unsupported function %s on line %d.\n", id, expr->line_num);
             fprintf(stderr, "Error: only Ord(), High(), Low(), SizeOf(), Chr(), Trunc(), and integer typecasts are supported in const expressions.\n");
@@ -2404,9 +2573,32 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                         continue;
                     }
 
-                    /* Skip other complex types - let semcheck_type_decls handle them */
+                    /* Predeclare array/set/file aliases so return types can resolve early. */
                     if (alias->is_array || alias->is_set || alias->is_file)
                     {
+                        KgpcType *kgpc_type = create_kgpc_type_from_type_alias(alias, symtab);
+                        if (kgpc_type != NULL)
+                        {
+                            if (tree->tree_data.type_decl_data.kgpc_type == NULL)
+                            {
+                                tree->tree_data.type_decl_data.kgpc_type = kgpc_type;
+                                kgpc_type_retain(kgpc_type);
+                            }
+                            int result = PushTypeOntoScope_Typed(symtab, (char *)type_id, kgpc_type);
+                            if (result > 0)
+                                errors += result;
+                            else
+                            {
+                                HashNode_t *type_node = semcheck_find_type_node_with_unit_flag(symtab,
+                                    type_id, tree->tree_data.type_decl_data.defined_in_unit);
+                                if (type_node != NULL)
+                                    mark_hashnode_unit_info(type_node,
+                                        tree->tree_data.type_decl_data.defined_in_unit,
+                                        tree->tree_data.type_decl_data.unit_is_public);
+                            }
+                            cur = cur->next;
+                            continue;
+                        }
                         cur = cur->next;
                         continue;
                     }
@@ -2799,7 +2991,10 @@ static int add_class_padding_field(struct RecordType *record_info, long long pad
     padding->is_hidden = 1;
 
     ListNode_t *node = CreateListNode(padding, LIST_RECORD_FIELD);
-    record_info->fields = PushListNodeBack(record_info->fields, node);
+    if (record_info->fields == NULL)
+        record_info->fields = node;
+    else
+        record_info->fields = PushListNodeBack(record_info->fields, node);
     return 0;
 }
 
@@ -3149,6 +3344,100 @@ static int resolve_const_identifier(SymTab_t *symtab, const char *id, long long 
     }
     
     return 1;
+}
+
+static int resolve_scoped_enum_literal(SymTab_t *symtab, const char *type_name,
+    const char *literal_name, long long *out_value)
+{
+    if (symtab == NULL || type_name == NULL || literal_name == NULL || out_value == NULL)
+        return 0;
+
+    const char *current_type = type_name;
+    for (int depth = 0; depth < 8; ++depth)
+    {
+        HashNode_t *type_node = NULL;
+        if (FindIdent(&type_node, symtab, (char *)current_type) < 0 || type_node == NULL ||
+            type_node->hash_type != HASHTYPE_TYPE)
+        {
+            const char *base = semcheck_base_type_name(current_type);
+            if (base == NULL || base == current_type ||
+                FindIdent(&type_node, symtab, (char *)base) < 0 || type_node == NULL ||
+                type_node->hash_type != HASHTYPE_TYPE)
+            {
+                break;
+            }
+        }
+
+        if (type_node->type == NULL)
+            return 0;
+        struct TypeAlias *alias = kgpc_type_get_type_alias(type_node->type);
+        if (alias != NULL && alias->is_enum && alias->enum_literals != NULL)
+        {
+            int ordinal = 0;
+            ListNode_t *literal_node = alias->enum_literals;
+            while (literal_node != NULL)
+            {
+                if (literal_node->cur != NULL &&
+                    pascal_identifier_equals((char *)literal_node->cur, literal_name))
+                {
+                    *out_value = ordinal;
+                    return 1;
+                }
+                ++ordinal;
+                literal_node = literal_node->next;
+            }
+            return 0;
+        }
+
+        if (alias == NULL || alias->target_type_id == NULL ||
+            pascal_identifier_equals(alias->target_type_id, current_type))
+            break;
+        current_type = alias->target_type_id;
+    }
+
+    {
+        const char *base_name = semcheck_base_type_name(type_name);
+        if (base_name != NULL && pascal_identifier_equals(base_name, "TEndian"))
+        {
+            if (pascal_identifier_equals(literal_name, "Little"))
+            {
+                *out_value = 0;
+                return 1;
+            }
+            if (pascal_identifier_equals(literal_name, "Big"))
+            {
+                *out_value = 1;
+                return 1;
+            }
+        }
+    }
+
+    return 0;
+}
+
+static char *build_qualified_identifier_from_expr(struct Expression *expr)
+{
+    if (expr == NULL)
+        return NULL;
+    if (expr->type == EXPR_VAR_ID && expr->expr_data.id != NULL)
+        return strdup(expr->expr_data.id);
+    if (expr->type != EXPR_RECORD_ACCESS)
+        return NULL;
+
+    struct Expression *record_expr = expr->expr_data.record_access_data.record_expr;
+    char *field_id = expr->expr_data.record_access_data.field_id;
+    if (record_expr == NULL || field_id == NULL)
+        return NULL;
+
+    char *base = build_qualified_identifier_from_expr(record_expr);
+    if (base == NULL)
+        return NULL;
+    size_t qualified_len = strlen(base) + 1 + strlen(field_id) + 1;
+    char *qualified = (char *)malloc(qualified_len);
+    if (qualified != NULL)
+        snprintf(qualified, qualified_len, "%s.%s", base, field_id);
+    free(base);
+    return qualified;
 }
 
 /* Resolves array bounds specified as constant identifiers in a KgpcType
@@ -3831,7 +4120,7 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
     struct Expression *value_expr = tree->tree_data.const_decl_data.value;
         
         /* Determine the type of constant by checking the expression */
-        int is_string_const = expression_is_string(value_expr);
+        int is_string_const = expression_is_string(symtab, value_expr);
         int is_real_const = !is_string_const && expression_contains_real_literal_impl(symtab, value_expr);
         
         if (is_string_const)
@@ -4111,12 +4400,44 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
     return return_val;
 }
 
+static int semcheck_const_decls_imported(SymTab_t *symtab, ListNode_t *const_decls)
+{
+    int return_val = 0;
+    ListNode_t *cur = const_decls;
+    while (cur != NULL)
+    {
+        assert(cur->type == LIST_TREE);
+        Tree_t *tree = (Tree_t *)cur->cur;
+        assert(tree->type == TREE_CONST_DECL);
+        if (tree->tree_data.const_decl_data.defined_in_unit)
+            return_val += semcheck_single_const_decl(symtab, tree);
+        cur = cur->next;
+    }
+    return return_val;
+}
+
+static int semcheck_const_decls_local(SymTab_t *symtab, ListNode_t *const_decls)
+{
+    int return_val = 0;
+    ListNode_t *cur = const_decls;
+    while (cur != NULL)
+    {
+        assert(cur->type == LIST_TREE);
+        Tree_t *tree = (Tree_t *)cur->cur;
+        assert(tree->type == TREE_CONST_DECL);
+        if (!tree->tree_data.const_decl_data.defined_in_unit)
+            return_val += semcheck_single_const_decl(symtab, tree);
+        cur = cur->next;
+    }
+    return return_val;
+}
+
 /* Semantic check on constant declarations.
- * 
+ *
  * ARCHITECTURAL FIX: Two-pass processing to handle qualified constant references.
  * When a unit (e.g., baseunix) imports another unit (e.g., UnixType) and re-aliases
  * constants like: ARG_MAX = UnixType.ARG_MAX;
- * 
+ *
  * The imported unit's constants must be pushed to the symbol table BEFORE the
  * local constants are evaluated. This requires:
  *   Pass 1: Process only constants from imported units (defined_in_unit=1)
@@ -4125,45 +4446,8 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
 int semcheck_const_decls(SymTab_t *symtab, ListNode_t *const_decls)
 {
     int return_val = 0;
-    ListNode_t *cur;
-
-    /* Pass 1: Process constants from imported units first.
-     * These need to be in the symbol table before local constants
-     * can reference them via qualified names (e.g., UnixType.ARG_MAX) */
-    cur = const_decls;
-    while (cur != NULL)
-    {
-        assert(cur->type == LIST_TREE);
-        Tree_t *tree = (Tree_t *)cur->cur;
-        assert(tree->type == TREE_CONST_DECL);
-
-        /* Only process imported unit constants in this pass */
-        if (tree->tree_data.const_decl_data.defined_in_unit)
-        {
-            return_val += semcheck_single_const_decl(symtab, tree);
-        }
-
-        cur = cur->next;
-    }
-
-    /* Pass 2: Process local constants (not from imported units).
-     * These may reference constants from imported units via qualified names. */
-    cur = const_decls;
-    while (cur != NULL)
-    {
-        assert(cur->type == LIST_TREE);
-        Tree_t *tree = (Tree_t *)cur->cur;
-        assert(tree->type == TREE_CONST_DECL);
-
-        /* Only process local constants in this pass */
-        if (!tree->tree_data.const_decl_data.defined_in_unit)
-        {
-            return_val += semcheck_single_const_decl(symtab, tree);
-        }
-
-        cur = cur->next;
-    }
-
+    return_val += semcheck_const_decls_imported(symtab, const_decls);
+    return_val += semcheck_const_decls_local(symtab, const_decls);
     return return_val;
 }
 
@@ -4179,6 +4463,29 @@ static void add_builtin_type_owned(SymTab_t *symtab, const char *name, KgpcType 
     destroy_kgpc_type(type);
 }
 
+static void add_builtin_alias_type(SymTab_t *symtab, const char *name, int base_type,
+    int storage_size)
+{
+    if (symtab == NULL || name == NULL)
+        return;
+
+    struct TypeAlias *alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
+    if (alias == NULL)
+        return;
+    alias->base_type = base_type;
+    alias->storage_size = storage_size;
+
+    KgpcType *type = create_primitive_type(base_type);
+    if (type == NULL)
+    {
+        free(alias);
+        return;
+    }
+    kgpc_type_set_type_alias(type, alias);
+    AddBuiltinType_Typed(symtab, (char *)name, type);
+    destroy_kgpc_type(type);
+}
+
 static void add_builtin_from_vartype(SymTab_t *symtab, const char *name, enum VarType vt)
 {
     KgpcType *t = kgpc_type_from_var_type(vt);
@@ -4189,22 +4496,43 @@ static void add_builtin_from_vartype(SymTab_t *symtab, const char *name, enum Va
 void semcheck_add_builtins(SymTab_t *symtab)
 {
 
-    /* Platform newline constants to support System/ObjPas resourcestring concatenations */
-    AddBuiltinStringConst(symtab, "LineEnding", "\n");
-    AddBuiltinStringConst(symtab, "sLineBreak", "\n");
+    if (!stdlib_loaded_flag())
+    {
+        /* Platform newline constants to support System/ObjPas resourcestring concatenations */
+        AddBuiltinStringConst(symtab, "LineEnding", "\n");
+        AddBuiltinStringConst(symtab, "sLineBreak", "\n");
+        AddBuiltinCharConst(symtab, "DirectorySeparator", '/');
+        AddBuiltinCharConst(symtab, "DriveSeparator", 0);
+        AddBuiltinCharConst(symtab, "PathSeparator", ':');
+        AddBuiltinCharConst(symtab, "ExtensionSeparator", '.');
+        AddBuiltinIntConst(symtab, "MaxPathLen", 4096);
 
-    /* Unix/Linux baseline limits needed by unix.pp aliases (UT.*) */
-    AddBuiltinIntConst(symtab, "ARG_MAX", 131072);
-    AddBuiltinIntConst(symtab, "NAME_MAX", 255);
-    AddBuiltinIntConst(symtab, "PATH_MAX", 4095);
-    AddBuiltinIntConst(symtab, "SYS_NMLN", 65);
-    AddBuiltinIntConst(symtab, "SIG_MAXSIG", 128);
-    AddBuiltinIntConst(symtab, "PRIO_PROCESS", 0);
-    AddBuiltinIntConst(symtab, "PRIO_PGRP", 1);
-    AddBuiltinIntConst(symtab, "PRIO_USER", 2);
-    AddBuiltinIntConst(symtab, "UTSNAME_LENGTH", 65);
-    AddBuiltinIntConst(symtab, "fmClosed", 0xD7B0);
-    AddBuiltinIntConst(symtab, "fmInput", 0xD7B1);
+        /* Unix/Linux baseline limits needed by unix.pp aliases (UT.*) */
+        AddBuiltinIntConst(symtab, "ARG_MAX", 131072);
+        AddBuiltinIntConst(symtab, "NAME_MAX", 255);
+        AddBuiltinIntConst(symtab, "PATH_MAX", 4095);
+        AddBuiltinIntConst(symtab, "SYS_NMLN", 65);
+        AddBuiltinIntConst(symtab, "SIG_MAXSIG", 128);
+        AddBuiltinIntConst(symtab, "PRIO_PROCESS", 0);
+        AddBuiltinIntConst(symtab, "PRIO_PGRP", 1);
+        AddBuiltinIntConst(symtab, "PRIO_USER", 2);
+        AddBuiltinIntConst(symtab, "UTSNAME_LENGTH", 65);
+        AddBuiltinIntConst(symtab, "fmClosed", 0xD7B0);
+        AddBuiltinIntConst(symtab, "fmInput", 0xD7B1);
+
+        /* Sysutils signal helpers (interface declarations may be skipped during parsing). */
+        AddBuiltinIntConst(symtab, "RTL_SIGINT", 0);
+        AddBuiltinIntConst(symtab, "RTL_SIGFPE", 1);
+        AddBuiltinIntConst(symtab, "RTL_SIGSEGV", 2);
+        AddBuiltinIntConst(symtab, "RTL_SIGILL", 3);
+        AddBuiltinIntConst(symtab, "RTL_SIGBUS", 4);
+        AddBuiltinIntConst(symtab, "RTL_SIGQUIT", 5);
+        AddBuiltinIntConst(symtab, "RTL_SIGLAST", 5);
+        AddBuiltinIntConst(symtab, "RTL_SIGDEFAULT", -1);
+        AddBuiltinIntConst(symtab, "ssNotHooked", 0);
+        AddBuiltinIntConst(symtab, "ssHooked", 1);
+        AddBuiltinIntConst(symtab, "ssOverridden", 2);
+    }
     
     /* Integer boundary constants - required by FPC's objpas.pp and system.pp */
     {
@@ -4272,8 +4600,19 @@ void semcheck_add_builtins(SymTab_t *symtab)
     add_builtin_from_vartype(symtab, "Integer", HASHVAR_INTEGER);
     add_builtin_from_vartype(symtab, "LongInt", HASHVAR_LONGINT);
     add_builtin_type_owned(symtab, "Int64", create_primitive_type_with_size(INT64_TYPE, 8));
+    if (!stdlib_loaded_flag())
+        add_builtin_alias_type(symtab, "Currency", INT64_TYPE, 8);
     add_builtin_from_vartype(symtab, "Real", HASHVAR_REAL);
     add_builtin_from_vartype(symtab, "Boolean", HASHVAR_BOOLEAN);
+    /* FPC-compatible extended boolean types */
+    add_builtin_alias_type(symtab, "Boolean8", BOOL, 1);
+    add_builtin_alias_type(symtab, "Boolean16", BOOL, 2);
+    add_builtin_alias_type(symtab, "Boolean32", BOOL, 4);
+    add_builtin_alias_type(symtab, "Boolean64", BOOL, 8);
+    if (!stdlib_loaded_flag())
+    {
+        add_builtin_alias_type(symtab, "TSignalState", INT_TYPE, 4);
+    }
     add_builtin_from_vartype(symtab, "Char", HASHVAR_CHAR);
     add_builtin_type_owned(symtab, "WideChar", create_primitive_type_with_size(CHAR_TYPE, 2));
     add_builtin_from_vartype(symtab, "String", HASHVAR_PCHAR);
@@ -4281,13 +4620,46 @@ void semcheck_add_builtins(SymTab_t *symtab)
     add_builtin_from_vartype(symtab, "RawByteString", HASHVAR_PCHAR);
     add_builtin_from_vartype(symtab, "UnicodeString", HASHVAR_PCHAR);
     add_builtin_from_vartype(symtab, "WideString", HASHVAR_PCHAR);
-    add_builtin_type_owned(symtab, "PAnsiString",
-        create_pointer_type(create_primitive_type(STRING_TYPE)));
-    add_builtin_type_owned(symtab, "PString",
-        create_pointer_type(create_primitive_type(STRING_TYPE)));
+    if (!stdlib_loaded_flag())
+    {
+        add_builtin_type_owned(symtab, "PAnsiString",
+            create_pointer_type(create_primitive_type(STRING_TYPE)));
+        add_builtin_type_owned(symtab, "PString",
+            create_pointer_type(create_primitive_type(STRING_TYPE)));
+    }
 
     /* Primitive pointer type */
     add_builtin_type_owned(symtab, "Pointer", create_primitive_type(POINTER_TYPE));
+    if (!stdlib_loaded_flag())
+    {
+        add_builtin_alias_type(symtab, "TClass", POINTER_TYPE, (int)sizeof(void *));
+        struct RecordType *tobject = (struct RecordType *)calloc(1, sizeof(struct RecordType));
+        if (tobject != NULL)
+        {
+            tobject->is_class = 1;
+            tobject->type_id = strdup("TObject");
+            KgpcType *tobject_type = create_record_type(tobject);
+            if (tobject_type != NULL)
+            {
+                AddBuiltinType_Typed(symtab, strdup("TObject"), tobject_type);
+                destroy_kgpc_type(tobject_type);
+            }
+        }
+
+        struct RecordType *tinterfaced = (struct RecordType *)calloc(1, sizeof(struct RecordType));
+        if (tinterfaced != NULL)
+        {
+            tinterfaced->is_class = 1;
+            tinterfaced->type_id = strdup("TInterfacedObject");
+            tinterfaced->parent_class_name = strdup("TObject");
+            KgpcType *tinterfaced_type = create_record_type(tinterfaced);
+            if (tinterfaced_type != NULL)
+            {
+                AddBuiltinType_Typed(symtab, strdup("TInterfacedObject"), tinterfaced_type);
+                destroy_kgpc_type(tinterfaced_type);
+            }
+        }
+    }
 
     /* Common ordinal aliases (match KGPC system.p sizes) */
     add_builtin_type_owned(symtab, "Byte", create_primitive_type_with_size(INT_TYPE, 1));
@@ -4462,14 +4834,6 @@ void semcheck_add_builtins(SymTab_t *symtab)
         destroy_kgpc_type(setcodepage_type);
         free(setcodepage_proc);
     }
-    char *interlocked_proc = strdup("InterlockedExchangeAdd");
-    if (interlocked_proc != NULL) {
-        KgpcType *interlocked_type = create_procedure_type(NULL, NULL);
-        assert(interlocked_type != NULL && "Failed to create InterlockedExchangeAdd procedure type");
-        AddBuiltinProc_Typed(symtab, interlocked_proc, interlocked_type);
-        destroy_kgpc_type(interlocked_type);
-        free(interlocked_proc);
-    }
     char *freemem_proc = strdup("FreeMem");
     if (freemem_proc != NULL) {
         KgpcType *freemem_type = create_procedure_type(NULL, NULL);
@@ -4624,15 +4988,34 @@ void semcheck_add_builtins(SymTab_t *symtab)
         destroy_kgpc_type(getmem_type);
         free(getmem_func);
     }
-    char *interlocked_func = strdup("InterlockedExchangeAdd");
-    if (interlocked_func != NULL) {
-        KgpcType *return_type = kgpc_type_from_var_type(HASHVAR_LONGINT);
-        assert(return_type != NULL && "Failed to create return type for InterlockedExchangeAdd");
-        KgpcType *interlocked_type = create_procedure_type(NULL, return_type);
-        assert(interlocked_type != NULL && "Failed to create InterlockedExchangeAdd function type");
-        AddBuiltinFunction_Typed(symtab, interlocked_func, interlocked_type);
-        destroy_kgpc_type(interlocked_type);
-        free(interlocked_func);
+    {
+        const char *interlocked_name = "InterlockedExchangeAdd";
+
+        ListNode_t *param_target = semcheck_create_builtin_param_var("Target", LONGINT_TYPE);
+        ListNode_t *param_value = semcheck_create_builtin_param("Source", LONGINT_TYPE);
+        ListNode_t *params = ConcatList(param_target, param_value);
+        KgpcType *return_type = create_primitive_type(LONGINT_TYPE);
+        KgpcType *interlocked_type = create_procedure_type(params, return_type);
+        if (interlocked_type != NULL)
+        {
+            AddBuiltinFunction_Typed(symtab, strdup(interlocked_name), interlocked_type);
+            destroy_kgpc_type(interlocked_type);
+        }
+        if (params != NULL)
+            DestroyList(params);
+
+        param_target = semcheck_create_builtin_param_var("Target", INT64_TYPE);
+        param_value = semcheck_create_builtin_param("Source", INT64_TYPE);
+        params = ConcatList(param_target, param_value);
+        return_type = create_primitive_type(INT64_TYPE);
+        interlocked_type = create_procedure_type(params, return_type);
+        if (interlocked_type != NULL)
+        {
+            AddBuiltinFunction_Typed(symtab, strdup(interlocked_name), interlocked_type);
+            destroy_kgpc_type(interlocked_type);
+        }
+        if (params != NULL)
+            DestroyList(params);
     }
     char *to_singlebyte = strdup("ToSingleByteFileSystemEncodedFileName");
     if (to_singlebyte != NULL) {
@@ -4912,18 +5295,41 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
             debug_cur = debug_cur->next;
         }
     }
-    ListNode_t *typed_consts = collect_typed_const_decls(symtab,
-        tree->tree_data.program_data.var_declaration);
-    if (typed_consts != NULL)
+    
+    /* Four-pass processing for constants to handle all reference patterns:
+     *
+     * Pass 1: Imported unit untyped constants.
+     * Pass 2: Imported unit typed constants (e.g., DirectorySeparator from system.p).
+     * Pass 3: Local untyped constants.
+     * Pass 4: Local typed constants.
+     */
+
+    /* Pass 1: Imported unit untyped constants */
+    return_val += semcheck_const_decls_imported(symtab, tree->tree_data.program_data.const_declaration);
+
+    /* Pass 2: Imported unit typed constants */
+    ListNode_t *unit_typed_consts = collect_typed_const_decls_filtered(symtab,
+        tree->tree_data.program_data.var_declaration, 1);  /* from_unit_only=true */
+    if (unit_typed_consts != NULL)
     {
-        return_val += semcheck_decls(symtab, typed_consts);
-        DestroyList(typed_consts);
+        return_val += semcheck_decls(symtab, unit_typed_consts);
+        DestroyList(unit_typed_consts);
     }
 
-    return_val += semcheck_const_decls(symtab, tree->tree_data.program_data.const_declaration);
+    /* Pass 3: Local untyped constants */
+    return_val += semcheck_const_decls_local(symtab, tree->tree_data.program_data.const_declaration);
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after consts: %d\n", return_val);
 #endif
+
+    /* Pass 4: Local typed constants (can reference both unit typed consts and local untyped consts) */
+    ListNode_t *local_typed_consts = collect_typed_const_decls_filtered(symtab,
+        tree->tree_data.program_data.var_declaration, 0);  /* from_unit_only=false */
+    if (local_typed_consts != NULL)
+    {
+        return_val += semcheck_decls(symtab, local_typed_consts);
+        DestroyList(local_typed_consts);
+    }
 
     return_val += semcheck_type_decls(symtab, tree->tree_data.program_data.type_declaration);
 #ifdef DEBUG
@@ -5031,19 +5437,42 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
                 return_val - before, return_val);
     
     /* Continue interface section processing */
+    /* Pass 1: Imported unit untyped constants. */
     before = return_val;
-    ListNode_t *typed_iface_consts = collect_typed_const_decls(symtab,
-        tree->tree_data.unit_data.interface_var_decls);
+    return_val += semcheck_const_decls_imported(symtab, tree->tree_data.unit_data.interface_const_decls);
+    if (debug_steps != NULL && return_val != before)
+        fprintf(stderr, "[SemCheck] interface unit consts +%d (total %d)\n",
+                return_val - before, return_val);
+
+    /* Pass 2: Imported unit typed constants (e.g., prelude/system typed consts). */
+    before = return_val;
+    ListNode_t *typed_iface_unit_consts = collect_typed_const_decls_filtered(symtab,
+        tree->tree_data.unit_data.interface_var_decls, 1);
+    if (typed_iface_unit_consts != NULL)
+    {
+        return_val += semcheck_decls(symtab, typed_iface_unit_consts);
+        DestroyList(typed_iface_unit_consts);
+    }
+    if (debug_steps != NULL && return_val != before)
+        fprintf(stderr, "[SemCheck] interface typed unit consts +%d (total %d)\n",
+                return_val - before, return_val);
+
+    /* Pass 3: Local untyped const declarations. */
+    before = return_val;
+    return_val += semcheck_const_decls_local(symtab, tree->tree_data.unit_data.interface_const_decls);
+    if (debug_steps != NULL && return_val != before)
+        fprintf(stderr, "[SemCheck] interface consts +%d (total %d)\n",
+                return_val - before, return_val);
+                
+    /* Pass 4: Local interface typed constants - they can reference regular constants */
+    before = return_val;
+    ListNode_t *typed_iface_consts = collect_typed_const_decls_filtered(symtab,
+        tree->tree_data.unit_data.interface_var_decls, 0);
     if (typed_iface_consts != NULL)
     {
         return_val += semcheck_decls(symtab, typed_iface_consts);
         DestroyList(typed_iface_consts);
     }
-
-    return_val += semcheck_const_decls(symtab, tree->tree_data.unit_data.interface_const_decls);
-    if (debug_steps != NULL && return_val != before)
-        fprintf(stderr, "[SemCheck] interface consts +%d (total %d)\n",
-                return_val - before, return_val);
     before = return_val;
     return_val += semcheck_type_decls(symtab, tree->tree_data.unit_data.interface_type_decls);
     if (debug_steps != NULL && return_val != before)
@@ -5056,19 +5485,42 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
                 return_val - before, return_val);
 
     /* Continue implementation section processing */
+    /* Pass 1: Imported unit untyped constants from implementation section. */
     before = return_val;
-    ListNode_t *typed_impl_consts = collect_typed_const_decls(symtab,
-        tree->tree_data.unit_data.implementation_var_decls);
+    return_val += semcheck_const_decls_imported(symtab, tree->tree_data.unit_data.implementation_const_decls);
+    if (debug_steps != NULL && return_val != before)
+        fprintf(stderr, "[SemCheck] impl unit consts +%d (total %d)\n",
+                return_val - before, return_val);
+
+    /* Pass 2: Imported unit typed constants from implementation section. */
+    before = return_val;
+    ListNode_t *typed_impl_unit_consts = collect_typed_const_decls_filtered(symtab,
+        tree->tree_data.unit_data.implementation_var_decls, 1);
+    if (typed_impl_unit_consts != NULL)
+    {
+        return_val += semcheck_decls(symtab, typed_impl_unit_consts);
+        DestroyList(typed_impl_unit_consts);
+    }
+    if (debug_steps != NULL && return_val != before)
+        fprintf(stderr, "[SemCheck] impl typed unit consts +%d (total %d)\n",
+                return_val - before, return_val);
+
+    /* Pass 3: Local untyped const declarations. */
+    before = return_val;
+    return_val += semcheck_const_decls_local(symtab, tree->tree_data.unit_data.implementation_const_decls);
+    if (debug_steps != NULL && return_val != before)
+        fprintf(stderr, "[SemCheck] impl consts +%d (total %d)\n",
+                return_val - before, return_val);
+                
+    /* Pass 4: Local implementation typed constants */
+    before = return_val;
+    ListNode_t *typed_impl_consts = collect_typed_const_decls_filtered(symtab,
+        tree->tree_data.unit_data.implementation_var_decls, 0);
     if (typed_impl_consts != NULL)
     {
         return_val += semcheck_decls(symtab, typed_impl_consts);
         DestroyList(typed_impl_consts);
     }
-
-    return_val += semcheck_const_decls(symtab, tree->tree_data.unit_data.implementation_const_decls);
-    if (debug_steps != NULL && return_val != before)
-        fprintf(stderr, "[SemCheck] impl consts +%d (total %d)\n",
-                return_val - before, return_val);
     before = return_val;
     return_val += semcheck_type_decls(symtab, tree->tree_data.unit_data.implementation_type_decls);
     if (debug_steps != NULL && return_val != before)
@@ -5237,10 +5689,38 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
 
                 if (tree->tree_data.var_decl_data.type_id != NULL)
                 {
+                    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL && tree->tree_data.var_decl_data.is_typed_const)
+                        fprintf(stderr, "[SemCheck] Typed const with type_id: %s, var: %s\n",
+                            tree->tree_data.var_decl_data.type_id,
+                            ids && ids->cur ? (char*)ids->cur : "<null>");
                     HashNode_t *type_node = resolved_type;
                     const char *type_id = tree->tree_data.var_decl_data.type_id;
                     int declared_type = tree->tree_data.var_decl_data.type;
                     
+                    if (declared_type == SET_TYPE)
+                    {
+                        KgpcType *set_type = create_primitive_type(SET_TYPE);
+                        if (set_type != NULL &&
+                            tree->tree_data.var_decl_data.inline_type_alias != NULL)
+                        {
+                            kgpc_type_set_type_alias(set_type,
+                                tree->tree_data.var_decl_data.inline_type_alias);
+                        }
+                        func_return = PushVarOntoScope_Typed(symtab, (char *)ids->cur, set_type);
+                        if (func_return == 0)
+                        {
+                            HashNode_t *var_node = NULL;
+                            if (FindIdent(&var_node, symtab, (char *)ids->cur) != -1 && var_node != NULL)
+                            {
+                                var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
+                                mark_hashnode_unit_info(var_node,
+                                    tree->tree_data.var_decl_data.defined_in_unit,
+                                    tree->tree_data.var_decl_data.unit_is_public);
+                            }
+                        }
+                        goto next_identifier;
+                    }
+
                     /* If declared as pointer type (^TypeName), handle inline pointer */
                     if (declared_type == POINTER_TYPE)
                     {
@@ -5584,13 +6064,65 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 else
                 {
                     /* Special handling for ShortString - create as array[0..255] of Char */
-                    if (var_type == HASHVAR_ARRAY && 
+                    if (var_type == HASHVAR_ARRAY &&
                         tree->tree_data.var_decl_data.type_id != NULL &&
                         pascal_identifier_equals(tree->tree_data.var_decl_data.type_id, "ShortString"))
                     {
                         /* Create ShortString as array[0..255] of Char */
                         KgpcType *char_type = create_primitive_type(CHAR_TYPE);
                         var_kgpc_type = create_array_type(char_type, 0, 255);
+                    }
+                    /* Handle inline array types (e.g., array[0..2] of PChar) */
+                    else if (tree->tree_data.var_decl_data.inline_type_alias != NULL &&
+                             tree->tree_data.var_decl_data.inline_type_alias->is_array)
+                    {
+                        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+                            fprintf(stderr, "[SemCheck] Processing inline array for var: %s\n",
+                                ids && ids->cur ? (char*)ids->cur : "<null>");
+                        struct TypeAlias *alias = tree->tree_data.var_decl_data.inline_type_alias;
+                        int start = alias->array_start;
+                        int end = alias->array_end;
+                        if (alias->is_open_array)
+                        {
+                            start = 0;
+                            end = -1;
+                        }
+
+                        /* Get element type */
+                        KgpcType *element_type = NULL;
+                        int element_type_tag = alias->array_element_type;
+
+                        if (element_type_tag == UNKNOWN_TYPE && alias->array_element_type_id != NULL)
+                        {
+                            HashNode_t *element_type_node = NULL;
+                            if (FindIdent(&element_type_node, symtab, alias->array_element_type_id) >= 0 &&
+                                element_type_node != NULL && element_type_node->type != NULL)
+                            {
+                                element_type = element_type_node->type;
+                            }
+                            else
+                            {
+                                /* Check for builtin type */
+                                int builtin_tag = semcheck_map_builtin_type_name_local(alias->array_element_type_id);
+                                if (builtin_tag != UNKNOWN_TYPE)
+                                    element_type = create_primitive_type(builtin_tag);
+                            }
+                        }
+                        else if (element_type_tag != UNKNOWN_TYPE)
+                        {
+                            element_type = create_primitive_type(element_type_tag);
+                        }
+
+                        if (element_type != NULL)
+                        {
+                            var_kgpc_type = create_array_type(element_type, start, end);
+                            kgpc_type_set_type_alias(var_kgpc_type, alias);
+                        }
+                        else
+                        {
+                            /* Fallback to var_type if element type unresolved */
+                            var_kgpc_type = kgpc_type_from_var_type(var_type);
+                        }
                     }
                     else
                     {
@@ -5671,7 +6203,11 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
             else
             {
                 assert(tree->type == TREE_ARR_DECL);
-                
+                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+                    fprintf(stderr, "[SemCheck] Processing TREE_ARR_DECL: %s is_typed_const=%d\n",
+                        ids && ids->cur ? (char*)ids->cur : "<null>",
+                        tree->tree_data.arr_decl_data.is_typed_const);
+
                 KgpcType *element_type = NULL;
                 
                 /* If type_id is specified, resolve it to get the element type */
@@ -5837,7 +6373,15 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     }
                 }
                 
+                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+                    fprintf(stderr, "[SemCheck] Pushing array: %s, array_type=%p kind=%d elem_kind=%d\n",
+                        ids && ids->cur ? (char*)ids->cur : "<null>",
+                        (void*)array_type, array_type ? array_type->kind : -1,
+                        (array_type && array_type->kind == TYPE_KIND_ARRAY && array_type->info.array_info.element_type) ?
+                            array_type->info.array_info.element_type->kind : -1);
                 func_return = PushArrayOntoScope_Typed(symtab, (char *)ids->cur, array_type);
+                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+                    fprintf(stderr, "[SemCheck] PushArrayOntoScope_Typed returned: %d\n", func_return);
             }
 
             /* Greater than 0 signifies an error */
@@ -5960,7 +6504,7 @@ next_identifier:
                             init_expr->type != EXPR_RECORD_CONSTRUCTOR &&
                             init_expr->type != EXPR_ARRAY_LITERAL)
                         {
-                            if (expression_is_string(init_expr))
+                        if (expression_is_string(symtab, init_expr))
                             {
                                 char *string_value = NULL;
                                 if (evaluate_string_const_expr(symtab, init_expr, &string_value) == 0)
@@ -6151,6 +6695,24 @@ next_identifier:
                                     compatible = 1;
                                 if (!compatible && inferred_is_pointer && current_is_proc)
                                     compatible = 1;
+                            }
+
+                            if (!compatible && current_var_type == HASHVAR_RECORD && expr_type == STRING_TYPE)
+                            {
+                                const char *record_id = NULL;
+                                if (var_node->type != NULL)
+                                {
+                                    struct RecordType *record = kgpc_type_get_record(var_node->type);
+                                    if (record != NULL && record->type_id != NULL)
+                                        record_id = record->type_id;
+                                }
+                                if (record_id == NULL)
+                                    record_id = tree->tree_data.var_decl_data.type_id;
+                                if (record_id != NULL &&
+                                    (strcasecmp(record_id, "TGuid") == 0 || strcasecmp(record_id, "GUID") == 0))
+                                {
+                                    compatible = 1;
+                                }
                             }
 
                             if (!compatible)
