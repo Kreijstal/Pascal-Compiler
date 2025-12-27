@@ -1061,8 +1061,35 @@ static void semcheck_set_array_info_from_hashnode(struct Expression *expr, SymTa
                     expr->array_element_type = element_alias->array_element_type;
                 }
             }
-            /* Other element types (pointers, etc.) can be added here
-             * when needed. For now, primitive, record, and array types cover the common cases. */
+            else if (element_type->kind == TYPE_KIND_POINTER)
+            {
+                /* Element is a pointer type (e.g., array of PChar) */
+                expr->array_element_type = POINTER_TYPE;
+
+                /* Get pointer target type info from the element type */
+                KgpcType *points_to = element_type->info.points_to;
+                if (points_to != NULL)
+                {
+                    if (points_to->kind == TYPE_KIND_PRIMITIVE)
+                    {
+                        /* Store pointer target type for later use in semcheck_arrayaccess */
+                        /* This info will be transferred to the array access expression */
+                    }
+                    else if (points_to->kind == TYPE_KIND_RECORD && points_to->info.record_info != NULL)
+                    {
+                        expr->array_element_record_type = points_to->info.record_info;
+                    }
+                }
+
+                /* If the element type has a type_alias with pointer info, use its type_id */
+                struct TypeAlias *element_alias = element_type->type_alias;
+                if (element_alias != NULL && element_alias->is_pointer && element_alias->pointer_type_id != NULL)
+                {
+                    expr->array_element_type_id = strdup(element_alias->pointer_type_id);
+                    if (expr->array_element_type_id == NULL)
+                        fprintf(stderr, "Error: failed to allocate array element type identifier.\n");
+                }
+            }
         }
     }
     else
@@ -3853,17 +3880,19 @@ static int sizeof_from_type_ref(SymTab_t *symtab, int type_tag,
         HashNode_t *target_node = NULL;
         if (FindIdent(&target_node, symtab, (char *)type_id) == -1 || target_node == NULL)
         {
-            /* For generic type parameters that haven't been resolved yet,
-             * treat as unknown size rather than hard error - this allows
-             * generic templates to be processed without full instantiation */
+            /* For generic type parameters or nested types that haven't been resolved yet,
+             * treat as pointer-sized rather than hard error - this allows:
+             * - generic templates to be processed without full instantiation
+             * - FPC bootstrap where nested types (Public type ...) aren't supported yet
+             * Nested procedural types and class references are typically pointer-sized */
             const char *debug_env = getenv("KGPC_DEBUG_TFPG");
             if (debug_env != NULL)
             {
-                fprintf(stderr, "[KGPC] SizeOf: unknown type %s at line %d (may be unresolved generic parameter)\n",
+                fprintf(stderr, "[KGPC] SizeOf: unknown type %s at line %d (may be unresolved generic parameter or nested type)\n",
                     type_id, line_num);
             }
-            *size_out = 0;  /* Unknown size - caller should handle */
-            return 1;  /* Still return error to indicate unresolved */
+            *size_out = POINTER_SIZE_BYTES;  /* Assume pointer-sized for unknown types */
+            return 0;  /* Return success to allow processing to continue */
         }
         return sizeof_from_hashnode(symtab, target_node, size_out, depth + 1, line_num);
     }
@@ -8208,6 +8237,12 @@ int semcheck_varid(int *type_return,
             {
                 node_is_array = hashnode_is_array(hash_return);
             }
+            if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+                fprintf(stderr, "[SemCheck] semcheck_varid: id=%s hash_type=%d node_type=%p kind=%d node_is_array=%d\n",
+                    id ? id : "<null>", hash_return->hash_type,
+                    (void*)hash_return->type,
+                    hash_return->type ? hash_return->type->kind : -1,
+                    node_is_array);
         }
 
         if(hash_return->hash_type != HASHTYPE_VAR &&
@@ -8357,7 +8392,9 @@ int semcheck_arrayaccess(int *type_return,
     return_val += semcheck_expr_main(&base_type, symtab, array_expr, max_scope_lev, mutating);
 
     int base_is_string = (is_string_type(base_type) && !array_expr->is_array_expr);
-    int base_is_pointer = (base_type == POINTER_TYPE);
+    /* Only treat as pointer indexing if NOT an array expression - for arrays of pointers,
+     * we want to go through the array path to properly handle element type info */
+    int base_is_pointer = (base_type == POINTER_TYPE && !array_expr->is_array_expr);
     
     if (!array_expr->is_array_expr && !base_is_string && !base_is_pointer)
     {

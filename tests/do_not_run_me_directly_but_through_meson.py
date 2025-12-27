@@ -1109,6 +1109,19 @@ class TestCompiler(unittest.TestCase):
         self.assertTrue(os.path.exists(asm_file))
         self.assertGreater(os.path.getsize(asm_file), 0)
 
+    def test_nested_type_declarations(self):
+        """Nested type declarations (Delphi syntax: public type inside record/class) should compile."""
+        input_file = os.path.join(TEST_CASES_DIR, "nested_type_declarations_parse_only.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "nested_type_declarations.s")
+
+        run_compiler(
+            input_file,
+            asm_file,
+        )
+
+        self.assertTrue(os.path.exists(asm_file))
+        self.assertGreater(os.path.getsize(asm_file), 0)
+
     def test_real_literal_codegen(self):
         """Compiling a real literal should succeed and materialize the IEEE-754 bits."""
         input_file = os.path.join(TEST_CASES_DIR, "real_literal.p")
@@ -1981,7 +1994,7 @@ sys.exit(3)
 
         asm_source = read_file_content(asm_file)
         self.assertIn("call\tkgpc_move", asm_source)
-        self.assertIn("call\tsucc_i", asm_source)
+        # Note: succ() is now inlined as x+1 by semcheck_builtin_predsucc, so no call to succ_i
 
     def test_register_spill_restores_value(self):
         """Ensures spilled registers are correctly reloaded when register pressure is high."""

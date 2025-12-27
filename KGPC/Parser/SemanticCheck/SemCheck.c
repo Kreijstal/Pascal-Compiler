@@ -568,6 +568,16 @@ static ListNode_t *collect_typed_const_decls_filtered(SymTab_t *symtab, ListNode
                     allow = 0;
                 }
 
+                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL && tree->tree_data.var_decl_data.ids != NULL)
+                {
+                    const char *first_id = tree->tree_data.var_decl_data.ids->cur ?
+                        (const char *)tree->tree_data.var_decl_data.ids->cur : "<null>";
+                    fprintf(stderr, "[SemCheck] collect_typed_const: id=%s type_id=%s type=%d allow=%d inline_alias=%p\n",
+                        first_id, type_id ? type_id : "<null>",
+                        tree->tree_data.var_decl_data.type, allow,
+                        (void*)tree->tree_data.var_decl_data.inline_type_alias);
+                }
+
                 if (allow)
                 {
                     ListNode_t *node = CreateListNode(tree, LIST_TREE);
@@ -5676,6 +5686,10 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
 
                 if (tree->tree_data.var_decl_data.type_id != NULL)
                 {
+                    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL && tree->tree_data.var_decl_data.is_typed_const)
+                        fprintf(stderr, "[SemCheck] Typed const with type_id: %s, var: %s\n",
+                            tree->tree_data.var_decl_data.type_id,
+                            ids && ids->cur ? (char*)ids->cur : "<null>");
                     HashNode_t *type_node = resolved_type;
                     const char *type_id = tree->tree_data.var_decl_data.type_id;
                     int declared_type = tree->tree_data.var_decl_data.type;
@@ -6047,13 +6061,65 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 else
                 {
                     /* Special handling for ShortString - create as array[0..255] of Char */
-                    if (var_type == HASHVAR_ARRAY && 
+                    if (var_type == HASHVAR_ARRAY &&
                         tree->tree_data.var_decl_data.type_id != NULL &&
                         pascal_identifier_equals(tree->tree_data.var_decl_data.type_id, "ShortString"))
                     {
                         /* Create ShortString as array[0..255] of Char */
                         KgpcType *char_type = create_primitive_type(CHAR_TYPE);
                         var_kgpc_type = create_array_type(char_type, 0, 255);
+                    }
+                    /* Handle inline array types (e.g., array[0..2] of PChar) */
+                    else if (tree->tree_data.var_decl_data.inline_type_alias != NULL &&
+                             tree->tree_data.var_decl_data.inline_type_alias->is_array)
+                    {
+                        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+                            fprintf(stderr, "[SemCheck] Processing inline array for var: %s\n",
+                                ids && ids->cur ? (char*)ids->cur : "<null>");
+                        struct TypeAlias *alias = tree->tree_data.var_decl_data.inline_type_alias;
+                        int start = alias->array_start;
+                        int end = alias->array_end;
+                        if (alias->is_open_array)
+                        {
+                            start = 0;
+                            end = -1;
+                        }
+
+                        /* Get element type */
+                        KgpcType *element_type = NULL;
+                        int element_type_tag = alias->array_element_type;
+
+                        if (element_type_tag == UNKNOWN_TYPE && alias->array_element_type_id != NULL)
+                        {
+                            HashNode_t *element_type_node = NULL;
+                            if (FindIdent(&element_type_node, symtab, alias->array_element_type_id) >= 0 &&
+                                element_type_node != NULL && element_type_node->type != NULL)
+                            {
+                                element_type = element_type_node->type;
+                            }
+                            else
+                            {
+                                /* Check for builtin type */
+                                int builtin_tag = semcheck_map_builtin_type_name_local(alias->array_element_type_id);
+                                if (builtin_tag != UNKNOWN_TYPE)
+                                    element_type = create_primitive_type(builtin_tag);
+                            }
+                        }
+                        else if (element_type_tag != UNKNOWN_TYPE)
+                        {
+                            element_type = create_primitive_type(element_type_tag);
+                        }
+
+                        if (element_type != NULL)
+                        {
+                            var_kgpc_type = create_array_type(element_type, start, end);
+                            kgpc_type_set_type_alias(var_kgpc_type, alias);
+                        }
+                        else
+                        {
+                            /* Fallback to var_type if element type unresolved */
+                            var_kgpc_type = kgpc_type_from_var_type(var_type);
+                        }
                     }
                     else
                     {
@@ -6134,7 +6200,11 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
             else
             {
                 assert(tree->type == TREE_ARR_DECL);
-                
+                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+                    fprintf(stderr, "[SemCheck] Processing TREE_ARR_DECL: %s is_typed_const=%d\n",
+                        ids && ids->cur ? (char*)ids->cur : "<null>",
+                        tree->tree_data.arr_decl_data.is_typed_const);
+
                 KgpcType *element_type = NULL;
                 
                 /* If type_id is specified, resolve it to get the element type */
@@ -6300,7 +6370,15 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     }
                 }
                 
+                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+                    fprintf(stderr, "[SemCheck] Pushing array: %s, array_type=%p kind=%d elem_kind=%d\n",
+                        ids && ids->cur ? (char*)ids->cur : "<null>",
+                        (void*)array_type, array_type ? array_type->kind : -1,
+                        (array_type && array_type->kind == TYPE_KIND_ARRAY && array_type->info.array_info.element_type) ?
+                            array_type->info.array_info.element_type->kind : -1);
                 func_return = PushArrayOntoScope_Typed(symtab, (char *)ids->cur, array_type);
+                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+                    fprintf(stderr, "[SemCheck] PushArrayOntoScope_Typed returned: %d\n", func_return);
             }
 
             /* Greater than 0 signifies an error */

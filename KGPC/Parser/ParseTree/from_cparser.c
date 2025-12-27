@@ -3443,7 +3443,7 @@ static void destroy_method_template_instance(struct MethodTemplate *template)
 
 static void collect_class_members(ast_t *node, const char *class_name,
     ListBuilder *field_builder, ListBuilder *property_builder,
-    ListBuilder *method_builder) {
+    ListBuilder *method_builder, ListBuilder *nested_type_builder) {
     if (node == NULL)
         return;
 
@@ -3451,9 +3451,14 @@ static void collect_class_members(ast_t *node, const char *class_name,
     while (cursor != NULL) {
         ast_t *unwrapped = unwrap_pascal_node(cursor);
         if (unwrapped != NULL) {
+            if (getenv("KGPC_DEBUG_TYPE_SECTION") != NULL) {
+                fprintf(stderr, "[KGPC] collect_class_members: node typ=%d (%s) in %s\n",
+                    unwrapped->typ, pascal_tag_to_string(unwrapped->typ),
+                    class_name ? class_name : "<unknown>");
+            }
             switch (unwrapped->typ) {
             case PASCAL_T_CLASS_MEMBER:
-                collect_class_members(unwrapped->child, class_name, field_builder, property_builder, method_builder);
+                collect_class_members(unwrapped->child, class_name, field_builder, property_builder, method_builder, nested_type_builder);
                 break;
             case PASCAL_T_FIELD_DECL: {
                 ListNode_t *fields = convert_class_field_decl(unwrapped);
@@ -3486,6 +3491,18 @@ static void collect_class_members(ast_t *node, const char *class_name,
                     list_builder_append(property_builder, property, LIST_CLASS_PROPERTY);
                 break;
             }
+            case PASCAL_T_TYPE_SECTION:
+            case PASCAL_T_NESTED_TYPE_SECTION: {
+                /* Nested type declarations inside record/class (Delphi syntax: public type ...) */
+                if (nested_type_builder != NULL) {
+                    /* Store a pointer to the AST node for later processing */
+                    list_builder_append(nested_type_builder, unwrapped, LIST_UNSPECIFIED);
+                    if (getenv("KGPC_DEBUG_TYPE_SECTION") != NULL)
+                        fprintf(stderr, "[KGPC] collect_class_members: found NESTED_TYPE_SECTION in %s at line %d\n",
+                            class_name ? class_name : "<unknown>", unwrapped->line);
+                }
+                break;
+            }
             default:
                 break;
             }
@@ -3494,9 +3511,12 @@ static void collect_class_members(ast_t *node, const char *class_name,
     }
 }
 
-static struct RecordType *convert_class_type(const char *class_name, ast_t *class_node) {
+static struct RecordType *convert_class_type_ex(const char *class_name, ast_t *class_node, ListNode_t **nested_types_out) {
     if (class_node == NULL)
         return NULL;
+
+    if (nested_types_out != NULL)
+        *nested_types_out = NULL;
 
     if (getenv("KGPC_DEBUG_GENERIC_CLONES") != NULL && class_name != NULL)
         fprintf(stderr, "[KGPC] convert_class_type %s\n", class_name);
@@ -3504,14 +3524,16 @@ static struct RecordType *convert_class_type(const char *class_name, ast_t *clas
     ListBuilder field_builder;
     ListBuilder property_builder;
     ListBuilder method_template_builder;
+    ListBuilder nested_type_builder;
     list_builder_init(&field_builder);
     list_builder_init(&property_builder);
     list_builder_init(&method_template_builder);
-    
+    list_builder_init(&nested_type_builder);
+
     // Check if first child is a parent class identifier
     char *parent_class_name = NULL;
     ast_t *body_start = class_node->child;
-    
+
     if (body_start != NULL && body_start->typ == PASCAL_T_IDENTIFIER) {
         // First child is parent class name, extract it
         if (body_start->sym != NULL && body_start->sym->name != NULL) {
@@ -3520,7 +3542,7 @@ static struct RecordType *convert_class_type(const char *class_name, ast_t *clas
         // Move to the actual class body (next sibling)
         body_start = body_start->next;
     }
-    
+
     if (getenv("KGPC_DEBUG_CLASS_METHODS") != NULL) {
         fprintf(stderr, "[KGPC] convert_class_type: processing class %s\n", class_name ? class_name : "<null>");
         if (body_start != NULL) {
@@ -3529,8 +3551,14 @@ static struct RecordType *convert_class_type(const char *class_name, ast_t *clas
             fprintf(stderr, "[KGPC]   body_start is NULL\n");
         }
     }
-    
-    collect_class_members(body_start, class_name, &field_builder, &property_builder, &method_template_builder);
+
+    collect_class_members(body_start, class_name, &field_builder, &property_builder, &method_template_builder, &nested_type_builder);
+
+    /* Output collected nested type sections */
+    if (nested_types_out != NULL)
+        *nested_types_out = list_builder_finish(&nested_type_builder);
+    else
+        destroy_list(nested_type_builder.head);
 
     struct RecordType *record = (struct RecordType *)malloc(sizeof(struct RecordType));
     if (record == NULL) {
@@ -3586,6 +3614,10 @@ static struct RecordType *convert_class_type(const char *class_name, ast_t *clas
         }
     }
     return record;
+}
+
+static struct RecordType *convert_class_type(const char *class_name, ast_t *class_node) {
+    return convert_class_type_ex(class_name, class_node, NULL);
 }
 
 static ListNode_t *convert_field_decl(ast_t *field_decl_node) {
@@ -3832,9 +3864,44 @@ static void convert_record_members(ast_t *node, ListBuilder *builder) {
     }
 }
 
-static struct RecordType *convert_record_type(ast_t *record_node) {
+/* Helper: scan record AST for nested type sections (Delphi advanced records) */
+static void collect_record_nested_types(ast_t *node, ListBuilder *nested_type_builder) {
+    for (ast_t *cur = node; cur != NULL; cur = cur->next) {
+        ast_t *unwrapped = unwrap_pascal_node(cur);
+        if (unwrapped == NULL)
+            continue;
+
+        if (unwrapped->typ == PASCAL_T_CLASS_MEMBER) {
+            /* Recurse into CLASS_MEMBER nodes */
+            collect_record_nested_types(unwrapped->child, nested_type_builder);
+        } else if (unwrapped->typ == PASCAL_T_NESTED_TYPE_SECTION || unwrapped->typ == PASCAL_T_TYPE_SECTION) {
+            /* Found a nested type section */
+            if (nested_type_builder != NULL) {
+                list_builder_append(nested_type_builder, unwrapped, LIST_UNSPECIFIED);
+                if (getenv("KGPC_DEBUG_TYPE_SECTION") != NULL)
+                    fprintf(stderr, "[KGPC] collect_record_nested_types: found NESTED_TYPE_SECTION at line %d\n",
+                        unwrapped->line);
+            }
+        }
+    }
+}
+
+static struct RecordType *convert_record_type_ex(ast_t *record_node, ListNode_t **nested_types_out) {
     if (record_node == NULL)
         return NULL;
+
+    if (nested_types_out != NULL)
+        *nested_types_out = NULL;
+
+    /* Scan for nested type sections in the record */
+    ListBuilder nested_type_builder;
+    list_builder_init(&nested_type_builder);
+    collect_record_nested_types(record_node->child, &nested_type_builder);
+
+    if (nested_types_out != NULL)
+        *nested_types_out = list_builder_finish(&nested_type_builder);
+    else
+        destroy_list(nested_type_builder.head);
 
     ListBuilder fields_builder;
     list_builder_init(&fields_builder);
@@ -3858,6 +3925,10 @@ static struct RecordType *convert_record_type(ast_t *record_node) {
     record->generic_args = NULL;
     record->num_generic_args = 0;
     return record;
+}
+
+static struct RecordType *convert_record_type(ast_t *record_node) {
+    return convert_record_type_ex(record_node, NULL);
 }
 
 static char *pop_last_identifier(ListNode_t **ids) {
@@ -4984,9 +5055,12 @@ static long long compute_range_storage_size(const TypeInfo *info)
     return 8;
 }
 
-static Tree_t *convert_type_decl(ast_t *type_decl_node, ListNode_t **method_clones) {
+static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_clones, ListNode_t **nested_type_decls_out) {
     if (type_decl_node == NULL)
         return NULL;
+
+    if (nested_type_decls_out != NULL)
+        *nested_type_decls_out = NULL;
 
     type_decl_node = unwrap_pascal_node(type_decl_node);
     if (type_decl_node == NULL)
@@ -5017,6 +5091,7 @@ static Tree_t *convert_type_decl(ast_t *type_decl_node, ListNode_t **method_clon
     TypeInfo type_info = {0};
     int mapped_type = UNKNOWN_TYPE;
     ast_t *class_spec = NULL;
+    ListNode_t *nested_type_sections = NULL;
     if (spec_node != NULL) {
         if (getenv("KGPC_DEBUG_TFPG") != NULL)
             fprintf(stderr, "[KGPC] convert_type_decl spec_node typ=%d sym=%s for id=%s\n",
@@ -5045,9 +5120,61 @@ static Tree_t *convert_type_decl(ast_t *type_decl_node, ListNode_t **method_clon
         }
 
         if (class_spec != NULL) {
-            record_type = convert_class_type(id, class_spec);
+            record_type = convert_class_type_ex(id, class_spec, &nested_type_sections);
+            /* Process nested type sections - extract and convert nested type declarations */
+            if (nested_type_sections != NULL && nested_type_decls_out != NULL) {
+                ListNode_t *section_cursor = nested_type_sections;
+                while (section_cursor != NULL) {
+                    ast_t *type_section_ast = (ast_t *)section_cursor->cur;
+                    if (type_section_ast != NULL) {
+                        /* Recursively process this nested type section */
+                        append_type_decls_from_section(type_section_ast, nested_type_decls_out, NULL);
+                        if (getenv("KGPC_DEBUG_TYPE_SECTION") != NULL)
+                            fprintf(stderr, "[KGPC] convert_type_decl: processed nested TYPE_SECTION for class %s\n", id);
+                    }
+                    section_cursor = section_cursor->next;
+                }
+            }
+            /* Clean up the section list (don't destroy AST nodes, just the list) */
+            while (nested_type_sections != NULL) {
+                ListNode_t *next = nested_type_sections->next;
+                free(nested_type_sections);
+                nested_type_sections = next;
+            }
         } else {
-            mapped_type = convert_type_spec(spec_node, &type_id, &record_type, &type_info);
+            /* Check if this is a record type - also extract nested types */
+            ast_t *record_spec = NULL;
+            if (spec_node->typ == PASCAL_T_RECORD_TYPE || spec_node->typ == PASCAL_T_OBJECT_TYPE) {
+                record_spec = spec_node;
+            } else if (spec_node->typ == PASCAL_T_TYPE_SPEC && spec_node->child != NULL &&
+                       (spec_node->child->typ == PASCAL_T_RECORD_TYPE || spec_node->child->typ == PASCAL_T_OBJECT_TYPE)) {
+                record_spec = spec_node->child;
+            }
+
+            if (record_spec != NULL) {
+                /* Handle record type with nested type extraction */
+                record_type = convert_record_type_ex(record_spec, &nested_type_sections);
+                mapped_type = RECORD_TYPE;
+                if (nested_type_sections != NULL && nested_type_decls_out != NULL) {
+                    ListNode_t *section_cursor = nested_type_sections;
+                    while (section_cursor != NULL) {
+                        ast_t *type_section_ast = (ast_t *)section_cursor->cur;
+                        if (type_section_ast != NULL) {
+                            append_type_decls_from_section(type_section_ast, nested_type_decls_out, NULL);
+                            if (getenv("KGPC_DEBUG_TYPE_SECTION") != NULL)
+                                fprintf(stderr, "[KGPC] convert_type_decl: processed nested TYPE_SECTION for record %s\n", id);
+                        }
+                        section_cursor = section_cursor->next;
+                    }
+                }
+                while (nested_type_sections != NULL) {
+                    ListNode_t *next = nested_type_sections->next;
+                    free(nested_type_sections);
+                    nested_type_sections = next;
+                }
+            } else {
+                mapped_type = convert_type_spec(spec_node, &type_id, &record_type, &type_info);
+            }
             if (getenv("KGPC_DEBUG_TFPG") != NULL)
                 fprintf(stderr, "[KGPC] convert_type_decl after convert_type_spec id=%s mapped=%d type_id=%s record_type=%p type_info.record=%p\n",
                     id, mapped_type,
@@ -5204,6 +5331,11 @@ static Tree_t *convert_type_decl(ast_t *type_decl_node, ListNode_t **method_clon
     }
 
     return decl;
+}
+
+/* Backward-compatible wrapper */
+static Tree_t *convert_type_decl(ast_t *type_decl_node, ListNode_t **method_clones) {
+    return convert_type_decl_ex(type_decl_node, method_clones, NULL);
 }
 
 static Tree_t *convert_generic_type_decl(ast_t *type_decl_node) {
@@ -5546,7 +5678,20 @@ static void append_type_decls_from_section(ast_t *type_section, ListNode_t **des
                 tail = &node->next;
             }
         } else if (unwrapped != NULL && unwrapped->typ == PASCAL_T_TYPE_DECL) {
-            Tree_t *decl = convert_type_decl(unwrapped, subprograms);
+            ListNode_t *nested_type_decls = NULL;
+            Tree_t *decl = convert_type_decl_ex(unwrapped, subprograms, &nested_type_decls);
+            /* Insert nested type declarations first (they must be available before the container type) */
+            if (nested_type_decls != NULL) {
+                ListNode_t *nested_cursor = nested_type_decls;
+                while (nested_cursor != NULL) {
+                    ListNode_t *next = nested_cursor->next;
+                    nested_cursor->next = NULL;
+                    *tail = nested_cursor;
+                    tail = &nested_cursor->next;
+                    nested_cursor = next;
+                }
+            }
+            /* Then insert the main type declaration */
             if (decl != NULL) {
                 ListNode_t *node = CreateListNode(decl, LIST_TREE);
                 *tail = node;

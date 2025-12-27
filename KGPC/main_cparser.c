@@ -1310,9 +1310,13 @@ int main(int argc, char **argv)
                 clear_prelude_type_decls(prelude_tree);
             }
 
+            /* Skip merging prelude constants/vars when compiling the System unit itself,
+             * since System defines its own DirectorySeparator, IsLibrary, etc. */
+            int is_system_unit = pascal_identifier_equals(user_tree->tree_data.unit_data.unit_id, "System");
+
             /* Merge prelude constants into unit for FPC compatibility (fmClosed, fmInput, etc.) */
             ListNode_t *prelude_consts = get_prelude_const_decls(prelude_tree);
-            if (prelude_consts != NULL)
+            if (prelude_consts != NULL && !is_system_unit)
             {
                 mark_unit_const_decls(prelude_consts, 1);  /* Mark as exported from unit */
                 user_tree->tree_data.unit_data.interface_const_decls =
@@ -1322,7 +1326,7 @@ int main(int argc, char **argv)
 
             /* Merge prelude variables into unit */
             ListNode_t *prelude_vars = get_prelude_var_decls(prelude_tree);
-            if (prelude_vars != NULL)
+            if (prelude_vars != NULL && !is_system_unit)
             {
                 mark_unit_var_decls(prelude_vars, 1);  /* Mark as exported from unit */
                 user_tree->tree_data.unit_data.interface_var_decls =
