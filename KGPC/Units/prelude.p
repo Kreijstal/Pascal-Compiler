@@ -53,6 +53,7 @@ type
   TSystemCodePage = Word;
 
   THandle = LongInt;
+  HRESULT = LongInt;  { Windows COM result type }
   CodePointer = Pointer;
 
   AnsiString = String;

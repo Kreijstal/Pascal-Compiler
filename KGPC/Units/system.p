@@ -66,6 +66,7 @@ type
 
   { Low-level I/O compatibility types }
   THandle = LongInt;
+  HRESULT = LongInt;  { Windows COM result type }
   CodePointer = Pointer;
   
   { String types - for FPC bootstrap compatibility }

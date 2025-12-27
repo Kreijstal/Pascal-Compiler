@@ -2071,8 +2071,8 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                 return 1;
             }
             
-            /* Handle Cardinal, LongWord, DWord, QWord, Int64, UInt64 and other integer typecasts 
-             * for constant expressions (FPC bootstrap: Cardinal(not Cardinal(0))) */
+            /* Handle Cardinal, LongWord, DWord, QWord, Int64, UInt64, HRESULT and other integer typecasts
+             * for constant expressions (FPC bootstrap: Cardinal(not Cardinal(0)), HRESULT($80020004)) */
             if (id != NULL && (pascal_identifier_equals(id, "Cardinal") ||
                                pascal_identifier_equals(id, "LongWord") ||
                                pascal_identifier_equals(id, "DWord") ||
@@ -2085,7 +2085,8 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                                pascal_identifier_equals(id, "SizeUInt") ||
                                pascal_identifier_equals(id, "ShortInt") ||
                                pascal_identifier_equals(id, "SmallInt") ||
-                               pascal_identifier_equals(id, "LongInt")))
+                               pascal_identifier_equals(id, "LongInt") ||
+                               pascal_identifier_equals(id, "HRESULT")))
             {
                 if (args == NULL || args->next != NULL)
                 {
@@ -2123,8 +2124,10 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                 {
                     *out_value = (short)(int_value & 0xFFFF);
                 }
-                else if (pascal_identifier_equals(id, "LongInt"))
+                else if (pascal_identifier_equals(id, "LongInt") ||
+                         pascal_identifier_equals(id, "HRESULT"))
                 {
+                    /* LongInt and HRESULT are 32-bit signed integers */
                     *out_value = (int)(int_value & 0xFFFFFFFFULL);
                 }
                 else

@@ -1122,6 +1122,33 @@ class TestCompiler(unittest.TestCase):
         self.assertTrue(os.path.exists(asm_file))
         self.assertGreater(os.path.getsize(asm_file), 0)
 
+    def test_hresult_const_typecast(self):
+        """HRESULT const typecast expressions should compile and run correctly."""
+        input_file = os.path.join(TEST_CASES_DIR, "hresult_const_typecast.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "hresult_const_typecast.s")
+        exe_file = os.path.join(TEST_OUTPUT_DIR, "hresult_const_typecast")
+
+        run_compiler(input_file, asm_file)
+        self.assertTrue(os.path.exists(asm_file))
+
+        self.compile_executable(asm_file, exe_file)
+        self.assertTrue(os.path.exists(exe_file))
+
+        result = subprocess.run(
+            [exe_file],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+        output = result.stdout
+        self.assertIn("PASS: VAR_OK = 0", output)
+        self.assertIn("PASS: S_OK = 0", output)
+        self.assertIn("PASS: S_FALSE = 1", output)
+        self.assertIn("PASS: VAR_PARAMNOTFOUND is negative", output)
+        self.assertIn("PASS: E_FAIL is negative", output)
+        self.assertIn("HRESULT const typecast test completed", output)
+
     def test_real_literal_codegen(self):
         """Compiling a real literal should succeed and materialize the IEEE-754 bits."""
         input_file = os.path.join(TEST_CASES_DIR, "real_literal.p")
