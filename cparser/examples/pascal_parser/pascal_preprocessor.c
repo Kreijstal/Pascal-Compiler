@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #define MAX_INCLUDE_DEPTH 32
 
@@ -578,6 +579,68 @@ static bool handle_directive(PascalPreprocessor *pp,
                 free(content);
                 free(path_token);
                 return err;
+            }
+
+            // Handle special FPC include macros like %DATE%, %TIME%, %FPCVERSION%, etc.
+            // These return string literals instead of including files.
+            if (path_token[0] == '%' && path_token[strlen(path_token) - 1] == '%') {
+                char special_value[64] = "";
+                bool is_special = false;
+
+                if (strcmp(path_token, "%DATE%") == 0) {
+                    // Return current date in 'YYYY/MM/DD' format
+                    time_t now = time(NULL);
+                    struct tm *tm_info = localtime(&now);
+                    snprintf(special_value, sizeof(special_value), "'%04d/%02d/%02d'",
+                             tm_info->tm_year + 1900, tm_info->tm_mon + 1, tm_info->tm_mday);
+                    is_special = true;
+                } else if (strcmp(path_token, "%TIME%") == 0) {
+                    // Return current time in 'HH:MM:SS' format
+                    time_t now = time(NULL);
+                    struct tm *tm_info = localtime(&now);
+                    snprintf(special_value, sizeof(special_value), "'%02d:%02d:%02d'",
+                             tm_info->tm_hour, tm_info->tm_min, tm_info->tm_sec);
+                    is_special = true;
+                } else if (strcmp(path_token, "%FPCVERSION%") == 0) {
+                    // Return FPC version string (we'll use a placeholder)
+                    snprintf(special_value, sizeof(special_value), "'3.2.2'");
+                    is_special = true;
+                } else if (strcmp(path_token, "%FPCTARGET%") == 0) {
+                    // Return target platform
+                    snprintf(special_value, sizeof(special_value), "'x86_64-linux'");
+                    is_special = true;
+                } else if (strcmp(path_token, "%FPCTARGETOS%") == 0) {
+                    snprintf(special_value, sizeof(special_value), "'linux'");
+                    is_special = true;
+                } else if (strcmp(path_token, "%FPCTARGETCPU%") == 0) {
+                    snprintf(special_value, sizeof(special_value), "'x86_64'");
+                    is_special = true;
+                } else if (strcmp(path_token, "%FILE%") == 0) {
+                    // Return current file name
+                    const char *base = filename ? filename : "<unknown>";
+                    snprintf(special_value, sizeof(special_value), "'%s'", base);
+                    is_special = true;
+                } else if (strcmp(path_token, "%LINE%") == 0) {
+                    // Return line number (approximate - we don't track exact line)
+                    snprintf(special_value, sizeof(special_value), "0");
+                    is_special = true;
+                } else if (strcmp(path_token, "%LINENUM%") == 0) {
+                    snprintf(special_value, sizeof(special_value), "0");
+                    is_special = true;
+                }
+
+                if (is_special) {
+                    // Append the special value directly to output
+                    size_t val_len = strlen(special_value);
+                    for (size_t i = 0; i < val_len; ++i) {
+                        string_builder_append_char(output, special_value[i]);
+                    }
+                    free(path_token);
+                    free(keyword);
+                    free(content);
+                    return true;
+                }
+                // If not recognized, fall through to try as a file
             }
 
             char *resolved_path = NULL;
