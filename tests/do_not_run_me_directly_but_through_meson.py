@@ -1124,15 +1124,10 @@ class TestCompiler(unittest.TestCase):
 
     def test_hresult_const_typecast(self):
         """HRESULT const typecast expressions should compile and run correctly."""
-        input_file = os.path.join(TEST_CASES_DIR, "hresult_const_typecast.p")
-        asm_file = os.path.join(TEST_OUTPUT_DIR, "hresult_const_typecast.s")
-        exe_file = os.path.join(TEST_OUTPUT_DIR, "hresult_const_typecast")
+        input_file, asm_file, exe_file = self._get_test_paths("hresult_const_typecast")
 
         run_compiler(input_file, asm_file)
-        self.assertTrue(os.path.exists(asm_file))
-
         self.compile_executable(asm_file, exe_file)
-        self.assertTrue(os.path.exists(exe_file))
 
         result = subprocess.run(
             [exe_file],
