@@ -4442,9 +4442,37 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
         return -1;
     }
 
-    if (type_info->array_dimensions != NULL && type_info->array_dimensions->next != NULL) {
-        fprintf(stderr, "ERROR: Unsupported multi-dimensional const array %s.\n", *id_ptr);
-        return -1;
+    /* For multi-dimensional arrays like array[a..b, c..d], we handle them
+     * by treating the second dimension as an inner array. The outer dimension
+     * determines the number of rows, and the inner dimension determines columns.
+     * Currently we only support 2D arrays (one level of nesting). */
+    int is_multidim = (type_info->array_dimensions != NULL && type_info->array_dimensions->next != NULL);
+    int multidim_inner_start = 0, multidim_inner_end = -1;
+    int multidim_infer_bounds = 0;  /* Set to 1 if we need to infer bounds from initializer */
+    if (is_multidim) {
+        /* Check for more than 2 dimensions - not yet supported */
+        if (type_info->array_dimensions->next->next != NULL) {
+            fprintf(stderr, "ERROR: Unsupported 3+ dimensional const array %s.\n", *id_ptr);
+            return -1;
+        }
+        /* Extract inner dimension bounds from the second dimension string */
+        const char *inner_range = (const char *)type_info->array_dimensions->next->cur;
+        if (inner_range != NULL) {
+            /* Parse range like "1..240" or "0..3" */
+            char *range_copy = strdup(inner_range);
+            if (range_copy != NULL) {
+                char *dotdot = strstr(range_copy, "..");
+                if (dotdot != NULL) {
+                    *dotdot = '\0';
+                    multidim_inner_start = atoi(range_copy);
+                    multidim_inner_end = atoi(dotdot + 2);
+                } else {
+                    /* Enum type - need to infer bounds from initializer */
+                    multidim_infer_bounds = 1;
+                }
+                free(range_copy);
+            }
+        }
     }
 
     if (type_info->is_open_array) {
@@ -4541,6 +4569,31 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                 return -1;
             }
             resolve_array_bounds(&element_array_info, type_section, const_section, type_info->element_type_id);
+        }
+    }
+
+    /* For 2D arrays (array[a..b, c..d]), treat as array of inner arrays */
+    if (is_multidim && !element_is_array) {
+        element_is_array = 1;
+        element_array_info.is_array = 1;
+        element_array_info.start = multidim_inner_start;
+        element_array_info.end = multidim_inner_end;
+        element_array_info.element_type = type_info->element_type;
+        element_array_info.element_type_id = type_info->element_type_id != NULL ? strdup(type_info->element_type_id) : NULL;
+
+        /* For enum-indexed arrays, infer inner dimension from first row of initializer */
+        if (multidim_infer_bounds && tuple_node != NULL && tuple_node->typ == PASCAL_T_TUPLE) {
+            ast_t *first_row = tuple_node->child;
+            if (first_row != NULL) {
+                ast_t *first_row_unwrapped = unwrap_pascal_node(first_row);
+                if (first_row_unwrapped != NULL && first_row_unwrapped->typ == PASCAL_T_TUPLE) {
+                    int inner_count = 0;
+                    for (ast_t *inner = first_row_unwrapped->child; inner != NULL; inner = inner->next)
+                        ++inner_count;
+                    element_array_info.start = 0;
+                    element_array_info.end = inner_count - 1;
+                }
+            }
         }
     }
 
