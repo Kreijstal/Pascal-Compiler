@@ -1085,7 +1085,7 @@ static ParseResult satisfy_fn(input_t * in, void * args, char* parser_name) {
     return make_success(ast);
 }
 
-// Helper function to skip a single Pascal element (comment, identifier, or one character).
+// Helper function to skip a single Pascal element (comment, identifier, string, or one character).
 // Returns true if something was skipped, false if at EOF.
 static bool skip_one_pascal_element(input_t* in) {
     if (in->start >= in->length) return false;
@@ -1135,6 +1135,24 @@ static bool skip_one_pascal_element(input_t* in) {
             char ch = buffer[in->start];
             if (!isalnum((unsigned char)ch) && ch != '_') break;
             in->start++;
+        }
+        return true;
+    }
+
+    // Skip string literals to avoid matching keywords inside strings
+    // (e.g., don't match 'initialization' in (str:'INITIALIZATION';...))
+    if (c == '\'') {
+        in->start++; // consume opening quote
+        while (in->start < in->length) {
+            char ch = buffer[in->start++];
+            if (ch == '\'') {
+                // Check for escaped quote ('')
+                if (in->start < in->length && buffer[in->start] == '\'') {
+                    in->start++; // skip the second quote
+                    continue;
+                }
+                break; // end of string
+            }
         }
         return true;
     }
