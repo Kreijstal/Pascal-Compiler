@@ -2121,10 +2121,10 @@ static bool parse_factor(const char **cursor,
                    strcmp(type_name, "LONGBOOL") == 0) {
             size = 4;
             found = true;
-        } else if (strcmp(type_name, "INTEGER") == 0 || strcmp(type_name, "SMALLINT") == 0 || 
-                   strcmp(type_name, "INT16") == 0 || strcmp(type_name, "WORD") == 0 || 
+        } else if (strcmp(type_name, "INTEGER") == 0 || strcmp(type_name, "SMALLINT") == 0 ||
+                   strcmp(type_name, "INT16") == 0 || strcmp(type_name, "WORD") == 0 ||
                    strcmp(type_name, "UINT16") == 0 || strcmp(type_name, "WIDECHAR") == 0 ||
-                   strcmp(type_name, "WORDBOOL") == 0) {
+                   strcmp(type_name, "WORDBOOL") == 0 || strcmp(type_name, "TCOMPILERWIDECHAR") == 0) {
             size = 2;
             found = true;
         } else if (strcmp(type_name, "SHORTINT") == 0 || strcmp(type_name, "INT8") == 0 || 
