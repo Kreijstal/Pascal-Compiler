@@ -1390,13 +1390,14 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
     expr_altern(*p, 5, PASCAL_T_SET_SYM_DIFF, token(match("><")));
 
     // Precedence 6: Multiplication, Division, Modulo, and Bitwise shifts
-    // Also reject C-style shift tokens at this precedence level (in case precedence routing differs)
+    // FPC supports both Pascal keywords (shl, shr) and C-style operators (<<, >>)
     expr_insert(*p, 6, PASCAL_T_MUL, EXPR_INFIX, ASSOC_LEFT, token(match("*")));
-    expr_altern(*p, 6, PASCAL_T_NONE, token(reject_shift_ops));
     expr_altern(*p, 6, PASCAL_T_DIV, token(match("/")));
     expr_altern(*p, 6, PASCAL_T_INTDIV, token(keyword_ci("div")));
     expr_altern(*p, 6, PASCAL_T_MOD, token(keyword_ci("mod")));
     expr_altern(*p, 6, PASCAL_T_MOD, token(match("%")));
+    expr_altern(*p, 6, PASCAL_T_SHL, token(match("<<")));
+    expr_altern(*p, 6, PASCAL_T_SHR, token(match(">>")));
     expr_altern(*p, 6, PASCAL_T_SHL, token(keyword_ci("shl")));
     expr_altern(*p, 6, PASCAL_T_SHR, token(keyword_ci("shr")));
     expr_altern(*p, 6, PASCAL_T_ROL, token(keyword_ci("rol")));

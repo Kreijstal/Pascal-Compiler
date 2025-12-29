@@ -422,6 +422,42 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
         free(buffer);
         return false;
     }
+    /* Define first_mm_imreg for FPC x86_64 paramgr.pas (CPU register constant from cpubase.pas) */
+    if (!pascal_preprocessor_define(preprocessor, "first_mm_imreg := 32"))
+    {
+        report_preprocessor_error(error_out, path, "unable to define first_mm_imreg symbol");
+        pascal_preprocessor_free(preprocessor);
+        free(buffer);
+        return false;
+    }
+    /* Define optimizer switch constants for {$IF x in supported_optimizerswitches} expressions.
+     * cs_opt_use_load_modify_store is at ordinal 25 in the toptimizerswitch enum.
+     * supported_optimizerswitches for x86_64 includes this (via genericlevel3optimizerswitches).
+     * We represent sets as bitmasks: bit N = ordinal N is in set.
+     */
+    if (!pascal_preprocessor_define(preprocessor, "cs_opt_use_load_modify_store := 25"))
+    {
+        report_preprocessor_error(error_out, path, "unable to define cs_opt_use_load_modify_store");
+        pascal_preprocessor_free(preprocessor);
+        free(buffer);
+        return false;
+    }
+    /* Bitmask with at least bit 25 set for supported_optimizerswitches */
+    if (!pascal_preprocessor_define(preprocessor, "supported_optimizerswitches := 33554432"))
+    {
+        report_preprocessor_error(error_out, path, "unable to define supported_optimizerswitches");
+        pascal_preprocessor_free(preprocessor);
+        free(buffer);
+        return false;
+    }
+    /* Define max_operands for x86 (4 operands max in x86 instructions) */
+    if (!pascal_preprocessor_define(preprocessor, "max_operands := 4"))
+    {
+        report_preprocessor_error(error_out, path, "unable to define max_operands");
+        pascal_preprocessor_free(preprocessor);
+        free(buffer);
+        return false;
+    }
     #endif
 #else
     const char *arch_symbol = "CPU32";
@@ -569,40 +605,8 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
                 while (cur < end && *cur != '\n') { ++cur; ++col; }
                 continue;
             }
-            // Detect forbidden tokens
-            if ((ch == '<' && (cur + 1) < end && cur[1] == '<') ||
-                (ch == '>' && (cur + 1) < end && cur[1] == '>')) {
-                // Build a parse-style error so tests see "parse error" and "expected" in output.
-                if (error_out != NULL && *error_out == NULL) {
-                    ParseError *err = (ParseError *)calloc(1, sizeof(ParseError));
-                    if (err != NULL) {
-                        err->line = line;
-                        err->col = col;
-                        err->index = (int)(cur - buffer);
-                        const char* msg = (ch == '<')
-                            ? "Unexpected '<<'. Expected 'shl' for left shift."
-                            : "Unexpected '>>'. Expected 'shr' for right shift.";
-                        err->message = strdup(msg);
-                        err->parser_name = strdup("pascal_frontend");
-                        err->unexpected = NULL;
-                        // Provide a short context slice for nicer printing
-                        int ctx_start = err->index - 10; if (ctx_start < 0) ctx_start = 0;
-                        int ctx_len = 0; while (ctx_start + ctx_len < (int)length && ctx_len < 40 && buffer[ctx_start + ctx_len] != '\n') ctx_len++;
-                        char* ctx = (char*)malloc((size_t)ctx_len + 2);
-                        if (ctx) {
-                            memcpy(ctx, buffer + ctx_start, (size_t)ctx_len);
-                            ctx[ctx_len] = '\n'; ctx[ctx_len + 1] = '\0';
-                            err->context = ctx;
-                        }
-                        err->cause = NULL;
-                        err->partial_ast = NULL;
-                        err->committed = true;
-                        *error_out = err;
-                    }
-                }
-                free(buffer);
-                return false;
-            }
+            // Note: FPC supports C-style shift operators << and >> as aliases for shl and shr
+            // They are parsed by the expression parser at precedence level 6
             if (*cur == '\n') { ++line; col = 1; ++cur; }
             else { ++cur; ++col; }
         }
