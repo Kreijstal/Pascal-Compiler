@@ -2027,12 +2027,14 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
             const char *func_mangled_name = src_expr->expr_data.function_call_data.mangled_id;
             const char *func_id = src_expr->expr_data.function_call_data.id;
 
-            int call_returns_record = expr_has_type_tag(src_expr, RECORD_TYPE);
+            int call_returns_record = expr_returns_sret(src_expr);
             if (!call_returns_record && func_type != NULL &&
                 kgpc_type_is_procedure(func_type))
             {
                 KgpcType *return_type = kgpc_type_get_return_type(func_type);
-                if (return_type != NULL && kgpc_type_is_record(return_type))
+                if (return_type != NULL && (kgpc_type_is_record(return_type) ||
+                    (return_type->kind == TYPE_KIND_ARRAY &&
+                     !kgpc_type_is_dynamic_array(return_type))))
                     call_returns_record = 1;
             }
 

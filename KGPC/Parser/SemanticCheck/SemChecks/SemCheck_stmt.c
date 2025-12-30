@@ -96,6 +96,36 @@ static struct Expression *get_param_default_value(Tree_t *decl)
     return NULL;
 }
 
+static int semcheck_param_decl_equivalent_stmt(const Tree_t *lhs, const Tree_t *rhs)
+{
+    if (lhs == NULL || rhs == NULL)
+        return 0;
+    if (lhs->type != TREE_VAR_DECL || rhs->type != TREE_VAR_DECL)
+        return 0;
+    if (lhs->tree_data.var_decl_data.is_var_param != rhs->tree_data.var_decl_data.is_var_param)
+        return 0;
+    if (lhs->tree_data.var_decl_data.type != rhs->tree_data.var_decl_data.type)
+        return 0;
+    if (lhs->tree_data.var_decl_data.type_id == NULL || rhs->tree_data.var_decl_data.type_id == NULL)
+        return 1;
+    return strcasecmp(lhs->tree_data.var_decl_data.type_id,
+        rhs->tree_data.var_decl_data.type_id) == 0;
+}
+
+static int semcheck_param_lists_equivalent_stmt(ListNode_t *lhs, ListNode_t *rhs)
+{
+    while (lhs != NULL && rhs != NULL)
+    {
+        Tree_t *lhs_decl = (Tree_t *)lhs->cur;
+        Tree_t *rhs_decl = (Tree_t *)rhs->cur;
+        if (!semcheck_param_decl_equivalent_stmt(lhs_decl, rhs_decl))
+            return 0;
+        lhs = lhs->next;
+        rhs = rhs->next;
+    }
+    return (lhs == NULL && rhs == NULL);
+}
+
 static int append_default_args(ListNode_t **args_head, ListNode_t *formal_params, int line_num)
 {
     if (args_head == NULL)
@@ -3585,6 +3615,31 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                         {
                             actual = semcheck_resolve_expression_kgpc_type(symtab, arg_expr,
                                 INT_MAX, NO_MUTATE, &actual_owned);
+                            if (actual == NULL)
+                            {
+                                int tag = UNKNOWN_TYPE;
+                                if (semcheck_expr_main(&tag, symtab, arg_expr, INT_MAX, NO_MUTATE) == 0)
+                                {
+                                    if (arg_expr->resolved_kgpc_type != NULL)
+                                    {
+                                        actual = arg_expr->resolved_kgpc_type;
+                                        actual_owned = 0;
+                                    }
+                                    else if (tag != UNKNOWN_TYPE)
+                                    {
+                                        if (tag == RECORD_TYPE && arg_expr->record_type != NULL)
+                                        {
+                                            actual = create_record_type(arg_expr->record_type);
+                                            actual_owned = 1;
+                                        }
+                                        else
+                                        {
+                                            actual = create_primitive_type(tag);
+                                            actual_owned = 1;
+                                        }
+                                    }
+                                }
+                            }
                         }
 
                         if (expected == NULL)
@@ -3640,7 +3695,26 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                     }
                     else if (score == best_score)
                     {
-                        num_best_matches++;
+                        int is_duplicate = 0;
+                        if (best_candidate != NULL && candidate != NULL)
+                        {
+                            if (best_candidate->mangled_id != NULL &&
+                                candidate->mangled_id != NULL &&
+                                strcmp(best_candidate->mangled_id, candidate->mangled_id) == 0)
+                            {
+                                is_duplicate = 1;
+                            }
+                            else if (best_candidate->type != NULL && candidate->type != NULL &&
+                                best_candidate->type->kind == TYPE_KIND_PROCEDURE &&
+                                candidate->type->kind == TYPE_KIND_PROCEDURE)
+                            {
+                                ListNode_t *best_params = best_candidate->type->info.proc_info.params;
+                                if (semcheck_param_lists_equivalent_stmt(best_params, param))
+                                    is_duplicate = 1;
+                            }
+                        }
+                        if (!is_duplicate)
+                            num_best_matches++;
                     }
                 }
             }

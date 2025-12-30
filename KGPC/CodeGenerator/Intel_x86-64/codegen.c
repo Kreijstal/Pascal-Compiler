@@ -2216,13 +2216,30 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
                     record_return_size = 0;
                 }
             }
-            else if (return_type->kind == TYPE_KIND_ARRAY &&
-                     kgpc_type_is_dynamic_array(return_type))
+            else if (return_type->kind == TYPE_KIND_ARRAY)
             {
-                returns_dynamic_array = 1;
-                dynamic_array_element_size = codegen_dynamic_array_element_size_from_type(ctx, return_type);
-                dynamic_array_descriptor_size = codegen_dynamic_array_descriptor_bytes(dynamic_array_element_size);
-                dynamic_array_lower_bound = return_type->info.array_info.start_index;
+                if (kgpc_type_is_dynamic_array(return_type))
+                {
+                    returns_dynamic_array = 1;
+                    dynamic_array_element_size = codegen_dynamic_array_element_size_from_type(ctx, return_type);
+                    dynamic_array_descriptor_size = codegen_dynamic_array_descriptor_bytes(dynamic_array_element_size);
+                    dynamic_array_lower_bound = return_type->info.array_info.start_index;
+                }
+                else
+                {
+                    long long array_size = kgpc_type_sizeof(return_type);
+                    if (array_size > 0 && array_size <= INT_MAX)
+                    {
+                        has_record_return = 1;
+                        record_return_size = array_size;
+                    }
+                    else
+                    {
+                        codegen_report_error(ctx,
+                            "ERROR: Unable to determine size for array return value of %s.", func->id);
+                        record_return_size = 0;
+                    }
+                }
             }
         }
     }
@@ -2271,6 +2288,23 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
                     has_record_return = 1;
                 }
             }
+            else if (return_type_node->type != NULL &&
+                     return_type_node->type->kind == TYPE_KIND_ARRAY &&
+                     !kgpc_type_is_dynamic_array(return_type_node->type))
+            {
+                long long array_size = kgpc_type_sizeof(return_type_node->type);
+                if (array_size > 0 && array_size <= INT_MAX)
+                {
+                    has_record_return = 1;
+                    record_return_size = array_size;
+                }
+                else
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Unable to determine size for array return value of %s.", func->id);
+                    record_return_size = 0;
+                }
+            }
         }
         else
         {
@@ -2311,6 +2345,25 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
             record_return_size > 0 && record_return_size <= INT_MAX)
         {
             has_record_return = 1;
+        }
+    }
+
+    if (!has_record_return && func->inline_return_type != NULL &&
+        func->inline_return_type->kgpc_type != NULL &&
+        func->inline_return_type->kgpc_type->kind == TYPE_KIND_ARRAY &&
+        !kgpc_type_is_dynamic_array(func->inline_return_type->kgpc_type))
+    {
+        long long array_size = kgpc_type_sizeof(func->inline_return_type->kgpc_type);
+        if (array_size > 0 && array_size <= INT_MAX)
+        {
+            has_record_return = 1;
+            record_return_size = array_size;
+        }
+        else
+        {
+            codegen_report_error(ctx,
+                "ERROR: Unable to determine size for array return value of %s.", func->id);
+            record_return_size = 0;
         }
     }
 

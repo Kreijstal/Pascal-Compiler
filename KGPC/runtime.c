@@ -2302,6 +2302,15 @@ void kgpc_string_to_shortstring(char *dest, const char *src, size_t dest_size)
         memset(dest + 1 + copy_len, 0, dest_size - 1 - copy_len);
 }
 
+char *kgpc_shortstring_to_string(const char *value)
+{
+    if (value == NULL)
+        return kgpc_string_duplicate("");
+
+    unsigned char len = (unsigned char)value[0];
+    return kgpc_string_duplicate_length(value + 1, len);
+}
+
 
 static void kgpc_text_close_stream(KGPCTextRec *file)
 {

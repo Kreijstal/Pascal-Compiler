@@ -6490,6 +6490,18 @@ int set_type_from_hashtype(int *type, HashNode_t *hash_node)
                         *type = POINTER_TYPE;
                         return 0;
                     }
+                    else if (return_type->kind == TYPE_KIND_ARRAY)
+                    {
+                        KgpcType *elem_type = return_type->info.array_info.element_type;
+                        if (elem_type != NULL && elem_type->kind == TYPE_KIND_PRIMITIVE &&
+                            elem_type->info.primitive_type_tag == CHAR_TYPE)
+                        {
+                            *type = SHORTSTRING_TYPE;
+                            return 0;
+                        }
+                        *type = UNKNOWN_TYPE;
+                        return 0;
+                    }
                     /* Add other return type kinds as needed */
                     *type = UNKNOWN_TYPE;
                     return 0;
