@@ -1732,6 +1732,7 @@ struct RecordType *clone_record_type(const struct RecordType *record_type)
     clone->cached_size = record_type->cached_size;
     clone->generic_decl = record_type->generic_decl;
     clone->num_generic_args = record_type->num_generic_args;
+    clone->method_clones_emitted = 0;
     clone->generic_args = NULL;
     if (record_type->generic_args != NULL && record_type->num_generic_args > 0)
     {

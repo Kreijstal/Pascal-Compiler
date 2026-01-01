@@ -3943,6 +3943,8 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
                 int sym_type = kgpc_type_get_legacy_tag(sym_node->type);
                 if (sym_type != UNKNOWN_TYPE)
                     expr_type = sym_type;
+                if (expr->resolved_kgpc_type == NULL)
+                    expr->resolved_kgpc_type = sym_node->type;
             }
         }
         
@@ -4173,8 +4175,17 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
         }
         else if (expr_type == LONGINT_TYPE)
         {
-            /* LONGINT_TYPE is now 4 bytes (to match FPC) - sign-extend to 64-bit */
-            inst_list = codegen_sign_extend32_to64(inst_list, value_reg->bit_32, value_dest64);
+            /* LONGINT_TYPE is now 4 bytes (to match FPC) - allow unsigned aliases to zero-extend */
+            if (expr_is_unsigned_type(expr))
+            {
+                inst_list = codegen_zero_extend32_to64(inst_list, value_reg->bit_32, value_reg->bit_32);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", value_reg->bit_64, value_dest64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else
+            {
+                inst_list = codegen_sign_extend32_to64(inst_list, value_reg->bit_32, value_dest64);
+            }
         }
         else
         {

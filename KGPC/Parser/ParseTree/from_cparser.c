@@ -1058,6 +1058,61 @@ static void append_subprogram_node(ListNode_t **dest, Tree_t *tree)
     *tail = node;
 }
 
+static void sync_method_impls_from_generic_template(struct RecordType *record)
+{
+    if (record == NULL || record->generic_decl == NULL ||
+        record->generic_decl->record_template == NULL ||
+        record->method_templates == NULL)
+        return;
+
+    ListNode_t *source = record->generic_decl->record_template->method_templates;
+    for (ListNode_t *cur = record->method_templates; cur != NULL; cur = cur->next)
+    {
+        if (cur->type != LIST_METHOD_TEMPLATE)
+            continue;
+        struct MethodTemplate *tmpl = (struct MethodTemplate *)cur->cur;
+        if (tmpl == NULL || tmpl->method_impl_ast != NULL || tmpl->name == NULL)
+            continue;
+
+        for (ListNode_t *src = source; src != NULL; src = src->next)
+        {
+            if (src->type != LIST_METHOD_TEMPLATE)
+                continue;
+            struct MethodTemplate *src_tmpl = (struct MethodTemplate *)src->cur;
+            if (src_tmpl != NULL && src_tmpl->name != NULL &&
+                strcasecmp(src_tmpl->name, tmpl->name) == 0 &&
+                src_tmpl->method_impl_ast != NULL)
+            {
+                tmpl->method_impl_ast = copy_ast(src_tmpl->method_impl_ast);
+                break;
+            }
+        }
+    }
+}
+
+static int subprogram_list_has_mangled(const ListNode_t *subprograms, const char *mangled_id)
+{
+    if (subprograms == NULL || mangled_id == NULL)
+        return 0;
+
+    const ListNode_t *cur = subprograms;
+    while (cur != NULL)
+    {
+        if (cur->type == LIST_TREE && cur->cur != NULL)
+        {
+            const Tree_t *tree = (const Tree_t *)cur->cur;
+            if ((tree->type == TREE_SUBPROGRAM_FUNC || tree->type == TREE_SUBPROGRAM_PROC) &&
+                tree->tree_data.subprogram_data.mangled_id != NULL &&
+                strcmp(tree->tree_data.subprogram_data.mangled_id, mangled_id) == 0)
+            {
+                return 1;
+            }
+        }
+        cur = cur->next;
+    }
+    return 0;
+}
+
 static void append_specialized_method_clones(Tree_t *decl, ListNode_t **subprograms)
 {
     if (decl == NULL || subprograms == NULL)
@@ -1072,9 +1127,20 @@ static void append_specialized_method_clones(Tree_t *decl, ListNode_t **subprogr
         record = decl->tree_data.type_decl_data.info.record;
     } else if (decl->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS) {
         record = decl->tree_data.type_decl_data.info.alias.inline_record_type;
+        if (record == NULL && decl->tree_data.type_decl_data.kgpc_type != NULL)
+        {
+            KgpcType *alias_type = decl->tree_data.type_decl_data.kgpc_type;
+            if (kgpc_type_is_record(alias_type))
+                record = kgpc_type_get_record(alias_type);
+            else if (kgpc_type_is_pointer(alias_type) && alias_type->info.points_to != NULL &&
+                     kgpc_type_is_record(alias_type->info.points_to))
+                record = kgpc_type_get_record(alias_type->info.points_to);
+        }
     } else {
         return;
     }
+
+    sync_method_impls_from_generic_template(record);
 
     if (record == NULL || record->method_templates == NULL ||
         record->generic_decl == NULL || record->generic_args == NULL ||
@@ -1085,8 +1151,11 @@ static void append_specialized_method_clones(Tree_t *decl, ListNode_t **subprogr
             fprintf(stderr, "[KGPC] skipping clone for %s (missing templates)\n", record->type_id);
         return;
     }
+    if (record->method_clones_emitted)
+        return;
 
     const char *debug_env = getenv("KGPC_DEBUG_GENERIC_CLONES");
+    int appended_any = 0;
     ListNode_t *cur = record->method_templates;
     while (cur != NULL)
     {
@@ -1097,7 +1166,17 @@ static void append_specialized_method_clones(Tree_t *decl, ListNode_t **subprogr
             {
                 Tree_t *method_tree = instantiate_method_template(template, record);
                 if (method_tree != NULL) {
+                    if (method_tree->tree_data.subprogram_data.mangled_id != NULL &&
+                        subprogram_list_has_mangled(*subprograms,
+                            method_tree->tree_data.subprogram_data.mangled_id))
+                    {
+                        destroy_tree(method_tree);
+                        method_tree = NULL;
+                    }
+                }
+                if (method_tree != NULL) {
                     append_subprogram_node(subprograms, method_tree);
+                    appended_any = 1;
                     if (debug_env != NULL && record->type_id != NULL && template->name != NULL)
                         fprintf(stderr, "[KGPC] cloned method %s.%s\n", record->type_id, template->name);
                 } else if (debug_env != NULL && record->type_id != NULL && template->name != NULL) {
@@ -1107,6 +1186,26 @@ static void append_specialized_method_clones(Tree_t *decl, ListNode_t **subprogr
             }
         }
         cur = cur->next;
+    }
+    if (appended_any)
+        record->method_clones_emitted = 1;
+}
+
+void append_generic_method_clones(Tree_t *program_tree)
+{
+    if (program_tree == NULL || program_tree->type != TREE_PROGRAM_TYPE)
+        return;
+
+    ListNode_t *type_cursor = program_tree->tree_data.program_data.type_declaration;
+    while (type_cursor != NULL)
+    {
+        if (type_cursor->type == LIST_TREE && type_cursor->cur != NULL)
+        {
+            Tree_t *decl = (Tree_t *)type_cursor->cur;
+            append_specialized_method_clones(decl,
+                &program_tree->tree_data.program_data.subprograms);
+        }
+        type_cursor = type_cursor->next;
     }
 }
 
@@ -1132,8 +1231,12 @@ void resolve_pending_generic_aliases(Tree_t *program_tree)
                 destroy_record_type(alias->inline_record_type);
             alias->inline_record_type = record;
             alias->base_type = RECORD_TYPE;
-            if (cur->decl->tree_data.type_decl_data.kgpc_type == NULL)
-                cur->decl->tree_data.type_decl_data.kgpc_type = create_record_type(record);
+            if (cur->decl->tree_data.type_decl_data.kgpc_type == NULL) {
+                KgpcType *inline_type = create_record_type(record);
+                if (record->is_class)
+                    inline_type = create_pointer_type(inline_type);
+                cur->decl->tree_data.type_decl_data.kgpc_type = inline_type;
+            }
             if (clone_dest != NULL)
                 append_specialized_method_clones(cur->decl, clone_dest);
             if (debug_env != NULL && cur->decl->tree_data.type_decl_data.id != NULL &&
@@ -1411,11 +1514,11 @@ static int map_type_name(const char *name, char **type_id_out) {
             *type_id_out = strdup("char");
         return CHAR_TYPE;
     }
-    /* WideChar is a 2-byte character type (UTF-16 code unit) */
+    /* WideChar is a 2-byte character type; resolve via symbol table for correct size. */
     if (strcasecmp(name, "widechar") == 0) {
         if (type_id_out != NULL)
             *type_id_out = strdup("widechar");
-        return INT_TYPE;  /* 2 bytes like Word - actual size from symbol table lookup */
+        return UNKNOWN_TYPE;
     }
     if (strcasecmp(name, "file") == 0) {
         if (type_id_out != NULL)
@@ -3581,6 +3684,7 @@ static struct RecordType *convert_class_type_ex(const char *class_name, ast_t *c
     record->generic_decl = NULL;
     record->generic_args = NULL;
     record->num_generic_args = 0;
+    record->method_clones_emitted = 0;
 
     if (parent_class_name == NULL)
     {
@@ -3924,6 +4028,7 @@ static struct RecordType *convert_record_type_ex(ast_t *record_node, ListNode_t 
     record->generic_decl = NULL;
     record->generic_args = NULL;
     record->num_generic_args = 0;
+    record->method_clones_emitted = 0;
     return record;
 }
 
@@ -5413,8 +5518,6 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
     if (decl != NULL)
     {
         decl->tree_data.type_decl_data.kgpc_type = kgpc_type;
-        if (method_clones != NULL)
-            append_specialized_method_clones(decl, method_clones);
         if (getenv("KGPC_DEBUG_TFPG") != NULL &&
             decl->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS &&
             decl->tree_data.type_decl_data.id != NULL)
@@ -5468,7 +5571,13 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
         if (type_info.is_record && type_info.record_type != NULL) {
             alias->inline_record_type = type_info.record_type;
             type_info.record_type = NULL;
-            if (decl->tree_data.type_decl_data.kgpc_type == NULL) {
+            if (alias->inline_record_type->is_class) {
+                KgpcType *inline_type = create_record_type(alias->inline_record_type);
+                inline_type = create_pointer_type(inline_type);
+                if (decl->tree_data.type_decl_data.kgpc_type != NULL)
+                    destroy_kgpc_type(decl->tree_data.type_decl_data.kgpc_type);
+                decl->tree_data.type_decl_data.kgpc_type = inline_type;
+            } else if (decl->tree_data.type_decl_data.kgpc_type == NULL) {
                 decl->tree_data.type_decl_data.kgpc_type =
                     create_record_type(alias->inline_record_type);
             }
@@ -5493,6 +5602,9 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
         free(id);
         destroy_record_type(record_type);
     }
+
+    if (decl != NULL && method_clones != NULL)
+        append_specialized_method_clones(decl, method_clones);
 
     return decl;
 }

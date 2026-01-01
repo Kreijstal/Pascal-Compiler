@@ -2254,11 +2254,51 @@ static int semcheck_builtin_length(int *type_return, SymTab_t *symtab,
     assert(expr->type == EXPR_FUNCTION_CALL);
 
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
-    if (args == NULL || args->next != NULL)
+    if (args == NULL)
     {
+        if (getenv("KGPC_DEBUG_LENGTH_ARGS") != NULL)
+            fprintf(stderr, "[KGPC] Length args count=0\n");
         fprintf(stderr, "Error on line %d, Length expects exactly one argument.\n", expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
+    }
+    if (args->next != NULL)
+    {
+        if (getenv("KGPC_DEBUG_LENGTH_ARGS") != NULL)
+        {
+            fprintf(stderr, "[KGPC] Length args count=%d\n", ListLength(args));
+            for (ListNode_t *cur = args; cur != NULL; cur = cur->next)
+            {
+                struct Expression *arg_expr = (struct Expression *)cur->cur;
+                if (arg_expr == NULL) {
+                    fprintf(stderr, "[KGPC]   arg: <null>\n");
+                } else if (arg_expr->type == EXPR_VAR_ID) {
+                    fprintf(stderr, "[KGPC]   arg: VAR_ID %s\n",
+                        arg_expr->expr_data.id != NULL ? arg_expr->expr_data.id : "<null>");
+                } else if (arg_expr->type == EXPR_RECORD_ACCESS) {
+                    fprintf(stderr, "[KGPC]   arg: RECORD_ACCESS %s\n",
+                        arg_expr->expr_data.record_access_data.field_id != NULL ?
+                            arg_expr->expr_data.record_access_data.field_id : "<null>");
+                } else {
+                    fprintf(stderr, "[KGPC]   arg: type=%d\n", arg_expr->type);
+                }
+            }
+        }
+
+        struct Expression *first_arg = (struct Expression *)args->cur;
+        if (first_arg != NULL && first_arg->type == EXPR_VAR_ID &&
+            first_arg->expr_data.id != NULL &&
+            pascal_identifier_equals(first_arg->expr_data.id, "Self"))
+        {
+            args = args->next;
+            expr->expr_data.function_call_data.args_expr = args;
+        }
+        if (args == NULL || args->next != NULL)
+        {
+            fprintf(stderr, "Error on line %d, Length expects exactly one argument.\n", expr->line_num);
+            *type_return = UNKNOWN_TYPE;
+            return 1;
+        }
     }
 
     struct Expression *arg_expr = (struct Expression *)args->cur;
@@ -3179,9 +3219,23 @@ static int semcheck_builtin_upcase(int *type_return, SymTab_t *symtab,
 
     if (error_count == 0 && arg_type != CHAR_TYPE)
     {
-        fprintf(stderr, "Error on line %d, UpCase expects a char argument.\n",
-            expr->line_num);
-        ++error_count;
+        if (arg_expr != NULL && arg_expr->type == EXPR_STRING &&
+            arg_expr->expr_data.string != NULL &&
+            strlen(arg_expr->expr_data.string) == 1)
+        {
+            unsigned char value = (unsigned char)arg_expr->expr_data.string[0];
+            free(arg_expr->expr_data.string);
+            arg_expr->expr_data.string = NULL;
+            arg_expr->type = EXPR_CHAR_CODE;
+            arg_expr->expr_data.char_code = value;
+            arg_type = CHAR_TYPE;
+        }
+        else
+        {
+            fprintf(stderr, "Error on line %d, UpCase expects a char argument.\n",
+                expr->line_num);
+            ++error_count;
+        }
     }
 
     if (error_count == 0)
@@ -3199,7 +3253,12 @@ static int semcheck_builtin_upcase(int *type_return, SymTab_t *symtab,
             return 1;
         }
         semcheck_reset_function_call_cache(expr);
+        /* Mark as valid so code generator won't look up "UpCase" and find
+         * the string overload. With call_kgpc_type=NULL (from reset) and
+         * is_call_info_valid=1, no formal parameter info will be used. */
+        expr->expr_data.function_call_data.is_call_info_valid = 1;
         expr->resolved_type = CHAR_TYPE;
+        expr->resolved_kgpc_type = create_primitive_type(CHAR_TYPE);
         *type_return = CHAR_TYPE;
         return 0;
     }
@@ -3612,6 +3671,51 @@ static int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
                 have_bounds = 1;
                 if (low < -2147483648LL || high > 2147483647LL)
                     result_type = INT64_TYPE;
+            }
+            else if (alias != NULL && alias->target_type_id != NULL)
+            {
+                HashNode_t *target_node = semcheck_find_preferred_type_node(symtab,
+                    alias->target_type_id);
+                if (target_node != NULL && target_node->hash_type == HASHTYPE_TYPE)
+                {
+                    struct TypeAlias *target_alias = get_type_alias_from_node(target_node);
+                    if (target_alias != NULL && target_alias->is_range && target_alias->range_known)
+                    {
+                        low = target_alias->range_start;
+                        high = target_alias->range_end;
+                        have_bounds = 1;
+                        if (low < -2147483648LL || high > 2147483647LL)
+                            result_type = INT64_TYPE;
+                    }
+                }
+                if (!have_bounds)
+                {
+                    const char *target_name = alias->target_type_id;
+                    if (pascal_identifier_equals(target_name, "SmallInt")) {
+                        low = -32768LL;
+                        high = 32767LL;
+                        have_bounds = 1;
+                    } else if (pascal_identifier_equals(target_name, "Word")) {
+                        low = 0;
+                        high = 65535LL;
+                        have_bounds = 1;
+                    } else if (pascal_identifier_equals(target_name, "ShortInt")) {
+                        low = -128LL;
+                        high = 127LL;
+                        have_bounds = 1;
+                    } else if (pascal_identifier_equals(target_name, "Byte")) {
+                        low = 0;
+                        high = 255LL;
+                        have_bounds = 1;
+                    } else if (pascal_identifier_equals(target_name, "Cardinal") ||
+                               pascal_identifier_equals(target_name, "LongWord") ||
+                               pascal_identifier_equals(target_name, "DWord")) {
+                        low = 0;
+                        high = 4294967295LL;
+                        have_bounds = 1;
+                        result_type = INT64_TYPE;
+                    }
+                }
             }
             else if (pascal_identifier_equals(type_name, "Int64"))
             {
@@ -4580,8 +4684,53 @@ static int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
                 }
 
                 if (error_count == 0)
-                    error_count += sizeof_from_hashnode(symtab, node, &computed_size,
-                        0, expr->line_num);
+                {
+                    struct TypeAlias *alias = get_type_alias_from_node(node);
+                    int used_target_size = 0;
+                    if (alias != NULL && alias->target_type_id != NULL)
+                    {
+                        const char *target = alias->target_type_id;
+                        if (pascal_identifier_equals(target, "Byte") ||
+                            pascal_identifier_equals(target, "ShortInt")) {
+                            computed_size = 1;
+                            used_target_size = 1;
+                        } else if (pascal_identifier_equals(target, "Word") ||
+                                   pascal_identifier_equals(target, "SmallInt")) {
+                            computed_size = 2;
+                            used_target_size = 1;
+                        } else if (pascal_identifier_equals(target, "Cardinal") ||
+                                   pascal_identifier_equals(target, "LongWord") ||
+                                   pascal_identifier_equals(target, "DWord")) {
+                            computed_size = 4;
+                            used_target_size = 1;
+                        }
+                    }
+                    if (!used_target_size)
+                    {
+                        if (alias != NULL && alias->storage_size <= 0 &&
+                            alias->target_type_id != NULL)
+                        {
+                            HashNode_t *target_node = semcheck_find_preferred_type_node(symtab,
+                                alias->target_type_id);
+                            if (target_node != NULL && target_node->hash_type == HASHTYPE_TYPE &&
+                                sizeof_from_hashnode(symtab, target_node, &computed_size,
+                                    0, expr->line_num) == 0)
+                            {
+                                /* Use target type size */
+                            }
+                            else
+                            {
+                                error_count += sizeof_from_hashnode(symtab, node, &computed_size,
+                                    0, expr->line_num);
+                            }
+                        }
+                        else
+                        {
+                            error_count += sizeof_from_hashnode(symtab, node, &computed_size,
+                                0, expr->line_num);
+                        }
+                    }
+                }
             }
         }
     }
@@ -8820,6 +8969,24 @@ int semcheck_funccall(int *type_return,
 
     return_val = 0;
     id = expr->expr_data.function_call_data.id;
+    if (id != NULL)
+    {
+        const char *dot = strrchr(id, '.');
+        if (dot != NULL && dot[1] != '\0')
+        {
+            char *unqualified = strdup(dot + 1);
+            if (unqualified == NULL)
+            {
+                fprintf(stderr, "Error on line %d: failed to allocate memory for unit-qualified call '%s'.\n",
+                    expr->line_num, id);
+                *type_return = UNKNOWN_TYPE;
+                return 1;
+            }
+            free(expr->expr_data.function_call_data.id);
+            expr->expr_data.function_call_data.id = unqualified;
+            id = unqualified;
+        }
+    }
     if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
         fprintf(stderr, "[SemCheck] semcheck_funccall: id='%s'\n", id != NULL ? id : "(null)");
     }
@@ -8829,6 +8996,46 @@ int semcheck_funccall(int *type_return,
 #endif
     }
     args_given = expr->expr_data.function_call_data.args_expr;
+
+    /* FPC Bootstrap Feature: Handle unit-qualified calls that the parser
+     * represents as __Function(UnitName, Args...). Only strip the first
+     * argument when the unit qualifier is unresolved AND the real function
+     * (without "__") exists. */
+    if (id != NULL && strncmp(id, "__", 2) == 0 && args_given != NULL)
+    {
+        struct Expression *first_arg = (struct Expression *)args_given->cur;
+        if (first_arg != NULL && first_arg->type == EXPR_VAR_ID && first_arg->expr_data.id != NULL)
+        {
+            HashNode_t *unit_check = NULL;
+            if (FindIdent(&unit_check, symtab, first_arg->expr_data.id) == -1)
+            {
+                char *real_func_name = strdup(id + 2);
+                if (real_func_name != NULL)
+                {
+                    ListNode_t *func_candidates = FindAllIdents(symtab, real_func_name);
+                    if (func_candidates != NULL)
+                    {
+                        ListNode_t *remaining_args = args_given->next;
+                        destroy_expr(first_arg);
+                        args_given->cur = NULL;
+                        free(args_given);
+
+                        expr->expr_data.function_call_data.args_expr = remaining_args;
+                        args_given = remaining_args;
+
+                        free(expr->expr_data.function_call_data.id);
+                        expr->expr_data.function_call_data.id = real_func_name;
+                        id = real_func_name;
+
+                        DestroyList(func_candidates);
+                        real_func_name = NULL;
+                    }
+                    if (real_func_name != NULL)
+                        free(real_func_name);
+                }
+            }
+        }
+    }
 
     /* If no receiver was provided, but Self is in scope and defines this method,
      * prepend Self so unqualified method calls resolve correctly. */
@@ -9484,6 +9691,11 @@ int semcheck_funccall(int *type_return,
             int arg_type = UNKNOWN_TYPE;
             int error_count = semcheck_expr_main(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
             if (error_count == 0 && arg_type == CHAR_TYPE)
+                return semcheck_builtin_upcase(type_return, symtab, expr, max_scope_lev);
+            if (error_count == 0 && arg_type == STRING_TYPE &&
+                arg_expr != NULL && arg_expr->type == EXPR_STRING &&
+                arg_expr->expr_data.string != NULL &&
+                strlen(arg_expr->expr_data.string) == 1)
                 return semcheck_builtin_upcase(type_return, symtab, expr, max_scope_lev);
         }
     }

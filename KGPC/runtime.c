@@ -3863,16 +3863,24 @@ char *kgpc_get_current_dir(void)
 #ifdef _WIN32
     DWORD needed = GetCurrentDirectoryA(0, NULL);
     if (needed == 0)
+    {
+        kgpc_ioresult_set((int)GetLastError());
         return kgpc_alloc_empty_string();
+    }
     char *buffer = (char *)malloc((size_t)needed + 1);
     if (buffer == NULL)
+    {
+        kgpc_ioresult_set(ENOMEM);
         return kgpc_alloc_empty_string();
+    }
     if (GetCurrentDirectoryA(needed + 1, buffer) == 0)
     {
+        kgpc_ioresult_set((int)GetLastError());
         free(buffer);
         return kgpc_alloc_empty_string();
     }
     char *result = kgpc_string_duplicate(buffer);
+    kgpc_ioresult_set(0);
     free(buffer);
     return result;
 #else
@@ -3884,13 +3892,18 @@ char *kgpc_get_current_dir(void)
         max_len = 4096;
     char *buffer = (char *)malloc(max_len);
     if (buffer == NULL)
+    {
+        kgpc_ioresult_set(ENOMEM);
         return kgpc_alloc_empty_string();
+    }
     if (getcwd(buffer, max_len) == NULL)
     {
+        kgpc_ioresult_set(errno);
         free(buffer);
         return kgpc_alloc_empty_string();
     }
     char *result = kgpc_string_duplicate(buffer);
+    kgpc_ioresult_set(0);
     free(buffer);
     return result;
 #endif
@@ -3899,11 +3912,18 @@ char *kgpc_get_current_dir(void)
 int kgpc_set_current_dir(const char *path)
 {
     if (path == NULL)
+    {
+        kgpc_ioresult_set(EINVAL);
         return EINVAL;
+    }
 #ifdef _WIN32
-    return SetCurrentDirectoryA(path) ? 0 : (int)GetLastError();
+    int res = SetCurrentDirectoryA(path) ? 0 : (int)GetLastError();
+    kgpc_ioresult_set(res);
+    return res;
 #else
-    return (chdir(path) == 0) ? 0 : errno;
+    int res = (chdir(path) == 0) ? 0 : errno;
+    kgpc_ioresult_set(res);
+    return res;
 #endif
 }
 

@@ -36,11 +36,14 @@ type
   
   { Pointer types }
   AnsiChar = Char;
+  WideChar = Word;
+  UnicodeChar = WideChar;
   PAnsiChar = ^AnsiChar;    { Pointer to ANSI character }
   PPAnsiChar = ^PAnsiChar;  { Pointer to pointer to ANSI character }
   PChar = ^Char;            { Alias for PAnsiChar }
   PPointer = ^Pointer;      { Pointer to pointer }
   PWideChar = ^WideChar;
+  PUnicodeChar = ^UnicodeChar;
   
   { Additional common pointer types }
   PByte = ^Byte;
@@ -202,8 +205,9 @@ const
   AllowDriveSeparators: set of AnsiChar = [];
   MaxPathLen = 4096;
 
-  DefaultSystemCodePage = 65001;
-  DefaultFileSystemCodePage = 65001;
+  AllFilesMask = '*';
+  FileNameCaseSensitive = true;
+  FileNameCasePreserving = true;
 
   fmClosed = $D7B0;
   fmInput = $D7B1;
@@ -231,6 +235,13 @@ const
 
 var
   IsLibrary: Boolean = False;
+  InOutRes: Word;
+  FirstDotAtFileNameStartIsExtension: Boolean;
+  DefaultSystemCodePage: TSystemCodePage;
+  DefaultUnicodeCodePage: TSystemCodePage;
+  DefaultFileSystemCodePage: TSystemCodePage;
+  DefaultRTLFileSystemCodePage: TSystemCodePage;
+  UTF8CompareLocale: TSystemCodePage;
 
 { ============================================================================
   Compiler Intrinsic Functions
@@ -361,6 +372,10 @@ begin
     end
 end;
 
+function kgpc_get_current_dir: AnsiString; external;
+function kgpc_set_current_dir(path: PChar): Integer; external;
+function kgpc_ioresult_peek: Integer; external;
+
 function InterlockedExchangeAdd(var target: longint; value: longint): longint; overload;
 var
   EnvP: PPAnsiChar = nil;
@@ -379,6 +394,30 @@ begin
     result := 0;
     interlocked_exchange_add_i64_impl(target, value, result);
     InterlockedExchangeAdd := result;
+end;
+
+function UpCase(c: char): char; overload;
+begin
+    if (c >= 'a') and (c <= 'z') then
+        UpCase := Chr(Ord(c) - 32)
+    else
+        UpCase := c;
+end;
+
+function UpCase(const s: string): string; overload;
+var
+    i: longint;
+    ch: Char;
+begin
+    UpCase := s;
+    i := 1;
+    while i <= Length(s) do
+    begin
+        ch := s[i];
+        if (ch >= 'a') and (ch <= 'z') then
+            UpCase[i] := Chr(Ord(ch) - 32);
+        i := i + 1;
+    end;
 end;
 
 function file_is_text(var f: file): longint;
@@ -505,6 +544,14 @@ begin
     end
 end;
 
+procedure SetCodePage(var S: UnicodeString; CodePage: TSystemCodePage; Convert: Boolean); overload;
+begin
+    assembler;
+    asm
+        call kgpc_set_codepage_string
+    end
+end;
+
 function ToSingleByteFileSystemEncodedFileName(const S: RawByteString): RawByteString;
 begin
     ToSingleByteFileSystemEncodedFileName := S;
@@ -521,6 +568,34 @@ begin
     asm
         call kgpc_directory_create
     end
+end;
+
+procedure ChDir(const path: RawByteString); overload;
+var
+    res: integer;
+begin
+    res := kgpc_set_current_dir(PChar(path));
+    InOutRes := Word(res);
+end;
+
+procedure ChDir(const path: UnicodeString); overload;
+var
+    res: integer;
+begin
+    res := kgpc_set_current_dir(PChar(path));
+    InOutRes := Word(res);
+end;
+
+procedure GetDir(drivenr: byte; var dir: RawByteString); overload;
+begin
+    dir := kgpc_get_current_dir();
+    InOutRes := Word(kgpc_ioresult_peek());
+end;
+
+procedure GetDir(drivenr: byte; var dir: UnicodeString); overload;
+begin
+    dir := kgpc_get_current_dir();
+    InOutRes := Word(kgpc_ioresult_peek());
 end;
 
 procedure RmDir(path: string);
@@ -877,4 +952,11 @@ begin
 end;
 
 begin
+    InOutRes := 0;
+    FirstDotAtFileNameStartIsExtension := False;
+    DefaultSystemCodePage := 65001;
+    DefaultUnicodeCodePage := 65001;
+    DefaultFileSystemCodePage := 65001;
+    DefaultRTLFileSystemCodePage := DefaultFileSystemCodePage;
+    UTF8CompareLocale := DefaultSystemCodePage;
 end.

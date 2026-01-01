@@ -145,6 +145,7 @@ struct RecordType
     struct GenericTypeDecl *generic_decl; /* Owning generic declaration, if any */
     char **generic_args;      /* Concrete type arguments for specialization */
     int num_generic_args;
+    int method_clones_emitted; /* 1 if generic method clones have been appended */
 };
 
 static inline int record_type_is_class(const struct RecordType *record)

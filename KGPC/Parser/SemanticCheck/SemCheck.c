@@ -357,6 +357,89 @@ static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
     return hashnode_get_type_alias(node);
 }
 
+static void apply_builtin_integer_alias_metadata(struct TypeAlias *alias, const char *type_name)
+{
+    if (alias == NULL || type_name == NULL)
+        return;
+
+    if (pascal_identifier_equals(type_name, "Byte"))
+    {
+        alias->base_type = INT_TYPE;
+        alias->is_range = 1;
+        alias->range_known = 1;
+        alias->range_start = 0;
+        alias->range_end = 255;
+        alias->storage_size = 1;
+    }
+    else if (pascal_identifier_equals(type_name, "ShortInt"))
+    {
+        alias->base_type = INT_TYPE;
+        alias->is_range = 1;
+        alias->range_known = 1;
+        alias->range_start = -128;
+        alias->range_end = 127;
+        alias->storage_size = 1;
+    }
+    else if (pascal_identifier_equals(type_name, "Word"))
+    {
+        alias->base_type = INT_TYPE;
+        alias->is_range = 1;
+        alias->range_known = 1;
+        alias->range_start = 0;
+        alias->range_end = 65535;
+        alias->storage_size = 2;
+    }
+    else if (pascal_identifier_equals(type_name, "SmallInt"))
+    {
+        alias->base_type = INT_TYPE;
+        alias->is_range = 1;
+        alias->range_known = 1;
+        alias->range_start = -32768;
+        alias->range_end = 32767;
+        alias->storage_size = 2;
+    }
+    else if (pascal_identifier_equals(type_name, "Cardinal") ||
+             pascal_identifier_equals(type_name, "LongWord") ||
+             pascal_identifier_equals(type_name, "DWord"))
+    {
+        alias->base_type = LONGINT_TYPE;
+        alias->is_range = 1;
+        alias->range_known = 1;
+        alias->range_start = 0;
+        alias->range_end = 4294967295LL;
+        alias->storage_size = 4;
+    }
+}
+
+static void inherit_alias_metadata(SymTab_t *symtab, struct TypeAlias *alias)
+{
+    if (symtab == NULL || alias == NULL || alias->target_type_id == NULL)
+        return;
+
+    HashNode_t *target_node = NULL;
+    if (semcheck_find_ident_with_qualified_fallback(&target_node, symtab,
+        alias->target_type_id) == -1 || target_node == NULL)
+        return;
+
+    struct TypeAlias *target_alias = get_type_alias_from_node(target_node);
+    if (target_alias == NULL)
+        return;
+
+    if (alias->storage_size <= 0 && target_alias->storage_size > 0)
+        alias->storage_size = target_alias->storage_size;
+
+    if (!alias->is_range && target_alias->is_range && target_alias->range_known)
+    {
+        alias->is_range = 1;
+        alias->range_known = target_alias->range_known;
+        alias->range_start = target_alias->range_start;
+        alias->range_end = target_alias->range_end;
+    }
+
+    if (alias->base_type == UNKNOWN_TYPE && target_alias->base_type != UNKNOWN_TYPE)
+        alias->base_type = target_alias->base_type;
+}
+
 /* Helper function to get RecordType from HashNode */
 static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
 {
@@ -1368,14 +1451,22 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
             }
 
             int target_type = expr->expr_data.typecast_data.target_type;
+            const char *id = NULL;
+            if (expr->expr_data.typecast_data.target_type_id != NULL)
+                id = semcheck_base_type_name(expr->expr_data.typecast_data.target_type_id);
+            if (getenv("KGPC_DEBUG_CONST_CAST") != NULL)
+            {
+                fprintf(stderr, "[KGPC] const cast id=%s target_type=%d inner=%lld\n",
+                    id != NULL ? id : "<null>", target_type, inner_value);
+            }
             if (target_type == UNKNOWN_TYPE &&
                 expr->expr_data.typecast_data.target_type_id != NULL)
             {
-                const char *id = semcheck_base_type_name(expr->expr_data.typecast_data.target_type_id);
                 if (id == NULL)
                     break;
                 if (strcasecmp(id, "Byte") == 0 || strcasecmp(id, "Word") == 0 ||
-                    strcasecmp(id, "Integer") == 0)
+                    strcasecmp(id, "Integer") == 0 || strcasecmp(id, "ShortInt") == 0 ||
+                    strcasecmp(id, "SmallInt") == 0)
                     target_type = INT_TYPE;
                 else if (strcasecmp(id, "LongInt") == 0)
                     target_type = LONGINT_TYPE;
@@ -1411,9 +1502,47 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                     return 0;
                 case INT_TYPE:
                 case LONGINT_TYPE:
+                    if (id != NULL)
+                    {
+                        if (strcasecmp(id, "Byte") == 0)
+                        {
+                            *out_value = (unsigned char)inner_value;
+                            return 0;
+                        }
+                        if (strcasecmp(id, "Word") == 0)
+                        {
+                            *out_value = (uint16_t)inner_value;
+                            return 0;
+                        }
+                        if (strcasecmp(id, "ShortInt") == 0)
+                        {
+                            *out_value = (int8_t)inner_value;
+                            return 0;
+                        }
+                        if (strcasecmp(id, "SmallInt") == 0)
+                        {
+                            *out_value = (int16_t)inner_value;
+                            return 0;
+                        }
+                        if (strcasecmp(id, "Cardinal") == 0 ||
+                            strcasecmp(id, "LongWord") == 0 ||
+                            strcasecmp(id, "DWord") == 0)
+                        {
+                            *out_value = (uint32_t)inner_value;
+                            return 0;
+                        }
+                    }
                     *out_value = (int32_t)inner_value;
                     return 0;
                 case INT64_TYPE:
+                    if (id != NULL &&
+                        (strcasecmp(id, "QWord") == 0 || strcasecmp(id, "UInt64") == 0 ||
+                         strcasecmp(id, "SizeUInt") == 0 || strcasecmp(id, "NativeUInt") == 0 ||
+                         strcasecmp(id, "PtrUInt") == 0))
+                    {
+                        *out_value = (uint64_t)inner_value;
+                        return 0;
+                    }
                     *out_value = inner_value;
                     return 0;
                 case POINTER_TYPE:
@@ -2463,6 +2592,10 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                 else if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS)
                 {
                     struct TypeAlias *alias = &tree->tree_data.type_decl_data.info.alias;
+                    if (alias->target_type_id != NULL)
+                        apply_builtin_integer_alias_metadata(alias, alias->target_type_id);
+                    else if (type_id != NULL)
+                        apply_builtin_integer_alias_metadata(alias, type_id);
                     
                     /* Handle inline record aliases (e.g., generic specializations) */
                     if (alias->inline_record_type != NULL)
@@ -2666,6 +2799,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
 
                     /* Only pre-declare simple primitive type aliases */
                     KgpcType *kgpc_type = NULL;
+                    int created_new_type = 0;
                     
                     /* Case 1: Direct primitive type tag (e.g., MyInt = Integer where base_type is set)
                      * Exclude PROCEDURE - procedure types are NOT primitive and need special handling.
@@ -2678,7 +2812,13 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                         alias->base_type != UNKNOWN_TYPE && alias->base_type != 0 &&
                         alias->base_type != PROCEDURE)
                     {
-                        kgpc_type = create_primitive_type(alias->base_type);
+                        if (alias->storage_size > 0)
+                            kgpc_type = create_primitive_type_with_size(alias->base_type,
+                                (int)alias->storage_size);
+                        else
+                            kgpc_type = create_primitive_type(alias->base_type);
+                        if (kgpc_type != NULL)
+                            created_new_type = 1;
                     }
                     /* Case 2: Reference to a known primitive type name */
                     else if (alias->target_type_id != NULL)
@@ -2696,6 +2836,8 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             pascal_identifier_equals(target, "NativeInt"))
                         {
                             kgpc_type = create_primitive_type(INT64_TYPE);
+                            if (kgpc_type != NULL)
+                                created_new_type = 1;
                         }
                         else if (pascal_identifier_equals(target, "LongInt") ||
                             pascal_identifier_equals(target, "Cardinal") ||
@@ -2703,6 +2845,8 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             pascal_identifier_equals(target, "DWord"))
                         {
                             kgpc_type = create_primitive_type(LONGINT_TYPE);
+                            if (kgpc_type != NULL)
+                                created_new_type = 1;
                         }
                         else if (pascal_identifier_equals(target, "Integer") ||
                             pascal_identifier_equals(target, "SmallInt") ||
@@ -2710,22 +2854,40 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             pascal_identifier_equals(target, "Byte") ||
                             pascal_identifier_equals(target, "Word"))
                         {
-                            kgpc_type = create_primitive_type(INT_TYPE);
+                            int storage_size = 0;
+                            if (pascal_identifier_equals(target, "Byte") ||
+                                pascal_identifier_equals(target, "ShortInt"))
+                                storage_size = 1;
+                            else if (pascal_identifier_equals(target, "Word") ||
+                                     pascal_identifier_equals(target, "SmallInt"))
+                                storage_size = 2;
+                            if (storage_size > 0)
+                                kgpc_type = create_primitive_type_with_size(INT_TYPE, storage_size);
+                            else
+                                kgpc_type = create_primitive_type(INT_TYPE);
+                            if (kgpc_type != NULL)
+                                created_new_type = 1;
                         }
                         else if (pascal_identifier_equals(target, "Real") ||
                                  pascal_identifier_equals(target, "Double") ||
                                  pascal_identifier_equals(target, "Single"))
                         {
                             kgpc_type = create_primitive_type(REAL_TYPE);
+                            if (kgpc_type != NULL)
+                                created_new_type = 1;
                         }
                         else if (pascal_identifier_equals(target, "Boolean"))
                         {
                             kgpc_type = create_primitive_type(BOOL);
+                            if (kgpc_type != NULL)
+                                created_new_type = 1;
                         }
                         else if (pascal_identifier_equals(target, "Char") ||
                                  pascal_identifier_equals(target, "AnsiChar"))
                         {
                             kgpc_type = create_primitive_type(CHAR_TYPE);
+                            if (kgpc_type != NULL)
+                                created_new_type = 1;
                         }
                         /* If target is another user-defined type, check if it's already declared */
                         else
@@ -2768,7 +2930,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                     }
                     
                     /* Flag to track if we're reusing an existing type (vs creating new) */
-                    int reusing_existing = (kgpc_type != NULL && 
+                    int reusing_existing = (!created_new_type && kgpc_type != NULL &&
                         kgpc_type_get_type_alias(kgpc_type) != NULL &&
                         kgpc_type_get_type_alias(kgpc_type) != alias);
                     
@@ -3692,8 +3854,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
             case TYPE_DECL_ALIAS:
             {
                 alias_info = &tree->tree_data.type_decl_data.info.alias;
-                if (alias_info->inline_record_type != NULL &&
-                    tree->tree_data.type_decl_data.kgpc_type == NULL)
+                if (alias_info->inline_record_type != NULL)
                 {
                     if (alias_info->inline_record_type->type_id == NULL &&
                         tree->tree_data.type_decl_data.id != NULL)
@@ -3701,12 +3862,19 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                         alias_info->inline_record_type->type_id =
                             strdup(tree->tree_data.type_decl_data.id);
                     }
-                    KgpcType *inline_kgpc = create_record_type(alias_info->inline_record_type);
-                    if (record_type_is_class(alias_info->inline_record_type))
-                        inline_kgpc = create_pointer_type(inline_kgpc);
-                    kgpc_type_set_type_alias(inline_kgpc, alias_info);
-                    tree->tree_data.type_decl_data.kgpc_type = inline_kgpc;
-                    kgpc_type_retain(inline_kgpc);
+                    if (tree->tree_data.type_decl_data.kgpc_type == NULL ||
+                        (record_type_is_class(alias_info->inline_record_type) &&
+                         !kgpc_type_is_pointer(tree->tree_data.type_decl_data.kgpc_type)))
+                    {
+                        KgpcType *inline_kgpc = create_record_type(alias_info->inline_record_type);
+                        if (record_type_is_class(alias_info->inline_record_type))
+                            inline_kgpc = create_pointer_type(inline_kgpc);
+                        kgpc_type_set_type_alias(inline_kgpc, alias_info);
+                        if (tree->tree_data.type_decl_data.kgpc_type != NULL)
+                            destroy_kgpc_type(tree->tree_data.type_decl_data.kgpc_type);
+                        tree->tree_data.type_decl_data.kgpc_type = inline_kgpc;
+                        kgpc_type_retain(inline_kgpc);
+                    }
                 }
                 if (alias_info->is_array)
                 {
@@ -3784,12 +3952,29 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                     }
                 }
 
-                if (alias_info->base_type == RECORD_TYPE &&
-                    tree->tree_data.type_decl_data.kgpc_type != NULL &&
-                    kgpc_type_is_record(tree->tree_data.type_decl_data.kgpc_type))
+                if (alias_info->base_type == RECORD_TYPE)
                 {
-                    struct RecordType *alias_record =
-                        kgpc_type_get_record(tree->tree_data.type_decl_data.kgpc_type);
+                    struct RecordType *alias_record = NULL;
+                    KgpcType *alias_type = tree->tree_data.type_decl_data.kgpc_type;
+
+                    if (alias_info->inline_record_type != NULL)
+                    {
+                        alias_record = alias_info->inline_record_type;
+                    }
+                    else if (alias_type != NULL)
+                    {
+                        if (kgpc_type_is_record(alias_type))
+                        {
+                            alias_record = kgpc_type_get_record(alias_type);
+                        }
+                        else if (kgpc_type_is_pointer(alias_type))
+                        {
+                            KgpcType *pointee = alias_type->info.points_to;
+                            if (pointee != NULL && kgpc_type_is_record(pointee))
+                                alias_record = kgpc_type_get_record(pointee);
+                        }
+                    }
+
                     if (alias_record != NULL)
                     {
                         /* Set the type_id on the RecordType for operator overloading */
@@ -3956,6 +4141,25 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
             if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS && alias_info != NULL && 
                 existing_type->type != NULL)
             {
+                struct TypeAlias *existing_alias = kgpc_type_get_type_alias(existing_type->type);
+                if (existing_alias != NULL)
+                {
+                    if (alias_info->storage_size <= 0 && existing_alias->storage_size > 0)
+                        alias_info->storage_size = existing_alias->storage_size;
+                    if (!alias_info->is_range && existing_alias->is_range && existing_alias->range_known)
+                    {
+                        alias_info->is_range = 1;
+                        alias_info->range_known = existing_alias->range_known;
+                        alias_info->range_start = existing_alias->range_start;
+                        alias_info->range_end = existing_alias->range_end;
+                    }
+                }
+
+                inherit_alias_metadata(symtab, alias_info);
+                kgpc_type_set_type_alias(existing_type->type, alias_info);
+                if (existing_type->type->type_alias != NULL && alias_info->storage_size > 0)
+                    existing_type->type->type_alias->storage_size = alias_info->storage_size;
+
                 /* Resolve array bounds from constant identifiers now that constants are in scope */
                 if (alias_info->is_array)
                 {
@@ -3968,6 +4172,19 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
             /* Set type_alias on KgpcType before pushing */
             if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS && alias_info != NULL)
             {
+                struct TypeAlias *existing_alias = kgpc_type_get_type_alias(kgpc_type);
+                if (existing_alias != NULL)
+                {
+                    if (alias_info->storage_size <= 0 && existing_alias->storage_size > 0)
+                        alias_info->storage_size = existing_alias->storage_size;
+                    if (!alias_info->is_range && existing_alias->is_range && existing_alias->range_known)
+                    {
+                        alias_info->is_range = 1;
+                        alias_info->range_known = existing_alias->range_known;
+                        alias_info->range_start = existing_alias->range_start;
+                        alias_info->range_end = existing_alias->range_end;
+                    }
+                }
                 kgpc_type_set_type_alias(kgpc_type, alias_info);
                 
                 /* IMPORTANT: Inherit storage_size from target type for type aliases.
@@ -3975,25 +4192,11 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                  * as INT_TYPE (4 bytes) in the primitive type system but have a custom
                  * storage_size defined. Without this, SizeOf(TMyChar) where TMyChar = WideChar
                  * would return 4 instead of the correct 2 bytes. */
-                if (alias_info->target_type_id != NULL && alias_info->storage_size <= 0)
+                inherit_alias_metadata(symtab, alias_info);
+                if (kgpc_type_get_type_alias(kgpc_type) != NULL &&
+                    alias_info->storage_size > 0)
                 {
-                    HashNode_t *target_node = NULL;
-                    int found = semcheck_find_ident_with_qualified_fallback(&target_node, symtab,
-                        alias_info->target_type_id);
-                    if (found != -1 && target_node != NULL && target_node->type != NULL)
-                    {
-                        /* Get the target type's storage_size */
-                        struct TypeAlias *target_alias = kgpc_type_get_type_alias(target_node->type);
-                        if (target_alias != NULL && target_alias->storage_size > 0)
-                        {
-                            /* Inherit storage_size from target type */
-                            alias_info->storage_size = target_alias->storage_size;
-                            /* Also update the KgpcType's type_alias storage_size */
-                            struct TypeAlias *kgpc_alias = kgpc_type_get_type_alias(kgpc_type);
-                            if (kgpc_alias != NULL)
-                                kgpc_alias->storage_size = target_alias->storage_size;
-                        }
-                    }
+                    kgpc_type_get_type_alias(kgpc_type)->storage_size = alias_info->storage_size;
                 }
                 
                 /* Resolve array bounds from constant identifiers now that constants are in scope */

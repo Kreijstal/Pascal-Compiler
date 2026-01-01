@@ -1217,14 +1217,17 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         }
 
         /* For function calls, get the KgpcType from cached call info populated during semcheck.
-         * Fall back to a fresh symbol lookup when metadata is unavailable. */
+         * Fall back to a fresh symbol lookup when metadata is unavailable.
+         * IMPORTANT: If is_call_info_valid is true, respect that even if call_kgpc_type is NULL.
+         * This allows builtins (like UpCase(char)) to signal that no formal parameter
+         * conversion is needed by setting is_call_info_valid=1 with call_kgpc_type=NULL. */
         struct KgpcType *func_type = NULL;
         HashNode_t *func_node = NULL;
         if (expr->expr_data.function_call_data.is_call_info_valid)
         {
             func_type = expr->expr_data.function_call_data.call_kgpc_type;
         }
-        if (func_type == NULL && ctx != NULL && ctx->symtab != NULL &&
+        else if (ctx != NULL && ctx->symtab != NULL &&
             expr->expr_data.function_call_data.id != NULL)
         {
             if (FindIdent(&func_node, ctx->symtab,
