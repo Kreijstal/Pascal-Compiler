@@ -9571,7 +9571,9 @@ int semcheck_funccall(int *type_return,
                     mangled_name = (resolved_method_name != NULL) ? strdup(resolved_method_name) : NULL;
 
                     /* Initialize overload candidates before jumping to avoid uninitialized access */
-                    overload_candidates = FindAllIdents(symtab, id);
+                    if (id != NULL) {
+                        overload_candidates = FindAllIdents(symtab, id);
+                    }
 
                     /* Continue with normal function call processing using the resolved method */
                     hash_return = method_node;
@@ -9705,7 +9707,9 @@ constructor_resolved:
         goto skip_overload_resolution;
     }
 
-    overload_candidates = FindAllIdents(symtab, id);
+    if (id != NULL) {
+        overload_candidates = FindAllIdents(symtab, id);
+    }
 
     int prefer_non_builtin = 0;
     if (overload_candidates != NULL)
@@ -9823,11 +9827,16 @@ constructor_resolved:
         }
     }
     
+    if (id == NULL) {
+        fprintf(stderr, "Error on line %d: function call with NULL id\n", expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        destroy_list(overload_candidates);
+        return ++return_val;
+    }
     mangled_name = MangleFunctionNameFromCallSite(id, args_given, symtab, max_scope_lev);
     if (mangled_name == NULL)
     {
-        fprintf(stderr, "Error: failed to mangle function name for call to %s\n",
-            id != NULL ? id : "(unknown)");
+        fprintf(stderr, "Error: failed to mangle function name for call to %s\n", id);
         *type_return = UNKNOWN_TYPE;
         destroy_list(overload_candidates);
         return ++return_val;

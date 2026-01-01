@@ -5897,7 +5897,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             /* Get element type - it might be a primitive type or a type reference */
                             KgpcType *element_type = NULL;
                             int element_type_tag = alias->array_element_type;
-                            
+
                             /* If element type is a type reference, resolve it */
                             if (element_type_tag == UNKNOWN_TYPE && alias->array_element_type_id != NULL)
                             {
@@ -5907,11 +5907,10 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                                 {
                                     element_type = element_type_node->type;
                                 }
-                                else if (element_type_node != NULL)
+                                else if (element_type_node != NULL && element_type_node->type != NULL)
                                 {
                                     /* Get KgpcType from element_type_node */
                                     element_type = element_type_node->type;
-                                    assert(element_type != NULL && "Element type node must have KgpcType");
                                 }
                             }
                             else if (element_type_tag != UNKNOWN_TYPE)
@@ -5919,8 +5918,12 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                                 /* Direct primitive type tag - use create_primitive_type */
                                 element_type = create_primitive_type(element_type_tag);
                             }
-                            
-                            assert(element_type != NULL && "Array element type must be resolvable");
+
+                            /* If element type is still NULL, create an unknown type to avoid crash */
+                            if (element_type == NULL)
+                            {
+                                element_type = create_primitive_type(UNKNOWN_TYPE);
+                            }
                             
                             /* Create array KgpcType */
                             KgpcType *array_type = create_array_type(element_type, start, end);

@@ -2132,7 +2132,7 @@ static bool parse_factor(const char **cursor,
         if (!found && (strcmp(type_name, "INT64") == 0 || strcmp(type_name, "QWORD") == 0 || strcmp(type_name, "UINT64") == 0 ||
             strcmp(type_name, "TSYSPARAM") == 0 || strcmp(type_name, "V") == 0 || strcmp(type_name, "ALUUINT") == 0 ||
             strcmp(type_name, "ALUSINT") == 0 || strcmp(type_name, "VALSINT") == 0 || strcmp(type_name, "VALUINT") == 0 ||
-            strcmp(type_name, "FREECHUNK") == 0 || strcmp(type_name, "AINTMAX") == 0 ||
+            strcmp(type_name, "FREECHUNK") == 0 || strcmp(type_name, "AINTMAX") == 0 || strcmp(type_name, "ASIZEINT") == 0 ||
             strcmp(type_name, "TBITSBASE") == 0 || strcmp(type_name, "TUNSIGNEDINTTYPE") == 0 ||
             strcmp(type_name, "TSIGNEDINTTYPE") == 0 || strcmp(type_name, "INTPTR") == 0 ||
             strcmp(type_name, "UINTPTR") == 0 || strcmp(type_name, "HANDLE") == 0 ||

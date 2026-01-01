@@ -4445,32 +4445,72 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
     /* For multi-dimensional arrays like array[a..b, c..d], we handle them
      * by treating the second dimension as an inner array. The outer dimension
      * determines the number of rows, and the inner dimension determines columns.
-     * Currently we only support 2D arrays (one level of nesting). */
+     * We support 2D and 3D arrays (one or two levels of nesting). */
     int is_multidim = (type_info->array_dimensions != NULL && type_info->array_dimensions->next != NULL);
+    int is_3d = 0;
     int multidim_inner_start = 0, multidim_inner_end = -1;
     int multidim_infer_bounds = 0;  /* Set to 1 if we need to infer bounds from initializer */
+    int dim3_start = 0, dim3_end = -1;
+    int dim3_infer_bounds = 0;
     if (is_multidim) {
-        /* Check for more than 2 dimensions - not yet supported */
+        /* Check for 3 dimensions */
         if (type_info->array_dimensions->next->next != NULL) {
-            fprintf(stderr, "ERROR: Unsupported 3+ dimensional const array %s.\n", *id_ptr);
-            return -1;
-        }
-        /* Extract inner dimension bounds from the second dimension string */
-        const char *inner_range = (const char *)type_info->array_dimensions->next->cur;
-        if (inner_range != NULL) {
-            /* Parse range like "1..240" or "0..3" */
-            char *range_copy = strdup(inner_range);
-            if (range_copy != NULL) {
-                char *dotdot = strstr(range_copy, "..");
-                if (dotdot != NULL) {
-                    *dotdot = '\0';
-                    multidim_inner_start = atoi(range_copy);
-                    multidim_inner_end = atoi(dotdot + 2);
-                } else {
-                    /* Enum type - need to infer bounds from initializer */
-                    multidim_infer_bounds = 1;
+            is_3d = 1;
+            /* Check for more than 3 dimensions - not yet supported */
+            if (type_info->array_dimensions->next->next->next != NULL) {
+                fprintf(stderr, "ERROR: Unsupported 4+ dimensional const array %s.\n", *id_ptr);
+                return -1;
+            }
+            /* Extract 2nd dimension bounds */
+            const char *dim2_range = (const char *)type_info->array_dimensions->next->cur;
+            if (dim2_range != NULL) {
+                char *range_copy = strdup(dim2_range);
+                if (range_copy != NULL) {
+                    char *dotdot = strstr(range_copy, "..");
+                    if (dotdot != NULL) {
+                        *dotdot = '\0';
+                        multidim_inner_start = atoi(range_copy);
+                        multidim_inner_end = atoi(dotdot + 2);
+                    } else {
+                        multidim_infer_bounds = 1;
+                    }
+                    free(range_copy);
                 }
-                free(range_copy);
+            }
+            /* Extract 3rd dimension bounds */
+            const char *dim3_range = (const char *)type_info->array_dimensions->next->next->cur;
+            if (dim3_range != NULL) {
+                char *range_copy = strdup(dim3_range);
+                if (range_copy != NULL) {
+                    char *dotdot = strstr(range_copy, "..");
+                    if (dotdot != NULL) {
+                        *dotdot = '\0';
+                        dim3_start = atoi(range_copy);
+                        dim3_end = atoi(dotdot + 2);
+                    } else {
+                        dim3_infer_bounds = 1;
+                    }
+                    free(range_copy);
+                }
+            }
+        } else {
+            /* Extract inner dimension bounds from the second dimension string */
+            const char *inner_range = (const char *)type_info->array_dimensions->next->cur;
+            if (inner_range != NULL) {
+                /* Parse range like "1..240" or "0..3" */
+                char *range_copy = strdup(inner_range);
+                if (range_copy != NULL) {
+                    char *dotdot = strstr(range_copy, "..");
+                    if (dotdot != NULL) {
+                        *dotdot = '\0';
+                        multidim_inner_start = atoi(range_copy);
+                        multidim_inner_end = atoi(dotdot + 2);
+                    } else {
+                        /* Enum type - need to infer bounds from initializer */
+                        multidim_infer_bounds = 1;
+                    }
+                    free(range_copy);
+                }
             }
         }
     }
@@ -4572,7 +4612,9 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
         }
     }
 
-    /* For 2D arrays (array[a..b, c..d]), treat as array of inner arrays */
+    /* For 2D/3D arrays (array[a..b, c..d] or array[a..b, c..d, e..f]), treat as nested arrays */
+    int element_is_2d_array = 0;  /* For 3D arrays, elements are 2D arrays */
+    TypeInfo element_2d_inner_info = {0};
     if (is_multidim && !element_is_array) {
         element_is_array = 1;
         element_array_info.is_array = 1;
@@ -4580,6 +4622,16 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
         element_array_info.end = multidim_inner_end;
         element_array_info.element_type = type_info->element_type;
         element_array_info.element_type_id = type_info->element_type_id != NULL ? strdup(type_info->element_type_id) : NULL;
+
+        /* For 3D arrays, elements of element_array are themselves arrays */
+        if (is_3d) {
+            element_is_2d_array = 1;
+            element_2d_inner_info.is_array = 1;
+            element_2d_inner_info.start = dim3_start;
+            element_2d_inner_info.end = dim3_end;
+            element_2d_inner_info.element_type = type_info->element_type;
+            element_2d_inner_info.element_type_id = type_info->element_type_id != NULL ? strdup(type_info->element_type_id) : NULL;
+        }
 
         /* For enum-indexed arrays, infer inner dimension from first row of initializer */
         if (multidim_infer_bounds && tuple_node != NULL && tuple_node->typ == PASCAL_T_TUPLE) {
@@ -4592,6 +4644,26 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                         ++inner_count;
                     element_array_info.start = 0;
                     element_array_info.end = inner_count - 1;
+                }
+            }
+        }
+        /* For 3D arrays with enum-indexed 3rd dimension, infer from first element */
+        if (is_3d && dim3_infer_bounds && tuple_node != NULL && tuple_node->typ == PASCAL_T_TUPLE) {
+            ast_t *first_row = tuple_node->child;
+            if (first_row != NULL) {
+                ast_t *first_row_unwrapped = unwrap_pascal_node(first_row);
+                if (first_row_unwrapped != NULL && first_row_unwrapped->typ == PASCAL_T_TUPLE) {
+                    ast_t *first_inner = first_row_unwrapped->child;
+                    if (first_inner != NULL) {
+                        ast_t *first_inner_unwrapped = unwrap_pascal_node(first_inner);
+                        if (first_inner_unwrapped != NULL && first_inner_unwrapped->typ == PASCAL_T_TUPLE) {
+                            int innermost_count = 0;
+                            for (ast_t *elem = first_inner_unwrapped->child; elem != NULL; elem = elem->next)
+                                ++innermost_count;
+                            element_2d_inner_info.start = 0;
+                            element_2d_inner_info.end = innermost_count - 1;
+                        }
+                    }
                 }
             }
         }
@@ -4665,21 +4737,59 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                 int inner_index = inner_start;
                 for (ast_t *inner = unwrapped->child; inner != NULL; inner = inner->next) {
                     ast_t *inner_unwrapped = unwrap_pascal_node(inner);
-                    struct Expression *rhs = convert_expression(inner_unwrapped);
-                    if (rhs == NULL) {
-                        fprintf(stderr, "ERROR: Unsupported const array element in %s[%d].\n", *id_ptr, index);
-                        destroy_list(stmt_builder.head);
-                        destroy_type_info_contents(&element_array_info);
-                        return -1;
-                    }
 
-                    struct Expression *outer_index_expr = mk_inum(element->line, index);
-                    struct Expression *base_expr = mk_varid(element->line, strdup(*id_ptr));
-                    struct Expression *outer_access = mk_arrayaccess(element->line, base_expr, outer_index_expr);
-                    struct Expression *inner_index_expr = mk_inum(element->line, inner_index);
-                    struct Expression *lhs = mk_arrayaccess(element->line, outer_access, inner_index_expr);
-                    struct Statement *assign = mk_varassign(element->line, element->col, lhs, rhs);
-                    list_builder_append(&stmt_builder, assign, LIST_STMT);
+                    /* For 3D arrays, handle the innermost dimension */
+                    if (element_is_2d_array) {
+                        if (inner_unwrapped == NULL || inner_unwrapped->typ != PASCAL_T_TUPLE) {
+                            fprintf(stderr, "ERROR: Const 3D array %s expects tuple for element [%d][%d].\n",
+                                    *id_ptr, index, inner_index);
+                            destroy_list(stmt_builder.head);
+                            destroy_type_info_contents(&element_array_info);
+                            destroy_type_info_contents(&element_2d_inner_info);
+                            return -1;
+                        }
+
+                        int innermost_index = element_2d_inner_info.start;
+                        for (ast_t *innermost = inner_unwrapped->child; innermost != NULL; innermost = innermost->next) {
+                            ast_t *innermost_unwrapped = unwrap_pascal_node(innermost);
+                            struct Expression *rhs = convert_expression(innermost_unwrapped);
+                            if (rhs == NULL) {
+                                fprintf(stderr, "ERROR: Unsupported const array element in %s[%d][%d][%d].\n",
+                                        *id_ptr, index, inner_index, innermost_index);
+                                destroy_list(stmt_builder.head);
+                                destroy_type_info_contents(&element_array_info);
+                                destroy_type_info_contents(&element_2d_inner_info);
+                                return -1;
+                            }
+
+                            struct Expression *outer_index_expr = mk_inum(element->line, index);
+                            struct Expression *base_expr = mk_varid(element->line, strdup(*id_ptr));
+                            struct Expression *outer_access = mk_arrayaccess(element->line, base_expr, outer_index_expr);
+                            struct Expression *inner_index_expr = mk_inum(element->line, inner_index);
+                            struct Expression *middle_access = mk_arrayaccess(element->line, outer_access, inner_index_expr);
+                            struct Expression *innermost_index_expr = mk_inum(element->line, innermost_index);
+                            struct Expression *lhs = mk_arrayaccess(element->line, middle_access, innermost_index_expr);
+                            struct Statement *assign = mk_varassign(element->line, element->col, lhs, rhs);
+                            list_builder_append(&stmt_builder, assign, LIST_STMT);
+                            ++innermost_index;
+                        }
+                    } else {
+                        struct Expression *rhs = convert_expression(inner_unwrapped);
+                        if (rhs == NULL) {
+                            fprintf(stderr, "ERROR: Unsupported const array element in %s[%d].\n", *id_ptr, index);
+                            destroy_list(stmt_builder.head);
+                            destroy_type_info_contents(&element_array_info);
+                            return -1;
+                        }
+
+                        struct Expression *outer_index_expr = mk_inum(element->line, index);
+                        struct Expression *base_expr = mk_varid(element->line, strdup(*id_ptr));
+                        struct Expression *outer_access = mk_arrayaccess(element->line, base_expr, outer_index_expr);
+                        struct Expression *inner_index_expr = mk_inum(element->line, inner_index);
+                        struct Expression *lhs = mk_arrayaccess(element->line, outer_access, inner_index_expr);
+                        struct Statement *assign = mk_varassign(element->line, element->col, lhs, rhs);
+                        list_builder_append(&stmt_builder, assign, LIST_STMT);
+                    }
                     ++inner_index;
                 }
 
@@ -4750,6 +4860,7 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
     }
 
     destroy_type_info_contents(&element_array_info);
+    destroy_type_info_contents(&element_2d_inner_info);
 
     ListNode_t *assignments = list_builder_finish(&stmt_builder);
     struct Statement *initializer = NULL;
