@@ -1348,7 +1348,7 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
 
     // Precedence 0: All relational operators (LOWEST precedence in Pascal!)
     // Multi-char operators added last (tried first in expr parser)
-    // First, explicitly reject C-style shift operators so they surface as parse errors
+    // Single character operators are guarded to avoid accidentally parsing '<<' or '>>' as two < or > operators
     combinator_t* reject_shift_ops = new_combinator();
     reject_shift_ops->type = P_MATCH; // type is unused by custom fn; keep stable
     reject_shift_ops->fn = reject_shift_ops_fn;
@@ -1380,7 +1380,7 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
     // Precedence 1: Range operator (..)
     expr_insert(*p, 1, PASCAL_T_RANGE, EXPR_INFIX, ASSOC_LEFT, token(match("..")));
 
-    // Precedence 2: Additive operators (+, -, or, xor) including string concatenation and set operations
+    // Precedence 2: Additive operators (+, -, or, xor) and set symmetric difference (><)
     expr_insert(*p, 2, PASCAL_T_ADD, EXPR_INFIX, ASSOC_LEFT, token(match("+")));
     expr_altern(*p, 2, PASCAL_T_SUB, token(match("-")));
     expr_altern(*p, 2, PASCAL_T_OR, token(keyword_ci("or")));
