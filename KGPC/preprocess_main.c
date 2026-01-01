@@ -241,7 +241,12 @@ int main(int argc, char **argv)
     pascal_preprocessor_define(preprocessor, "CPUX86_HAS_CMOV");
     pascal_preprocessor_define(preprocessor, "CPUX86_HAS_SSE2");
     pascal_preprocessor_define(preprocessor, "CPUX86_HAS_SSEUNIT");
-    
+    /* CPU register constants from cpubase.pas for x86_64 */
+    pascal_preprocessor_define_macro(preprocessor, "first_mm_imreg", "32"); /* $20 in hex */
+
+    /* max_operands for x86 (4 operands max in x86 instructions) */
+    pascal_preprocessor_define_macro(preprocessor, "max_operands", "4");
+
     /* Stack alignment for x86_64 */
     pascal_preprocessor_define(preprocessor, "FPC_STACKALIGNMENT:=16");
 #endif

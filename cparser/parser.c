@@ -1085,15 +1085,15 @@ static ParseResult satisfy_fn(input_t * in, void * args, char* parser_name) {
     return make_success(ast);
 }
 
-// Helper function to skip a single Pascal comment or one character.
+// Helper function to skip a single Pascal element (comment, identifier, string, or one character).
 // Returns true if something was skipped, false if at EOF.
 static bool skip_one_pascal_element(input_t* in) {
     if (in->start >= in->length) return false;
-    
+
     const char* buffer = in->buffer;
     int pos = in->start;
     char c = buffer[pos];
-    
+
     // Skip { } brace comments
     if (c == '{') {
         in->start++; // consume '{'
@@ -1103,7 +1103,7 @@ static bool skip_one_pascal_element(input_t* in) {
         }
         return true;
     }
-    
+
     // Skip (* *) paren-star comments
     if (c == '(' && (pos + 1) < in->length && buffer[pos + 1] == '*') {
         in->start += 2; // consume '(*'
@@ -1116,7 +1116,7 @@ static bool skip_one_pascal_element(input_t* in) {
         }
         return true;
     }
-    
+
     // Skip // line comments
     if (c == '/' && (pos + 1) < in->length && buffer[pos + 1] == '/') {
         in->start += 2; // consume '//'
@@ -1126,7 +1126,37 @@ static bool skip_one_pascal_element(input_t* in) {
         }
         return true;
     }
-    
+
+    // Skip entire identifiers to avoid matching keywords that appear as suffixes
+    // (e.g., don't match 'exports' in 'myexports')
+    if (c == '_' || isalpha((unsigned char)c)) {
+        in->start++;
+        while (in->start < in->length) {
+            char ch = buffer[in->start];
+            if (!isalnum((unsigned char)ch) && ch != '_') break;
+            in->start++;
+        }
+        return true;
+    }
+
+    // Skip string literals to avoid matching keywords inside strings
+    // (e.g., don't match 'initialization' in (str:'INITIALIZATION';...))
+    if (c == '\'') {
+        in->start++; // consume opening quote
+        while (in->start < in->length) {
+            char ch = buffer[in->start++];
+            if (ch == '\'') {
+                // Check for escaped quote ('')
+                if (in->start < in->length && buffer[in->start] == '\'') {
+                    in->start++; // skip the second quote
+                    continue;
+                }
+                break; // end of string
+            }
+        }
+        return true;
+    }
+
     // Skip single character
     in->start++;
     return true;

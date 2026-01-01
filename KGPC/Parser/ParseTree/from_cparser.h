@@ -45,5 +45,6 @@ int from_cparser_is_method_static(const char *class_name, const char *method_nam
 void from_cparser_enable_pending_specializations(void);
 void from_cparser_disable_pending_specializations(void);
 void resolve_pending_generic_aliases(Tree_t *program_tree);
+void append_generic_method_clones(Tree_t *program_tree);
 
 #endif /* FROM_CPARSER_H */
