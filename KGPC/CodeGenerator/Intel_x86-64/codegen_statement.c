@@ -1474,7 +1474,7 @@ static ListNode_t *codegen_call_string_assign(ListNode_t *inst_list, CodeGenCont
     }
 
     inst_list = codegen_vect_reg(inst_list, 0);
-    inst_list = add_inst(inst_list, "\tcall\tkgpc_string_assign\n");
+    inst_list = codegen_call_with_shadow_space(inst_list, ctx, "kgpc_string_assign");
     free_arg_regs();
     return inst_list;
 }

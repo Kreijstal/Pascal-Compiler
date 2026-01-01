@@ -2116,9 +2116,11 @@ cleanup_constructor:
      * This properly handles Int64/QWord/UInt64 which have storage_size=8 */
     int desired_qword = expr_requires_qword(expr);
     int storage_tag = expr_effective_storage_type(expr, ctx);
-    int storage_qword = (expr != NULL && expr->resolved_kgpc_type != NULL) ?
-        kgpc_type_uses_qword(expr->resolved_kgpc_type) :
-        codegen_type_uses_qword(storage_tag);
+    int storage_qword = 0;
+    if (expr != NULL)
+        storage_qword = expr_uses_qword_kgpctype(expr);
+    if (!storage_qword)
+        storage_qword = codegen_type_uses_qword(storage_tag);
     if (!desired_qword && storage_qword)
         desired_qword = 1;
     int is_immediate = (buf_leaf[0] == '$');
