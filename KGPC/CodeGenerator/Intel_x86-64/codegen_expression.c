@@ -1148,6 +1148,22 @@ int expr_has_type_tag(const struct Expression *expr, int type_tag)
     return (expr->resolved_type == type_tag);
 }
 
+int expr_returns_sret(const struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+
+    if (expr_has_type_tag(expr, RECORD_TYPE))
+        return 1;
+
+    KgpcType *type = expr_get_kgpc_type(expr);
+    if (type != NULL && type->kind == TYPE_KIND_ARRAY &&
+        !kgpc_type_is_dynamic_array(type))
+        return 1;
+
+    return 0;
+}
+
 void codegen_release_function_call_mangled_id(struct Expression *expr)
 {
     if (expr == NULL || expr->type != EXPR_FUNCTION_CALL)

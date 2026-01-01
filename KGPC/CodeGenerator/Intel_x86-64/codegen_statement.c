@@ -1474,7 +1474,7 @@ static ListNode_t *codegen_call_string_assign(ListNode_t *inst_list, CodeGenCont
     }
 
     inst_list = codegen_vect_reg(inst_list, 0);
-    inst_list = add_inst(inst_list, "\tcall\tkgpc_string_assign\n");
+    inst_list = codegen_call_with_shadow_space(inst_list, ctx, "kgpc_string_assign");
     free_arg_regs();
     return inst_list;
 }
@@ -2027,12 +2027,14 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
             const char *func_mangled_name = src_expr->expr_data.function_call_data.mangled_id;
             const char *func_id = src_expr->expr_data.function_call_data.id;
 
-            int call_returns_record = expr_has_type_tag(src_expr, RECORD_TYPE);
+            int call_returns_record = expr_returns_sret(src_expr);
             if (!call_returns_record && func_type != NULL &&
                 kgpc_type_is_procedure(func_type))
             {
                 KgpcType *return_type = kgpc_type_get_return_type(func_type);
-                if (return_type != NULL && kgpc_type_is_record(return_type))
+                if (return_type != NULL && (kgpc_type_is_record(return_type) ||
+                    (return_type->kind == TYPE_KIND_ARRAY &&
+                     !kgpc_type_is_dynamic_array(return_type))))
                     call_returns_record = 1;
             }
 
@@ -3941,6 +3943,8 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
                 int sym_type = kgpc_type_get_legacy_tag(sym_node->type);
                 if (sym_type != UNKNOWN_TYPE)
                     expr_type = sym_type;
+                if (expr->resolved_kgpc_type == NULL)
+                    expr->resolved_kgpc_type = sym_node->type;
             }
         }
         
@@ -4171,8 +4175,17 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
         }
         else if (expr_type == LONGINT_TYPE)
         {
-            /* LONGINT_TYPE is now 4 bytes (to match FPC) - sign-extend to 64-bit */
-            inst_list = codegen_sign_extend32_to64(inst_list, value_reg->bit_32, value_dest64);
+            /* LONGINT_TYPE is now 4 bytes (to match FPC) - allow unsigned aliases to zero-extend */
+            if (expr_is_unsigned_type(expr))
+            {
+                inst_list = codegen_zero_extend32_to64(inst_list, value_reg->bit_32, value_reg->bit_32);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", value_reg->bit_64, value_dest64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else
+            {
+                inst_list = codegen_sign_extend32_to64(inst_list, value_reg->bit_32, value_dest64);
+            }
         }
         else
         {

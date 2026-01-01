@@ -720,11 +720,23 @@ void init_pascal_statement_parser(combinator_t** p) {
     );
     combinator_t* suffixes = many(suffix_choice);
 
-    combinator_t* lvalue = map(seq(new_combinator(), PASCAL_T_NONE,
+    combinator_t* typecast_lvalue = seq(new_combinator(), PASCAL_T_TYPECAST,
+        token(type_name(PASCAL_T_IDENTIFIER)),
+        between(token(match("(")), token(match(")")), lazy(expr_parser)),
+        NULL
+    );
+
+    combinator_t* simple_lvalue = map(seq(new_combinator(), PASCAL_T_NONE,
         simple_identifier,
         suffixes,
         NULL
     ), build_pointer_lvalue_chain);
+
+    combinator_t* lvalue = multi(new_combinator(), PASCAL_T_NONE,
+        typecast_lvalue,
+        simple_lvalue,
+        NULL
+    );
 
     // Assignment statement: support both ":=" and "+=" compound assignments
     combinator_t* simple_assignment = seq(new_combinator(), PASCAL_T_ASSIGNMENT,

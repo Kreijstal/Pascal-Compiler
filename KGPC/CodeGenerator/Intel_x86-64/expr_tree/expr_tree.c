@@ -10,6 +10,7 @@
 #include <assert.h>
 #include <string.h>
 #include <stdint.h>
+#include <limits.h>
 #include "../codegen.h"
 #include "expr_tree.h"
 #include "../register_types.h"
@@ -24,6 +25,10 @@
 #include "../../../Parser/SemanticCheck/HashTable/HashTable.h"
 #include "../../../Parser/SemanticCheck/SymTab/SymTab.h"
 #include "../../../Parser/SemanticCheck/NameMangling.h"
+
+#ifndef CODEGEN_POINTER_SIZE_BYTES
+#define CODEGEN_POINTER_SIZE_BYTES 8
+#endif
 
 static ListNode_t *codegen_builtin_dynarray_length(struct Expression *expr,
     ListNode_t *inst_list, CodeGenContext *ctx, Register_t *target_reg)
@@ -879,6 +884,11 @@ static ListNode_t *promote_char_operand_to_string(expr_node_t *node, ListNode_t 
     if (node == NULL || node->expr == NULL || value_reg == NULL)
         return inst_list;
 
+    int is_shortstring = (expr_get_type_tag(node->expr) == SHORTSTRING_TYPE) ||
+        is_shortstring_array(node->expr->resolved_type, node->expr->is_array_expr);
+    if (is_shortstring)
+        return inst_list;
+
     if (node->expr->resolved_type != CHAR_TYPE)
         return inst_list;
 
@@ -894,6 +904,33 @@ static ListNode_t *promote_char_operand_to_string(expr_node_t *node, ListNode_t 
 
     inst_list = codegen_vect_reg(inst_list, 0);
     inst_list = add_inst(inst_list, "\tcall\tkgpc_char_to_string\n");
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", RETURN_REG_64, value_reg->bit_64);
+    inst_list = add_inst(inst_list, buffer);
+    free_arg_regs();
+    return inst_list;
+}
+
+static ListNode_t *promote_shortstring_operand_to_string(expr_node_t *node, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t *value_reg)
+{
+    if (node == NULL || node->expr == NULL || ctx == NULL || value_reg == NULL)
+        return inst_list;
+
+    int is_shortstring = (expr_get_type_tag(node->expr) == SHORTSTRING_TYPE) ||
+        is_shortstring_array(node->expr->resolved_type, node->expr->is_array_expr);
+    if (!is_shortstring)
+        return inst_list;
+
+    const char *arg_reg64 = current_arg_reg64(0);
+    if (arg_reg64 == NULL)
+        return inst_list;
+
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", value_reg->bit_64, arg_reg64);
+    inst_list = add_inst(inst_list, buffer);
+
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = add_inst(inst_list, "\tcall\tkgpc_shortstring_to_string\n");
     snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", RETURN_REG_64, value_reg->bit_64);
     inst_list = add_inst(inst_list, buffer);
     free_arg_regs();
@@ -919,11 +956,13 @@ static ListNode_t *gencode_string_concat(expr_node_t *node, ListNode_t *inst_lis
         StackNode_t *spill_loc = add_l_t("str_concat_rhs");
         inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, target_reg);
         inst_list = promote_char_operand_to_string(node->right_expr, inst_list, ctx, target_reg);
+        inst_list = promote_shortstring_operand_to_string(node->right_expr, inst_list, ctx, target_reg);
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", target_reg->bit_64, spill_loc->offset);
         inst_list = add_inst(inst_list, buffer);
 
         inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
         inst_list = promote_char_operand_to_string(node->left_expr, inst_list, ctx, target_reg);
+        inst_list = promote_shortstring_operand_to_string(node->left_expr, inst_list, ctx, target_reg);
 
         if (codegen_target_is_windows())
         {
@@ -945,11 +984,13 @@ static ListNode_t *gencode_string_concat(expr_node_t *node, ListNode_t *inst_lis
         StackNode_t *lhs_spill = add_l_t("str_concat_lhs");
         inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
         inst_list = promote_char_operand_to_string(node->left_expr, inst_list, ctx, target_reg);
+        inst_list = promote_shortstring_operand_to_string(node->left_expr, inst_list, ctx, target_reg);
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", target_reg->bit_64, lhs_spill->offset);
         inst_list = add_inst(inst_list, buffer);
 
         inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, rhs_reg);
         inst_list = promote_char_operand_to_string(node->right_expr, inst_list, ctx, rhs_reg);
+        inst_list = promote_shortstring_operand_to_string(node->right_expr, inst_list, ctx, rhs_reg);
 
         snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", lhs_spill->offset, target_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
@@ -1176,14 +1217,17 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         }
 
         /* For function calls, get the KgpcType from cached call info populated during semcheck.
-         * Fall back to a fresh symbol lookup when metadata is unavailable. */
+         * Fall back to a fresh symbol lookup when metadata is unavailable.
+         * IMPORTANT: If is_call_info_valid is true, respect that even if call_kgpc_type is NULL.
+         * This allows builtins (like UpCase(char)) to signal that no formal parameter
+         * conversion is needed by setting is_call_info_valid=1 with call_kgpc_type=NULL. */
         struct KgpcType *func_type = NULL;
         HashNode_t *func_node = NULL;
         if (expr->expr_data.function_call_data.is_call_info_valid)
         {
             func_type = expr->expr_data.function_call_data.call_kgpc_type;
         }
-        if (func_type == NULL && ctx != NULL && ctx->symtab != NULL &&
+        else if (ctx != NULL && ctx->symtab != NULL &&
             expr->expr_data.function_call_data.id != NULL)
         {
             if (FindIdent(&func_node, ctx->symtab,
@@ -1278,8 +1322,19 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 
         /* Constructors for classes return the constructed instance by value,
          * which uses a hidden sret pointer in the first argument slot. */
-        int has_record_return = expr_has_type_tag(expr, RECORD_TYPE);
+        int has_record_return = expr_returns_sret(expr);
         int ctor_has_record_return = (is_constructor && has_record_return);
+        StackNode_t *sret_slot = NULL;
+        if (has_record_return && !is_constructor)
+        {
+            long long sret_size = 0;
+            KgpcType *return_type = expr_get_kgpc_type(expr);
+            if (return_type != NULL)
+                sret_size = kgpc_type_sizeof(return_type);
+            if (sret_size <= 0 || sret_size > INT_MAX)
+                sret_size = CODEGEN_POINTER_SIZE_BYTES;
+            sret_slot = add_l_x("__record_return_tmp__", (int)sret_size);
+        }
         
         /* For constructors, allocate memory for the instance */
         if (is_constructor)
@@ -1506,6 +1561,17 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                     break;
                 default:
                     break;
+            }
+        }
+
+        if (has_record_return && !is_constructor && sret_slot != NULL)
+        {
+            const char *ret_reg = current_arg_reg64(0);
+            if (ret_reg != NULL)
+            {
+                snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                    sret_slot->offset, ret_reg);
+                inst_list = add_inst(inst_list, buffer);
             }
         }
         
@@ -1764,7 +1830,10 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         else
         {
             /* Normal function return value */
-            if (expr_has_type_tag(expr, REAL_TYPE))
+            if (has_record_return && !is_constructor && sret_slot != NULL)
+                snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                    sret_slot->offset, target_reg->bit_64);
+            else if (expr_has_type_tag(expr, REAL_TYPE))
                 snprintf(buffer, sizeof(buffer), "\tmovq\t%%xmm0, %s\n", target_reg->bit_64);
             else if (expr_uses_qword_kgpctype(expr))
                 snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", target_reg->bit_64);
@@ -2029,15 +2098,29 @@ cleanup_constructor:
             inst_list = add_inst(inst_list, load_value);
             return inst_list;
         }
+
+        int is_shortstring = (expr_get_type_tag(expr) == SHORTSTRING_TYPE) ||
+            is_shortstring_array(expr->resolved_type, expr->is_array_expr);
+        if (is_shortstring)
+        {
+            if (buf_leaf[0] != '$')
+            {
+                snprintf(buffer, sizeof(buffer), "\tleaq\t%s, %s\n",
+                    buf_leaf, target_reg->bit_64);
+                return add_inst(inst_list, buffer);
+            }
+        }
     }
 
     /* Use expr_requires_qword to check both type tag and storage_size.
      * This properly handles Int64/QWord/UInt64 which have storage_size=8 */
     int desired_qword = expr_requires_qword(expr);
     int storage_tag = expr_effective_storage_type(expr, ctx);
-    int storage_qword = (expr != NULL && expr->resolved_kgpc_type != NULL) ?
-        kgpc_type_uses_qword(expr->resolved_kgpc_type) :
-        codegen_type_uses_qword(storage_tag);
+    int storage_qword = 0;
+    if (expr != NULL)
+        storage_qword = expr_uses_qword_kgpctype(expr);
+    if (!storage_qword)
+        storage_qword = codegen_type_uses_qword(storage_tag);
     if (!desired_qword && storage_qword)
         desired_qword = 1;
     int is_immediate = (buf_leaf[0] == '$');

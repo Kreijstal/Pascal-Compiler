@@ -36,11 +36,14 @@ type
   
   { Pointer types }
   AnsiChar = Char;
+  WideChar = Word;
+  UnicodeChar = WideChar;
   PAnsiChar = ^AnsiChar;    { Pointer to ANSI character }
   PPAnsiChar = ^PAnsiChar;  { Pointer to pointer to ANSI character }
   PChar = ^Char;            { Alias for PAnsiChar }
   PPointer = ^Pointer;      { Pointer to pointer }
   PWideChar = ^WideChar;
+  PUnicodeChar = ^UnicodeChar;
   
   { Additional common pointer types }
   PByte = ^Byte;
@@ -66,6 +69,7 @@ type
 
   { Low-level I/O compatibility types }
   THandle = LongInt;
+  HRESULT = LongInt;  { Windows COM result type }
   CodePointer = Pointer;
   
   { String types - for FPC bootstrap compatibility }
@@ -73,6 +77,8 @@ type
   UnicodeString = String;
   WideString = String;
   RawByteString = String;   { Alias for String type - KGPC doesn't distinguish encoding }
+  PAnsiString = ^AnsiString;
+  PString = ^String;
   { ShortString: length-prefixed string[255] compatible layout.
     Note: most bootstrap-compatible aliases live in KGPC/stdlib.p (the implicit prelude). }
   ShortString = array[0..255] of Char;
@@ -84,6 +90,8 @@ type
 
   { Root class for ObjPas compatibility }
   TObject = class
+  end;
+  TInterfacedObject = class(TObject)
   end;
 
   { GUID type for SysUtils compatibility }
@@ -172,6 +180,12 @@ type
   { Unix signal hook state used by SysUtils }
   TSignalState = (ssNotHooked, ssHooked, ssOverridden);
 
+  { Extended boolean aliases (sized boolean types) }
+  ByteBool = Boolean8;
+  WordBool = Boolean16;
+  LongBool = Boolean32;
+  QWordBool = Boolean64;
+
   { Exception is defined in vendor unit sysutils.p - don't define here to avoid duplication }
   ExceptAddr = Pointer;
   TExceptAddr = ExceptAddr;
@@ -181,20 +195,34 @@ const
   TextRecNameLength = 256;
   TextRecBufSize = 256;
 
+  LineEnding = #10;
+  sLineBreak = LineEnding;
   DirectorySeparator: AnsiChar = '/';
   DriveSeparator: AnsiChar = #0;
   PathSeparator: AnsiChar = ':';
+  ExtensionSeparator: AnsiChar = '.';
   AllowDirectorySeparators: set of AnsiChar = ['\', '/'];
   AllowDriveSeparators: set of AnsiChar = [];
   MaxPathLen = 4096;
 
-  DefaultSystemCodePage = 65001;
-  DefaultFileSystemCodePage = 65001;
+  AllFilesMask = '*';
+  FileNameCaseSensitive = true;
+  FileNameCasePreserving = true;
 
   fmClosed = $D7B0;
   fmInput = $D7B1;
   fmOutput = $D7B2;
   fmInOut = $D7B3;
+
+  ARG_MAX = 131072;
+  NAME_MAX = 255;
+  PATH_MAX = 4095;
+  SYS_NMLN = 65;
+  SIG_MAXSIG = 128;
+  PRIO_PROCESS = 0;
+  PRIO_PGRP = 1;
+  PRIO_USER = 2;
+  UTSNAME_LENGTH = 65;
 
   RTL_SIGINT = 0;
   RTL_SIGFPE = 1;
@@ -207,6 +235,13 @@ const
 
 var
   IsLibrary: Boolean = False;
+  InOutRes: Word;
+  FirstDotAtFileNameStartIsExtension: Boolean;
+  DefaultSystemCodePage: TSystemCodePage;
+  DefaultUnicodeCodePage: TSystemCodePage;
+  DefaultFileSystemCodePage: TSystemCodePage;
+  DefaultRTLFileSystemCodePage: TSystemCodePage;
+  UTF8CompareLocale: TSystemCodePage;
 
 { ============================================================================
   Compiler Intrinsic Functions
@@ -337,6 +372,10 @@ begin
     end
 end;
 
+function kgpc_get_current_dir: AnsiString; external;
+function kgpc_set_current_dir(path: PChar): Integer; external;
+function kgpc_ioresult_peek: Integer; external;
+
 function InterlockedExchangeAdd(var target: longint; value: longint): longint; overload;
 var
   EnvP: PPAnsiChar = nil;
@@ -355,6 +394,30 @@ begin
     result := 0;
     interlocked_exchange_add_i64_impl(target, value, result);
     InterlockedExchangeAdd := result;
+end;
+
+function UpCase(c: char): char; overload;
+begin
+    if (c >= 'a') and (c <= 'z') then
+        UpCase := Chr(Ord(c) - 32)
+    else
+        UpCase := c;
+end;
+
+function UpCase(const s: string): string; overload;
+var
+    i: longint;
+    ch: Char;
+begin
+    UpCase := s;
+    i := 1;
+    while i <= Length(s) do
+    begin
+        ch := s[i];
+        if (ch >= 'a') and (ch <= 'z') then
+            UpCase[i] := Chr(Ord(ch) - 32);
+        i := i + 1;
+    end;
 end;
 
 function file_is_text(var f: file): longint;
@@ -481,6 +544,14 @@ begin
     end
 end;
 
+procedure SetCodePage(var S: UnicodeString; CodePage: TSystemCodePage; Convert: Boolean); overload;
+begin
+    assembler;
+    asm
+        call kgpc_set_codepage_string
+    end
+end;
+
 function ToSingleByteFileSystemEncodedFileName(const S: RawByteString): RawByteString;
 begin
     ToSingleByteFileSystemEncodedFileName := S;
@@ -497,6 +568,34 @@ begin
     asm
         call kgpc_directory_create
     end
+end;
+
+procedure ChDir(const path: RawByteString); overload;
+var
+    res: integer;
+begin
+    res := kgpc_set_current_dir(PChar(path));
+    InOutRes := Word(res);
+end;
+
+procedure ChDir(const path: UnicodeString); overload;
+var
+    res: integer;
+begin
+    res := kgpc_set_current_dir(PChar(path));
+    InOutRes := Word(res);
+end;
+
+procedure GetDir(drivenr: byte; var dir: RawByteString); overload;
+begin
+    dir := kgpc_get_current_dir();
+    InOutRes := Word(kgpc_ioresult_peek());
+end;
+
+procedure GetDir(drivenr: byte; var dir: UnicodeString); overload;
+begin
+    dir := kgpc_get_current_dir();
+    InOutRes := Word(kgpc_ioresult_peek());
 end;
 
 procedure RmDir(path: string);
@@ -853,4 +952,11 @@ begin
 end;
 
 begin
+    InOutRes := 0;
+    FirstDotAtFileNameStartIsExtension := False;
+    DefaultSystemCodePage := 65001;
+    DefaultUnicodeCodePage := 65001;
+    DefaultFileSystemCodePage := 65001;
+    DefaultRTLFileSystemCodePage := DefaultFileSystemCodePage;
+    UTF8CompareLocale := DefaultSystemCodePage;
 end.

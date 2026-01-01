@@ -21,6 +21,7 @@ int FLAG_PARSE_ONLY = 0;
 static char *FLAG_DUMP_AST_PATH = NULL;
 static int FLAG_TIME_PASSES = 0;
 static int FLAG_ASM_DEBUG_COMMENTS = 0;
+static int FLAG_STDLIB_LOADED = 0;
 
 static kgpc_target_abi_t FLAG_TARGET_ABI =
 #if defined(_WIN32) || defined(__CYGWIN__)
@@ -60,6 +61,10 @@ void set_asm_debug_flag(void)
     FLAG_ASM_DEBUG_COMMENTS = 1;
 }
 
+void set_stdlib_loaded_flag(int loaded)
+{
+    FLAG_STDLIB_LOADED = loaded ? 1 : 0;
+}
 void set_dump_ast_path(const char *path)
 {
     if (FLAG_DUMP_AST_PATH != NULL)
@@ -111,6 +116,11 @@ int time_passes_flag(void)
 int asm_debug_flag(void)
 {
     return FLAG_ASM_DEBUG_COMMENTS;
+}
+
+int stdlib_loaded_flag(void)
+{
+    return FLAG_STDLIB_LOADED;
 }
 
 const char *dump_ast_path(void)

@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #define MAX_INCLUDE_DEPTH 32
 
@@ -121,6 +122,7 @@ static bool parse_factor(const char **cursor,
                          int64_t *value,
                          PascalPreprocessor *pp,
                          char **error_message);
+static bool is_keyword_operator(const char *cursor, const char *keyword, size_t keyword_len);
 static const char *get_symbol_value(const PascalPreprocessor *pp, const char *symbol);
 static const char *get_macro_value(const PascalPreprocessor *pp, const char *symbol);
 
@@ -580,6 +582,68 @@ static bool handle_directive(PascalPreprocessor *pp,
                 return err;
             }
 
+            // Handle special FPC include macros like %DATE%, %TIME%, %FPCVERSION%, etc.
+            // These return string literals instead of including files.
+            if (path_token[0] == '%' && path_token[strlen(path_token) - 1] == '%') {
+                char special_value[64] = "";
+                bool is_special = false;
+
+                if (strcmp(path_token, "%DATE%") == 0) {
+                    // Return current date in 'YYYY/MM/DD' format
+                    time_t now = time(NULL);
+                    struct tm *tm_info = localtime(&now);
+                    snprintf(special_value, sizeof(special_value), "'%04d/%02d/%02d'",
+                             tm_info->tm_year + 1900, tm_info->tm_mon + 1, tm_info->tm_mday);
+                    is_special = true;
+                } else if (strcmp(path_token, "%TIME%") == 0) {
+                    // Return current time in 'HH:MM:SS' format
+                    time_t now = time(NULL);
+                    struct tm *tm_info = localtime(&now);
+                    snprintf(special_value, sizeof(special_value), "'%02d:%02d:%02d'",
+                             tm_info->tm_hour, tm_info->tm_min, tm_info->tm_sec);
+                    is_special = true;
+                } else if (strcmp(path_token, "%FPCVERSION%") == 0) {
+                    // Return FPC version string (we'll use a placeholder)
+                    snprintf(special_value, sizeof(special_value), "'3.2.2'");
+                    is_special = true;
+                } else if (strcmp(path_token, "%FPCTARGET%") == 0) {
+                    // Return target platform
+                    snprintf(special_value, sizeof(special_value), "'x86_64-linux'");
+                    is_special = true;
+                } else if (strcmp(path_token, "%FPCTARGETOS%") == 0) {
+                    snprintf(special_value, sizeof(special_value), "'linux'");
+                    is_special = true;
+                } else if (strcmp(path_token, "%FPCTARGETCPU%") == 0) {
+                    snprintf(special_value, sizeof(special_value), "'x86_64'");
+                    is_special = true;
+                } else if (strcmp(path_token, "%FILE%") == 0) {
+                    // Return current file name
+                    const char *base = filename ? filename : "<unknown>";
+                    snprintf(special_value, sizeof(special_value), "'%s'", base);
+                    is_special = true;
+                } else if (strcmp(path_token, "%LINE%") == 0) {
+                    // Return line number (approximate - we don't track exact line)
+                    snprintf(special_value, sizeof(special_value), "0");
+                    is_special = true;
+                } else if (strcmp(path_token, "%LINENUM%") == 0) {
+                    snprintf(special_value, sizeof(special_value), "0");
+                    is_special = true;
+                }
+
+                if (is_special) {
+                    // Append the special value directly to output
+                    size_t val_len = strlen(special_value);
+                    for (size_t i = 0; i < val_len; ++i) {
+                        string_builder_append_char(output, special_value[i]);
+                    }
+                    free(path_token);
+                    free(keyword);
+                    free(content);
+                    return true;
+                }
+                // If not recognized, fall through to try as a file
+            }
+
             char *resolved_path = NULL;
             if (!resolve_include_path(pp, filename, path_token, &resolved_path)) {
                 bool err = set_error(error_message, "unable to resolve include '%s' in '%s'", path_token, filename ? filename : "<buffer>");
@@ -695,6 +759,17 @@ static bool handle_directive(PascalPreprocessor *pp,
             return set_error(error_message, "out of memory");
         }
         free(symbol);
+    } else if (strcmp(keyword, "IFOPT") == 0) {
+        // {$IFOPT X+} or {$IFOPT X-} - compiler option check
+        // Treat all compiler options as disabled by default
+        handled = true;
+        bool parent_active = current_branch_active(conditions);
+        // The condition is false - options are not enabled
+        if (!push_conditional(conditions, parent_active, false, filename, current_line)) {
+            free(keyword);
+            free(content);
+            return set_error(error_message, "out of memory");
+        }
     } else if (strcmp(keyword, "IF") == 0) {
         handled = true;
         bool cond_value = false;
@@ -1743,10 +1818,14 @@ static bool parse_expression(const char **cursor,
     }
 
     // Check for relational operators
-    // =, <>, <, <=, >, >=
-    enum { OP_NONE, OP_EQ, OP_NE, OP_LT, OP_LE, OP_GT, OP_GE } op = OP_NONE;
+    // =, <>, <, <=, >, >=, IN
+    enum { OP_NONE, OP_EQ, OP_NE, OP_LT, OP_LE, OP_GT, OP_GE, OP_IN } op = OP_NONE;
 
-    if (**cursor == '=') {
+    // Check for 'in' keyword (set membership test)
+    if (is_keyword_operator(*cursor, "IN", 2)) {
+        op = OP_IN;
+        *cursor += 2;
+    } else if (**cursor == '=') {
         op = OP_EQ;
         ++(*cursor);
     } else if (**cursor == '<') {
@@ -1782,6 +1861,15 @@ static bool parse_expression(const char **cursor,
             case OP_LE: *value = (*value <= rhs); break;
             case OP_GT: *value = (*value > rhs); break;
             case OP_GE: *value = (*value >= rhs); break;
+            case OP_IN:
+                // Set membership test: element IN set
+                // element is ordinal value (0-63), set is bitmask
+                if (*value >= 0 && *value < 64) {
+                    *value = ((1LL << *value) & rhs) != 0;
+                } else {
+                    *value = 0;  // out of range = not in set
+                }
+                break;
             default: break;
         }
     }
@@ -2032,7 +2120,10 @@ static bool parse_factor(const char **cursor,
         if (strcmp(type_name, "NATIVEINT") == 0 || strcmp(type_name, "NATIVEUINT") == 0 ||
             strcmp(type_name, "SIZEINT") == 0 || strcmp(type_name, "SIZEUINT") == 0 ||
             strcmp(type_name, "PTRINT") == 0 || strcmp(type_name, "PTRUINT") == 0 ||
-            strcmp(type_name, "INTPTR") == 0 || strcmp(type_name, "UINTPTR") == 0) {
+            strcmp(type_name, "INTPTR") == 0 || strcmp(type_name, "UINTPTR") == 0 ||
+            strcmp(type_name, "TCONSTPTRUINT") == 0 || strcmp(type_name, "TCONSTPTRINT") == 0 ||
+            strcmp(type_name, "PUINT") == 0 || strcmp(type_name, "PINT") == 0 ||
+            strcmp(type_name, "AINT") == 0 || strcmp(type_name, "ASIZEINT") == 0) {
             size = cpu64 ? 8 : 4;
             found = true;
         }
@@ -2041,7 +2132,7 @@ static bool parse_factor(const char **cursor,
         if (!found && (strcmp(type_name, "INT64") == 0 || strcmp(type_name, "QWORD") == 0 || strcmp(type_name, "UINT64") == 0 ||
             strcmp(type_name, "TSYSPARAM") == 0 || strcmp(type_name, "V") == 0 || strcmp(type_name, "ALUUINT") == 0 ||
             strcmp(type_name, "ALUSINT") == 0 || strcmp(type_name, "VALSINT") == 0 || strcmp(type_name, "VALUINT") == 0 ||
-            strcmp(type_name, "FREECHUNK") == 0 ||
+            strcmp(type_name, "FREECHUNK") == 0 || strcmp(type_name, "AINTMAX") == 0 || strcmp(type_name, "ASIZEINT") == 0 ||
             strcmp(type_name, "TBITSBASE") == 0 || strcmp(type_name, "TUNSIGNEDINTTYPE") == 0 ||
             strcmp(type_name, "TSIGNEDINTTYPE") == 0 || strcmp(type_name, "INTPTR") == 0 ||
             strcmp(type_name, "UINTPTR") == 0 || strcmp(type_name, "HANDLE") == 0 ||
@@ -2055,10 +2146,10 @@ static bool parse_factor(const char **cursor,
                    strcmp(type_name, "LONGBOOL") == 0) {
             size = 4;
             found = true;
-        } else if (strcmp(type_name, "INTEGER") == 0 || strcmp(type_name, "SMALLINT") == 0 || 
-                   strcmp(type_name, "INT16") == 0 || strcmp(type_name, "WORD") == 0 || 
+        } else if (strcmp(type_name, "INTEGER") == 0 || strcmp(type_name, "SMALLINT") == 0 ||
+                   strcmp(type_name, "INT16") == 0 || strcmp(type_name, "WORD") == 0 ||
                    strcmp(type_name, "UINT16") == 0 || strcmp(type_name, "WIDECHAR") == 0 ||
-                   strcmp(type_name, "WORDBOOL") == 0) {
+                   strcmp(type_name, "WORDBOOL") == 0 || strcmp(type_name, "TCOMPILERWIDECHAR") == 0) {
             size = 2;
             found = true;
         } else if (strcmp(type_name, "SHORTINT") == 0 || strcmp(type_name, "INT8") == 0 || 
@@ -2069,8 +2160,11 @@ static bool parse_factor(const char **cursor,
             found = true;
         }
         // Floating point types
-        else if (strcmp(type_name, "VALREAL") == 0 || strcmp(type_name, "EXTENDED") == 0 || strcmp(type_name, "LONGDOUBLE") == 0) {
-            // FPC on x86_64 maps ValReal/Extended to the 80-bit extended type (10 bytes)
+        else if (strcmp(type_name, "VALREAL") == 0 || strcmp(type_name, "EXTENDED") == 0 ||
+                   strcmp(type_name, "LONGDOUBLE") == 0 || strcmp(type_name, "BESTREALREC") == 0 ||
+                   strcmp(type_name, "TEXTENDED80REC") == 0 || strcmp(type_name, "BESTREAL") == 0) {
+            // FPC on x86_64 maps ValReal/Extended/bestreal to the 80-bit extended type (10 bytes)
+            // bestrealrec is TExtended80Rec on x86_64 with extended float support
             size = 10;
             found = true;
         } else if (strcmp(type_name, "DOUBLE") == 0 || strcmp(type_name, "REAL") == 0) {

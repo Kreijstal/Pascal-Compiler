@@ -1274,6 +1274,11 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
         between(token(match("(")), token(match(")")), lazy(p)), // expression
         NULL
     );
+    combinator_t* typecast_with_suffixes = map(seq(new_combinator(), PASCAL_T_NONE,
+        typecast,
+        suffixes,
+        NULL
+    ), build_array_or_pointer_chain);
 
     // Boolean literal parsers
     combinator_t* boolean_true = map(token(keyword_ci("true")), wrap_true_literal);
@@ -1320,6 +1325,7 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
         token(boolean_true),                      // Boolean true
         token(boolean_false),                     // Boolean false
         nil_literal,                              // Nil literal
+        typecast_with_suffixes,                   // Type casts with suffixes (e.g., shortstring(x)[1])
         typecast,                                 // Type casts Integer(x) - try before func_call
         array_access,                             // Array access (supports pointer dereference)
         func_call,                                // Function calls func(x)
@@ -1384,13 +1390,14 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
     expr_altern(*p, 5, PASCAL_T_SET_SYM_DIFF, token(match("><")));
 
     // Precedence 6: Multiplication, Division, Modulo, and Bitwise shifts
-    // Also reject C-style shift tokens at this precedence level (in case precedence routing differs)
+    // FPC supports both Pascal keywords (shl, shr) and C-style operators (<<, >>)
     expr_insert(*p, 6, PASCAL_T_MUL, EXPR_INFIX, ASSOC_LEFT, token(match("*")));
-    expr_altern(*p, 6, PASCAL_T_NONE, token(reject_shift_ops));
     expr_altern(*p, 6, PASCAL_T_DIV, token(match("/")));
     expr_altern(*p, 6, PASCAL_T_INTDIV, token(keyword_ci("div")));
     expr_altern(*p, 6, PASCAL_T_MOD, token(keyword_ci("mod")));
     expr_altern(*p, 6, PASCAL_T_MOD, token(match("%")));
+    expr_altern(*p, 6, PASCAL_T_SHL, token(match("<<")));
+    expr_altern(*p, 6, PASCAL_T_SHR, token(match(">>")));
     expr_altern(*p, 6, PASCAL_T_SHL, token(keyword_ci("shl")));
     expr_altern(*p, 6, PASCAL_T_SHR, token(keyword_ci("shr")));
     expr_altern(*p, 6, PASCAL_T_ROL, token(keyword_ci("rol")));
@@ -1399,7 +1406,7 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
     // Precedence 7: Unary operators
     expr_insert(*p, 7, PASCAL_T_NEG, EXPR_PREFIX, ASSOC_NONE, token(match("-")));
     expr_insert(*p, 7, PASCAL_T_POS, EXPR_PREFIX, ASSOC_NONE, token(match("+")));
-    expr_insert(*p, 7, PASCAL_T_NOT, EXPR_PREFIX, ASSOC_NONE, token(match("not")));
+    expr_insert(*p, 7, PASCAL_T_NOT, EXPR_PREFIX, ASSOC_NONE, token(keyword_ci("not")));
     expr_insert(*p, 7, PASCAL_T_ADDR, EXPR_PREFIX, ASSOC_NONE, token(match("@")));
 
     // Field width operator for formatted output: expression:width (same precedence as unary)
