@@ -4812,6 +4812,11 @@ void semcheck_add_builtins(SymTab_t *symtab)
     add_builtin_alias_type(symtab, "Boolean16", BOOL, 2);
     add_builtin_alias_type(symtab, "Boolean32", BOOL, 4);
     add_builtin_alias_type(symtab, "Boolean64", BOOL, 8);
+    /* FPC-compatible byte/word/long boolean types (synonyms) */
+    add_builtin_alias_type(symtab, "ByteBool", BOOL, 1);
+    add_builtin_alias_type(symtab, "WordBool", BOOL, 2);
+    add_builtin_alias_type(symtab, "LongBool", BOOL, 4);
+    add_builtin_alias_type(symtab, "QWordBool", BOOL, 8);
     if (!stdlib_loaded_flag())
     {
         add_builtin_alias_type(symtab, "TSignalState", INT_TYPE, 4);

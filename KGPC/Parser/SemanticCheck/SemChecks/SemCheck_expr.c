@@ -841,6 +841,13 @@ static HashNode_t *semcheck_find_preferred_type_node(SymTab_t *symtab, const cha
         return NULL;
 
     ListNode_t *matches = FindAllIdents(symtab, (char *)type_id);
+    if (matches == NULL)
+    {
+        /* Try stripping unit prefix from qualified name like "baseunix.stat" */
+        const char *dot = strrchr(type_id, '.');
+        if (dot != NULL && dot[1] != '\0')
+            matches = FindAllIdents(symtab, (char *)(dot + 1));
+    }
     HashNode_t *best = NULL;
     ListNode_t *cur = matches;
     while (cur != NULL)
