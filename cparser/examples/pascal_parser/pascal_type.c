@@ -2622,8 +2622,8 @@ static ParseResult pascal_identifier_with_subscript_fn(input_t* in, void* args, 
     InputState state;
     save_input_state(in, &state);
     
-    // Parse the base identifier
-    combinator_t* base_id = cident(tag);
+    // Parse the base identifier (supports unit-qualified names like baseunix.stat)
+    combinator_t* base_id = pascal_qualified_identifier(tag);
     ParseResult base_res = parse(in, base_id);
     free_combinator(base_id);
     

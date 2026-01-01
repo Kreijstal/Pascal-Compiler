@@ -1340,23 +1340,20 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
     expr(*p, factor);
 
     // Precedence levels (lower number = lower precedence, must be consecutive starting from 0)
-    // Precedence 0: Boolean OR (lowest precedence)
-    expr_insert(*p, 0, PASCAL_T_OR, EXPR_INFIX, ASSOC_LEFT, token(match("or")));
+    // Pascal operator precedence (from FPC documentation):
+    //   Lowest:  Relational (=, <>, <, >, <=, >=, in, is)
+    //   Additive: +, -, or, xor
+    //   Multiplicative: *, /, div, mod, and, shl, shr, as
+    //   Highest: not, @, - (unary)
 
-    // Precedence 1: Boolean XOR
-    expr_insert(*p, 1, PASCAL_T_XOR, EXPR_INFIX, ASSOC_LEFT, token(match("xor")));
-
-    // Precedence 2: Boolean AND
-    expr_insert(*p, 2, PASCAL_T_AND, EXPR_INFIX, ASSOC_LEFT, token(match("and")));
-
-    // Precedence 3: All relational operators - multi-char operators added last (tried first)
+    // Precedence 0: All relational operators (LOWEST precedence in Pascal!)
+    // Multi-char operators added last (tried first in expr parser)
     // First, explicitly reject C-style shift operators so they surface as parse errors
     combinator_t* reject_shift_ops = new_combinator();
     reject_shift_ops->type = P_MATCH; // type is unused by custom fn; keep stable
     reject_shift_ops->fn = reject_shift_ops_fn;
     reject_shift_ops->args = NULL;
     reject_shift_ops->name = strdup("reject_shift_ops");
-    // Will be added as a highest-priority alternative after creating prec-3 node
     // Single character operators, guarded to avoid accidentally parsing malformed '<<' or '>>'
     combinator_t* single_lt = seq(new_combinator(), PASCAL_T_NONE,
         match("<"),
@@ -1368,60 +1365,63 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
         pnot(match(">")),
         NULL
     );
-    expr_insert(*p, 3, PASCAL_T_EQ, EXPR_INFIX, ASSOC_LEFT, token(match("=")));
+    expr_insert(*p, 0, PASCAL_T_EQ, EXPR_INFIX, ASSOC_LEFT, token(match("=")));
     // Try rejecting '<<'/'>>' before any relational operator gets a chance
-    expr_altern(*p, 3, PASCAL_T_NONE, token(reject_shift_ops));
-    expr_altern(*p, 3, PASCAL_T_LT, token(single_lt));
-    expr_altern(*p, 3, PASCAL_T_GT, token(single_gt));
-    expr_altern(*p, 3, PASCAL_T_IN, token(keyword_ci("in")));
-    expr_altern(*p, 3, PASCAL_T_IS, token(keyword_ci("is")));
-    expr_altern(*p, 3, PASCAL_T_AS, token(keyword_ci("as")));
+    expr_altern(*p, 0, PASCAL_T_NONE, token(reject_shift_ops));
+    expr_altern(*p, 0, PASCAL_T_LT, token(single_lt));
+    expr_altern(*p, 0, PASCAL_T_GT, token(single_gt));
+    expr_altern(*p, 0, PASCAL_T_IN, token(keyword_ci("in")));
+    expr_altern(*p, 0, PASCAL_T_IS, token(keyword_ci("is")));
     // Multi-character operators (added last = tried first in expr parser)
-    expr_altern(*p, 3, PASCAL_T_NE, token(match("<>")));
-    expr_altern(*p, 3, PASCAL_T_GE, token(match(">=")));
-    expr_altern(*p, 3, PASCAL_T_LE, token(match("<=")));
+    expr_altern(*p, 0, PASCAL_T_NE, token(match("<>")));
+    expr_altern(*p, 0, PASCAL_T_GE, token(match(">=")));
+    expr_altern(*p, 0, PASCAL_T_LE, token(match("<=")));
 
-    // Precedence 4: Range operator (..)
-    expr_insert(*p, 4, PASCAL_T_RANGE, EXPR_INFIX, ASSOC_LEFT, token(match("..")));
+    // Precedence 1: Range operator (..)
+    expr_insert(*p, 1, PASCAL_T_RANGE, EXPR_INFIX, ASSOC_LEFT, token(match("..")));
 
-    // Precedence 5: Addition and Subtraction (includes string concatenation and set operations)
-    expr_insert(*p, 5, PASCAL_T_ADD, EXPR_INFIX, ASSOC_LEFT, token(match("+")));
-    expr_altern(*p, 5, PASCAL_T_SUB, token(match("-")));
-    expr_altern(*p, 5, PASCAL_T_SET_SYM_DIFF, token(match("><")));
+    // Precedence 2: Additive operators (+, -, or, xor) including string concatenation and set operations
+    expr_insert(*p, 2, PASCAL_T_ADD, EXPR_INFIX, ASSOC_LEFT, token(match("+")));
+    expr_altern(*p, 2, PASCAL_T_SUB, token(match("-")));
+    expr_altern(*p, 2, PASCAL_T_OR, token(keyword_ci("or")));
+    expr_altern(*p, 2, PASCAL_T_XOR, token(keyword_ci("xor")));
+    expr_altern(*p, 2, PASCAL_T_SET_SYM_DIFF, token(match("><")));
 
-    // Precedence 6: Multiplication, Division, Modulo, and Bitwise shifts
+    // Precedence 3: Multiplicative operators (*, /, div, mod, and, shl, shr, as)
     // FPC supports both Pascal keywords (shl, shr) and C-style operators (<<, >>)
-    expr_insert(*p, 6, PASCAL_T_MUL, EXPR_INFIX, ASSOC_LEFT, token(match("*")));
-    expr_altern(*p, 6, PASCAL_T_DIV, token(match("/")));
-    expr_altern(*p, 6, PASCAL_T_INTDIV, token(keyword_ci("div")));
-    expr_altern(*p, 6, PASCAL_T_MOD, token(keyword_ci("mod")));
-    expr_altern(*p, 6, PASCAL_T_MOD, token(match("%")));
-    expr_altern(*p, 6, PASCAL_T_SHL, token(match("<<")));
-    expr_altern(*p, 6, PASCAL_T_SHR, token(match(">>")));
-    expr_altern(*p, 6, PASCAL_T_SHL, token(keyword_ci("shl")));
-    expr_altern(*p, 6, PASCAL_T_SHR, token(keyword_ci("shr")));
-    expr_altern(*p, 6, PASCAL_T_ROL, token(keyword_ci("rol")));
-    expr_altern(*p, 6, PASCAL_T_ROR, token(keyword_ci("ror")));
+    expr_insert(*p, 3, PASCAL_T_MUL, EXPR_INFIX, ASSOC_LEFT, token(match("*")));
+    expr_altern(*p, 3, PASCAL_T_DIV, token(match("/")));
+    expr_altern(*p, 3, PASCAL_T_INTDIV, token(keyword_ci("div")));
+    expr_altern(*p, 3, PASCAL_T_MOD, token(keyword_ci("mod")));
+    expr_altern(*p, 3, PASCAL_T_MOD, token(match("%")));
+    expr_altern(*p, 3, PASCAL_T_AND, token(keyword_ci("and")));
+    expr_altern(*p, 3, PASCAL_T_SHL, token(match("<<")));
+    expr_altern(*p, 3, PASCAL_T_SHR, token(match(">>")));
+    expr_altern(*p, 3, PASCAL_T_SHL, token(keyword_ci("shl")));
+    expr_altern(*p, 3, PASCAL_T_SHR, token(keyword_ci("shr")));
+    expr_altern(*p, 3, PASCAL_T_ROL, token(keyword_ci("rol")));
+    expr_altern(*p, 3, PASCAL_T_ROR, token(keyword_ci("ror")));
+    expr_altern(*p, 3, PASCAL_T_AS, token(keyword_ci("as")));
 
-    // Precedence 7: Unary operators
-    expr_insert(*p, 7, PASCAL_T_NEG, EXPR_PREFIX, ASSOC_NONE, token(match("-")));
-    expr_insert(*p, 7, PASCAL_T_POS, EXPR_PREFIX, ASSOC_NONE, token(match("+")));
-    expr_insert(*p, 7, PASCAL_T_NOT, EXPR_PREFIX, ASSOC_NONE, token(keyword_ci("not")));
-    expr_insert(*p, 7, PASCAL_T_ADDR, EXPR_PREFIX, ASSOC_NONE, token(match("@")));
+    // Precedence 4: Unary operators (highest precedence for regular operators)
+    expr_insert(*p, 4, PASCAL_T_NEG, EXPR_PREFIX, ASSOC_NONE, token(match("-")));
+    expr_insert(*p, 4, PASCAL_T_POS, EXPR_PREFIX, ASSOC_NONE, token(match("+")));
+    expr_insert(*p, 4, PASCAL_T_NOT, EXPR_PREFIX, ASSOC_NONE, token(keyword_ci("not")));
+    expr_insert(*p, 4, PASCAL_T_ADDR, EXPR_PREFIX, ASSOC_NONE, token(match("@")));
 
     // Field width operator for formatted output: expression:width (same precedence as unary)
-    expr_insert(*p, 7, PASCAL_T_FIELD_WIDTH, EXPR_INFIX, ASSOC_LEFT, token(match(":")));
+    expr_insert(*p, 4, PASCAL_T_FIELD_WIDTH, EXPR_INFIX, ASSOC_LEFT, token(match(":")));
 
-    // Precedence 8: Member access (highest precedence)
+    // Precedence 5: Member access (highest precedence)
     combinator_t* member_access_op = seq(new_combinator(), PASCAL_T_NONE,
         match("."),
         pnot(match(".")),  // not followed by another dot
         NULL
     );
-    expr_insert(*p, 8, PASCAL_T_MEMBER_ACCESS, EXPR_INFIX, ASSOC_LEFT, token(member_access_op));
+    expr_insert(*p, 5, PASCAL_T_MEMBER_ACCESS, EXPR_INFIX, ASSOC_LEFT, token(member_access_op));
     
-    // Precedence 9: Pointer dereference operator (postfix): expression^ (higher than member access)
-    expr_insert(*p, 9, PASCAL_T_DEREF, EXPR_POSTFIX, ASSOC_LEFT, token(match("^")));
+    // Precedence 6: Pointer dereference operator (postfix): expression^ (higher than member access)
+    expr_insert(*p, 6, PASCAL_T_DEREF, EXPR_POSTFIX, ASSOC_LEFT, token(match("^")));
 }
 
 // --- Utility Functions ---
