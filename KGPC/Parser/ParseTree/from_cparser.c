@@ -7402,6 +7402,18 @@ static struct Expression *convert_member_access_chain(int line,
         }
         return mk_recordaccess(node_line, base_expr, field_id);
     }
+    case PASCAL_T_BOOLEAN: {
+        /* Handle scoped enum literals like TUseBoolStrs.False or TUseBoolStrs.True
+         * The parser treats 'False' and 'True' as boolean keywords, but in the context
+         * of a member access (after a dot), they should be treated as identifiers
+         * that reference enum literals. */
+        char *field_id = dup_symbol(unwrapped);
+        if (field_id == NULL) {
+            destroy_expr(base_expr);
+            return NULL;
+        }
+        return mk_recordaccess(node_line, base_expr, field_id);
+    }
     case PASCAL_T_ARRAY_ACCESS: {
         ast_t *array_base = unwrapped->child;
         ast_t *index_node = (array_base != NULL) ? array_base->next : NULL;

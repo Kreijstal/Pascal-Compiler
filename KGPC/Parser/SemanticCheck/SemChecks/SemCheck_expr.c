@@ -1810,11 +1810,22 @@ struct Expression *clone_expression(const struct Expression *expr)
     clone->resolved_type = expr->resolved_type;
     clone->pointer_subtype = expr->pointer_subtype;
     clone->record_type = expr->record_type;
+    
+    /* Clone resolved_kgpc_type if present - important for default parameter values
+     * that have been transformed (e.g., scoped enum literals to integer constants) */
+    if (expr->resolved_kgpc_type != NULL)
+    {
+        clone->resolved_kgpc_type = expr->resolved_kgpc_type;
+        kgpc_type_retain(clone->resolved_kgpc_type);
+    }
+    
     if (expr->pointer_subtype_id != NULL)
     {
         clone->pointer_subtype_id = strdup(expr->pointer_subtype_id);
         if (clone->pointer_subtype_id == NULL)
         {
+            if (clone->resolved_kgpc_type != NULL)
+                destroy_kgpc_type(clone->resolved_kgpc_type);
             free(clone);
             return NULL;
         }
@@ -5830,7 +5841,8 @@ static int semcheck_recordaccess(int *type_return,
         HashNode_t *unit_check = NULL;
         
         /* Check if the "unit name" identifier exists in symbol table */
-        if (FindIdent(&unit_check, symtab, unit_id) == -1)
+        int find_result = FindIdent(&unit_check, symtab, unit_id);
+        if (find_result == -1)
         {
             /* Identifier not found - might be a unit qualifier.
              * Try to look up the field_id directly as it may be an exported constant/var. */
