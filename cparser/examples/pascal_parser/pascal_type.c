@@ -1383,6 +1383,7 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
 
     /* Optional record helper clause: "helper for <Type>" */
     bool is_helper = false;
+    ast_t *helper_base_ast = NULL;
     pascal_word_slice_t helper_word;
     if (pascal_peek_word_after(in, in->start, &helper_word) &&
         pascal_word_equals_ci(&helper_word, "helper")) {
@@ -1403,7 +1404,7 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
             combinator_t* helper_base = create_type_ref_parser();
             ParseResult base_res = parse(in, helper_base);
             if (base_res.is_success) {
-                free_ast(base_res.value.ast);
+                helper_base_ast = base_res.value.ast;
             } else {
                 discard_failure(base_res);
             }
@@ -1438,8 +1439,8 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
 
         ast_t* record_ast = new_ast();
         record_ast->typ = pargs->tag;
-        record_ast->sym = is_packed ? sym_lookup("packed") : NULL;
-        record_ast->child = NULL;
+        record_ast->sym = sym_lookup("helper");
+        record_ast->child = helper_base_ast;
         record_ast->next = NULL;
         set_ast_position(record_ast, in);
         return make_success(record_ast);

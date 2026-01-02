@@ -3799,6 +3799,9 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 {
                     record_info->type_id = strdup(tree->tree_data.type_decl_data.id);
                 }
+
+                if (record_info != NULL && record_info->is_type_helper)
+                    semcheck_register_type_helper(record_info, symtab);
                 
                 /* Handle class inheritance - merge parent fields */
                 if (record_info != NULL && record_info->parent_class_name != NULL)

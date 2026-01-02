@@ -723,6 +723,13 @@ static ast_t* wrap_public_name_clause(ast_t* parsed) {
     return node;
 }
 
+static ast_t* mark_type_helper_record(ast_t* parsed) {
+    if (parsed == NULL || parsed == ast_nil)
+        return parsed;
+    parsed->sym = sym_lookup("helper");
+    return parsed;
+}
+
 static combinator_t* make_generic_type_prefix(void) {
     return seq(new_combinator(), PASCAL_T_NONE,
         optional(token(keyword_ci("generic"))),
@@ -1319,7 +1326,7 @@ void init_pascal_unit_parser(combinator_t** p) {
         NULL
     );
 
-    combinator_t* type_helper_type = seq(new_combinator(), PASCAL_T_RECORD_TYPE,
+    combinator_t* type_helper_type = map(seq(new_combinator(), PASCAL_T_RECORD_TYPE,
         helper_kind,
         token(keyword_ci("helper")),
         token(keyword_ci("for")),
@@ -1327,7 +1334,7 @@ void init_pascal_unit_parser(combinator_t** p) {
         helper_body,
         token(keyword_ci("end")),
         NULL
-    );
+    ), mark_type_helper_record);
 
     // Constructed type parser for generic types like TFoo<Integer>
     // Peek to ensure this looks like a generic type before committing
@@ -2627,8 +2634,26 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         NULL
     );
 
+    combinator_t* helper_body = optional(until(token(keyword_ci("end")), PASCAL_T_NONE));
+    combinator_t* helper_kind = multi(new_combinator(), PASCAL_T_NONE,
+        token(keyword_ci("type")),
+        token(keyword_ci("record")),
+        token(keyword_ci("class")),
+        NULL
+    );
+    combinator_t* type_helper_type = map(seq(new_combinator(), PASCAL_T_RECORD_TYPE,
+        helper_kind,
+        token(keyword_ci("helper")),
+        token(keyword_ci("for")),
+        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
+        helper_body,
+        token(keyword_ci("end")),
+        NULL
+    ), mark_type_helper_record);
+
     combinator_t* type_spec = multi(new_combinator(), PASCAL_T_TYPE_SPEC,
-        distinct_type_spec_prog,                        // distinct types like "type Double" (must be first to catch "type" keyword)
+        type_helper_type,                               // type helpers (e.g., type helper for Integer)
+        distinct_type_spec_prog,                        // distinct types like "type Double"
         reference_to_type(PASCAL_T_REFERENCE_TO_TYPE),  // reference to procedure/function
         interface_type(PASCAL_T_INTERFACE_TYPE),        // interface types like interface ... end
         class_of_type(PASCAL_T_CLASS_OF_TYPE),          // class reference types like "class of TObject" (must be before class_type)
@@ -2645,6 +2670,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         range_type(PASCAL_T_RANGE_TYPE),                // range types like -1..1
         type_name(PASCAL_T_IDENTIFIER),                 // built-in types
         constructed_type,                               // constructed types like TFoo<Integer> (try before plain identifiers)
+        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),  // unit-qualified types like foo.bar
         token(pascal_identifier_with_subscript(PASCAL_T_IDENTIFIER)),  // custom types with optional [size]
         NULL
     );
@@ -2908,6 +2934,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         procedure_type(PASCAL_T_PROCEDURE_TYPE),
         function_type(PASCAL_T_FUNCTION_TYPE),
         reference_to_type(PASCAL_T_REFERENCE_TO_TYPE),
+        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),  // allow unit-qualified return types
         token(cident(PASCAL_T_IDENTIFIER)),          // simple type identifier (fallback)
         NULL
     );
