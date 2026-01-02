@@ -1212,6 +1212,33 @@ int codegen_sizeof_record_type(CodeGenContext *ctx, struct RecordType *record,
 static int codegen_sizeof_alias(CodeGenContext *ctx, struct TypeAlias *alias,
     long long *size_out, int depth);
 
+static int codegen_formal_is_dynamic_array(Tree_t *formal, SymTab_t *symtab)
+{
+    if (formal == NULL || formal->type != TREE_VAR_DECL)
+        return 0;
+
+    KgpcType *cached = formal->tree_data.var_decl_data.cached_kgpc_type;
+    if (cached != NULL && cached->kind == TYPE_KIND_ARRAY &&
+        kgpc_type_is_dynamic_array(cached))
+    {
+        return 1;
+    }
+
+    if (symtab != NULL && formal->tree_data.var_decl_data.type_id != NULL)
+    {
+        HashNode_t *type_node = NULL;
+        if (FindIdent(&type_node, symtab, formal->tree_data.var_decl_data.type_id) != -1 &&
+            type_node != NULL && type_node->type != NULL &&
+            type_node->type->kind == TYPE_KIND_ARRAY &&
+            kgpc_type_is_dynamic_array(type_node->type))
+        {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
 static int codegen_sizeof_hashnode(CodeGenContext *ctx, HashNode_t *node,
     long long *size_out, int depth);
 
@@ -3823,6 +3850,22 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         formal_args = proc_type->info.proc_info.params;
         CODEGEN_DEBUG("DEBUG: Using formal_args from KgpcType: %p\n", formal_args);
     }
+    if (formal_args != NULL)
+    {
+        int formal_count = ListLength(formal_args);
+        int actual_count = ListLength(args);
+        if (formal_count == actual_count + 1)
+        {
+            Tree_t *first_decl = (Tree_t *)formal_args->cur;
+            if (first_decl != NULL && first_decl->type == TREE_VAR_DECL)
+            {
+                ListNode_t *ids = first_decl->tree_data.var_decl_data.ids;
+                const char *first_id = (ids != NULL) ? (const char *)ids->cur : NULL;
+                if (first_id != NULL && pascal_identifier_equals(first_id, "Self"))
+                    formal_args = formal_args->next;
+            }
+        }
+    }
     
     /* CRITICAL VALIDATION: Ensure formal_args is either NULL or properly structured.
      * This catches any remaining cases of corrupted list pointers. */
@@ -3922,9 +3965,11 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         int is_var_param = (formal_arg_decl != NULL && formal_arg_decl->tree_data.var_decl_data.is_var_param);
         int is_array_param = (formal_arg_decl != NULL && formal_arg_decl->type == TREE_ARR_DECL);
         int formal_is_open_array = formal_decl_is_open_array(formal_arg_decl);
+        int formal_is_dynarray = codegen_formal_is_dynamic_array(formal_arg_decl, ctx->symtab);
         
         /* Also check if we're passing a static array argument (even if not declared as var param) */
         int is_array_arg = (arg_expr != NULL && arg_expr->is_array_expr && !arg_expr->array_is_dynamic);
+        int treat_self_by_value = 0;
 
         int expected_type = codegen_param_expected_type(formal_arg_decl, ctx->symtab);
         if (expected_type == UNKNOWN_TYPE && procedure_name != NULL)
@@ -3953,7 +3998,23 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             else if (expected_type == UNKNOWN_TYPE)
                 expected_type = LONGINT_TYPE;
         }
-        int is_pointer_like = (is_var_param || is_array_param || is_array_arg);
+        if (is_var_param && arg_num == 0 && arg_expr != NULL &&
+            !codegen_expr_is_addressable(arg_expr))
+        {
+            const char *formal_id = NULL;
+            if (formal_arg_decl != NULL && formal_arg_decl->type == TREE_VAR_DECL)
+            {
+                ListNode_t *ids = formal_arg_decl->tree_data.var_decl_data.ids;
+                formal_id = (ids != NULL) ? (const char *)ids->cur : NULL;
+            }
+            if (formal_id != NULL && pascal_identifier_equals(formal_id, "Self"))
+            {
+                treat_self_by_value = 1;
+                is_var_param = 0;
+            }
+        }
+
+        int is_pointer_like = (is_var_param || is_array_param || is_array_arg || treat_self_by_value || formal_is_dynarray);
 
         if (arg_infos != NULL)
         {
@@ -4103,6 +4164,37 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             if (arg_spill != NULL && arg_infos != NULL)
             {
                 snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", 
+                    addr_reg->bit_64, arg_spill->offset);
+                inst_list = add_inst(inst_list, buffer);
+                free_reg(get_reg_stack(), addr_reg);
+                
+                arg_infos[arg_num].reg = NULL;
+                arg_infos[arg_num].spill = arg_spill;
+                arg_infos[arg_num].expr = arg_expr;
+            }
+            else if (arg_infos != NULL)
+            {
+                arginfo_assign_register(&arg_infos[arg_num], addr_reg, arg_expr);
+            }
+        }
+        else if (formal_is_dynarray && arg_expr != NULL &&
+            arg_expr->is_array_expr && arg_expr->array_is_dynamic)
+        {
+            Register_t *addr_reg = NULL;
+            if (!codegen_expr_is_addressable(arg_expr))
+            {
+                codegen_report_error(ctx,
+                    "ERROR: Unsupported expression type for dynamic array argument.");
+                return inst_list;
+            }
+            inst_list = codegen_address_for_expr(arg_expr, inst_list, ctx, &addr_reg);
+            if (codegen_had_error(ctx) || addr_reg == NULL)
+                return inst_list;
+
+            StackNode_t *arg_spill = add_l_t("arg_eval");
+            if (arg_spill != NULL && arg_infos != NULL)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
                     addr_reg->bit_64, arg_spill->offset);
                 inst_list = add_inst(inst_list, buffer);
                 free_reg(get_reg_stack(), addr_reg);

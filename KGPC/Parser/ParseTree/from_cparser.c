@@ -63,6 +63,71 @@ static int kgpc_debug_decl_scan_enabled(void)
     return cached;
 }
 
+struct TypeHelperMapping
+{
+    char *helper_id;
+    char *base_type_id;
+};
+
+static ListNode_t *type_helper_mappings = NULL;
+
+static void register_type_helper_mapping(const char *helper_id, const char *base_type_id)
+{
+    if (helper_id == NULL || base_type_id == NULL)
+        return;
+
+    ListNode_t *cur = type_helper_mappings;
+    while (cur != NULL) {
+        struct TypeHelperMapping *entry = (struct TypeHelperMapping *)cur->cur;
+        if (entry != NULL && entry->helper_id != NULL &&
+            strcasecmp(entry->helper_id, helper_id) == 0)
+        {
+            return;
+        }
+        cur = cur->next;
+    }
+
+    struct TypeHelperMapping *entry = (struct TypeHelperMapping *)calloc(1, sizeof(struct TypeHelperMapping));
+    if (entry == NULL)
+        return;
+    entry->helper_id = strdup(helper_id);
+    entry->base_type_id = strdup(base_type_id);
+    if (entry->helper_id == NULL || entry->base_type_id == NULL)
+    {
+        free(entry->helper_id);
+        free(entry->base_type_id);
+        free(entry);
+        return;
+    }
+    ListNode_t *node = CreateListNode(entry, LIST_UNSPECIFIED);
+    if (node == NULL)
+    {
+        free(entry->helper_id);
+        free(entry->base_type_id);
+        free(entry);
+        return;
+    }
+    node->next = type_helper_mappings;
+    type_helper_mappings = node;
+}
+
+static const char *lookup_type_helper_base(const char *helper_id)
+{
+    if (helper_id == NULL)
+        return NULL;
+    ListNode_t *cur = type_helper_mappings;
+    while (cur != NULL) {
+        struct TypeHelperMapping *entry = (struct TypeHelperMapping *)cur->cur;
+        if (entry != NULL && entry->helper_id != NULL &&
+            strcasecmp(entry->helper_id, helper_id) == 0)
+        {
+            return entry->base_type_id;
+        }
+        cur = cur->next;
+    }
+    return NULL;
+}
+
 static VisitedSet *visited_set_create(void) {
     VisitedSet *set = (VisitedSet *)malloc(sizeof(VisitedSet));
     if (set == NULL) return NULL;
@@ -3678,6 +3743,8 @@ static struct RecordType *convert_class_type_ex(const char *class_name, ast_t *c
     record->parent_class_name = parent_class_name;
     record->methods = NULL;  /* Methods list will be populated during semantic checking */
     record->is_class = 1;
+    record->is_type_helper = 0;
+    record->helper_base_type_id = NULL;
     record->type_id = class_name != NULL ? strdup(class_name) : NULL;
     record->has_cached_size = 0;
     record->cached_size = 0;
@@ -3997,6 +4064,44 @@ static struct RecordType *convert_record_type_ex(ast_t *record_node, ListNode_t 
     if (nested_types_out != NULL)
         *nested_types_out = NULL;
 
+    if (record_node->sym != NULL &&
+        record_node->sym->name != NULL &&
+        strcasecmp(record_node->sym->name, "helper") == 0)
+    {
+        struct RecordType *record = (struct RecordType *)calloc(1, sizeof(struct RecordType));
+        if (record == NULL)
+            return NULL;
+        record->fields = NULL;
+        record->properties = NULL;
+        record->parent_class_name = NULL;
+        record->methods = NULL;
+        record->method_templates = NULL;
+        record->is_class = 0;
+        record->is_type_helper = 1;
+        record->helper_base_type_id = NULL;
+        record->type_id = NULL;
+        record->has_cached_size = 0;
+        record->cached_size = 0;
+        record->generic_decl = NULL;
+        record->generic_args = NULL;
+        record->num_generic_args = 0;
+        record->method_clones_emitted = 0;
+
+        ast_t *base_node = record_node->child;
+        while (base_node != NULL) {
+            ast_t *unwrapped = unwrap_pascal_node(base_node);
+            if (unwrapped != NULL &&
+                (unwrapped->typ == PASCAL_T_IDENTIFIER || unwrapped->typ == PASCAL_T_QUALIFIED_IDENTIFIER) &&
+                unwrapped->sym != NULL && unwrapped->sym->name != NULL)
+            {
+                record->helper_base_type_id = strdup(unwrapped->sym->name);
+                break;
+            }
+            base_node = base_node->next;
+        }
+        return record;
+    }
+
     /* Scan for nested type sections in the record */
     ListBuilder nested_type_builder;
     list_builder_init(&nested_type_builder);
@@ -4022,6 +4127,8 @@ static struct RecordType *convert_record_type_ex(ast_t *record_node, ListNode_t 
     record->methods = NULL;  /* Regular records don't have methods */
     record->method_templates = NULL;
     record->is_class = 0;
+    record->is_type_helper = 0;
+    record->helper_base_type_id = NULL;
     record->type_id = NULL;
     record->has_cached_size = 0;
     record->cached_size = 0;
@@ -5472,6 +5579,12 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
         /* Set the type ID for the record */
         if (record_type->type_id == NULL && id != NULL)
             record_type->type_id = strdup(id);
+
+        if (record_type->is_type_helper && record_type->helper_base_type_id != NULL &&
+            record_type->type_id != NULL)
+        {
+            register_type_helper_mapping(record_type->type_id, record_type->helper_base_type_id);
+        }
         
         /* For advanced records, register any method declarations */
         /* Walk the fields list looking for stored method AST nodes */
@@ -6969,6 +7082,7 @@ static struct Expression *convert_member_access(ast_t *node) {
         call_expr->expr_data.function_call_data.id = method_id;
         call_expr->expr_data.function_call_data.args_expr = args_list;
         call_expr->expr_data.function_call_data.resolved_func = NULL;
+        call_expr->expr_data.function_call_data.is_method_call_placeholder = 1;
         
         return call_expr;
     }
@@ -7085,6 +7199,7 @@ static struct Expression *convert_member_access_chain(int line,
             call_expr->expr_data.function_call_data.args_expr = args_list;
             call_expr->expr_data.function_call_data.resolved_func = NULL;
             call_expr->resolved_kgpc_type = NULL;
+            call_expr->expr_data.function_call_data.is_method_call_placeholder = 1;
             
             return call_expr;
         }
@@ -7126,6 +7241,7 @@ static struct Expression *convert_member_access_chain(int line,
         call_expr->expr_data.function_call_data.id = method_id;
         call_expr->expr_data.function_call_data.args_expr = args_list;
         call_expr->expr_data.function_call_data.resolved_func = NULL;
+        call_expr->expr_data.function_call_data.is_method_call_placeholder = 1;
         
         return call_expr;
     }
@@ -8077,14 +8193,17 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     struct TypeAlias *inline_return_type = NULL;
     int has_return_type = 0;
 
+    const char *helper_base = (effective_class != NULL) ? lookup_type_helper_base(effective_class) : NULL;
+    int is_helper_method = (helper_base != NULL);
+
     /* Add Self parameter only for instance methods, not for class operators or static methods */
     if (!is_class_operator && !is_static_method) {
         ListNode_t *self_ids = CreateListNode(strdup("Self"), LIST_STRING);
         char *self_type_id = NULL;
         if (effective_class != NULL)
-            self_type_id = strdup(effective_class);
+            self_type_id = strdup(is_helper_method ? helper_base : effective_class);
         Tree_t *self_param = mk_vardecl(method_node->line, self_ids, UNKNOWN_TYPE,
-            self_type_id, 1, 0, NULL, NULL, NULL, NULL);
+            self_type_id, is_helper_method ? 0 : 1, 0, NULL, NULL, NULL, NULL);
         list_builder_append(&params_builder, self_param, LIST_TREE);
     }
 
@@ -8210,8 +8329,8 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         return_type = POINTER_TYPE;
     }
 
-    /* Wrap method body in WITH Self for instance methods, but not for class operators or static methods */
-    if (body != NULL && !is_class_operator && !is_static_method) {
+    /* Wrap method body in WITH Self for instance methods, but not for helpers, class operators, or static methods */
+    if (body != NULL && !is_class_operator && !is_static_method && !is_helper_method) {
         struct Expression *self_expr = mk_varid(method_node->line, strdup("Self"));
         body = mk_with(method_node->line, self_expr, body);
     }

@@ -1,0 +1,4 @@
+Test 1 PASS: Attr and faDirectory = faDirectory
+Test 2 PASS: Combined flags detected correctly
+Test 3 PASS: Correctly rejected non-directory
+ALL TESTS PASSED

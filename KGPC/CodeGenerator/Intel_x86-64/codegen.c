@@ -3065,6 +3065,8 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     int tree_is_var_param = arg_decl->tree_data.var_decl_data.is_var_param;
                     int symbol_is_var_param = tree_is_var_param;
                     struct RecordType *record_type_info = NULL;
+                    int is_dynarray_param = 0;
+                    int dynarray_elem_size = 0;
 
                     if (getenv("KGPC_DEBUG_ARG_TYPES") != NULL && arg_ids->cur != NULL)
                     {
@@ -3093,12 +3095,33 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                             record_type_info = get_record_type_from_node(resolved_type_node);
                         if (record_type_info == NULL && cached_arg_node_ptr != NULL)
                             record_type_info = get_record_type_from_node(cached_arg_node_ptr);
+                        if (record_type_info == NULL)
+                        {
+                            KgpcType *param_type = NULL;
+                            if (resolved_type_node != NULL)
+                                param_type = resolved_type_node->type;
+                            else if (cached_arg_type != NULL)
+                                param_type = cached_arg_type;
+                            if (param_type != NULL &&
+                                param_type->kind == TYPE_KIND_ARRAY &&
+                                kgpc_type_is_dynamic_array(param_type))
+                            {
+                                is_dynarray_param = 1;
+                                dynarray_elem_size = (int)kgpc_type_get_array_element_size(param_type);
+                                if (dynarray_elem_size <= 0)
+                                    dynarray_elem_size = 1;
+                            }
+                        }
                     }
 
-                    if (record_type_info != NULL)
+                    if (record_type_info != NULL || is_dynarray_param)
                     {
                         long long record_size = 0;
-                        if (codegen_sizeof_type_reference(ctx, RECORD_TYPE, NULL,
+                        if (is_dynarray_param)
+                        {
+                            record_size = codegen_dynamic_array_descriptor_bytes(dynarray_elem_size);
+                        }
+                        else if (codegen_sizeof_type_reference(ctx, RECORD_TYPE, NULL,
                                 record_type_info, &record_size) != 0 || record_size <= 0)
                         {
                             codegen_report_error(ctx,
