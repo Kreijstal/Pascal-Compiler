@@ -7824,6 +7824,25 @@ int semcheck_relop(int *type_return,
                 int char_ok = (type_first == CHAR_TYPE && type_second == CHAR_TYPE);
                 int pointer_ok = (type_first == POINTER_TYPE && type_second == POINTER_TYPE);
                 int enum_ok = (type_first == ENUM_TYPE && type_second == ENUM_TYPE);
+                
+                /* Also check using KgpcType for enum compatibility (handles scoped enums) */
+                if (!enum_ok && expr1 != NULL && expr2 != NULL)
+                {
+                    KgpcType *kgpc1 = expr1->resolved_kgpc_type;
+                    KgpcType *kgpc2 = expr2->resolved_kgpc_type;
+                    if (kgpc1 != NULL && kgpc2 != NULL)
+                    {
+                        struct TypeAlias *alias1 = kgpc_type_get_type_alias(kgpc1);
+                        struct TypeAlias *alias2 = kgpc_type_get_type_alias(kgpc2);
+                        if ((alias1 != NULL && alias1->is_enum) ||
+                            (alias2 != NULL && alias2->is_enum))
+                        {
+                            /* At least one side is an enum - allow comparison */
+                            enum_ok = 1;
+                        }
+                    }
+                }
+                
                 if (!numeric_ok && !boolean_ok && !string_ok && !char_ok && !pointer_ok && !enum_ok)
                 {
                     fprintf(stderr, "Error on line %d, equality comparison requires matching numeric, boolean, string, character, or pointer types!\n\n",
@@ -11041,6 +11060,12 @@ skip_overload_resolution:
                         type_compatible = 1;
                     }
                     else if (expected_type == REAL_TYPE && is_integer_type(arg_type))
+                    {
+                        type_compatible = 1;
+                    }
+                    /* For enum types: integer literals and scoped enum literals are compatible with enum parameters */
+                    else if (expected_type == ENUM_TYPE && 
+                             (is_integer_type(arg_type) || arg_type == ENUM_TYPE))
                     {
                         type_compatible = 1;
                     }
