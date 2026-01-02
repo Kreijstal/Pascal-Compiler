@@ -7873,6 +7873,53 @@ int semcheck_relop(int *type_return,
                 int pointer_ok = (type_first == POINTER_TYPE && type_second == POINTER_TYPE);
                 int enum_ok = (type_first == ENUM_TYPE && type_second == ENUM_TYPE);
                 
+                /* Check for string/PChar comparison.
+                 * In Pascal, comparing AnsiString with PAnsiChar is valid.
+                 * Use type tags first (string vs pointer), then refine with KgpcType if available. */
+                int string_pchar_ok = 0;
+                if (!string_ok && expr1 != NULL && expr2 != NULL)
+                {
+                    /* First try using type tags - if one is string and other is pointer,
+                     * this is likely a string/PChar comparison */
+                    int tag_string1 = is_string_type(type_first);
+                    int tag_string2 = is_string_type(type_second);
+                    int tag_pointer1 = (type_first == POINTER_TYPE);
+                    int tag_pointer2 = (type_second == POINTER_TYPE);
+                    
+                    if ((tag_string1 && tag_pointer2) || (tag_pointer1 && tag_string2))
+                    {
+                        /* Likely string/PChar - allow it. 
+                         * We could verify with KgpcType but it's not always available */
+                        string_pchar_ok = 1;
+                    }
+                    
+                    /* Also check using KgpcType for more accurate detection when available */
+                    KgpcType *kgpc1 = expr1->resolved_kgpc_type;
+                    KgpcType *kgpc2 = expr2->resolved_kgpc_type;
+                    if (kgpc1 != NULL && kgpc2 != NULL)
+                    {
+                        /* Check if one is string and other is PChar (pointer to char) */
+                        int is_pchar1 = (kgpc1->kind == TYPE_KIND_POINTER && kgpc1->info.points_to != NULL &&
+                                         kgpc1->info.points_to->kind == TYPE_KIND_PRIMITIVE &&
+                                         kgpc1->info.points_to->info.primitive_type_tag == CHAR_TYPE);
+                        int is_pchar2 = (kgpc2->kind == TYPE_KIND_POINTER && kgpc2->info.points_to != NULL &&
+                                         kgpc2->info.points_to->kind == TYPE_KIND_PRIMITIVE &&
+                                         kgpc2->info.points_to->info.primitive_type_tag == CHAR_TYPE);
+                        int is_string1 = (kgpc1->kind == TYPE_KIND_PRIMITIVE && 
+                                          (kgpc1->info.primitive_type_tag == STRING_TYPE ||
+                                           kgpc1->info.primitive_type_tag == SHORTSTRING_TYPE));
+                        int is_string2 = (kgpc2->kind == TYPE_KIND_PRIMITIVE && 
+                                          (kgpc2->info.primitive_type_tag == STRING_TYPE ||
+                                           kgpc2->info.primitive_type_tag == SHORTSTRING_TYPE));
+                        
+                        if ((is_pchar1 && is_string2) || (is_string1 && is_pchar2))
+                            string_pchar_ok = 1;
+                        /* Also allow string to string comparison via KgpcType */
+                        if (is_string1 && is_string2)
+                            string_ok = 1;
+                    }
+                }
+                
                 /* Also check using KgpcType for enum compatibility (handles scoped enums) */
                 if (!enum_ok && expr1 != NULL && expr2 != NULL)
                 {
@@ -7891,7 +7938,7 @@ int semcheck_relop(int *type_return,
                     }
                 }
                 
-                if (!numeric_ok && !boolean_ok && !string_ok && !char_ok && !pointer_ok && !enum_ok)
+                if (!numeric_ok && !boolean_ok && !string_ok && !char_ok && !pointer_ok && !enum_ok && !string_pchar_ok)
                 {
                     fprintf(stderr, "Error on line %d, equality comparison requires matching numeric, boolean, string, character, or pointer types!\n\n",
                         expr->line_num);
@@ -7908,8 +7955,47 @@ int semcheck_relop(int *type_return,
                 int char_ok = (type_first == CHAR_TYPE && type_second == CHAR_TYPE);
                 int pointer_ok = (type_first == POINTER_TYPE && type_second == POINTER_TYPE);
                 int enum_ok = (type_first == ENUM_TYPE && type_second == ENUM_TYPE);
+                
+                /* Check for string/PChar comparison.
+                 * Use type tags first, then refine with KgpcType if available. */
+                int string_pchar_ok = 0;
+                if (!string_ok && expr1 != NULL && expr2 != NULL)
+                {
+                    /* First try using type tags */
+                    int tag_string1 = is_string_type(type_first);
+                    int tag_string2 = is_string_type(type_second);
+                    int tag_pointer1 = (type_first == POINTER_TYPE);
+                    int tag_pointer2 = (type_second == POINTER_TYPE);
+                    
+                    if ((tag_string1 && tag_pointer2) || (tag_pointer1 && tag_string2))
+                        string_pchar_ok = 1;
+                    
+                    /* Also check using KgpcType when available */
+                    KgpcType *kgpc1 = expr1->resolved_kgpc_type;
+                    KgpcType *kgpc2 = expr2->resolved_kgpc_type;
+                    if (kgpc1 != NULL && kgpc2 != NULL)
+                    {
+                        int is_pchar1 = (kgpc1->kind == TYPE_KIND_POINTER && kgpc1->info.points_to != NULL &&
+                                         kgpc1->info.points_to->kind == TYPE_KIND_PRIMITIVE &&
+                                         kgpc1->info.points_to->info.primitive_type_tag == CHAR_TYPE);
+                        int is_pchar2 = (kgpc2->kind == TYPE_KIND_POINTER && kgpc2->info.points_to != NULL &&
+                                         kgpc2->info.points_to->kind == TYPE_KIND_PRIMITIVE &&
+                                         kgpc2->info.points_to->info.primitive_type_tag == CHAR_TYPE);
+                        int is_string1 = (kgpc1->kind == TYPE_KIND_PRIMITIVE && 
+                                          (kgpc1->info.primitive_type_tag == STRING_TYPE ||
+                                           kgpc1->info.primitive_type_tag == SHORTSTRING_TYPE));
+                        int is_string2 = (kgpc2->kind == TYPE_KIND_PRIMITIVE && 
+                                          (kgpc2->info.primitive_type_tag == STRING_TYPE ||
+                                           kgpc2->info.primitive_type_tag == SHORTSTRING_TYPE));
+                        
+                        if ((is_pchar1 && is_string2) || (is_string1 && is_pchar2))
+                            string_pchar_ok = 1;
+                        if (is_string1 && is_string2)
+                            string_ok = 1;
+                    }
+                }
 
-                if(!numeric_ok && !string_ok && !char_ok && !pointer_ok && !enum_ok)
+                if(!numeric_ok && !string_ok && !char_ok && !pointer_ok && !enum_ok && !string_pchar_ok)
                 {
                     fprintf(stderr,
                         "Error on line %d, expected compatible numeric, string, or character types between relational op!\n\n",
