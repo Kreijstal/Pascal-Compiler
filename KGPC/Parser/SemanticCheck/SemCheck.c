@@ -2608,7 +2608,9 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                 {
                     struct TypeAlias *alias = &tree->tree_data.type_decl_data.info.alias;
                     alias->is_char_alias = semcheck_alias_should_be_char_like(type_id,
-                        alias->target_type_id);
+                        alias->target_type_id) &&
+                        !alias->is_pointer && !alias->is_array && !alias->is_set &&
+                        !alias->is_enum && !alias->is_file;
                     if (alias->target_type_id != NULL)
                         apply_builtin_integer_alias_metadata(alias, alias->target_type_id);
                     else if (type_id != NULL)
@@ -3875,7 +3877,9 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
             {
                 alias_info = &tree->tree_data.type_decl_data.info.alias;
                 alias_info->is_char_alias = semcheck_alias_should_be_char_like(
-                    tree->tree_data.type_decl_data.id, alias_info->target_type_id);
+                    tree->tree_data.type_decl_data.id, alias_info->target_type_id) &&
+                    !alias_info->is_pointer && !alias_info->is_array && !alias_info->is_set &&
+                    !alias_info->is_enum && !alias_info->is_file;
                 if (tree->tree_data.type_decl_data.kgpc_type == NULL &&
                     (alias_info->is_array || alias_info->is_pointer ||
                      alias_info->is_set || alias_info->is_file))
