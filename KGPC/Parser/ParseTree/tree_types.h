@@ -139,6 +139,8 @@ struct RecordType
     ListNode_t *methods;      /* List of MethodInfo for virtual/override methods */
     ListNode_t *method_templates; /* Template methods captured from declarations */
     int is_class;             /* 1 if this record represents a class */
+    int is_type_helper;       /* 1 if this record represents a type helper */
+    char *helper_base_type_id; /* Base type name for helpers */
     char *type_id;            /* Canonical type name if available */
     int has_cached_size;      /* 1 if cached_size has been computed */
     long long cached_size;    /* Cached byte size for kgpc_type_sizeof */
@@ -443,6 +445,7 @@ struct Expression
             int is_procedural_var_call;      /* 1 if calling through a procedural variable */
             struct HashNode *procedural_var_symbol;  /* Symbol for the procedural variable */
             struct Expression *procedural_var_expr;  /* Expression yielding a function pointer (for record fields, etc.) */
+            int is_method_call_placeholder;          /* 1 if created from member access and needs method resolution */
         } function_call_data;
 
         /* Integer number */

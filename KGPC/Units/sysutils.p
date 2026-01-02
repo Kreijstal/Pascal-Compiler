@@ -18,6 +18,7 @@ type
     Word = 0..65535;
     LongWord = 0..4294967295;
     Byte = 0..255;
+    TBytes = array of Byte;
 
     Exception = class
     private
@@ -25,6 +26,15 @@ type
     public
         constructor Create(const Msg: AnsiString);
         property Message: AnsiString read FMessage;
+    end;
+
+    TEncoding = class
+    public
+        class function UTF8: TEncoding; static;
+        class function ANSI: TEncoding; static;
+        class function Default: TEncoding; static;
+        function GetBytes(const S: AnsiString): TBytes; virtual;
+        function GetString(const Bytes: TBytes): AnsiString; virtual;
     end;
 
 const
@@ -135,6 +145,54 @@ begin
         StrPas := ''
     else
         StrPas := kgpc_strpas(PAnsiChar(P));
+end;
+
+var
+    EncodingUtf8Instance: TEncoding;
+    EncodingAnsiInstance: TEncoding;
+    EncodingDefaultInstance: TEncoding;
+
+class function TEncoding.UTF8: TEncoding;
+begin
+    if EncodingUtf8Instance = nil then
+        EncodingUtf8Instance := TEncoding.Create;
+    UTF8 := EncodingUtf8Instance;
+end;
+
+class function TEncoding.ANSI: TEncoding;
+begin
+    if EncodingAnsiInstance = nil then
+        EncodingAnsiInstance := TEncoding.Create;
+    ANSI := EncodingAnsiInstance;
+end;
+
+class function TEncoding.Default: TEncoding;
+begin
+    if EncodingDefaultInstance = nil then
+        EncodingDefaultInstance := TEncoding.UTF8;
+    Default := EncodingDefaultInstance;
+end;
+
+function TEncoding.GetBytes(const S: AnsiString): TBytes;
+var
+    bytes: TBytes;
+    i: Integer;
+begin
+    SetLength(bytes, Length(S));
+    for i := 1 to Length(S) do
+        bytes[i - 1] := Ord(S[i]) and $FF;
+    GetBytes := bytes;
+end;
+
+function TEncoding.GetString(const Bytes: TBytes): AnsiString;
+var
+    text: AnsiString;
+    i: Integer;
+begin
+    SetLength(text, Length(Bytes));
+    for i := 0 to Length(Bytes) - 1 do
+        text[i + 1] := Char(Bytes[i]);
+    GetString := text;
 end;
 
 procedure Sleep(milliseconds: integer);

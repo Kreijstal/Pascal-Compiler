@@ -1683,6 +1683,7 @@ void destroy_record_type(struct RecordType *record_type)
         }
     }
     free(record_type->parent_class_name);
+    free(record_type->helper_base_type_id);
     free(record_type->type_id);
     
     /* Free methods list */
@@ -1727,6 +1728,9 @@ struct RecordType *clone_record_type(const struct RecordType *record_type)
     clone->methods = NULL;  /* Methods list copied during semantic checking if needed */
     clone->method_templates = clone_method_template_list(record_type->method_templates);
     clone->is_class = record_type->is_class;
+    clone->is_type_helper = record_type->is_type_helper;
+    clone->helper_base_type_id = record_type->helper_base_type_id ?
+        strdup(record_type->helper_base_type_id) : NULL;
     clone->type_id = record_type->type_id ? strdup(record_type->type_id) : NULL;
     clone->has_cached_size = record_type->has_cached_size;
     clone->cached_size = record_type->cached_size;
@@ -2542,6 +2546,7 @@ static void init_expression(struct Expression *expr, int line_num, enum ExprType
     expr->expr_data.array_literal_data.elements = NULL;
     expr->expr_data.array_literal_data.element_count = 0;
     expr->expr_data.array_literal_data.elements_semchecked = 0;
+    expr->expr_data.function_call_data.is_method_call_placeholder = 0;
 }
 
 struct Expression *mk_relop(int line_num, int type, struct Expression *left,
@@ -2705,6 +2710,7 @@ struct Expression *mk_functioncall(int line_num, char *id, ListNode_t *args)
     new_expr->expr_data.function_call_data.is_procedural_var_call = 0;
     new_expr->expr_data.function_call_data.procedural_var_symbol = NULL;
     new_expr->expr_data.function_call_data.procedural_var_expr = NULL;
+    new_expr->expr_data.function_call_data.is_method_call_placeholder = 0;
 
     return new_expr;
 }

@@ -1341,9 +1341,9 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
 
     // Precedence levels (lower number = lower precedence, must be consecutive starting from 0)
     // Pascal operator precedence (from FPC documentation):
-    //   Lowest:  Relational (=, <>, <, >, <=, >=, in, is)
+    //   Lowest:  Relational (=, <>, <, >, <=, >=, in, is, as)
     //   Additive: +, -, or, xor
-    //   Multiplicative: *, /, div, mod, and, shl, shr, as
+    //   Multiplicative: *, /, div, mod, and, shl, shr
     //   Highest: not, @, - (unary)
 
     // Precedence 0: All relational operators (LOWEST precedence in Pascal!)
@@ -1372,6 +1372,7 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
     expr_altern(*p, 0, PASCAL_T_GT, token(single_gt));
     expr_altern(*p, 0, PASCAL_T_IN, token(keyword_ci("in")));
     expr_altern(*p, 0, PASCAL_T_IS, token(keyword_ci("is")));
+    expr_altern(*p, 0, PASCAL_T_AS, token(keyword_ci("as")));
     // Multi-character operators (added last = tried first in expr parser)
     expr_altern(*p, 0, PASCAL_T_NE, token(match("<>")));
     expr_altern(*p, 0, PASCAL_T_GE, token(match(">=")));
@@ -1387,7 +1388,7 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
     expr_altern(*p, 2, PASCAL_T_XOR, token(keyword_ci("xor")));
     expr_altern(*p, 2, PASCAL_T_SET_SYM_DIFF, token(match("><")));
 
-    // Precedence 3: Multiplicative operators (*, /, div, mod, and, shl, shr, as)
+    // Precedence 3: Multiplicative operators (*, /, div, mod, and, shl, shr)
     // FPC supports both Pascal keywords (shl, shr) and C-style operators (<<, >>)
     expr_insert(*p, 3, PASCAL_T_MUL, EXPR_INFIX, ASSOC_LEFT, token(match("*")));
     expr_altern(*p, 3, PASCAL_T_DIV, token(match("/")));
@@ -1401,7 +1402,6 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
     expr_altern(*p, 3, PASCAL_T_SHR, token(keyword_ci("shr")));
     expr_altern(*p, 3, PASCAL_T_ROL, token(keyword_ci("rol")));
     expr_altern(*p, 3, PASCAL_T_ROR, token(keyword_ci("ror")));
-    expr_altern(*p, 3, PASCAL_T_AS, token(keyword_ci("as")));
 
     // Precedence 4: Unary operators (highest precedence for regular operators)
     expr_insert(*p, 4, PASCAL_T_NEG, EXPR_PREFIX, ASSOC_NONE, token(match("-")));
