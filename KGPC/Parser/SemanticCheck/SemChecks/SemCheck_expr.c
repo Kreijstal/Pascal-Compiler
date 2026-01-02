@@ -5638,6 +5638,19 @@ static int semcheck_transform_property_getter_call(int *type_return,
         return 1;
     }
 
+    /* Check if the getter is a static function (takes no Self parameter).
+     * Static getters don't need the object instance as an argument. */
+    int is_static_getter = 0;
+    if (method_node->type != NULL && method_node->type->kind == TYPE_KIND_PROCEDURE)
+    {
+        ListNode_t *params = kgpc_type_get_procedure_params(method_node->type);
+        if (params == NULL)
+        {
+            /* No parameters - this is a static getter */
+            is_static_getter = 1;
+        }
+    }
+
     expr->expr_data.record_access_data.record_expr = NULL;
     if (expr->expr_data.record_access_data.field_id != NULL)
     {
@@ -5645,14 +5658,24 @@ static int semcheck_transform_property_getter_call(int *type_return,
         expr->expr_data.record_access_data.field_id = NULL;
     }
 
-    ListNode_t *arg_node = CreateListNode(object_expr, LIST_EXPR);
-    if (arg_node == NULL)
+    ListNode_t *arg_node = NULL;
+    if (!is_static_getter)
     {
-        fprintf(stderr, "Error on line %d, unable to allocate getter argument list.\n\n",
-            expr->line_num);
-        expr->expr_data.record_access_data.record_expr = object_expr;
-        *type_return = UNKNOWN_TYPE;
-        return 1;
+        /* Non-static getter - pass object as first argument */
+        arg_node = CreateListNode(object_expr, LIST_EXPR);
+        if (arg_node == NULL)
+        {
+            fprintf(stderr, "Error on line %d, unable to allocate getter argument list.\n\n",
+                expr->line_num);
+            expr->expr_data.record_access_data.record_expr = object_expr;
+            *type_return = UNKNOWN_TYPE;
+            return 1;
+        }
+    }
+    else
+    {
+        /* Static getter - no object argument needed, destroy the object expression */
+        destroy_expr(object_expr);
     }
 
     char *id_copy = method_node->id != NULL ? strdup(method_node->id) : NULL;
@@ -5667,8 +5690,14 @@ static int semcheck_transform_property_getter_call(int *type_return,
             expr->line_num);
         free(id_copy);
         free(mangled_copy);
-        free(arg_node);
-        expr->expr_data.record_access_data.record_expr = object_expr;
+        if (arg_node != NULL)
+        {
+            /* Restore object_expr ownership before freeing arg_node */
+            object_expr = (struct Expression *)arg_node->cur;
+            arg_node->cur = NULL;
+            free(arg_node);
+            expr->expr_data.record_access_data.record_expr = object_expr;
+        }
         *type_return = UNKNOWN_TYPE;
         return 1;
     }

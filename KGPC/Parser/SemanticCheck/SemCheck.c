@@ -4657,6 +4657,13 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
         {
             /* Evaluate as integer constant */
             long long value = 0;
+            
+            /* Run semantic check on the value expression to resolve types properly.
+             * This is important for scoped enum literals like TEndian.Little
+             * which need to have their resolved_kgpc_type set. */
+            int expr_type = UNKNOWN_TYPE;
+            semcheck_expr_main(&expr_type, symtab, value_expr, INT_MAX, NO_MUTATE);
+            
             if (evaluate_const_expr(symtab, value_expr, &value) != 0)
             {
                 fprintf(stderr, "Error on line %d, unsupported const expression.\n", tree->line_num);
@@ -4693,6 +4700,17 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                 if (value_expr != NULL && value_expr->type == EXPR_SET)
                 {
                     const_type = create_primitive_type(SET_TYPE);
+                }
+                /* Check if the expression has enum type (e.g., scoped enum literals like TEnum.Value) */
+                else if (value_expr != NULL && value_expr->resolved_kgpc_type != NULL)
+                {
+                    struct TypeAlias *alias = kgpc_type_get_type_alias(value_expr->resolved_kgpc_type);
+                    if (alias != NULL && alias->is_enum)
+                    {
+                        /* Preserve the enum type for the constant */
+                        const_type = value_expr->resolved_kgpc_type;
+                        kgpc_type_retain(const_type);
+                    }
                 }
                 else if (tree->tree_data.const_decl_data.type_id != NULL)
                 {

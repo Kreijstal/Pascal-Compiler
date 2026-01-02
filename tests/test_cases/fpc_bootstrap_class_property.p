@@ -2,13 +2,12 @@ program fpc_bootstrap_class_property;
 {$mode objfpc}
 { Test: Class property with getter }
 { FPC: Should compile and output 42 }
-{ KGPC: Fails with "getter not found" }
+{ KGPC: Was failing with "call to function does not match any available overload" }
 { This pattern is used in FPC's TEncoding.SystemEncoding }
 
 type
   TMyClass = class
   private
-    class var FValue: Integer;
     class function GetValue: Integer; static;
   public
     class property Value: Integer read GetValue;
@@ -20,6 +19,5 @@ begin
 end;
 
 begin
-  TMyClass.FValue := 100;  { Initialize class var }
   writeln(TMyClass.Value);
 end.

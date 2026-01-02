@@ -376,6 +376,23 @@ static struct Expression *copy_default_expr(struct Expression *src)
                 copy->line_num = src->line_num;
             }
             break;
+        case EXPR_VAR_ID:
+            /* Handle constant references like CPUEndian in default parameters */
+            if (src->expr_data.id != NULL)
+            {
+                copy = (struct Expression *)malloc(sizeof(struct Expression));
+                if (copy != NULL) {
+                    memset(copy, 0, sizeof(struct Expression));
+                    copy->type = EXPR_VAR_ID;
+                    copy->line_num = src->line_num;
+                    copy->expr_data.id = strdup(src->expr_data.id);
+                    if (copy->expr_data.id == NULL) {
+                        free(copy);
+                        copy = NULL;
+                    }
+                }
+            }
+            break;
         default:
             /* For complex expressions, we can't easily copy them.
              * Return NULL and let the caller handle the error. */
