@@ -4107,8 +4107,18 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                 int expected_type_owned = 0;
                 KgpcType *expected_kgpc_type = resolve_type_from_vardecl(arg_decl, symtab, &expected_type_owned);
                 
+                /* For var/out parameters, we need to mark the argument as mutated.
+                 * This is important for tracking whether Result was assigned in a function. */
+                int param_is_var_out = (arg_decl->type == TREE_VAR_DECL &&
+                                        arg_decl->tree_data.var_decl_data.is_var_param);
+                int mutate_flag = param_is_var_out ? MUTATE : NO_MUTATE;
+                
+                /* Call semcheck_expr_main to properly mark the variable as mutated */
+                int dummy_type = UNKNOWN_TYPE;
+                semcheck_expr_main(&dummy_type, symtab, arg_expr, INT_MAX, mutate_flag);
+                
                 int arg_type_owned = 0;
-                KgpcType *arg_kgpc_type = semcheck_resolve_expression_kgpc_type(symtab, arg_expr, INT_MAX, NO_MUTATE, &arg_type_owned);
+                KgpcType *arg_kgpc_type = semcheck_resolve_expression_kgpc_type(symtab, arg_expr, INT_MAX, mutate_flag, &arg_type_owned);
                 int param_is_untyped = semcheck_var_decl_is_untyped(arg_decl);
 
                 /* Perform type compatibility check using KgpcType */
