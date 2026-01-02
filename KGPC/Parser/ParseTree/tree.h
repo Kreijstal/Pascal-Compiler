@@ -103,6 +103,7 @@ typedef struct Tree
             int nesting_level; /* Lexical nesting depth: 0 = top-level, 1 = nested in program, etc. */
             int requires_static_link;
             int defined_in_unit;
+            int unit_is_public; /* 1 if declared in interface section, 0 if implementation only */
 
             ListNode_t *declarations;
             ListNode_t *subprograms;

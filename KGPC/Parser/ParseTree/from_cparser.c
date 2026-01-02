@@ -9181,6 +9181,9 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                                 fprintf(stderr, "[KGPC] convert_procedure(%s) => %p\n", proc_id, (void*)proc);
                                 free(proc_id);
                             }
+                            if (proc != NULL) {
+                                proc->tree_data.subprogram_data.unit_is_public = 1;  /* Interface procedure */
+                            }
                             append_subprogram_node(&subprograms, proc);
                             break;
                         }
@@ -9190,6 +9193,9 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                                 char *func_id = (node_cursor->child != NULL) ? dup_symbol(node_cursor->child) : strdup("?");
                                 fprintf(stderr, "[KGPC] convert_function(%s) => %p\n", func_id, (void*)func);
                                 free(func_id);
+                            }
+                            if (func != NULL) {
+                                func->tree_data.subprogram_data.unit_is_public = 1;  /* Interface function */
                             }
                             append_subprogram_node(&subprograms, func);
                             break;

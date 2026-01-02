@@ -2000,6 +2000,7 @@ Tree_t *mk_procedure(int line_num, char *id, ListNode_t *args, ListNode_t *const
     new_tree->tree_data.subprogram_data.nesting_level = 0;
     new_tree->tree_data.subprogram_data.requires_static_link = 0;
     new_tree->tree_data.subprogram_data.defined_in_unit = 0;
+    new_tree->tree_data.subprogram_data.unit_is_public = 0;
     new_tree->tree_data.subprogram_data.declarations = var_decl;
     new_tree->tree_data.subprogram_data.subprograms = subprograms;
     new_tree->tree_data.subprogram_data.statement_list = compound_statement;
@@ -2035,6 +2036,7 @@ Tree_t *mk_function(int line_num, char *id, ListNode_t *args, ListNode_t *const_
     new_tree->tree_data.subprogram_data.nesting_level = 0;
     new_tree->tree_data.subprogram_data.requires_static_link = 0;
     new_tree->tree_data.subprogram_data.defined_in_unit = 0;
+    new_tree->tree_data.subprogram_data.unit_is_public = 0;
     new_tree->tree_data.subprogram_data.declarations = var_decl;
     new_tree->tree_data.subprogram_data.subprograms = subprograms;
     new_tree->tree_data.subprogram_data.statement_list = compound_statement;
