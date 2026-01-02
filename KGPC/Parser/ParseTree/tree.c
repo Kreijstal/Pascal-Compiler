@@ -2089,6 +2089,7 @@ Tree_t *mk_typealiasdecl(int line_num, char *id, int is_array, int actual_type, 
 
     struct TypeAlias *alias = &new_tree->tree_data.type_decl_data.info.alias;
     alias->base_type = is_array ? UNKNOWN_TYPE : actual_type;
+    alias->is_char_alias = 0;
     alias->target_type_id = NULL;
     alias->inline_record_type = NULL;
     alias->is_array = is_array;
@@ -2956,6 +2957,7 @@ static void clear_type_alias_fields(struct TypeAlias *alias)
         destroy_record_type(alias->inline_record_type);
         alias->inline_record_type = NULL;
     }
+    alias->is_char_alias = 0;
     alias->is_range = 0;
     alias->range_known = 0;
     alias->range_start = 0;

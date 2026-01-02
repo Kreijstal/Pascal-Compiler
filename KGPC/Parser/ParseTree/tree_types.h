@@ -27,6 +27,7 @@ enum TypeDeclKind { TYPE_DECL_RANGE, TYPE_DECL_RECORD, TYPE_DECL_ALIAS, TYPE_DEC
 struct TypeAlias
 {
     int base_type;
+    int is_char_alias;
     char *target_type_id;
     struct RecordType *inline_record_type;
     int is_array;

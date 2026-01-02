@@ -50,6 +50,7 @@ int is_type_ir(int *type);
 static int types_numeric_compatible(int lhs, int rhs);
 static void semcheck_coerce_char_string_operands(int *type_first, struct Expression *expr1,
     int *type_second, struct Expression *expr2);
+static int semcheck_expr_is_char_like(struct Expression *expr);
 
 /* Helper function to get type name from an expression for operator overloading */
 static const char *get_expr_type_name(struct Expression *expr, SymTab_t *symtab)
@@ -4496,6 +4497,12 @@ static int sizeof_from_alias(SymTab_t *symtab, struct TypeAlias *alias,
         return 0;
     }
 
+    if (alias->is_pointer)
+    {
+        *size_out = POINTER_SIZE_BYTES;
+        return 0;
+    }
+
     if (depth > SIZEOF_RECURSION_LIMIT)
     {
         fprintf(stderr, "Error on line %d, SizeOf exceeded recursion depth while resolving type alias.\n",
@@ -4592,7 +4599,9 @@ static int sizeof_from_hashnode(SymTab_t *symtab, HashNode_t *node,
             
         struct TypeAlias *alias = get_type_alias_from_node(node);
         if (alias != NULL)
+        {
             return sizeof_from_alias(symtab, alias, size_out, depth + 1, line_num);
+        }
 
     }
 
@@ -4918,6 +4927,11 @@ static void semcheck_coerce_char_string_operands(int *type_first, struct Express
     if (type_first == NULL || type_second == NULL)
         return;
 
+    if (expr1 != NULL && semcheck_expr_is_char_like(expr1) && *type_first != CHAR_TYPE)
+        *type_first = CHAR_TYPE;
+    if (expr2 != NULL && semcheck_expr_is_char_like(expr2) && *type_second != CHAR_TYPE)
+        *type_second = CHAR_TYPE;
+
     /* Handle CHAR + STRING or STRING + CHAR comparisons
      * Upgrade CHAR to STRING for comparison purposes */
     if ((*type_first == CHAR_TYPE && *type_second == STRING_TYPE) ||
@@ -4957,6 +4971,23 @@ static void semcheck_coerce_char_string_operands(int *type_first, struct Express
                 expr2->resolved_type = STRING_TYPE;
         }
     }
+}
+
+static int semcheck_expr_is_char_like(struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+    if (expr->resolved_type == CHAR_TYPE)
+        return 1;
+    if (expr->resolved_kgpc_type != NULL)
+    {
+        if (kgpc_type_get_primitive_tag(expr->resolved_kgpc_type) == CHAR_TYPE)
+            return 1;
+        struct TypeAlias *alias = kgpc_type_get_type_alias(expr->resolved_kgpc_type);
+        if (alias != NULL && alias->is_char_alias)
+            return 1;
+    }
+    return 0;
 }
 
 static int resolve_type_identifier(int *out_type, SymTab_t *symtab,
