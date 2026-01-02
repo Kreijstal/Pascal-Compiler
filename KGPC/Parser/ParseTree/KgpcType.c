@@ -533,6 +533,12 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
         else if (pascal_identifier_equals(type_id, "Pointer")) {
             builtin_tag = POINTER_TYPE;
         }
+        else if (pascal_identifier_equals(type_id, "File")) {
+            builtin_tag = FILE_TYPE;
+        }
+        else if (pascal_identifier_equals(type_id, "Text") || pascal_identifier_equals(type_id, "TextFile")) {
+            builtin_tag = TEXT_TYPE;
+        }
         
         if (builtin_tag != UNKNOWN_TYPE) {
             if (owns_type != NULL)
