@@ -45,6 +45,107 @@ static inline struct RecordType* semcheck_stmt_get_record_type_from_node(HashNod
 #include "../../ParseTree/from_cparser.h"
 #include "../../../identifier_utils.h"
 
+static KgpcType *semcheck_param_effective_type(Tree_t *param_decl, KgpcType *expected)
+{
+    if (param_decl == NULL || expected == NULL)
+        return expected;
+
+    if (param_decl->type == TREE_VAR_DECL &&
+        param_decl->tree_data.var_decl_data.is_var_param &&
+        expected->kind == TYPE_KIND_POINTER &&
+        expected->info.points_to != NULL)
+    {
+        /* var/out params may be modeled as pointers; compare against the pointee type. */
+        return expected->info.points_to;
+    }
+
+    return expected;
+}
+
+static int semcheck_type_is_typed_file(KgpcType *type, struct SymTab *symtab)
+{
+    if (type == NULL || symtab == NULL)
+        return 0;
+
+    HashNode_t *typed_file_node = NULL;
+    if (FindIdent(&typed_file_node, symtab, "TypedFile") < 0 || typed_file_node == NULL)
+        return 0;
+    if (typed_file_node->type == NULL)
+        return 0;
+    return typed_file_node->type == type;
+}
+
+static int semcheck_param_types_compatible(Tree_t *param_decl, KgpcType *expected, KgpcType *actual, SymTab_t *symtab)
+{
+    if (expected == NULL || actual == NULL)
+        return 0;
+
+    KgpcType *effective = semcheck_param_effective_type(param_decl, expected);
+
+    if (param_decl != NULL && param_decl->type == TREE_VAR_DECL &&
+        param_decl->tree_data.var_decl_data.is_var_param &&
+        effective != NULL &&
+        effective->kind == TYPE_KIND_PRIMITIVE &&
+        actual->kind == TYPE_KIND_PRIMITIVE)
+    {
+        int expected_tag = effective->info.primitive_type_tag;
+        int actual_tag = actual->info.primitive_type_tag;
+        if (is_integer_type(expected_tag) && is_integer_type(actual_tag) &&
+            expected_tag != actual_tag)
+        {
+            return 0;
+        }
+    }
+
+    if (param_decl != NULL && param_decl->type == TREE_VAR_DECL &&
+        actual->kind == TYPE_KIND_PRIMITIVE &&
+        actual->info.primitive_type_tag == FILE_TYPE)
+    {
+        const char *type_id = param_decl->tree_data.var_decl_data.type_id;
+        int actual_is_typed = semcheck_type_is_typed_file(actual, symtab);
+        if (type_id != NULL)
+        {
+            if (pascal_identifier_equals(type_id, "TypedFile") && !actual_is_typed)
+                return 0;
+            if (pascal_identifier_equals(type_id, "File") && actual_is_typed)
+                return 0;
+        }
+    }
+
+    int compatible = are_types_compatible_for_assignment(effective, actual, symtab);
+    if (compatible)
+        return 1;
+
+    if (param_decl != NULL && param_decl->type == TREE_VAR_DECL &&
+        !param_decl->tree_data.var_decl_data.is_var_param &&
+        actual->kind == TYPE_KIND_PRIMITIVE)
+    {
+        int expected_tag = kgpc_type_get_legacy_tag(effective);
+        int actual_tag = actual->info.primitive_type_tag;
+        if ((expected_tag == LONGINT_TYPE && actual_tag == INT_TYPE) ||
+            (expected_tag == INT64_TYPE &&
+                (actual_tag == LONGINT_TYPE || actual_tag == INT_TYPE)))
+        {
+            return 1;
+        }
+    }
+
+    if (param_decl != NULL && param_decl->type == TREE_VAR_DECL)
+    {
+        const char *type_id = param_decl->tree_data.var_decl_data.type_id;
+        if (type_id != NULL && actual->kind == TYPE_KIND_PRIMITIVE)
+        {
+            int actual_tag = actual->info.primitive_type_tag;
+            if (actual_tag == FILE_TYPE && pascal_identifier_equals(type_id, "File"))
+                return 1;
+            if (actual_tag == TEXT_TYPE && pascal_identifier_equals(type_id, "Text"))
+                return 1;
+        }
+    }
+
+    return 0;
+}
+
 /* Helper to check if a parameter has a default value */
 static int param_has_default_value(Tree_t *decl)
 {
@@ -628,14 +729,14 @@ static int semcheck_call_with_proc_var(SymTab_t *symtab, struct Statement *stmt,
         else if (!param_is_untyped)
         {
             /* Use comprehensive KgpcType-based type compatibility checking */
-            if (!are_types_compatible_for_assignment(param_type, arg_type, symtab))
+            if (!semcheck_param_types_compatible(param_decl, param_type, arg_type, symtab))
             {
                 fprintf(stderr,
                     "Error on line %d, on procedure call %s, argument %d: Type mismatch (expected %s, got %s)!\n\n",
                     stmt->line_num,
                     stmt->stmt_data.procedure_call_data.id,
                     arg_index,
-                    kgpc_type_to_string(param_type),
+                    kgpc_type_to_string(semcheck_param_effective_type(param_decl, param_type)),
                     kgpc_type_to_string(arg_type));
                 ++return_val;
             }
@@ -3646,19 +3747,59 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                         {
                             /* Untyped parameters accept any argument. */
                         }
-                        else if (actual == NULL ||
-                            !are_types_compatible_for_assignment(expected, actual, symtab))
+                        else if (actual == NULL)
                         {
                             score += 1000;
                         }
                         else
                         {
-                            int expected_tag = kgpc_type_get_legacy_tag(expected);
-                            int actual_tag = kgpc_type_get_legacy_tag(actual);
-                            if (expected_tag != UNKNOWN_TYPE && actual_tag != UNKNOWN_TYPE &&
-                                expected_tag != actual_tag)
+                            if (!semcheck_param_types_compatible(param_decl, expected, actual, symtab))
                             {
-                                score += 1;
+                                score += 1000;
+                            }
+                            else
+                            {
+                                KgpcType *tag_expected = semcheck_param_effective_type(param_decl, expected);
+                                if (tag_expected != NULL &&
+                                    tag_expected->kind == TYPE_KIND_ARRAY &&
+                                    actual->kind == TYPE_KIND_POINTER)
+                                {
+                                    score += 2;
+                                }
+                                if (tag_expected != NULL &&
+                                    tag_expected->kind == TYPE_KIND_ARRAY &&
+                                    actual->kind == TYPE_KIND_PRIMITIVE &&
+                                    actual->info.primitive_type_tag == STRING_TYPE)
+                                {
+                                    score += 2;
+                                }
+                                if (tag_expected != NULL &&
+                                    tag_expected->kind == TYPE_KIND_ARRAY &&
+                                    actual->kind == TYPE_KIND_PRIMITIVE &&
+                                    actual->info.primitive_type_tag == CHAR_TYPE)
+                                {
+                                    score += 2;
+                                }
+                                int expected_tag = kgpc_type_get_legacy_tag(tag_expected);
+                                int actual_tag = kgpc_type_get_legacy_tag(actual);
+                                if (expected_tag == LONGINT_TYPE && actual_tag == LONGINT_TYPE &&
+                                    param_decl != NULL && param_decl->type == TREE_VAR_DECL)
+                                {
+                                    const char *type_id = param_decl->tree_data.var_decl_data.type_id;
+                                    if (type_id != NULL &&
+                                        (pascal_identifier_equals(type_id, "Cardinal") ||
+                                         pascal_identifier_equals(type_id, "LongWord") ||
+                                         pascal_identifier_equals(type_id, "Word") ||
+                                         pascal_identifier_equals(type_id, "Byte")))
+                                    {
+                                        score += 2;
+                                    }
+                                }
+                                if (expected_tag != UNKNOWN_TYPE && actual_tag != UNKNOWN_TYPE &&
+                                    expected_tag != actual_tag)
+                                {
+                                    score += 1;
+                                }
                             }
                         }
 
@@ -3737,6 +3878,15 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     {
         if (resolved_proc->mangled_id != NULL)
             stmt->stmt_data.procedure_call_data.mangled_id = strdup(resolved_proc->mangled_id);
+        else if (resolved_proc->type != NULL && resolved_proc->type->kind == TYPE_KIND_PROCEDURE)
+        {
+            ListNode_t *formal_params = kgpc_type_get_procedure_params(resolved_proc->type);
+            if (formal_params != NULL)
+                stmt->stmt_data.procedure_call_data.mangled_id =
+                    MangleFunctionName(resolved_proc->id, formal_params, symtab);
+        }
+        else if (mangled_name != NULL)
+            stmt->stmt_data.procedure_call_data.mangled_id = strdup(mangled_name);
         else
             stmt->stmt_data.procedure_call_data.mangled_id = NULL;
         if (stmt->stmt_data.procedure_call_data.mangled_id == NULL &&

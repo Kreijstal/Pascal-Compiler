@@ -5334,11 +5334,24 @@ void semcheck_add_builtins(SymTab_t *symtab)
     {
         const char *interlocked_name = "InterlockedExchangeAdd";
 
-        ListNode_t *param_target = semcheck_create_builtin_param_var("Target", LONGINT_TYPE);
-        ListNode_t *param_value = semcheck_create_builtin_param("Source", LONGINT_TYPE);
+        ListNode_t *param_target = semcheck_create_builtin_param_var("Target", INT_TYPE);
+        ListNode_t *param_value = semcheck_create_builtin_param("Source", INT_TYPE);
         ListNode_t *params = ConcatList(param_target, param_value);
-        KgpcType *return_type = create_primitive_type(LONGINT_TYPE);
+        KgpcType *return_type = create_primitive_type(INT_TYPE);
         KgpcType *interlocked_type = create_procedure_type(params, return_type);
+        if (interlocked_type != NULL)
+        {
+            AddBuiltinFunction_Typed(symtab, strdup(interlocked_name), interlocked_type);
+            destroy_kgpc_type(interlocked_type);
+        }
+        if (params != NULL)
+            DestroyList(params);
+
+        param_target = semcheck_create_builtin_param_var("Target", LONGINT_TYPE);
+        param_value = semcheck_create_builtin_param("Source", LONGINT_TYPE);
+        params = ConcatList(param_target, param_value);
+        return_type = create_primitive_type(LONGINT_TYPE);
+        interlocked_type = create_procedure_type(params, return_type);
         if (interlocked_type != NULL)
         {
             AddBuiltinFunction_Typed(symtab, strdup(interlocked_name), interlocked_type);

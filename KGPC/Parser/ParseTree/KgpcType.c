@@ -297,10 +297,12 @@ void destroy_kgpc_type(KgpcType *type) {
      * This can happen when a KgpcType is shared across multiple structures but
      * not properly retained, or when the same pointer is destroyed multiple times.
      * Instead of crashing, we log a warning and return safely. */
-    if (type->ref_count == 0) {
+    if (type->ref_count <= 0) {
         static int warn_once = 0;
         if (!warn_once) {
-            fprintf(stderr, "Warning: Attempting to destroy KgpcType with ref_count=0 (possible double-free)\n");
+            fprintf(stderr,
+                "Warning: Attempting to destroy KgpcType with ref_count=%d (possible double-free)\n",
+                type->ref_count);
             warn_once = 1;
         }
         return;

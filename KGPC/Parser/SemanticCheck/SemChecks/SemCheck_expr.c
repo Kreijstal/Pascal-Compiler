@@ -513,10 +513,10 @@ static const char *semcheck_normalize_char_type_id(const char *id)
     if (id == NULL)
         return NULL;
     if (pascal_identifier_equals(id, "UnicodeChar") ||
-        pascal_identifier_equals(id, "WideChar") ||
-        pascal_identifier_equals(id, "Char"))
+        pascal_identifier_equals(id, "WideChar"))
         return "WideChar";
-    if (pascal_identifier_equals(id, "AnsiChar"))
+    if (pascal_identifier_equals(id, "Char") ||
+        pascal_identifier_equals(id, "AnsiChar"))
         return "AnsiChar";
     return id;
 }
@@ -3014,6 +3014,12 @@ static int semcheck_builtin_abs(int *type_return, SymTab_t *symtab,
         }
         semcheck_reset_function_call_cache(expr);
         expr->resolved_type = result_type;
+        if (expr->resolved_kgpc_type != NULL)
+        {
+            destroy_kgpc_type(expr->resolved_kgpc_type);
+            expr->resolved_kgpc_type = NULL;
+        }
+        expr->resolved_kgpc_type = create_primitive_type(result_type);
         *type_return = result_type;
         return 0;
     }
@@ -8834,6 +8840,20 @@ int semcheck_arrayaccess(int *type_return,
                 }
             }
 
+            if (pointer_subtype_id == NULL && array_expr->array_element_type_id != NULL &&
+                (array_expr->array_element_type_id[0] == 'P' ||
+                 array_expr->array_element_type_id[0] == 'p') &&
+                array_expr->array_element_type_id[1] != '\0')
+            {
+                pointer_subtype_id = array_expr->array_element_type_id + 1;
+                if (pointer_subtype == UNKNOWN_TYPE)
+                {
+                    int mapped = semcheck_map_builtin_type_name(symtab, pointer_subtype_id);
+                    if (mapped != UNKNOWN_TYPE)
+                        pointer_subtype = mapped;
+                }
+            }
+
             semcheck_set_pointer_info(expr, pointer_subtype, pointer_subtype_id);
             if (pointer_subtype == RECORD_TYPE)
                 expr->record_type = pointer_record;
@@ -10390,7 +10410,8 @@ method_call_resolved:
                                     formal_subtype_id = elem_alias->pointer_type_id;
                                 }
                             }
-                            if (formal_subtype_id == NULL && formal_elem_type_id[0] == 'P' &&
+                            if (formal_subtype_id == NULL &&
+                                (formal_elem_type_id[0] == 'P' || formal_elem_type_id[0] == 'p') &&
                                 formal_elem_type_id[1] != '\0')
                             {
                                 formal_subtype_id = formal_elem_type_id + 1;
@@ -10403,7 +10424,8 @@ method_call_resolved:
                             }
                         }
                         if (formal_subtype_id == NULL && formal_type_id != NULL &&
-                            formal_type_id[0] == 'P' && formal_type_id[1] != '\0')
+                            (formal_type_id[0] == 'P' || formal_type_id[0] == 'p') &&
+                            formal_type_id[1] != '\0')
                         {
                             formal_subtype_id = formal_type_id + 1;
                         }
@@ -10413,6 +10435,12 @@ method_call_resolved:
                         const char *call_elem_type_id = NULL;
                         if (call_expr->is_array_expr)
                             call_elem_type_id = call_expr->array_element_type_id;
+                        if (call_subtype_id == NULL && call_expr->resolved_kgpc_type != NULL)
+                        {
+                            struct TypeAlias *call_alias = kgpc_type_get_type_alias(call_expr->resolved_kgpc_type);
+                            if (call_alias != NULL && call_alias->pointer_type_id != NULL)
+                                call_subtype_id = call_alias->pointer_type_id;
+                        }
                         if (call_subtype == UNKNOWN_TYPE && call_expr->resolved_kgpc_type != NULL &&
                             kgpc_type_is_pointer(call_expr->resolved_kgpc_type))
                         {
@@ -10446,7 +10474,8 @@ method_call_resolved:
                                     call_subtype_id = elem_alias->pointer_type_id;
                                 }
                             }
-                            if (call_subtype_id == NULL && call_elem_type_id[0] == 'P' &&
+                            if (call_subtype_id == NULL &&
+                                (call_elem_type_id[0] == 'P' || call_elem_type_id[0] == 'p') &&
                                 call_elem_type_id[1] != '\0')
                             {
                                 call_subtype_id = call_elem_type_id + 1;
@@ -10485,6 +10514,26 @@ method_call_resolved:
                         {
                             pointer_penalty = 1000;
                         }
+                        if (pointer_penalty == 0 && formal_kgpc != NULL && call_expr->resolved_kgpc_type != NULL &&
+                            kgpc_type_is_pointer(formal_kgpc) &&
+                            kgpc_type_is_pointer(call_expr->resolved_kgpc_type))
+                        {
+                            KgpcType *formal_points_to = formal_kgpc->info.points_to;
+                            KgpcType *call_points_to = call_expr->resolved_kgpc_type->info.points_to;
+                            if (formal_points_to != NULL && call_points_to != NULL &&
+                                formal_points_to->kind == TYPE_KIND_PRIMITIVE &&
+                                call_points_to->kind == TYPE_KIND_PRIMITIVE &&
+                                formal_points_to->info.primitive_type_tag == CHAR_TYPE &&
+                                call_points_to->info.primitive_type_tag == CHAR_TYPE)
+                            {
+                                long long formal_size = kgpc_type_sizeof(formal_points_to);
+                                long long call_size = kgpc_type_sizeof(call_points_to);
+                                if (formal_size > 0 && call_size > 0 && formal_size != call_size)
+                                {
+                                    pointer_penalty = 1000;
+                                }
+                            }
+                        }
                         if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
                         {
                             fprintf(stderr,
@@ -10519,6 +10568,17 @@ method_call_resolved:
                         current_score += 1000; // Mismatch
 
                     current_score += pointer_penalty;
+                    if (formal_type == LONGINT_TYPE && call_type == LONGINT_TYPE)
+                    {
+                        const char *formal_type_id = semcheck_get_param_type_id(formal_decl);
+                        if (formal_type_id != NULL &&
+                            (pascal_identifier_equals(formal_type_id, "Cardinal") ||
+                             pascal_identifier_equals(formal_type_id, "LongWord") ||
+                             pascal_identifier_equals(formal_type_id, "Word")))
+                        {
+                            current_score += 2;
+                        }
+                    }
 
                     formal_args = formal_args->next;
                     call_args = call_args->next;
