@@ -95,6 +95,18 @@ static const char *get_expr_type_name(struct Expression *expr, SymTab_t *symtab)
     return NULL;
 }
 
+static char *semcheck_mangle_helper_const_id(const char *helper_type_id, const char *field_id)
+{
+    if (helper_type_id == NULL || field_id == NULL)
+        return NULL;
+    size_t len = strlen(helper_type_id) + strlen(field_id) + 3;
+    char *result = (char *)malloc(len);
+    if (result == NULL)
+        return NULL;
+    snprintf(result, len, "%s__%s", helper_type_id, field_id);
+    return result;
+}
+
 static int semcheck_map_builtin_type_name(SymTab_t *symtab, const char *id);
 
 typedef struct TypeHelperEntry
@@ -1472,8 +1484,8 @@ static KgpcType *semcheck_field_expected_kgpc_type(SymTab_t *symtab, struct Reco
         else if (field->array_element_type_id != NULL)
         {
             HashNode_t *type_node = NULL;
-            if (FindIdent(&type_node, symtab, field->array_element_type_id) >= 0 &&
-                type_node != NULL)
+            type_node = semcheck_find_preferred_type_node(symtab, field->array_element_type_id);
+            if (type_node != NULL)
             {
                 if (type_node->type != NULL)
                 {
@@ -1501,7 +1513,8 @@ static KgpcType *semcheck_field_expected_kgpc_type(SymTab_t *symtab, struct Reco
     if (field->type_id != NULL)
     {
         HashNode_t *type_node = NULL;
-        if (FindIdent(&type_node, symtab, field->type_id) >= 0 && type_node != NULL)
+        type_node = semcheck_find_preferred_type_node(symtab, field->type_id);
+        if (type_node != NULL)
         {
             if (type_node->type != NULL)
             {
@@ -4060,8 +4073,8 @@ static int sizeof_from_type_ref(SymTab_t *symtab, int type_tag,
 
     if (type_id != NULL)
     {
-        HashNode_t *target_node = NULL;
-        if (FindIdent(&target_node, symtab, (char *)type_id) == -1 || target_node == NULL)
+        HashNode_t *target_node = semcheck_find_preferred_type_node(symtab, type_id);
+        if (target_node == NULL)
         {
             /* For generic type parameters or nested types that haven't been resolved yet,
              * treat as pointer-sized rather than hard error - this allows:
@@ -6400,6 +6413,29 @@ static int semcheck_recordaccess(int *type_return,
             }
         }
 
+        if (record_info != NULL && record_info->is_type_helper && record_info->type_id != NULL)
+        {
+            char *mangled_const = semcheck_mangle_helper_const_id(record_info->type_id, field_id);
+            HashNode_t *const_node = NULL;
+            if (mangled_const != NULL &&
+                FindIdent(&const_node, symtab, mangled_const) == 0 &&
+                const_node != NULL && const_node->hash_type == HASHTYPE_CONST)
+            {
+                destroy_expr(record_expr);
+                expr->expr_data.record_access_data.record_expr = NULL;
+                if (expr->expr_data.record_access_data.field_id != NULL)
+                {
+                    free(expr->expr_data.record_access_data.field_id);
+                    expr->expr_data.record_access_data.field_id = NULL;
+                }
+                expr->type = EXPR_VAR_ID;
+                expr->expr_data.id = mangled_const;
+                return semcheck_varid(type_return, symtab, expr, max_scope_lev, mutating);
+            }
+            if (mangled_const != NULL)
+                free(mangled_const);
+        }
+
         fprintf(stderr, "Error on line %d, record field %s not found.\n", expr->line_num, field_id);
         *type_return = UNKNOWN_TYPE;
         return error_count + 1;
@@ -6468,11 +6504,9 @@ FIELD_RESOLVED:
             ++error_count;
         field_type = resolved_type;
 
-        HashNode_t *type_node = NULL;
-        if (FindIdent(&type_node, symtab, field_desc->type_id) == -1 || type_node == NULL)
-        {
+        HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, field_desc->type_id);
+        if (type_node == NULL)
             type_node = semcheck_find_type_node_with_kgpc_type(symtab, field_desc->type_id);
-        }
 
         if (type_node != NULL)
         {
@@ -6484,12 +6518,10 @@ FIELD_RESOLVED:
                 struct TypeAlias *alias = get_type_alias_from_node(type_node);
                 if (alias != NULL && alias->target_type_id != NULL)
                 {
-                    HashNode_t *target_node = NULL;
-                    if (FindIdent(&target_node, symtab, alias->target_type_id) != -1 &&
-                        target_node != NULL)
-                    {
+                    HashNode_t *target_node =
+                        semcheck_find_preferred_type_node(symtab, alias->target_type_id);
+                    if (target_node != NULL)
                         field_record = get_record_type_from_node(target_node);
-                    }
                 }
             }
 
@@ -7010,8 +7042,9 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                                     if (field->type_id != NULL)
                                     {
                                         /* User-defined type - look up in symbol table */
-                                        HashNode_t *type_node = NULL;
-                                        if (FindIdent(&type_node, symtab, field->type_id) != -1 && type_node != NULL)
+                                        HashNode_t *type_node =
+                                            semcheck_find_preferred_type_node(symtab, field->type_id);
+                                        if (type_node != NULL)
                                         {
                                             if (owns_type != NULL)
                                                 *owns_type = 0;
@@ -7031,8 +7064,9 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                                         KgpcType *element_type = NULL;
                                         if (field->array_element_type_id != NULL)
                                         {
-                                            HashNode_t *elem_type_node = NULL;
-                                            if (FindIdent(&elem_type_node, symtab, field->array_element_type_id) != -1 && elem_type_node != NULL)
+                                            HashNode_t *elem_type_node =
+                                                semcheck_find_preferred_type_node(symtab, field->array_element_type_id);
+                                            if (elem_type_node != NULL)
                                             {
                                                 element_type = elem_type_node->type;
                                             }
@@ -9144,7 +9178,8 @@ int semcheck_funccall(int *type_return,
         if (first_arg != NULL && first_arg->type == EXPR_VAR_ID && first_arg->expr_data.id != NULL)
         {
             HashNode_t *unit_check = NULL;
-            if (FindIdent(&unit_check, symtab, first_arg->expr_data.id) == -1)
+            if (FindIdent(&unit_check, symtab, first_arg->expr_data.id) == -1 &&
+                semcheck_is_unit_name(first_arg->expr_data.id))
             {
                 char *real_func_name = strdup(id + 2);
                 if (real_func_name != NULL)
@@ -9170,6 +9205,28 @@ int semcheck_funccall(int *type_return,
                     if (real_func_name != NULL)
                         free(real_func_name);
                 }
+            }
+        }
+    }
+
+    /* Handle unit-qualified calls parsed as member access: UnitName.Func(args). */
+    if (expr->expr_data.function_call_data.is_method_call_placeholder && args_given != NULL)
+    {
+        struct Expression *first_arg = (struct Expression *)args_given->cur;
+        if (first_arg != NULL && first_arg->type == EXPR_VAR_ID && first_arg->expr_data.id != NULL)
+        {
+            HashNode_t *unit_check = NULL;
+            if (FindIdent(&unit_check, symtab, first_arg->expr_data.id) == -1 &&
+                semcheck_is_unit_name(first_arg->expr_data.id))
+            {
+                ListNode_t *remaining_args = args_given->next;
+                destroy_expr(first_arg);
+                args_given->cur = NULL;
+                free(args_given);
+
+                expr->expr_data.function_call_data.args_expr = remaining_args;
+                args_given = remaining_args;
+                expr->expr_data.function_call_data.is_method_call_placeholder = 0;
             }
         }
     }

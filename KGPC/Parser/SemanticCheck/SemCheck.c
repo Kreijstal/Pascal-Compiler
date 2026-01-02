@@ -43,6 +43,84 @@
 #include "NameMangling.h"
 #include <stdarg.h>
 
+static ListNode_t *g_semcheck_unit_names = NULL;
+
+static void semcheck_unit_names_reset(void)
+{
+    ListNode_t *cur = g_semcheck_unit_names;
+    while (cur != NULL)
+    {
+        if (cur->cur != NULL)
+            free(cur->cur);
+        cur = cur->next;
+    }
+    DestroyList(g_semcheck_unit_names);
+    g_semcheck_unit_names = NULL;
+}
+
+static void semcheck_unit_name_add(const char *name)
+{
+    if (name == NULL || name[0] == '\0')
+        return;
+
+    ListNode_t *cur = g_semcheck_unit_names;
+    while (cur != NULL)
+    {
+        const char *existing = (const char *)cur->cur;
+        if (existing != NULL && pascal_identifier_equals(existing, name))
+            return;
+        cur = cur->next;
+    }
+
+    char *dup = strdup(name);
+    if (dup == NULL)
+        return;
+
+    ListNode_t *node = CreateListNode(dup, LIST_STRING);
+    if (node == NULL)
+    {
+        free(dup);
+        return;
+    }
+
+    if (g_semcheck_unit_names == NULL)
+        g_semcheck_unit_names = node;
+    else
+    {
+        ListNode_t *tail = g_semcheck_unit_names;
+        while (tail->next != NULL)
+            tail = tail->next;
+        tail->next = node;
+    }
+}
+
+static void semcheck_unit_names_add_list(ListNode_t *units)
+{
+    ListNode_t *cur = units;
+    while (cur != NULL)
+    {
+        if (cur->type == LIST_STRING && cur->cur != NULL)
+            semcheck_unit_name_add((const char *)cur->cur);
+        cur = cur->next;
+    }
+}
+
+int semcheck_is_unit_name(const char *name)
+{
+    if (name == NULL || name[0] == '\0')
+        return 0;
+
+    ListNode_t *cur = g_semcheck_unit_names;
+    while (cur != NULL)
+    {
+        const char *existing = (const char *)cur->cur;
+        if (existing != NULL && pascal_identifier_equals(existing, name))
+            return 1;
+        cur = cur->next;
+    }
+    return 0;
+}
+
 /* Helper declared in SemCheck_expr.c */
 static const char *semcheck_base_type_name(const char *id)
 {
@@ -1888,9 +1966,8 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                     }
                     if (pascal_identifier_equals(type_name, "QWord") ||
                         pascal_identifier_equals(type_name, "UInt64")) {
-                        /* Note: This will be -1 as a signed long long, but the bit pattern
-                         * is correct for UINT64_MAX. The consumer must interpret appropriately. */
-                        *out_value = (long long)0xFFFFFFFFFFFFFFFFULL;
+                        /* Treat QWord as signed 64-bit until unsigned semantics are supported. */
+                        *out_value = 9223372036854775807LL;
                         return 0;
                     }
                     if (pascal_identifier_equals(type_name, "LongInt") ||
@@ -5523,6 +5600,10 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
 
     PushScope(symtab);
 
+    semcheck_unit_names_reset();
+    semcheck_unit_name_add("System");
+    semcheck_unit_names_add_list(tree->tree_data.program_data.uses_units);
+
     return_val += semcheck_id_not_main(tree->tree_data.program_data.program_id);
 
     /* TODO: Push program name onto scope */
@@ -5651,6 +5732,7 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
     }
 
     /* Keep the outermost scope alive for code generation. DestroySymTab will clean it up. */
+    semcheck_unit_names_reset();
     return return_val;
 }
 
@@ -5666,6 +5748,12 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
     return_val = 0;
 
     PushScope(symtab);
+
+    semcheck_unit_names_reset();
+    semcheck_unit_name_add("System");
+    semcheck_unit_name_add(tree->tree_data.unit_data.unit_id);
+    semcheck_unit_names_add_list(tree->tree_data.unit_data.interface_uses);
+    semcheck_unit_names_add_list(tree->tree_data.unit_data.implementation_uses);
 
     /* Check interface section */
     int before = return_val;
@@ -5823,6 +5911,7 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
                     return_val - before, return_val);
     }
 
+    semcheck_unit_names_reset();
     return return_val;
 }
 

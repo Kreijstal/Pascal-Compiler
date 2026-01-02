@@ -1620,7 +1620,8 @@ static ListNode_t *convert_statement_list(ast_t *stmt_list_node);
 static struct Statement *build_nested_with_statements(int line,
                                                       ast_t *context_node,
                                                       struct Statement *body_stmt);
-static void append_type_decls_from_section(ast_t *type_section, ListNode_t **dest, ListNode_t **subprograms);
+static void append_type_decls_from_section(ast_t *type_section, ListNode_t **dest,
+    ListNode_t **subprograms, ListNode_t **const_decls, ListBuilder *var_builder);
 
 /* Helper function to resolve enum literal identifier to its ordinal value
  * by searching through AST type section.
@@ -4071,6 +4072,8 @@ static struct RecordType *convert_record_type_ex(ast_t *record_node, ListNode_t 
         struct RecordType *record = (struct RecordType *)calloc(1, sizeof(struct RecordType));
         if (record == NULL)
             return NULL;
+        ListBuilder helper_fields_builder;
+        list_builder_init(&helper_fields_builder);
         record->fields = NULL;
         record->properties = NULL;
         record->parent_class_name = NULL;
@@ -4087,18 +4090,32 @@ static struct RecordType *convert_record_type_ex(ast_t *record_node, ListNode_t 
         record->num_generic_args = 0;
         record->method_clones_emitted = 0;
 
+        int saw_base = 0;
         ast_t *base_node = record_node->child;
         while (base_node != NULL) {
             ast_t *unwrapped = unwrap_pascal_node(base_node);
-            if (unwrapped != NULL &&
+            if (!saw_base &&
+                unwrapped != NULL &&
                 (unwrapped->typ == PASCAL_T_IDENTIFIER || unwrapped->typ == PASCAL_T_QUALIFIED_IDENTIFIER) &&
                 unwrapped->sym != NULL && unwrapped->sym->name != NULL)
             {
                 record->helper_base_type_id = strdup(unwrapped->sym->name);
-                break;
+                saw_base = 1;
+                base_node = base_node->next;
+                continue;
+            }
+
+            if (unwrapped != NULL &&
+                (unwrapped->typ == PASCAL_T_METHOD_DECL ||
+                 unwrapped->typ == PASCAL_T_CONSTRUCTOR_DECL ||
+                 unwrapped->typ == PASCAL_T_DESTRUCTOR_DECL))
+            {
+                list_builder_append(&helper_fields_builder, unwrapped, LIST_UNSPECIFIED);
             }
             base_node = base_node->next;
         }
+
+        record->fields = list_builder_finish(&helper_fields_builder);
         return record;
     }
 
@@ -5504,7 +5521,8 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
                     ast_t *type_section_ast = (ast_t *)section_cursor->cur;
                     if (type_section_ast != NULL) {
                         /* Recursively process this nested type section */
-                        append_type_decls_from_section(type_section_ast, nested_type_decls_out, NULL);
+                        append_type_decls_from_section(type_section_ast, nested_type_decls_out,
+                            NULL, NULL, NULL);
                         if (getenv("KGPC_DEBUG_TYPE_SECTION") != NULL)
                             fprintf(stderr, "[KGPC] convert_type_decl: processed nested TYPE_SECTION for class %s\n", id);
                     }
@@ -5536,7 +5554,8 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
                     while (section_cursor != NULL) {
                         ast_t *type_section_ast = (ast_t *)section_cursor->cur;
                         if (type_section_ast != NULL) {
-                            append_type_decls_from_section(type_section_ast, nested_type_decls_out, NULL);
+                            append_type_decls_from_section(type_section_ast, nested_type_decls_out,
+                                NULL, NULL, NULL);
                             if (getenv("KGPC_DEBUG_TYPE_SECTION") != NULL)
                                 fprintf(stderr, "[KGPC] convert_type_decl: processed nested TYPE_SECTION for record %s\n", id);
                         }
@@ -5869,7 +5888,8 @@ static void convert_routine_body(ast_t *body_node, ListNode_t **const_decls,
                     fprintf(stderr, "[KGPC] convert_routine_body TYPE_SECTION at line=%d\n", node->line);
                 }
                 if (type_decl_list != NULL)
-                    append_type_decls_from_section(node, type_decl_list, nested_subs);
+                    append_type_decls_from_section(node, type_decl_list, nested_subs,
+                        const_decls, var_builder);
                 type_section_ast = node;  /* Save for const array enum resolution */
                 break;
             case PASCAL_T_CONST_SECTION:
@@ -5997,7 +6017,116 @@ static void append_labels_from_section(ast_t *label_node, ListBuilder *builder) 
     visited_set_destroy(visited);
 }
 
-static void append_type_decls_from_section(ast_t *type_section, ListNode_t **dest, ListNode_t **subprograms) {
+static char *mangle_helper_const_name(const char *helper_id, const char *const_id)
+{
+    if (helper_id == NULL || const_id == NULL)
+        return NULL;
+    size_t len = strlen(helper_id) + strlen(const_id) + 3;
+    char *name = (char *)malloc(len);
+    if (name == NULL)
+        return NULL;
+    snprintf(name, len, "%s__%s", helper_id, const_id);
+    return name;
+}
+
+static ast_t *find_helper_record_spec(ast_t *type_decl_node)
+{
+    if (type_decl_node == NULL || type_decl_node->typ != PASCAL_T_TYPE_DECL)
+        return NULL;
+
+    ast_t *id_node = type_decl_node->child;
+    while (id_node != NULL && id_node->typ != PASCAL_T_IDENTIFIER)
+        id_node = id_node->next;
+    if (id_node == NULL)
+        return NULL;
+
+    ast_t *spec_node = id_node->next;
+    while (spec_node != NULL &&
+           spec_node->typ != PASCAL_T_TYPE_SPEC &&
+           spec_node->typ != PASCAL_T_RECORD_TYPE &&
+           spec_node->typ != PASCAL_T_OBJECT_TYPE)
+    {
+        spec_node = spec_node->next;
+    }
+
+    if (spec_node == NULL)
+        return NULL;
+
+    if (spec_node->typ == PASCAL_T_TYPE_SPEC && spec_node->child != NULL)
+        spec_node = spec_node->child;
+
+    if (spec_node->sym == NULL || spec_node->sym->name == NULL)
+        return NULL;
+
+    if (strcasecmp(spec_node->sym->name, "helper") != 0)
+        return NULL;
+
+    return spec_node;
+}
+
+static void append_helper_const_decls_from_type_decl(ast_t *type_decl_node,
+    const char *helper_id, ListNode_t **const_decls, ListBuilder *var_builder,
+    ast_t *type_section)
+{
+    if (type_decl_node == NULL || helper_id == NULL || const_decls == NULL ||
+        var_builder == NULL)
+        return;
+
+    ast_t *record_spec = find_helper_record_spec(type_decl_node);
+    if (record_spec == NULL)
+        return;
+
+    ListNode_t **tail = const_decls;
+    while (*tail != NULL)
+        tail = &(*tail)->next;
+
+    for (ast_t *cur = record_spec->child; cur != NULL; cur = cur->next)
+    {
+        ast_t *node = cur;
+        ast_t *unwrapped = unwrap_pascal_node(cur);
+        int is_const_section = 0;
+        if (node != NULL && node->typ == PASCAL_T_CONST_SECTION)
+            is_const_section = 1;
+        else if (node != NULL && node->typ == PASCAL_T_NONE &&
+                 node->sym != NULL && node->sym->name != NULL &&
+                 strcasecmp(node->sym->name, "const") == 0)
+            is_const_section = 1;
+        else if (unwrapped != NULL && unwrapped->typ == PASCAL_T_CONST_SECTION)
+            is_const_section = 1;
+        if (!is_const_section)
+            continue;
+
+        ListNode_t *helper_consts = NULL;
+        append_const_decls_from_section(node, &helper_consts, var_builder, type_section);
+
+        ListNode_t *const_cur = helper_consts;
+        while (const_cur != NULL)
+        {
+            ListNode_t *next = const_cur->next;
+            const_cur->next = NULL;
+
+            Tree_t *decl = (Tree_t *)const_cur->cur;
+            if (decl != NULL && decl->type == TREE_CONST_DECL &&
+                decl->tree_data.const_decl_data.id != NULL)
+            {
+                char *mangled = mangle_helper_const_name(helper_id,
+                    decl->tree_data.const_decl_data.id);
+                if (mangled != NULL)
+                {
+                    free(decl->tree_data.const_decl_data.id);
+                    decl->tree_data.const_decl_data.id = mangled;
+                }
+            }
+
+            *tail = const_cur;
+            tail = &const_cur->next;
+            const_cur = next;
+        }
+    }
+}
+
+static void append_type_decls_from_section(ast_t *type_section, ListNode_t **dest,
+    ListNode_t **subprograms, ListNode_t **const_decls, ListBuilder *var_builder) {
     if (type_section == NULL || dest == NULL)
         return;
 
@@ -6068,6 +6197,14 @@ static void append_type_decls_from_section(ast_t *type_section, ListNode_t **des
             }
         } else if (unwrapped != NULL && unwrapped->typ == PASCAL_T_TYPE_DECL) {
             ListNode_t *nested_type_decls = NULL;
+            if (const_decls != NULL && var_builder != NULL) {
+                char *helper_id = dup_first_identifier_in_node(unwrapped);
+                if (helper_id != NULL) {
+                    append_helper_const_decls_from_type_decl(unwrapped, helper_id,
+                        const_decls, var_builder, type_section);
+                    free(helper_id);
+                }
+            }
             Tree_t *decl = convert_type_decl_ex(unwrapped, subprograms, &nested_type_decls);
             /* Insert nested type declarations first (they must be available before the container type) */
             if (nested_type_decls != NULL) {
@@ -8286,7 +8423,8 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
             if (getenv("KGPC_DEBUG_TYPE_SECTION") != NULL) {
                 fprintf(stderr, "[KGPC] convert_function TYPE_SECTION at line=%d\n", node->line);
             }
-            append_type_decls_from_section(node, &type_decls, &nested_subs);
+            append_type_decls_from_section(node, &type_decls, &nested_subs,
+                &const_decls, &var_builder);
             type_section_ast = node;  /* Save for const array enum resolution */
             break;
         case PASCAL_T_CONST_SECTION:
@@ -8422,7 +8560,8 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
     while (cur != NULL) {
         switch (cur->typ) {
         case PASCAL_T_TYPE_SECTION:
-            append_type_decls_from_section(cur, &type_decls, &nested_subs);
+            append_type_decls_from_section(cur, &type_decls, &nested_subs,
+                &const_decls, &var_decls_builder);
             type_section_ast = cur;  /* Save for const array enum resolution */
             break;
         case PASCAL_T_CONST_SECTION:
@@ -8601,7 +8740,8 @@ static Tree_t *convert_function(ast_t *func_node) {
 
         switch (cur->typ) {
         case PASCAL_T_TYPE_SECTION:
-            append_type_decls_from_section(cur, &type_decls, &nested_subs);
+            append_type_decls_from_section(cur, &type_decls, &nested_subs,
+                &const_decls, &var_decls_builder);
             type_section_ast = cur;  /* Save for const array enum resolution */
             break;
         case PASCAL_T_CONST_SECTION:
@@ -8899,7 +9039,8 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                 break;
             case PASCAL_T_TYPE_SECTION:
                 type_section_ast = section;  /* Save for enum resolution */
-                append_type_decls_from_section(section, &type_decls, &subprograms);
+                append_type_decls_from_section(section, &type_decls, &subprograms,
+                    &const_decls, &var_decls_builder);
                 break;
             case PASCAL_T_USES_SECTION:
                 append_uses_from_section(section, &uses);
@@ -9165,7 +9306,8 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                                 fprintf(stderr, "[KGPC] interface TYPE_SECTION at line=%d\n", node_cursor->line);
                             }
                             interface_type_section_ast = node_cursor;  /* Save for const array enum resolution */
-                            append_type_decls_from_section(node_cursor, &interface_type_decls, NULL);
+                            append_type_decls_from_section(node_cursor, &interface_type_decls,
+                                NULL, &interface_const_decls, &interface_var_builder);
                             break;
                         case PASCAL_T_CONST_SECTION:
                             append_const_decls_from_section(node_cursor, &interface_const_decls,
@@ -9240,7 +9382,8 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                             break;
                         case PASCAL_T_TYPE_SECTION:
                             implementation_type_section_ast = node_cursor;  /* Save for const array enum resolution */
-                            append_type_decls_from_section(node_cursor, &implementation_type_decls, &subprograms);
+                            append_type_decls_from_section(node_cursor, &implementation_type_decls,
+                                &subprograms, &implementation_const_decls, &implementation_var_builder);
                             break;
                         case PASCAL_T_CONST_SECTION:
                             append_const_decls_from_section(node_cursor, &implementation_const_decls,
