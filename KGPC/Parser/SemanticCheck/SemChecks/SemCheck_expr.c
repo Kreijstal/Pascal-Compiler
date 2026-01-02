@@ -50,6 +50,7 @@ int is_type_ir(int *type);
 static int types_numeric_compatible(int lhs, int rhs);
 static void semcheck_coerce_char_string_operands(int *type_first, struct Expression *expr1,
     int *type_second, struct Expression *expr2);
+static int semcheck_expr_is_char_like(struct Expression *expr);
 
 /* Helper function to get type name from an expression for operator overloading */
 static const char *get_expr_type_name(struct Expression *expr, SymTab_t *symtab)
@@ -91,6 +92,77 @@ static const char *get_expr_type_name(struct Expression *expr, SymTab_t *symtab)
         }
     }
     
+    return NULL;
+}
+
+static int semcheck_map_builtin_type_name(SymTab_t *symtab, const char *id);
+
+typedef struct TypeHelperEntry
+{
+    char *base_type_id;
+    int base_type_tag;
+    struct RecordType *helper_record;
+} TypeHelperEntry;
+
+static ListNode_t *type_helper_entries = NULL;
+
+void semcheck_register_type_helper(struct RecordType *record_info, SymTab_t *symtab)
+{
+    if (record_info == NULL || symtab == NULL)
+        return;
+    if (!record_info->is_type_helper || record_info->helper_base_type_id == NULL)
+        return;
+
+    ListNode_t *cur = type_helper_entries;
+    while (cur != NULL)
+    {
+        TypeHelperEntry *entry = (TypeHelperEntry *)cur->cur;
+        if (entry != NULL && entry->helper_record == record_info)
+            return;
+        cur = cur->next;
+    }
+
+    TypeHelperEntry *entry = (TypeHelperEntry *)calloc(1, sizeof(TypeHelperEntry));
+    if (entry == NULL)
+        return;
+    entry->base_type_id = strdup(record_info->helper_base_type_id);
+    entry->base_type_tag = semcheck_map_builtin_type_name(symtab, record_info->helper_base_type_id);
+    entry->helper_record = record_info;
+    if (entry->base_type_id == NULL)
+    {
+        free(entry);
+        return;
+    }
+
+    ListNode_t *node = CreateListNode(entry, LIST_UNSPECIFIED);
+    if (node == NULL)
+    {
+        free(entry->base_type_id);
+        free(entry);
+        return;
+    }
+    node->next = type_helper_entries;
+    type_helper_entries = node;
+}
+
+struct RecordType *semcheck_lookup_type_helper(SymTab_t *symtab,
+    int base_type_tag, const char *type_name)
+{
+    (void)symtab;
+    ListNode_t *cur = type_helper_entries;
+    while (cur != NULL)
+    {
+        TypeHelperEntry *entry = (TypeHelperEntry *)cur->cur;
+        if (entry != NULL)
+        {
+            if (base_type_tag != UNKNOWN_TYPE && entry->base_type_tag == base_type_tag)
+                return entry->helper_record;
+            if (type_name != NULL && entry->base_type_id != NULL &&
+                pascal_identifier_equals(entry->base_type_id, type_name))
+                return entry->helper_record;
+        }
+        cur = cur->next;
+    }
     return NULL;
 }
 
@@ -841,6 +913,13 @@ static HashNode_t *semcheck_find_preferred_type_node(SymTab_t *symtab, const cha
         return NULL;
 
     ListNode_t *matches = FindAllIdents(symtab, (char *)type_id);
+    if (matches == NULL)
+    {
+        /* Try stripping unit prefix from qualified name like "baseunix.stat" */
+        const char *dot = strrchr(type_id, '.');
+        if (dot != NULL && dot[1] != '\0')
+            matches = FindAllIdents(symtab, (char *)(dot + 1));
+    }
     HashNode_t *best = NULL;
     ListNode_t *cur = matches;
     while (cur != NULL)
@@ -4418,6 +4497,12 @@ static int sizeof_from_alias(SymTab_t *symtab, struct TypeAlias *alias,
         return 0;
     }
 
+    if (alias->is_pointer)
+    {
+        *size_out = POINTER_SIZE_BYTES;
+        return 0;
+    }
+
     if (depth > SIZEOF_RECURSION_LIMIT)
     {
         fprintf(stderr, "Error on line %d, SizeOf exceeded recursion depth while resolving type alias.\n",
@@ -4514,7 +4599,9 @@ static int sizeof_from_hashnode(SymTab_t *symtab, HashNode_t *node,
             
         struct TypeAlias *alias = get_type_alias_from_node(node);
         if (alias != NULL)
+        {
             return sizeof_from_alias(symtab, alias, size_out, depth + 1, line_num);
+        }
 
     }
 
@@ -4840,6 +4927,11 @@ static void semcheck_coerce_char_string_operands(int *type_first, struct Express
     if (type_first == NULL || type_second == NULL)
         return;
 
+    if (expr1 != NULL && semcheck_expr_is_char_like(expr1) && *type_first != CHAR_TYPE)
+        *type_first = CHAR_TYPE;
+    if (expr2 != NULL && semcheck_expr_is_char_like(expr2) && *type_second != CHAR_TYPE)
+        *type_second = CHAR_TYPE;
+
     /* Handle CHAR + STRING or STRING + CHAR comparisons
      * Upgrade CHAR to STRING for comparison purposes */
     if ((*type_first == CHAR_TYPE && *type_second == STRING_TYPE) ||
@@ -4879,6 +4971,23 @@ static void semcheck_coerce_char_string_operands(int *type_first, struct Express
                 expr2->resolved_type = STRING_TYPE;
         }
     }
+}
+
+static int semcheck_expr_is_char_like(struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+    if (expr->resolved_type == CHAR_TYPE)
+        return 1;
+    if (expr->resolved_kgpc_type != NULL)
+    {
+        if (kgpc_type_get_primitive_tag(expr->resolved_kgpc_type) == CHAR_TYPE)
+            return 1;
+        struct TypeAlias *alias = kgpc_type_get_type_alias(expr->resolved_kgpc_type);
+        if (alias != NULL && alias->is_char_alias)
+            return 1;
+    }
+    return 0;
 }
 
 static int resolve_type_identifier(int *out_type, SymTab_t *symtab,
@@ -5881,9 +5990,27 @@ static int semcheck_recordaccess(int *type_return,
     }
     else
     {
-        fprintf(stderr, "Error on line %d, field access requires a record value.\n\n", expr->line_num);
-        *type_return = UNKNOWN_TYPE;
-        return error_count + 1;
+        const char *expr_type_name = get_expr_type_name(record_expr, symtab);
+        const char *alias_type_name = NULL;
+        if (record_expr->resolved_kgpc_type != NULL &&
+            record_expr->resolved_kgpc_type->type_alias != NULL &&
+            record_expr->resolved_kgpc_type->type_alias->target_type_id != NULL)
+        {
+            alias_type_name = record_expr->resolved_kgpc_type->type_alias->target_type_id;
+        }
+        struct RecordType *helper_record = semcheck_lookup_type_helper(symtab, record_type,
+            alias_type_name != NULL ? alias_type_name : expr_type_name);
+        if (helper_record != NULL)
+        {
+            record_type = RECORD_TYPE;
+            record_info = helper_record;
+        }
+        else
+        {
+            fprintf(stderr, "Error on line %d, field access requires a record value.\n\n", expr->line_num);
+            *type_return = UNKNOWN_TYPE;
+            return error_count + 1;
+        }
     }
 
     if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
@@ -6073,8 +6200,12 @@ static int semcheck_recordaccess(int *type_return,
                 if (method_node->hash_type == HASHTYPE_FUNCTION || 
                     method_node->hash_type == HASHTYPE_PROCEDURE)
                 {
+                    int is_static_method = 0;
+                    if (record_info->type_id != NULL && field_id != NULL) {
+                        is_static_method = from_cparser_is_method_static(record_info->type_id, field_id);
+                    }
+
                     /* Transform record access into an explicit method call: receiver.Method() */
-                    struct Expression *receiver = record_expr;
                     char *method_id = (field_id != NULL) ? strdup(field_id) : NULL;
 
                     expr->type = EXPR_FUNCTION_CALL;
@@ -6088,8 +6219,13 @@ static int semcheck_recordaccess(int *type_return,
                         expr->expr_data.function_call_data.mangled_id = strdup(method_id);
                     expr->expr_data.function_call_data.resolved_func = method_node;
 
-                    ListNode_t *arg_node = CreateListNode(receiver, LIST_EXPR);
-                    expr->expr_data.function_call_data.args_expr = arg_node;
+                    if (is_static_method) {
+                        expr->expr_data.function_call_data.args_expr = NULL;
+                    } else {
+                        struct Expression *receiver = record_expr;
+                        ListNode_t *arg_node = CreateListNode(receiver, LIST_EXPR);
+                        expr->expr_data.function_call_data.args_expr = arg_node;
+                    }
 
                     /* Re-run semantic checking as a function call */
                     expr->record_type = NULL;
@@ -6244,6 +6380,7 @@ static int semcheck_recordaccess(int *type_return,
                     else if (method_id != NULL)
                         expr->expr_data.function_call_data.mangled_id = strdup(method_id);
                     expr->expr_data.function_call_data.resolved_func = method_node;
+                    semcheck_expr_set_call_kgpc_type(expr, method_node->type, 0);
 
                     /* For static methods, don't pass a receiver/Self */
                     if (is_static_method) {
@@ -9722,10 +9859,8 @@ int semcheck_funccall(int *type_return,
 
     /***** FIRST VERIFY FUNCTION IDENTIFIER *****/
 
-    /* Check for method call with unresolved name (__MethodName format) where first arg is the type/instance.
-     * This handles TFoo.PrintHello being parsed as __PrintHello(TFoo).
-     * For static methods, we need to remove the type argument. */
-    if (id != NULL && id[0] == '_' && id[1] == '_' && args_given != NULL) {
+    /* Check for method call with unresolved name (member-access placeholder) where first arg is the type/instance. */
+    if (expr->expr_data.function_call_data.is_method_call_placeholder && args_given != NULL) {
         struct Expression *first_arg = (struct Expression *)args_given->cur;
         int first_arg_type_tag;
         semcheck_expr_main(&first_arg_type_tag, symtab, first_arg, max_scope_lev, NO_MUTATE);
@@ -9741,7 +9876,7 @@ int semcheck_funccall(int *type_return,
             }
             
             if (record_info != NULL && record_info->type_id != NULL) {
-                const char *method_name = id + 2;  /* Skip the leading __ */
+                const char *method_name = id;
                 
                 /* Check if this is a static method */
                 int is_static = from_cparser_is_method_static(record_info->type_id, method_name);
@@ -9783,9 +9918,7 @@ int semcheck_funccall(int *type_return,
                     mangled_name = (resolved_method_name != NULL) ? strdup(resolved_method_name) : NULL;
 
                     /* Initialize overload candidates before jumping to avoid uninitialized access */
-                    if (id != NULL) {
-                        overload_candidates = FindAllIdents(symtab, id);
-                    }
+                    overload_candidates = CreateListNode(method_node, LIST_UNSPECIFIED);
 
                     /* Continue with normal function call processing using the resolved method */
                     hash_return = method_node;

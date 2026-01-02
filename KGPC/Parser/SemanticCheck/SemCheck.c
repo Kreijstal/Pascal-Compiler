@@ -110,6 +110,21 @@ static int semcheck_map_builtin_type_name_local(const char *id)
     return UNKNOWN_TYPE;
 }
 
+static int semcheck_is_char_alias_name(const char *id)
+{
+    return (id != NULL &&
+        (pascal_identifier_equals(id, "Char") ||
+            pascal_identifier_equals(id, "AnsiChar") ||
+            pascal_identifier_equals(id, "WideChar") ||
+            pascal_identifier_equals(id, "UnicodeChar")));
+}
+
+static int semcheck_alias_should_be_char_like(const char *alias_id, const char *target_id)
+{
+    return (semcheck_is_char_alias_name(alias_id) ||
+        semcheck_is_char_alias_name(target_id));
+}
+
 static int semcheck_is_currency_type_id(const char *type_id)
 {
     const char *base = semcheck_base_type_name(type_id);
@@ -2592,6 +2607,10 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                 else if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS)
                 {
                     struct TypeAlias *alias = &tree->tree_data.type_decl_data.info.alias;
+                    alias->is_char_alias = semcheck_alias_should_be_char_like(type_id,
+                        alias->target_type_id) &&
+                        !alias->is_pointer && !alias->is_array && !alias->is_set &&
+                        !alias->is_enum && !alias->is_file;
                     if (alias->target_type_id != NULL)
                         apply_builtin_integer_alias_metadata(alias, alias->target_type_id);
                     else if (type_id != NULL)
@@ -3799,6 +3818,9 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 {
                     record_info->type_id = strdup(tree->tree_data.type_decl_data.id);
                 }
+
+                if (record_info != NULL && record_info->is_type_helper)
+                    semcheck_register_type_helper(record_info, symtab);
                 
                 /* Handle class inheritance - merge parent fields */
                 if (record_info != NULL && record_info->parent_class_name != NULL)
@@ -3854,6 +3876,21 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
             case TYPE_DECL_ALIAS:
             {
                 alias_info = &tree->tree_data.type_decl_data.info.alias;
+                alias_info->is_char_alias = semcheck_alias_should_be_char_like(
+                    tree->tree_data.type_decl_data.id, alias_info->target_type_id) &&
+                    !alias_info->is_pointer && !alias_info->is_array && !alias_info->is_set &&
+                    !alias_info->is_enum && !alias_info->is_file;
+                if (tree->tree_data.type_decl_data.kgpc_type == NULL &&
+                    (alias_info->is_array || alias_info->is_pointer ||
+                     alias_info->is_set || alias_info->is_file))
+                {
+                    KgpcType *alias_type = create_kgpc_type_from_type_alias(alias_info, symtab);
+                    if (alias_type != NULL)
+                    {
+                        tree->tree_data.type_decl_data.kgpc_type = alias_type;
+                        kgpc_type_retain(alias_type);
+                    }
+                }
                 if (alias_info->inline_record_type != NULL)
                 {
                     if (alias_info->inline_record_type->type_id == NULL &&
@@ -4142,6 +4179,13 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 existing_type->type != NULL)
             {
                 struct TypeAlias *existing_alias = kgpc_type_get_type_alias(existing_type->type);
+                int can_override_alias = 1;
+                if (existing_alias != NULL && existing_alias != alias_info &&
+                    alias_info->target_type_id != NULL)
+                {
+                    /* Avoid overwriting alias metadata when reusing another type. */
+                    can_override_alias = 0;
+                }
                 if (existing_alias != NULL)
                 {
                     if (alias_info->storage_size <= 0 && existing_alias->storage_size > 0)
@@ -4156,9 +4200,12 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 }
 
                 inherit_alias_metadata(symtab, alias_info);
-                kgpc_type_set_type_alias(existing_type->type, alias_info);
-                if (existing_type->type->type_alias != NULL && alias_info->storage_size > 0)
-                    existing_type->type->type_alias->storage_size = alias_info->storage_size;
+                if (can_override_alias)
+                {
+                    kgpc_type_set_type_alias(existing_type->type, alias_info);
+                    if (existing_type->type->type_alias != NULL && alias_info->storage_size > 0)
+                        existing_type->type->type_alias->storage_size = alias_info->storage_size;
+                }
 
                 /* Resolve array bounds from constant identifiers now that constants are in scope */
                 if (alias_info->is_array)
@@ -4173,6 +4220,13 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
             if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS && alias_info != NULL)
             {
                 struct TypeAlias *existing_alias = kgpc_type_get_type_alias(kgpc_type);
+                int can_override_alias = 1;
+                if (existing_alias != NULL && existing_alias != alias_info &&
+                    alias_info->target_type_id != NULL)
+                {
+                    /* Avoid overwriting alias metadata when reusing another type. */
+                    can_override_alias = 0;
+                }
                 if (existing_alias != NULL)
                 {
                     if (alias_info->storage_size <= 0 && existing_alias->storage_size > 0)
@@ -4185,7 +4239,10 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                         alias_info->range_end = existing_alias->range_end;
                     }
                 }
-                kgpc_type_set_type_alias(kgpc_type, alias_info);
+                if (can_override_alias)
+                {
+                    kgpc_type_set_type_alias(kgpc_type, alias_info);
+                }
                 
                 /* IMPORTANT: Inherit storage_size from target type for type aliases.
                  * This is critical for types like WideChar (2 bytes) that are represented
@@ -4193,7 +4250,8 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                  * storage_size defined. Without this, SizeOf(TMyChar) where TMyChar = WideChar
                  * would return 4 instead of the correct 2 bytes. */
                 inherit_alias_metadata(symtab, alias_info);
-                if (kgpc_type_get_type_alias(kgpc_type) != NULL &&
+                if (can_override_alias &&
+                    kgpc_type_get_type_alias(kgpc_type) != NULL &&
                     alias_info->storage_size > 0)
                 {
                     kgpc_type_get_type_alias(kgpc_type)->storage_size = alias_info->storage_size;
@@ -4812,6 +4870,11 @@ void semcheck_add_builtins(SymTab_t *symtab)
     add_builtin_alias_type(symtab, "Boolean16", BOOL, 2);
     add_builtin_alias_type(symtab, "Boolean32", BOOL, 4);
     add_builtin_alias_type(symtab, "Boolean64", BOOL, 8);
+    /* FPC-compatible byte/word/long boolean types (synonyms) */
+    add_builtin_alias_type(symtab, "ByteBool", BOOL, 1);
+    add_builtin_alias_type(symtab, "WordBool", BOOL, 2);
+    add_builtin_alias_type(symtab, "LongBool", BOOL, 4);
+    add_builtin_alias_type(symtab, "QWordBool", BOOL, 8);
     if (!stdlib_loaded_flag())
     {
         add_builtin_alias_type(symtab, "TSignalState", INT_TYPE, 4);
