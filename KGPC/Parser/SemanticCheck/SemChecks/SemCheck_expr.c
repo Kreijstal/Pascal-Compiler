@@ -467,7 +467,7 @@ static int semcheck_property_type_info(SymTab_t *symtab, struct ClassProperty *p
     int line_num, int *type_out, struct RecordType **record_out);
 static int semcheck_transform_property_getter_call(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating,
-    HashNode_t *method_node);
+    HashNode_t *method_node, struct RecordType *owner_record);
 static void semcheck_clear_pointer_info(struct Expression *expr);
 static void semcheck_set_pointer_info(struct Expression *expr, int subtype, const char *type_id);
 static int resolve_type_identifier(int *out_type, SymTab_t *symtab,
@@ -5621,7 +5621,7 @@ static int semcheck_property_type_info(SymTab_t *symtab, struct ClassProperty *p
 
 static int semcheck_transform_property_getter_call(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating,
-    HashNode_t *method_node)
+    HashNode_t *method_node, struct RecordType *owner_record)
 {
     if (expr == NULL || expr->type != EXPR_RECORD_ACCESS || method_node == NULL)
     {
@@ -5641,7 +5641,14 @@ static int semcheck_transform_property_getter_call(int *type_return,
     /* Check if the getter is a static function (takes no Self parameter).
      * Static getters don't need the object instance as an argument. */
     int is_static_getter = 0;
-    if (method_node->type != NULL && method_node->type->kind == TYPE_KIND_PROCEDURE)
+    if (owner_record != NULL && owner_record->type_id != NULL &&
+        method_node->id != NULL)
+    {
+        is_static_getter = from_cparser_is_method_static(owner_record->type_id,
+            method_node->id);
+    }
+    if (!is_static_getter && method_node->type != NULL &&
+        method_node->type->kind == TYPE_KIND_PROCEDURE)
     {
         ListNode_t *params = kgpc_type_get_procedure_params(method_node->type);
         if (params == NULL)
@@ -6168,7 +6175,7 @@ static int semcheck_recordaccess(int *type_return,
                     }
 
                     return semcheck_transform_property_getter_call(type_return, symtab,
-                        expr, max_scope_lev, mutating, getter_node);
+                        expr, max_scope_lev, mutating, getter_node, property_owner);
                 }
                 else
                 {
