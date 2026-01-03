@@ -2144,6 +2144,14 @@ ListNode_t *codegen_addressof_leaf(struct Expression *expr, ListNode_t *inst_lis
                 snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
                     label, target_reg->bit_64);
             }
+            else if (var_node->is_reference)
+            {
+                /* For var/out/constref parameters, the stack slot already contains
+                 * a pointer to the actual variable. So @param returns the VALUE
+                 * stored in the slot (the pointer), not the address of the slot. */
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                    var_node->offset, target_reg->bit_64);
+            }
             else
             {
                 snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",

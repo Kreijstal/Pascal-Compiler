@@ -4288,6 +4288,14 @@ static ListNode_t *convert_param(ast_t *param_node) {
             is_var_param = 1;
         else if (strcasecmp(modifier_name, "const") == 0)
             is_const_param = 1;
+        else if (strcasecmp(modifier_name, "constref") == 0)
+        {
+            /* constref is like var (pass by reference) but also const (not modifiable).
+             * For codegen purposes, we treat it as is_var_param=1 to pass by reference.
+             * The const aspect is enforced by semantic checking. */
+            is_var_param = 1;
+            is_const_param = 1;
+        }
     }
 
     ast_t *cursor = ids_cursor;
