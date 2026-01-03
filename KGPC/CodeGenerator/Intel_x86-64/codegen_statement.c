@@ -1040,20 +1040,23 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
         }
 
         char buffer[96];
-
+        
         const char *static_label = NULL;
         if (var_node->is_static)
             static_label = (var_node->static_label != NULL) ? var_node->static_label : var_node->label;
 
         if (static_label != NULL)
         {
-            const char *instr = treat_as_reference ? "movq" : "leaq";
-            if (var_node->offset != 0)
-                snprintf(buffer, sizeof(buffer), "\t%s\t%s+%d(%%rip), %s\n",
-                    instr, static_label, var_node->offset, addr_reg->bit_64);
+            if (treat_as_reference)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s(%%rip), %s\n",
+                    static_label, addr_reg->bit_64);
+            }
             else
-                snprintf(buffer, sizeof(buffer), "\t%s\t%s(%%rip), %s\n",
-                    instr, static_label, addr_reg->bit_64);
+            {
+                snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                    static_label, addr_reg->bit_64);
+            }
             inst_list = add_inst(inst_list, buffer);
             *out_reg = addr_reg;
             goto cleanup;
@@ -4874,7 +4877,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
     var_expr = stmt->stmt_data.var_assign_data.var;
     assign_expr = stmt->stmt_data.var_assign_data.expr;
 
-
+    
 
 
     if (codegen_expr_is_mp_integer(var_expr))
@@ -5113,12 +5116,14 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             {
                 const char *label = (var->static_label != NULL) ?
                     var->static_label : var->label;
-                const char *instr = use_qword ? "movq" : use_byte ? "movb" : use_word ? "movw" : "movl";
-                const char *src_reg = use_qword ? reg->bit_64 : use_byte ? value_reg8 : use_word ? value_reg16 : reg->bit_32;
-                if (var->offset != 0)
-                    snprintf(buffer, sizeof(buffer), "\t%s\t%s, %s+%d(%%rip)\n", instr, src_reg, label, var->offset);
+                if (use_qword)
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s(%%rip)\n", reg->bit_64, label);
+                else if (use_byte)
+                    snprintf(buffer, sizeof(buffer), "\tmovb\t%s, %s(%%rip)\n", value_reg8, label);
+                else if (use_word)
+                    snprintf(buffer, sizeof(buffer), "\tmovw\t%s, %s(%%rip)\n", value_reg16, label);
                 else
-                    snprintf(buffer, sizeof(buffer), "\t%s\t%s, %s(%%rip)\n", instr, src_reg, label);
+                    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s(%%rip)\n", reg->bit_32, label);
                 inst_list = add_inst(inst_list, buffer);
                 free_reg(get_reg_stack(), reg);
                 return inst_list;

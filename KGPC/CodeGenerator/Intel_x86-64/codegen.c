@@ -26,10 +26,6 @@
 #include "../../Parser/ParseTree/type_tags.h"
 #include "../../Parser/ParseTree/KgpcType.h"
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
-/* Forward declaration for resolve_record_field from SemCheck_expr.c */
-int resolve_record_field(SymTab_t *symtab, struct RecordType *record,
-    const char *field_name, struct RecordField **out_field, long long *offset_out,
-    int line_num, int silent);
 
 #define CODEGEN_POINTER_SIZE_BYTES 8
 #define CODEGEN_LABEL_BUFFER_SIZE 256
@@ -38,7 +34,7 @@ int resolve_record_field(SymTab_t *symtab, struct RecordType *record,
 static int codegen_dynamic_array_element_size_from_type(CodeGenContext *ctx, KgpcType *array_type);
 static int codegen_dynamic_array_descriptor_bytes(int element_size);
 static void add_alias_for_return_var(StackNode_t *return_var, const char *alias_label);
-static int add_absolute_var_alias(const char *alias_label, const char *target_label, SymTab_t *symtab);
+static int add_absolute_var_alias(const char *alias_label, const char *target_label);
 static void add_result_alias_for_return_var(StackNode_t *return_var);
 static ListNode_t *codegen_store_class_typeinfo(ListNode_t *inst_list,
     CodeGenContext *ctx, StackNode_t *var_node, const char *type_name);
@@ -1687,7 +1683,13 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                         const char *absolute_target = tree->tree_data.var_decl_data.absolute_target;
                         if (absolute_target != NULL && id_list != NULL && id_list->next == NULL)
                         {
-                            if (add_absolute_var_alias((char *)id_list->cur, absolute_target, symtab) == 0)
+                            if (strchr(absolute_target, '.') != NULL)
+                            {
+                                fprintf(stderr,
+                                    "Warning: absolute variable alias to record field '%s' not supported yet.\n",
+                                    absolute_target);
+                            }
+                            else if (add_absolute_var_alias((char *)id_list->cur, absolute_target) == 0)
                             {
                                 id_list = id_list->next;
                                 continue;
@@ -1735,7 +1737,13 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                         const char *absolute_target = tree->tree_data.var_decl_data.absolute_target;
                         if (absolute_target != NULL && id_list != NULL && id_list->next == NULL)
                         {
-                            if (add_absolute_var_alias((char *)id_list->cur, absolute_target, symtab) == 0)
+                            if (strchr(absolute_target, '.') != NULL)
+                            {
+                                fprintf(stderr,
+                                    "Warning: absolute variable alias to record field '%s' not supported yet.\n",
+                                    absolute_target);
+                            }
+                            else if (add_absolute_var_alias((char *)id_list->cur, absolute_target) == 0)
                             {
                                 id_list = id_list->next;
                                 continue;
@@ -2722,155 +2730,46 @@ static void add_alias_for_return_var(StackNode_t *return_var, const char *alias_
     }
 }
 
-static int add_absolute_var_alias(const char *alias_label, const char *target_label, SymTab_t *symtab)
+static int add_absolute_var_alias(const char *alias_label, const char *target_label)
 {
     if (alias_label == NULL || alias_label[0] == '\0' ||
         target_label == NULL || target_label[0] == '\0')
         return 1;
 
-    /* Check if target contains a dot (record field) */
-    const char *dot = strchr(target_label, '.');
-    if (dot != NULL)
+    StackNode_t *target = find_label((char *)target_label);
+    if (target == NULL)
+        return 1;
+
+    StackNode_t *alias = init_stack_node(target->offset, (char *)alias_label, target->size);
+    if (alias == NULL)
+        return 1;
+
+    alias->element_size = target->element_size;
+    alias->is_alias = 1;
+    alias->is_static = target->is_static;
+    if (target->static_label != NULL)
+        alias->static_label = strdup(target->static_label);
+
+    StackScope_t *cur_scope = get_cur_scope();
+    if (cur_scope == NULL)
     {
-        /* Split into base and field */
-        size_t base_len = dot - target_label;
-        char *base = (char *)malloc(base_len + 1);
-        if (base == NULL)
-            return 1;
-        strncpy(base, target_label, base_len);
-        base[base_len] = '\0';
-        const char *field = dot + 1;
-        
-        /* Find base variable's stack node */
-        StackNode_t *base_node = find_label(base);
-        if (base_node == NULL)
-        {
-            free(base);
-            return 1;
-        }
-        
-        /* Find base variable's hash node to get its type */
-        HashNode_t *hash_node = NULL;
-        if (FindIdent(&hash_node, symtab, base) == -1 || hash_node == NULL)
-        {
-            free(base);
-            return 1;
-        }
-        free(base);
-        
-        if (hash_node->type == NULL || hash_node->type->kind != TYPE_KIND_RECORD)
-        {
-            fprintf(stderr, "Warning: absolute variable alias target '%s' is not a record.\n", target_label);
-            return 1;
-        }
-        
-        struct RecordType *record = kgpc_type_get_record(hash_node->type);
-        if (record == NULL)
-            return 1;
-        
-        struct RecordField *field_desc = NULL;
-        long long field_offset = 0;
-        /* Use resolve_record_field to get field offset */
-        if (resolve_record_field(symtab, record, field, &field_desc, &field_offset, 0, 1) != 0)
-        {
-            fprintf(stderr, "Warning: field '%s' not found in record '%s'.\n", field, target_label);
-            return 1;
-        }
-
-        /* Compute field size based on type */
-        long long field_size = 4; /* default for unknown types */
-        if (field_desc != NULL)
-        {
-            switch (field_desc->type)
-            {
-                case CHAR_TYPE:
-                case BOOL:
-                    field_size = 1;
-                    break;
-                case LONGINT_TYPE:
-                case INT_TYPE:
-                    field_size = 4;
-                    break;
-                case INT64_TYPE:
-                case REAL_TYPE:
-                case POINTER_TYPE:
-                case STRING_TYPE:
-                    field_size = 8;
-                    break;
-                default:
-                    /* For complex types (records, arrays, enums), default to pointer size */
-                    field_size = 8;
-                    break;
-            }
-        }
-        /* Create alias with offset = base offset + field offset, size = field size */
-        StackNode_t *alias = init_stack_node(base_node->offset + (int)field_offset, (char *)alias_label, (int)field_size);
-        if (alias == NULL)
-            return 1;
-        alias->element_size = base_node->element_size;
-        alias->is_alias = 1;
-        alias->is_static = base_node->is_static;
-        if (base_node->static_label != NULL)
-            alias->static_label = strdup(base_node->static_label);
-        
-        StackScope_t *cur_scope = get_cur_scope();
-        if (cur_scope == NULL)
-        {
-            destroy_stack_node(alias);
-            return 1;
-        }
-
-        ListNode_t *new_list_node = CreateListNode(alias, LIST_UNSPECIFIED);
-        if (new_list_node == NULL)
-        {
-            destroy_stack_node(alias);
-            return 1;
-        }
-        if (cur_scope->x == NULL)
-            cur_scope->x = new_list_node;
-        else
-            cur_scope->x = PushListNodeBack(cur_scope->x, new_list_node);
-
-        return 0;
+        destroy_stack_node(alias);
+        return 1;
     }
+
+    ListNode_t *new_list_node = CreateListNode(alias, LIST_UNSPECIFIED);
+    if (new_list_node == NULL)
+    {
+        destroy_stack_node(alias);
+        return 1;
+    }
+
+    if (cur_scope->x == NULL)
+        cur_scope->x = new_list_node;
     else
-    {
-        /* No dot: original behavior */
-        StackNode_t *target = find_label((char *)target_label);
-        if (target == NULL)
-            return 1;
+        cur_scope->x = PushListNodeBack(cur_scope->x, new_list_node);
 
-        StackNode_t *alias = init_stack_node(target->offset, (char *)alias_label, target->size);
-        if (alias == NULL)
-            return 1;
-
-        alias->element_size = target->element_size;
-        alias->is_alias = 1;
-        alias->is_static = target->is_static;
-        if (target->static_label != NULL)
-            alias->static_label = strdup(target->static_label);
-
-        StackScope_t *cur_scope = get_cur_scope();
-        if (cur_scope == NULL)
-        {
-            destroy_stack_node(alias);
-            return 1;
-        }
-
-        ListNode_t *new_list_node = CreateListNode(alias, LIST_UNSPECIFIED);
-        if (new_list_node == NULL)
-        {
-            destroy_stack_node(alias);
-            return 1;
-        }
-
-        if (cur_scope->x == NULL)
-            cur_scope->x = new_list_node;
-        else
-            cur_scope->x = PushListNodeBack(cur_scope->x, new_list_node);
-
-        return 0;
-    }
+    return 0;
 }
 
 /* Helper function to add a Result alias for anonymous function return variable */

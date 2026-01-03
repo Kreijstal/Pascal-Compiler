@@ -2452,10 +2452,7 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                     {
                         const char *label = (stack_node->static_label != NULL) ?
                             stack_node->static_label : stack_node->label;
-                        if (stack_node->offset != 0)
-                            snprintf(buffer, buf_len, "%s+%d(%%rip)", label, stack_node->offset);
-                        else
-                            snprintf(buffer, buf_len, "%s(%%rip)", label);
+                        snprintf(buffer, buf_len, "%s(%%rip)", label);
                     }
                     else if (scope_depth == 0)
                     {

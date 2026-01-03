@@ -1,3 +1,4 @@
+{ Helper unit for TEndian test }
 unit fpc_bootstrap_objpas_tendian_unit;
 
 {$mode objfpc}
@@ -5,15 +6,15 @@ unit fpc_bootstrap_objpas_tendian_unit;
 interface
 
 type
-  TLocalEndian = ObjPas.TEndian;
+  TLocalEndian = TEndian;
 
-function EndianToString(e: ObjPas.TEndian): string;
+function EndianToString(e: TEndian): string;
 
 implementation
 
-function EndianToString(e: ObjPas.TEndian): string;
+function EndianToString(e: TEndian): string;
 begin
-  if e = ObjPas.TEndian.Little then
+  if e = Little then
     EndianToString := 'little'
   else
     EndianToString := 'big';

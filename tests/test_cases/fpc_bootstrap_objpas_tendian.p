@@ -1,3 +1,4 @@
+{ Test TEndian type from ObjPas unit via {$mode objfpc} }
 program fpc_bootstrap_objpas_tendian;
 
 {$mode objfpc}
@@ -5,12 +6,12 @@ program fpc_bootstrap_objpas_tendian;
 uses fpc_bootstrap_objpas_tendian_unit;
 
 var
-  e: ObjPas.TEndian;
+  e: TEndian;
 
 begin
-  e := ObjPas.TEndian.Little;
+  e := Little;
   writeln('unit: ', EndianToString(e));
-  if e = ObjPas.TEndian.Little then
+  if e = Little then
     writeln('little')
   else
     writeln('big');
