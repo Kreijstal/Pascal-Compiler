@@ -1384,6 +1384,14 @@ int main(int argc, char **argv)
         }
         load_units_from_list(user_tree, user_tree->tree_data.unit_data.interface_uses, &visited_units);
         load_units_from_list(user_tree, user_tree->tree_data.unit_data.implementation_uses, &visited_units);
+        
+        /* If {$MODE objfpc} was detected, automatically load ObjPas unit.
+         * This makes types like TEndian available without explicit 'uses objpas'. */
+        if (pascal_frontend_is_objfpc_mode())
+        {
+            load_unit(user_tree, "objpas", &visited_units);
+        }
+        
         debug_check_type_presence(user_tree);
         unit_set_destroy(&visited_units);
         
@@ -1537,6 +1545,14 @@ int main(int argc, char **argv)
     if (!use_stdlib)
         load_unit(user_tree, "System", &visited_units);
     load_units_from_list(user_tree, user_tree->tree_data.program_data.uses_units, &visited_units);
+    
+    /* If {$MODE objfpc} was detected, automatically load ObjPas unit.
+     * This makes types like TEndian available without explicit 'uses objpas'. */
+    if (pascal_frontend_is_objfpc_mode())
+    {
+        load_unit(user_tree, "objpas", &visited_units);
+    }
+    
     debug_check_type_presence(user_tree);
     user_tree->tree_data.program_data.type_declaration =
         ConcatList(user_tree->tree_data.program_data.type_declaration, user_types);

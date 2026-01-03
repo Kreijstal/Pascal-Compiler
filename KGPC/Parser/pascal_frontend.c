@@ -21,6 +21,79 @@ static int g_user_include_path_count = 0;
 static char *g_user_defines[MAX_USER_DEFINES];
 static int g_user_define_count = 0;
 
+/* Flag set when {$MODE objfpc} is detected in the current parse.
+ * Used to automatically inject ObjPas unit dependency. */
+static bool g_objfpc_mode_detected = false;
+
+/* Check if source buffer contains {$MODE objfpc} directive */
+static bool detect_objfpc_mode(const char *buffer, size_t length)
+{
+    if (buffer == NULL || length == 0)
+        return false;
+    
+    const char *pos = buffer;
+    const char *end = buffer + length;
+    
+    while (pos < end)
+    {
+        /* Look for compiler directive start */
+        if (*pos == '{' && (pos + 1) < end && pos[1] == '$')
+        {
+            pos += 2; /* Skip {$ */
+            
+            /* Skip whitespace */
+            while (pos < end && (*pos == ' ' || *pos == '\t'))
+                pos++;
+            
+            /* Check for MODE keyword (case-insensitive) */
+            if ((pos + 4) < end && 
+                (pos[0] == 'M' || pos[0] == 'm') &&
+                (pos[1] == 'O' || pos[1] == 'o') &&
+                (pos[2] == 'D' || pos[2] == 'd') &&
+                (pos[3] == 'E' || pos[3] == 'e') &&
+                (pos[4] == ' ' || pos[4] == '\t'))
+            {
+                pos += 5;
+                
+                /* Skip whitespace */
+                while (pos < end && (*pos == ' ' || *pos == '\t'))
+                    pos++;
+                
+                /* Check for OBJFPC (case-insensitive) */
+                if ((pos + 6) <= end &&
+                    (pos[0] == 'O' || pos[0] == 'o') &&
+                    (pos[1] == 'B' || pos[1] == 'b') &&
+                    (pos[2] == 'J' || pos[2] == 'j') &&
+                    (pos[3] == 'F' || pos[3] == 'f') &&
+                    (pos[4] == 'P' || pos[4] == 'p') &&
+                    (pos[5] == 'C' || pos[5] == 'c'))
+                {
+                    return true;
+                }
+            }
+            
+            /* Skip to end of directive */
+            while (pos < end && *pos != '}')
+                pos++;
+        }
+        pos++;
+    }
+    
+    return false;
+}
+
+/* Getter for objfpc mode flag - used by main_cparser.c to inject ObjPas */
+bool pascal_frontend_is_objfpc_mode(void)
+{
+    return g_objfpc_mode_detected;
+}
+
+/* Reset objfpc mode flag before parsing a new file */
+void pascal_frontend_reset_objfpc_mode(void)
+{
+    g_objfpc_mode_detected = false;
+}
+
 void pascal_frontend_add_include_path(const char *path)
 {
     if (path == NULL || g_user_include_path_count >= MAX_USER_INCLUDE_PATHS)
@@ -548,6 +621,10 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
     free(buffer);
     buffer = preprocessed_buffer;
     length = preprocessed_length;
+
+    /* Detect {$MODE objfpc} in the preprocessed source.
+     * If found, set flag so ObjPas unit can be auto-imported. */
+    g_objfpc_mode_detected = detect_objfpc_mode(buffer, length);
 
     const char *dump_path = getenv("KGPC_DUMP_PREPROCESSED");
     if (dump_path != NULL && dump_path[0] != '\0')
