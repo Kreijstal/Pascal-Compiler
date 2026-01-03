@@ -927,6 +927,25 @@ long long expr_effective_size_bytes(const struct Expression *expr)
             return size;
     }
 
+    /* For pointer dereference, try to get size from the pointer's subtype info.
+     * This handles cases like PByte^ where Byte is a subrange type that maps to
+     * INT_TYPE but should have size 1. */
+    if (expr != NULL && expr->type == EXPR_POINTER_DEREF)
+    {
+        struct Expression *pointer_expr = expr->expr_data.pointer_deref_data.pointer_expr;
+        if (pointer_expr != NULL && pointer_expr->resolved_kgpc_type != NULL &&
+            kgpc_type_is_pointer(pointer_expr->resolved_kgpc_type))
+        {
+            KgpcType *points_to = pointer_expr->resolved_kgpc_type->info.points_to;
+            if (points_to != NULL)
+            {
+                long long size = kgpc_type_sizeof(points_to);
+                if (size > 0)
+                    return size;
+            }
+        }
+    }
+
     int tag = expr_get_type_tag(expr);
     switch (tag)
     {
