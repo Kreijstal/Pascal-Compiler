@@ -371,6 +371,33 @@ static void register_const_section(ast_t *const_section) {
     }
 }
 
+static int evaluate_simple_const_expr(const char *expr, ast_t *const_section, int *result);
+
+static int resolve_const_expr_from_sections(const char *expr, int *result)
+{
+    if (expr == NULL || result == NULL)
+        return -1;
+
+    if (g_const_sections != NULL)
+    {
+        for (ListNode_t *cur = g_const_sections; cur != NULL; cur = cur->next)
+        {
+            ast_t *section = (ast_t *)cur->cur;
+            if (evaluate_simple_const_expr(expr, section, result) == 0)
+                return 0;
+        }
+    }
+
+    char *endptr = NULL;
+    long num = strtol(expr, &endptr, 10);
+    if (endptr != NULL && *endptr == '\0' && num >= INT_MIN && num <= INT_MAX)
+    {
+        *result = (int)num;
+        return 0;
+    }
+    return -1;
+}
+
 static int lookup_const_int(const char *name, int *out_value) {
     if (name == NULL || out_value == NULL)
         return -1;
@@ -2282,6 +2309,27 @@ static char *serialize_expr_to_string(ast_t *expr) {
     return NULL;
 }
 
+static int resolve_const_expr_to_int(ast_t *expr, int *out_value)
+{
+    if (out_value == NULL)
+        return -1;
+    *out_value = 0;
+    if (expr == NULL)
+        return -1;
+
+    char *expr_str = serialize_expr_to_string(expr);
+    if (expr_str == NULL)
+        return -1;
+
+    int value = 0;
+    if (resolve_const_expr_from_sections(expr_str, &value) != 0)
+        value = atoi(expr_str);
+    free(expr_str);
+
+    *out_value = value;
+    return 0;
+}
+
 static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                              struct RecordType **record_out, TypeInfo *type_info) {
     if (type_id_out != NULL)
@@ -2337,6 +2385,44 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
 
     if (spec_node->typ == PASCAL_T_IDENTIFIER) {
         char *dup = dup_symbol(spec_node);
+
+        if (dup != NULL && spec_node->child != NULL &&
+            strcasecmp(dup, "string") == 0)
+        {
+            int size_val = 0;
+            if (resolve_const_expr_to_int(spec_node->child, &size_val) != 0)
+            {
+                frontend_error("Error on line %d: string bound must be constant",
+                    spec_node->line);
+                size_val = 0;
+            }
+            if (size_val < 0)
+            {
+                frontend_error("Error on line %d: string bound must be >= 0",
+                    spec_node->line);
+                size_val = 0;
+            }
+
+            if (type_info != NULL)
+            {
+                type_info->is_array = 1;
+                type_info->start = 0;
+                type_info->end = size_val;
+                type_info->element_type = CHAR_TYPE;
+                type_info->element_type_id = strdup("char");
+
+                ListBuilder dims_builder;
+                list_builder_init(&dims_builder);
+                char buffer[64];
+                snprintf(buffer, sizeof(buffer), "0..%d", size_val);
+                list_builder_append(&dims_builder, strdup(buffer), LIST_STRING);
+                type_info->array_dimensions = list_builder_finish(&dims_builder);
+            }
+
+            free(dup);
+            return UNKNOWN_TYPE;
+        }
+
         int result = map_type_name(dup, type_id_out);
         if (type_info != NULL && result == FILE_TYPE) {
             type_info->is_file = 1;
@@ -2493,8 +2579,14 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                     
                     if (lower_str != NULL && upper_str != NULL) {
                         if (dims_builder.head == NULL) {
-                            type_info->start = atoi(lower_str);
-                            type_info->end = atoi(upper_str);
+                            int start_val = 0;
+                            int end_val = 0;
+                            if (resolve_const_expr_from_sections(lower_str, &start_val) != 0)
+                                start_val = atoi(lower_str);
+                            if (resolve_const_expr_from_sections(upper_str, &end_val) != 0)
+                                end_val = atoi(upper_str);
+                            type_info->start = start_val;
+                            type_info->end = end_val;
                         }
                         char buffer[128];
                         snprintf(buffer, sizeof(buffer), "%s..%s", lower_str, upper_str);

@@ -1035,8 +1035,11 @@ static ParseResult type_name_fn(input_t* in, void* args, char* parser_name) {
                         
                         if (close_res.is_success) {
                             free_ast(close_res.value.ast);
-                            // Discard the size - treat string[n] as string for now
-                            free_ast(size_res.value.ast);
+                            /* Preserve size expression so frontend can model string[n]. */
+                            if (type_ast->child == NULL)
+                                type_ast->child = size_res.value.ast;
+                            else
+                                free_ast(size_res.value.ast);
                         } else {
                             // Failed to parse closing bracket, restore and ignore subscript
                             discard_failure(close_res);
@@ -2670,9 +2673,11 @@ static ParseResult pascal_identifier_with_subscript_fn(input_t* in, void* args, 
         }
         free_ast(close_res.value.ast);
         
-        // Discard the size - treat string[n] as string for now
-        // Full shortstring support would require changes throughout the type system
-        free_ast(size_res.value.ast);
+        /* Preserve size expression so frontend can model identifier[n]. */
+        if (identifier_ast->child == NULL)
+            identifier_ast->child = size_res.value.ast;
+        else
+            free_ast(size_res.value.ast);
     } else {
         discard_failure(open_res);
         restore_input_state(in, &subscript_state);

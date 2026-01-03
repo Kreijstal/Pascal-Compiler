@@ -51,6 +51,8 @@ static int types_numeric_compatible(int lhs, int rhs);
 static void semcheck_coerce_char_string_operands(int *type_first, struct Expression *expr1,
     int *type_second, struct Expression *expr2);
 static int semcheck_expr_is_char_like(struct Expression *expr);
+static int semcheck_expr_is_char_pointer(struct Expression *expr);
+static void semcheck_promote_pointer_expr_to_string(struct Expression *expr);
 
 /* Helper function to get type name from an expression for operator overloading */
 static const char *get_expr_type_name(struct Expression *expr, SymTab_t *symtab)
@@ -2409,11 +2411,20 @@ static int semcheck_builtin_length(int *type_return, SymTab_t *symtab,
     int error_count = semcheck_expr_main(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
 
 
-  int is_dynamic_array = (arg_expr != NULL && arg_expr->is_array_expr && arg_expr->array_is_dynamic);
-  int is_static_array = (arg_expr != NULL && arg_expr->is_array_expr && !arg_expr->array_is_dynamic);
+    int is_dynamic_array = (arg_expr != NULL && arg_expr->is_array_expr && arg_expr->array_is_dynamic);
+    int is_static_array = (arg_expr != NULL && arg_expr->is_array_expr && !arg_expr->array_is_dynamic);
+    int is_shortstring = 0;
+
+    if (arg_expr != NULL && arg_expr->is_array_expr &&
+        arg_expr->array_element_type == CHAR_TYPE &&
+        arg_expr->array_lower_bound == 0 &&
+        arg_expr->array_upper_bound >= 0)
+    {
+        is_shortstring = 1;
+    }
 
     /* For static arrays, convert Length() to a compile-time constant */
-    if (error_count == 0 && is_static_array)
+    if (error_count == 0 && is_static_array && !is_shortstring)
     {
         long long length = arg_expr->array_upper_bound - arg_expr->array_lower_bound + 1;
         
@@ -2428,8 +2439,8 @@ static int semcheck_builtin_length(int *type_return, SymTab_t *symtab,
 
 
     const char *mangled_name = NULL;
-    if (error_count == 0 && is_string_type(arg_type))
-        mangled_name = "kgpc_string_length";
+    if (error_count == 0 && (is_string_type(arg_type) || is_shortstring))
+        mangled_name = is_shortstring ? "kgpc_shortstring_length" : "kgpc_string_length";
     else if (error_count == 0 && is_dynamic_array)
         mangled_name = "__kgpc_dynarray_length";
     else if (error_count == 0 && is_static_array)
@@ -4962,6 +4973,23 @@ static void semcheck_coerce_char_string_operands(int *type_first, struct Express
     if (expr2 != NULL && semcheck_expr_is_char_like(expr2) && *type_second != CHAR_TYPE)
         *type_second = CHAR_TYPE;
 
+    int expr1_is_char_ptr = semcheck_expr_is_char_pointer(expr1);
+    int expr2_is_char_ptr = semcheck_expr_is_char_pointer(expr2);
+    if ((*type_first == STRING_TYPE && expr2_is_char_ptr) ||
+        (*type_second == STRING_TYPE && expr1_is_char_ptr))
+    {
+        if (*type_first == STRING_TYPE && expr2_is_char_ptr)
+        {
+            *type_second = STRING_TYPE;
+            semcheck_promote_pointer_expr_to_string(expr2);
+        }
+        else if (*type_second == STRING_TYPE && expr1_is_char_ptr)
+        {
+            *type_first = STRING_TYPE;
+            semcheck_promote_pointer_expr_to_string(expr1);
+        }
+    }
+
     /* Handle CHAR + STRING or STRING + CHAR comparisons
      * Upgrade CHAR to STRING for comparison purposes */
     if ((*type_first == CHAR_TYPE && *type_second == STRING_TYPE) ||
@@ -5018,6 +5046,46 @@ static int semcheck_expr_is_char_like(struct Expression *expr)
             return 1;
     }
     return 0;
+}
+
+static int semcheck_expr_is_char_pointer(struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+    if (expr->resolved_type != POINTER_TYPE &&
+        (expr->resolved_kgpc_type == NULL || !kgpc_type_is_pointer(expr->resolved_kgpc_type)))
+        return 0;
+    if (expr->pointer_subtype == CHAR_TYPE)
+        return 1;
+    if (expr->pointer_subtype_id != NULL)
+    {
+        const char *normalized = semcheck_normalize_char_type_id(expr->pointer_subtype_id);
+        if (normalized != NULL &&
+            (pascal_identifier_equals(normalized, "AnsiChar") ||
+             pascal_identifier_equals(normalized, "WideChar")))
+            return 1;
+    }
+    if (expr->resolved_kgpc_type != NULL && kgpc_type_is_pointer(expr->resolved_kgpc_type))
+    {
+        KgpcType *pointee = expr->resolved_kgpc_type->info.points_to;
+        if (pointee != NULL &&
+            pointee->kind == TYPE_KIND_PRIMITIVE &&
+            pointee->info.primitive_type_tag == CHAR_TYPE)
+            return 1;
+    }
+    return 0;
+}
+
+static void semcheck_promote_pointer_expr_to_string(struct Expression *expr)
+{
+    if (expr == NULL)
+        return;
+    if (expr->resolved_kgpc_type != NULL)
+    {
+        destroy_kgpc_type(expr->resolved_kgpc_type);
+        expr->resolved_kgpc_type = NULL;
+    }
+    expr->resolved_type = STRING_TYPE;
 }
 
 static int resolve_type_identifier(int *out_type, SymTab_t *symtab,
@@ -6606,6 +6674,30 @@ FIELD_RESOLVED:
 
     if (array_alias != NULL)
         semcheck_set_array_info_from_alias(expr, symtab, array_alias, expr->line_num);
+
+    if (field_type == POINTER_TYPE)
+    {
+        int pointer_subtype = UNKNOWN_TYPE;
+        const char *pointer_subtype_id = NULL;
+        if (field_desc->type_id != NULL)
+        {
+            HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, field_desc->type_id);
+            if (type_node == NULL)
+                type_node = semcheck_find_type_node_with_kgpc_type(symtab, field_desc->type_id);
+            if (type_node != NULL)
+            {
+                struct TypeAlias *alias = get_type_alias_from_node(type_node);
+                if (alias != NULL && alias->is_pointer)
+                {
+                    pointer_subtype = alias->pointer_type;
+                    pointer_subtype_id = alias->pointer_type_id;
+                }
+                if (pointer_subtype == UNKNOWN_TYPE && type_node->type != NULL)
+                    pointer_subtype = kgpc_type_get_pointer_subtype_tag(type_node->type);
+            }
+        }
+        semcheck_set_pointer_info(expr, pointer_subtype, pointer_subtype_id);
+    }
 
     expr->record_type = (field_type == RECORD_TYPE) ? field_record : NULL;
     *type_return = field_type;

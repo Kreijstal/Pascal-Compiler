@@ -1203,6 +1203,22 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
                             method_node = method_node->next;
                         }
                     }
+
+                    /* Emit writable storage for class vars. */
+                    long long class_var_size = 0;
+                    if (codegen_sizeof_record_type(ctx, record_info, &class_var_size) != 0 ||
+                        class_var_size <= 0)
+                    {
+                        class_var_size = 8;
+                    }
+
+                    fprintf(ctx->output_file, "\n# Class var storage for %s\n", class_label);
+                    fprintf(ctx->output_file, "\t.data\n");
+                    fprintf(ctx->output_file, "\t.align 8\n");
+                    fprintf(ctx->output_file, ".globl %s_CLASSVAR\n", class_label);
+                    fprintf(ctx->output_file, "%s_CLASSVAR:\n", class_label);
+                    fprintf(ctx->output_file, "\t.zero\t%lld\n", class_var_size);
+                    fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());
                 }
             }
         cur = cur->next;
