@@ -1021,6 +1021,9 @@ static void semcheck_set_array_info_from_alias(struct Expression *expr, SymTab_t
             fprintf(stderr, "Error: failed to allocate array element type identifier.\n");
     }
 
+    if (alias->is_shortstring)
+        expr->resolved_type = SHORTSTRING_TYPE;
+
     if (expr->array_element_type == UNKNOWN_TYPE && expr->array_element_type_id != NULL)
     {
         int resolved_type = UNKNOWN_TYPE;

@@ -35,6 +35,7 @@ struct TypeAlias
     int array_end;
     int array_element_type;
     char *array_element_type_id;
+    int is_shortstring;
     int is_open_array;
     ListNode_t *array_dimensions;
     int is_pointer;

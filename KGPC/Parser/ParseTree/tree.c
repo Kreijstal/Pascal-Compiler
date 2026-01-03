@@ -2099,6 +2099,7 @@ Tree_t *mk_typealiasdecl(int line_num, char *id, int is_array, int actual_type, 
     alias->array_end = end;
     alias->array_element_type = UNKNOWN_TYPE;
     alias->array_element_type_id = NULL;
+    alias->is_shortstring = 0;
     alias->is_open_array = (alias->is_array && end < start);
     alias->array_dimensions = NULL;
     alias->is_pointer = 0;
@@ -2160,6 +2161,7 @@ Tree_t *mk_arraydecl(int line_num, ListNode_t *ids, int type, char *type_id, int
     new_tree->tree_data.arr_decl_data.range_str = range_str;
     new_tree->tree_data.arr_decl_data.initializer = initializer;
     new_tree->tree_data.arr_decl_data.is_typed_const = 0;
+    new_tree->tree_data.arr_decl_data.is_shortstring = 0;
     new_tree->tree_data.arr_decl_data.has_static_storage = 0;
     new_tree->tree_data.arr_decl_data.static_storage_emitted = 0;
     new_tree->tree_data.arr_decl_data.static_label = NULL;
@@ -2960,6 +2962,7 @@ static void clear_type_alias_fields(struct TypeAlias *alias)
         alias->inline_record_type = NULL;
     }
     alias->is_char_alias = 0;
+    alias->is_shortstring = 0;
     alias->is_range = 0;
     alias->range_known = 0;
     alias->range_start = 0;

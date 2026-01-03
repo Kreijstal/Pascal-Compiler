@@ -1568,13 +1568,24 @@ static int codegen_expr_is_shortstring_array(const struct Expression *expr)
 {
     if (expr == NULL)
         return 0;
-    if (!expr->is_array_expr || expr->array_element_type != CHAR_TYPE)
-        return 0;
-    if (expr_get_array_lower_bound(expr) != 0)
-        return 0;
-    if (expr_get_array_upper_bound(expr) < 0)
-        return 0;
-    return 1;
+    if (expr->resolved_type == SHORTSTRING_TYPE)
+        return 1;
+    if (expr->resolved_kgpc_type != NULL)
+    {
+        struct TypeAlias *alias = kgpc_type_get_type_alias(expr->resolved_kgpc_type);
+        if (alias != NULL && alias->is_shortstring)
+            return 1;
+    }
+    if (expr->is_array_expr &&
+        expr->array_element_type == CHAR_TYPE &&
+        expr_get_array_lower_bound(expr) == 0 &&
+        expr_get_array_upper_bound(expr) == 255)
+    {
+        if (expr->resolved_kgpc_type == NULL ||
+            kgpc_type_get_type_alias(expr->resolved_kgpc_type) == NULL)
+            return 1;
+    }
+    return 0;
 }
 
 /* Call kgpc_string_to_shortstring(dest, src, size) to copy string to ShortString */

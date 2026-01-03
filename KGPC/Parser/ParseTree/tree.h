@@ -146,6 +146,7 @@ typedef struct Tree
             char *range_str;  /* Original range string (e.g., "1..N") for constant resolution */
             struct Statement *initializer;
             int is_typed_const;
+            int is_shortstring;
             int has_static_storage;
             int static_storage_emitted;
             char *static_label;

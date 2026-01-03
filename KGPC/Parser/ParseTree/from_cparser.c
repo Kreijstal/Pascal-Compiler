@@ -23,6 +23,7 @@
 #include "KgpcType.h"
 #include "generic_types.h"
 #include "../SemanticCheck/SymTab/SymTab.h"
+#include "../../identifier_utils.h"
 
 /* ============================================================================
  * Circular Reference Detection for AST Traversal
@@ -236,6 +237,7 @@ typedef struct {
     int end;
     int element_type;
     char *element_type_id;
+    int is_shortstring;
     int is_open_array;
     ListNode_t *array_dimensions;
     int is_pointer;
@@ -2410,6 +2412,7 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                 type_info->end = size_val;
                 type_info->element_type = CHAR_TYPE;
                 type_info->element_type_id = strdup("char");
+                type_info->is_shortstring = 1;
 
                 ListBuilder dims_builder;
                 list_builder_init(&dims_builder);
@@ -4379,6 +4382,8 @@ static ListNode_t *convert_param(ast_t *param_node) {
             }
             param_decl = mk_arraydecl(param_node->line, id_node, element_type, element_type_id,
                                       type_info.start, type_info.end, range_str, NULL);
+            if (param_decl != NULL)
+                param_decl->tree_data.arr_decl_data.is_shortstring = type_info.is_shortstring;
             /* Set var parameter flag on array declaration */
             if (is_var_param && param_decl != NULL)
                 param_decl->tree_data.arr_decl_data.type = var_type; // Store this for compatibility
@@ -4537,6 +4542,8 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
         
         Tree_t *decl = mk_arraydecl(decl_node->line, ids, element_type, element_type_id,
                                     type_info.start, type_info.end, range_str, initializer_stmt);
+        if (decl != NULL)
+            decl->tree_data.arr_decl_data.is_shortstring = type_info.is_shortstring;
         type_info.element_type_id = NULL;
         destroy_type_info_contents(&type_info);
         return decl;
@@ -5732,6 +5739,10 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
     } else if (type_info.is_array) {
         decl = mk_typealiasdecl(type_decl_node->line, id, 1, type_info.element_type,
                                  type_info.element_type_id, type_info.start, type_info.end);
+        if (decl != NULL)
+            decl->tree_data.type_decl_data.info.alias.is_shortstring =
+                type_info.is_shortstring ||
+                (id != NULL && pascal_identifier_equals(id, "ShortString"));
         type_info.element_type_id = NULL;
     } else if (type_info.is_record && type_id != NULL) {
         /* Alias to a record type (including generic specializations) */
@@ -8502,6 +8513,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
                         inline_return_type->array_end = type_info.end;
                         inline_return_type->array_element_type = type_info.element_type;
                         inline_return_type->array_element_type_id = type_info.element_type_id;
+                        inline_return_type->is_shortstring = type_info.is_shortstring;
                         inline_return_type->is_open_array = type_info.is_open_array;
                     }
                     
@@ -8805,6 +8817,7 @@ static Tree_t *convert_function(ast_t *func_node) {
                     inline_return_type->array_end = type_info.end;
                     inline_return_type->array_element_type = type_info.element_type;
                     inline_return_type->array_element_type_id = type_info.element_type_id;
+                    inline_return_type->is_shortstring = type_info.is_shortstring;
                     inline_return_type->is_open_array = type_info.is_open_array;
                 }
                 

@@ -6473,6 +6473,20 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         /* Create ShortString as array[0..255] of Char */
                         KgpcType *char_type = create_primitive_type(CHAR_TYPE);
                         var_kgpc_type = create_array_type(char_type, 0, 255);
+                        if (var_kgpc_type != NULL)
+                        {
+                            struct TypeAlias *alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
+                            if (alias != NULL)
+                            {
+                                alias->is_array = 1;
+                                alias->array_start = 0;
+                                alias->array_end = 255;
+                                alias->array_element_type = CHAR_TYPE;
+                                alias->array_element_type_id = strdup("char");
+                                alias->is_shortstring = 1;
+                                kgpc_type_set_type_alias(var_kgpc_type, alias);
+                            }
+                        }
                     }
                     /* Handle inline array types (e.g., array[0..2] of PChar) */
                     else if (tree->tree_data.var_decl_data.inline_type_alias != NULL &&
@@ -6754,15 +6768,15 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     end_bound
                 );
                 assert(array_type != NULL && "Failed to create array type");
-                
+
                 /* If the element type was specified by a type_id (like TAlfa), preserve that information
                  * by creating a minimal TypeAlias and attaching it to the array_type. This allows
                  * nested array indexing to work correctly (e.g., Keywords[1][1] where Keywords is
                  * array[1..5] of TAlfa and TAlfa is array[1..10] of char). */
+                struct TypeAlias *temp_alias = NULL;
                 if (tree->tree_data.arr_decl_data.type_id != NULL)
                 {
-                    /* Create a minimal TypeAlias just to store the element type ID */
-                    struct TypeAlias *temp_alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
+                    temp_alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
                     if (temp_alias != NULL)
                     {
                         temp_alias->is_array = 1;
@@ -6770,10 +6784,29 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         temp_alias->array_end = end_bound;
                         temp_alias->array_element_type_id = strdup(tree->tree_data.arr_decl_data.type_id);
                         temp_alias->array_element_type = tree->tree_data.arr_decl_data.type;
-                        
-                        kgpc_type_set_type_alias(array_type, temp_alias);
                     }
                 }
+
+                if (tree->tree_data.arr_decl_data.is_shortstring)
+                {
+                    if (temp_alias == NULL)
+                    {
+                        temp_alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
+                        if (temp_alias != NULL)
+                        {
+                            temp_alias->is_array = 1;
+                            temp_alias->array_start = start_bound;
+                            temp_alias->array_end = end_bound;
+                            temp_alias->array_element_type = CHAR_TYPE;
+                            temp_alias->array_element_type_id = strdup("char");
+                        }
+                    }
+                    if (temp_alias != NULL)
+                        temp_alias->is_shortstring = 1;
+                }
+
+                if (temp_alias != NULL)
+                    kgpc_type_set_type_alias(array_type, temp_alias);
                 
                 if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
                     fprintf(stderr, "[SemCheck] Pushing array: %s, array_type=%p kind=%d elem_kind=%d\n",
