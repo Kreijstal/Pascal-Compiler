@@ -1811,10 +1811,46 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                         const char *absolute_target = tree->tree_data.var_decl_data.absolute_target;
                         if (absolute_target != NULL && id_list != NULL && id_list->next == NULL)
                         {
-                            if (strchr(absolute_target, '.') != NULL)
+                            const char *dot = strchr(absolute_target, '.');
+                            if (dot != NULL)
                             {
+                                /* Record field alias: extract base var and field name */
+                                size_t base_len = (size_t)(dot - absolute_target);
+                                char *base_var = (char *)malloc(base_len + 1);
+                                if (base_var != NULL)
+                                {
+                                    strncpy(base_var, absolute_target, base_len);
+                                    base_var[base_len] = '\0';
+                                    const char *field_name = dot + 1;
+                                    
+                                    /* Look up base variable in symbol table to get record type */
+                                    int field_offset = -1;
+                                    HashNode_t *base_node = NULL;
+                                    if (ctx->symtab != NULL &&
+                                        FindIdent(&base_node, ctx->symtab, base_var) >= 0 &&
+                                        base_node != NULL)
+                                    {
+                                        struct RecordType *record = get_record_type_from_node(base_node);
+                                        if (record != NULL)
+                                        {
+                                            field_offset = record_type_get_field_offset(record, field_name);
+                                        }
+                                    }
+                                    
+                                    if (field_offset >= 0)
+                                    {
+                                        if (add_absolute_var_alias_with_offset((char *)id_list->cur, 
+                                            base_var, field_offset, alloc_size) == 0)
+                                        {
+                                            free(base_var);
+                                            id_list = id_list->next;
+                                            continue;
+                                        }
+                                    }
+                                    free(base_var);
+                                }
                                 fprintf(stderr,
-                                    "Warning: absolute variable alias to record field '%s' not supported yet.\n",
+                                    "Warning: absolute variable alias to record field '%s' failed to resolve.\n",
                                     absolute_target);
                             }
                             else if (add_absolute_var_alias((char *)id_list->cur, absolute_target) == 0)
