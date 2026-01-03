@@ -1148,6 +1148,41 @@ int expr_has_type_tag(const struct Expression *expr, int type_tag)
     return (expr->resolved_type == type_tag);
 }
 
+static int expr_is_char_pointer(const struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+
+    if (expr->resolved_type != POINTER_TYPE)
+    {
+        KgpcType *type = expr_get_kgpc_type(expr);
+        if (type == NULL || !kgpc_type_is_pointer(type))
+            return 0;
+    }
+
+    if (expr->pointer_subtype == CHAR_TYPE)
+        return 1;
+    if (expr->pointer_subtype_id != NULL)
+    {
+        if (pascal_identifier_equals(expr->pointer_subtype_id, "AnsiChar") ||
+            pascal_identifier_equals(expr->pointer_subtype_id, "WideChar") ||
+            pascal_identifier_equals(expr->pointer_subtype_id, "Char"))
+            return 1;
+    }
+
+    KgpcType *type = expr_get_kgpc_type(expr);
+    if (type != NULL && kgpc_type_is_pointer(type))
+    {
+        KgpcType *pointee = type->info.points_to;
+        if (pointee != NULL &&
+            pointee->kind == TYPE_KIND_PRIMITIVE &&
+            pointee->info.primitive_type_tag == CHAR_TYPE)
+            return 1;
+    }
+
+    return 0;
+}
+
 int expr_returns_sret(const struct Expression *expr)
 {
     if (expr == NULL)
@@ -1255,6 +1290,10 @@ int codegen_expr_is_addressable(const struct Expression *expr)
         case EXPR_POINTER_DEREF:
         case EXPR_RECORD_CONSTRUCTOR:
             return 1;
+        case EXPR_TYPECAST:
+            if (expr->expr_data.typecast_data.expr != NULL)
+                return codegen_expr_is_addressable(expr->expr_data.typecast_data.expr);
+            return 0;
         case EXPR_AS:
             if (expr->expr_data.as_data.expr != NULL)
                 return codegen_expr_is_addressable(expr->expr_data.as_data.expr);
@@ -2186,6 +2225,23 @@ ListNode_t *codegen_record_field_address(struct Expression *expr, ListNode_t *in
      * However, parameters are already passed as pointers, so we shouldn't dereference them. */
     int is_class_field = (record_expr->record_type != NULL && 
                           record_type_is_class(record_expr->record_type));
+
+    int is_class_type_ref = 0;
+    const char *class_type_label = NULL;
+    if (is_class_field && record_expr->type == EXPR_VAR_ID &&
+        record_expr->expr_data.id != NULL && ctx->symtab != NULL)
+    {
+        HashNode_t *symbol = NULL;
+        if (FindIdent(&symbol, ctx->symtab, record_expr->expr_data.id) >= 0 &&
+            symbol != NULL && symbol->hash_type == HASHTYPE_TYPE)
+        {
+            is_class_type_ref = 1;
+            if (record_expr->record_type != NULL && record_expr->record_type->type_id != NULL)
+                class_type_label = record_expr->record_type->type_id;
+            else
+                class_type_label = record_expr->expr_data.id;
+        }
+    }
     
     /* Check if the record expression is a parameter (already a pointer) */
     int is_parameter = 0;
@@ -2206,14 +2262,34 @@ ListNode_t *codegen_record_field_address(struct Expression *expr, ListNode_t *in
     }
 
     Register_t *addr_reg = NULL;
-    inst_list = codegen_address_for_expr(record_expr, inst_list, ctx, &addr_reg);
-    if (addr_reg == NULL)
-        return inst_list;
+    if (is_class_type_ref && class_type_label != NULL)
+    {
+        addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (addr_reg == NULL)
+            addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+        if (addr_reg == NULL)
+        {
+            codegen_report_error(ctx,
+                "ERROR: Unable to allocate register for class var access.");
+            return inst_list;
+        }
+
+        char buffer[96];
+        snprintf(buffer, sizeof(buffer), "\tleaq\t%s_CLASSVAR(%%rip), %s\n",
+            class_type_label, addr_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else
+    {
+        inst_list = codegen_address_for_expr(record_expr, inst_list, ctx, &addr_reg);
+        if (addr_reg == NULL)
+            return inst_list;
+    }
 
     /* For class types that are NOT parameters, addr_reg points to the variable holding the pointer.
      * We need to load the pointer value to get the address of the instance.
      * Parameters are already pointers, so we don't need the extra dereference. */
-    if (is_class_field && !is_parameter)
+    if (is_class_field && !is_parameter && !is_class_type_ref)
     {
         char buffer[64];
         snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", addr_reg->bit_64, addr_reg->bit_64);
@@ -3396,7 +3472,11 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
 
     int left_is_string = (left_expr != NULL && expr_has_type_tag(left_expr, STRING_TYPE));
     int right_is_string = (right_expr != NULL && expr_has_type_tag(right_expr, STRING_TYPE));
-    if (left_is_string && right_is_string)
+    int left_is_char_ptr = expr_is_char_pointer(left_expr);
+    int right_is_char_ptr = expr_is_char_pointer(right_expr);
+    if ((left_is_string && right_is_string) ||
+        (left_is_string && right_is_char_ptr) ||
+        (right_is_string && left_is_char_ptr))
     {
         const char *lhs_arg = current_arg_reg64(0);
         const char *rhs_arg = current_arg_reg64(1);

@@ -5390,6 +5390,19 @@ void semcheck_add_builtins(SymTab_t *symtab)
         }
         if (params != NULL)
             DestroyList(params);
+
+        param_target = semcheck_create_builtin_param_var("Target", POINTER_TYPE);
+        param_value = semcheck_create_builtin_param("Source", POINTER_TYPE);
+        params = ConcatList(param_target, param_value);
+        return_type = create_primitive_type(POINTER_TYPE);
+        interlocked_type = create_procedure_type(params, return_type);
+        if (interlocked_type != NULL)
+        {
+            AddBuiltinFunction_Typed(symtab, strdup(interlocked_name), interlocked_type);
+            destroy_kgpc_type(interlocked_type);
+        }
+        if (params != NULL)
+            DestroyList(params);
     }
     char *to_singlebyte = strdup("ToSingleByteFileSystemEncodedFileName");
     if (to_singlebyte != NULL) {
@@ -7766,7 +7779,6 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
      * the matching implementation body. */
     {
         int current_has_body = (subprogram->tree_data.subprogram_data.statement_list != NULL);
-        int current_param_count = ListLength(subprogram->tree_data.subprogram_data.args_var);
         ListNode_t *all_matches = FindAllIdents(symtab, id_to_use_for_lookup);
         ListNode_t *cur = all_matches;
         while (cur != NULL)
@@ -7777,15 +7789,27 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
                 cur = cur->next;
                 continue;
             }
-            if (candidate != NULL && candidate->type != NULL &&
-                candidate->type->kind == TYPE_KIND_PROCEDURE)
+            if (candidate->type != NULL && candidate->type->kind == TYPE_KIND_PROCEDURE)
             {
                 Tree_t *def = candidate->type->info.proc_info.definition;
                 int existing_has_body = (def != NULL &&
                     def->tree_data.subprogram_data.statement_list != NULL);
-                int existing_param_count = ListLength(candidate->type->info.proc_info.params);
-                if (existing_param_count == current_param_count &&
-                    existing_has_body != current_has_body)
+                int same_signature = 0;
+
+                if (def != NULL &&
+                    semcheck_subprogram_signatures_equivalent(subprogram, def))
+                {
+                    same_signature = 1;
+                }
+                else if (candidate->mangled_id != NULL &&
+                         subprogram->tree_data.subprogram_data.mangled_id != NULL &&
+                         strcmp(candidate->mangled_id,
+                                subprogram->tree_data.subprogram_data.mangled_id) == 0)
+                {
+                    same_signature = 1;
+                }
+
+                if (same_signature && existing_has_body != current_has_body)
                 {
                     if (all_matches != NULL)
                         DestroyList(all_matches);
