@@ -21,6 +21,8 @@ void set_target_sysv_flag(void);
 void set_dump_ast_path(const char *path);
 void set_asm_debug_flag(void);
 void set_stdlib_loaded_flag(int loaded);
+void set_compile_system_unit_flag(void);
+void set_goto_enabled_flag(void);
 
 int nonlocal_flag(void);
 int optimize_flag(void);
@@ -32,5 +34,7 @@ const char *dump_ast_path(void);
 void clear_dump_ast_path(void);
 int asm_debug_flag(void);
 int stdlib_loaded_flag(void);
+int compile_system_unit_flag(void);
+int goto_enabled_flag(void);
 
 #endif

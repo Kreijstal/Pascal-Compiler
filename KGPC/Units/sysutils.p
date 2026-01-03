@@ -8,12 +8,12 @@ uses
 type
     TDateTime = System.TDateTime;
     AnsiString = string;
-    PChar = ^Char;
     Uint64 = cuint64;
 
     // Added for Unix support
-    AnsiChar = cchar;
-    PAnsiChar = pcchar;
+    AnsiChar = Char;
+    PAnsiChar = ^AnsiChar;
+    PChar = PAnsiChar;
     SmallInt = -32768..32767;
     Word = 0..65535;
     LongWord = 0..4294967295;
@@ -63,6 +63,9 @@ function UnixToDateTime(UnixTime: Int64): TDateTime;
 function Format(const Fmt: string; const Args: array of const): string;
 function StrPas(P: PAnsiChar): AnsiString;
 function StrPas(P: PChar): AnsiString;
+function StrLen(P: PAnsiChar): SizeInt;
+function StrPos(Str1, Str2: PAnsiChar): PAnsiChar;
+function StrRScan(P: PAnsiChar; C: AnsiChar): PAnsiChar;
 function FloatToStr(Value: Real): AnsiString;
 function StrToInt(const S: AnsiString): longint;
 function StrToFloat(const S: AnsiString): Real;
@@ -146,6 +149,66 @@ begin
     else
         StrPas := kgpc_strpas(PAnsiChar(P));
 end;
+
+function StrLen(P: PAnsiChar): SizeInt;
+var
+    Len: SizeInt;
+begin
+    if P = nil then
+    begin
+        StrLen := 0;
+        exit;
+    end;
+    Len := 0;
+    while P^ <> #0 do
+    begin
+        Len := Len + 1;
+        P := P + 1;
+    end;
+    StrLen := Len;
+end;
+
+function StrPos(Str1, Str2: PAnsiChar): PAnsiChar;
+var
+    S1: AnsiString;
+    S2: AnsiString;
+    Index: SizeInt;
+begin
+    if (Str1 = nil) or (Str2 = nil) then
+    begin
+        StrPos := nil;
+        exit;
+    end;
+    S1 := StrPas(Str1);
+    S2 := StrPas(Str2);
+    Index := Pos(S2, S1);
+    if Index <= 0 then
+        StrPos := nil
+    else
+        StrPos := PAnsiChar(PtrUInt(Str1) + PtrUInt(Index - 1));
+end;
+
+function StrRScan(P: PAnsiChar; C: AnsiChar): PAnsiChar;
+var
+    Last: PAnsiChar;
+begin
+    if P = nil then
+    begin
+        StrRScan := nil;
+        exit;
+    end;
+    Last := nil;
+    while P^ <> #0 do
+    begin
+        if P^ = C then
+            Last := P;
+        P := P + 1;
+    end;
+    if C = #0 then
+        Last := P;
+    StrRScan := Last;
+end;
+
 
 var
     EncodingUtf8Instance: TEncoding;
