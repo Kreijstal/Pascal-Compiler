@@ -110,6 +110,8 @@ static void print_usage(const char *prog_name)
     fprintf(stderr, "    --no-vendor-units     Disable built-in KGPC vendor units\n");
     fprintf(stderr, "    --no-stdlib           Disable KGPC stdlib; load minimal prelude instead\n");
     fprintf(stderr, "    -D<symbol>[=<value>]  Define preprocessor symbol\n");
+    fprintf(stderr, "    -Us                   Compile System unit (FPC compatible)\n");
+    fprintf(stderr, "    -Sg                   Enable goto statements (FPC compatible)\n");
 }
 
 static bool dump_ast_to_requested_path(Tree_t *tree)
@@ -461,6 +463,37 @@ static void set_flags(char **optional_args, int count)
         else if (arg[0] == '-' && arg[1] == 'D' && arg[2] != '\0')
         {
             /* Define: -DSYMBOL or -DSYMBOL=VALUE */
+            pascal_frontend_add_define(&arg[2]);
+        }
+        else if (strcmp(arg, "-Us") == 0)
+        {
+            /* FPC flag: compile System unit mode */
+            set_compile_system_unit_flag();
+            g_skip_stdlib = true; /* System unit is self-contained */
+        }
+        else if (strcmp(arg, "-Sg") == 0)
+        {
+            /* FPC flag: enable goto statements */
+            set_goto_enabled_flag();
+        }
+        else if (arg[0] == '-' && arg[1] == 'S' && arg[2] != '\0')
+        {
+            /* Other FPC -S flags: silently ignore for compatibility */
+            /* e.g., -Sew (warnings as errors), -Sd (Delphi mode), etc. */
+        }
+        else if (arg[0] == '-' && arg[1] == 'C' && arg[2] != '\0')
+        {
+            /* FPC -C flags: code generation options - silently ignore */
+            /* e.g., -Cg (PIC code), etc. */
+        }
+        else if (arg[0] == '-' && arg[1] == 'F' && arg[2] != '\0')
+        {
+            /* Other FPC -F flags: silently ignore for compatibility */
+            /* e.g., -FE, -Fl, etc. (already handled -Fu and -Fi) */
+        }
+        else if (arg[0] == '-' && arg[1] == 'd' && arg[2] != '\0')
+        {
+            /* FPC lowercase -d: define symbol (same as -D) */
             pascal_frontend_add_define(&arg[2]);
         }
         else

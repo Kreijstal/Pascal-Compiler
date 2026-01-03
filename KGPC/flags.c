@@ -23,6 +23,12 @@ static int FLAG_TIME_PASSES = 0;
 static int FLAG_ASM_DEBUG_COMMENTS = 0;
 static int FLAG_STDLIB_LOADED = 0;
 
+/* Flag for compiling the System unit (FPC -Us flag) */
+static int FLAG_COMPILE_SYSTEM_UNIT = 0;
+
+/* Flag for enabling goto statements (FPC -Sg flag) */
+static int FLAG_GOTO_ENABLED = 0;
+
 static kgpc_target_abi_t FLAG_TARGET_ABI =
 #if defined(_WIN32) || defined(__CYGWIN__)
     KGPC_TARGET_ABI_WINDOWS;
@@ -145,4 +151,24 @@ int target_windows_flag(void)
 kgpc_target_abi_t current_target_abi(void)
 {
     return FLAG_TARGET_ABI;
+}
+
+void set_compile_system_unit_flag(void)
+{
+    FLAG_COMPILE_SYSTEM_UNIT = 1;
+}
+
+void set_goto_enabled_flag(void)
+{
+    FLAG_GOTO_ENABLED = 1;
+}
+
+int compile_system_unit_flag(void)
+{
+    return FLAG_COMPILE_SYSTEM_UNIT;
+}
+
+int goto_enabled_flag(void)
+{
+    return FLAG_GOTO_ENABLED;
 }

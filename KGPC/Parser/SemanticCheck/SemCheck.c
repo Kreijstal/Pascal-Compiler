@@ -43,6 +43,84 @@
 #include "NameMangling.h"
 #include <stdarg.h>
 
+static ListNode_t *g_semcheck_unit_names = NULL;
+
+static void semcheck_unit_names_reset(void)
+{
+    ListNode_t *cur = g_semcheck_unit_names;
+    while (cur != NULL)
+    {
+        if (cur->cur != NULL)
+            free(cur->cur);
+        cur = cur->next;
+    }
+    DestroyList(g_semcheck_unit_names);
+    g_semcheck_unit_names = NULL;
+}
+
+static void semcheck_unit_name_add(const char *name)
+{
+    if (name == NULL || name[0] == '\0')
+        return;
+
+    ListNode_t *cur = g_semcheck_unit_names;
+    while (cur != NULL)
+    {
+        const char *existing = (const char *)cur->cur;
+        if (existing != NULL && pascal_identifier_equals(existing, name))
+            return;
+        cur = cur->next;
+    }
+
+    char *dup = strdup(name);
+    if (dup == NULL)
+        return;
+
+    ListNode_t *node = CreateListNode(dup, LIST_STRING);
+    if (node == NULL)
+    {
+        free(dup);
+        return;
+    }
+
+    if (g_semcheck_unit_names == NULL)
+        g_semcheck_unit_names = node;
+    else
+    {
+        ListNode_t *tail = g_semcheck_unit_names;
+        while (tail->next != NULL)
+            tail = tail->next;
+        tail->next = node;
+    }
+}
+
+static void semcheck_unit_names_add_list(ListNode_t *units)
+{
+    ListNode_t *cur = units;
+    while (cur != NULL)
+    {
+        if (cur->type == LIST_STRING && cur->cur != NULL)
+            semcheck_unit_name_add((const char *)cur->cur);
+        cur = cur->next;
+    }
+}
+
+int semcheck_is_unit_name(const char *name)
+{
+    if (name == NULL || name[0] == '\0')
+        return 0;
+
+    ListNode_t *cur = g_semcheck_unit_names;
+    while (cur != NULL)
+    {
+        const char *existing = (const char *)cur->cur;
+        if (existing != NULL && pascal_identifier_equals(existing, name))
+            return 1;
+        cur = cur->next;
+    }
+    return 0;
+}
+
 /* Helper declared in SemCheck_expr.c */
 static const char *semcheck_base_type_name(const char *id)
 {
@@ -1888,9 +1966,8 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                     }
                     if (pascal_identifier_equals(type_name, "QWord") ||
                         pascal_identifier_equals(type_name, "UInt64")) {
-                        /* Note: This will be -1 as a signed long long, but the bit pattern
-                         * is correct for UINT64_MAX. The consumer must interpret appropriately. */
-                        *out_value = (long long)0xFFFFFFFFFFFFFFFFULL;
+                        /* Treat QWord as signed 64-bit until unsigned semantics are supported. */
+                        *out_value = 9223372036854775807LL;
                         return 0;
                     }
                     if (pascal_identifier_equals(type_name, "LongInt") ||
@@ -4580,6 +4657,13 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
         {
             /* Evaluate as integer constant */
             long long value = 0;
+            
+            /* Run semantic check on the value expression to resolve types properly.
+             * This is important for scoped enum literals like TEndian.Little
+             * which need to have their resolved_kgpc_type set. */
+            int expr_type = UNKNOWN_TYPE;
+            semcheck_expr_main(&expr_type, symtab, value_expr, INT_MAX, NO_MUTATE);
+            
             if (evaluate_const_expr(symtab, value_expr, &value) != 0)
             {
                 fprintf(stderr, "Error on line %d, unsupported const expression.\n", tree->line_num);
@@ -4616,6 +4700,17 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                 if (value_expr != NULL && value_expr->type == EXPR_SET)
                 {
                     const_type = create_primitive_type(SET_TYPE);
+                }
+                /* Check if the expression has enum type (e.g., scoped enum literals like TEnum.Value) */
+                else if (value_expr != NULL && value_expr->resolved_kgpc_type != NULL)
+                {
+                    struct TypeAlias *alias = kgpc_type_get_type_alias(value_expr->resolved_kgpc_type);
+                    if (alias != NULL && alias->is_enum)
+                    {
+                        /* Preserve the enum type for the constant */
+                        const_type = value_expr->resolved_kgpc_type;
+                        kgpc_type_retain(const_type);
+                    }
                 }
                 else if (tree->tree_data.const_decl_data.type_id != NULL)
                 {
@@ -5257,11 +5352,24 @@ void semcheck_add_builtins(SymTab_t *symtab)
     {
         const char *interlocked_name = "InterlockedExchangeAdd";
 
-        ListNode_t *param_target = semcheck_create_builtin_param_var("Target", LONGINT_TYPE);
-        ListNode_t *param_value = semcheck_create_builtin_param("Source", LONGINT_TYPE);
+        ListNode_t *param_target = semcheck_create_builtin_param_var("Target", INT_TYPE);
+        ListNode_t *param_value = semcheck_create_builtin_param("Source", INT_TYPE);
         ListNode_t *params = ConcatList(param_target, param_value);
-        KgpcType *return_type = create_primitive_type(LONGINT_TYPE);
+        KgpcType *return_type = create_primitive_type(INT_TYPE);
         KgpcType *interlocked_type = create_procedure_type(params, return_type);
+        if (interlocked_type != NULL)
+        {
+            AddBuiltinFunction_Typed(symtab, strdup(interlocked_name), interlocked_type);
+            destroy_kgpc_type(interlocked_type);
+        }
+        if (params != NULL)
+            DestroyList(params);
+
+        param_target = semcheck_create_builtin_param_var("Target", LONGINT_TYPE);
+        param_value = semcheck_create_builtin_param("Source", LONGINT_TYPE);
+        params = ConcatList(param_target, param_value);
+        return_type = create_primitive_type(LONGINT_TYPE);
+        interlocked_type = create_procedure_type(params, return_type);
         if (interlocked_type != NULL)
         {
             AddBuiltinFunction_Typed(symtab, strdup(interlocked_name), interlocked_type);
@@ -5274,6 +5382,19 @@ void semcheck_add_builtins(SymTab_t *symtab)
         param_value = semcheck_create_builtin_param("Source", INT64_TYPE);
         params = ConcatList(param_target, param_value);
         return_type = create_primitive_type(INT64_TYPE);
+        interlocked_type = create_procedure_type(params, return_type);
+        if (interlocked_type != NULL)
+        {
+            AddBuiltinFunction_Typed(symtab, strdup(interlocked_name), interlocked_type);
+            destroy_kgpc_type(interlocked_type);
+        }
+        if (params != NULL)
+            DestroyList(params);
+
+        param_target = semcheck_create_builtin_param_var("Target", POINTER_TYPE);
+        param_value = semcheck_create_builtin_param("Source", POINTER_TYPE);
+        params = ConcatList(param_target, param_value);
+        return_type = create_primitive_type(POINTER_TYPE);
         interlocked_type = create_procedure_type(params, return_type);
         if (interlocked_type != NULL)
         {
@@ -5523,6 +5644,10 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
 
     PushScope(symtab);
 
+    semcheck_unit_names_reset();
+    semcheck_unit_name_add("System");
+    semcheck_unit_names_add_list(tree->tree_data.program_data.uses_units);
+
     return_val += semcheck_id_not_main(tree->tree_data.program_data.program_id);
 
     /* TODO: Push program name onto scope */
@@ -5651,6 +5776,7 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
     }
 
     /* Keep the outermost scope alive for code generation. DestroySymTab will clean it up. */
+    semcheck_unit_names_reset();
     return return_val;
 }
 
@@ -5666,6 +5792,12 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
     return_val = 0;
 
     PushScope(symtab);
+
+    semcheck_unit_names_reset();
+    semcheck_unit_name_add("System");
+    semcheck_unit_name_add(tree->tree_data.unit_data.unit_id);
+    semcheck_unit_names_add_list(tree->tree_data.unit_data.interface_uses);
+    semcheck_unit_names_add_list(tree->tree_data.unit_data.implementation_uses);
 
     /* Check interface section */
     int before = return_val;
@@ -5823,6 +5955,7 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
                     return_val - before, return_val);
     }
 
+    semcheck_unit_names_reset();
     return return_val;
 }
 
@@ -6340,6 +6473,20 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         /* Create ShortString as array[0..255] of Char */
                         KgpcType *char_type = create_primitive_type(CHAR_TYPE);
                         var_kgpc_type = create_array_type(char_type, 0, 255);
+                        if (var_kgpc_type != NULL)
+                        {
+                            struct TypeAlias *alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
+                            if (alias != NULL)
+                            {
+                                alias->is_array = 1;
+                                alias->array_start = 0;
+                                alias->array_end = 255;
+                                alias->array_element_type = CHAR_TYPE;
+                                alias->array_element_type_id = strdup("char");
+                                alias->is_shortstring = 1;
+                                kgpc_type_set_type_alias(var_kgpc_type, alias);
+                            }
+                        }
                     }
                     /* Handle inline array types (e.g., array[0..2] of PChar) */
                     else if (tree->tree_data.var_decl_data.inline_type_alias != NULL &&
@@ -6621,15 +6768,15 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     end_bound
                 );
                 assert(array_type != NULL && "Failed to create array type");
-                
+
                 /* If the element type was specified by a type_id (like TAlfa), preserve that information
                  * by creating a minimal TypeAlias and attaching it to the array_type. This allows
                  * nested array indexing to work correctly (e.g., Keywords[1][1] where Keywords is
                  * array[1..5] of TAlfa and TAlfa is array[1..10] of char). */
+                struct TypeAlias *temp_alias = NULL;
                 if (tree->tree_data.arr_decl_data.type_id != NULL)
                 {
-                    /* Create a minimal TypeAlias just to store the element type ID */
-                    struct TypeAlias *temp_alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
+                    temp_alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
                     if (temp_alias != NULL)
                     {
                         temp_alias->is_array = 1;
@@ -6637,10 +6784,29 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         temp_alias->array_end = end_bound;
                         temp_alias->array_element_type_id = strdup(tree->tree_data.arr_decl_data.type_id);
                         temp_alias->array_element_type = tree->tree_data.arr_decl_data.type;
-                        
-                        kgpc_type_set_type_alias(array_type, temp_alias);
                     }
                 }
+
+                if (tree->tree_data.arr_decl_data.is_shortstring)
+                {
+                    if (temp_alias == NULL)
+                    {
+                        temp_alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
+                        if (temp_alias != NULL)
+                        {
+                            temp_alias->is_array = 1;
+                            temp_alias->array_start = start_bound;
+                            temp_alias->array_end = end_bound;
+                            temp_alias->array_element_type = CHAR_TYPE;
+                            temp_alias->array_element_type_id = strdup("char");
+                        }
+                    }
+                    if (temp_alias != NULL)
+                        temp_alias->is_shortstring = 1;
+                }
+
+                if (temp_alias != NULL)
+                    kgpc_type_set_type_alias(array_type, temp_alias);
                 
                 if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
                     fprintf(stderr, "[SemCheck] Pushing array: %s, array_type=%p kind=%d elem_kind=%d\n",
@@ -7646,7 +7812,6 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
      * the matching implementation body. */
     {
         int current_has_body = (subprogram->tree_data.subprogram_data.statement_list != NULL);
-        int current_param_count = ListLength(subprogram->tree_data.subprogram_data.args_var);
         ListNode_t *all_matches = FindAllIdents(symtab, id_to_use_for_lookup);
         ListNode_t *cur = all_matches;
         while (cur != NULL)
@@ -7657,15 +7822,27 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
                 cur = cur->next;
                 continue;
             }
-            if (candidate != NULL && candidate->type != NULL &&
-                candidate->type->kind == TYPE_KIND_PROCEDURE)
+            if (candidate->type != NULL && candidate->type->kind == TYPE_KIND_PROCEDURE)
             {
                 Tree_t *def = candidate->type->info.proc_info.definition;
                 int existing_has_body = (def != NULL &&
                     def->tree_data.subprogram_data.statement_list != NULL);
-                int existing_param_count = ListLength(candidate->type->info.proc_info.params);
-                if (existing_param_count == current_param_count &&
-                    existing_has_body != current_has_body)
+                int same_signature = 0;
+
+                if (def != NULL &&
+                    semcheck_subprogram_signatures_equivalent(subprogram, def))
+                {
+                    same_signature = 1;
+                }
+                else if (candidate->mangled_id != NULL &&
+                         subprogram->tree_data.subprogram_data.mangled_id != NULL &&
+                         strcmp(candidate->mangled_id,
+                                subprogram->tree_data.subprogram_data.mangled_id) == 0)
+                {
+                    same_signature = 1;
+                }
+
+                if (same_signature && existing_has_body != current_has_body)
                 {
                     if (all_matches != NULL)
                         DestroyList(all_matches);

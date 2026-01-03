@@ -59,7 +59,7 @@ int PushConstOntoScope(SymTab_t *symtab, char *id, long long value)
     /* Determine type based on value range and create KgpcType */
     int type_tag = INT_TYPE;
     if (value > INT_MAX || value < INT_MIN)
-        type_tag = LONGINT_TYPE;
+        type_tag = INT64_TYPE;
     
     KgpcType *kgpc_type = create_primitive_type(type_tag);
     if (kgpc_type == NULL)

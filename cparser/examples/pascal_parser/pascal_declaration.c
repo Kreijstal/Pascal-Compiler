@@ -1285,6 +1285,151 @@ static combinator_t* make_stmt_list_parser(combinator_t** stmt_parser) {
     );
 }
 
+static combinator_t* create_helper_body_parser(void) {
+    combinator_t** helper_const_expr_parser = (combinator_t**)safe_malloc(sizeof(combinator_t*));
+    *helper_const_expr_parser = new_combinator();
+    init_pascal_expression_parser(helper_const_expr_parser, NULL);
+
+    combinator_t* const_value = lazy(helper_const_expr_parser);
+
+    combinator_t* const_decl = seq(new_combinator(), PASCAL_T_CONST_DECL,
+        token(cident(PASCAL_T_IDENTIFIER)),
+        optional(seq(new_combinator(), PASCAL_T_NONE,
+            token(match(":")),
+            map(until(token(match("=")), PASCAL_T_NONE), discard_ast),
+            NULL
+        )),
+        token(match("=")),
+        const_value,
+        token(match(";")),
+        NULL
+    );
+
+    combinator_t* const_section = seq(new_combinator(), PASCAL_T_CONST_SECTION,
+        token(keyword_ci("const")),
+        commit(many(const_decl)),
+        NULL
+    );
+    const_section->extra_to_free = helper_const_expr_parser;
+
+    combinator_t* access_modifier = seq(new_combinator(), PASCAL_T_ACCESS_MODIFIER,
+        optional(token(keyword_ci("strict"))),
+        multi(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("private")),
+            token(keyword_ci("protected")),
+            token(keyword_ci("public")),
+            token(keyword_ci("published")),
+            NULL
+        ),
+        optional(token(match(":"))),
+        NULL
+    );
+
+    combinator_t* helper_method_directive_keyword = multi(new_combinator(), PASCAL_T_NONE,
+        token(create_keyword_parser("virtual", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("override", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("reintroduce", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("overload", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("static", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("inline", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("abstract", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("cdecl", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("stdcall", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("register", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("safecall", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("pascal", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("external", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("deprecated", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("unimplemented", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("platform", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("library", PASCAL_T_IDENTIFIER)),
+        NULL
+    );
+
+    combinator_t* helper_method_directives = many(seq(new_combinator(), PASCAL_T_METHOD_DIRECTIVE,
+        helper_method_directive_keyword,
+        optional(token(pascal_string(PASCAL_T_STRING))),
+        token(match(";")),
+        NULL
+    ));
+
+    combinator_t* helper_return_type = multi(new_combinator(), PASCAL_T_TYPE_SPEC,
+        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        NULL
+    );
+
+    combinator_t* helper_procedure_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
+        optional(token(keyword_ci("class"))),
+        token(keyword_ci("procedure")),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        create_pascal_param_parser(),
+        token(match(";")),
+        helper_method_directives,
+        NULL
+    );
+
+    combinator_t* helper_function_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
+        optional(token(keyword_ci("class"))),
+        token(keyword_ci("function")),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        create_pascal_param_parser(),
+        token(match(":")),
+        helper_return_type,
+        token(match(";")),
+        helper_method_directives,
+        NULL
+    );
+
+    combinator_t* helper_constructor_decl = seq(new_combinator(), PASCAL_T_CONSTRUCTOR_DECL,
+        optional(token(keyword_ci("class"))),
+        token(keyword_ci("constructor")),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        create_pascal_param_parser(),
+        token(match(";")),
+        helper_method_directives,
+        NULL
+    );
+
+    combinator_t* helper_destructor_decl = seq(new_combinator(), PASCAL_T_DESTRUCTOR_DECL,
+        optional(token(keyword_ci("class"))),
+        token(keyword_ci("destructor")),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        create_pascal_param_parser(),
+        token(match(";")),
+        helper_method_directives,
+        NULL
+    );
+
+    combinator_t* helper_property_decl = seq(new_combinator(), PASCAL_T_PROPERTY_DECL,
+        token(keyword_ci("property")),
+        until(token(match(";")), PASCAL_T_NONE),
+        token(match(";")),
+        NULL
+    );
+
+    combinator_t* helper_var_decl = seq(new_combinator(), PASCAL_T_NONE,
+        token(keyword_ci("var")),
+        until(token(match(";")), PASCAL_T_NONE),
+        token(match(";")),
+        NULL
+    );
+
+    combinator_t* helper_item = multi(new_combinator(), PASCAL_T_NONE,
+        const_section,
+        access_modifier,
+        helper_procedure_decl,
+        helper_function_decl,
+        helper_constructor_decl,
+        helper_destructor_decl,
+        helper_property_decl,
+        helper_var_decl,
+        NULL
+    );
+
+    return many(helper_item);
+}
+
 // Pascal Unit Parser
 void init_pascal_unit_parser(combinator_t** p) {
     combinator_t** stmt_parser = (combinator_t**)safe_malloc(sizeof(combinator_t*));
@@ -1315,9 +1460,7 @@ void init_pascal_unit_parser(combinator_t** p) {
         NULL
     );
 
-    /* Helper bodies can contain a wide variety of declarations. Be permissive and
-     * consume tokens until the terminating "end" keyword. */
-    combinator_t* helper_body = optional(until(token(keyword_ci("end")), PASCAL_T_NONE));
+    combinator_t* helper_body = optional(create_helper_body_parser());
 
     combinator_t* helper_kind = multi(new_combinator(), PASCAL_T_NONE,
         token(keyword_ci("type")),
@@ -2634,7 +2777,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         NULL
     );
 
-    combinator_t* helper_body = optional(until(token(keyword_ci("end")), PASCAL_T_NONE));
+    combinator_t* helper_body = optional(create_helper_body_parser());
     combinator_t* helper_kind = multi(new_combinator(), PASCAL_T_NONE,
         token(keyword_ci("type")),
         token(keyword_ci("record")),

@@ -103,6 +103,7 @@ typedef struct Tree
             int nesting_level; /* Lexical nesting depth: 0 = top-level, 1 = nested in program, etc. */
             int requires_static_link;
             int defined_in_unit;
+            int unit_is_public; /* 1 if declared in interface section, 0 if implementation only */
 
             ListNode_t *declarations;
             ListNode_t *subprograms;
@@ -145,6 +146,7 @@ typedef struct Tree
             char *range_str;  /* Original range string (e.g., "1..N") for constant resolution */
             struct Statement *initializer;
             int is_typed_const;
+            int is_shortstring;
             int has_static_storage;
             int static_storage_emitted;
             char *static_label;

@@ -460,6 +460,15 @@ static int check_collision_allowance(HashNode_t* existing_node, enum HashType ne
         (new_hash_type == HASHTYPE_VAR || new_hash_type == HASHTYPE_ARRAY)) {
         return 1;
     }
+    
+    /* Allow parameters (VAR) to shadow procedures/functions in the same scope.
+     * This is needed when a procedure's parameter has the same name as the procedure itself.
+     * Example: procedure Value(Value: LongInt); - the parameter Value should shadow the procedure Value
+     * within the procedure body to enable correct argument passing. */
+    if (is_existing_proc_func &&
+        (new_hash_type == HASHTYPE_VAR || new_hash_type == HASHTYPE_ARRAY)) {
+        return 1;
+    }
 
     /* Allow local constants to shadow imported unit constants. */
     if (existing_node->hash_type == HASHTYPE_CONST &&

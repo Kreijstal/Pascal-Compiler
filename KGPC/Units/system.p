@@ -364,6 +364,14 @@ begin
     end
 end;
 
+procedure interlocked_exchange_add_i32_int_impl(var target: integer; value: integer; var result: integer);
+begin
+    assembler;
+    asm
+        call kgpc_interlocked_exchange_add_i32
+    end
+end;
+
 procedure interlocked_exchange_add_i64_impl(var target: int64; value: int64; var result: int64);
 begin
     assembler;
@@ -372,9 +380,26 @@ begin
     end
 end;
 
+procedure interlocked_exchange_add_ptr_impl(var target: Pointer; value: Pointer; var result: Pointer);
+begin
+    assembler;
+    asm
+        call kgpc_interlocked_exchange_add_ptr
+    end
+end;
+
 function kgpc_get_current_dir: AnsiString; external;
 function kgpc_set_current_dir(path: PChar): Integer; external;
 function kgpc_ioresult_peek: Integer; external;
+
+function InterlockedExchangeAdd(var target: integer; value: integer): integer; overload;
+var
+    result: integer;
+begin
+    result := 0;
+    interlocked_exchange_add_i32_int_impl(target, value, result);
+    InterlockedExchangeAdd := result;
+end;
 
 function InterlockedExchangeAdd(var target: longint; value: longint): longint; overload;
 var
@@ -394,6 +419,15 @@ begin
     result := 0;
     interlocked_exchange_add_i64_impl(target, value, result);
     InterlockedExchangeAdd := result;
+end;
+
+function InterlockedExchangeAdd(var target: Pointer; value: Pointer): Pointer; overload;
+var
+    result: Pointer;
+begin
+    result := nil;
+    interlocked_exchange_add_ptr_impl(target, value, result);
+    Exit(result);
 end;
 
 function UpCase(c: char): char; overload;

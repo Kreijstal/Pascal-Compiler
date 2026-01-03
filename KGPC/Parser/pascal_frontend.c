@@ -381,7 +381,8 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
         "CommonHeaderSize := 8",
         // FPC feature flags
         "FPC_HAS_FEATURE_DYNARRAYS", "FPC_HAS_FEATURE_ANSISTRINGS", 
-        "FPC_HAS_FEATURE_WIDESTRINGS", "FPC_HAS_FEATURE_CLASSES",
+        "FPC_HAS_FEATURE_WIDESTRINGS", "FPC_HAS_UNICODESTRING",
+        "FPC_HAS_FEATURE_CLASSES",
         "FPC_HAS_FEATURE_OBJECTS", "FPC_HAS_FEATURE_EXCEPTIONS",
         "FPC_HAS_FEATURE_RTTI", "FPC_HAS_FEATURE_HEAP",
         "FPC_HAS_FEATURE_TEXTIO", "FPC_HAS_FEATURE_FILEIO",

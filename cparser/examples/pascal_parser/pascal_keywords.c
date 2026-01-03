@@ -39,6 +39,8 @@ static const char* expression_identifier_keywords[] = {
     "byte", "word", "longint",
     // Object-oriented helpers that must be usable as identifiers in expressions
     "self",
+    // Boolean literals - needed for scoped enums like TUseBoolStrs.False
+    "false", "true",
     NULL
 };
 

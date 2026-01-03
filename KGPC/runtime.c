@@ -101,6 +101,20 @@ void kgpc_interlocked_exchange_add_i64(int64_t *target, int64_t value, int64_t *
         *result = old;
 }
 
+void kgpc_interlocked_exchange_add_ptr(intptr_t *target, intptr_t value, intptr_t *result)
+{
+#if defined(__GNUC__) || defined(__clang__)
+    intptr_t old = __atomic_fetch_add(target, value, __ATOMIC_SEQ_CST);
+#elif defined(_WIN32) && defined(_WIN64)
+    intptr_t old = (intptr_t)InterlockedExchangeAdd64((volatile LONGLONG *)target, (LONGLONG)value);
+#else
+    intptr_t old = *target;
+    *target += value;
+#endif
+    if (result != NULL)
+        *result = old;
+}
+
 
 typedef enum {
     KGPC_BINARY_UNSPECIFIED = 0,
@@ -2309,6 +2323,13 @@ char *kgpc_shortstring_to_string(const char *value)
 
     unsigned char len = (unsigned char)value[0];
     return kgpc_string_duplicate_length(value + 1, len);
+}
+
+int64_t kgpc_shortstring_length(const char *value)
+{
+    if (value == NULL)
+        return 0;
+    return (unsigned char)value[0];
 }
 
 
