@@ -557,6 +557,73 @@ static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
 }
 
 /**
+ * Copy default parameter values from forward declaration to implementation.
+ * When a method is declared in a class with default values but implemented
+ * without them, the implementation's params need the defaults for overload resolution.
+ */
+static void copy_default_values_to_impl_params(ListNode_t *fwd_params, ListNode_t *impl_params)
+{
+    if (fwd_params == NULL || impl_params == NULL)
+        return;
+    
+    ListNode_t *fwd = fwd_params;
+    ListNode_t *impl = impl_params;
+    
+    while (fwd != NULL && impl != NULL)
+    {
+        Tree_t *fwd_decl = (Tree_t *)fwd->cur;
+        Tree_t *impl_decl = (Tree_t *)impl->cur;
+        
+        if (fwd_decl != NULL && impl_decl != NULL)
+        {
+            /* Copy default value from forward declaration if impl doesn't have one */
+            if (fwd_decl->type == TREE_VAR_DECL && impl_decl->type == TREE_VAR_DECL)
+            {
+                struct Statement *fwd_init = fwd_decl->tree_data.var_decl_data.initializer;
+                if (fwd_init != NULL &&
+                    impl_decl->tree_data.var_decl_data.initializer == NULL)
+                {
+                    /* The initializer is a STMT_VAR_ASSIGN with NULL var, containing the expression */
+                    if (fwd_init->type == STMT_VAR_ASSIGN && 
+                        fwd_init->stmt_data.var_assign_data.expr != NULL)
+                    {
+                        struct Expression *cloned_expr = clone_expression(
+                            fwd_init->stmt_data.var_assign_data.expr);
+                        if (cloned_expr != NULL)
+                        {
+                            impl_decl->tree_data.var_decl_data.initializer =
+                                mk_varassign(fwd_init->line_num, fwd_init->col_num, NULL, cloned_expr);
+                        }
+                    }
+                }
+            }
+            else if (fwd_decl->type == TREE_ARR_DECL && impl_decl->type == TREE_ARR_DECL)
+            {
+                struct Statement *fwd_init = fwd_decl->tree_data.arr_decl_data.initializer;
+                if (fwd_init != NULL &&
+                    impl_decl->tree_data.arr_decl_data.initializer == NULL)
+                {
+                    if (fwd_init->type == STMT_VAR_ASSIGN && 
+                        fwd_init->stmt_data.var_assign_data.expr != NULL)
+                    {
+                        struct Expression *cloned_expr = clone_expression(
+                            fwd_init->stmt_data.var_assign_data.expr);
+                        if (cloned_expr != NULL)
+                        {
+                            impl_decl->tree_data.arr_decl_data.initializer =
+                                mk_varassign(fwd_init->line_num, fwd_init->col_num, NULL, cloned_expr);
+                        }
+                    }
+                }
+            }
+        }
+        
+        fwd = fwd->next;
+        impl = impl->next;
+    }
+}
+
+/**
  * For a method implementation (ClassName__MethodName), add class vars to scope
  * so they can be referenced within the method body. This is essential for
  * static methods which have no implicit Self parameter.
@@ -7463,6 +7530,10 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             {
                 proc_type->info.proc_info.definition = subprogram;
             }
+            /* Copy default parameter values from forward declaration to implementation */
+            copy_default_values_to_impl_params(
+                proc_type->info.proc_info.params,
+                subprogram->tree_data.subprogram_data.args_var);
         }
         else
         {
@@ -7572,6 +7643,10 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                     existing_decl->type->info.proc_info.definition = subprogram;
                 }
             }
+            /* Copy default parameter values from forward declaration to implementation */
+            copy_default_values_to_impl_params(
+                existing_decl->type->info.proc_info.params,
+                subprogram->tree_data.subprogram_data.args_var);
         }
 
         /* If the predeclare step could not resolve the type (e.g., inline array),

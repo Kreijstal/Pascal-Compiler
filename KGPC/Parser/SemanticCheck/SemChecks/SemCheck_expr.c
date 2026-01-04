@@ -9320,7 +9320,14 @@ static int count_required_params(ListNode_t *params)
     while (cur != NULL)
     {
         Tree_t *param_decl = (Tree_t *)cur->cur;
-        if (!param_has_default_value(param_decl))
+        int has_default = param_has_default_value(param_decl);
+        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+            const char *param_id = "?";
+            if (param_decl && param_decl->type == TREE_VAR_DECL && param_decl->tree_data.var_decl_data.ids)
+                param_id = (char *)param_decl->tree_data.var_decl_data.ids->cur;
+            fprintf(stderr, "[SemCheck] count_required_params: param=%s has_default=%d\n", param_id, has_default);
+        }
+        if (!has_default)
             required++;
         else
             break;  /* All remaining params have defaults */
