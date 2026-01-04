@@ -663,6 +663,57 @@ static void add_class_vars_to_method_scope(SymTab_t *symtab, const char *method_
         field_node = field_node->next;
     }
 
+    /* Add other static methods of the same class to scope, so they can be
+     * called without full qualification from within a static method. */
+    ListNode_t *class_methods = NULL;
+    int method_count = 0;
+    get_class_methods(class_name, &class_methods, &method_count);
+    
+    ListNode_t *cur_method = class_methods;
+    while (cur_method != NULL)
+    {
+        ClassMethodBinding *binding = (ClassMethodBinding *)cur_method->cur;
+        if (binding != NULL && binding->method_name != NULL && binding->method_name[0] != '\0')
+        {
+            /* Build the mangled name: ClassName__MethodName */
+            size_t mangled_len = strlen(class_name) + 2 + strlen(binding->method_name) + 1;
+            char *mangled_name = (char *)malloc(mangled_len);
+            if (mangled_name != NULL)
+            {
+                snprintf(mangled_name, mangled_len, "%s__%s", class_name, binding->method_name);
+                
+                /* Look up the mangled method in the symbol table */
+                HashNode_t *method_node = NULL;
+                if (FindIdent(&method_node, symtab, mangled_name) != -1 && method_node != NULL)
+                {
+                    /* Add an alias using just the method name */
+                    HashNode_t *existing = NULL;
+                    if (FindIdent(&existing, symtab, binding->method_name) == -1)
+                    {
+                        /* Push the method onto scope using its short name */
+                        if (method_node->type != NULL)
+                        {
+                            kgpc_type_retain(method_node->type);
+                            PushFunctionOntoScope_Typed(symtab, binding->method_name,
+                                                        mangled_name, method_node->type);
+                            destroy_kgpc_type(method_node->type);
+                        }
+                    }
+                }
+                free(mangled_name);
+            }
+        }
+        cur_method = cur_method->next;
+    }
+    
+    /* Clean up the class_methods list */
+    while (class_methods != NULL)
+    {
+        ListNode_t *next = class_methods->next;
+        free(class_methods);
+        class_methods = next;
+    }
+
     free(class_name);
 }
 

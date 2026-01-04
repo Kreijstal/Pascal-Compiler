@@ -10263,10 +10263,11 @@ int semcheck_funccall(int *type_return,
         semcheck_expr_main(&first_arg_type_tag, symtab, first_arg, max_scope_lev, NO_MUTATE);
         
         if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
-             fprintf(stderr, "[SemCheck] semcheck_funccall: first_arg=%p type=%d id=%s record_type=%p\n", 
+             fprintf(stderr, "[SemCheck] semcheck_funccall: first_arg=%p type=%d id=%s record_type=%p resolved_kgpc_type=%p\n", 
                  (void*)first_arg, first_arg->type, 
                  (first_arg->type == EXPR_VAR_ID) ? first_arg->expr_data.id : "N/A",
-                 first_arg->record_type);
+                 first_arg->record_type,
+                 first_arg->resolved_kgpc_type);
         }
         
         /* Check if first arg is a TYPE (for class constructor) or INSTANCE (for method) */
@@ -10275,95 +10276,126 @@ int semcheck_funccall(int *type_return,
         /* Wait, if MyException is a TYPE, semcheck_expr returns TYPE_KIND_TYPE? */
         /* Or the type tag of the type? */
         
-        if (first_arg->resolved_kgpc_type != NULL) {
-             /* If it's a record/class type, look up the method in it */
-             KgpcType *owner_type = first_arg->resolved_kgpc_type;
-             struct RecordType *record_info = NULL;
-             
+        /* Get the record info from either resolved_kgpc_type or record_type */
+        KgpcType *owner_type = first_arg->resolved_kgpc_type;
+        struct RecordType *record_info = NULL;
+        
+        if (owner_type != NULL) {
              if (owner_type->kind == TYPE_KIND_RECORD) {
                  record_info = owner_type->info.record_info;
-             } else if (owner_type->kind == TYPE_KIND_POINTER && owner_type->info.points_to->kind == TYPE_KIND_RECORD) {
+             } else if (owner_type->kind == TYPE_KIND_POINTER && 
+                        owner_type->info.points_to != NULL &&
+                        owner_type->info.points_to->kind == TYPE_KIND_RECORD) {
                  record_info = owner_type->info.points_to->info.record_info;
              }
-             
-             if (record_info != NULL) {
-                 HashNode_t *method_node = semcheck_find_class_method(symtab, record_info, id, NULL);
-                 if (method_node != NULL) {
+        }
+        
+        /* Fallback to record_type if resolved_kgpc_type didn't give us a record */
+        if (record_info == NULL && first_arg->record_type != NULL) {
+            record_info = first_arg->record_type;
+            /* Also need to set owner_type for return type determination later */
+            if (owner_type == NULL && record_info != NULL) {
+                /* Look up the type to get its KgpcType */
+                HashNode_t *type_node = NULL;
+                if (record_info->type_id != NULL &&
+                    FindIdent(&type_node, symtab, record_info->type_id) != -1 &&
+                    type_node != NULL && type_node->type != NULL) {
+                    owner_type = type_node->type;
+                }
+            }
+        }
+        
+        if (record_info != NULL && record_info->type_id != NULL) {
+            /* Build the mangled method name: ClassName__MethodName */
+            size_t class_len = strlen(record_info->type_id);
+            size_t method_len = strlen(id);
+            char *mangled_method_name = (char *)malloc(class_len + 2 + method_len + 1);
+            if (mangled_method_name != NULL) {
+                snprintf(mangled_method_name, class_len + 2 + method_len + 1, "%s__%s",
+                         record_info->type_id, id);
+                
+                /* Look up ALL overloads of this method */
+                ListNode_t *method_candidates = FindAllIdents(symtab, mangled_method_name);
+                
+                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                    fprintf(stderr, "[SemCheck] semcheck_funccall: Looking for '%s' found %d candidates\n", 
+                        mangled_method_name, ListLength(method_candidates));
+                }
+                
+                if (method_candidates != NULL) {
+                    /* Found at least one method overload */
                     if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
-                         fprintf(stderr, "[SemCheck] semcheck_funccall: Found constructor/method %s in class\n", id);
-                     }
-                     
-                     /* It's a method call! */
-                     /* We need to set the return type */
-                     set_type_from_hashtype(type_return, method_node);
-                     semcheck_expr_set_resolved_kgpc_type_shared(expr, method_node->type);
-                     expr->expr_data.function_call_data.resolved_func = method_node;
-                     const char *resolved_method_name = (method_node->mangled_id != NULL) ?
-                        method_node->mangled_id : method_node->id;
-                     if (expr->expr_data.function_call_data.mangled_id != NULL)
-                         free(expr->expr_data.function_call_data.mangled_id);
-                     expr->expr_data.function_call_data.mangled_id =
-                        (resolved_method_name != NULL) ? strdup(resolved_method_name) : NULL;
-                     
-                     if (strcasecmp(id, "Create") == 0) {
-                         if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
-                             fprintf(stderr, "[SemCheck] semcheck_funccall: Fixing return type for Create\n");
-                             fprintf(stderr, "[SemCheck]   expr=%p\n", (void*)expr);
-                             fprintf(stderr, "[SemCheck]   owner_type kind=%d\n", owner_type->kind);
-                         }
-
-                         /* Return type is the class itself (pointer to record) */
-                         if (owner_type->kind == TYPE_KIND_RECORD) {
-                             if (first_arg->resolved_kgpc_type != NULL) {
-                                 if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
-                                     fprintf(stderr, "[SemCheck]   first_arg type kind=%d\n", first_arg->resolved_kgpc_type->kind);
-                                 }
-                                 
-                                 /* Handle both POINTER (class) and RECORD (object/record) types */
-                                 if (first_arg->resolved_kgpc_type->kind == TYPE_KIND_POINTER || 
-                                     first_arg->resolved_kgpc_type->kind == TYPE_KIND_RECORD) {
-                                      semcheck_expr_set_resolved_kgpc_type_shared(expr, first_arg->resolved_kgpc_type);
-                                      *type_return = kgpc_type_get_legacy_tag(first_arg->resolved_kgpc_type);
-                                      /* Also set record_type for compatibility */
-                                      expr->record_type = first_arg->record_type;
-                                      if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
-                                          fprintf(stderr, "[SemCheck]   Set return type to %s (tag=%d), record_type=%p\n", 
-                                              (first_arg->resolved_kgpc_type->kind == TYPE_KIND_POINTER) ? "POINTER" : "RECORD", 
-                                              *type_return, (void*)expr->record_type);
-                                      }
-                                 }
-                             }
-                         } else {
-                             semcheck_expr_set_resolved_kgpc_type_shared(expr, owner_type);
-                             *type_return = kgpc_type_get_legacy_tag(owner_type);
-                             /* Also set record_type for compatibility */
-                             if (owner_type->kind == TYPE_KIND_POINTER && owner_type->info.points_to != NULL &&
-                                 owner_type->info.points_to->kind == TYPE_KIND_RECORD) {
-                                 expr->record_type = owner_type->info.points_to->info.record_info;
-                             } else if (owner_type->kind == TYPE_KIND_RECORD) {
-                                 expr->record_type = owner_type->info.record_info;
-                             }
-                             if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
-                                 fprintf(stderr, "[SemCheck]   Set return type to owner type (tag=%d), record_type=%p\n", 
-                                     *type_return, (void*)expr->record_type);
-                             }
-                         }
-                     }
-                     
-                     /* Continue to normal argument processing below instead of returning early.
-                      * This ensures constructor arguments are validated and processed correctly.
-                      * The method_node and return type have already been set above. */
-                     if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
-                         fprintf(stderr, "[SemCheck] After setting constructor return type:\n");
-                         fprintf(stderr, "[SemCheck]   expr->resolved_kgpc_type=%p\n", (void*)expr->resolved_kgpc_type);
-                         if (expr->resolved_kgpc_type != NULL) {
-                             fprintf(stderr, "[SemCheck]   expr->resolved_kgpc_type->kind=%d\n", expr->resolved_kgpc_type->kind);
-                         }
-                         fprintf(stderr, "[SemCheck]   expr->record_type=%p\n", (void*)expr->record_type);
-                     }
-                     goto constructor_resolved;
-                 }
-             }
+                        fprintf(stderr, "[SemCheck] semcheck_funccall: Found constructor/method %s in class\n", id);
+                    }
+                    
+                    /* Remove the first argument (the class reference) from the argument list
+                     * since it's not a real argument to the constructor */
+                    ListNode_t *old_head = args_given;
+                    expr->expr_data.function_call_data.args_expr = old_head->next;
+                    old_head->next = NULL;  /* Detach to prevent dangling reference */
+                    ListNode_t *user_args = expr->expr_data.function_call_data.args_expr;
+                    
+                    /* For constructors, add a placeholder Self argument at the front.
+                     * Constructors have Self as first parameter, but from user's perspective
+                     * they don't pass Self - it's implicitly created.
+                     * We use EXPR_NIL as the placeholder - codegen will allocate memory. */
+                    struct Expression *self_placeholder = (struct Expression *)calloc(1, sizeof(struct Expression));
+                    if (self_placeholder != NULL) {
+                        /* Use nil as the placeholder - codegen will handle actual allocation */
+                        self_placeholder->type = EXPR_NIL;
+                        self_placeholder->resolved_type = POINTER_TYPE;
+                        self_placeholder->line_num = expr->line_num;
+                        /* Set the resolved_kgpc_type to match the class type for proper type matching */
+                        if (owner_type != NULL) {
+                            kgpc_type_retain(owner_type);
+                            self_placeholder->resolved_kgpc_type = owner_type;
+                        }
+                        /* Set record_type for class pointer compatibility */
+                        self_placeholder->record_type = record_info;
+                        
+                        ListNode_t *self_node = CreateListNode(self_placeholder, LIST_EXPR);
+                        if (self_node != NULL) {
+                            self_node->next = user_args;
+                            expr->expr_data.function_call_data.args_expr = self_node;
+                            args_given = self_node;
+                        }
+                    }
+                    
+                    /* Update the function call id to the mangled name */
+                    if (expr->expr_data.function_call_data.id != NULL)
+                        free(expr->expr_data.function_call_data.id);
+                    expr->expr_data.function_call_data.id = strdup(mangled_method_name);
+                    if (expr->expr_data.function_call_data.mangled_id != NULL)
+                        free(expr->expr_data.function_call_data.mangled_id);
+                    expr->expr_data.function_call_data.mangled_id = strdup(mangled_method_name);
+                    id = expr->expr_data.function_call_data.id;
+                    
+                    /* Set up overload candidates for normal resolution */
+                    overload_candidates = method_candidates;
+                    
+                    /* For Create, set up the return type */
+                    if (strcasecmp(id + class_len + 2, "Create") == 0 && owner_type != NULL) {
+                        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                            fprintf(stderr, "[SemCheck] semcheck_funccall: Setting up return type for Create\n");
+                        }
+                        
+                        /* Return type is the class itself (pointer to record) */
+                        semcheck_expr_set_resolved_kgpc_type_shared(expr, owner_type);
+                        *type_return = kgpc_type_get_legacy_tag(owner_type);
+                        if (owner_type->kind == TYPE_KIND_POINTER && owner_type->info.points_to != NULL &&
+                            owner_type->info.points_to->kind == TYPE_KIND_RECORD) {
+                            expr->record_type = owner_type->info.points_to->info.record_info;
+                        } else if (owner_type->kind == TYPE_KIND_RECORD) {
+                            expr->record_type = owner_type->info.record_info;
+                        }
+                    }
+                    
+                    free(mangled_method_name);
+                    /* Continue to normal overload resolution */
+                    goto method_call_resolved;
+                }
+                free(mangled_method_name);
+            }
         }
     }
 
