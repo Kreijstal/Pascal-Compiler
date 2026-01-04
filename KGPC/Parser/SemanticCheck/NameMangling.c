@@ -326,17 +326,28 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
                 else if (kgpc_type->kind == TYPE_KIND_PROCEDURE)
                     resolved_type = HASHVAR_PROCEDURE;
                 
-                /* Check for specific string types via type alias */
-                struct TypeAlias *alias = kgpc_type_get_type_alias(kgpc_type);
-                if (alias != NULL)
+                /* Check for specific string types via type alias.
+                 * We skip this for integer/real literals since they can't be string types.
+                 * The resolved_kgpc_type->type_alias may point to stale data when expressions
+                 * are converted during semantic checking (e.g., EXPR_VAR_ID -> EXPR_INUM for constants). */
+                if (arg_expr != NULL && 
+                    arg_expr->type != EXPR_INUM && 
+                    arg_expr->type != EXPR_RNUM &&
+                    arg_expr->type != EXPR_BOOL &&
+                    arg_expr->type != EXPR_CHAR_CODE &&
+                    arg_expr->type != EXPR_NIL)
                 {
-                    const char *n1 = alias->alias_name;
-                    const char *n2 = alias->target_type_id;
-                    
-                    if ((n1 && strcasecmp(n1, "RawByteString") == 0) || (n2 && strcasecmp(n2, "RawByteString") == 0))
-                        resolved_type = HASHVAR_RAWBYTESTRING;
-                    else if ((n1 && strcasecmp(n1, "UnicodeString") == 0) || (n2 && strcasecmp(n2, "UnicodeString") == 0))
-                        resolved_type = HASHVAR_UNICODESTRING;
+                    struct TypeAlias *alias = kgpc_type_get_type_alias(kgpc_type);
+                    if (alias != NULL)
+                    {
+                        const char *n1 = alias->alias_name;
+                        const char *n2 = alias->target_type_id;
+                        
+                        if ((n1 && strcasecmp(n1, "RawByteString") == 0) || (n2 && strcasecmp(n2, "RawByteString") == 0))
+                            resolved_type = HASHVAR_RAWBYTESTRING;
+                        else if ((n1 && strcasecmp(n1, "UnicodeString") == 0) || (n2 && strcasecmp(n2, "UnicodeString") == 0))
+                            resolved_type = HASHVAR_UNICODESTRING;
+                    }
                 }
             }
             
