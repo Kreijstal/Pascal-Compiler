@@ -5650,6 +5650,9 @@ static int semcheck_pointer_deref(int *type_return,
         }
     }
 
+    /* Set the expression's resolved type to the pointed-to type.
+     * This is critical for code generation to emit correct-sized loads. */
+    expr->resolved_type = target_type;
     *type_return = target_type;
     return error_count;
 }
