@@ -4181,6 +4181,9 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
             case TYPE_DECL_ALIAS:
             {
                 alias_info = &tree->tree_data.type_decl_data.info.alias;
+                if (alias_info->alias_name == NULL && tree->tree_data.type_decl_data.id != NULL)
+                    alias_info->alias_name = strdup(tree->tree_data.type_decl_data.id);
+                
                 alias_info->is_char_alias = semcheck_alias_should_be_char_like(
                     tree->tree_data.type_decl_data.id, alias_info->target_type_id) &&
                     !alias_info->is_pointer && !alias_info->is_array && !alias_info->is_set &&
@@ -5056,6 +5059,7 @@ static void add_builtin_alias_type(SymTab_t *symtab, const char *name, int base_
     struct TypeAlias *alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
     if (alias == NULL)
         return;
+    alias->alias_name = strdup(name);
     alias->base_type = base_type;
     alias->storage_size = storage_size;
 
@@ -5074,6 +5078,25 @@ static void add_builtin_from_vartype(SymTab_t *symtab, const char *name, enum Va
 {
     KgpcType *t = kgpc_type_from_var_type(vt);
     assert(t != NULL && "Failed to create builtin type");
+    add_builtin_type_owned(symtab, name, t);
+}
+
+/* Add a string type with explicit type alias to preserve type identity for mangling */
+static void add_builtin_string_type_with_alias(SymTab_t *symtab, const char *name, enum VarType vt)
+{
+    KgpcType *t = kgpc_type_from_var_type(vt);
+    assert(t != NULL && "Failed to create builtin type");
+    
+    /* Create and attach a type alias with the specific type name */
+    struct TypeAlias *alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
+    if (alias != NULL)
+    {
+        alias->base_type = STRING_TYPE;
+        alias->target_type_id = strdup(name);
+        alias->alias_name = strdup(name);
+        kgpc_type_set_type_alias(t, alias);
+    }
+    
     add_builtin_type_owned(symtab, name, t);
 }
 
@@ -5206,8 +5229,8 @@ void semcheck_add_builtins(SymTab_t *symtab)
     add_builtin_type_owned(symtab, "WideChar", create_primitive_type_with_size(CHAR_TYPE, 2));
     add_builtin_from_vartype(symtab, "String", HASHVAR_PCHAR);
     add_builtin_from_vartype(symtab, "AnsiString", HASHVAR_PCHAR);
-    add_builtin_from_vartype(symtab, "RawByteString", HASHVAR_PCHAR);
-    add_builtin_from_vartype(symtab, "UnicodeString", HASHVAR_PCHAR);
+    add_builtin_string_type_with_alias(symtab, "RawByteString", HASHVAR_PCHAR);
+    add_builtin_string_type_with_alias(symtab, "UnicodeString", HASHVAR_PCHAR);
     add_builtin_from_vartype(symtab, "WideString", HASHVAR_PCHAR);
     if (!stdlib_loaded_flag())
     {

@@ -3,6 +3,7 @@
 
 #include "../List/List.h"
 #include "SymTab/SymTab.h"
+#include "HashTable/HashTable.h"
 
 // Generates a mangled name for a function from its declaration.
 // The caller is responsible for freeing the returned string.
