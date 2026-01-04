@@ -1055,10 +1055,14 @@ void init_pascal_statement_parser(combinator_t** p) {
     
     // Constant expressions for case labels - more flexible than simple values
     // but restricted to avoid conflicts with statement parsing
+    // Note: boolean literals (true/false) must come BEFORE cident to avoid being
+    // parsed as identifiers
     combinator_t* const_expr_factor = multi(new_combinator(), PASCAL_T_NONE,
         integer(PASCAL_T_INTEGER),
         char_literal(PASCAL_T_CHAR),
         control_char_literal(PASCAL_T_CHAR),
+        token(create_keyword_parser("true", PASCAL_T_BOOLEAN)),   // Boolean true
+        token(create_keyword_parser("false", PASCAL_T_BOOLEAN)),  // Boolean false
         cident(PASCAL_T_IDENTIFIER),
         between(token(match("(")), token(match(")")), lazy(expr_parser)), // parenthesized expressions
         NULL);

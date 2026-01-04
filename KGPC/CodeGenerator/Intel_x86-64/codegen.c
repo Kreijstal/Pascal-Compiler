@@ -26,6 +26,7 @@
 #include "../../Parser/ParseTree/type_tags.h"
 #include "../../Parser/ParseTree/KgpcType.h"
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
+#include "../../Parser/SemanticCheck/SemChecks/SemCheck_expr.h"
 
 #define CODEGEN_POINTER_SIZE_BYTES 8
 #define CODEGEN_LABEL_BUFFER_SIZE 256
@@ -35,6 +36,8 @@ static int codegen_dynamic_array_element_size_from_type(CodeGenContext *ctx, Kgp
 static int codegen_dynamic_array_descriptor_bytes(int element_size);
 static void add_alias_for_return_var(StackNode_t *return_var, const char *alias_label);
 static int add_absolute_var_alias(const char *alias_label, const char *target_label);
+static int add_absolute_var_alias_with_offset(const char *alias_label, const char *target_label,
+    int field_offset, int alias_size);
 static void add_result_alias_for_return_var(StackNode_t *return_var);
 static ListNode_t *codegen_store_class_typeinfo(ListNode_t *inst_list,
     CodeGenContext *ctx, StackNode_t *var_node, const char *type_name);
@@ -63,6 +66,26 @@ static inline int node_is_file_type(HashNode_t *node)
 static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
 {
     return hashnode_get_record_type(node);
+}
+
+/* Get field offset within a record by field name.
+ * Returns -1 if field not found. */
+static int record_type_get_field_offset(SymTab_t *symtab, struct RecordType *record,
+    const char *field_name)
+{
+    if (record == NULL || field_name == NULL)
+        return -1;
+
+    struct RecordField *field_desc = NULL;
+    long long offset = 0;
+    if (resolve_record_field(symtab, record, field_name, &field_desc, &offset, 0, 1) != 0 ||
+        field_desc == NULL)
+        return -1;
+
+    if (offset < 0 || offset > INT_MAX)
+        return -1;
+
+    return (int)offset;
 }
 
 static inline int node_is_class_type(HashNode_t *node)
@@ -1683,10 +1706,46 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                         const char *absolute_target = tree->tree_data.var_decl_data.absolute_target;
                         if (absolute_target != NULL && id_list != NULL && id_list->next == NULL)
                         {
-                            if (strchr(absolute_target, '.') != NULL)
+                            const char *dot = strchr(absolute_target, '.');
+                            if (dot != NULL)
                             {
+                                /* Record field alias: extract base var and field name */
+                                size_t base_len = (size_t)(dot - absolute_target);
+                                char *base_var = (char *)malloc(base_len + 1);
+                                if (base_var != NULL)
+                                {
+                                    strncpy(base_var, absolute_target, base_len);
+                                    base_var[base_len] = '\0';
+                                    const char *field_name = dot + 1;
+                                    
+                                    /* Look up base variable in symbol table to get record type */
+                                    int field_offset = -1;
+                                    HashNode_t *base_node = NULL;
+                                    if (ctx->symtab != NULL &&
+                                        FindIdent(&base_node, ctx->symtab, base_var) >= 0 &&
+                                        base_node != NULL)
+                                    {
+                                        struct RecordType *record = get_record_type_from_node(base_node);
+                                        if (record != NULL)
+                                        {
+                                            field_offset = record_type_get_field_offset(ctx->symtab, record, field_name);
+                                        }
+                                    }
+                                    
+                                    if (field_offset >= 0)
+                                    {
+                                        if (add_absolute_var_alias_with_offset((char *)id_list->cur, 
+                                            base_var, field_offset, alloc_size) == 0)
+                                        {
+                                            free(base_var);
+                                            id_list = id_list->next;
+                                            continue;
+                                        }
+                                    }
+                                    free(base_var);
+                                }
                                 fprintf(stderr,
-                                    "Warning: absolute variable alias to record field '%s' not supported yet.\n",
+                                    "Warning: absolute variable alias to record field '%s' failed to resolve.\n",
                                     absolute_target);
                             }
                             else if (add_absolute_var_alias((char *)id_list->cur, absolute_target) == 0)
@@ -1737,10 +1796,46 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                         const char *absolute_target = tree->tree_data.var_decl_data.absolute_target;
                         if (absolute_target != NULL && id_list != NULL && id_list->next == NULL)
                         {
-                            if (strchr(absolute_target, '.') != NULL)
+                            const char *dot = strchr(absolute_target, '.');
+                            if (dot != NULL)
                             {
+                                /* Record field alias: extract base var and field name */
+                                size_t base_len = (size_t)(dot - absolute_target);
+                                char *base_var = (char *)malloc(base_len + 1);
+                                if (base_var != NULL)
+                                {
+                                    strncpy(base_var, absolute_target, base_len);
+                                    base_var[base_len] = '\0';
+                                    const char *field_name = dot + 1;
+                                    
+                                    /* Look up base variable in symbol table to get record type */
+                                    int field_offset = -1;
+                                    HashNode_t *base_node = NULL;
+                                    if (ctx->symtab != NULL &&
+                                        FindIdent(&base_node, ctx->symtab, base_var) >= 0 &&
+                                        base_node != NULL)
+                                    {
+                                        struct RecordType *record = get_record_type_from_node(base_node);
+                                        if (record != NULL)
+                                        {
+                                            field_offset = record_type_get_field_offset(ctx->symtab, record, field_name);
+                                        }
+                                    }
+                                    
+                                    if (field_offset >= 0)
+                                    {
+                                        if (add_absolute_var_alias_with_offset((char *)id_list->cur, 
+                                            base_var, field_offset, alloc_size) == 0)
+                                        {
+                                            free(base_var);
+                                            id_list = id_list->next;
+                                            continue;
+                                        }
+                                    }
+                                    free(base_var);
+                                }
                                 fprintf(stderr,
-                                    "Warning: absolute variable alias to record field '%s' not supported yet.\n",
+                                    "Warning: absolute variable alias to record field '%s' failed to resolve.\n",
                                     absolute_target);
                             }
                             else if (add_absolute_var_alias((char *)id_list->cur, absolute_target) == 0)
@@ -2749,6 +2844,67 @@ static int add_absolute_var_alias(const char *alias_label, const char *target_la
     alias->is_static = target->is_static;
     if (target->static_label != NULL)
         alias->static_label = strdup(target->static_label);
+
+    StackScope_t *cur_scope = get_cur_scope();
+    if (cur_scope == NULL)
+    {
+        destroy_stack_node(alias);
+        return 1;
+    }
+
+    ListNode_t *new_list_node = CreateListNode(alias, LIST_UNSPECIFIED);
+    if (new_list_node == NULL)
+    {
+        destroy_stack_node(alias);
+        return 1;
+    }
+
+    if (cur_scope->x == NULL)
+        cur_scope->x = new_list_node;
+    else
+        cur_scope->x = PushListNodeBack(cur_scope->x, new_list_node);
+
+    return 0;
+}
+
+/* Add absolute alias with offset for record field access.
+ * Creates an alias variable that points to base_var + field_offset. */
+static int add_absolute_var_alias_with_offset(const char *alias_label, const char *target_label,
+    int field_offset, int alias_size)
+{
+    if (alias_label == NULL || alias_label[0] == '\0' ||
+        target_label == NULL || target_label[0] == '\0')
+        return 1;
+
+    StackNode_t *target = find_label((char *)target_label);
+    if (target == NULL)
+        return 1;
+
+    /* Create alias with adjusted offset: target offset + field offset */
+    int adjusted_offset = target->offset + field_offset;
+    StackNode_t *alias = init_stack_node(adjusted_offset, (char *)alias_label, alias_size);
+    if (alias == NULL)
+        return 1;
+
+    alias->element_size = alias_size;
+    alias->is_alias = 1;
+    alias->is_static = target->is_static;
+    if (target->static_label != NULL)
+    {
+        /* For static variables, create a new label with offset suffix.
+         * The assembly will reference base+offset. */
+        size_t label_len = strlen(target->static_label) + 32;
+        char *offset_label = (char *)malloc(label_len);
+        if (offset_label != NULL)
+        {
+            snprintf(offset_label, label_len, "%s+%d", target->static_label, field_offset);
+            alias->static_label = offset_label;
+        }
+        else
+        {
+            alias->static_label = strdup(target->static_label);
+        }
+    }
 
     StackScope_t *cur_scope = get_cur_scope();
     if (cur_scope == NULL)
