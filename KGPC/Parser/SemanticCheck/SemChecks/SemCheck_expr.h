@@ -59,6 +59,9 @@ int semcheck_prepare_record_constructor_argument(Tree_t *formal_decl, struct Exp
 
 int semcheck_compute_record_size(SymTab_t *symtab, struct RecordType *record,
     long long *size_out, int line_num);
+int resolve_record_field(SymTab_t *symtab, struct RecordType *record,
+    const char *field_name, struct RecordField **out_field, long long *offset_out,
+    int line_num, int silent);
 
 struct ClassProperty *semcheck_find_class_property(SymTab_t *symtab,
     struct RecordType *record_info, const char *property_name,

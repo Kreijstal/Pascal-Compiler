@@ -26,6 +26,7 @@
 #include "../../Parser/ParseTree/type_tags.h"
 #include "../../Parser/ParseTree/KgpcType.h"
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
+#include "../../Parser/SemanticCheck/SemChecks/SemCheck_expr.h"
 
 #define CODEGEN_POINTER_SIZE_BYTES 8
 #define CODEGEN_LABEL_BUFFER_SIZE 256
@@ -69,38 +70,22 @@ static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
 
 /* Get field offset within a record by field name.
  * Returns -1 if field not found. */
-static int record_type_get_field_offset(struct RecordType *record, const char *field_name)
+static int record_type_get_field_offset(SymTab_t *symtab, struct RecordType *record,
+    const char *field_name)
 {
     if (record == NULL || field_name == NULL)
         return -1;
-    
-    int offset = 0;
-    ListNode_t *cur = record->fields;
-    while (cur != NULL)
-    {
-        if (cur->type == LIST_RECORD_FIELD && cur->cur != NULL)
-        {
-            struct RecordField *field = (struct RecordField *)cur->cur;
-            if (field->name != NULL && strcmp(field->name, field_name) == 0)
-                return offset;
-            
-            /* Calculate size of this field */
-            int field_size = 4; /* Default to 4 bytes (LongInt) */
-            if (field->type == CHAR_TYPE)
-                field_size = 1;
-            else if (field->type == INT_TYPE || field->type == LONGINT_TYPE)
-                field_size = 4;
-            else if (field->type == INT64_TYPE || field->type == REAL_TYPE ||
-                     field->type == POINTER_TYPE || field->type == STRING_TYPE)
-                field_size = 8;
-            else if (field->type == BOOL)
-                field_size = 1;
-            
-            offset += field_size;
-        }
-        cur = cur->next;
-    }
-    return -1; /* Field not found */
+
+    struct RecordField *field_desc = NULL;
+    long long offset = 0;
+    if (resolve_record_field(symtab, record, field_name, &field_desc, &offset, 0, 1) != 0 ||
+        field_desc == NULL)
+        return -1;
+
+    if (offset < 0 || offset > INT_MAX)
+        return -1;
+
+    return (int)offset;
 }
 
 static inline int node_is_class_type(HashNode_t *node)
@@ -1743,7 +1728,7 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                                         struct RecordType *record = get_record_type_from_node(base_node);
                                         if (record != NULL)
                                         {
-                                            field_offset = record_type_get_field_offset(record, field_name);
+                                            field_offset = record_type_get_field_offset(ctx->symtab, record, field_name);
                                         }
                                     }
                                     
@@ -1833,7 +1818,7 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                                         struct RecordType *record = get_record_type_from_node(base_node);
                                         if (record != NULL)
                                         {
-                                            field_offset = record_type_get_field_offset(record, field_name);
+                                            field_offset = record_type_get_field_offset(ctx->symtab, record, field_name);
                                         }
                                     }
                                     

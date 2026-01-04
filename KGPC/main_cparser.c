@@ -1175,6 +1175,8 @@ int main(int argc, char **argv)
     if (time_passes_flag())
         atexit(emit_timing_summary);
 
+    pascal_frontend_reset_objfpc_mode();
+
     bool use_stdlib = !g_skip_stdlib;
     char *prelude_path = NULL;
     if (use_stdlib)

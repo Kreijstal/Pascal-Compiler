@@ -624,7 +624,8 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
 
     /* Detect {$MODE objfpc} in the preprocessed source.
      * If found, set flag so ObjPas unit can be auto-imported. */
-    g_objfpc_mode_detected = detect_objfpc_mode(buffer, length);
+    if (detect_objfpc_mode(buffer, length))
+        g_objfpc_mode_detected = true;
 
     const char *dump_path = getenv("KGPC_DUMP_PREPROCESSED");
     if (dump_path != NULL && dump_path[0] != '\0')
