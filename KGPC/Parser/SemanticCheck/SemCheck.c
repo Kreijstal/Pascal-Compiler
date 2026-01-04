@@ -556,6 +556,116 @@ static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
     return NULL;
 }
 
+/**
+ * For a method implementation (ClassName__MethodName), add class vars to scope
+ * so they can be referenced within the method body. This is essential for
+ * static methods which have no implicit Self parameter.
+ */
+static void add_class_vars_to_method_scope(SymTab_t *symtab, const char *method_id)
+{
+    if (symtab == NULL || method_id == NULL)
+        return;
+
+    /* Check if this is a method (contains "__") */
+    const char *sep = strstr(method_id, "__");
+    if (sep == NULL || sep == method_id)
+        return;
+
+    /* Extract class name */
+    size_t class_name_len = (size_t)(sep - method_id);
+    char *class_name = (char *)malloc(class_name_len + 1);
+    if (class_name == NULL)
+        return;
+    memcpy(class_name, method_id, class_name_len);
+    class_name[class_name_len] = '\0';
+
+    /* For generic types (containing < or >), skip this lookup as
+     * the type resolution is handled differently for generics. */
+    if (strchr(class_name, '<') != NULL || strchr(class_name, '>') != NULL)
+    {
+        free(class_name);
+        return;
+    }
+
+    /* Extract method name */
+    const char *method_name = sep + 2;
+    if (method_name[0] == '\0')
+    {
+        free(class_name);
+        return;
+    }
+
+    /* Only add class fields for static methods. Non-static methods
+     * access fields via Self which is handled differently. */
+    if (!from_cparser_is_method_static(class_name, method_name))
+    {
+        free(class_name);
+        return;
+    }
+
+    /* Look up the class type */
+    HashNode_t *class_node = NULL;
+    int lookup_result = FindIdent(&class_node, symtab, class_name);
+    if (lookup_result == -1 || class_node == NULL)
+    {
+        free(class_name);
+        return;
+    }
+
+    struct RecordType *record_info = get_record_type_from_node(class_node);
+    if (record_info == NULL)
+    {
+        free(class_name);
+        return;
+    }
+
+    /* Only process class types, not regular records */
+    if (!record_type_is_class(record_info))
+    {
+        free(class_name);
+        return;
+    }
+
+    /* Add class vars from the record fields to the current scope.
+     * Class vars are stored in the record's fields list.
+     * For class types, all fields are accessible in methods. */
+    ListNode_t *field_node = record_info->fields;
+    while (field_node != NULL)
+    {
+        struct RecordField *field = (struct RecordField *)field_node->cur;
+        if (field != NULL && field->name != NULL && field->name[0] != '\0')
+        {
+            /* Check if already defined in scope */
+            HashNode_t *existing = NULL;
+            if (FindIdent(&existing, symtab, field->name) == -1)
+            {
+                /* Build a KgpcType for this field if needed */
+                KgpcType *field_type = NULL;
+                if (field->type_id != NULL && field->type_id[0] != '\0')
+                {
+                    HashNode_t *type_node = NULL;
+                    if (FindIdent(&type_node, symtab, field->type_id) != -1 &&
+                        type_node != NULL && type_node->type != NULL)
+                    {
+                        field_type = type_node->type;
+                        kgpc_type_retain(field_type);
+                    }
+                }
+                
+                /* Push onto scope - using typed variant */
+                PushVarOntoScope_Typed(symtab, field->name, field_type);
+                
+                /* Release our ref if we retained it */
+                if (field_type != NULL)
+                    destroy_kgpc_type(field_type);
+            }
+        }
+        field_node = field_node->next;
+    }
+
+    free(class_name);
+}
+
 static HashNode_t *semcheck_find_preferred_type_node(SymTab_t *symtab, const char *type_id)
 {
     if (symtab == NULL || type_id == NULL)
@@ -7377,6 +7487,9 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
 
         PushScope(symtab);
         
+        /* For method implementations, add class vars to scope */
+        add_class_vars_to_method_scope(symtab, subprogram->tree_data.subprogram_data.id);
+        
         if (existing_decl != NULL && existing_decl->type != NULL)
         {
             kgpc_type_retain(existing_decl->type);
@@ -7471,6 +7584,10 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         }
 
         PushScope(symtab);
+        
+        /* For method implementations, add class vars to scope */
+        add_class_vars_to_method_scope(symtab, subprogram->tree_data.subprogram_data.id);
+        
         // **THIS IS THE FIX FOR THE RETURN VALUE**:
         // Use the ORIGINAL name for the internal return variable with KgpcType
         // Always use _Typed variant, even if KgpcType is NULL
