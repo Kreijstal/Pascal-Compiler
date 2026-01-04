@@ -4946,6 +4946,12 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
     if (expr_get_type_tag(var_expr) == SET_TYPE && expr_is_char_set_ctx(var_expr, ctx))
         return codegen_assign_record_value(var_expr, assign_expr, inst_list, ctx);
 
+    /* ShortStrings need record-like handling when assigned from function calls
+     * because they use SRET (struct return) convention */
+    if (codegen_expr_is_shortstring_array(var_expr) &&
+        assign_expr != NULL && assign_expr->type == EXPR_FUNCTION_CALL)
+        return codegen_assign_record_value(var_expr, assign_expr, inst_list, ctx);
+
     if (var_expr->type == EXPR_VAR_ID)
     {
         if (expr_is_dynamic_array(var_expr))

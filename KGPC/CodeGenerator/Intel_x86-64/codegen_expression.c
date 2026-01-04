@@ -1210,9 +1210,17 @@ int expr_returns_sret(const struct Expression *expr)
     if (expr_has_type_tag(expr, RECORD_TYPE))
         return 1;
 
+    /* ShortStrings are passed via SRET because they're small fixed-size arrays */
+    if (expr_has_type_tag(expr, SHORTSTRING_TYPE))
+        return 1;
+
     KgpcType *type = expr_get_kgpc_type(expr);
     if (type != NULL && type->kind == TYPE_KIND_ARRAY &&
         !kgpc_type_is_dynamic_array(type))
+        return 1;
+
+    /* Also check for shortstring type aliases */
+    if (type != NULL && type->type_alias != NULL && type->type_alias->is_shortstring)
         return 1;
 
     return 0;
