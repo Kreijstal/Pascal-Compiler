@@ -325,33 +325,37 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
                     resolved_type = HASHVAR_POINTER;
                 else if (kgpc_type->kind == TYPE_KIND_PROCEDURE)
                     resolved_type = HASHVAR_PROCEDURE;
-                
-                /* Check for specific string types via type alias.
-                 * We skip this for integer/real literals since they can't be string types.
-                 * The resolved_kgpc_type->type_alias may point to stale data when expressions
-                 * are converted during semantic checking (e.g., EXPR_VAR_ID -> EXPR_INUM for constants). */
-                if (arg_expr != NULL && 
-                    arg_expr->type != EXPR_INUM && 
-                    arg_expr->type != EXPR_RNUM &&
-                    arg_expr->type != EXPR_BOOL &&
-                    arg_expr->type != EXPR_CHAR_CODE &&
-                    arg_expr->type != EXPR_NIL)
+                else if (kgpc_type->kind == TYPE_KIND_PRIMITIVE)
                 {
-                    struct TypeAlias *alias = kgpc_type_get_type_alias(kgpc_type);
-                    if (alias != NULL)
+                    /* Check for specific string types via type alias.
+                     * We only check for primitive types since RawByteString and UnicodeString
+                     * are string (primitive) types. Non-primitive types (arrays, records, etc.)
+                     * may have corrupted type_alias pointers.
+                     * We also skip literals since they can't be string types and their
+                     * resolved_kgpc_type may have stale data. */
+                    if (arg_expr->type != EXPR_INUM && 
+                        arg_expr->type != EXPR_RNUM &&
+                        arg_expr->type != EXPR_BOOL &&
+                        arg_expr->type != EXPR_CHAR_CODE &&
+                        arg_expr->type != EXPR_NIL)
                     {
-                        const char *n1 = alias->alias_name;
-                        const char *n2 = alias->target_type_id;
-                        
-                        if ((n1 && strcasecmp(n1, "RawByteString") == 0) || (n2 && strcasecmp(n2, "RawByteString") == 0))
-                            resolved_type = HASHVAR_RAWBYTESTRING;
-                        else if ((n1 && strcasecmp(n1, "UnicodeString") == 0) || (n2 && strcasecmp(n2, "UnicodeString") == 0))
-                            resolved_type = HASHVAR_UNICODESTRING;
+                        struct TypeAlias *alias = kgpc_type_get_type_alias(kgpc_type);
+                        if (alias != NULL)
+                        {
+                            const char *n1 = alias->alias_name;
+                            const char *n2 = alias->target_type_id;
+                            
+                            if ((n1 && strcasecmp(n1, "RawByteString") == 0) || (n2 && strcasecmp(n2, "RawByteString") == 0))
+                                resolved_type = HASHVAR_RAWBYTESTRING;
+                            else if ((n1 && strcasecmp(n1, "UnicodeString") == 0) || (n2 && strcasecmp(n2, "UnicodeString") == 0))
+                                resolved_type = HASHVAR_UNICODESTRING;
+                        }
                     }
                 }
             }
             
-            /* For variable identifiers, look up the declared type in the symbol table */
+            /* For variable identifiers, look up the declared type in the symbol table.
+             * Only check for string type aliases if the variable is a primitive type. */
             if (arg_expr != NULL && arg_expr->type == EXPR_VAR_ID)
             {
                 const char *var_name = arg_expr->expr_data.id;
@@ -360,7 +364,8 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
                     HashNode_t *var_node = NULL;
                     FindIdent(&var_node, symtab, (char *)var_name);
                     
-                    if (var_node != NULL && var_node->type != NULL)
+                    if (var_node != NULL && var_node->type != NULL && 
+                        var_node->type->kind == TYPE_KIND_PRIMITIVE)
                     {
                         struct TypeAlias *alias = kgpc_type_get_type_alias(var_node->type);
                         if (alias != NULL)
