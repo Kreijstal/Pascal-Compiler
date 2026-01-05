@@ -325,19 +325,11 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
                     resolved_type = HASHVAR_POINTER;
                 else if (kgpc_type->kind == TYPE_KIND_PROCEDURE)
                     resolved_type = HASHVAR_PROCEDURE;
-                else if (kgpc_type->kind == TYPE_KIND_PRIMITIVE &&
-                         kgpc_type_get_primitive_tag(kgpc_type) == STRING_TYPE)
-                {
-                    /* Check for RawByteString or UnicodeString via type_alias */
-                    struct TypeAlias *alias = kgpc_type_get_type_alias(kgpc_type);
-                    if (alias != NULL && alias->alias_name != NULL)
-                    {
-                        if (strcasecmp(alias->alias_name, "RawByteString") == 0)
-                            resolved_type = HASHVAR_RAWBYTESTRING;
-                        else if (strcasecmp(alias->alias_name, "UnicodeString") == 0)
-                            resolved_type = HASHVAR_UNICODESTRING;
-                    }
-                }
+                /* Note: For STRING_TYPE, we don't attempt to distinguish between
+                 * RawByteString and UnicodeString at the call site because the
+                 * type_alias pointers may be invalid. The declaration-side mangling
+                 * in GetFlatTypeListForMangling correctly distinguishes these types
+                 * based on the declared type_id in the VAR_DECL tree. */
             }
         }
 
