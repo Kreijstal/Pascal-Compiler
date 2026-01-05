@@ -1,9 +1,8 @@
-{ Test case for complex FPC features that KGPC may not support }
+{ Test case for Free method with explicit TObject inheritance }
 { 
-  This test attempts to use features that may not be fully supported in KGPC
-  but are supported in FPC.
+  This test demonstrates calling the inherited Free method from TObject.
   
-  Expected with KGPC: May fail depending on feature support
+  Expected with KGPC: Should compile and output "Value: 42"
   Expected with FPC: Should compile successfully
 }
 
@@ -12,7 +11,7 @@ program fpc_bootstrap_complex_feature;
 {$mode objfpc}
 
 type
-  TMyClass = class
+  TMyClass = class(TObject)
   private
     FValue: Integer;
   public

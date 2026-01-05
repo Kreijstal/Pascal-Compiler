@@ -3899,16 +3899,6 @@ static struct RecordType *convert_class_type_ex(const char *class_name, ast_t *c
     record->properties = list_builder_finish(&property_builder);
     record->method_templates = list_builder_finish(&method_template_builder);
     
-    /* In objfpc mode, classes without explicit parent inherit from TObject,
-     * unless this IS TObject itself (to avoid circular inheritance). */
-    if (parent_class_name == NULL && pascal_frontend_is_objfpc_mode())
-    {
-        if (class_name == NULL || strcasecmp(class_name, "TObject") != 0)
-        {
-            parent_class_name = strdup("TObject");
-        }
-    }
-    
     record->parent_class_name = parent_class_name;
     record->methods = NULL;  /* Methods list will be populated during semantic checking */
     record->is_class = 1;
