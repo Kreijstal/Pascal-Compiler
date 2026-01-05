@@ -6605,10 +6605,12 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         else if (pascal_identifier_equals(type_id, "Real") || pascal_identifier_equals(type_id, "Double"))
                             var_type = HASHVAR_REAL;
                         else if (pascal_identifier_equals(type_id, "String") || pascal_identifier_equals(type_id, "AnsiString") ||
-                                 pascal_identifier_equals(type_id, "RawByteString") ||
-                                 pascal_identifier_equals(type_id, "UnicodeString") ||
                                  pascal_identifier_equals(type_id, "WideString"))
                             var_type = HASHVAR_PCHAR;
+                        else if (pascal_identifier_equals(type_id, "RawByteString"))
+                            var_type = HASHVAR_RAWBYTESTRING;
+                        else if (pascal_identifier_equals(type_id, "UnicodeString"))
+                            var_type = HASHVAR_UNICODESTRING;
                         else if (pascal_identifier_equals(type_id, "ShortString"))
                         {
                             /* ShortString is array[0..255] of Char with length at index 0 */
