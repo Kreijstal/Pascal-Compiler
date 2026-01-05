@@ -1882,7 +1882,7 @@ Tree_t *mk_program(int line_num, char *id, ListNode_t *args, ListNode_t *uses,
     ListNode_t *subprograms, struct Statement *compound_statement)
 {
     Tree_t *new_tree;
-    new_tree = (Tree_t *)malloc(sizeof(Tree_t));
+    new_tree = (Tree_t *)calloc(1, sizeof(Tree_t));
     assert(new_tree != NULL);
 
     new_tree->line_num = line_num;
@@ -1913,7 +1913,7 @@ Tree_t *mk_unit(int line_num, char *id, ListNode_t *interface_uses,
     ListNode_t *implementation_var_decls, ListNode_t *subprograms,
     struct Statement *initialization, struct Statement *finalization)
 {
-    Tree_t *new_tree = (Tree_t *)malloc(sizeof(Tree_t));
+    Tree_t *new_tree = (Tree_t *)calloc(1, sizeof(Tree_t));
     assert(new_tree != NULL);
 
     new_tree->line_num = line_num;
@@ -1937,7 +1937,7 @@ Tree_t *mk_unit(int line_num, char *id, ListNode_t *interface_uses,
 Tree_t *mk_typedecl(int line_num, char *id, int start, int end)
 {
     Tree_t *new_tree;
-    new_tree = (Tree_t *)malloc(sizeof(Tree_t));
+    new_tree = (Tree_t *)calloc(1, sizeof(Tree_t));
     assert(new_tree != NULL);
 
     new_tree->line_num = line_num;
@@ -1957,7 +1957,7 @@ Tree_t *mk_typedecl(int line_num, char *id, int start, int end)
 Tree_t *mk_record_type(int line_num, char *id, struct RecordType *record_type)
 {
     Tree_t *new_tree;
-    new_tree = (Tree_t *)malloc(sizeof(Tree_t));
+    new_tree = (Tree_t *)calloc(1, sizeof(Tree_t));
     assert(new_tree != NULL);
 
     new_tree->line_num = line_num;
@@ -1979,7 +1979,7 @@ Tree_t *mk_procedure(int line_num, char *id, ListNode_t *args, ListNode_t *const
     int cname_flag, int overload_flag)
 {
     Tree_t *new_tree;
-    new_tree = (Tree_t *)malloc(sizeof(Tree_t));
+    new_tree = (Tree_t *)calloc(1, sizeof(Tree_t));
     assert(new_tree != NULL);
 
     new_tree->line_num = line_num;
@@ -2015,7 +2015,7 @@ Tree_t *mk_function(int line_num, char *id, ListNode_t *args, ListNode_t *const_
     int return_type, char *return_type_id, struct TypeAlias *inline_return_type, int cname_flag, int overload_flag)
 {
     Tree_t *new_tree;
-    new_tree = (Tree_t *)malloc(sizeof(Tree_t));
+    new_tree = (Tree_t *)calloc(1, sizeof(Tree_t));
     assert(new_tree != NULL);
 
     new_tree->line_num = line_num;
@@ -2053,7 +2053,7 @@ Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type, char *type_id,
     char *absolute_target)
 {
     Tree_t *new_tree;
-    new_tree = (Tree_t *)malloc(sizeof(Tree_t));
+    new_tree = (Tree_t *)calloc(1, sizeof(Tree_t));
     assert(new_tree != NULL);
 
     new_tree->line_num = line_num;
@@ -2080,7 +2080,7 @@ Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type, char *type_id,
 
 Tree_t *mk_typealiasdecl(int line_num, char *id, int is_array, int actual_type, char *type_id, int start, int end)
 {
-    Tree_t *new_tree = (Tree_t *)malloc(sizeof(Tree_t));
+    Tree_t *new_tree = (Tree_t *)calloc(1, sizeof(Tree_t));
     assert(new_tree != NULL);
 
     new_tree->line_num = line_num;
@@ -2148,7 +2148,7 @@ Tree_t *mk_arraydecl(int line_num, ListNode_t *ids, int type, char *type_id, int
     char *range_str, struct Statement *initializer)
 {
     Tree_t *new_tree;
-    new_tree = (Tree_t *)malloc(sizeof(Tree_t));
+    new_tree = (Tree_t *)calloc(1, sizeof(Tree_t));
     assert(new_tree != NULL);
 
     new_tree->line_num = line_num;
@@ -2174,7 +2174,7 @@ Tree_t *mk_arraydecl(int line_num, ListNode_t *ids, int type, char *type_id, int
 
 Tree_t *mk_constdecl(int line_num, char *id, char *type_id, struct Expression *value)
 {
-    Tree_t *new_tree = (Tree_t *)malloc(sizeof(Tree_t));
+    Tree_t *new_tree = (Tree_t *)calloc(1, sizeof(Tree_t));
     assert(new_tree != NULL);
 
     new_tree->line_num = line_num;
