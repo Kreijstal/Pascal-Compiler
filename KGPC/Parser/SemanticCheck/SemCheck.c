@@ -784,6 +784,182 @@ static void add_class_vars_to_method_scope(SymTab_t *symtab, const char *method_
     free(class_name);
 }
 
+/**
+ * For a method implementation (ClassName__MethodName), copy default parameter
+ * values from the class declaration to the implementation's parameters.
+ * This is needed because default values are specified in the class declaration
+ * but not repeated in the implementation.
+ */
+static void copy_method_decl_defaults_to_impl(SymTab_t *symtab, Tree_t *subprogram)
+{
+    if (symtab == NULL || subprogram == NULL)
+        return;
+    
+    const char *method_id = subprogram->tree_data.subprogram_data.id;
+    if (method_id == NULL)
+        return;
+    
+    /* Check if this is a method (contains "__") */
+    const char *sep = strstr(method_id, "__");
+    if (sep == NULL || sep == method_id)
+        return;
+    
+    /* Extract class name */
+    size_t class_name_len = (size_t)(sep - method_id);
+    char *class_name = (char *)malloc(class_name_len + 1);
+    if (class_name == NULL)
+        return;
+    memcpy(class_name, method_id, class_name_len);
+    class_name[class_name_len] = '\0';
+    
+    /* Extract method name */
+    const char *method_name = sep + 2;
+    if (method_name[0] == '\0')
+    {
+        free(class_name);
+        return;
+    }
+    
+    /* Look up the class type */
+    HashNode_t *class_node = NULL;
+    if (FindIdent(&class_node, symtab, class_name) == -1 || class_node == NULL)
+    {
+        free(class_name);
+        return;
+    }
+    
+    struct RecordType *record_info = get_record_type_from_node(class_node);
+    if (record_info == NULL)
+    {
+        free(class_name);
+        return;
+    }
+    
+    /* Find the method template with the declaration's parameters */
+    struct MethodTemplate *template = from_cparser_get_method_template(record_info, method_name);
+    if (template == NULL || template->params_ast == NULL)
+    {
+        if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL)
+            fprintf(stderr, "[copy_method_decl_defaults] No method template found for %s.%s\n",
+                class_name, method_name);
+        free(class_name);
+        return;
+    }
+    
+    if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL)
+        fprintf(stderr, "[copy_method_decl_defaults] Found template for %s.%s, params_ast=%p typ=%d\n",
+            class_name, method_name, (void*)template->params_ast, template->params_ast->typ);
+    
+    /* Convert the declaration's params_ast to a parameter list */
+    /* The params_ast is a PASCAL_T_PARAM or PASCAL_T_PARAM_LIST node */
+    ast_t *decl_params_ast = template->params_ast;
+    ast_t *param_cursor = decl_params_ast;
+    if (decl_params_ast->typ == PASCAL_T_PARAM_LIST)
+        param_cursor = decl_params_ast->child;
+    
+    /* Iterate through implementation params and declaration params in parallel,
+     * copying defaults from declaration to implementation */
+    ListNode_t *impl_param = subprogram->tree_data.subprogram_data.args_var;
+    
+    /* Skip the Self parameter if present (it won't be in the declaration) */
+    if (impl_param != NULL)
+    {
+        Tree_t *first_param = (Tree_t *)impl_param->cur;
+        if (first_param != NULL && first_param->type == TREE_VAR_DECL)
+        {
+            ListNode_t *ids = first_param->tree_data.var_decl_data.ids;
+            if (ids != NULL && ids->cur != NULL)
+            {
+                const char *param_name = (const char *)ids->cur;
+                if (param_name != NULL && strcasecmp(param_name, "Self") == 0)
+                    impl_param = impl_param->next;
+            }
+        }
+    }
+    
+    while (param_cursor != NULL && impl_param != NULL)
+    {
+        ast_t *decl_param = param_cursor;
+        if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL)
+            fprintf(stderr, "[copy_method_decl_defaults] Processing decl_param typ=%d\n", decl_param->typ);
+        
+        if (decl_param->typ == PASCAL_T_PARAM)
+        {
+            /* Find the TYPE_SPEC and DEFAULT_VALUE in the declaration param */
+            ast_t *type_spec = NULL;
+            ast_t *default_value = NULL;
+            
+            for (ast_t *child = decl_param->child; child != NULL; child = child->next)
+            {
+                if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL)
+                    fprintf(stderr, "[copy_method_decl_defaults]   child typ=%d\n", child->typ);
+                if (child->typ == PASCAL_T_TYPE_SPEC)
+                    type_spec = child;
+                if (child->typ == PASCAL_T_DEFAULT_VALUE)
+                    default_value = child;
+            }
+            
+            /* Check if TYPE_SPEC->next is DEFAULT_VALUE (alternate structure) */
+            if (default_value == NULL && type_spec != NULL && type_spec->next != NULL && 
+                type_spec->next->typ == PASCAL_T_DEFAULT_VALUE)
+            {
+                default_value = type_spec->next;
+            }
+            
+            if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL)
+                fprintf(stderr, "[copy_method_decl_defaults] type_spec=%p default_value=%p\n",
+                    (void*)type_spec, (void*)default_value);
+            
+            if (default_value != NULL)
+            {
+                /* Get the implementation parameter */
+                Tree_t *impl_decl = (Tree_t *)impl_param->cur;
+                if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL)
+                    fprintf(stderr, "[copy_method_decl_defaults] impl_decl=%p type=%d\n",
+                        (void*)impl_decl, impl_decl ? impl_decl->type : -1);
+                
+                if (impl_decl != NULL && impl_decl->type == TREE_VAR_DECL)
+                {
+                    /* Only copy if impl doesn't already have a default */
+                    if (impl_decl->tree_data.var_decl_data.initializer == NULL)
+                    {
+                        /* Convert default_value->child to Expression and wrap in initializer */
+                        ast_t *expr_node = default_value->child;
+                        if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL)
+                            fprintf(stderr, "[copy_method_decl_defaults] expr_node=%p typ=%d\n",
+                                (void*)expr_node, expr_node ? expr_node->typ : -1);
+                        
+                        if (expr_node != NULL)
+                        {
+                            struct Expression *default_expr = from_cparser_convert_expression(expr_node);
+                            if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL)
+                                fprintf(stderr, "[copy_method_decl_defaults] default_expr=%p\n",
+                                    (void*)default_expr);
+                            
+                            if (default_expr != NULL)
+                            {
+                                impl_decl->tree_data.var_decl_data.initializer =
+                                    mk_varassign(default_value->line, 0, NULL, default_expr);
+                                if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL)
+                                    fprintf(stderr, "[copy_method_decl_defaults] COPIED default value!\n");
+                            }
+                        }
+                    }
+                    else if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL)
+                    {
+                        fprintf(stderr, "[copy_method_decl_defaults] impl already has initializer\n");
+                    }
+                }
+            }
+        }
+        
+        param_cursor = param_cursor->next;
+        impl_param = impl_param->next;
+    }
+    
+    free(class_name);
+}
+
 static HashNode_t *semcheck_find_preferred_type_node(SymTab_t *symtab, const char *type_id)
 {
     if (symtab == NULL || type_id == NULL)
@@ -7441,6 +7617,11 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
 #endif
 
     assert(subprogram->type == TREE_SUBPROGRAM);
+
+    /* For class methods, copy default parameter values from the class declaration
+     * to the implementation. This is needed because Pascal allows defaults only in
+     * the declaration, not in the implementation. */
+    copy_method_decl_defaults_to_impl(symtab, subprogram);
 
     /* Record lexical nesting depth so codegen can reason about static links accurately.
      * Store depth as parent depth + 1 so the top-level program has depth 1 and

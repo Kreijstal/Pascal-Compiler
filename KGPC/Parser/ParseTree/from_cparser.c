@@ -9611,3 +9611,65 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
     fprintf(stderr, "ERROR: Unsupported Pascal AST root type %d.\n", cur->typ);
     return NULL;
 }
+
+/* Get the method template for a class method.
+ * This is used to copy default parameter values from class declarations to implementations.
+ * For overloaded methods, we need to match by parameter count.
+ */
+struct MethodTemplate *from_cparser_get_method_template(struct RecordType *record, const char *method_name)
+{
+    if (record == NULL || method_name == NULL)
+        return NULL;
+    
+    ListNode_t *cur = record->method_templates;
+    while (cur != NULL)
+    {
+        struct MethodTemplate *template = (struct MethodTemplate *)cur->cur;
+        if (template != NULL && template->name != NULL &&
+            strcasecmp(template->name, method_name) == 0)
+        {
+            /* For overloaded methods, prefer templates that have default values */
+            if (template->params_ast != NULL)
+            {
+                /* Check if this template has default values */
+                ast_t *param = template->params_ast;
+                if (param->typ == PASCAL_T_PARAM_LIST)
+                    param = param->child;
+                
+                while (param != NULL)
+                {
+                    if (param->typ == PASCAL_T_PARAM)
+                    {
+                        for (ast_t *child = param->child; child != NULL; child = child->next)
+                        {
+                            if (child->typ == PASCAL_T_DEFAULT_VALUE)
+                                return template;  /* Found one with defaults */
+                        }
+                    }
+                    param = param->next;
+                }
+            }
+        }
+        cur = cur->next;
+    }
+    
+    /* Fallback: return any matching template */
+    cur = record->method_templates;
+    while (cur != NULL)
+    {
+        struct MethodTemplate *template = (struct MethodTemplate *)cur->cur;
+        if (template != NULL && template->name != NULL &&
+            strcasecmp(template->name, method_name) == 0)
+        {
+            return template;
+        }
+        cur = cur->next;
+    }
+    return NULL;
+}
+
+/* Public wrapper for convert_expression */
+struct Expression *from_cparser_convert_expression(ast_t *expr_node)
+{
+    return convert_expression(expr_node);
+}
