@@ -1583,11 +1583,21 @@ static int map_type_name(const char *name, char **type_id_out) {
     }
     if (strcasecmp(name, "string") == 0 ||
         strcasecmp(name, "ansistring") == 0 ||
-        strcasecmp(name, "rawbytestring") == 0 ||
-        strcasecmp(name, "unicodestring") == 0 ||
         strcasecmp(name, "widestring") == 0) {
         if (type_id_out != NULL)
             *type_id_out = strdup("string");
+        return STRING_TYPE;
+    }
+    /* RawByteString and UnicodeString need to preserve their original names
+     * for correct name mangling of overloaded procedures */
+    if (strcasecmp(name, "rawbytestring") == 0) {
+        if (type_id_out != NULL)
+            *type_id_out = strdup("RawByteString");
+        return STRING_TYPE;
+    }
+    if (strcasecmp(name, "unicodestring") == 0) {
+        if (type_id_out != NULL)
+            *type_id_out = strdup("UnicodeString");
         return STRING_TYPE;
     }
     if (strcasecmp(name, "text") == 0) {
