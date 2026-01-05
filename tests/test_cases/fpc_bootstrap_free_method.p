@@ -6,6 +6,9 @@
   
   Expected with KGPC: Fails with "call to procedure TMyClass__Free does not match any available overload"
   Expected with FPC: Should compile successfully
+  
+  NOTE: This test has no .expected file, so it is not run by the test suite.
+  It serves as documentation of a known limitation in KGPC.
 }
 
 program fpc_bootstrap_free_method;
