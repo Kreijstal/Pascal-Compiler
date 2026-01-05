@@ -2907,6 +2907,9 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
                     alias->base_type = type_tag;
                     /* Set type_alias on the KgpcType */
                     kgpc_type_set_type_alias(type, alias);
+                    /* Free the temporary alias after copying */
+                    free(alias->alias_name);
+                    free(alias);
                 }
             }
             free(type_name);

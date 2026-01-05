@@ -280,16 +280,7 @@ KgpcType* create_kgpc_type_from_type_alias(struct TypeAlias *alias, struct SymTa
     if (alias->target_type_id != NULL && symtab != NULL) {
         HashNode_t *target_node = kgpc_find_type_node(symtab, alias->target_type_id);
         if (target_node != NULL && target_node->type != NULL) {
-            /* For primitive types, create a new KgpcType with type_alias set to preserve the alias name.
-             * This is important for RawByteString/UnicodeString name mangling. */
-            if (target_node->type->kind == TYPE_KIND_PRIMITIVE) {
-                KgpcType *new_type = create_primitive_type(target_node->type->info.primitive_type_tag);
-                if (new_type != NULL) {
-                    kgpc_type_set_type_alias(new_type, alias);
-                }
-                return new_type;
-            }
-            /* For complex types, return the target's KgpcType (reference, not clone) */
+            /* Return the target's KgpcType (reference, not clone) */
             kgpc_type_retain(target_node->type);
             return target_node->type;
         }
