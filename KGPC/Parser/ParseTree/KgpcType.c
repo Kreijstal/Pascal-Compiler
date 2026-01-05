@@ -45,6 +45,10 @@ static HashNode_t *kgpc_find_type_node(SymTab_t *symtab, const char *type_id)
     return NULL;
 }
 
+/* Forward declarations for TypeAlias copy functions */
+static struct TypeAlias* copy_type_alias(const struct TypeAlias *src);
+static void free_copied_type_alias(struct TypeAlias *alias);
+
 // --- Constructor Implementations ---
 
 KgpcType* create_primitive_type(int primitive_tag) {
@@ -147,6 +151,11 @@ KgpcType* create_kgpc_type_from_type_alias(struct TypeAlias *alias, struct SymTa
     
     /* If alias already has a KgpcType (enums, sets), use it */
     if (alias->kgpc_type != NULL) {
+        /* If the KgpcType doesn't have type_alias set, set it now.
+         * This is important for RawByteString/UnicodeString name mangling. */
+        if (alias->kgpc_type->type_alias == NULL && alias->alias_name != NULL) {
+            kgpc_type_set_type_alias(alias->kgpc_type, alias);
+        }
         return alias->kgpc_type;
     }
     
@@ -290,6 +299,10 @@ void kgpc_type_retain(KgpcType *type) {
     type->ref_count++;
 }
 
+void kgpc_type_release(KgpcType *type) {
+    destroy_kgpc_type(type);
+}
+
 void destroy_kgpc_type(KgpcType *type) {
     if (type == NULL) return;
     
@@ -336,6 +349,13 @@ void destroy_kgpc_type(KgpcType *type) {
         case TYPE_KIND_RECORD:
             break;
     }
+    
+    /* Free the copied type_alias if it exists */
+    if (type->type_alias != NULL) {
+        free_copied_type_alias(type->type_alias);
+        type->type_alias = NULL;
+    }
+    
     free(type);
 }
 
@@ -1377,6 +1397,142 @@ KgpcType* kgpc_type_from_var_type(enum VarType var_type)
 }
 
 /* Get the type alias metadata from a KgpcType */
+/* Helper function to copy a list of strings */
+static ListNode_t *copy_string_list(const ListNode_t *src)
+{
+    if (src == NULL)
+        return NULL;
+    
+    ListNode_t *dst = NULL;
+    ListNode_t *tail = NULL;
+    const ListNode_t *cur = src;
+    
+    while (cur != NULL)
+    {
+        if (cur->type == LIST_STRING && cur->cur != NULL)
+        {
+            ListNode_t *new_node = (ListNode_t *)malloc(sizeof(ListNode_t));
+            if (new_node == NULL)
+            {
+                /* Free already allocated nodes on failure */
+                destroy_list(dst);
+                return NULL;
+            }
+            new_node->type = LIST_STRING;
+            new_node->cur = strdup((char *)cur->cur);
+            new_node->next = NULL;
+            
+            if (dst == NULL)
+            {
+                dst = new_node;
+                tail = new_node;
+            }
+            else
+            {
+                tail->next = new_node;
+                tail = new_node;
+            }
+        }
+        cur = cur->next;
+    }
+    
+    return dst;
+}
+
+/* Copy a TypeAlias structure */
+static struct TypeAlias* copy_type_alias(const struct TypeAlias *src)
+{
+    if (src == NULL)
+        return NULL;
+    
+    struct TypeAlias *dst = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
+    if (dst == NULL)
+        return NULL;
+    
+    /* Copy simple fields */
+    dst->base_type = src->base_type;
+    dst->is_char_alias = src->is_char_alias;
+    dst->is_array = src->is_array;
+    dst->array_start = src->array_start;
+    dst->array_end = src->array_end;
+    dst->array_element_type = src->array_element_type;
+    dst->is_shortstring = src->is_shortstring;
+    dst->is_open_array = src->is_open_array;
+    dst->is_pointer = src->is_pointer;
+    dst->pointer_type = src->pointer_type;
+    dst->is_set = src->is_set;
+    dst->set_element_type = src->set_element_type;
+    dst->is_enum = src->is_enum;
+    dst->is_file = src->is_file;
+    dst->file_type = src->file_type;
+    dst->is_range = src->is_range;
+    dst->range_known = src->range_known;
+    dst->range_start = src->range_start;
+    dst->range_end = src->range_end;
+    dst->storage_size = src->storage_size;
+    
+    /* Copy string fields with duplication */
+    if (src->alias_name != NULL)
+        dst->alias_name = strdup(src->alias_name);
+    if (src->target_type_id != NULL)
+        dst->target_type_id = strdup(src->target_type_id);
+    if (src->array_element_type_id != NULL)
+        dst->array_element_type_id = strdup(src->array_element_type_id);
+    if (src->pointer_type_id != NULL)
+        dst->pointer_type_id = strdup(src->pointer_type_id);
+    if (src->set_element_type_id != NULL)
+        dst->set_element_type_id = strdup(src->set_element_type_id);
+    if (src->file_type_id != NULL)
+        dst->file_type_id = strdup(src->file_type_id);
+    
+    /* Deep copy lists */
+    dst->array_dimensions = copy_string_list(src->array_dimensions);
+    dst->enum_literals = copy_string_list(src->enum_literals);
+    
+    /* Copy inline_record_type - reference only for now (owned by AST) */
+    dst->inline_record_type = src->inline_record_type;
+    
+    /* Copy kgpc_type with proper reference counting */
+    if (src->kgpc_type != NULL) {
+        kgpc_type_retain(src->kgpc_type);
+        dst->kgpc_type = src->kgpc_type;
+    }
+    
+    return dst;
+}
+
+/* Free a copied TypeAlias structure */
+static void free_copied_type_alias(struct TypeAlias *alias)
+{
+    if (alias == NULL)
+        return;
+    
+    free(alias->alias_name);
+    free(alias->target_type_id);
+    free(alias->array_element_type_id);
+    free(alias->pointer_type_id);
+    free(alias->set_element_type_id);
+    free(alias->file_type_id);
+    
+    /* Free deep-copied lists */
+    if (alias->array_dimensions != NULL)
+        destroy_list(alias->array_dimensions);
+    if (alias->enum_literals != NULL)
+        destroy_list(alias->enum_literals);
+    
+    /* Note: We don't free inline_record_type as it's owned by AST */
+    
+    /* Save and NULL out kgpc_type before releasing to prevent infinite recursion
+     * when the alias's kgpc_type points back to the type that owns this alias */
+    if (alias->kgpc_type != NULL) {
+        KgpcType *kgpc_type_to_release = alias->kgpc_type;
+        alias->kgpc_type = NULL;  /* Break potential cycle before release */
+        kgpc_type_release(kgpc_type_to_release);
+    }
+    
+    free(alias);
+}
+
 struct TypeAlias* kgpc_type_get_type_alias(KgpcType *type)
 {
     if (type == NULL)
@@ -1388,7 +1544,19 @@ struct TypeAlias* kgpc_type_get_type_alias(KgpcType *type)
 void kgpc_type_set_type_alias(KgpcType *type, struct TypeAlias *alias)
 {
     assert(type != NULL && "Cannot set type_alias on NULL KgpcType");
-    type->type_alias = alias;
+    
+    /* Free existing copied alias if any */
+    if (type->type_alias != NULL) {
+        free_copied_type_alias(type->type_alias);
+        type->type_alias = NULL;
+    }
+    
+    /* Copy the alias to make KgpcType own it, or set to NULL if alias is NULL */
+    if (alias != NULL) {
+        type->type_alias = copy_type_alias(alias);
+    } else {
+        type->type_alias = NULL;
+    }
 }
 
 /* Get the legacy type tag from a KgpcType */

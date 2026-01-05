@@ -767,8 +767,9 @@ static ast_t* detach_type_spec(ast_t* identifier_start, ast_t** out_type_spec, a
     }
     while (cursor != NULL) {
         if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL) {
-            fprintf(stderr, "[detach_type_spec] cursor=%p typ=%d next=%p next_typ=%d\n",
+            fprintf(stderr, "[detach_type_spec] cursor=%p typ=%d (TYPE_SPEC=%d DEFAULT_VALUE=%d) next=%p next_typ=%d\n",
                 (void*)cursor, cursor->typ,
+                PASCAL_T_TYPE_SPEC, PASCAL_T_DEFAULT_VALUE,
                 (void*)(cursor->next),
                 cursor->next ? cursor->next->typ : -1);
         }

@@ -556,6 +556,410 @@ static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
     return NULL;
 }
 
+/**
+ * Copy default parameter values from forward declaration to implementation.
+ * When a method is declared in a class with default values but implemented
+ * without them, the implementation's params need the defaults for overload resolution.
+ */
+static void copy_default_values_to_impl_params(ListNode_t *fwd_params, ListNode_t *impl_params)
+{
+    if (fwd_params == NULL || impl_params == NULL)
+        return;
+    
+    ListNode_t *fwd = fwd_params;
+    ListNode_t *impl = impl_params;
+    
+    while (fwd != NULL && impl != NULL)
+    {
+        Tree_t *fwd_decl = (Tree_t *)fwd->cur;
+        Tree_t *impl_decl = (Tree_t *)impl->cur;
+        
+        if (fwd_decl != NULL && impl_decl != NULL)
+        {
+            /* Copy default value from forward declaration if impl doesn't have one */
+            if (fwd_decl->type == TREE_VAR_DECL && impl_decl->type == TREE_VAR_DECL)
+            {
+                struct Statement *fwd_init = fwd_decl->tree_data.var_decl_data.initializer;
+                if (fwd_init != NULL &&
+                    impl_decl->tree_data.var_decl_data.initializer == NULL)
+                {
+                    /* The initializer is a STMT_VAR_ASSIGN with NULL var, containing the expression */
+                    if (fwd_init->type == STMT_VAR_ASSIGN && 
+                        fwd_init->stmt_data.var_assign_data.expr != NULL)
+                    {
+                        struct Expression *cloned_expr = clone_expression(
+                            fwd_init->stmt_data.var_assign_data.expr);
+                        if (cloned_expr != NULL)
+                        {
+                            impl_decl->tree_data.var_decl_data.initializer =
+                                mk_varassign(fwd_init->line_num, fwd_init->col_num, NULL, cloned_expr);
+                        }
+                    }
+                }
+            }
+            else if (fwd_decl->type == TREE_ARR_DECL && impl_decl->type == TREE_ARR_DECL)
+            {
+                struct Statement *fwd_init = fwd_decl->tree_data.arr_decl_data.initializer;
+                if (fwd_init != NULL &&
+                    impl_decl->tree_data.arr_decl_data.initializer == NULL)
+                {
+                    if (fwd_init->type == STMT_VAR_ASSIGN && 
+                        fwd_init->stmt_data.var_assign_data.expr != NULL)
+                    {
+                        struct Expression *cloned_expr = clone_expression(
+                            fwd_init->stmt_data.var_assign_data.expr);
+                        if (cloned_expr != NULL)
+                        {
+                            impl_decl->tree_data.arr_decl_data.initializer =
+                                mk_varassign(fwd_init->line_num, fwd_init->col_num, NULL, cloned_expr);
+                        }
+                    }
+                }
+            }
+        }
+        
+        fwd = fwd->next;
+        impl = impl->next;
+    }
+}
+
+/**
+ * For a method implementation (ClassName__MethodName), add class vars to scope
+ * so they can be referenced within the method body. This is essential for
+ * static methods which have no implicit Self parameter.
+ */
+static void add_class_vars_to_method_scope(SymTab_t *symtab, const char *method_id)
+{
+    if (symtab == NULL || method_id == NULL)
+        return;
+
+    /* Check if this is a method (contains "__") */
+    const char *sep = strstr(method_id, "__");
+    if (sep == NULL || sep == method_id)
+        return;
+
+    /* Extract class name */
+    size_t class_name_len = (size_t)(sep - method_id);
+    char *class_name = (char *)malloc(class_name_len + 1);
+    if (class_name == NULL)
+        return;
+    memcpy(class_name, method_id, class_name_len);
+    class_name[class_name_len] = '\0';
+
+    /* For generic types (containing < or >), skip this lookup as
+     * the type resolution is handled differently for generics. */
+    if (strchr(class_name, '<') != NULL || strchr(class_name, '>') != NULL)
+    {
+        free(class_name);
+        return;
+    }
+
+    /* Extract method name */
+    const char *method_name = sep + 2;
+    if (method_name[0] == '\0')
+    {
+        free(class_name);
+        return;
+    }
+
+    /* Only add class fields for static methods. Non-static methods
+     * access fields via Self which is handled differently. */
+    if (!from_cparser_is_method_static(class_name, method_name))
+    {
+        free(class_name);
+        return;
+    }
+
+    /* Look up the class type */
+    HashNode_t *class_node = NULL;
+    int lookup_result = FindIdent(&class_node, symtab, class_name);
+    if (lookup_result == -1 || class_node == NULL)
+    {
+        free(class_name);
+        return;
+    }
+
+    struct RecordType *record_info = get_record_type_from_node(class_node);
+    if (record_info == NULL)
+    {
+        free(class_name);
+        return;
+    }
+
+    /* Only process class types, not regular records */
+    if (!record_type_is_class(record_info))
+    {
+        free(class_name);
+        return;
+    }
+
+    /* Add class vars from the record fields to the current scope.
+     * Class vars are stored in the record's fields list.
+     * For class types, all fields are accessible in methods. */
+    ListNode_t *field_node = record_info->fields;
+    while (field_node != NULL)
+    {
+        struct RecordField *field = (struct RecordField *)field_node->cur;
+        if (field != NULL && field->name != NULL && field->name[0] != '\0')
+        {
+            /* Check if already defined in scope */
+            HashNode_t *existing = NULL;
+            if (FindIdent(&existing, symtab, field->name) == -1)
+            {
+                /* Build a KgpcType for this field if needed */
+                KgpcType *field_type = NULL;
+                if (field->type_id != NULL && field->type_id[0] != '\0')
+                {
+                    HashNode_t *type_node = NULL;
+                    if (FindIdent(&type_node, symtab, field->type_id) != -1 &&
+                        type_node != NULL && type_node->type != NULL)
+                    {
+                        field_type = type_node->type;
+                        kgpc_type_retain(field_type);
+                    }
+                }
+                
+                /* Push onto scope - using typed variant */
+                PushVarOntoScope_Typed(symtab, field->name, field_type);
+                
+                /* Release our ref if we retained it */
+                if (field_type != NULL)
+                    destroy_kgpc_type(field_type);
+            }
+        }
+        field_node = field_node->next;
+    }
+
+    /* Add other static methods of the same class to scope, so they can be
+     * called without full qualification from within a static method. */
+    ListNode_t *class_methods = NULL;
+    int method_count = 0;
+    get_class_methods(class_name, &class_methods, &method_count);
+    
+    ListNode_t *cur_method = class_methods;
+    while (cur_method != NULL)
+    {
+        ClassMethodBinding *binding = (ClassMethodBinding *)cur_method->cur;
+        if (binding != NULL && binding->method_name != NULL && binding->method_name[0] != '\0')
+        {
+            /* Build the mangled name: ClassName__MethodName */
+            size_t mangled_len = strlen(class_name) + 2 + strlen(binding->method_name) + 1;
+            char *mangled_name = (char *)malloc(mangled_len);
+            if (mangled_name != NULL)
+            {
+                snprintf(mangled_name, mangled_len, "%s__%s", class_name, binding->method_name);
+                
+                /* Look up the mangled method in the symbol table */
+                HashNode_t *method_node = NULL;
+                if (FindIdent(&method_node, symtab, mangled_name) != -1 && method_node != NULL)
+                {
+                    /* Add an alias using just the method name */
+                    HashNode_t *existing = NULL;
+                    if (FindIdent(&existing, symtab, binding->method_name) == -1)
+                    {
+                        /* Push the method onto scope using its short name */
+                        if (method_node->type != NULL)
+                        {
+                            kgpc_type_retain(method_node->type);
+                            PushFunctionOntoScope_Typed(symtab, binding->method_name,
+                                                        mangled_name, method_node->type);
+                            destroy_kgpc_type(method_node->type);
+                        }
+                    }
+                }
+                free(mangled_name);
+            }
+        }
+        cur_method = cur_method->next;
+    }
+    
+    /* Clean up the class_methods list */
+    while (class_methods != NULL)
+    {
+        ListNode_t *next = class_methods->next;
+        free(class_methods);
+        class_methods = next;
+    }
+
+    free(class_name);
+}
+
+/**
+ * For a method implementation (ClassName__MethodName), copy default parameter
+ * values from the class declaration to the implementation's parameters.
+ * This is needed because default values are specified in the class declaration
+ * but not repeated in the implementation.
+ */
+static void copy_method_decl_defaults_to_impl(SymTab_t *symtab, Tree_t *subprogram)
+{
+    if (symtab == NULL || subprogram == NULL)
+        return;
+    
+    const char *method_id = subprogram->tree_data.subprogram_data.id;
+    if (method_id == NULL)
+        return;
+    
+    /* Check if this is a method (contains "__") */
+    const char *sep = strstr(method_id, "__");
+    if (sep == NULL || sep == method_id)
+        return;
+    
+    /* Extract class name */
+    size_t class_name_len = (size_t)(sep - method_id);
+    char *class_name = (char *)malloc(class_name_len + 1);
+    if (class_name == NULL)
+        return;
+    memcpy(class_name, method_id, class_name_len);
+    class_name[class_name_len] = '\0';
+    
+    /* Extract method name */
+    const char *method_name = sep + 2;
+    if (method_name[0] == '\0')
+    {
+        free(class_name);
+        return;
+    }
+    
+    /* Look up the class type */
+    HashNode_t *class_node = NULL;
+    if (FindIdent(&class_node, symtab, class_name) == -1 || class_node == NULL)
+    {
+        free(class_name);
+        return;
+    }
+    
+    struct RecordType *record_info = get_record_type_from_node(class_node);
+    if (record_info == NULL)
+    {
+        free(class_name);
+        return;
+    }
+    
+    /* Find the method template with the declaration's parameters */
+    struct MethodTemplate *template = from_cparser_get_method_template(record_info, method_name);
+    if (template == NULL || template->params_ast == NULL)
+    {
+        if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL)
+            fprintf(stderr, "[copy_method_decl_defaults] No method template found for %s.%s\n",
+                class_name, method_name);
+        free(class_name);
+        return;
+    }
+    
+    if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL)
+        fprintf(stderr, "[copy_method_decl_defaults] Found template for %s.%s, params_ast=%p typ=%d\n",
+            class_name, method_name, (void*)template->params_ast, template->params_ast->typ);
+    
+    /* Convert the declaration's params_ast to a parameter list */
+    /* The params_ast is a PASCAL_T_PARAM or PASCAL_T_PARAM_LIST node */
+    ast_t *decl_params_ast = template->params_ast;
+    ast_t *param_cursor = decl_params_ast;
+    if (decl_params_ast->typ == PASCAL_T_PARAM_LIST)
+        param_cursor = decl_params_ast->child;
+    
+    /* Iterate through implementation params and declaration params in parallel,
+     * copying defaults from declaration to implementation */
+    ListNode_t *impl_param = subprogram->tree_data.subprogram_data.args_var;
+    
+    /* Skip the Self parameter if present (it won't be in the declaration) */
+    if (impl_param != NULL)
+    {
+        Tree_t *first_param = (Tree_t *)impl_param->cur;
+        if (first_param != NULL && first_param->type == TREE_VAR_DECL)
+        {
+            ListNode_t *ids = first_param->tree_data.var_decl_data.ids;
+            if (ids != NULL && ids->cur != NULL)
+            {
+                const char *param_name = (const char *)ids->cur;
+                if (param_name != NULL && strcasecmp(param_name, "Self") == 0)
+                    impl_param = impl_param->next;
+            }
+        }
+    }
+    
+    while (param_cursor != NULL && impl_param != NULL)
+    {
+        ast_t *decl_param = param_cursor;
+        if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL)
+            fprintf(stderr, "[copy_method_decl_defaults] Processing decl_param typ=%d\n", decl_param->typ);
+        
+        if (decl_param->typ == PASCAL_T_PARAM)
+        {
+            /* Find the TYPE_SPEC and DEFAULT_VALUE in the declaration param */
+            ast_t *type_spec = NULL;
+            ast_t *default_value = NULL;
+            
+            for (ast_t *child = decl_param->child; child != NULL; child = child->next)
+            {
+                if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL)
+                    fprintf(stderr, "[copy_method_decl_defaults]   child typ=%d\n", child->typ);
+                if (child->typ == PASCAL_T_TYPE_SPEC)
+                    type_spec = child;
+                if (child->typ == PASCAL_T_DEFAULT_VALUE)
+                    default_value = child;
+            }
+            
+            /* Check if TYPE_SPEC->next is DEFAULT_VALUE (alternate structure) */
+            if (default_value == NULL && type_spec != NULL && type_spec->next != NULL && 
+                type_spec->next->typ == PASCAL_T_DEFAULT_VALUE)
+            {
+                default_value = type_spec->next;
+            }
+            
+            if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL)
+                fprintf(stderr, "[copy_method_decl_defaults] type_spec=%p default_value=%p\n",
+                    (void*)type_spec, (void*)default_value);
+            
+            if (default_value != NULL)
+            {
+                /* Get the implementation parameter */
+                Tree_t *impl_decl = (Tree_t *)impl_param->cur;
+                if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL)
+                    fprintf(stderr, "[copy_method_decl_defaults] impl_decl=%p type=%d\n",
+                        (void*)impl_decl, impl_decl ? impl_decl->type : -1);
+                
+                if (impl_decl != NULL && impl_decl->type == TREE_VAR_DECL)
+                {
+                    /* Only copy if impl doesn't already have a default */
+                    if (impl_decl->tree_data.var_decl_data.initializer == NULL)
+                    {
+                        /* Convert default_value->child to Expression and wrap in initializer */
+                        ast_t *expr_node = default_value->child;
+                        if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL)
+                            fprintf(stderr, "[copy_method_decl_defaults] expr_node=%p typ=%d\n",
+                                (void*)expr_node, expr_node ? expr_node->typ : -1);
+                        
+                        if (expr_node != NULL)
+                        {
+                            struct Expression *default_expr = from_cparser_convert_expression(expr_node);
+                            if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL)
+                                fprintf(stderr, "[copy_method_decl_defaults] default_expr=%p\n",
+                                    (void*)default_expr);
+                            
+                            if (default_expr != NULL)
+                            {
+                                impl_decl->tree_data.var_decl_data.initializer =
+                                    mk_varassign(default_value->line, 0, NULL, default_expr);
+                                if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL)
+                                    fprintf(stderr, "[copy_method_decl_defaults] COPIED default value!\n");
+                            }
+                        }
+                    }
+                    else if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL)
+                    {
+                        fprintf(stderr, "[copy_method_decl_defaults] impl already has initializer\n");
+                    }
+                }
+            }
+        }
+        
+        param_cursor = param_cursor->next;
+        impl_param = impl_param->next;
+    }
+    
+    free(class_name);
+}
+
 static HashNode_t *semcheck_find_preferred_type_node(SymTab_t *symtab, const char *type_id)
 {
     if (symtab == NULL || type_id == NULL)
@@ -3953,6 +4357,9 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
             case TYPE_DECL_ALIAS:
             {
                 alias_info = &tree->tree_data.type_decl_data.info.alias;
+                if (alias_info->alias_name == NULL && tree->tree_data.type_decl_data.id != NULL)
+                    alias_info->alias_name = strdup(tree->tree_data.type_decl_data.id);
+                
                 alias_info->is_char_alias = semcheck_alias_should_be_char_like(
                     tree->tree_data.type_decl_data.id, alias_info->target_type_id) &&
                     !alias_info->is_pointer && !alias_info->is_array && !alias_info->is_set &&
@@ -4825,19 +5232,17 @@ static void add_builtin_alias_type(SymTab_t *symtab, const char *name, int base_
     if (symtab == NULL || name == NULL)
         return;
 
-    struct TypeAlias *alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
-    if (alias == NULL)
-        return;
-    alias->base_type = base_type;
-    alias->storage_size = storage_size;
+    struct TypeAlias alias = {0};
+    alias.alias_name = (char *)name;  /* Will be duplicated by copy_type_alias */
+    alias.base_type = base_type;
+    alias.storage_size = storage_size;
 
     KgpcType *type = create_primitive_type(base_type);
     if (type == NULL)
     {
-        free(alias);
         return;
     }
-    kgpc_type_set_type_alias(type, alias);
+    kgpc_type_set_type_alias(type, &alias);
     AddBuiltinType_Typed(symtab, (char *)name, type);
     destroy_kgpc_type(type);
 }
@@ -4846,6 +5251,22 @@ static void add_builtin_from_vartype(SymTab_t *symtab, const char *name, enum Va
 {
     KgpcType *t = kgpc_type_from_var_type(vt);
     assert(t != NULL && "Failed to create builtin type");
+    add_builtin_type_owned(symtab, name, t);
+}
+
+/* Add a string type with explicit type alias to preserve type identity for mangling */
+static void add_builtin_string_type_with_alias(SymTab_t *symtab, const char *name, enum VarType vt)
+{
+    KgpcType *t = kgpc_type_from_var_type(vt);
+    assert(t != NULL && "Failed to create builtin type");
+    
+    /* Create and attach a type alias with the specific type name */
+    struct TypeAlias alias = {0};
+    alias.base_type = STRING_TYPE;
+    alias.target_type_id = (char *)name;  /* Will be duplicated by copy_type_alias */
+    alias.alias_name = (char *)name;      /* Will be duplicated by copy_type_alias */
+    kgpc_type_set_type_alias(t, &alias);
+    
     add_builtin_type_owned(symtab, name, t);
 }
 
@@ -4978,8 +5399,8 @@ void semcheck_add_builtins(SymTab_t *symtab)
     add_builtin_type_owned(symtab, "WideChar", create_primitive_type_with_size(CHAR_TYPE, 2));
     add_builtin_from_vartype(symtab, "String", HASHVAR_PCHAR);
     add_builtin_from_vartype(symtab, "AnsiString", HASHVAR_PCHAR);
-    add_builtin_from_vartype(symtab, "RawByteString", HASHVAR_PCHAR);
-    add_builtin_from_vartype(symtab, "UnicodeString", HASHVAR_PCHAR);
+    add_builtin_string_type_with_alias(symtab, "RawByteString", HASHVAR_PCHAR);
+    add_builtin_string_type_with_alias(symtab, "UnicodeString", HASHVAR_PCHAR);
     add_builtin_from_vartype(symtab, "WideString", HASHVAR_PCHAR);
     if (!stdlib_loaded_flag())
     {
@@ -6475,17 +6896,14 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         var_kgpc_type = create_array_type(char_type, 0, 255);
                         if (var_kgpc_type != NULL)
                         {
-                            struct TypeAlias *alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
-                            if (alias != NULL)
-                            {
-                                alias->is_array = 1;
-                                alias->array_start = 0;
-                                alias->array_end = 255;
-                                alias->array_element_type = CHAR_TYPE;
-                                alias->array_element_type_id = strdup("char");
-                                alias->is_shortstring = 1;
-                                kgpc_type_set_type_alias(var_kgpc_type, alias);
-                            }
+                            struct TypeAlias alias = {0};
+                            alias.is_array = 1;
+                            alias.array_start = 0;
+                            alias.array_end = 255;
+                            alias.array_element_type = CHAR_TYPE;
+                            alias.array_element_type_id = "char";  /* Will be duplicated by copy_type_alias */
+                            alias.is_shortstring = 1;
+                            kgpc_type_set_type_alias(var_kgpc_type, &alias);
                         }
                     }
                     /* Handle inline array types (e.g., array[0..2] of PChar) */
@@ -6773,40 +7191,35 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                  * by creating a minimal TypeAlias and attaching it to the array_type. This allows
                  * nested array indexing to work correctly (e.g., Keywords[1][1] where Keywords is
                  * array[1..5] of TAlfa and TAlfa is array[1..10] of char). */
-                struct TypeAlias *temp_alias = NULL;
+                struct TypeAlias temp_alias = {0};
+                int has_alias = 0;
+                
                 if (tree->tree_data.arr_decl_data.type_id != NULL)
                 {
-                    temp_alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
-                    if (temp_alias != NULL)
-                    {
-                        temp_alias->is_array = 1;
-                        temp_alias->array_start = start_bound;
-                        temp_alias->array_end = end_bound;
-                        temp_alias->array_element_type_id = strdup(tree->tree_data.arr_decl_data.type_id);
-                        temp_alias->array_element_type = tree->tree_data.arr_decl_data.type;
-                    }
+                    temp_alias.is_array = 1;
+                    temp_alias.array_start = start_bound;
+                    temp_alias.array_end = end_bound;
+                    temp_alias.array_element_type_id = tree->tree_data.arr_decl_data.type_id;  /* Will be duplicated by copy_type_alias */
+                    temp_alias.array_element_type = tree->tree_data.arr_decl_data.type;
+                    has_alias = 1;
                 }
 
                 if (tree->tree_data.arr_decl_data.is_shortstring)
                 {
-                    if (temp_alias == NULL)
+                    if (!has_alias)
                     {
-                        temp_alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
-                        if (temp_alias != NULL)
-                        {
-                            temp_alias->is_array = 1;
-                            temp_alias->array_start = start_bound;
-                            temp_alias->array_end = end_bound;
-                            temp_alias->array_element_type = CHAR_TYPE;
-                            temp_alias->array_element_type_id = strdup("char");
-                        }
+                        temp_alias.is_array = 1;
+                        temp_alias.array_start = start_bound;
+                        temp_alias.array_end = end_bound;
+                        temp_alias.array_element_type = CHAR_TYPE;
+                        temp_alias.array_element_type_id = "char";  /* Will be duplicated by copy_type_alias */
+                        has_alias = 1;
                     }
-                    if (temp_alias != NULL)
-                        temp_alias->is_shortstring = 1;
+                    temp_alias.is_shortstring = 1;
                 }
 
-                if (temp_alias != NULL)
-                    kgpc_type_set_type_alias(array_type, temp_alias);
+                if (has_alias)
+                    kgpc_type_set_type_alias(array_type, &temp_alias);
                 
                 if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
                     fprintf(stderr, "[SemCheck] Pushing array: %s, array_type=%p kind=%d elem_kind=%d\n",
@@ -7191,6 +7604,11 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
 
     assert(subprogram->type == TREE_SUBPROGRAM);
 
+    /* For class methods, copy default parameter values from the class declaration
+     * to the implementation. This is needed because Pascal allows defaults only in
+     * the declaration, not in the implementation. */
+    copy_method_decl_defaults_to_impl(symtab, subprogram);
+
     /* Record lexical nesting depth so codegen can reason about static links accurately.
      * Store depth as parent depth + 1 so the top-level program has depth 1 and
      * nested subprograms continue to increase. */
@@ -7302,6 +7720,10 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             {
                 proc_type->info.proc_info.definition = subprogram;
             }
+            /* Copy default parameter values from forward declaration to implementation */
+            copy_default_values_to_impl_params(
+                proc_type->info.proc_info.params,
+                subprogram->tree_data.subprogram_data.args_var);
         }
         else
         {
@@ -7377,6 +7799,9 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
 
         PushScope(symtab);
         
+        /* For method implementations, add class vars to scope */
+        add_class_vars_to_method_scope(symtab, subprogram->tree_data.subprogram_data.id);
+        
         if (existing_decl != NULL && existing_decl->type != NULL)
         {
             kgpc_type_retain(existing_decl->type);
@@ -7408,6 +7833,10 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                     existing_decl->type->info.proc_info.definition = subprogram;
                 }
             }
+            /* Copy default parameter values from forward declaration to implementation */
+            copy_default_values_to_impl_params(
+                existing_decl->type->info.proc_info.params,
+                subprogram->tree_data.subprogram_data.args_var);
         }
 
         /* If the predeclare step could not resolve the type (e.g., inline array),
@@ -7471,6 +7900,10 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         }
 
         PushScope(symtab);
+        
+        /* For method implementations, add class vars to scope */
+        add_class_vars_to_method_scope(symtab, subprogram->tree_data.subprogram_data.id);
+        
         // **THIS IS THE FIX FOR THE RETURN VALUE**:
         // Use the ORIGINAL name for the internal return variable with KgpcType
         // Always use _Typed variant, even if KgpcType is NULL

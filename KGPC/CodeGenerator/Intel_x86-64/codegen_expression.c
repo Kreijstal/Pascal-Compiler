@@ -1210,9 +1210,17 @@ int expr_returns_sret(const struct Expression *expr)
     if (expr_has_type_tag(expr, RECORD_TYPE))
         return 1;
 
+    /* ShortStrings are passed via SRET because they're small fixed-size arrays */
+    if (expr_has_type_tag(expr, SHORTSTRING_TYPE))
+        return 1;
+
     KgpcType *type = expr_get_kgpc_type(expr);
     if (type != NULL && type->kind == TYPE_KIND_ARRAY &&
         !kgpc_type_is_dynamic_array(type))
+        return 1;
+
+    /* Also check for shortstring type aliases */
+    if (type != NULL && type->type_alias != NULL && type->type_alias->is_shortstring)
         return 1;
 
     return 0;
@@ -4192,6 +4200,90 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 inst_list = add_inst(inst_list, buffer);
                 free_reg(get_reg_stack(), desc_addr_reg);
                 
+                arg_infos[arg_num].reg = NULL;
+                arg_infos[arg_num].spill = arg_spill;
+                arg_infos[arg_num].expr = arg_expr;
+            }
+            else if (arg_infos != NULL)
+            {
+                arginfo_assign_register(&arg_infos[arg_num], desc_addr_reg, arg_expr);
+            }
+        }
+        else if (formal_is_open_array && arg_expr != NULL && arg_expr->type == EXPR_STRING)
+        {
+            /* Handle string literal passed to open array of Char parameter.
+             * Create a descriptor: (pointer to string data, element count).
+             * The string is placed in read-only section. */
+            const char *str_data = arg_expr->expr_data.string;
+            int str_len = (str_data != NULL) ? (int)strlen(str_data) : 0;
+
+            const char *readonly_section = codegen_readonly_section_directive();
+            char label[64];
+            snprintf(label, sizeof(label), ".LC%d", ctx->write_label_counter++);
+
+            char escaped_str[CODEGEN_MAX_INST_BUF];
+            escape_string(escaped_str, str_data ? str_data : "", sizeof(escaped_str));
+            snprintf(buffer, sizeof(buffer), "%s\n%s:\n\t.string \"%s\"\n\t.text\n",
+                     readonly_section, label, escaped_str);
+            inst_list = add_inst(inst_list, buffer);
+
+            StackNode_t *desc_slot = codegen_alloc_temp_bytes("str_arr_desc",
+                2 * CODEGEN_POINTER_SIZE_BYTES);
+            if (desc_slot == NULL)
+            {
+                codegen_report_error(ctx,
+                    "ERROR: Unable to allocate descriptor for string literal to open array.");
+                return inst_list;
+            }
+
+            /* Get a register to hold the string address temporarily */
+            Register_t *data_addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+            if (data_addr_reg == NULL)
+            {
+                codegen_report_error(ctx,
+                    "ERROR: Unable to allocate register for string literal address.");
+                return inst_list;
+            }
+
+            /* Get descriptor address register */
+            Register_t *desc_addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+            if (desc_addr_reg == NULL)
+            {
+                free_reg(get_reg_stack(), data_addr_reg);
+                codegen_report_error(ctx,
+                    "ERROR: Unable to allocate register for open array descriptor.");
+                return inst_list;
+            }
+
+            /* Load descriptor slot address */
+            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                desc_slot->offset, desc_addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+
+            /* Load string address */
+            snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                     label, data_addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+
+            /* Store string pointer at descriptor[0] */
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n",
+                data_addr_reg->bit_64, desc_addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            free_reg(get_reg_stack(), data_addr_reg);
+
+            /* Store element count at descriptor[1] (offset 8) */
+            snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, 8(%s)\n",
+                str_len, desc_addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+
+            StackNode_t *arg_spill = add_l_t("arg_eval");
+            if (arg_spill != NULL && arg_infos != NULL)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                    desc_addr_reg->bit_64, arg_spill->offset);
+                inst_list = add_inst(inst_list, buffer);
+                free_reg(get_reg_stack(), desc_addr_reg);
+
                 arg_infos[arg_num].reg = NULL;
                 arg_infos[arg_num].spill = arg_spill;
                 arg_infos[arg_num].expr = arg_expr;

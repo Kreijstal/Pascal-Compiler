@@ -95,9 +95,12 @@ static enum VarType MapBuiltinTypeNameToVarType(const char *type_name) {
     
     // String types
     if (strcasecmp(type_name, "String") == 0 || strcasecmp(type_name, "AnsiString") == 0 ||
-        strcasecmp(type_name, "RawByteString") == 0 || strcasecmp(type_name, "UnicodeString") == 0 ||
         strcasecmp(type_name, "WideString") == 0)
         return HASHVAR_PCHAR;
+    if (strcasecmp(type_name, "RawByteString") == 0)
+        return HASHVAR_RAWBYTESTRING;
+    if (strcasecmp(type_name, "UnicodeString") == 0)
+        return HASHVAR_UNICODESTRING;
     
     // Integer types
     if (strcasecmp(type_name, "Integer") == 0 || strcasecmp(type_name, "Byte") == 0 ||
@@ -269,6 +272,8 @@ static char* MangleNameFromTypeList(const char* original_name, ListNode_t* type_
             case HASHVAR_TEXT:    type_suffix = "_t"; break; // For text files
             case HASHVAR_RECORD:  type_suffix = "_u"; break; // Record types treated as unknown for mangling
             case HASHVAR_ARRAY:   type_suffix = "_a"; break; // Array
+            case HASHVAR_RAWBYTESTRING: type_suffix = "_rbs"; break; // RawByteString
+            case HASHVAR_UNICODESTRING: type_suffix = "_us"; break;  // UnicodeString
             default:              type_suffix = "_u"; break; // Unknown/unsupported
         }
         strcat(mangled_name, type_suffix);
@@ -320,6 +325,20 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
                     resolved_type = HASHVAR_POINTER;
                 else if (kgpc_type->kind == TYPE_KIND_PROCEDURE)
                     resolved_type = HASHVAR_PROCEDURE;
+                /* Check type_alias for STRING_TYPE to distinguish between
+                 * RawByteString and UnicodeString. With the fix in commit 868406b,
+                 * type_alias is now owned by KgpcType and should be valid. */
+                else if (type == STRING_TYPE && kgpc_type->type_alias != NULL)
+                {
+                    struct TypeAlias *alias = kgpc_type->type_alias;
+                    if (alias->alias_name != NULL)
+                    {
+                        if (strcasecmp(alias->alias_name, "RawByteString") == 0)
+                            resolved_type = HASHVAR_RAWBYTESTRING;
+                        else if (strcasecmp(alias->alias_name, "UnicodeString") == 0)
+                            resolved_type = HASHVAR_UNICODESTRING;
+                    }
+                }
             }
         }
 
