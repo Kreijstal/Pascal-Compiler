@@ -24,6 +24,7 @@
 #include "generic_types.h"
 #include "../SemanticCheck/SymTab/SymTab.h"
 #include "../../identifier_utils.h"
+#include "../pascal_frontend.h"
 
 /* ============================================================================
  * Circular Reference Detection for AST Traversal
@@ -3897,6 +3898,7 @@ static struct RecordType *convert_class_type_ex(const char *class_name, ast_t *c
     record->fields = list_builder_finish(&field_builder);
     record->properties = list_builder_finish(&property_builder);
     record->method_templates = list_builder_finish(&method_template_builder);
+    
     record->parent_class_name = parent_class_name;
     record->methods = NULL;  /* Methods list will be populated during semantic checking */
     record->is_class = 1;

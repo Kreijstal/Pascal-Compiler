@@ -90,6 +90,9 @@ type
 
   { Root class for ObjPas compatibility }
   TObject = class
+  public
+    destructor Destroy; virtual;
+    procedure Free;
   end;
   TInterfacedObject = class(TObject)
   end;
@@ -988,6 +991,19 @@ begin
     actual64 := 0;
     blockwrite_impl(f, buffer, count, @actual64);
     result := longint(actual64);
+end;
+
+{ TObject methods }
+
+destructor TObject.Destroy;
+begin
+    { Base destructor does nothing - subclasses can override }
+end;
+
+procedure TObject.Free;
+begin
+    if Self <> nil then
+        Self.Destroy;
 end;
 
 begin
