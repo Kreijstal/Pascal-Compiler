@@ -2612,10 +2612,38 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                         type_info->is_open_array = 1;
                     }
                 } else if (dim->typ == PASCAL_T_IDENTIFIER) {
-                    // Single identifier as array dimension (e.g., array[color])
+                    // Single identifier as array dimension (e.g., array[color], array[boolean])
                     // This is NOT an open array - it's an array indexed by an enum or subrange type
-                    // Store the identifier for semantic resolution
-                    list_builder_append(&dims_builder, dup_symbol(dim), LIST_STRING);
+                    char *dim_name = dup_symbol(dim);
+                    if (dim_name != NULL) {
+                        // Check if this is the first dimension (no nodes appended yet)
+                        int is_first_dim = (dims_builder.head == NULL);
+                        list_builder_append(&dims_builder, dim_name, LIST_STRING);
+                        // Set bounds based on the dimension type
+                        // For boolean: 0..1 (False=0, True=1)
+                        if (is_first_dim) {
+                            // This is the first dimension - set bounds
+                            if (strcasecmp(dim_name, "boolean") == 0) {
+                                type_info->start = 0;
+                                type_info->end = 1;
+                            } else if (strcasecmp(dim_name, "char") == 0) {
+                                type_info->start = 0;
+                                type_info->end = 255;
+                            } else if (strcasecmp(dim_name, "byte") == 0) {
+                                type_info->start = 0;
+                                type_info->end = 255;
+                            } else if (strcasecmp(dim_name, "shortint") == 0) {
+                                type_info->start = -128;
+                                type_info->end = 127;
+                            } else {
+                                // For other types (enums, etc.), we'll need to resolve them later
+                                // For now, mark as needing resolution but set safe bounds
+                                // to avoid being marked as open array
+                                type_info->start = 0;
+                                type_info->end = 0;  // Will be resolved in semantic checking
+                            }
+                        }
+                    }
                     // Note: is_open_array is NOT set to 1 here
                 } else {
                     type_info->is_open_array = 1;
