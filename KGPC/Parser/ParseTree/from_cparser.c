@@ -1586,17 +1586,8 @@ static int map_type_name(const char *name, char **type_id_out) {
         strcasecmp(name, "rawbytestring") == 0 ||
         strcasecmp(name, "unicodestring") == 0 ||
         strcasecmp(name, "widestring") == 0) {
-        if (type_id_out != NULL) {
-            /* Preserve the original type name for RawByteString/UnicodeString
-             * so that name mangling can distinguish overloads.
-             * Other string types normalize to "string". */
-            if (strcasecmp(name, "rawbytestring") == 0)
-                *type_id_out = strdup("RawByteString");
-            else if (strcasecmp(name, "unicodestring") == 0)
-                *type_id_out = strdup("UnicodeString");
-            else
-                *type_id_out = strdup("string");
-        }
+        if (type_id_out != NULL)
+            *type_id_out = strdup("string");
         return STRING_TYPE;
     }
     if (strcasecmp(name, "text") == 0) {

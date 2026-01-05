@@ -1358,31 +1358,9 @@ KgpcType* kgpc_type_from_var_type(enum VarType var_type)
         case HASHVAR_FILE:
         case HASHVAR_TEXT:
         case HASHVAR_ENUM:
-        case HASHVAR_INT64:
         {
             int tag = var_type_to_primitive_tag(var_type);
             return create_primitive_type(tag);
-        }
-        
-        case HASHVAR_RAWBYTESTRING:
-        case HASHVAR_UNICODESTRING:
-        {
-            /* RawByteString and UnicodeString are string types with special alias_name.
-             * Create a STRING_TYPE primitive and set the alias_name. */
-            KgpcType *type = create_primitive_type(STRING_TYPE);
-            if (type != NULL)
-            {
-                /* Create a TypeAlias to store the original name */
-                struct TypeAlias *alias = calloc(1, sizeof(struct TypeAlias));
-                if (alias != NULL)
-                {
-                    alias->alias_name = strdup(var_type == HASHVAR_RAWBYTESTRING ? 
-                                               "RawByteString" : "UnicodeString");
-                    alias->base_type = STRING_TYPE;
-                    kgpc_type_set_type_alias(type, alias);
-                }
-            }
-            return type;
         }
         
         case HASHVAR_ARRAY:
