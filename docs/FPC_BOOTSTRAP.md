@@ -42,11 +42,19 @@ The FPC RTL cannot be fully compiled because kgpc has bugs and missing features 
 
 ## Build Command
 ```
-kgpc <file>.pp -o <file>.s \
-  -Irtl/inc -Irtl/x86_64 -Irtl/unix -Irtl/linux -Irtl/linux/x86_64 \
+build/KGPC/kgpc <file>.pp <file>.s \
+  -IFPCSource/rtl/inc \
+  -IFPCSource/rtl/x86_64 \
+  -IFPCSource/rtl/unix \
+  -IFPCSource/rtl/linux \
+  -IFPCSource/rtl/linux/x86_64 \
+  -IFPCSource/rtl/objpas \
+  -IFPCSource/rtl/objpas/sysutils \
   --no-stdlib \
   -Cg -dCPUX86_64
 ```
+
+Note: The `sysutils.pp` unit requires `-IFPCSource/rtl/objpas` and `-IFPCSource/rtl/objpas/sysutils` paths to find `TEndian` (from `ObjPas`) and `SCannotCreateEmptyDir` (from `SysConst`).
 
 ## Compiles Successfully (RTL Units)
 - `system.pp` - Core system unit (dead code eliminated)
@@ -69,7 +77,12 @@ kgpc <file>.pp -o <file>.s \
 - `dl.pp` - Dynamic loading
 
 ## Units with Compilation Errors
-- `sysutils.pp` - Missing constants, type mismatches
+- `sysutils.pp` - Missing paths (now fixed), plus ~77 remaining semantic errors:
+  - Overload resolution failures (EInOutError.Create, TryCase, etc.)
+  - Bitwise AND/OR incorrectly rejected as non-boolean
+  - Property getter resolution failures (SystemEncoding, Unicode)
+  - Type mismatches (char vs string, arithmetic operands)
+  - Scope/visibility bugs (SysBeep not found in same unit)
 - `math.pp` - Depends on sysutils
 - `cthreads.pp` - Missing ThreadingAlreadyUsed
 - `charset.pp` - Type incompatibilities
