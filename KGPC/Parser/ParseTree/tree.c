@@ -2916,6 +2916,11 @@ static void clear_type_alias_fields(struct TypeAlias *alias)
     if (alias == NULL)
         return;
 
+    if (alias->alias_name != NULL)
+    {
+        free(alias->alias_name);
+        alias->alias_name = NULL;
+    }
     if (alias->target_type_id != NULL)
     {
         free(alias->target_type_id);
