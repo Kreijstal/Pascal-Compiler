@@ -26,6 +26,7 @@
 #include "../../flags.h"
 #include "../../identifier_utils.h"
 #include "../../Optimizer/optimizer.h"
+#include "../pascal_frontend.h"
 #include "../ParseTree/tree.h"
 #include "../ParseTree/tree_types.h"
 #include "../ParseTree/KgpcType.h"
@@ -4302,6 +4303,19 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
 
                 if (record_info != NULL && record_info->is_type_helper)
                     semcheck_register_type_helper(record_info, symtab);
+                
+                /* In objfpc mode, classes without explicit parent inherit from TObject,
+                 * unless this IS TObject itself (to avoid circular inheritance). */
+                if (record_info != NULL && record_info->is_class && 
+                    record_info->parent_class_name == NULL &&
+                    pascal_frontend_is_objfpc_mode())
+                {
+                    const char *class_name = tree->tree_data.type_decl_data.id;
+                    if (class_name == NULL || strcasecmp(class_name, "TObject") != 0)
+                    {
+                        record_info->parent_class_name = strdup("TObject");
+                    }
+                }
                 
                 /* Handle class inheritance - merge parent fields */
                 if (record_info != NULL && record_info->parent_class_name != NULL)

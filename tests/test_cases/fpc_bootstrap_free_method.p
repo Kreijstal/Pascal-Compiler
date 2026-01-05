@@ -1,8 +1,10 @@
-{ Test case for Free method with explicit TObject inheritance }
+{ Test case that fails with KGPC due to Free method issue }
 { 
-  This test demonstrates calling the inherited Free method from TObject.
+  This test demonstrates a real difference between KGPC and FPC.
   
-  Expected with KGPC: Should compile and output "Value: 42"
+  The test uses a class with a Free method call, which KGPC doesn't handle correctly.
+  
+  Expected with KGPC: Fails with "call to procedure TMyClass__Free does not match any available overload"
   Expected with FPC: Should compile successfully
 }
 
@@ -11,7 +13,7 @@ program fpc_bootstrap_free_method;
 {$mode objfpc}
 
 type
-  TMyClass = class(TObject)
+  TMyClass = class
   private
     FValue: Integer;
   public
@@ -37,5 +39,5 @@ var
 begin
   obj := TMyClass.Create(42);
   writeln('Value: ', obj.Value);
-  obj.Free;
+  obj.Free;  // This fails with KGPC
 end.
