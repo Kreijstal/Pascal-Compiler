@@ -5232,20 +5232,17 @@ static void add_builtin_alias_type(SymTab_t *symtab, const char *name, int base_
     if (symtab == NULL || name == NULL)
         return;
 
-    struct TypeAlias *alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
-    if (alias == NULL)
-        return;
-    alias->alias_name = strdup(name);
-    alias->base_type = base_type;
-    alias->storage_size = storage_size;
+    struct TypeAlias alias = {0};
+    alias.alias_name = (char *)name;  /* Will be duplicated by copy_type_alias */
+    alias.base_type = base_type;
+    alias.storage_size = storage_size;
 
     KgpcType *type = create_primitive_type(base_type);
     if (type == NULL)
     {
-        free(alias);
         return;
     }
-    kgpc_type_set_type_alias(type, alias);
+    kgpc_type_set_type_alias(type, &alias);
     AddBuiltinType_Typed(symtab, (char *)name, type);
     destroy_kgpc_type(type);
 }
@@ -5264,14 +5261,11 @@ static void add_builtin_string_type_with_alias(SymTab_t *symtab, const char *nam
     assert(t != NULL && "Failed to create builtin type");
     
     /* Create and attach a type alias with the specific type name */
-    struct TypeAlias *alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
-    if (alias != NULL)
-    {
-        alias->base_type = STRING_TYPE;
-        alias->target_type_id = strdup(name);
-        alias->alias_name = strdup(name);
-        kgpc_type_set_type_alias(t, alias);
-    }
+    struct TypeAlias alias = {0};
+    alias.base_type = STRING_TYPE;
+    alias.target_type_id = (char *)name;  /* Will be duplicated by copy_type_alias */
+    alias.alias_name = (char *)name;      /* Will be duplicated by copy_type_alias */
+    kgpc_type_set_type_alias(t, &alias);
     
     add_builtin_type_owned(symtab, name, t);
 }
@@ -6902,17 +6896,14 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         var_kgpc_type = create_array_type(char_type, 0, 255);
                         if (var_kgpc_type != NULL)
                         {
-                            struct TypeAlias *alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
-                            if (alias != NULL)
-                            {
-                                alias->is_array = 1;
-                                alias->array_start = 0;
-                                alias->array_end = 255;
-                                alias->array_element_type = CHAR_TYPE;
-                                alias->array_element_type_id = strdup("char");
-                                alias->is_shortstring = 1;
-                                kgpc_type_set_type_alias(var_kgpc_type, alias);
-                            }
+                            struct TypeAlias alias = {0};
+                            alias.is_array = 1;
+                            alias.array_start = 0;
+                            alias.array_end = 255;
+                            alias.array_element_type = CHAR_TYPE;
+                            alias.array_element_type_id = "char";  /* Will be duplicated by copy_type_alias */
+                            alias.is_shortstring = 1;
+                            kgpc_type_set_type_alias(var_kgpc_type, &alias);
                         }
                     }
                     /* Handle inline array types (e.g., array[0..2] of PChar) */
@@ -7200,40 +7191,35 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                  * by creating a minimal TypeAlias and attaching it to the array_type. This allows
                  * nested array indexing to work correctly (e.g., Keywords[1][1] where Keywords is
                  * array[1..5] of TAlfa and TAlfa is array[1..10] of char). */
-                struct TypeAlias *temp_alias = NULL;
+                struct TypeAlias temp_alias = {0};
+                int has_alias = 0;
+                
                 if (tree->tree_data.arr_decl_data.type_id != NULL)
                 {
-                    temp_alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
-                    if (temp_alias != NULL)
-                    {
-                        temp_alias->is_array = 1;
-                        temp_alias->array_start = start_bound;
-                        temp_alias->array_end = end_bound;
-                        temp_alias->array_element_type_id = strdup(tree->tree_data.arr_decl_data.type_id);
-                        temp_alias->array_element_type = tree->tree_data.arr_decl_data.type;
-                    }
+                    temp_alias.is_array = 1;
+                    temp_alias.array_start = start_bound;
+                    temp_alias.array_end = end_bound;
+                    temp_alias.array_element_type_id = tree->tree_data.arr_decl_data.type_id;  /* Will be duplicated by copy_type_alias */
+                    temp_alias.array_element_type = tree->tree_data.arr_decl_data.type;
+                    has_alias = 1;
                 }
 
                 if (tree->tree_data.arr_decl_data.is_shortstring)
                 {
-                    if (temp_alias == NULL)
+                    if (!has_alias)
                     {
-                        temp_alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
-                        if (temp_alias != NULL)
-                        {
-                            temp_alias->is_array = 1;
-                            temp_alias->array_start = start_bound;
-                            temp_alias->array_end = end_bound;
-                            temp_alias->array_element_type = CHAR_TYPE;
-                            temp_alias->array_element_type_id = strdup("char");
-                        }
+                        temp_alias.is_array = 1;
+                        temp_alias.array_start = start_bound;
+                        temp_alias.array_end = end_bound;
+                        temp_alias.array_element_type = CHAR_TYPE;
+                        temp_alias.array_element_type_id = "char";  /* Will be duplicated by copy_type_alias */
+                        has_alias = 1;
                     }
-                    if (temp_alias != NULL)
-                        temp_alias->is_shortstring = 1;
+                    temp_alias.is_shortstring = 1;
                 }
 
-                if (temp_alias != NULL)
-                    kgpc_type_set_type_alias(array_type, temp_alias);
+                if (has_alias)
+                    kgpc_type_set_type_alias(array_type, &temp_alias);
                 
                 if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
                     fprintf(stderr, "[SemCheck] Pushing array: %s, array_type=%p kind=%d elem_kind=%d\n",

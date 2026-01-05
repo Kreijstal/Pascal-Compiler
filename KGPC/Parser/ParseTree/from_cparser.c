@@ -9687,6 +9687,8 @@ struct MethodTemplate *from_cparser_get_method_template(struct RecordType *recor
         return NULL;
     
     ListNode_t *cur = record->method_templates;
+    struct MethodTemplate *fallback_template = NULL;
+    
     while (cur != NULL)
     {
         struct MethodTemplate *template = (struct MethodTemplate *)cur->cur;
@@ -9714,23 +9716,16 @@ struct MethodTemplate *from_cparser_get_method_template(struct RecordType *recor
                     param = param->next;
                 }
             }
+            
+            /* Remember first matching template as fallback */
+            if (fallback_template == NULL)
+                fallback_template = template;
         }
         cur = cur->next;
     }
     
-    /* Fallback: return any matching template */
-    cur = record->method_templates;
-    while (cur != NULL)
-    {
-        struct MethodTemplate *template = (struct MethodTemplate *)cur->cur;
-        if (template != NULL && template->name != NULL &&
-            strcasecmp(template->name, method_name) == 0)
-        {
-            return template;
-        }
-        cur = cur->next;
-    }
-    return NULL;
+    /* Return fallback if no template with defaults found */
+    return fallback_template;
 }
 
 /* Public wrapper for convert_expression */

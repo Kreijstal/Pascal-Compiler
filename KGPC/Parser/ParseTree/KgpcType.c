@@ -299,6 +299,10 @@ void kgpc_type_retain(KgpcType *type) {
     type->ref_count++;
 }
 
+void kgpc_type_release(KgpcType *type) {
+    destroy_kgpc_type(type);
+}
+
 void destroy_kgpc_type(KgpcType *type) {
     if (type == NULL) return;
     
@@ -1393,6 +1397,48 @@ KgpcType* kgpc_type_from_var_type(enum VarType var_type)
 }
 
 /* Get the type alias metadata from a KgpcType */
+/* Helper function to copy a list of strings */
+static ListNode_t *copy_string_list(const ListNode_t *src)
+{
+    if (src == NULL)
+        return NULL;
+    
+    ListNode_t *dst = NULL;
+    ListNode_t *tail = NULL;
+    const ListNode_t *cur = src;
+    
+    while (cur != NULL)
+    {
+        if (cur->type == LIST_STRING && cur->cur != NULL)
+        {
+            ListNode_t *new_node = (ListNode_t *)malloc(sizeof(ListNode_t));
+            if (new_node == NULL)
+            {
+                /* Free already allocated nodes on failure */
+                destroy_list(dst);
+                return NULL;
+            }
+            new_node->type = LIST_STRING;
+            new_node->cur = strdup((char *)cur->cur);
+            new_node->next = NULL;
+            
+            if (dst == NULL)
+            {
+                dst = new_node;
+                tail = new_node;
+            }
+            else
+            {
+                tail->next = new_node;
+                tail = new_node;
+            }
+        }
+        cur = cur->next;
+    }
+    
+    return dst;
+}
+
 /* Copy a TypeAlias structure */
 static struct TypeAlias* copy_type_alias(const struct TypeAlias *src)
 {
@@ -1439,12 +1485,11 @@ static struct TypeAlias* copy_type_alias(const struct TypeAlias *src)
     if (src->file_type_id != NULL)
         dst->file_type_id = strdup(src->file_type_id);
     
-    /* Copy lists - for now we just reference them since they're owned by AST
-     * In a more complete solution, we'd need to deep copy these lists */
-    dst->array_dimensions = src->array_dimensions;
-    dst->enum_literals = src->enum_literals;
+    /* Deep copy lists */
+    dst->array_dimensions = copy_string_list(src->array_dimensions);
+    dst->enum_literals = copy_string_list(src->enum_literals);
     
-    /* Copy inline_record_type - reference only for now */
+    /* Copy inline_record_type - reference only for now (owned by AST) */
     dst->inline_record_type = src->inline_record_type;
     
     /* Copy kgpc_type with proper reference counting */
@@ -1469,15 +1514,20 @@ static void free_copied_type_alias(struct TypeAlias *alias)
     free(alias->set_element_type_id);
     free(alias->file_type_id);
     
-    /* Note: We don't free array_dimensions or enum_literals as they're owned by AST */
+    /* Free deep-copied lists */
+    if (alias->array_dimensions != NULL)
+        destroy_list(alias->array_dimensions);
+    if (alias->enum_literals != NULL)
+        destroy_list(alias->enum_literals);
+    
     /* Note: We don't free inline_record_type as it's owned by AST */
     
-    /* Save and NULL out kgpc_type before destroying to prevent infinite recursion
+    /* Save and NULL out kgpc_type before releasing to prevent infinite recursion
      * when the alias's kgpc_type points back to the type that owns this alias */
     if (alias->kgpc_type != NULL) {
-        KgpcType *kgpc_type_to_destroy = alias->kgpc_type;
-        alias->kgpc_type = NULL;  /* Break potential cycle before destroy */
-        destroy_kgpc_type(kgpc_type_to_destroy);
+        KgpcType *kgpc_type_to_release = alias->kgpc_type;
+        alias->kgpc_type = NULL;  /* Break potential cycle before release */
+        kgpc_type_release(kgpc_type_to_release);
     }
     
     free(alias);

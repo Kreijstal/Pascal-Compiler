@@ -4221,8 +4221,10 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             char label[64];
             snprintf(label, sizeof(label), ".LC%d", ctx->write_label_counter++);
 
+            char escaped_str[CODEGEN_MAX_INST_BUF];
+            escape_string(escaped_str, str_data ? str_data : "", sizeof(escaped_str));
             snprintf(buffer, sizeof(buffer), "%s\n%s:\n\t.string \"%s\"\n\t.text\n",
-                     readonly_section, label, str_data ? str_data : "");
+                     readonly_section, label, escaped_str);
             inst_list = add_inst(inst_list, buffer);
 
             StackNode_t *desc_slot = codegen_alloc_temp_bytes("str_arr_desc",

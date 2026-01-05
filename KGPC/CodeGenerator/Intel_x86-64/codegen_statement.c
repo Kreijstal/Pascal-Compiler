@@ -5127,6 +5127,10 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                 snprintf(buffer, sizeof(buffer), "\tmovb\t%s, 1(%s)\n", char_reg, addr_reg->bit_64);
                 inst_list = add_inst(inst_list, buffer);
             }
+            else
+            {
+                codegen_report_error(ctx, "ERROR: Could not get 8-bit register name for character storage");
+            }
             
             free_reg(get_reg_stack(), value_reg);
             free_reg(get_reg_stack(), addr_reg);

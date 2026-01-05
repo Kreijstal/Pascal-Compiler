@@ -2958,7 +2958,7 @@ static void clear_type_alias_fields(struct TypeAlias *alias)
     }
     if (alias->kgpc_type != NULL)
     {
-        destroy_kgpc_type(alias->kgpc_type);
+        kgpc_type_release(alias->kgpc_type);
         alias->kgpc_type = NULL;
     }
     if (alias->inline_record_type != NULL)
