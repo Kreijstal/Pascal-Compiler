@@ -3090,9 +3090,15 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
 
                 if (right != NULL && right[0] == '$')
                 {
-                    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%r10d\n", right);
+                    /* When loading an immediate set value, make sure not to clobber the left operand.
+                     * Use %r11d if left is in %r10d, otherwise use %r10d. */
+                    const char *temp_reg = "%r10d";
+                    /* Check if left operand is in r10 (any size: r10, r10d, r10b, r10w) */
+                    if (left32 != NULL && strstr(left32, "%r10") == left32)
+                        temp_reg = "%r11d";
+                    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", right, temp_reg);
                     inst_list = add_inst(inst_list, buffer);
-                    bit_base = "%r10d";
+                    bit_base = temp_reg;
                 }
 
                 if (left32 != NULL && left8 != NULL && bit_index != NULL && bit_base != NULL)

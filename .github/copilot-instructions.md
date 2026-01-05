@@ -87,7 +87,6 @@ bash -c 'source quasi-msys2/env/all.src && meson test -C builddir-cross'
 
 - `cparser/tests.c` - Unit tests for parser combinators
 - `cparser/examples/pascal_parser/pascal_tests.c` - Pascal parser unit tests
-- `tests/test_runner.py` - Integration test runner (TAP protocol)
 - `tests/test_cases/` - Pascal test programs
 - `tests/golden_ast/` - Expected AST outputs
 

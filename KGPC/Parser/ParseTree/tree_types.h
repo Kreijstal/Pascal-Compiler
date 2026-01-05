@@ -26,6 +26,7 @@ enum TypeDeclKind { TYPE_DECL_RANGE, TYPE_DECL_RECORD, TYPE_DECL_ALIAS, TYPE_DEC
 
 struct TypeAlias
 {
+    char *alias_name; /* The name of this alias (e.g. "RawByteString") */
     int base_type;
     int is_char_alias;
     char *target_type_id;

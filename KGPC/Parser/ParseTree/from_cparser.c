@@ -1583,11 +1583,21 @@ static int map_type_name(const char *name, char **type_id_out) {
     }
     if (strcasecmp(name, "string") == 0 ||
         strcasecmp(name, "ansistring") == 0 ||
-        strcasecmp(name, "rawbytestring") == 0 ||
-        strcasecmp(name, "unicodestring") == 0 ||
         strcasecmp(name, "widestring") == 0) {
         if (type_id_out != NULL)
             *type_id_out = strdup("string");
+        return STRING_TYPE;
+    }
+    /* RawByteString and UnicodeString need to preserve their original names
+     * for correct name mangling of overloaded procedures */
+    if (strcasecmp(name, "rawbytestring") == 0) {
+        if (type_id_out != NULL)
+            *type_id_out = strdup("RawByteString");
+        return STRING_TYPE;
+    }
+    if (strcasecmp(name, "unicodestring") == 0) {
+        if (type_id_out != NULL)
+            *type_id_out = strdup("UnicodeString");
         return STRING_TYPE;
     }
     if (strcasecmp(name, "text") == 0) {
@@ -2602,10 +2612,38 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                         type_info->is_open_array = 1;
                     }
                 } else if (dim->typ == PASCAL_T_IDENTIFIER) {
-                    // Single identifier as array dimension (e.g., array[color])
+                    // Single identifier as array dimension (e.g., array[color], array[boolean])
                     // This is NOT an open array - it's an array indexed by an enum or subrange type
-                    // Store the identifier for semantic resolution
-                    list_builder_append(&dims_builder, dup_symbol(dim), LIST_STRING);
+                    char *dim_name = dup_symbol(dim);
+                    if (dim_name != NULL) {
+                        // Check if this is the first dimension (no nodes appended yet)
+                        int is_first_dim = (dims_builder.head == NULL);
+                        list_builder_append(&dims_builder, dim_name, LIST_STRING);
+                        // Set bounds based on the dimension type
+                        // For boolean: 0..1 (False=0, True=1)
+                        if (is_first_dim) {
+                            // This is the first dimension - set bounds
+                            if (strcasecmp(dim_name, "boolean") == 0) {
+                                type_info->start = 0;
+                                type_info->end = 1;
+                            } else if (strcasecmp(dim_name, "char") == 0) {
+                                type_info->start = 0;
+                                type_info->end = 255;
+                            } else if (strcasecmp(dim_name, "byte") == 0) {
+                                type_info->start = 0;
+                                type_info->end = 255;
+                            } else if (strcasecmp(dim_name, "shortint") == 0) {
+                                type_info->start = -128;
+                                type_info->end = 127;
+                            } else {
+                                // For other types (enums, etc.), we'll need to resolve them later
+                                // For now, mark as needing resolution but set safe bounds
+                                // to avoid being marked as open array
+                                type_info->start = 0;
+                                type_info->end = 0;  // Will be resolved in semantic checking
+                            }
+                        }
+                    }
                     // Note: is_open_array is NOT set to 1 here
                 } else {
                     type_info->is_open_array = 1;
@@ -2880,12 +2918,35 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
         if (type_name == NULL)
             return NULL;
 
-        int type_tag = map_type_name(type_name, NULL);
-        free(type_name);
-
+        /* Get the preserved type name for RawByteString/UnicodeString */
+        char *preserved_type_id = NULL;
+        int type_tag = map_type_name(type_name, &preserved_type_id);
+        
         if (type_tag != UNKNOWN_TYPE) {
-            return create_primitive_type(type_tag);
+            KgpcType *type = create_primitive_type(type_tag);
+            /* If this is RawByteString or UnicodeString, create a type_alias to preserve the name */
+            if (type != NULL && preserved_type_id != NULL &&
+                (strcasecmp(preserved_type_id, "RawByteString") == 0 ||
+                 strcasecmp(preserved_type_id, "UnicodeString") == 0)) {
+                /* Create a TypeAlias to preserve the original type name */
+                struct TypeAlias *alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
+                if (alias != NULL) {
+                    alias->alias_name = strdup(preserved_type_id);
+                    alias->base_type = type_tag;
+                    /* Set type_alias on the KgpcType */
+                    kgpc_type_set_type_alias(type, alias);
+                    /* Free the temporary alias after copying */
+                    free(alias->alias_name);
+                    free(alias);
+                }
+            }
+            free(type_name);
+            free(preserved_type_id);
+            return type;
         }
+        
+        free(type_name);
+        free(preserved_type_id);
 
         /* If unknown type and we have a symbol table, try to look it up */
         if (symtab != NULL) {
@@ -5784,6 +5845,10 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
     if (decl != NULL && decl->type == TREE_TYPE_DECL &&
         decl->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS) {
         struct TypeAlias *alias = &decl->tree_data.type_decl_data.info.alias;
+        /* Set the alias name */
+        if (decl->tree_data.type_decl_data.id != NULL && alias->alias_name == NULL) {
+            alias->alias_name = strdup(decl->tree_data.type_decl_data.id);
+        }
         if (type_info.array_dimensions != NULL) {
             alias->array_dimensions = type_info.array_dimensions;
             type_info.array_dimensions = NULL;
@@ -9610,4 +9675,61 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
 
     fprintf(stderr, "ERROR: Unsupported Pascal AST root type %d.\n", cur->typ);
     return NULL;
+}
+
+/* Get the method template for a class method.
+ * This is used to copy default parameter values from class declarations to implementations.
+ * For overloaded methods, we need to match by parameter count.
+ */
+struct MethodTemplate *from_cparser_get_method_template(struct RecordType *record, const char *method_name)
+{
+    if (record == NULL || method_name == NULL)
+        return NULL;
+    
+    ListNode_t *cur = record->method_templates;
+    struct MethodTemplate *fallback_template = NULL;
+    
+    while (cur != NULL)
+    {
+        struct MethodTemplate *template = (struct MethodTemplate *)cur->cur;
+        if (template != NULL && template->name != NULL &&
+            strcasecmp(template->name, method_name) == 0)
+        {
+            /* For overloaded methods, prefer templates that have default values */
+            if (template->params_ast != NULL)
+            {
+                /* Check if this template has default values */
+                ast_t *param = template->params_ast;
+                if (param->typ == PASCAL_T_PARAM_LIST)
+                    param = param->child;
+                
+                while (param != NULL)
+                {
+                    if (param->typ == PASCAL_T_PARAM)
+                    {
+                        for (ast_t *child = param->child; child != NULL; child = child->next)
+                        {
+                            if (child->typ == PASCAL_T_DEFAULT_VALUE)
+                                return template;  /* Found one with defaults */
+                        }
+                    }
+                    param = param->next;
+                }
+            }
+            
+            /* Remember first matching template as fallback */
+            if (fallback_template == NULL)
+                fallback_template = template;
+        }
+        cur = cur->next;
+    }
+    
+    /* Return fallback if no template with defaults found */
+    return fallback_template;
+}
+
+/* Public wrapper for convert_expression */
+struct Expression *from_cparser_convert_expression(ast_t *expr_node)
+{
+    return convert_expression(expr_node);
 }

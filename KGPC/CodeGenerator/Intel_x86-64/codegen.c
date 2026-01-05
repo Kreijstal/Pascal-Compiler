@@ -31,6 +31,61 @@
 #define CODEGEN_POINTER_SIZE_BYTES 8
 #define CODEGEN_LABEL_BUFFER_SIZE 256
 
+/* Escape a string for use in assembly .string directive */
+void escape_string(char *dest, const char *src, size_t dest_size)
+{
+    if (dest == NULL || src == NULL || dest_size == 0)
+        return;
+    
+    size_t i = 0, j = 0;
+    while (src[i] != '\0' && j < dest_size - 1)
+    {
+        switch (src[i])
+        {
+            case '"':
+                if (j + 2 < dest_size - 1)
+                {
+                    dest[j++] = '\\';
+                    dest[j++] = '"';
+                }
+                break;
+            case '\\':
+                if (j + 2 < dest_size - 1)
+                {
+                    dest[j++] = '\\';
+                    dest[j++] = '\\';
+                }
+                break;
+            case '\n':
+                if (j + 2 < dest_size - 1)
+                {
+                    dest[j++] = '\\';
+                    dest[j++] = 'n';
+                }
+                break;
+            case '\t':
+                if (j + 2 < dest_size - 1)
+                {
+                    dest[j++] = '\\';
+                    dest[j++] = 't';
+                }
+                break;
+            case '\r':
+                if (j + 2 < dest_size - 1)
+                {
+                    dest[j++] = '\\';
+                    dest[j++] = 'r';
+                }
+                break;
+            default:
+                dest[j++] = src[i];
+                break;
+        }
+        i++;
+    }
+    dest[j] = '\0';
+}
+
 /* Helper functions for transitioning from legacy type fields to KgpcType */
 static int codegen_dynamic_array_element_size_from_type(CodeGenContext *ctx, KgpcType *array_type);
 static int codegen_dynamic_array_descriptor_bytes(int element_size);
@@ -1206,7 +1261,11 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
                     fprintf(ctx->output_file, "\t.quad\t%s\n", name_label);
                     /* Always emit VMT reference, even if no methods */
                     fprintf(ctx->output_file, "\t.quad\t%s_VMT\n", class_label);
-                    fprintf(ctx->output_file, "%s:\n\t.string \"%s\"\n", name_label, class_label);
+                    {
+                        char escaped_label[CODEGEN_MAX_INST_BUF];
+                        escape_string(escaped_label, class_label, sizeof(escaped_label));
+                        fprintf(ctx->output_file, "%s:\n\t.string \"%s\"\n", name_label, escaped_label);
+                    }
 
                     /* Always emit VMT for classes, even if no virtual methods */
                     fprintf(ctx->output_file, "\n# VMT for class %s\n", class_label);
@@ -1262,7 +1321,11 @@ void codegen_program_header(const char *fname, CodeGenContext *ctx)
     #endif
     assert(fname != NULL);
     assert(ctx != NULL);
-    fprintf(ctx->output_file, "\t.file\t\"%s\"\n", fname);
+    {
+        char escaped_fname[CODEGEN_MAX_INST_BUF];
+        escape_string(escaped_fname, fname, sizeof(escaped_fname));
+        fprintf(ctx->output_file, "\t.file\t\"%s\"\n", escaped_fname);
+    }
     fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());
 
     fprintf(ctx->output_file, "\t.text\n");

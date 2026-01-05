@@ -570,7 +570,12 @@ begin
     { Stub implementation - code page handling not yet implemented }
 end;
 
-procedure SetCodePage(var S: RawByteString; CodePage: TSystemCodePage; Convert: Boolean); overload;
+function StringCodePage(const S: RawByteString): TSystemCodePage; overload;
+begin
+    StringCodePage := 65001; { Return UTF-8 code page by default }
+end;
+
+procedure SetCodePage(var S: RawByteString; CodePage: TSystemCodePage; Convert: Boolean = True); overload;
 begin
     assembler;
     asm
@@ -578,7 +583,7 @@ begin
     end
 end;
 
-procedure SetCodePage(var S: UnicodeString; CodePage: TSystemCodePage; Convert: Boolean); overload;
+procedure SetCodePage(var S: UnicodeString; CodePage: TSystemCodePage; Convert: Boolean = True); overload;
 begin
     assembler;
     asm

@@ -1779,6 +1779,14 @@ static ListNode_t *codegen_assign_static_array(struct Expression *dest_expr,
         }
     }
 
+    /* Check if the source expression involves a function call.
+     * If so, we need to spill the destination address to a stack slot
+     * because the function call can clobber any caller-saved register. */
+    int src_has_function_call = (src_expr->type == EXPR_FUNCTION_CALL) ||
+        expr_returns_sret(src_expr);
+    StackNode_t *dest_spill_slot = NULL;
+    char buffer[128];
+
     /* Get address of destination */
     Register_t *dest_reg = NULL;
     inst_list = codegen_address_for_expr(dest_expr, inst_list, ctx, &dest_reg);
@@ -1787,6 +1795,18 @@ static ListNode_t *codegen_assign_static_array(struct Expression *dest_expr,
         if (dest_reg != NULL)
             free_reg(get_reg_stack(), dest_reg);
         return inst_list;
+    }
+
+    /* If source has a function call, spill destination address to preserve it */
+    if (src_has_function_call)
+    {
+        dest_spill_slot = add_l_t("array_dest_spill");
+        if (dest_spill_slot != NULL)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                dest_reg->bit_64, dest_spill_slot->offset);
+            inst_list = add_inst(inst_list, buffer);
+        }
     }
 
     /* Get address of source */
@@ -1800,6 +1820,14 @@ static ListNode_t *codegen_assign_static_array(struct Expression *dest_expr,
         return inst_list;
     }
 
+    /* If we spilled the destination, reload it */
+    if (dest_spill_slot != NULL)
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+            dest_spill_slot->offset, dest_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
     /* Get register for size */
     Register_t *count_reg = get_free_reg(get_reg_stack(), &inst_list);
     if (count_reg == NULL)
@@ -1810,7 +1838,6 @@ static ListNode_t *codegen_assign_static_array(struct Expression *dest_expr,
             "ERROR: Unable to allocate register for array copy size.");
     }
 
-    char buffer[128];
     snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n", array_size, count_reg->bit_64);
     inst_list = add_inst(inst_list, buffer);
 
@@ -4946,6 +4973,12 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
     if (expr_get_type_tag(var_expr) == SET_TYPE && expr_is_char_set_ctx(var_expr, ctx))
         return codegen_assign_record_value(var_expr, assign_expr, inst_list, ctx);
 
+    /* ShortStrings need record-like handling when assigned from function calls
+     * because they use SRET (struct return) convention */
+    if (codegen_expr_is_shortstring_array(var_expr) &&
+        assign_expr != NULL && assign_expr->type == EXPR_FUNCTION_CALL)
+        return codegen_assign_record_value(var_expr, assign_expr, inst_list, ctx);
+
     if (var_expr->type == EXPR_VAR_ID)
     {
         if (expr_is_dynamic_array(var_expr))
@@ -5061,6 +5094,42 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             {
                 /* Regular char array copy */
                 inst_list = codegen_call_string_to_char_array(inst_list, ctx, addr_reg, value_reg, array_size);
+            }
+            
+            free_reg(get_reg_stack(), value_reg);
+            free_reg(get_reg_stack(), addr_reg);
+            return inst_list;
+        }
+
+        /* Handle CHAR assignment to ShortString arrays - set length=1 and store char at position 1 */
+        if (codegen_expr_is_shortstring_array(var_expr) &&
+            expr_get_type_tag(assign_expr) == CHAR_TYPE)
+        {
+            Register_t *addr_reg = NULL;
+            inst_list = codegen_address_for_expr(var_expr, inst_list, ctx, &addr_reg);
+            if (codegen_had_error(ctx) || addr_reg == NULL)
+            {
+                free_reg(get_reg_stack(), value_reg);
+                if (addr_reg != NULL)
+                    free_reg(get_reg_stack(), addr_reg);
+                return inst_list;
+            }
+
+            char buffer[128];
+            /* Store length=1 at position 0 */
+            snprintf(buffer, sizeof(buffer), "\tmovb\t$1, (%s)\n", addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            
+            /* Store the character at position 1 */
+            const char *char_reg = register_name8(value_reg);
+            if (char_reg != NULL)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovb\t%s, 1(%s)\n", char_reg, addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else
+            {
+                codegen_report_error(ctx, "ERROR: Could not get 8-bit register name for character storage");
             }
             
             free_reg(get_reg_stack(), value_reg);

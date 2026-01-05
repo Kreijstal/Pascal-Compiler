@@ -103,6 +103,7 @@ KgpcType* create_kgpc_type_from_type_alias(struct TypeAlias *alias, struct SymTa
 // Destructor function (CRITICAL for preventing memory leaks)
 void destroy_kgpc_type(KgpcType *type);
 void kgpc_type_retain(KgpcType *type);
+void kgpc_type_release(KgpcType *type);
 
 // Utility functions
 int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, struct SymTab *symtab);

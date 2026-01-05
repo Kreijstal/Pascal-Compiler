@@ -47,4 +47,15 @@ void from_cparser_disable_pending_specializations(void);
 void resolve_pending_generic_aliases(Tree_t *program_tree);
 void append_generic_method_clones(Tree_t *program_tree);
 
+/* Get the method template AST for a class method declaration.
+ * Returns the params_ast from the method template, or NULL if not found.
+ * This is used to copy default parameter values from class declarations to implementations.
+ */
+struct MethodTemplate *from_cparser_get_method_template(struct RecordType *record, const char *method_name);
+
+/* Convert an AST expression node to an Expression structure.
+ * This is used internally and also needed for copying default parameter values.
+ */
+struct Expression *from_cparser_convert_expression(ast_t *expr_node);
+
 #endif /* FROM_CPARSER_H */
