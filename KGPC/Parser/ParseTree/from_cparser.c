@@ -2890,12 +2890,32 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
         if (type_name == NULL)
             return NULL;
 
-        int type_tag = map_type_name(type_name, NULL);
-        free(type_name);
-
+        /* Get the preserved type name for RawByteString/UnicodeString */
+        char *preserved_type_id = NULL;
+        int type_tag = map_type_name(type_name, &preserved_type_id);
+        
         if (type_tag != UNKNOWN_TYPE) {
-            return create_primitive_type(type_tag);
+            KgpcType *type = create_primitive_type(type_tag);
+            /* If this is RawByteString or UnicodeString, create a type_alias to preserve the name */
+            if (type != NULL && preserved_type_id != NULL &&
+                (strcasecmp(preserved_type_id, "RawByteString") == 0 ||
+                 strcasecmp(preserved_type_id, "UnicodeString") == 0)) {
+                /* Create a TypeAlias to preserve the original type name */
+                struct TypeAlias *alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
+                if (alias != NULL) {
+                    alias->alias_name = strdup(preserved_type_id);
+                    alias->base_type = type_tag;
+                    /* Set type_alias on the KgpcType */
+                    kgpc_type_set_type_alias(type, alias);
+                }
+            }
+            free(type_name);
+            free(preserved_type_id);
+            return type;
         }
+        
+        free(type_name);
+        free(preserved_type_id);
 
         /* If unknown type and we have a symbol table, try to look it up */
         if (symtab != NULL) {
@@ -5794,6 +5814,10 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
     if (decl != NULL && decl->type == TREE_TYPE_DECL &&
         decl->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS) {
         struct TypeAlias *alias = &decl->tree_data.type_decl_data.info.alias;
+        /* Set the alias name */
+        if (decl->tree_data.type_decl_data.id != NULL && alias->alias_name == NULL) {
+            alias->alias_name = strdup(decl->tree_data.type_decl_data.id);
+        }
         if (type_info.array_dimensions != NULL) {
             alias->array_dimensions = type_info.array_dimensions;
             type_info.array_dimensions = NULL;

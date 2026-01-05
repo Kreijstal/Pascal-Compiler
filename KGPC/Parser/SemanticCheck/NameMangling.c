@@ -325,11 +325,20 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
                     resolved_type = HASHVAR_POINTER;
                 else if (kgpc_type->kind == TYPE_KIND_PROCEDURE)
                     resolved_type = HASHVAR_PROCEDURE;
-                /* Note: For STRING_TYPE, we don't attempt to distinguish between
-                 * RawByteString and UnicodeString at the call site because the
-                 * type_alias pointers may be invalid. The declaration-side mangling
-                 * in GetFlatTypeListForMangling correctly distinguishes these types
-                 * based on the declared type_id in the VAR_DECL tree. */
+                /* Check type_alias for STRING_TYPE to distinguish between
+                 * RawByteString and UnicodeString. With the fix in commit 868406b,
+                 * type_alias is now owned by KgpcType and should be valid. */
+                else if (type == STRING_TYPE && kgpc_type->type_alias != NULL)
+                {
+                    struct TypeAlias *alias = kgpc_type->type_alias;
+                    if (alias->alias_name != NULL)
+                    {
+                        if (strcasecmp(alias->alias_name, "RawByteString") == 0)
+                            resolved_type = HASHVAR_RAWBYTESTRING;
+                        else if (strcasecmp(alias->alias_name, "UnicodeString") == 0)
+                            resolved_type = HASHVAR_UNICODESTRING;
+                    }
+                }
             }
         }
 
