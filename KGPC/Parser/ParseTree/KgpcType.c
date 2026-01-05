@@ -1472,8 +1472,13 @@ static void free_copied_type_alias(struct TypeAlias *alias)
     /* Note: We don't free array_dimensions or enum_literals as they're owned by AST */
     /* Note: We don't free inline_record_type as it's owned by AST */
     
-    if (alias->kgpc_type != NULL)
-        destroy_kgpc_type(alias->kgpc_type);
+    /* Save and NULL out kgpc_type before destroying to prevent infinite recursion
+     * when the alias's kgpc_type points back to the type that owns this alias */
+    if (alias->kgpc_type != NULL) {
+        KgpcType *kgpc_type_to_destroy = alias->kgpc_type;
+        alias->kgpc_type = NULL;  /* Break potential cycle before destroy */
+        destroy_kgpc_type(kgpc_type_to_destroy);
+    }
     
     free(alias);
 }
