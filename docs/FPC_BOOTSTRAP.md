@@ -82,7 +82,7 @@ Note: The `sysutils.pp` unit requires `-IFPCSource/rtl/objpas` and `-IFPCSource/
   - Bitwise AND/OR incorrectly rejected as non-boolean
   - Property getter resolution failures (SystemEncoding, Unicode)
   - Type mismatches (char vs string, arithmetic operands)
-  - Scope/visibility bugs (SysBeep not found in same unit)
+  - Scope/visibility bugs (SysBeep not found in the same unit)
 - `math.pp` - Depends on sysutils
 - `cthreads.pp` - Missing ThreadingAlreadyUsed
 - `charset.pp` - Type incompatibilities
