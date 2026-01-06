@@ -9509,19 +9509,105 @@ int semcheck_funccall(int *type_return,
         }
     }
 
-    /* If no receiver was provided, but Self is in scope and defines this method,
-     * prepend Self so unqualified method calls resolve correctly. */
-    if (id != NULL && (args_given == NULL || args_given->cur == NULL))
-    {
-        HashNode_t *self_node = NULL;
-        if (FindIdent(&self_node, symtab, "Self") == 0 && self_node != NULL)
+        /* If no explicit receiver was provided (not a method call placeholder), but Self is in scope
+         * and defines this method, prepend Self so unqualified method calls resolve correctly. */
+        if (id != NULL && !expr->expr_data.function_call_data.is_method_call_placeholder)
         {
-            struct RecordType *self_record = get_record_type_from_node(self_node);
-            if (self_record != NULL)
+            HashNode_t *self_node = NULL;
+            if (FindIdent(&self_node, symtab, "Self") == 0 && self_node != NULL)
             {
-                HashNode_t *method_node = semcheck_find_class_method(symtab,
-                    self_record, id, NULL);
-                if (method_node != NULL)
+                struct RecordType *self_record = get_record_type_from_node(self_node);
+                
+                /* If Self lookup returns a different class than expected (e.g., TBase instead of TDerived
+                 * when we're in a TDerived method), try to find the correct class from the scope. */
+                if (self_record != NULL)
+                {
+                    /* First, try to find the method in Self's class */
+                    HashNode_t *method_node = semcheck_find_class_method(symtab,
+                        self_record, id, NULL);
+                    
+                    /* Check if the method was found but has wrong parameter count (0 params = forward decl) */
+                    int method_params_len = 0;
+                    if (method_node != NULL && method_node->type != NULL)
+                    {
+                        ListNode_t *method_params = kgpc_type_get_procedure_params(method_node->type);
+                        method_params_len = ListLength(method_params);
+                    }
+                    
+                    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                        fprintf(stderr, "[SemCheck] Method check: method_node=%p method_params_len=%d condition=%d\n",
+                            (void*)method_node, method_params_len,
+                            (method_node == NULL || method_params_len == 0));
+                    }
+                    
+                    /* If method not found, or has wrong params (0 params = forward declaration),
+                     * try looking up the method using class_method_bindings */
+                    if (method_node == NULL || method_params_len == 0)
+                    {
+                        int class_count = 0;
+                        int found_correct_method = 0;
+                        ListNode_t *class_list = from_cparser_find_classes_with_method((char *)id, &class_count);
+                        if (class_list != NULL)
+                        {
+                            ListNode_t *cur_class = class_list;
+                            while (cur_class != NULL)
+                            {
+                                char *class_name = (char *)cur_class->cur;
+                                if (class_name != NULL)
+                                {
+                                    /* Look up this class */
+                                    HashNode_t *class_node = NULL;
+                                    int find_result = FindIdent(&class_node, symtab, class_name);
+                                    if (find_result != -1 && class_node != NULL)
+                                    {
+                                        struct RecordType *correct_record = get_record_type_from_node(class_node);
+                                        if (correct_record != NULL)
+                                        {
+                                            /* Don't use semcheck_find_class_method because it walks up inheritance
+                                             * and finds forward declarations in parent classes.
+                                             * Instead, look for the exact mangled name directly. */
+                                            char mangled_name[256];
+                                            snprintf(mangled_name, sizeof(mangled_name), "%s__%s", 
+                                                class_name, (char *)id);
+                                            
+                                            HashNode_t *correct_method = NULL;
+                                            FindIdent(&correct_method, symtab, mangled_name);
+                                            
+                                            /* Check if the correct method has proper parameters */
+                                            int correct_params_len = 0;
+                                            if (correct_method != NULL && correct_method->type != NULL)
+                                            {
+                                                ListNode_t *correct_params = kgpc_type_get_procedure_params(correct_method->type);
+                                                correct_params_len = ListLength(correct_params);
+                                            }
+                                            
+                                            if (correct_method != NULL && correct_params_len > 0)
+                                            {
+                                                self_record = correct_record;
+                                                method_node = correct_method;
+                                                found_correct_method = 1;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                                ListNode_t *next_class = cur_class->next;
+                                free(cur_class->cur);
+                                cur_class = next_class;
+                            }
+                            /* Only destroy list if we haven't already (i.e., if we didn't break early) */
+                            if (!found_correct_method && class_list != NULL) {
+                                DestroyList(class_list);
+                            }
+                        }
+                    }
+                    
+                    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                        fprintf(stderr, "[SemCheck] Self injection: Self found, self_record=%s, method=%s, method_node=%p\n",
+                            self_record->type_id ? self_record->type_id : "(null)",
+                            id ? id : "(null)", (void*)method_node);
+                    }
+                    if (method_node != NULL)
                 {
                     ListNode_t *method_params = kgpc_type_get_procedure_params(method_node->type);
                     if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
