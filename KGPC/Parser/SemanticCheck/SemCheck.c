@@ -4330,6 +4330,141 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                     }
                 }
                 
+                /* Process method templates and register them with class method bindings.
+                 * Methods declared in class type sections (e.g., abstract methods)
+                 * may not have been registered during parsing if they were only forward
+                 * declarations. We need to ensure they're registered for VMT building. */
+                if (record_info->method_templates != NULL)
+                {
+                    ListNode_t *template_cur = record_info->method_templates;
+                    while (template_cur != NULL)
+                    {
+                        if (template_cur->type == LIST_METHOD_TEMPLATE)
+                        {
+                            struct MethodTemplate *tmpl = (struct MethodTemplate *)template_cur->cur;
+                            if (tmpl != NULL && tmpl->name != NULL)
+                            {
+                                /* Build mangled name: ClassName__MethodName */
+                                size_t class_len = strlen(tree->tree_data.type_decl_data.id);
+                                size_t method_len = strlen(tmpl->name);
+                                char *mangled = (char *)malloc(class_len + 2 + method_len + 1);
+                                if (mangled != NULL)
+                                {
+                                    snprintf(mangled, class_len + 2 + method_len + 1, "%s__%s",
+                                             tree->tree_data.type_decl_data.id, tmpl->name);
+
+                                    /* Check if already registered in class_method_bindings */
+                                    ListNode_t *bindings = NULL;
+                                    int method_count = 0;
+                                    get_class_methods(tree->tree_data.type_decl_data.id, &bindings, &method_count);
+                                    
+                                    int already_registered = 0;
+                                    if (bindings != NULL)
+                                    {
+                                        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                                            fprintf(stderr, "[SemCheck] Checking %d existing methods for %s\n",
+                                                method_count, tree->tree_data.type_decl_data.id);
+                                        }
+                                        ListNode_t *cur = bindings;
+                                        while (cur != NULL)
+                                        {
+                                            ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
+                                            if (binding != NULL && binding->method_name != NULL)
+                                            {
+                                                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                                                    fprintf(stderr, "[SemCheck] Existing method: %s.%s\n",
+                                                        binding->class_name, binding->method_name);
+                                                }
+                                                if (strcasecmp(binding->method_name, tmpl->name) == 0)
+                                                {
+                                                    already_registered = 1;
+                                                    break;
+                                                }
+                                            }
+                                            cur = cur->next;
+                                        }
+                                    }
+                                    else
+                                    {
+                                        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                                            fprintf(stderr, "[SemCheck] No existing methods found for %s\n",
+                                                tree->tree_data.type_decl_data.id);
+                                        }
+                                    }
+
+                                    /* If not already registered, register it now */
+                                    if (!already_registered)
+                                    {
+                                        from_cparser_register_method_template(
+                                            tree->tree_data.type_decl_data.id,
+                                            tmpl->name,
+                                            tmpl->is_virtual,
+                                            tmpl->is_override,
+                                            tmpl->is_static);
+
+                                        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                                            fprintf(stderr, "[SemCheck] Registered method template: %s.%s (virtual=%d, override=%d, static=%d)\n",
+                                                tree->tree_data.type_decl_data.id,
+                                                tmpl->name,
+                                                tmpl->is_virtual,
+                                                tmpl->is_override,
+                                                tmpl->is_static);
+                                        }
+                                    }
+
+                                    /* Add as forward declaration to symbol table */
+                                    HashNode_t *existing = NULL;
+                                    if (FindIdent(&existing, symtab, mangled) == -1)
+                                    {
+                                        /* Create a placeholder type for the forward declaration */
+                                        KgpcType *proc_type = create_procedure_type(NULL, NULL);
+                                        if (proc_type != NULL)
+                                        {
+                                            /* Check if this is a function or procedure */
+                                            if (tmpl->method_ast != NULL)
+                                            {
+                                                struct ast_t *method_ast = tmpl->method_ast;
+                                                /* Find the return type in the method AST */
+                                                for (ast_t *child = method_ast->child; child != NULL; child = child->next)
+                                                {
+                                                    if (child->typ == PASCAL_T_RETURN_TYPE)
+                                                    {
+                                                        if (child->sym != NULL && child->sym->name != NULL)
+                                                        {
+                                                            proc_type->kind = TYPE_KIND_PROCEDURE;
+                                                            proc_type->info.proc_info.return_type_id = strdup(child->sym->name);
+                                                        }
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        /* Add to symbol table as forward declaration - use mangled as both id and mangled_id */
+                                        PushProcedureOntoScope_Typed(symtab, mangled, mangled, proc_type);
+                                        destroy_kgpc_type(proc_type);
+
+                                        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                                            fprintf(stderr, "[SemCheck] Added method forward declaration: %s -> %s\n",
+                                                tmpl->name, mangled);
+                                        }
+                                    }
+                                    free(mangled);
+                                }
+                            }
+                        }
+                        template_cur = template_cur->next;
+                    }
+                }
+
+                /* Now also check if this class has method implementations that need to be added.
+                 * These are in the subprogram list (nested_subs of the class type decl) */
+                if (tree->tree_data.type_decl_data.info.record != NULL &&
+                    tree->tree_data.type_decl_data.info.record->methods != NULL)
+                {
+                    /* Methods have been processed - nothing more to do */
+                }
+
                 /* Build VMT for classes with virtual methods */
                 if (record_info != NULL)
                 {

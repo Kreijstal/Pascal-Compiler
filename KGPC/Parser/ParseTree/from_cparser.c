@@ -540,6 +540,11 @@ static void register_class_method_ex(const char *class_name, const char *method_
     }
 }
 
+void from_cparser_register_method_template(const char *class_name, const char *method_name,
+    int is_virtual, int is_override, int is_static) {
+    register_class_method_ex(class_name, method_name, is_virtual, is_override, is_static);
+}
+
 
 
 static const char *find_class_for_method(const char *method_name) {
@@ -577,6 +582,51 @@ static int is_method_static(const char *class_name, const char *method_name) {
 /* Public wrapper for is_method_static */
 int from_cparser_is_method_static(const char *class_name, const char *method_name) {
     return is_method_static(class_name, method_name);
+}
+
+/* Find all class names that have a method with the given name */
+ListNode_t *from_cparser_find_classes_with_method(const char *method_name, int *count_out) {
+    if (count_out != NULL) *count_out = 0;
+    if (method_name == NULL) return NULL;
+
+    ListNode_t *result = NULL;
+    int count = 0;
+
+    ListNode_t *cur = class_method_bindings;
+    while (cur != NULL) {
+        ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
+        if (binding != NULL && binding->method_name != NULL &&
+            strcasecmp(binding->method_name, method_name) == 0) {
+            /* Check if we already have this class in the result */
+            ListNode_t *check = result;
+            int found = 0;
+            while (check != NULL) {
+                char *existing_class = (char *)check->cur;
+                if (existing_class != NULL && strcasecmp(existing_class, binding->class_name) == 0) {
+                    found = 1;
+                    break;
+                }
+                check = check->next;
+            }
+            if (!found && binding->class_name != NULL) {
+                char *class_copy = strdup(binding->class_name);
+                if (class_copy != NULL) {
+                    ListNode_t *node = CreateListNode(class_copy, LIST_UNSPECIFIED);
+                    if (node != NULL) {
+                        node->next = result;
+                        result = node;
+                        count++;
+                    } else {
+                        free(class_copy);
+                    }
+                }
+            }
+        }
+        cur = cur->next;
+    }
+
+    if (count_out != NULL) *count_out = count;
+    return result;
 }
 
 static int typed_const_counter = 0;
@@ -8407,12 +8457,137 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
         fprintf(stderr, "[KGPC] convert_method_impl entry (method_node=%p)\n", (void*)method_node);
     }
-    
+
     if (method_node == NULL)
         return NULL;
 
     ast_t *cur = method_node->child;
     ast_t *qualified = unwrap_pascal_node(cur);
+
+    if (getenv("KGPC_DEBUG_OPERATOR") != NULL) {
+        fprintf(stderr, "[Operator] convert_method_impl: cur=%p qualified=%p\n", (void*)cur, (void*)qualified);
+        if (qualified != NULL) {
+            fprintf(stderr, "[Operator]   qualified->typ=%d\n", qualified->typ);
+            if (qualified->sym && qualified->sym->name) {
+                fprintf(stderr, "[Operator]   qualified->sym->name=%s\n", qualified->sym->name);
+            }
+        }
+    }
+
+    /* Check for standalone operator: the first child is directly the operator symbol like "+" or "-"
+     * This is detected by checking if the first identifier is a known operator symbol */
+    if (qualified != NULL && qualified->typ == PASCAL_T_IDENTIFIER) {
+        char *potential_op = dup_symbol(qualified);
+        /* Check if this is an operator symbol (encoded to op_xxx means it's an operator) */
+        char *encoded_op = (potential_op != NULL) ? encode_operator_name(potential_op) : NULL;
+        int is_operator_symbol = (encoded_op != NULL && strcmp(potential_op, encoded_op) != 0);
+        free(potential_op);
+
+        if (is_operator_symbol) {
+            /* This is a standalone operator - qualified is the operator symbol directly */
+            if (getenv("KGPC_DEBUG_OPERATOR") != NULL) {
+                fprintf(stderr, "[Operator] Detected operator symbol: encoded=%s\n", encoded_op);
+            }
+            /* Get the param list to determine the type.
+             * The next node could be PASCAL_T_PARAM_LIST or directly a PASCAL_T_PARAM */
+            ast_t *param_node = qualified->next;
+            if (getenv("KGPC_DEBUG_OPERATOR") != NULL) {
+                fprintf(stderr, "[Operator] param_node=%p typ=%d (PARAM_LIST=%d, PARAM=%d)\n",
+                    (void*)param_node, param_node ? param_node->typ : -1,
+                    PASCAL_T_PARAM_LIST, PASCAL_T_PARAM);
+            }
+            ast_t *first_param = NULL;
+            if (param_node != NULL) {
+                if (param_node->typ == PASCAL_T_PARAM_LIST) {
+                    first_param = param_node->child;
+                } else if (param_node->typ == PASCAL_T_PARAM) {
+                    first_param = param_node;
+                }
+            }
+            if (first_param != NULL) {
+                /* Parse the parameter to get its type */
+                ast_t *param_cursor = first_param;
+                ListNode_t *params = convert_param_list(&param_cursor);
+                if (params != NULL) {
+                    Tree_t *first_param_tree = (Tree_t *)params->cur;
+                    if (first_param_tree != NULL &&
+                        first_param_tree->type == TREE_VAR_DECL &&
+                        first_param_tree->tree_data.var_decl_data.type_id != NULL) {
+                        const char *param_type_id = first_param_tree->tree_data.var_decl_data.type_id;
+
+                        /* Build mangled name: TypeName__op_suffix */
+                        size_t name_len = strlen(param_type_id) + strlen(encoded_op) + 3;
+                        char *mangled_name = (char *)malloc(name_len);
+                        if (mangled_name != NULL) {
+                            snprintf(mangled_name, name_len, "%s__%s", param_type_id, encoded_op);
+
+                            if (getenv("KGPC_DEBUG_OPERATOR") != NULL) {
+                                fprintf(stderr, "[Operator] Standalone operator: %s\n", mangled_name);
+                            }
+
+                            /* Find return type by scanning siblings of param_node */
+                            ast_t *return_type_node = NULL;
+                            ast_t *scan = param_node->next;
+                            while (scan != NULL) {
+                                if (scan->typ == PASCAL_T_RETURN_TYPE) {
+                                    return_type_node = scan;
+                                    break;
+                                }
+                                /* Skip other params */
+                                if (scan->typ != PASCAL_T_PARAM)
+                                    break;
+                                scan = scan->next;
+                            }
+
+                            char *return_type_id = NULL;
+                            int return_type = UNKNOWN_TYPE;
+                            struct TypeAlias *inline_return_type = NULL;
+
+                            if (return_type_node != NULL) {
+                                TypeInfo type_info;
+                                return_type = convert_type_spec(return_type_node->child, &return_type_id, NULL, &type_info);
+                                if (return_type_id == NULL && return_type_node->sym != NULL && return_type_node->sym->name != NULL) {
+                                    return_type_id = strdup(return_type_node->sym->name);
+                                }
+                            }
+
+                            /* Find the body */
+                            struct Statement *body = NULL;
+                            ast_t *body_cursor = return_type_node ? return_type_node->next : param_node->next;
+                            while (body_cursor != NULL) {
+                                if (body_cursor->typ == PASCAL_T_BEGIN_BLOCK) {
+                                    body = convert_block(body_cursor);
+                                    break;
+                                } else if (body_cursor->typ == PASCAL_T_FUNCTION_BODY) {
+                                    ListNode_t *ignored_const = NULL;
+                                    ListBuilder ignored_var; list_builder_init(&ignored_var);
+                                    ListBuilder ignored_label; list_builder_init(&ignored_label);
+                                    ListNode_t *ignored_subs = NULL;
+                                    ListNode_t *ignored_types = NULL;
+                                    convert_routine_body(body_cursor, &ignored_const, &ignored_var, &ignored_label,
+                                        &ignored_subs, &body, &ignored_types);
+                                    break;
+                                }
+                                body_cursor = body_cursor->next;
+                            }
+
+                            /* Create the function tree */
+                            Tree_t *tree = mk_function(method_node->line, mangled_name, params, NULL,
+                                NULL, NULL, NULL, NULL, body, return_type, return_type_id, inline_return_type, 0, 0);
+
+                            free(encoded_op);
+                            return tree;
+                        }
+                    }
+                    /* Don't destroy params here - they'll be used in the tree */
+                }
+            }
+            free(encoded_op);
+            return NULL; /* Couldn't process the operator */
+        }
+        free(encoded_op);
+    }
+
     if (qualified == NULL || qualified->typ != PASCAL_T_QUALIFIED_IDENTIFIER) {
         if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
             fprintf(stderr, "[KGPC] convert_method_impl: cur=%p typ=%d\n",
@@ -8501,6 +8676,13 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
      * falling back to the registered class if no explicit class was given */
     const char *effective_class = (cleaned_class_name != NULL) ? cleaned_class_name : 
                                   (class_name != NULL) ? class_name : registered_class;
+    
+    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+        fprintf(stderr, "[FromCParser] convert_method_impl: class_name=%s method_name=%s effective_class=%s\n",
+            class_name ? class_name : "<null>",
+            method_name ? method_name : "<null>",
+            effective_class ? effective_class : "<null>");
+    }
     
     /* Don't re-register the method here - it was already registered during class declaration */
     
@@ -8871,12 +9053,26 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
 static Tree_t *convert_function(ast_t *func_node) {
     ast_t *cur = func_node->child;
     char *id = NULL;
+    char *operator_symbol = NULL;  /* For standalone operators */
+    int is_standalone_operator = 0;
     static int debug_external_nodes = -1;
     if (debug_external_nodes == -1)
         debug_external_nodes = (getenv("KGPC_DEBUG_EXTERNAL") != NULL);
 
     if (cur != NULL && cur->typ == PASCAL_T_IDENTIFIER)
         id = dup_symbol(cur);
+
+    /* Check if this is a standalone operator declaration */
+    if (id != NULL && strcasecmp(id, "operator") == 0) {
+        is_standalone_operator = 1;
+        /* Get the operator symbol from the next child */
+        if (cur != NULL) {
+            cur = cur->next;
+            if (cur != NULL && cur->typ == PASCAL_T_IDENTIFIER) {
+                operator_symbol = dup_symbol(cur);
+            }
+        }
+    }
 
     if (cur != NULL) {
         cur = cur->next;
@@ -8893,6 +9089,45 @@ static Tree_t *convert_function(ast_t *func_node) {
             extend_list(&params, param_nodes);
             cur = cur->next;
         }
+    }
+
+    /* For standalone operators, derive the mangled name from operator symbol and first param type */
+    if (is_standalone_operator && operator_symbol != NULL && params != NULL) {
+        /* Get the type of the first parameter (params is a list of Tree_t* with TREE_VAR_DECL) */
+        Tree_t *first_param = (Tree_t *)params->cur;
+        if (getenv("KGPC_DEBUG_OPERATOR") != NULL) {
+            fprintf(stderr, "[Operator] is_standalone_operator=%d operator_symbol=%s params=%p first_param=%p\n",
+                is_standalone_operator, operator_symbol, (void*)params, (void*)first_param);
+            if (first_param != NULL) {
+                fprintf(stderr, "[Operator] first_param->type=%d type_id=%s\n",
+                    first_param->type,
+                    first_param->tree_data.var_decl_data.type_id ?
+                    first_param->tree_data.var_decl_data.type_id : "(null)");
+            }
+        }
+        if (first_param != NULL && first_param->type == TREE_VAR_DECL &&
+            first_param->tree_data.var_decl_data.type_id != NULL) {
+            char *encoded_op = encode_operator_name(operator_symbol);
+            if (encoded_op != NULL) {
+                /* Build mangled name: TypeName__op_suffix */
+                const char *param_type_id = first_param->tree_data.var_decl_data.type_id;
+                size_t name_len = strlen(param_type_id) + strlen(encoded_op) + 3;
+                char *mangled_name = (char *)malloc(name_len);
+                if (mangled_name != NULL) {
+                    snprintf(mangled_name, name_len, "%s__%s", param_type_id, encoded_op);
+                    if (getenv("KGPC_DEBUG_OPERATOR") != NULL) {
+                        fprintf(stderr, "[Operator] mangled name: %s\n", mangled_name);
+                    }
+                    free(id);
+                    id = mangled_name;
+                }
+                free(encoded_op);
+            }
+        }
+        free(operator_symbol);
+        operator_symbol = NULL;
+    } else if (operator_symbol != NULL) {
+        free(operator_symbol);
     }
 
     char *return_type_id = NULL;
