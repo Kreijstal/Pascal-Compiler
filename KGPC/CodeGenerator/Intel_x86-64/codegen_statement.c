@@ -54,6 +54,8 @@ static ListNode_t *codegen_try_finally(struct Statement *stmt, ListNode_t *inst_
 static ListNode_t *codegen_try_except(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
 static ListNode_t *codegen_raise(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
 static ListNode_t *codegen_inherited(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
+static int codegen_expr_is_shortstring_array(const struct Expression *expr);
+static int codegen_array_access_targets_shortstring(const struct Expression *expr, CodeGenContext *ctx);
 #if KGPC_ENABLE_REG_DEBUG
 extern const char *g_reg_debug_context;
 #endif
@@ -1562,6 +1564,64 @@ static ListNode_t *codegen_call_string_to_char_array(ListNode_t *inst_list, Code
     inst_list = add_inst(inst_list, "\tcall\tkgpc_string_to_char_array\n");
     free_arg_regs();
     return inst_list;
+}
+
+/* Check if an array access expression targets a shortstring element.
+ * This handles cases like Names[0] where Names is array[...] of ShortString. */
+static int codegen_array_access_targets_shortstring(const struct Expression *expr, CodeGenContext *ctx)
+{
+    if (expr == NULL || ctx == NULL)
+        return 0;
+    if (expr->type != EXPR_ARRAY_ACCESS)
+        return 0;
+    
+    struct Expression *base_expr = expr->expr_data.array_access_data.array_expr;
+    if (base_expr == NULL)
+        return 0;
+    
+    /* If the array access expression itself has shortstring type info, use that */
+    if (codegen_expr_is_shortstring_array(expr))
+        return 1;
+    
+    /* Check if base array is declared with shortstring element type */
+    if (base_expr->type == EXPR_VAR_ID && ctx->symtab != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindIdent(&node, ctx->symtab, base_expr->expr_data.id) >= 0 && node != NULL)
+        {
+            /* Check KgpcType for array element info */
+            if (node->type != NULL && kgpc_type_is_array(node->type))
+            {
+                KgpcType *elem_type = kgpc_type_get_array_element_type(node->type);
+                if (elem_type != NULL)
+                {
+                    if (getenv("KGPC_DEBUG_CODEGEN") != NULL)
+                    {
+                        fprintf(stderr, "[codegen] checking shortstring: base=%s elem_type->kind=%d\n",
+                            base_expr->expr_data.id, elem_type->kind);
+                    }
+                    /* Element type is a shortstring if it's an array of char with proper bounds */
+                    if (kgpc_type_is_array(elem_type))
+                    {
+                        KgpcType *inner_elem = kgpc_type_get_array_element_type(elem_type);
+                        if (inner_elem != NULL && inner_elem->kind == TYPE_KIND_PRIMITIVE &&
+                            inner_elem->info.primitive_type_tag == CHAR_TYPE)
+                        {
+                            return 1;  /* array element is array of char = shortstring */
+                        }
+                    }
+                    /* Or if the element type tag is SHORTSTRING_TYPE */
+                    if (elem_type->kind == TYPE_KIND_PRIMITIVE &&
+                        elem_type->info.primitive_type_tag == SHORTSTRING_TYPE)
+                    {
+                        return 1;
+                    }
+                }
+            }
+        }
+    }
+    
+    return 0;
 }
 
 static int codegen_expr_is_shortstring_array(const struct Expression *expr)
@@ -4385,6 +4445,11 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
                     is_char_array = 1;
                 }
             }
+            else if (expr_type == SHORTSTRING_TYPE || codegen_expr_is_shortstring_array(expr))
+            {
+                /* Handle ShortString type - use special write function that handles length prefix */
+                call_target = "kgpc_write_shortstring";
+            }
             else
             {
                 call_target = "kgpc_write_string";
@@ -4915,6 +4980,18 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
     var_expr = stmt->stmt_data.var_assign_data.var;
     assign_expr = stmt->stmt_data.var_assign_data.expr;
 
+    if (getenv("KGPC_DEBUG_CODEGEN") != NULL)
+    {
+        fprintf(stderr, "[codegen] var_assignment: var_expr->type=%d, assign_expr->type=%d\n",
+            var_expr ? var_expr->type : -1, assign_expr ? assign_expr->type : -1);
+        if (var_expr && var_expr->type == EXPR_ARRAY_ACCESS)
+        {
+            struct Expression *base = var_expr->expr_data.array_access_data.array_expr;
+            if (base && base->type == EXPR_VAR_ID)
+                fprintf(stderr, "[codegen]   base_id=%s\n", base->expr_data.id);
+        }
+    }
+
     
 
 
@@ -5106,6 +5183,47 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                 /* Regular char array copy */
                 inst_list = codegen_call_string_to_char_array(inst_list, ctx, addr_reg, value_reg, array_size);
             }
+            
+            free_reg(get_reg_stack(), value_reg);
+            free_reg(get_reg_stack(), addr_reg);
+            return inst_list;
+        }
+
+        /* Handle string literal assignment to SHORTSTRING_TYPE elements (e.g., Names[0] := 'ONE') */
+        /* Also check codegen_array_access_targets_shortstring for cases where type info is not available
+         * (like auto-generated initializer statements from const arrays) */
+        int targets_shortstring = codegen_array_access_targets_shortstring(var_expr, ctx);
+        if (getenv("KGPC_DEBUG_CODEGEN") != NULL && var_expr->type == EXPR_ARRAY_ACCESS)
+        {
+            struct Expression *base = var_expr->expr_data.array_access_data.array_expr;
+            fprintf(stderr, "[codegen] var_assignment: var_type=%d, targets_shortstring=%d, assign_type=%d",
+                var_type, targets_shortstring, expr_get_type_tag(assign_expr));
+            if (base != NULL && base->type == EXPR_VAR_ID)
+                fprintf(stderr, ", base_id=%s", base->expr_data.id);
+            fprintf(stderr, "\n");
+        }
+        if ((var_type == SHORTSTRING_TYPE || codegen_expr_is_shortstring_array(var_expr) ||
+             targets_shortstring) &&
+            expr_get_type_tag(assign_expr) == STRING_TYPE)
+        {
+            Register_t *addr_reg = NULL;
+            inst_list = codegen_address_for_expr(var_expr, inst_list, ctx, &addr_reg);
+            if (codegen_had_error(ctx) || addr_reg == NULL)
+            {
+                free_reg(get_reg_stack(), value_reg);
+                if (addr_reg != NULL)
+                    free_reg(get_reg_stack(), addr_reg);
+                return inst_list;
+            }
+
+            /* For shortstrings, use the array bounds to determine size.
+             * If bounds are not available, default to 256 (standard ShortString). */
+            int array_size = 256;
+            if (var_expr->is_array_expr)
+                array_size = expr_get_array_upper_bound(var_expr) - expr_get_array_lower_bound(var_expr) + 1;
+            
+            /* Use ShortString-specific copy that sets length byte at index 0 */
+            inst_list = codegen_call_string_to_shortstring(inst_list, ctx, addr_reg, value_reg, array_size);
             
             free_reg(get_reg_stack(), value_reg);
             free_reg(get_reg_stack(), addr_reg);
@@ -5372,9 +5490,22 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         if (element_size <= 0)
             element_size = expr_effective_size_bytes(var_expr);
         int use_word = (!use_qword && element_size == 2);
+        
+        /* Check if target is a shortstring element (e.g., array[...] of string[10]) */
+        int targets_shortstring = codegen_array_access_targets_shortstring(var_expr, ctx);
+        
         if (var_type == STRING_TYPE)
         {
             inst_list = codegen_call_string_assign(inst_list, ctx, addr_reload, value_reg);
+        }
+        else if ((var_type == SHORTSTRING_TYPE || targets_shortstring) &&
+                 expr_get_type_tag(assign_expr) == STRING_TYPE)
+        {
+            /* Handle shortstring assignment - copy string content to shortstring buffer */
+            int array_size = 256;  /* Default ShortString size */
+            if (var_expr->is_array_expr)
+                array_size = expr_get_array_upper_bound(var_expr) - expr_get_array_lower_bound(var_expr) + 1;
+            inst_list = codegen_call_string_to_shortstring(inst_list, ctx, addr_reload, value_reg, array_size);
         }
         else if (use_qword)
         {
