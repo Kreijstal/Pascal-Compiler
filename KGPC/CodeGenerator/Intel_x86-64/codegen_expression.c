@@ -237,6 +237,10 @@ static int codegen_param_expected_type(Tree_t *decl, SymTab_t *symtab)
             return decl->tree_data.arr_decl_data.type;
     }
 
+    /* Special case: ShortString type identifier */
+    if (type_id != NULL && pascal_identifier_equals(type_id, "ShortString"))
+        return SHORTSTRING_TYPE;
+
     if (type_id != NULL && symtab != NULL &&
         FindIdent(&type_node, symtab, type_id) >= 0 && type_node != NULL &&
         type_node->type != NULL)
@@ -4291,6 +4295,115 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             else if (arg_infos != NULL)
             {
                 arginfo_assign_register(&arg_infos[arg_num], desc_addr_reg, arg_expr);
+            }
+        }
+        /* Handle string literal passed to ShortString parameter.
+         * ShortStrings use Pascal format: length byte at index 0, followed by string data.
+         * We need to convert the C string literal to a ShortString in a stack buffer. */
+        else if (expected_type == SHORTSTRING_TYPE && arg_expr != NULL && arg_expr->type == EXPR_STRING)
+        {
+            const char *str_data = arg_expr->expr_data.string;
+            int str_len = (str_data != NULL) ? (int)strlen(str_data) : 0;
+            if (str_len > 255) str_len = 255;  /* ShortString max length */
+            
+            /* Allocate 256 bytes on stack for ShortString buffer */
+            StackNode_t *shortstr_buf = codegen_alloc_temp_bytes("shortstr_arg", 256);
+            if (shortstr_buf == NULL)
+            {
+                codegen_report_error(ctx,
+                    "ERROR: Unable to allocate ShortString buffer for argument.");
+                if (arg_infos != NULL) free(arg_infos);
+                return inst_list;
+            }
+            
+            /* Put string literal in rodata section */
+            const char *readonly_section = codegen_readonly_section_directive();
+            char label[64];
+            snprintf(label, sizeof(label), ".LC%d", ctx->write_label_counter++);
+            
+            char escaped_str[CODEGEN_MAX_INST_BUF];
+            escape_string(escaped_str, str_data ? str_data : "", sizeof(escaped_str));
+            snprintf(buffer, sizeof(buffer), "%s\n%s:\n\t.string \"%s\"\n\t.text\n",
+                     readonly_section, label, escaped_str);
+            inst_list = add_inst(inst_list, buffer);
+            
+            /* Get register for buffer address */
+            Register_t *buf_addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+            if (buf_addr_reg == NULL)
+            {
+                codegen_report_error(ctx,
+                    "ERROR: Unable to allocate register for ShortString buffer.");
+                if (arg_infos != NULL) free(arg_infos);
+                return inst_list;
+            }
+            
+            /* Get register for string literal address */
+            Register_t *str_addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+            if (str_addr_reg == NULL)
+            {
+                free_reg(get_reg_stack(), buf_addr_reg);
+                codegen_report_error(ctx,
+                    "ERROR: Unable to allocate register for string literal address.");
+                if (arg_infos != NULL) free(arg_infos);
+                return inst_list;
+            }
+            
+            /* Load buffer address */
+            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                shortstr_buf->offset, buf_addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            
+            /* Load string literal address */
+            snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                label, str_addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            
+            /* Call kgpc_string_to_shortstring(dest, src, max_len) */
+            if (codegen_target_is_windows())
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", buf_addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", str_addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                inst_list = add_inst(inst_list, "\tmovl\t$256, %r8d\n");
+            }
+            else
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", buf_addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", str_addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                inst_list = add_inst(inst_list, "\tmovl\t$256, %edx\n");
+            }
+            
+            free_reg(get_reg_stack(), str_addr_reg);
+            
+            inst_list = add_inst(inst_list, "\tmovl\t$0, %eax\n");
+            inst_list = add_inst(inst_list, "\tcall\tkgpc_string_to_shortstring\n");
+            
+            /* Reload buffer address after the call (it may have been clobbered) */
+            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                shortstr_buf->offset, buf_addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            
+            /* Save buffer address to arg_infos for later use in argument passing */
+            StackNode_t *arg_spill = add_l_t("arg_eval");
+            if (arg_spill != NULL && arg_infos != NULL)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                    buf_addr_reg->bit_64, arg_spill->offset);
+                inst_list = add_inst(inst_list, buffer);
+                free_reg(get_reg_stack(), buf_addr_reg);
+                
+                arg_infos[arg_num].reg = NULL;
+                arg_infos[arg_num].spill = arg_spill;
+                arg_infos[arg_num].expr = arg_expr;
+                arg_infos[arg_num].is_pointer_like = 1;  /* Pass as pointer */
+            }
+            else if (arg_infos != NULL)
+            {
+                arginfo_assign_register(&arg_infos[arg_num], buf_addr_reg, arg_expr);
+                arg_infos[arg_num].is_pointer_like = 1;  /* Pass as pointer */
             }
         }
         else if(is_var_param || is_array_param || is_array_arg)

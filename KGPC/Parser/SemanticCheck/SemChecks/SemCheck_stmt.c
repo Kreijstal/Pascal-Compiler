@@ -3799,6 +3799,30 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                                 }
                                 int expected_tag = kgpc_type_get_legacy_tag(tag_expected);
                                 int actual_tag = kgpc_type_get_legacy_tag(actual);
+                                
+                                /* For string literals, prefer ShortString over UnicodeString/RawByteString/AnsiString */
+                                int is_string_literal = (arg_expr != NULL && arg_expr->type == EXPR_STRING);
+                                if (is_string_literal && param_decl != NULL && param_decl->type == TREE_VAR_DECL)
+                                {
+                                    const char *type_id = param_decl->tree_data.var_decl_data.type_id;
+                                    if (type_id != NULL)
+                                    {
+                                        /* ShortString gets highest priority (no penalty) for string literals */
+                                        if (pascal_identifier_equals(type_id, "ShortString"))
+                                        {
+                                            /* No penalty - best match */
+                                        }
+                                        /* UnicodeString/RawByteString/WideString get penalty */
+                                        else if (pascal_identifier_equals(type_id, "UnicodeString") ||
+                                                 pascal_identifier_equals(type_id, "RawByteString") ||
+                                                 pascal_identifier_equals(type_id, "WideString") ||
+                                                 pascal_identifier_equals(type_id, "AnsiString"))
+                                        {
+                                            score += 3;
+                                        }
+                                    }
+                                }
+                                
                                 if (expected_tag == LONGINT_TYPE && actual_tag == LONGINT_TYPE &&
                                     param_decl != NULL && param_decl->type == TREE_VAR_DECL)
                                 {
