@@ -4100,7 +4100,7 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
             expr->resolved_type = expr_type;
         
         /* Treat char arrays as strings for printing */
-        int treat_as_string = (expr_type == STRING_TYPE);
+        int treat_as_string = (expr_type == STRING_TYPE || expr_type == SHORTSTRING_TYPE);
         /* If type info is missing but the literal is a string (and not typed as CHAR),
          * still treat it as a string for write/writeln. This fixes string literals that
          * lost their resolved_type during parsing/semantics. */
@@ -4205,6 +4205,17 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
         if (expr != NULL && expr_type == CHAR_TYPE && expr->is_array_expr && expr->array_element_type == CHAR_TYPE)
         {
             /* Load address of char array. codegen_address_for_expr allocates its own register. */
+            inst_list = codegen_address_for_expr(expr, inst_list, ctx, &value_reg);
+            if (codegen_had_error(ctx) || value_reg == NULL)
+            {
+                if (value_reg != NULL)
+                    free_reg(get_reg_stack(), value_reg);
+                return inst_list;
+            }
+        }
+        else if (expr != NULL && expr_type == SHORTSTRING_TYPE)
+        {
+            /* Load address of shortstring (array of char). codegen_address_for_expr allocates its own register. */
             inst_list = codegen_address_for_expr(expr, inst_list, ctx, &value_reg);
             if (codegen_had_error(ctx) || value_reg == NULL)
             {

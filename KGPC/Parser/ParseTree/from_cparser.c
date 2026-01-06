@@ -2674,11 +2674,20 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                     struct RecordType *nested_record = NULL;
                     TypeInfo nested_info = {0};
                     int mapped = convert_type_spec(element_node, &nested_id, &nested_record, &nested_info);
-                    type_info->element_type = mapped;
-                    if (type_info->element_type_id == NULL)
-                        type_info->element_type_id = nested_id;
-                    else if (nested_id != NULL)
-                        free(nested_id);
+                    /* Handle shortstring element types (e.g., string[10]) */
+                    if (nested_info.is_shortstring) {
+                        type_info->element_type = SHORTSTRING_TYPE;
+                        if (type_info->element_type_id == NULL)
+                            type_info->element_type_id = strdup("ShortString");
+                        if (nested_id != NULL)
+                            free(nested_id);
+                    } else {
+                        type_info->element_type = mapped;
+                        if (type_info->element_type_id == NULL)
+                            type_info->element_type_id = nested_id;
+                        else if (nested_id != NULL)
+                            free(nested_id);
+                    }
                     if (nested_record != NULL)
                         destroy_record_type(nested_record);
                     destroy_type_info_contents(&nested_info);
