@@ -7109,8 +7109,19 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         var_type = HASHVAR_BOOLEAN;
                     else if(tree->tree_data.arr_decl_data.type == STRING_TYPE)
                         var_type = HASHVAR_PCHAR;
-                    else
+                    else if(tree->tree_data.arr_decl_data.type == SHORTSTRING_TYPE)
+                        var_type = HASHVAR_PCHAR;  /* ShortString is array of char */
+                    else if(tree->tree_data.arr_decl_data.type == CHAR_TYPE)
+                        var_type = HASHVAR_CHAR;
+                    else if(tree->tree_data.arr_decl_data.type == REAL_TYPE)
                         var_type = HASHVAR_REAL;
+                    else {
+                        /* Unknown type - report error and default to real */
+                        fprintf(stderr, "Warning: Unknown array element type %d for %s, defaulting to real\n",
+                                tree->tree_data.arr_decl_data.type,
+                                ids && ids->cur ? (char*)ids->cur : "<unknown>");
+                        var_type = HASHVAR_REAL;
+                    }
                     
                     element_type = kgpc_type_from_var_type(var_type);
                     assert(element_type != NULL && "Array element type must be createable from VarType");
