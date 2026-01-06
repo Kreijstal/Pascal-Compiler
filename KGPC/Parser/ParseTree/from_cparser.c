@@ -581,6 +581,36 @@ int from_cparser_is_method_static(const char *class_name, const char *method_nam
 
 static int typed_const_counter = 0;
 
+/* Check if a name is an operator symbol (not a regular identifier) */
+static int is_operator_symbol(const char *name) {
+    if (name == NULL || name[0] == '\0')
+        return 0;
+    
+    /* Operator symbols that require special handling */
+    const char *operator_symbols[] = {
+        "+", "-", "*", "/", "=", "<>", "<", ">", "<=", ">=", "**", ":=",
+        NULL
+    };
+    
+    for (int i = 0; operator_symbols[i] != NULL; i++) {
+        if (strcmp(name, operator_symbols[i]) == 0)
+            return 1;
+    }
+    
+    /* Keyword operators (case-insensitive) */
+    const char *keyword_ops[] = {
+        "div", "mod", "and", "or", "not", "xor", "shl", "shr", "in", "is", "as",
+        NULL
+    };
+    
+    for (int i = 0; keyword_ops[i] != NULL; i++) {
+        if (strcasecmp(name, keyword_ops[i]) == 0)
+            return 1;
+    }
+    
+    return 0;
+}
+
 /* Encode operator symbols into valid identifier names for assembly */
 static char *encode_operator_name(const char *op_name) {
     if (op_name == NULL)
@@ -9017,13 +9047,36 @@ static Tree_t *convert_function(ast_t *func_node) {
     }
 
     ListNode_t *label_decls = list_builder_finish(&label_decls_builder);
-    Tree_t *tree = mk_function(func_node->line, id, params, const_decls,
+    
+    /* For standalone operators (like "operator + (const a, b: TMyInt): TMyInt"),
+     * we need to mangle the name using the first parameter's type.
+     * The semantic checker looks up "TypeName__op_add" for operator overloading. */
+    char *operator_id = NULL;
+    if (id != NULL && is_operator_symbol(id) && params != NULL) {
+        /* Extract type name from the first parameter */
+        ListNode_t *first_param = params;
+        if (first_param != NULL && first_param->cur != NULL) {
+            Tree_t *param_tree = (Tree_t *)first_param->cur;
+            if (param_tree->type == TREE_VAR_DECL && param_tree->tree_data.var_decl_data.type_id != NULL) {
+                const char *type_name = param_tree->tree_data.var_decl_data.type_id;
+                operator_id = mangle_method_name(type_name, id);
+            }
+        }
+    }
+    
+    Tree_t *tree = mk_function(func_node->line, operator_id != NULL ? operator_id : id, params, const_decls,
                                 label_decls, type_decls, list_builder_finish(&var_decls_builder), nested_subs, body,
                                 return_type, return_type_id, inline_return_type, is_external, 0);
     if (tree != NULL && external_alias != NULL)
         tree->tree_data.subprogram_data.cname_override = external_alias;
     else if (external_alias != NULL)
         free(external_alias);
+    
+    /* Free the original id if we used the operator_id instead */
+    if (operator_id != NULL && id != NULL) {
+        free(id);
+    }
+    
     return tree;
 }
 

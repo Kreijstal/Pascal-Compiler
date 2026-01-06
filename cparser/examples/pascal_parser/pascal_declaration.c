@@ -3421,6 +3421,22 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         NULL
     );
 
+    // Standalone operator overloading: operator + (const a, b: TMyInt): TMyInt; begin ... end;
+    // This is FPC's module-level operator syntax (without class prefix)
+    combinator_t* standalone_operator_param_list = create_simple_param_list();
+    combinator_t* standalone_operator_impl = seq(new_combinator(), PASCAL_T_FUNCTION_DECL,
+        token(keyword_ci("operator")),               // operator keyword
+        token(operator_name(PASCAL_T_IDENTIFIER)),   // operator symbol or name (e.g., +, -, *, Add)
+        standalone_operator_param_list,              // parameter list
+        return_type,                                 // return type (: TMyInt)
+        token(match(";")),                           // semicolon after signature
+        implementation_routine_directives,           // directives (inline, overload, etc.)
+        program_function_body,                       // operator body
+        optional(token(match(";"))),                 // optional terminating semicolon
+        NULL
+    );
+    set_combinator_name(standalone_operator_impl, "standalone_operator_impl");
+
     // Object Pascal method implementations (constructor/destructor/procedure with class.method syntax)
     // These are Object Pascal extensions, not standard Pascal
     
@@ -3552,6 +3568,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     combinator_t* proc_or_func = multi(new_combinator(), PASCAL_T_NONE,
         working_function,                            // function implementations
         working_procedure,                           // procedure implementations
+        standalone_operator_impl,                    // standalone operator overloading (FPC style)
         headeronly_function,                         // forward/external/assembler function declarations
         headeronly_procedure,                        // forward/external/assembler procedure declarations
         NULL

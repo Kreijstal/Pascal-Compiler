@@ -10422,6 +10422,132 @@ constructor_resolved:
     if (id != NULL) {
         overload_candidates = FindAllIdents(symtab, id);
     }
+    
+    /* IMPLICIT SELF METHOD CALL RESOLUTION:
+     * If we're inside a class method (Self exists in scope), and no direct match found,
+     * try to find the method in the current class hierarchy.
+     * This handles cases like calling "GetValue('hello')" from within TBase.UseValue,
+     * which should resolve to TBase__GetValue(Self, 'hello').
+     * 
+     * This is needed for abstract methods because the declaration exists in the class
+     * but only has a class-qualified name (e.g., TBase__GetValue), not the plain name.
+     */
+    {
+        /* Count actual function/procedure candidates in overload_candidates */
+        int actual_function_candidates = 0;
+        if (overload_candidates != NULL) {
+            ListNode_t *check = overload_candidates;
+            while (check != NULL) {
+                HashNode_t *candidate = (HashNode_t *)check->cur;
+                if (candidate != NULL &&
+                    (candidate->hash_type == HASHTYPE_FUNCTION ||
+                     candidate->hash_type == HASHTYPE_PROCEDURE ||
+                     candidate->hash_type == HASHTYPE_BUILTIN_PROCEDURE)) {
+                    actual_function_candidates++;
+                }
+                check = check->next;
+            }
+        }
+        
+        if (actual_function_candidates == 0 && id != NULL) {
+            HashNode_t *self_node = NULL;
+            if (FindIdent(&self_node, symtab, "Self") != -1 && self_node != NULL && self_node->type != NULL) {
+                struct RecordType *current_class = NULL;
+                
+                /* Handle both direct records and pointers to records (classes) */
+                if (self_node->type->kind == TYPE_KIND_RECORD && self_node->type->info.record_info != NULL) {
+                    current_class = self_node->type->info.record_info;
+                } else if (self_node->type->kind == TYPE_KIND_POINTER &&
+                           self_node->type->info.points_to != NULL &&
+                           self_node->type->info.points_to->kind == TYPE_KIND_RECORD &&
+                           self_node->type->info.points_to->info.record_info != NULL) {
+                    current_class = self_node->type->info.points_to->info.record_info;
+                }
+                
+                if (current_class != NULL && current_class->type_id != NULL) {
+                    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                        fprintf(stderr, "[SemCheck] semcheck_funccall: Checking implicit Self method for '%s' in class '%s'\n",
+                            id, current_class->type_id);
+                    }
+                    
+                    /* Search through the class hierarchy for the method */
+                    struct RecordType *search_class = current_class;
+                    while (search_class != NULL) {
+                        char mangled_method[512];
+                        snprintf(mangled_method, sizeof(mangled_method), "%s__%s", search_class->type_id, id);
+                        
+                        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                            fprintf(stderr, "[SemCheck] semcheck_funccall: Looking for method '%s'\n", mangled_method);
+                        }
+                        
+                        ListNode_t *method_candidates = FindAllIdents(symtab, mangled_method);
+                        if (method_candidates != NULL && ListLength(method_candidates) > 0) {
+                            /* Found the method in this class. Transform the call to include Self. */
+                            if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                                fprintf(stderr, "[SemCheck] semcheck_funccall: Found implicit Self method %s in %s\n",
+                                    id, search_class->type_id);
+                            }
+                            
+                            /* Add Self as the first argument */
+                            struct Expression *self_expr = (struct Expression *)calloc(1, sizeof(struct Expression));
+                            if (self_expr != NULL) {
+                                self_expr->type = EXPR_VAR_ID;
+                                self_expr->expr_data.id = strdup("Self");
+                                self_expr->line_num = expr->line_num;
+                                self_expr->col_num = expr->col_num;
+                                
+                                /* Create a new list node for Self and prepend to args */
+                                ListNode_t *self_arg_node = CreateListNode(self_expr, LIST_EXPR);
+                                if (self_arg_node != NULL) {
+                                    self_arg_node->next = args_given;
+                                    expr->expr_data.function_call_data.args_expr = self_arg_node;
+                                    args_given = self_arg_node;
+                                }
+                            }
+                            
+                            /* Update the call to use the mangled method name */
+                            if (expr->expr_data.function_call_data.mangled_id != NULL) {
+                                free(expr->expr_data.function_call_data.mangled_id);
+                            }
+                            expr->expr_data.function_call_data.mangled_id = strdup(mangled_method);
+                            
+                            /* Use the method candidates for overload resolution */
+                            if (overload_candidates != NULL) {
+                                DestroyList(overload_candidates);
+                            }
+                            overload_candidates = method_candidates;
+                            break;
+                        }
+                        
+                        if (method_candidates != NULL) {
+                            DestroyList(method_candidates);
+                        }
+                        
+                        /* Move to parent class */
+                        if (search_class->parent_class_name != NULL) {
+                            HashNode_t *parent_type_node = NULL;
+                            if (FindIdent(&parent_type_node, symtab, search_class->parent_class_name) != -1 &&
+                                parent_type_node != NULL && parent_type_node->type != NULL) {
+                                if (parent_type_node->type->kind == TYPE_KIND_RECORD) {
+                                    search_class = parent_type_node->type->info.record_info;
+                                } else if (parent_type_node->type->kind == TYPE_KIND_POINTER &&
+                                           parent_type_node->type->info.points_to != NULL &&
+                                           parent_type_node->type->info.points_to->kind == TYPE_KIND_RECORD) {
+                                    search_class = parent_type_node->type->info.points_to->info.record_info;
+                                } else {
+                                    search_class = NULL;
+                                }
+                            } else {
+                                search_class = NULL;
+                            }
+                        } else {
+                            search_class = NULL;
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     int prefer_non_builtin = 0;
     if (overload_candidates != NULL)
