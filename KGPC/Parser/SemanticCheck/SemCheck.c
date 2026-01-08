@@ -4416,37 +4416,135 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                     HashNode_t *existing = NULL;
                                     if (FindIdent(&existing, symtab, mangled) == -1)
                                     {
-                                        /* Create a placeholder type for the forward declaration */
-                                        KgpcType *proc_type = create_procedure_type(NULL, NULL);
-                                        if (proc_type != NULL)
+                                        KgpcType *return_type = NULL;
+                                        char *return_type_id = NULL;
+                                        int is_function_template = (tmpl->kind == METHOD_TEMPLATE_FUNCTION ||
+                                            tmpl->kind == METHOD_TEMPLATE_CONSTRUCTOR ||
+                                            tmpl->has_return_type);
+                                        ast_t *return_type_node = NULL;
+                                        if (tmpl->method_ast != NULL)
                                         {
-                                            /* Check if this is a function or procedure */
-                                            if (tmpl->method_ast != NULL)
+                                            struct ast_t *method_ast = tmpl->method_ast;
+                                            for (ast_t *child = method_ast->child; child != NULL; child = child->next)
                                             {
-                                                struct ast_t *method_ast = tmpl->method_ast;
-                                                /* Find the return type in the method AST */
-                                                for (ast_t *child = method_ast->child; child != NULL; child = child->next)
+                                                if (child->typ == PASCAL_T_RETURN_TYPE)
                                                 {
-                                                    if (child->typ == PASCAL_T_RETURN_TYPE)
-                                                    {
-                                                        if (child->sym != NULL && child->sym->name != NULL)
-                                                        {
-                                                            proc_type->kind = TYPE_KIND_PROCEDURE;
-                                                            proc_type->info.proc_info.return_type_id = strdup(child->sym->name);
-                                                        }
-                                                        break;
-                                                    }
+                                                    return_type_node = child;
+                                                    if (child->sym != NULL && child->sym->name != NULL)
+                                                        return_type_id = strdup(child->sym->name);
+                                                    break;
                                                 }
                                             }
                                         }
 
-                                        /* Add to symbol table as forward declaration - use mangled as both id and mangled_id */
-                                        PushProcedureOntoScope_Typed(symtab, mangled, mangled, proc_type);
-                                        destroy_kgpc_type(proc_type);
+                                        if (return_type_node != NULL && return_type_node->child != NULL)
+                                        {
+                                            return_type = convert_type_spec_to_kgpctype(return_type_node->child, symtab);
+                                            if (return_type_id == NULL &&
+                                                return_type_node->child->sym != NULL &&
+                                                return_type_node->child->sym->name != NULL)
+                                            {
+                                                return_type_id = strdup(return_type_node->child->sym->name);
+                                            }
+                                        }
+                                        else if (return_type_id != NULL)
+                                        {
+                                            HashNode_t *type_node = NULL;
+                                            if (FindIdent(&type_node, symtab, return_type_id) != -1 &&
+                                                type_node != NULL && type_node->type != NULL)
+                                            {
+                                                kgpc_type_retain(type_node->type);
+                                                return_type = type_node->type;
+                                            }
+                                            else
+                                            {
+                                                int tag = semcheck_map_builtin_type_name_local(return_type_id);
+                                                if (tag != UNKNOWN_TYPE)
+                                                    return_type = create_primitive_type(tag);
+                                            }
+                                        }
+
+                                        KgpcType *proc_type = create_procedure_type(NULL, return_type);
+                                        if (proc_type != NULL && return_type_id != NULL)
+                                            proc_type->info.proc_info.return_type_id = strdup(return_type_id);
+
+                                        if (return_type_id != NULL)
+                                            free(return_type_id);
+
+                                        if (is_function_template)
+                                            PushFunctionOntoScope_Typed(symtab, mangled, mangled, proc_type);
+                                        else
+                                            PushProcedureOntoScope_Typed(symtab, mangled, mangled, proc_type);
+
+                                        if (proc_type != NULL)
+                                            destroy_kgpc_type(proc_type);
 
                                         if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                                             fprintf(stderr, "[SemCheck] Added method forward declaration: %s -> %s\n",
                                                 tmpl->name, mangled);
+                                        }
+                                    }
+                                    else
+                                    {
+                                        int is_function_template = (tmpl->kind == METHOD_TEMPLATE_FUNCTION ||
+                                            tmpl->kind == METHOD_TEMPLATE_CONSTRUCTOR ||
+                                            tmpl->has_return_type);
+                                        if (is_function_template && existing != NULL &&
+                                            existing->hash_type == HASHTYPE_PROCEDURE)
+                                            existing->hash_type = HASHTYPE_FUNCTION;
+                                        if (existing != NULL && existing->type != NULL &&
+                                            existing->type->kind == TYPE_KIND_PROCEDURE &&
+                                            existing->type->info.proc_info.return_type == NULL)
+                                        {
+                                            KgpcType *return_type = NULL;
+                                            char *return_type_id = NULL;
+                                            ast_t *return_type_node = NULL;
+                                            if (tmpl->method_ast != NULL)
+                                            {
+                                                struct ast_t *method_ast = tmpl->method_ast;
+                                                for (ast_t *child = method_ast->child; child != NULL; child = child->next)
+                                                {
+                                                    if (child->typ == PASCAL_T_RETURN_TYPE)
+                                                    {
+                                                        return_type_node = child;
+                                                        if (child->sym != NULL && child->sym->name != NULL)
+                                                            return_type_id = strdup(child->sym->name);
+                                                        break;
+                                                    }
+                                                }
+                                            }
+
+                                            if (return_type_node != NULL && return_type_node->child != NULL)
+                                            {
+                                                return_type = convert_type_spec_to_kgpctype(return_type_node->child, symtab);
+                                                if (return_type_id == NULL &&
+                                                    return_type_node->child->sym != NULL &&
+                                                    return_type_node->child->sym->name != NULL)
+                                                {
+                                                    return_type_id = strdup(return_type_node->child->sym->name);
+                                                }
+                                            }
+                                            else if (return_type_id != NULL)
+                                            {
+                                                HashNode_t *type_node = NULL;
+                                                if (FindIdent(&type_node, symtab, return_type_id) != -1 &&
+                                                    type_node != NULL && type_node->type != NULL)
+                                                {
+                                                    kgpc_type_retain(type_node->type);
+                                                    return_type = type_node->type;
+                                                }
+                                                else
+                                                {
+                                                    int tag = semcheck_map_builtin_type_name_local(return_type_id);
+                                                    if (tag != UNKNOWN_TYPE)
+                                                        return_type = create_primitive_type(tag);
+                                                }
+                                            }
+
+                                            if (return_type != NULL)
+                                                existing->type->info.proc_info.return_type = return_type;
+                                            if (return_type_id != NULL)
+                                                free(return_type_id);
                                         }
                                     }
                                     free(mangled);

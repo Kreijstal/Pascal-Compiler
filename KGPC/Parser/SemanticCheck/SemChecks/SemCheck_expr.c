@@ -5038,6 +5038,9 @@ static int semcheck_expr_is_char_like(struct Expression *expr)
 {
     if (expr == NULL)
         return 0;
+    if (expr->type == EXPR_STRING && expr->expr_data.string != NULL &&
+        strlen(expr->expr_data.string) == 1)
+        return 1;
     if (expr->resolved_type == CHAR_TYPE)
         return 1;
     if (expr->resolved_kgpc_type != NULL)
@@ -6240,7 +6243,37 @@ static int semcheck_recordaccess(int *type_return,
                         *type_return = UNKNOWN_TYPE;
                         return error_count + 1;
                     }
-                    if (getter_node->hash_type != HASHTYPE_FUNCTION)
+                    int getter_is_function = (getter_node->hash_type == HASHTYPE_FUNCTION);
+                    if (!getter_is_function && getter_node->type != NULL &&
+                        getter_node->type->kind == TYPE_KIND_PROCEDURE &&
+                        getter_node->type->info.proc_info.return_type == NULL)
+                    {
+                        int prop_type = UNKNOWN_TYPE;
+                        struct RecordType *prop_record = NULL;
+                        if (semcheck_property_type_info(symtab, property, expr->line_num,
+                                &prop_type, &prop_record) == 0)
+                        {
+                            KgpcType *prop_kgpc = NULL;
+                            if (prop_record != NULL)
+                                prop_kgpc = create_record_type(prop_record);
+                            else if (prop_type != UNKNOWN_TYPE)
+                                prop_kgpc = create_primitive_type(prop_type);
+                            if (prop_kgpc != NULL)
+                            {
+                                getter_node->type->info.proc_info.return_type = prop_kgpc;
+                                getter_node->hash_type = HASHTYPE_FUNCTION;
+                                getter_is_function = 1;
+                            }
+                        }
+                    }
+                    if (!getter_is_function && getter_node->type != NULL &&
+                        getter_node->type->kind == TYPE_KIND_PROCEDURE)
+                    {
+                        KgpcType *ret_type = kgpc_type_get_return_type(getter_node->type);
+                        if (ret_type != NULL)
+                            getter_is_function = 1;
+                    }
+                    if (!getter_is_function)
                     {
                         fprintf(stderr, "Error on line %d, property getter %s must be a function.\n\n",
                             expr->line_num, property->read_accessor);
@@ -10392,13 +10425,38 @@ int semcheck_funccall(int *type_return,
                             }
                         }
 
-                        /* Update mangled_name to use the resolved name */
+                        /* Prefer all overloads of the resolved method for scoring. */
+                        char *mangled_method_name = NULL;
+                        if (record_info->type_id != NULL && method_name != NULL)
+                        {
+                            size_t class_len = strlen(record_info->type_id);
+                            size_t method_len = strlen(method_name);
+                            mangled_method_name = (char *)malloc(class_len + 2 + method_len + 1);
+                            if (mangled_method_name != NULL)
+                                snprintf(mangled_method_name, class_len + 2 + method_len + 1,
+                                    "%s__%s", record_info->type_id, method_name);
+                        }
+
+                        ListNode_t *method_candidates = NULL;
+                        if (mangled_method_name != NULL)
+                            method_candidates = FindAllIdents(symtab, mangled_method_name);
+
                         if (mangled_name != NULL)
                             free(mangled_name);
-                        mangled_name = (resolved_method_name != NULL) ? strdup(resolved_method_name) : NULL;
+                        mangled_name = (mangled_method_name != NULL) ? strdup(mangled_method_name)
+                                                                    : (resolved_method_name != NULL ? strdup(resolved_method_name) : NULL);
 
-                        /* Initialize overload candidates before jumping to avoid uninitialized access */
-                        overload_candidates = CreateListNode(method_node, LIST_UNSPECIFIED);
+                        if (method_candidates != NULL)
+                        {
+                            overload_candidates = method_candidates;
+                        }
+                        else
+                        {
+                            overload_candidates = CreateListNode(method_node, LIST_UNSPECIFIED);
+                        }
+
+                        if (mangled_method_name != NULL)
+                            free(mangled_method_name);
 
                         /* Continue with normal function call processing using the resolved method */
                         hash_return = method_node;
@@ -10741,8 +10799,12 @@ method_call_resolved:
                     candidate->id, total_params, required_params, given_count);
             }
             
-            /* Match if given args is at least required count and at most total params */
-            if (given_count >= required_params && given_count <= total_params)
+            /* Match if given args is at least required count and at most total params.
+             * Also allow forward-declared methods with unknown params. */
+            if ((given_count >= required_params && given_count <= total_params) ||
+                (total_params == 0 && given_count > 0 &&
+                 candidate->type != NULL &&
+                 candidate->type->info.proc_info.definition == NULL))
             {
                 int current_score = 0;
                 ListNode_t *formal_args = candidate_args;
@@ -11073,6 +11135,32 @@ method_call_resolved:
         if (best_match != NULL && best_match->type != NULL &&
             best_match->type->kind == TYPE_KIND_PROCEDURE)
         {
+            if (best_match->type->info.proc_info.return_type == NULL &&
+                best_match->type->info.proc_info.return_type_id != NULL)
+            {
+                const char *ret_id = best_match->type->info.proc_info.return_type_id;
+                HashNode_t *type_node = NULL;
+                KgpcType *ret_type = NULL;
+                if (FindIdent(&type_node, symtab, (char *)ret_id) != -1 &&
+                    type_node != NULL && type_node->type != NULL)
+                {
+                    kgpc_type_retain(type_node->type);
+                    ret_type = type_node->type;
+                }
+                else
+                {
+                    int tag = semcheck_map_builtin_type_name(symtab, ret_id);
+                    if (tag != UNKNOWN_TYPE)
+                        ret_type = create_primitive_type(tag);
+                }
+                if (ret_type != NULL)
+                {
+                    best_match->type->info.proc_info.return_type = ret_type;
+                    if (best_match->hash_type == HASHTYPE_PROCEDURE)
+                        best_match->hash_type = HASHTYPE_FUNCTION;
+                }
+            }
+
             Tree_t *proc_def = best_match->type->info.proc_info.definition;
             int is_external = 0;
             if (proc_def != NULL)
@@ -11520,9 +11608,20 @@ skip_overload_resolution:
         }
         if(true_args_to_validate == NULL && args_to_validate != NULL)
         {
-            fprintf(stderr, "Error on line %d, on function call %s, too many arguments given!\n\n",
-                expr->line_num, id);
-            ++return_val;
+            int allow_forward_params = 0;
+            if (hash_return != NULL && hash_return->type != NULL &&
+                hash_return->type->kind == TYPE_KIND_PROCEDURE &&
+                hash_return->type->info.proc_info.params == NULL &&
+                hash_return->type->info.proc_info.definition == NULL)
+            {
+                allow_forward_params = 1;
+            }
+            if (!allow_forward_params)
+            {
+                fprintf(stderr, "Error on line %d, on function call %s, too many arguments given!\n\n",
+                    expr->line_num, id);
+                ++return_val;
+            }
         }
         else if(true_args_to_validate != NULL && args_to_validate == NULL)
         {

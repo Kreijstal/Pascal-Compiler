@@ -25,6 +25,7 @@ type
         FMessage: AnsiString;
     public
         constructor Create(const Msg: AnsiString);
+        constructor CreateFmt(const Msg: AnsiString; const Args: array of const);
         property Message: AnsiString read FMessage;
     end;
 
@@ -33,8 +34,13 @@ type
         class function UTF8: TEncoding; static;
         class function ANSI: TEncoding; static;
         class function Default: TEncoding; static;
+        class function GetSystemEncoding: TEncoding; static;
+        class property SystemEncoding: TEncoding read GetSystemEncoding;
         function GetBytes(const S: AnsiString): TBytes; virtual;
         function GetString(const Bytes: TBytes): AnsiString; virtual;
+        function GetString(const Bytes: TBytes; Index, Count: Integer): AnsiString; overload; virtual;
+        function GetAnsiString(const Bytes: TBytes): AnsiString; virtual;
+        function GetAnsiString(const Bytes: TBytes; Index, Count: Integer): AnsiString; overload; virtual;
     end;
 
 const
@@ -91,6 +97,8 @@ function LoadLibrary(const Name: AnsiString): NativeUInt;
 function GetProcedureAddress(LibHandle: NativeUInt; const ProcName: AnsiString): NativeUInt;
 function FreeLibrary(LibHandle: NativeUInt): Boolean;
 procedure SetString(out S: AnsiString; Buffer: PAnsiChar; Len: Integer);
+function FileDateToDateTime(FileDate: LongInt): TDateTime;
+function StringToGUID(const S: AnsiString): TGUID;
 
 { Generic procedure to free an object and set its reference to nil }
 procedure FreeAndNil(var Obj: Pointer);
@@ -236,6 +244,13 @@ begin
     Default := EncodingDefaultInstance;
 end;
 
+class function TEncoding.GetSystemEncoding: TEncoding;
+begin
+    if EncodingDefaultInstance = nil then
+        EncodingDefaultInstance := TEncoding.UTF8;
+    GetSystemEncoding := EncodingDefaultInstance;
+end;
+
 function TEncoding.GetBytes(const S: AnsiString): TBytes;
 var
     bytes: TBytes;
@@ -256,6 +271,55 @@ begin
     for i := 0 to Length(Bytes) - 1 do
         text[i + 1] := Char(Bytes[i]);
     GetString := text;
+end;
+
+function TEncoding.GetString(const Bytes: TBytes; Index, Count: Integer): AnsiString;
+var
+    text: AnsiString;
+    i: Integer;
+    max_count: Integer;
+begin
+    if Index < 0 then
+        Index := 0;
+    if Count < 0 then
+        Count := 0;
+    max_count := Length(Bytes) - Index;
+    if Count > max_count then
+        Count := max_count;
+    SetLength(text, Count);
+    for i := 0 to Count - 1 do
+        text[i + 1] := Char(Bytes[Index + i]);
+    GetString := text;
+end;
+
+function TEncoding.GetAnsiString(const Bytes: TBytes): AnsiString;
+var
+    text: AnsiString;
+    i: Integer;
+begin
+    SetLength(text, Length(Bytes));
+    for i := 0 to Length(Bytes) - 1 do
+        text[i + 1] := Char(Bytes[i]);
+    GetAnsiString := text;
+end;
+
+function TEncoding.GetAnsiString(const Bytes: TBytes; Index, Count: Integer): AnsiString;
+var
+    text: AnsiString;
+    i: Integer;
+    max_count: Integer;
+begin
+    if Index < 0 then
+        Index := 0;
+    if Count < 0 then
+        Count := 0;
+    max_count := Length(Bytes) - Index;
+    if Count > max_count then
+        Count := max_count;
+    SetLength(text, Count);
+    for i := 0 to Count - 1 do
+        text[i + 1] := Char(Bytes[Index + i]);
+    GetAnsiString := text;
 end;
 
 procedure Sleep(milliseconds: integer);
@@ -695,6 +759,94 @@ end;
 constructor Exception.Create(const Msg: AnsiString);
 begin
     FMessage := Msg;
+end;
+
+constructor Exception.CreateFmt(const Msg: AnsiString; const Args: array of const);
+var
+    ArgPointer: Pointer;
+    formatted: AnsiString;
+begin
+    if Length(Args) > 0 then
+        ArgPointer := @Args[Low(Args)]
+    else
+        ArgPointer := nil;
+    formatted := kgpc_format(Msg, ArgPointer, Length(Args));
+    FMessage := formatted;
+end;
+
+function FileDateToDateTime(FileDate: LongInt): TDateTime;
+begin
+    FileDateToDateTime := UnixToDateTime(FileDate);
+end;
+
+function StringToGUID(const S: AnsiString): TGUID;
+var
+    Hex: AnsiString;
+    i: Integer;
+    idx: Integer;
+    ch: AnsiChar;
+    value: Integer;
+    function HexValue(C: AnsiChar): Integer;
+    begin
+        if (C >= '0') and (C <= '9') then
+            HexValue := Ord(C) - Ord('0')
+        else if (C >= 'A') and (C <= 'F') then
+            HexValue := 10 + Ord(C) - Ord('A')
+        else if (C >= 'a') and (C <= 'f') then
+            HexValue := 10 + Ord(C) - Ord('a')
+        else
+            HexValue := -1;
+    end;
+    function ParseHex(StartIndex, Count: Integer): LongWord;
+    var
+        j: Integer;
+        v: LongWord;
+        digit: Integer;
+    begin
+        v := 0;
+        for j := 0 to Count - 1 do
+        begin
+            digit := HexValue(Hex[StartIndex + j]);
+            if digit < 0 then
+            begin
+                ParseHex := 0;
+                exit;
+            end;
+            v := (v shl 4) or LongWord(digit);
+        end;
+        ParseHex := v;
+    end;
+begin
+    Hex := '';
+    for i := 1 to Length(S) do
+    begin
+        ch := S[i];
+        if (ch = '{') or (ch = '}') or (ch = '-') then
+            continue;
+        if HexValue(ch) >= 0 then
+            Hex := Hex + ch;
+    end;
+
+    if Length(Hex) <> 32 then
+    begin
+        StringToGUID.D1 := 0;
+        StringToGUID.D2 := 0;
+        StringToGUID.D3 := 0;
+        for i := 0 to 7 do
+            StringToGUID.D4[i] := 0;
+        exit;
+    end;
+
+    StringToGUID.D1 := ParseHex(1, 8);
+    StringToGUID.D2 := Word(ParseHex(9, 4));
+    StringToGUID.D3 := Word(ParseHex(13, 4));
+    idx := 17;
+    for i := 0 to 7 do
+    begin
+        value := Integer(ParseHex(idx, 2));
+        StringToGUID.D4[i] := Byte(value);
+        idx := idx + 2;
+    end;
 end;
 
 

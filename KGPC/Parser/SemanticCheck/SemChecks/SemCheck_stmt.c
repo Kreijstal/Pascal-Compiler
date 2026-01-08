@@ -2474,6 +2474,24 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
         
         if (!are_types_compatible_for_assignment(lhs_kgpctype, rhs_kgpctype, symtab))
         {
+            int allow_char_literal = 0;
+            if (lhs_kgpctype->kind == TYPE_KIND_PRIMITIVE &&
+                lhs_kgpctype->info.primitive_type_tag == CHAR_TYPE &&
+                rhs_kgpctype->kind == TYPE_KIND_PRIMITIVE &&
+                rhs_kgpctype->info.primitive_type_tag == STRING_TYPE &&
+                expr != NULL && expr->type == EXPR_STRING &&
+                expr->expr_data.string != NULL &&
+                strlen(expr->expr_data.string) == 1)
+            {
+                allow_char_literal = 1;
+                expr->resolved_type = CHAR_TYPE;
+                if (expr->resolved_kgpc_type != NULL)
+                    destroy_kgpc_type(expr->resolved_kgpc_type);
+                expr->resolved_kgpc_type = create_primitive_type(CHAR_TYPE);
+            }
+            if (allow_char_literal)
+                goto assignment_types_ok;
+
             const char *lhs_name = "<expression>";
             if (var != NULL && var->type == EXPR_VAR_ID)
                 lhs_name = var->expr_data.id;
@@ -2507,6 +2525,7 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                 }
             }
         }
+assignment_types_ok:
     }
 
     if (!handled_by_kgpctype)
