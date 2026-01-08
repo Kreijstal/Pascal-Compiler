@@ -357,8 +357,23 @@ static struct RecordField *semcheck_find_class_field_impl(SymTab_t *symtab,
     while (current != NULL)
     {
         ListNode_t *field_node = current->fields;
+        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+        {
+            fprintf(stderr, "[SemCheck] semcheck_find_class_field_impl: searching for '%s' in record with %d fields\n",
+                field_name, field_node ? ListLength(field_node) : 0);
+        }
         while (field_node != NULL)
         {
+            if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+            {
+                fprintf(stderr, "[SemCheck]   field_node->type=%d (LIST_RECORD_FIELD=%d) cur=%p\n",
+                    field_node->type, LIST_RECORD_FIELD, field_node->cur);
+                if (field_node->cur != NULL && field_node->type == LIST_RECORD_FIELD)
+                {
+                    struct RecordField *f = (struct RecordField *)field_node->cur;
+                    fprintf(stderr, "[SemCheck]   field name='%s'\n", f->name ? f->name : "(null)");
+                }
+            }
             if (field_node->type == LIST_RECORD_FIELD && field_node->cur != NULL)
             {
                 struct RecordField *field = (struct RecordField *)field_node->cur;
@@ -8708,8 +8723,14 @@ int semcheck_varid(int *type_return,
             if (FindIdent(&self_node, symtab, "Self") == 0 && self_node != NULL)
             {
                 struct RecordType *self_record = get_record_type_from_node(self_node);
+                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+                {
+                    fprintf(stderr, "[SemCheck] varid Self-field fallback: id=%s self_node=%p self_record=%p\n",
+                        id, (void*)self_node, (void*)self_record);
+                }
                 if (self_record != NULL)
                 {
+                    /* First check if it's a method */
                     HashNode_t *method_node = semcheck_find_class_method(symtab, self_record, id, NULL);
                     if (method_node != NULL)
                     {
@@ -8721,6 +8742,57 @@ int semcheck_varid(int *type_return,
                         expr->expr_data.function_call_data.mangled_id = NULL;
                         semcheck_reset_function_call_cache(expr);
                         return semcheck_funccall(type_return, symtab, expr, max_scope_lev, mutating);
+                    }
+                    
+                    /* Then check if it's an instance field - convert to Self.fieldname */
+                    struct RecordType *field_owner = NULL;
+                    struct RecordField *field_desc = semcheck_find_class_field(symtab, 
+                        self_record, id, &field_owner);
+                    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+                    {
+                        fprintf(stderr, "[SemCheck] varid Self-field: semcheck_find_class_field(%s) returned %p\n",
+                            id, (void*)field_desc);
+                    }
+                    if (field_desc != NULL)
+                    {
+                        /* Convert EXPR_VAR_ID to EXPR_RECORD_ACCESS for Self.field */
+                        char *saved_id = expr->expr_data.id;
+                        expr->expr_data.id = NULL;
+                        
+                        expr->type = EXPR_RECORD_ACCESS;
+                        memset(&expr->expr_data.record_access_data, 0,
+                            sizeof(expr->expr_data.record_access_data));
+                        
+                        /* Create Self reference as record_expr using mk_varid */
+                        struct Expression *self_expr = mk_varid(expr->line_num, strdup("Self"));
+                        if (self_expr != NULL)
+                        {
+                            self_expr->record_type = self_record;
+                            if (self_node->type != NULL)
+                            {
+                                self_expr->resolved_kgpc_type = self_node->type;
+                                kgpc_type_retain(self_node->type);
+                            }
+                            
+                            expr->expr_data.record_access_data.record_expr = self_expr;
+                            expr->expr_data.record_access_data.field_id = saved_id;
+                            
+                            /* Resolve field offset and type */
+                            long long field_offset = 0;
+                            if (resolve_record_field(symtab, self_record, id, 
+                                NULL, &field_offset, 0, 1) == 0)
+                            {
+                                expr->expr_data.record_access_data.field_offset = field_offset;
+                            }
+                            
+                            /* Now process this as a record access */
+                            return semcheck_recordaccess(type_return, symtab, expr,
+                                max_scope_lev, mutating);
+                        }
+                        else
+                        {
+                            free(saved_id);
+                        }
                     }
                 }
             }
