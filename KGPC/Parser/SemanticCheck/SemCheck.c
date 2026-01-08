@@ -7192,9 +7192,10 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         tree->tree_data.arr_decl_data.is_typed_const);
 
                 KgpcType *element_type = NULL;
+                int is_array_of_const = (tree->tree_data.arr_decl_data.type == ARRAY_OF_CONST_TYPE);
                 
                 /* If type_id is specified, resolve it to get the element type */
-                if (tree->tree_data.arr_decl_data.type_id != NULL)
+                if (!is_array_of_const && tree->tree_data.arr_decl_data.type_id != NULL)
                 {
                     HashNode_t *element_type_node = NULL;
                     element_type_node = semcheck_find_preferred_type_node(symtab,
@@ -7234,7 +7235,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 }
                 
                 /* If element type not resolved from type_id, use primitive type */
-                if (element_type == NULL)
+                if (element_type == NULL && !is_array_of_const)
                 {
                     if(tree->tree_data.arr_decl_data.type == INT_TYPE)
                         var_type = HASHVAR_INTEGER;
@@ -7340,46 +7341,57 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 tree->tree_data.arr_decl_data.s_range = start_bound;
                 tree->tree_data.arr_decl_data.e_range = end_bound;
                 
-                KgpcType *array_type = create_array_type(
-                    element_type,
-                    start_bound,
-                    end_bound
-                );
+                KgpcType *array_type = NULL;
+                if (is_array_of_const)
+                {
+                    array_type = create_array_of_const_type();
+                }
+                else
+                {
+                    array_type = create_array_type(
+                        element_type,
+                        start_bound,
+                        end_bound
+                    );
+                }
                 assert(array_type != NULL && "Failed to create array type");
 
                 /* If the element type was specified by a type_id (like TAlfa), preserve that information
                  * by creating a minimal TypeAlias and attaching it to the array_type. This allows
                  * nested array indexing to work correctly (e.g., Keywords[1][1] where Keywords is
                  * array[1..5] of TAlfa and TAlfa is array[1..10] of char). */
-                struct TypeAlias temp_alias = {0};
-                int has_alias = 0;
-                
-                if (tree->tree_data.arr_decl_data.type_id != NULL)
+                if (!is_array_of_const)
                 {
-                    temp_alias.is_array = 1;
-                    temp_alias.array_start = start_bound;
-                    temp_alias.array_end = end_bound;
-                    temp_alias.array_element_type_id = tree->tree_data.arr_decl_data.type_id;  /* Will be duplicated by copy_type_alias */
-                    temp_alias.array_element_type = tree->tree_data.arr_decl_data.type;
-                    has_alias = 1;
-                }
-
-                if (tree->tree_data.arr_decl_data.is_shortstring)
-                {
-                    if (!has_alias)
+                    struct TypeAlias temp_alias = {0};
+                    int has_alias = 0;
+                    
+                    if (tree->tree_data.arr_decl_data.type_id != NULL)
                     {
                         temp_alias.is_array = 1;
                         temp_alias.array_start = start_bound;
                         temp_alias.array_end = end_bound;
-                        temp_alias.array_element_type = CHAR_TYPE;
-                        temp_alias.array_element_type_id = "char";  /* Will be duplicated by copy_type_alias */
+                        temp_alias.array_element_type_id = tree->tree_data.arr_decl_data.type_id;  /* Will be duplicated by copy_type_alias */
+                        temp_alias.array_element_type = tree->tree_data.arr_decl_data.type;
                         has_alias = 1;
                     }
-                    temp_alias.is_shortstring = 1;
-                }
 
-                if (has_alias)
-                    kgpc_type_set_type_alias(array_type, &temp_alias);
+                    if (tree->tree_data.arr_decl_data.is_shortstring)
+                    {
+                        if (!has_alias)
+                        {
+                            temp_alias.is_array = 1;
+                            temp_alias.array_start = start_bound;
+                            temp_alias.array_end = end_bound;
+                            temp_alias.array_element_type = CHAR_TYPE;
+                            temp_alias.array_element_type_id = "char";  /* Will be duplicated by copy_type_alias */
+                            has_alias = 1;
+                        }
+                        temp_alias.is_shortstring = 1;
+                    }
+
+                    if (has_alias)
+                        kgpc_type_set_type_alias(array_type, &temp_alias);
+                }
                 
                 if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
                     fprintf(stderr, "[SemCheck] Pushing array: %s, array_type=%p kind=%d elem_kind=%d\n",

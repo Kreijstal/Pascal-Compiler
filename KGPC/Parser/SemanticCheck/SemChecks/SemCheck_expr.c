@@ -8710,6 +8710,7 @@ int semcheck_varid(int *type_return,
                 struct RecordType *self_record = get_record_type_from_node(self_node);
                 if (self_record != NULL)
                 {
+                    /* First check if it's a method */
                     HashNode_t *method_node = semcheck_find_class_method(symtab, self_record, id, NULL);
                     if (method_node != NULL)
                     {
@@ -8721,6 +8722,55 @@ int semcheck_varid(int *type_return,
                         expr->expr_data.function_call_data.mangled_id = NULL;
                         semcheck_reset_function_call_cache(expr);
                         return semcheck_funccall(type_return, symtab, expr, max_scope_lev, mutating);
+                    }
+                    
+                    /* Then check if it's an instance field - convert to Self.fieldname */
+                    struct RecordType *field_owner = NULL;
+                    struct RecordField *field_desc = semcheck_find_class_field(symtab, 
+                        self_record, id, &field_owner);
+                    if (field_desc != NULL)
+                    {
+                        /* First create the Self expression to ensure memory allocation succeeds */
+                        char *self_str = strdup("Self");
+                        if (self_str != NULL)
+                        {
+                            struct Expression *self_expr = mk_varid(expr->line_num, self_str);
+                            /* mk_varid takes ownership of self_str, so don't free it separately */
+                            if (self_expr != NULL)
+                            {
+                                self_expr->record_type = self_record;
+                                if (self_node->type != NULL)
+                                {
+                                    self_expr->resolved_kgpc_type = self_node->type;
+                                    kgpc_type_retain(self_node->type);
+                                }
+                                
+                                /* Convert EXPR_VAR_ID to EXPR_RECORD_ACCESS for Self.field */
+                                char *saved_id = expr->expr_data.id;
+                                expr->expr_data.id = NULL;
+                                
+                                expr->type = EXPR_RECORD_ACCESS;
+                                memset(&expr->expr_data.record_access_data, 0,
+                                    sizeof(expr->expr_data.record_access_data));
+                                
+                                expr->expr_data.record_access_data.record_expr = self_expr;
+                                expr->expr_data.record_access_data.field_id = saved_id;
+                                
+                                /* Resolve field offset and type */
+                                long long field_offset = 0;
+                                if (resolve_record_field(symtab, self_record, id, 
+                                    NULL, &field_offset, 0, 1) == 0)
+                                {
+                                    expr->expr_data.record_access_data.field_offset = field_offset;
+                                }
+                                
+                                /* Now process this as a record access */
+                                return semcheck_recordaccess(type_return, symtab, expr,
+                                    max_scope_lev, mutating);
+                            }
+                            /* If mk_varid fails, it takes ownership of self_str, so we don't free */
+                        }
+                        /* If we reach here, memory allocation failed - fall through to error handling */
                     }
                 }
             }
@@ -10292,65 +10342,77 @@ int semcheck_funccall(int *type_return,
             
             if (owner_type->kind == TYPE_KIND_RECORD) {
                 record_info = owner_type->info.record_info;
-            } else if (owner_type->kind == TYPE_KIND_POINTER && owner_type->info.points_to->kind == TYPE_KIND_RECORD) {
+            } else if (owner_type->kind == TYPE_KIND_POINTER &&
+                owner_type->info.points_to != NULL &&
+                owner_type->info.points_to->kind == TYPE_KIND_RECORD) {
                 record_info = owner_type->info.points_to->info.record_info;
             }
             
             if (record_info != NULL && record_info->type_id != NULL) {
                 const char *method_name = id;
-                
-                /* Check if this is a static method */
-                int is_static = from_cparser_is_method_static(record_info->type_id, method_name);
+                if (method_name != NULL &&
+                    (strncasecmp(method_name, "Create", 6) == 0 ||
+                     strcasecmp(method_name, "Destroy") == 0))
+                {
+                    /* Defer constructor/destructor handling to the specialized path below. */
+                }
+                else
+                {
+                    /* Check if this is a static method */
+                    int is_static = from_cparser_is_method_static(record_info->type_id, method_name);
                 
                 if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                     fprintf(stderr, "[SemCheck] semcheck_funccall: __method call type=%s method=%s is_static=%d\n",
                         record_info->type_id, method_name, is_static);
                 }
                 
-                /* Look up the method */
-                HashNode_t *method_node = semcheck_find_class_method(symtab, record_info, method_name, NULL);
-                if (method_node != NULL) {
-                    /* Resolve the method name */
-                    set_type_from_hashtype(type_return, method_node);
-                    semcheck_expr_set_resolved_kgpc_type_shared(expr, method_node->type);
-                    expr->expr_data.function_call_data.resolved_func = method_node;
-                    const char *resolved_method_name = (method_node->mangled_id != NULL) ?
-                        method_node->mangled_id : method_node->id;
-                    if (expr->expr_data.function_call_data.mangled_id != NULL)
-                        free(expr->expr_data.function_call_data.mangled_id);
-                    expr->expr_data.function_call_data.mangled_id =
-                        (resolved_method_name != NULL) ? strdup(resolved_method_name) : NULL;
-                    
-                    if (is_static) {
-                        /* For static methods, remove the first argument (the type identifier) */
-                        ListNode_t *old_head = args_given;
-                        expr->expr_data.function_call_data.args_expr = old_head->next;
-                        old_head->next = NULL;  /* Detach to prevent dangling reference */
-                        args_given = expr->expr_data.function_call_data.args_expr;
+                    /* Look up the method */
+                    HashNode_t *method_node = semcheck_find_class_method(symtab, record_info, method_name, NULL);
+                    if (method_node != NULL) {
+                        /* Resolve the method name */
+                        set_type_from_hashtype(type_return, method_node);
+                        semcheck_expr_set_resolved_kgpc_type_shared(expr, method_node->type);
+                        expr->expr_data.function_call_data.resolved_func = method_node;
+                        const char *resolved_method_name = (method_node->mangled_id != NULL) ?
+                            method_node->mangled_id : method_node->id;
+                        if (expr->expr_data.function_call_data.mangled_id != NULL)
+                            free(expr->expr_data.function_call_data.mangled_id);
+                        expr->expr_data.function_call_data.mangled_id =
+                            (resolved_method_name != NULL) ? strdup(resolved_method_name) : NULL;
+                        
+                        if (is_static) {
+                            /* For static methods, remove the first argument (the type identifier) */
+                            ListNode_t *old_head = args_given;
+                            expr->expr_data.function_call_data.args_expr = old_head->next;
+                            old_head->next = NULL;  /* Detach to prevent dangling reference */
+                            args_given = expr->expr_data.function_call_data.args_expr;
 
-                        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
-                            fprintf(stderr, "[SemCheck] semcheck_funccall: Removed type arg for static method call\n");
+                            if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                                fprintf(stderr, "[SemCheck] semcheck_funccall: Removed type arg for static method call\n");
+                            }
                         }
+
+                        /* Update mangled_name to use the resolved name */
+                        if (mangled_name != NULL)
+                            free(mangled_name);
+                        mangled_name = (resolved_method_name != NULL) ? strdup(resolved_method_name) : NULL;
+
+                        /* Initialize overload candidates before jumping to avoid uninitialized access */
+                        overload_candidates = CreateListNode(method_node, LIST_UNSPECIFIED);
+
+                        /* Continue with normal function call processing using the resolved method */
+                        hash_return = method_node;
+                        goto method_call_resolved;
                     }
-
-                    /* Update mangled_name to use the resolved name */
-                    if (mangled_name != NULL)
-                        free(mangled_name);
-                    mangled_name = (resolved_method_name != NULL) ? strdup(resolved_method_name) : NULL;
-
-                    /* Initialize overload candidates before jumping to avoid uninitialized access */
-                    overload_candidates = CreateListNode(method_node, LIST_UNSPECIFIED);
-
-                    /* Continue with normal function call processing using the resolved method */
-                    hash_return = method_node;
-                    goto method_call_resolved;
                 }
             }
         }
     }
     
     /* Check for Constructor Call (Create) where first arg is the class type/instance */
-    if (id != NULL && (strcasecmp(id, "Create") == 0 || strcasecmp(id, "Destroy") == 0) && args_given != NULL) {
+    if (id != NULL &&
+        (strncasecmp(id, "Create", 6) == 0 || strcasecmp(id, "Destroy") == 0) &&
+        args_given != NULL) {
         struct Expression *first_arg = (struct Expression *)args_given->cur;
         int first_arg_type_tag;
         semcheck_expr_main(&first_arg_type_tag, symtab, first_arg, max_scope_lev, NO_MUTATE);
@@ -10466,10 +10528,11 @@ int semcheck_funccall(int *type_return,
                     /* Set up overload candidates for normal resolution */
                     overload_candidates = method_candidates;
                     
-                    /* For Create, set up the return type */
-                    if (strcasecmp(id + class_len + 2, "Create") == 0 && owner_type != NULL) {
+                    /* For constructors (Create, CreateFmt, etc.), set up the return type */
+                    const char *method_name = id + class_len + 2;
+                    if (strncasecmp(method_name, "Create", 6) == 0 && owner_type != NULL) {
                         if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
-                            fprintf(stderr, "[SemCheck] semcheck_funccall: Setting up return type for Create\n");
+                            fprintf(stderr, "[SemCheck] semcheck_funccall: Setting up return type for constructor %s\n", method_name);
                         }
                         
                         /* Return type is the class itself (pointer to record) */
@@ -11277,7 +11340,8 @@ skip_overload_resolution:
                 id, ListLength(args_given), ListLength(true_args));
         }
 
-        if (id != NULL && (strcasecmp(id, "Create") == 0 || strcasecmp(id, "Destroy") == 0) &&
+        if (id != NULL &&
+            (strncasecmp(id, "Create", 6) == 0 || strcasecmp(id, "Destroy") == 0) &&
             args_given != NULL)
         {
             /* If lengths match, we assume first arg is class type and first param is Self -> skip both */
