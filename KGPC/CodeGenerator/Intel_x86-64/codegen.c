@@ -314,14 +314,20 @@ static void codegen_add_class_vars_for_static_method(const char *mangled_name,
             
             /* Build the static label for this field: ClassName_CLASSVAR+offset */
             /* We register it with offset information */
+            /* Buffer size: classvar_label + "+" + max_digits(long long) + null terminator */
+            /* max_digits for long long is 20, so 32 provides ample margin */
             size_t field_label_len = strlen(classvar_label) + 32;
             char *field_static_label = (char *)malloc(field_label_len);
             if (field_static_label != NULL)
             {
+                int written;
                 if (current_offset == 0)
-                    snprintf(field_static_label, field_label_len, "%s", classvar_label);
+                    written = snprintf(field_static_label, field_label_len, "%s", classvar_label);
                 else
-                    snprintf(field_static_label, field_label_len, "%s+%lld", classvar_label, current_offset);
+                    written = snprintf(field_static_label, field_label_len, "%s+%lld", classvar_label, current_offset);
+                
+                /* Verify buffer was large enough */
+                assert(written >= 0 && (size_t)written < field_label_len);
                 
                 /* Check if already registered */
                 StackNode_t *existing = find_label(field->name);
@@ -332,10 +338,9 @@ static void codegen_add_class_vars_for_static_method(const char *mangled_name,
                 free(field_static_label);
             }
             
-            /* Advance offset (align to field size) */
+            /* Advance offset with alignment (using standard power-of-two alignment formula) */
             int alignment = (field_size >= 8) ? 8 : ((field_size >= 4) ? 4 : 1);
-            if (current_offset % alignment != 0)
-                current_offset += alignment - (current_offset % alignment);
+            current_offset = (current_offset + alignment - 1) & ~(alignment - 1);
             current_offset += field_size;
         }
         field_node = field_node->next;

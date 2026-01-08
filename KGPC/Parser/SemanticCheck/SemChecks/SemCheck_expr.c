@@ -8730,44 +8730,47 @@ int semcheck_varid(int *type_return,
                         self_record, id, &field_owner);
                     if (field_desc != NULL)
                     {
-                        /* Convert EXPR_VAR_ID to EXPR_RECORD_ACCESS for Self.field */
-                        char *saved_id = expr->expr_data.id;
-                        expr->expr_data.id = NULL;
-                        
-                        expr->type = EXPR_RECORD_ACCESS;
-                        memset(&expr->expr_data.record_access_data, 0,
-                            sizeof(expr->expr_data.record_access_data));
-                        
-                        /* Create Self reference as record_expr using mk_varid */
-                        struct Expression *self_expr = mk_varid(expr->line_num, strdup("Self"));
-                        if (self_expr != NULL)
+                        /* First create the Self expression to ensure memory allocation succeeds */
+                        char *self_str = strdup("Self");
+                        if (self_str != NULL)
                         {
-                            self_expr->record_type = self_record;
-                            if (self_node->type != NULL)
+                            struct Expression *self_expr = mk_varid(expr->line_num, self_str);
+                            /* mk_varid takes ownership of self_str, so don't free it separately */
+                            if (self_expr != NULL)
                             {
-                                self_expr->resolved_kgpc_type = self_node->type;
-                                kgpc_type_retain(self_node->type);
+                                self_expr->record_type = self_record;
+                                if (self_node->type != NULL)
+                                {
+                                    self_expr->resolved_kgpc_type = self_node->type;
+                                    kgpc_type_retain(self_node->type);
+                                }
+                                
+                                /* Convert EXPR_VAR_ID to EXPR_RECORD_ACCESS for Self.field */
+                                char *saved_id = expr->expr_data.id;
+                                expr->expr_data.id = NULL;
+                                
+                                expr->type = EXPR_RECORD_ACCESS;
+                                memset(&expr->expr_data.record_access_data, 0,
+                                    sizeof(expr->expr_data.record_access_data));
+                                
+                                expr->expr_data.record_access_data.record_expr = self_expr;
+                                expr->expr_data.record_access_data.field_id = saved_id;
+                                
+                                /* Resolve field offset and type */
+                                long long field_offset = 0;
+                                if (resolve_record_field(symtab, self_record, id, 
+                                    NULL, &field_offset, 0, 1) == 0)
+                                {
+                                    expr->expr_data.record_access_data.field_offset = field_offset;
+                                }
+                                
+                                /* Now process this as a record access */
+                                return semcheck_recordaccess(type_return, symtab, expr,
+                                    max_scope_lev, mutating);
                             }
-                            
-                            expr->expr_data.record_access_data.record_expr = self_expr;
-                            expr->expr_data.record_access_data.field_id = saved_id;
-                            
-                            /* Resolve field offset and type */
-                            long long field_offset = 0;
-                            if (resolve_record_field(symtab, self_record, id, 
-                                NULL, &field_offset, 0, 1) == 0)
-                            {
-                                expr->expr_data.record_access_data.field_offset = field_offset;
-                            }
-                            
-                            /* Now process this as a record access */
-                            return semcheck_recordaccess(type_return, symtab, expr,
-                                max_scope_lev, mutating);
+                            /* If mk_varid fails, it takes ownership of self_str, so we don't free */
                         }
-                        else
-                        {
-                            free(saved_id);
-                        }
+                        /* If we reach here, memory allocation failed - fall through to error handling */
                     }
                 }
             }
