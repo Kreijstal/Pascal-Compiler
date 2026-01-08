@@ -518,8 +518,7 @@ static void build_subprogram_map(ListNode_t *sub_list, SubprogramMap *map) {
         if (sub_list->type == LIST_TREE && sub_list->cur != NULL) {
             Tree_t *sub = (Tree_t*)sub_list->cur;
             if (sub->type == TREE_SUBPROGRAM) {
-                /* Initialize is_used to 0 */
-                sub->tree_data.subprogram_data.is_used = 0;
+                /* Don't reset is_used if already marked (e.g., by mark_program_subs_used) */
                 
                 const char *mangled_id = sub->tree_data.subprogram_data.mangled_id;
                 const char *map_id = (mangled_id != NULL) ? mangled_id : sub->tree_data.subprogram_data.id;
@@ -564,6 +563,22 @@ void mark_used_functions(Tree_t *program, SymTab_t *symtab) {
     
     /* Build map of all subprograms */
     build_subprogram_map(program->tree_data.program_data.subprograms, &map);
+    
+    /* First, traverse bodies of already-used subprograms (e.g., from previous call).
+     * This ensures that functions called by specialized methods are discovered. */
+    ListNode_t *pre_pass = program->tree_data.program_data.subprograms;
+    while (pre_pass != NULL) {
+        if (pre_pass->type == LIST_TREE && pre_pass->cur != NULL) {
+            Tree_t *sub = (Tree_t*)pre_pass->cur;
+            if (sub->type == TREE_SUBPROGRAM && sub->tree_data.subprogram_data.is_used) {
+                struct Statement *body = sub->tree_data.subprogram_data.statement_list;
+                if (body != NULL) {
+                    mark_stmt_calls(body, &map);
+                }
+            }
+        }
+        pre_pass = pre_pass->next;
+    }
     
     /* Start from the main program body */
     struct Statement *main_body = program->tree_data.program_data.body_statement;

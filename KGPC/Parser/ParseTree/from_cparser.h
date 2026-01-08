@@ -53,6 +53,18 @@ void append_generic_method_clones(Tree_t *program_tree);
  */
 struct MethodTemplate *from_cparser_get_method_template(struct RecordType *record, const char *method_name);
 
+/* Register a method template with the class method binding system.
+ * This is used by the semantic checker to ensure method templates are findable.
+ */
+void from_cparser_register_method_template(const char *class_name, const char *method_name,
+    int is_virtual, int is_override, int is_static);
+
+/* Find all class names that have a method with the given name.
+ * Returns a list of class names (caller must free each string and the list).
+ * Sets *count_out to the number of classes found.
+ */
+ListNode_t *from_cparser_find_classes_with_method(const char *method_name, int *count_out);
+
 /* Convert an AST expression node to an Expression structure.
  * This is used internally and also needed for copying default parameter values.
  */

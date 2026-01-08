@@ -411,6 +411,13 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
         int elem_type_tag = var_decl->tree_data.arr_decl_data.type;
         char *elem_type_id = var_decl->tree_data.arr_decl_data.type_id;
         
+        if (elem_type_tag == ARRAY_OF_CONST_TYPE)
+        {
+            if (owns_type != NULL)
+                *owns_type = 1;
+            return create_array_of_const_type();
+        }
+
         KgpcType *elem_type = NULL;
         
         /* Resolve element type */

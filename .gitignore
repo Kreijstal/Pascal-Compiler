@@ -21,7 +21,10 @@ tests/test_cases/*.out
 tests/test_cases/*.exe
 tests/test_cases/*.log
 tests/test_cases/*.tmp
+tests/test_cases/testrun
+tests/test_cases/test_fpc_*
 !tests/test_cases/*.expected
+!tests/test_cases/*.p
 
 # Root-level scratch artifacts that should live under tests/output or build/
 /*.s
