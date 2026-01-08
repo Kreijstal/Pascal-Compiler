@@ -357,23 +357,8 @@ static struct RecordField *semcheck_find_class_field_impl(SymTab_t *symtab,
     while (current != NULL)
     {
         ListNode_t *field_node = current->fields;
-        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
-        {
-            fprintf(stderr, "[SemCheck] semcheck_find_class_field_impl: searching for '%s' in record with %d fields\n",
-                field_name, field_node ? ListLength(field_node) : 0);
-        }
         while (field_node != NULL)
         {
-            if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
-            {
-                fprintf(stderr, "[SemCheck]   field_node->type=%d (LIST_RECORD_FIELD=%d) cur=%p\n",
-                    field_node->type, LIST_RECORD_FIELD, field_node->cur);
-                if (field_node->cur != NULL && field_node->type == LIST_RECORD_FIELD)
-                {
-                    struct RecordField *f = (struct RecordField *)field_node->cur;
-                    fprintf(stderr, "[SemCheck]   field name='%s'\n", f->name ? f->name : "(null)");
-                }
-            }
             if (field_node->type == LIST_RECORD_FIELD && field_node->cur != NULL)
             {
                 struct RecordField *field = (struct RecordField *)field_node->cur;
@@ -8723,11 +8708,6 @@ int semcheck_varid(int *type_return,
             if (FindIdent(&self_node, symtab, "Self") == 0 && self_node != NULL)
             {
                 struct RecordType *self_record = get_record_type_from_node(self_node);
-                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
-                {
-                    fprintf(stderr, "[SemCheck] varid Self-field fallback: id=%s self_node=%p self_record=%p\n",
-                        id, (void*)self_node, (void*)self_record);
-                }
                 if (self_record != NULL)
                 {
                     /* First check if it's a method */
@@ -8748,11 +8728,6 @@ int semcheck_varid(int *type_return,
                     struct RecordType *field_owner = NULL;
                     struct RecordField *field_desc = semcheck_find_class_field(symtab, 
                         self_record, id, &field_owner);
-                    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
-                    {
-                        fprintf(stderr, "[SemCheck] varid Self-field: semcheck_find_class_field(%s) returned %p\n",
-                            id, (void*)field_desc);
-                    }
                     if (field_desc != NULL)
                     {
                         /* Convert EXPR_VAR_ID to EXPR_RECORD_ACCESS for Self.field */
