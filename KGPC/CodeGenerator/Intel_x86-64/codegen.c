@@ -25,6 +25,7 @@
 #include "../../Parser/ParseTree/tree_types.h"
 #include "../../Parser/ParseTree/type_tags.h"
 #include "../../Parser/ParseTree/KgpcType.h"
+#include "../../Parser/ParseTree/from_cparser.h"
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
 #include "../../Parser/SemanticCheck/SemChecks/SemCheck_expr.h"
 
@@ -173,6 +174,175 @@ static const char *codegen_resolve_record_type_name(HashNode_t *node, SymTab_t *
             return codegen_resolve_record_type_name(target, symtab);
     }
     return NULL;
+}
+
+/**
+ * For static class methods, register the class variables with the stack manager
+ * so they can be found during code generation via find_label_with_depth.
+ * 
+ * This function extracts the class name from the mangled method name (ClassName__MethodName),
+ * looks up the class type in the symbol table, and registers each class var field
+ * with the stack manager using add_static_var.
+ */
+static void codegen_add_class_vars_for_static_method(const char *mangled_name, 
+    SymTab_t *symtab, CodeGenContext *ctx)
+{
+    if (mangled_name == NULL || symtab == NULL)
+        return;
+    
+    /* Check if this is a method (contains "__") */
+    const char *sep = strstr(mangled_name, "__");
+    if (sep == NULL || sep == mangled_name)
+        return;
+    
+    /* Extract class name */
+    size_t class_name_len = (size_t)(sep - mangled_name);
+    char *class_name = (char *)malloc(class_name_len + 1);
+    if (class_name == NULL)
+        return;
+    memcpy(class_name, mangled_name, class_name_len);
+    class_name[class_name_len] = '\0';
+    
+    /* Extract method name (after "__") */
+    const char *method_name = sep + 2;
+    /* Method name might have suffix like "_void", strip at first underscore */
+    size_t method_len = strcspn(method_name, "_");
+    char *method_short = (char *)malloc(method_len + 1);
+    if (method_short == NULL) {
+        free(class_name);
+        return;
+    }
+    memcpy(method_short, method_name, method_len);
+    method_short[method_len] = '\0';
+    
+    /* Only add class vars for static methods */
+    int is_static_check = from_cparser_is_method_static(class_name, method_short);
+    if (!is_static_check)
+    {
+        free(class_name);
+        free(method_short);
+        return;
+    }
+    free(method_short);
+    
+    /* Look up the class type */
+    HashNode_t *class_node = NULL;
+    int lookup_result = FindIdent(&class_node, symtab, class_name);
+    if (lookup_result == -1 || class_node == NULL)
+    {
+        free(class_name);
+        return;
+    }
+    
+    /* Get the record type - for classes, the type is a pointer to the record */
+    struct RecordType *record_info = get_record_type_from_node(class_node);
+    if (record_info == NULL)
+    {
+        /* Try to dereference if it's a pointer type (class types are pointers to records) */
+        if (class_node->type != NULL && class_node->type->kind == TYPE_KIND_POINTER)
+        {
+            KgpcType *pointed_to = class_node->type->info.points_to;
+            if (pointed_to != NULL && pointed_to->kind == TYPE_KIND_RECORD)
+            {
+                record_info = pointed_to->info.record_info;
+            }
+        }
+    }
+    
+    if (record_info == NULL || !record_type_is_class(record_info))
+    {
+        free(class_name);
+        return;
+    }
+    
+    /* Build the class var storage label */
+    size_t label_len = strlen(class_name) + strlen("_CLASSVAR") + 1;
+    char *classvar_label = (char *)malloc(label_len);
+    if (classvar_label == NULL)
+    {
+        free(class_name);
+        return;
+    }
+    snprintf(classvar_label, label_len, "%s_CLASSVAR", class_name);
+    
+    /* Iterate over fields and register each as a static var with proper offset */
+    ListNode_t *field_node = record_info->fields;
+    long long current_offset = 0;
+    
+    while (field_node != NULL)
+    {
+        struct RecordField *field = (struct RecordField *)field_node->cur;
+        if (field != NULL && field->name != NULL && field->name[0] != '\0')
+        {
+            /* Calculate field size */
+            int field_size = DOUBLEWORD;  /* Default 4 bytes */
+            
+            /* Try to get actual size from type */
+            if (field->type_id != NULL)
+            {
+                HashNode_t *type_node = NULL;
+                if (FindIdent(&type_node, symtab, field->type_id) != -1 && type_node != NULL)
+                {
+                    if (type_node->type != NULL)
+                    {
+                        long long type_size = kgpc_type_sizeof(type_node->type);
+                        if (type_size > 0)
+                            field_size = (int)type_size;
+                    }
+                }
+            }
+            else
+            {
+                /* Use primitive type tag */
+                switch (field->type)
+                {
+                    case INT64_TYPE:
+                    case REAL_TYPE:
+                    case STRING_TYPE:
+                    case POINTER_TYPE:
+                        field_size = 8;
+                        break;
+                    case CHAR_TYPE:
+                    case BOOL:
+                        field_size = 1;
+                        break;
+                    default:
+                        field_size = DOUBLEWORD;
+                        break;
+                }
+            }
+            
+            /* Build the static label for this field: ClassName_CLASSVAR+offset */
+            /* We register it with offset information */
+            size_t field_label_len = strlen(classvar_label) + 32;
+            char *field_static_label = (char *)malloc(field_label_len);
+            if (field_static_label != NULL)
+            {
+                if (current_offset == 0)
+                    snprintf(field_static_label, field_label_len, "%s", classvar_label);
+                else
+                    snprintf(field_static_label, field_label_len, "%s+%lld", classvar_label, current_offset);
+                
+                /* Check if already registered */
+                StackNode_t *existing = find_label(field->name);
+                if (existing == NULL)
+                {
+                    add_static_var(field->name, field_size, field_static_label);
+                }
+                free(field_static_label);
+            }
+            
+            /* Advance offset (align to field size) */
+            int alignment = (field_size >= 8) ? 8 : ((field_size >= 4) ? 4 : 1);
+            if (current_offset % alignment != 0)
+                current_offset += alignment - (current_offset % alignment);
+            current_offset += field_size;
+        }
+        field_node = field_node->next;
+    }
+    
+    free(classvar_label);
+    free(class_name);
 }
 
 /* Allocate the next available integer argument register (general purpose). */
@@ -2191,6 +2361,10 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     int is_class_method = (sub_id != NULL && strstr(sub_id, "__") != NULL);
     StackNode_t *static_link = NULL;
 
+    /* For static class methods, register class vars with the stack manager */
+    if (is_class_method)
+        codegen_add_class_vars_for_static_method(sub_id, symtab, ctx);
+
     /* Process arguments first to allocate their stack space */
     /* Nested procedures always receive a static link so they can forward it to callees,
      * even if they don't themselves capture any outer scope state. Class methods still
@@ -2330,6 +2504,10 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ctx->current_subprogram_lexical_depth = lexical_depth;
     int is_class_method = (sub_id != NULL && strstr(sub_id, "__") != NULL);
     StackNode_t *static_link = NULL;
+
+    /* For static class methods, register class vars with the stack manager */
+    if (is_class_method)
+        codegen_add_class_vars_for_static_method(sub_id, symtab, ctx);
 
     HashNode_t *func_node = NULL;
     if (symtab != NULL)
