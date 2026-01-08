@@ -10516,10 +10516,11 @@ int semcheck_funccall(int *type_return,
                     /* Set up overload candidates for normal resolution */
                     overload_candidates = method_candidates;
                     
-                    /* For Create, set up the return type */
-                    if (strcasecmp(id + class_len + 2, "Create") == 0 && owner_type != NULL) {
+                    /* For constructors (Create, CreateFmt, etc.), set up the return type */
+                    const char *method_name = id + class_len + 2;
+                    if (strncasecmp(method_name, "Create", 6) == 0 && owner_type != NULL) {
                         if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
-                            fprintf(stderr, "[SemCheck] semcheck_funccall: Setting up return type for Create\n");
+                            fprintf(stderr, "[SemCheck] semcheck_funccall: Setting up return type for constructor %s\n", method_name);
                         }
                         
                         /* Return type is the class itself (pointer to record) */
