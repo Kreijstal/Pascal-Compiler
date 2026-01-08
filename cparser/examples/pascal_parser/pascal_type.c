@@ -810,7 +810,7 @@ combinator_t* class_type(tag_t tag) {
     );
 
     // Class var section: class var Field1, Field2: Type;
-    // Only applies to the single declaration following 'class var'
+    // Allow multiple declarations separated by semicolons.
     combinator_t* class_var_decl = seq(new_combinator(), PASCAL_T_FIELD_DECL,
         sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
         token(match(":")),
@@ -818,17 +818,18 @@ combinator_t* class_type(tag_t tag) {
         token(match(";")),
         NULL
     );
-    combinator_t* class_var_section = seq(new_combinator(), PASCAL_T_NONE,
+    combinator_t* class_var_section = seq(new_combinator(), PASCAL_T_CLASS_MEMBER,
         token(keyword_ci("class")),
         token(keyword_ci("var")),
-        class_var_decl,  // Single declaration after 'class var', not many
+        many(class_var_decl),
         NULL
     );
 
     // Plain var section inside class: var FField: Type;
-    combinator_t* plain_var_section = seq(new_combinator(), PASCAL_T_NONE,
+    // Allow multiple declarations separated by semicolons.
+    combinator_t* plain_var_section = seq(new_combinator(), PASCAL_T_CLASS_MEMBER,
         token(keyword_ci("var")),
-        class_var_decl,  // Single declaration after 'var', not many
+        many(class_var_decl),
         NULL
     );
 

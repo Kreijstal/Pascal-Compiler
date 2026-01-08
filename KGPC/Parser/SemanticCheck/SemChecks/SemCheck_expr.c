@@ -10342,65 +10342,77 @@ int semcheck_funccall(int *type_return,
             
             if (owner_type->kind == TYPE_KIND_RECORD) {
                 record_info = owner_type->info.record_info;
-            } else if (owner_type->kind == TYPE_KIND_POINTER && owner_type->info.points_to->kind == TYPE_KIND_RECORD) {
+            } else if (owner_type->kind == TYPE_KIND_POINTER &&
+                owner_type->info.points_to != NULL &&
+                owner_type->info.points_to->kind == TYPE_KIND_RECORD) {
                 record_info = owner_type->info.points_to->info.record_info;
             }
             
             if (record_info != NULL && record_info->type_id != NULL) {
                 const char *method_name = id;
-                
-                /* Check if this is a static method */
-                int is_static = from_cparser_is_method_static(record_info->type_id, method_name);
+                if (method_name != NULL &&
+                    (strncasecmp(method_name, "Create", 6) == 0 ||
+                     strcasecmp(method_name, "Destroy") == 0))
+                {
+                    /* Defer constructor/destructor handling to the specialized path below. */
+                }
+                else
+                {
+                    /* Check if this is a static method */
+                    int is_static = from_cparser_is_method_static(record_info->type_id, method_name);
                 
                 if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                     fprintf(stderr, "[SemCheck] semcheck_funccall: __method call type=%s method=%s is_static=%d\n",
                         record_info->type_id, method_name, is_static);
                 }
                 
-                /* Look up the method */
-                HashNode_t *method_node = semcheck_find_class_method(symtab, record_info, method_name, NULL);
-                if (method_node != NULL) {
-                    /* Resolve the method name */
-                    set_type_from_hashtype(type_return, method_node);
-                    semcheck_expr_set_resolved_kgpc_type_shared(expr, method_node->type);
-                    expr->expr_data.function_call_data.resolved_func = method_node;
-                    const char *resolved_method_name = (method_node->mangled_id != NULL) ?
-                        method_node->mangled_id : method_node->id;
-                    if (expr->expr_data.function_call_data.mangled_id != NULL)
-                        free(expr->expr_data.function_call_data.mangled_id);
-                    expr->expr_data.function_call_data.mangled_id =
-                        (resolved_method_name != NULL) ? strdup(resolved_method_name) : NULL;
-                    
-                    if (is_static) {
-                        /* For static methods, remove the first argument (the type identifier) */
-                        ListNode_t *old_head = args_given;
-                        expr->expr_data.function_call_data.args_expr = old_head->next;
-                        old_head->next = NULL;  /* Detach to prevent dangling reference */
-                        args_given = expr->expr_data.function_call_data.args_expr;
+                    /* Look up the method */
+                    HashNode_t *method_node = semcheck_find_class_method(symtab, record_info, method_name, NULL);
+                    if (method_node != NULL) {
+                        /* Resolve the method name */
+                        set_type_from_hashtype(type_return, method_node);
+                        semcheck_expr_set_resolved_kgpc_type_shared(expr, method_node->type);
+                        expr->expr_data.function_call_data.resolved_func = method_node;
+                        const char *resolved_method_name = (method_node->mangled_id != NULL) ?
+                            method_node->mangled_id : method_node->id;
+                        if (expr->expr_data.function_call_data.mangled_id != NULL)
+                            free(expr->expr_data.function_call_data.mangled_id);
+                        expr->expr_data.function_call_data.mangled_id =
+                            (resolved_method_name != NULL) ? strdup(resolved_method_name) : NULL;
+                        
+                        if (is_static) {
+                            /* For static methods, remove the first argument (the type identifier) */
+                            ListNode_t *old_head = args_given;
+                            expr->expr_data.function_call_data.args_expr = old_head->next;
+                            old_head->next = NULL;  /* Detach to prevent dangling reference */
+                            args_given = expr->expr_data.function_call_data.args_expr;
 
-                        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
-                            fprintf(stderr, "[SemCheck] semcheck_funccall: Removed type arg for static method call\n");
+                            if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                                fprintf(stderr, "[SemCheck] semcheck_funccall: Removed type arg for static method call\n");
+                            }
                         }
+
+                        /* Update mangled_name to use the resolved name */
+                        if (mangled_name != NULL)
+                            free(mangled_name);
+                        mangled_name = (resolved_method_name != NULL) ? strdup(resolved_method_name) : NULL;
+
+                        /* Initialize overload candidates before jumping to avoid uninitialized access */
+                        overload_candidates = CreateListNode(method_node, LIST_UNSPECIFIED);
+
+                        /* Continue with normal function call processing using the resolved method */
+                        hash_return = method_node;
+                        goto method_call_resolved;
                     }
-
-                    /* Update mangled_name to use the resolved name */
-                    if (mangled_name != NULL)
-                        free(mangled_name);
-                    mangled_name = (resolved_method_name != NULL) ? strdup(resolved_method_name) : NULL;
-
-                    /* Initialize overload candidates before jumping to avoid uninitialized access */
-                    overload_candidates = CreateListNode(method_node, LIST_UNSPECIFIED);
-
-                    /* Continue with normal function call processing using the resolved method */
-                    hash_return = method_node;
-                    goto method_call_resolved;
                 }
             }
         }
     }
     
     /* Check for Constructor Call (Create) where first arg is the class type/instance */
-    if (id != NULL && (strcasecmp(id, "Create") == 0 || strcasecmp(id, "Destroy") == 0) && args_given != NULL) {
+    if (id != NULL &&
+        (strncasecmp(id, "Create", 6) == 0 || strcasecmp(id, "Destroy") == 0) &&
+        args_given != NULL) {
         struct Expression *first_arg = (struct Expression *)args_given->cur;
         int first_arg_type_tag;
         semcheck_expr_main(&first_arg_type_tag, symtab, first_arg, max_scope_lev, NO_MUTATE);
@@ -11328,7 +11340,8 @@ skip_overload_resolution:
                 id, ListLength(args_given), ListLength(true_args));
         }
 
-        if (id != NULL && (strcasecmp(id, "Create") == 0 || strcasecmp(id, "Destroy") == 0) &&
+        if (id != NULL &&
+            (strncasecmp(id, "Create", 6) == 0 || strcasecmp(id, "Destroy") == 0) &&
             args_given != NULL)
         {
             /* If lengths match, we assume first arg is class type and first param is Self -> skip both */

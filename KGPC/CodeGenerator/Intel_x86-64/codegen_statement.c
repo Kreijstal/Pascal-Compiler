@@ -56,6 +56,7 @@ static ListNode_t *codegen_raise(struct Statement *stmt, ListNode_t *inst_list, 
 static ListNode_t *codegen_inherited(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
 static int codegen_expr_is_shortstring_array(const struct Expression *expr);
 static int codegen_array_access_targets_shortstring(const struct Expression *expr, CodeGenContext *ctx);
+static int codegen_get_shortstring_capacity(const struct Expression *expr, CodeGenContext *ctx);
 #if KGPC_ENABLE_REG_DEBUG
 extern const char *g_reg_debug_context;
 #endif
@@ -1646,6 +1647,71 @@ static int codegen_expr_is_shortstring_array(const struct Expression *expr)
             return 1;
     }
     return 0;
+}
+
+static int codegen_get_shortstring_capacity(const struct Expression *expr, CodeGenContext *ctx)
+{
+    int lower_bound = expr_get_array_lower_bound(expr);
+    int upper_bound = expr_get_array_upper_bound(expr);
+    if (upper_bound >= lower_bound && upper_bound >= 0)
+        return upper_bound - lower_bound + 1;
+
+    if (expr != NULL && expr->type == EXPR_ARRAY_ACCESS)
+    {
+        struct Expression *base_expr = expr->expr_data.array_access_data.array_expr;
+        KgpcType *base_type = NULL;
+
+        if (base_expr != NULL)
+        {
+            base_type = base_expr->resolved_kgpc_type;
+            if (base_type == NULL &&
+                base_expr->type == EXPR_VAR_ID &&
+                ctx != NULL &&
+                ctx->symtab != NULL)
+            {
+                HashNode_t *node = NULL;
+                if (FindIdent(&node, ctx->symtab, base_expr->expr_data.id) >= 0 &&
+                    node != NULL)
+                {
+                    base_type = node->type;
+                }
+            }
+        }
+
+        if (base_type != NULL && kgpc_type_is_array(base_type))
+        {
+            KgpcType *elem_type = kgpc_type_get_array_element_type(base_type);
+            if (elem_type != NULL && kgpc_type_is_array(elem_type))
+            {
+                int start = 0;
+                int end = -1;
+                if (kgpc_type_get_array_bounds(elem_type, &start, &end) == 0 &&
+                    end >= start && end >= 0)
+                {
+                    return end - start + 1;
+                }
+            }
+        }
+    }
+
+    if (expr != NULL &&
+        expr->type == EXPR_VAR_ID &&
+        ctx != NULL &&
+        ctx->symtab != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindIdent(&node, ctx->symtab, expr->expr_data.id) >= 0 &&
+            node != NULL)
+        {
+            int start = 0;
+            int end = -1;
+            hashnode_get_array_bounds(node, &start, &end);
+            if (end >= start && end >= 0)
+                return end - start + 1;
+        }
+    }
+
+    return 256;
 }
 
 /* Call kgpc_string_to_shortstring(dest, src, size) to copy string to ShortString */
@@ -5218,9 +5284,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
 
             /* For shortstrings, use the array bounds to determine size.
              * If bounds are not available, default to 256 (standard ShortString). */
-            int array_size = 256;
-            if (var_expr->is_array_expr)
-                array_size = expr_get_array_upper_bound(var_expr) - expr_get_array_lower_bound(var_expr) + 1;
+            int array_size = codegen_get_shortstring_capacity(var_expr, ctx);
             
             /* Use ShortString-specific copy that sets length byte at index 0 */
             inst_list = codegen_call_string_to_shortstring(inst_list, ctx, addr_reg, value_reg, array_size);
@@ -5502,9 +5566,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                  expr_get_type_tag(assign_expr) == STRING_TYPE)
         {
             /* Handle shortstring assignment - copy string content to shortstring buffer */
-            int array_size = 256;  /* Default ShortString size */
-            if (var_expr->is_array_expr)
-                array_size = expr_get_array_upper_bound(var_expr) - expr_get_array_lower_bound(var_expr) + 1;
+            int array_size = codegen_get_shortstring_capacity(var_expr, ctx);
             inst_list = codegen_call_string_to_shortstring(inst_list, ctx, addr_reload, value_reg, array_size);
         }
         else if (use_qword)

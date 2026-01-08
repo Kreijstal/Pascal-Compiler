@@ -3822,6 +3822,36 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                                         }
                                     }
                                 }
+
+                                /* Prefer overloads whose formal string alias matches the actual alias. */
+                                if (param_decl != NULL && param_decl->type == TREE_VAR_DECL)
+                                {
+                                    const char *formal_type_id = param_decl->tree_data.var_decl_data.type_id;
+                                    struct TypeAlias *actual_alias = kgpc_type_get_type_alias(actual);
+                                    if (formal_type_id != NULL && actual_alias != NULL &&
+                                        actual_alias->alias_name != NULL)
+                                    {
+                                        int formal_is_string_alias =
+                                            pascal_identifier_equals(formal_type_id, "String") ||
+                                            pascal_identifier_equals(formal_type_id, "AnsiString") ||
+                                            pascal_identifier_equals(formal_type_id, "RawByteString") ||
+                                            pascal_identifier_equals(formal_type_id, "UnicodeString") ||
+                                            pascal_identifier_equals(formal_type_id, "WideString") ||
+                                            pascal_identifier_equals(formal_type_id, "ShortString");
+                                        int actual_is_string_alias =
+                                            pascal_identifier_equals(actual_alias->alias_name, "String") ||
+                                            pascal_identifier_equals(actual_alias->alias_name, "AnsiString") ||
+                                            pascal_identifier_equals(actual_alias->alias_name, "RawByteString") ||
+                                            pascal_identifier_equals(actual_alias->alias_name, "UnicodeString") ||
+                                            pascal_identifier_equals(actual_alias->alias_name, "WideString") ||
+                                            pascal_identifier_equals(actual_alias->alias_name, "ShortString");
+                                        if (formal_is_string_alias && actual_is_string_alias &&
+                                            !pascal_identifier_equals(formal_type_id, actual_alias->alias_name))
+                                        {
+                                            score += 1;
+                                        }
+                                    }
+                                }
                                 
                                 if (expected_tag == LONGINT_TYPE && actual_tag == LONGINT_TYPE &&
                                     param_decl != NULL && param_decl->type == TREE_VAR_DECL)

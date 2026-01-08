@@ -329,11 +329,27 @@ static void codegen_add_class_vars_for_static_method(const char *mangled_name,
                 /* Verify buffer was large enough */
                 assert(written >= 0 && (size_t)written < field_label_len);
                 
-                /* Check if already registered */
-                StackNode_t *existing = find_label(field->name);
-                if (existing == NULL)
+                /* Register class vars under a class-qualified key to avoid cross-class collisions. */
+                size_t key_len = strlen(class_name) + 2 + strlen(field->name) + 1;
+                char *classvar_key = (char *)malloc(key_len);
+                if (classvar_key != NULL)
                 {
-                    add_static_var(field->name, field_size, field_static_label);
+                    snprintf(classvar_key, key_len, "%s::%s", class_name, field->name);
+                    StackScope_t *cur_scope = get_cur_scope();
+                    StackNode_t *existing = NULL;
+                    if (cur_scope != NULL)
+                        existing = stackscope_find_x(cur_scope, classvar_key);
+                    if (existing == NULL)
+                        add_static_var(classvar_key, field_size, field_static_label);
+
+                    if (cur_scope != NULL &&
+                        stackscope_find_z(cur_scope, field->name) == NULL &&
+                        stackscope_find_x(cur_scope, field->name) == NULL &&
+                        stackscope_find_t(cur_scope, field->name) == NULL)
+                    {
+                        add_absolute_var_alias(field->name, classvar_key);
+                    }
+                    free(classvar_key);
                 }
                 free(field_static_label);
             }
