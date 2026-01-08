@@ -1612,6 +1612,9 @@ int main(int argc, char **argv)
         extern void mark_used_functions(Tree_t *program, SymTab_t *symtab);
         mark_used_functions(user_tree, symtab);
         mark_program_subs_used(user_tree);
+        /* Run mark_used again to discover functions called by newly-marked subprograms
+         * (e.g., inherited methods in specialized generics) */
+        mark_used_functions(user_tree, symtab);
 
         double codegen_start = track_time ? current_time_seconds() : 0.0;
         codegen(user_tree, input_file, &ctx, symtab);
