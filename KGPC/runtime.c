@@ -2146,8 +2146,8 @@ void kgpc_setstring(char **target, const char *buffer, int64_t length)
     char *result = (char *)malloc(copy_len + 1);
     if (result == NULL)
     {
-        fprintf(stderr, "KGPC runtime: failed to allocate string (%lld bytes).\n",
-            (long long)length);
+        fprintf(stderr, "KGPC runtime: failed to allocate string (%zu bytes including null).\n",
+            copy_len + 1);
         exit(EXIT_FAILURE);
     }
 

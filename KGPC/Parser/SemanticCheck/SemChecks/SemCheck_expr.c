@@ -2672,8 +2672,8 @@ static int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
     else
     {
         /* 2-argument form: synthesize a large count value to copy to end of string.
-           MaxInt (2147483647) is used as runtime clips to available length. */
-        count_expr = mk_inum(expr->line_num, 2147483647LL);
+           Using INT_MAX as runtime clips to available length. */
+        count_expr = mk_inum(expr->line_num, (long long)INT_MAX);
         assert(count_expr != NULL);
         count_expr->resolved_type = LONGINT_TYPE;
         ListNode_t *count_node = CreateListNode(count_expr, LIST_EXPR);
