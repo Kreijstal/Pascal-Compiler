@@ -4481,27 +4481,43 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 {
                     int is_class_method = 0;
                     const char *mangled_name_hint = (procedure_name != NULL) ? procedure_name : "";
-                    
+
                     /* Detect if this is a class method by checking for __ in the mangled name.
                      * Class methods have mangled names like TClassName__MethodName. */
                     if (strstr(mangled_name_hint, "__") != NULL)
                         is_class_method = 1;
-                    
-                    /* For class methods, always dereference the first argument (Self).
+
+                    /* Check if the argument expression is itself a var parameter variable.
+                     * If so, codegen_address_for_expr already loaded the instance pointer via movq,
+                     * so we should NOT dereference again. */
+                    int arg_is_var_param = 0;
+                    if (arg_expr->type == EXPR_VAR_ID && ctx->symtab != NULL)
+                    {
+                        HashNode_t *arg_symbol = NULL;
+                        if (FindIdent(&arg_symbol, ctx->symtab, arg_expr->expr_data.id) >= 0 &&
+                            arg_symbol != NULL && arg_symbol->is_var_parameter)
+                        {
+                            arg_is_var_param = 1;
+                        }
+                    }
+
+                    /* For class methods, dereference the first argument (Self) to get instance pointer,
+                     * BUT only if Self was not already loaded by value (i.e., not a var param).
                      * For non-methods with var parameters, don't dereference. */
                     int should_dereference = 0;
-                    if (is_class_method && arg_num == 0)
+                    if (is_class_method && arg_num == 0 && !arg_is_var_param)
                     {
-                        /* Class method Self: dereference to get instance pointer */
+                        /* Class method Self from local variable: dereference to get instance pointer */
                         should_dereference = 1;
                     }
-                    else if (!is_var_param)
+                    else if (!is_var_param && !arg_is_var_param)
                     {
-                        /* Non-var class parameter: dereference to get instance pointer */
+                        /* Non-var class parameter from local variable: dereference to get instance pointer */
                         should_dereference = 1;
                     }
-                    /* else: var parameter of class type: pass address of variable (no dereference) */
-                    
+                    /* else: var parameter of class type OR argument is already a var param:
+                     * codegen_address_for_expr already loaded the value, don't dereference again */
+
                     if (should_dereference)
                     {
                         snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
