@@ -1668,6 +1668,31 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 inst_list = add_inst(inst_list, buffer);
             }
         }
+        else if (expr->expr_data.function_call_data.is_virtual_call &&
+                 expr->expr_data.function_call_data.vmt_index >= 0)
+        {
+            /* Virtual method call - dispatch through VMT.
+             * %rdi contains the instance pointer (Self).
+             * The instance has the VMT pointer at offset 0.
+             * We need to:
+             *   1. Get the VMT pointer from the instance
+             *   2. Index into the VMT to get the method pointer
+             *   3. Call through the method pointer */
+            int vmt_index = expr->expr_data.function_call_data.vmt_index;
+            /* Copy instance pointer to r11 */
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%%rdi, %%r11\n");
+            inst_list = add_inst(inst_list, buffer);
+            /* Get VMT pointer (at offset 0 of instance) */
+            snprintf(buffer, sizeof(buffer), "\tmovq\t(%%r11), %%r11\n");
+            inst_list = add_inst(inst_list, buffer);
+            /* VMT layout: [typeinfo at 0, method1 at 8, method2 at 16, ...] */
+            int vmt_offset = vmt_index * 8;
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%d(%%r11), %%r11\n", vmt_offset);
+            inst_list = add_inst(inst_list, buffer);
+            /* Call through the VMT entry */
+            snprintf(buffer, sizeof(buffer), "\tcall\t*%%r11\n");
+            inst_list = add_inst(inst_list, buffer);
+        }
         else
         {
             /* Normal function call */

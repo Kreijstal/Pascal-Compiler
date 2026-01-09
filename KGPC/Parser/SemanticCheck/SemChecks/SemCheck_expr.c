@@ -9951,6 +9951,35 @@ int semcheck_funccall(int *type_return,
                         if (resolved_name != NULL)
                             expr->expr_data.function_call_data.mangled_id = strdup(resolved_name);
                     }
+                    /* Check if this is a virtual method call that needs VMT dispatch */
+                    const char *class_name = self_record->type_id;
+                    if (class_name != NULL && from_cparser_is_method_virtual(class_name, id))
+                    {
+                        expr->expr_data.function_call_data.is_virtual_call = 1;
+                        /* Find VMT index by looking through the class methods */
+                        int vmt_index = -1;
+                        if (self_record->methods != NULL)
+                        {
+                            ListNode_t *method_entry = self_record->methods;
+                            while (method_entry != NULL)
+                            {
+                                struct MethodInfo *info = (struct MethodInfo *)method_entry->cur;
+                                if (info != NULL && info->name != NULL &&
+                                    strcasecmp(info->name, id) == 0)
+                                {
+                                    vmt_index = info->vmt_index;
+                                    break;
+                                }
+                                method_entry = method_entry->next;
+                            }
+                        }
+                        expr->expr_data.function_call_data.vmt_index = vmt_index;
+                        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+                        {
+                            fprintf(stderr, "[SemCheck] Virtual method call: %s.%s vmt_index=%d\n",
+                                class_name, id, vmt_index);
+                        }
+                    }
                 }
             }
         }

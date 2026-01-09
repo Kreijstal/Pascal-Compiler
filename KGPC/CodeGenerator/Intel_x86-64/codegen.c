@@ -1471,7 +1471,23 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
                         while (method_node != NULL) {
                             struct MethodInfo *method = (struct MethodInfo *)method_node->cur;
                             if (method != NULL && method->mangled_name != NULL) {
-                                fprintf(ctx->output_file, "\t.quad\t%s_p\n", method->mangled_name);
+                                /* Look up the actual function symbol to get its full mangled name.
+                                 * Only use it if the method has a definition (body), not just a declaration. */
+                                HashNode_t *func_sym = NULL;
+                                const char *full_mangled = NULL;
+                                if (FindIdent(&func_sym, symtab, method->mangled_name) == 0 &&
+                                    func_sym != NULL && func_sym->mangled_id != NULL &&
+                                    func_sym->type != NULL &&
+                                    func_sym->type->kind == TYPE_KIND_PROCEDURE &&
+                                    func_sym->type->info.proc_info.definition != NULL) {
+                                    full_mangled = func_sym->mangled_id;
+                                }
+                                if (full_mangled != NULL) {
+                                    fprintf(ctx->output_file, "\t.quad\t%s\n", full_mangled);
+                                } else {
+                                    /* Abstract method or no definition - emit reference to runtime error handler */
+                                    fprintf(ctx->output_file, "\t.quad\t__kgpc_abstract_method_error\n");
+                                }
                             }
                             method_node = method_node->next;
                         }

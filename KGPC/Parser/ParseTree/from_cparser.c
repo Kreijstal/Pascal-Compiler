@@ -584,6 +584,23 @@ int from_cparser_is_method_static(const char *class_name, const char *method_nam
     return is_method_static(class_name, method_name);
 }
 
+/* Check if a method is virtual (needs VMT dispatch) */
+int from_cparser_is_method_virtual(const char *class_name, const char *method_name) {
+    if (class_name == NULL || method_name == NULL)
+        return 0;
+
+    ListNode_t *cur = class_method_bindings;
+    while (cur != NULL) {
+        ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
+        if (binding != NULL && binding->class_name != NULL && binding->method_name != NULL &&
+            strcasecmp(binding->class_name, class_name) == 0 &&
+            strcasecmp(binding->method_name, method_name) == 0)
+            return binding->is_virtual || binding->is_override;
+        cur = cur->next;
+    }
+    return 0;
+}
+
 /* Find all class names that have a method with the given name */
 ListNode_t *from_cparser_find_classes_with_method(const char *method_name, int *count_out) {
     if (count_out != NULL) *count_out = 0;
@@ -3808,13 +3825,6 @@ static void annotate_method_template(struct MethodTemplate *method_template, ast
 
     method_template->kind = METHOD_TEMPLATE_UNKNOWN;
     ast_t *cursor = method_ast->child;
-    if (getenv("KGPC_DEBUG_METHOD_TEMPLATE") != NULL &&
-        method_template->name != NULL &&
-        (strcasecmp(method_template->name, "GetAnsiString") == 0 ||
-         strcasecmp(method_template->name, "GetString") == 0))
-    {
-        fprintf(stderr, "[MethodTemplate] %s:\n", method_template->name);
-    }
     while (cursor != NULL)
     {
         ast_t *node = unwrap_pascal_node(cursor);
@@ -3822,14 +3832,6 @@ static void annotate_method_template(struct MethodTemplate *method_template, ast
             node = cursor;
 
         const char *sym_name = (node->sym != NULL) ? node->sym->name : NULL;
-        if (getenv("KGPC_DEBUG_METHOD_TEMPLATE") != NULL &&
-            method_template->name != NULL &&
-            (strcasecmp(method_template->name, "GetAnsiString") == 0 ||
-             strcasecmp(method_template->name, "GetString") == 0))
-        {
-            fprintf(stderr, "  node typ=%d sym=%s\n", node->typ,
-                sym_name != NULL ? sym_name : "<null>");
-        }
         switch (node->typ)
         {
             case PASCAL_T_IDENTIFIER:
@@ -3856,6 +3858,8 @@ static void annotate_method_template(struct MethodTemplate *method_template, ast
                 {
                     if (strcasecmp(sym_name, "virtual") == 0)
                         method_template->is_virtual = 1;
+                    else if (strcasecmp(sym_name, "abstract") == 0)
+                        method_template->is_virtual = 1;  /* Abstract methods are implicitly virtual */
                     else if (strcasecmp(sym_name, "override") == 0)
                     {
                         method_template->is_override = 1;
@@ -3864,27 +3868,55 @@ static void annotate_method_template(struct MethodTemplate *method_template, ast
                     else if (strcasecmp(sym_name, "static") == 0)
                         method_template->is_static = 1;
                 }
-                /* Also check the child for static keyword */
+                /* Also check the child for all directive keywords */
                 if (node->child != NULL) {
                     ast_t *dir_child = unwrap_pascal_node(node->child);
                     if (dir_child != NULL && dir_child->sym != NULL && dir_child->sym->name != NULL) {
-                        if (strcasecmp(dir_child->sym->name, "static") == 0)
+                        const char *child_name = dir_child->sym->name;
+                        if (strcasecmp(child_name, "static") == 0)
                             method_template->is_static = 1;
+                        else if (strcasecmp(child_name, "abstract") == 0)
+                            method_template->is_virtual = 1;
+                        else if (strcasecmp(child_name, "virtual") == 0)
+                            method_template->is_virtual = 1;
+                        else if (strcasecmp(child_name, "override") == 0) {
+                            method_template->is_override = 1;
+                            method_template->is_virtual = 1;
+                        }
                     }
                 }
-                /* Also recursively check all children of the directive to find static */
+                /* Also recursively check all children of the directive to find directives */
                 ast_t *dir_cur = node->child;
                 while (dir_cur != NULL) {
                     ast_t *unwrapped_dir = unwrap_pascal_node(dir_cur);
-                    if (unwrapped_dir != NULL && unwrapped_dir->sym != NULL && 
-                        unwrapped_dir->sym->name != NULL && strcasecmp(unwrapped_dir->sym->name, "static") == 0) {
-                        method_template->is_static = 1;
+                    if (unwrapped_dir != NULL && unwrapped_dir->sym != NULL &&
+                        unwrapped_dir->sym->name != NULL) {
+                        const char *dir_name = unwrapped_dir->sym->name;
+                        if (strcasecmp(dir_name, "static") == 0)
+                            method_template->is_static = 1;
+                        else if (strcasecmp(dir_name, "abstract") == 0)
+                            method_template->is_virtual = 1;
+                        else if (strcasecmp(dir_name, "virtual") == 0)
+                            method_template->is_virtual = 1;
+                        else if (strcasecmp(dir_name, "override") == 0) {
+                            method_template->is_override = 1;
+                            method_template->is_virtual = 1;
+                        }
                     }
                     /* Check identifier child of token */
                     if (unwrapped_dir != NULL && unwrapped_dir->typ == PASCAL_T_IDENTIFIER &&
-                        unwrapped_dir->sym != NULL && unwrapped_dir->sym->name != NULL &&
-                        strcasecmp(unwrapped_dir->sym->name, "static") == 0) {
-                        method_template->is_static = 1;
+                        unwrapped_dir->sym != NULL && unwrapped_dir->sym->name != NULL) {
+                        const char *id_name = unwrapped_dir->sym->name;
+                        if (strcasecmp(id_name, "static") == 0)
+                            method_template->is_static = 1;
+                        else if (strcasecmp(id_name, "abstract") == 0)
+                            method_template->is_virtual = 1;
+                        else if (strcasecmp(id_name, "virtual") == 0)
+                            method_template->is_virtual = 1;
+                        else if (strcasecmp(id_name, "override") == 0) {
+                            method_template->is_override = 1;
+                            method_template->is_virtual = 1;
+                        }
                     }
                     dir_cur = dir_cur->next;
                 }
