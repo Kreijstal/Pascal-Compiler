@@ -1441,7 +1441,12 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
     fprintf(ctx->output_file, "\n");
     fprintf(ctx->output_file, "# Class RTTI metadata and Virtual Method Tables (VMT)\n");
     fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());
-    
+
+    /* Track emitted class labels to avoid duplicates (e.g., TObject from merged units) */
+    #define MAX_EMITTED_CLASSES 256
+    const char *emitted_classes[MAX_EMITTED_CLASSES];
+    int emitted_count = 0;
+
     /* Iterate through all type declarations */
     ListNode_t *cur = type_decls;
     while (cur != NULL) {
@@ -1469,6 +1474,23 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
             }
 
             if (record_info != NULL && record_type_is_class(record_info) && class_label != NULL) {
+                    /* Check if this class was already emitted (can happen with merged units) */
+                    int already_emitted = 0;
+                    for (int i = 0; i < emitted_count; i++) {
+                        if (emitted_classes[i] != NULL && strcmp(emitted_classes[i], class_label) == 0) {
+                            already_emitted = 1;
+                            break;
+                        }
+                    }
+                    if (already_emitted) {
+                        cur = cur->next;
+                        continue;
+                    }
+                    /* Track this class as emitted */
+                    if (emitted_count < MAX_EMITTED_CLASSES) {
+                        emitted_classes[emitted_count++] = class_label;
+                    }
+
                     fprintf(ctx->output_file, "\n# RTTI for class %s\n", class_label);
                     fprintf(ctx->output_file, "\t.align 8\n");
                     fprintf(ctx->output_file, ".globl %s_TYPEINFO\n", class_label);
@@ -2983,8 +3005,14 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     else if (has_record_return && return_dest_slot != NULL && record_return_size > 0)
     {
         Register_t *dest_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (dest_reg == NULL)
+            dest_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
         Register_t *src_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (src_reg == NULL)
+            src_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
         Register_t *size_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (size_reg == NULL)
+            size_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
         if (dest_reg == NULL || src_reg == NULL || size_reg == NULL)
         {
             if (dest_reg != NULL)
