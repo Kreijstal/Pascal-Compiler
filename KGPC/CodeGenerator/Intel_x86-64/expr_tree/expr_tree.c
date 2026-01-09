@@ -1672,15 +1672,18 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                  expr->expr_data.function_call_data.vmt_index >= 0)
         {
             /* Virtual method call - dispatch through VMT.
-             * %rdi contains the instance pointer (Self).
+             * The instance pointer (Self) lives in the first argument register:
+             *   - SysV:  %rdi
+             *   - Win64: %rcx
              * The instance has the VMT pointer at offset 0.
              * We need to:
              *   1. Get the VMT pointer from the instance
              *   2. Index into the VMT to get the method pointer
              *   3. Call through the method pointer */
             int vmt_index = expr->expr_data.function_call_data.vmt_index;
+            const char *self_reg = codegen_target_is_windows() ? "%rcx" : "%rdi";
             /* Copy instance pointer to r11 */
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%%rdi, %%r11\n");
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r11\n", self_reg);
             inst_list = add_inst(inst_list, buffer);
             /* Get VMT pointer (at offset 0 of instance) */
             snprintf(buffer, sizeof(buffer), "\tmovq\t(%%r11), %%r11\n");
