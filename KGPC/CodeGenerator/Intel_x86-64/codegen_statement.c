@@ -125,6 +125,8 @@ static ListNode_t *codegen_fail_register(CodeGenContext *ctx, ListNode_t *inst_l
     Register_t **out_reg, const char *message);
 static ListNode_t *codegen_builtin_setlength_string(struct Statement *stmt,
     ListNode_t *inst_list, CodeGenContext *ctx);
+static ListNode_t *codegen_builtin_setstring(struct Statement *stmt,
+    ListNode_t *inst_list, CodeGenContext *ctx);
 static ListNode_t *codegen_builtin_str(struct Statement *stmt, ListNode_t *inst_list,
     CodeGenContext *ctx);
 static ListNode_t *codegen_builtin_insert(struct Statement *stmt, ListNode_t *inst_list,
@@ -3361,6 +3363,111 @@ static ListNode_t *codegen_builtin_setlength_string(struct Statement *stmt, List
     return inst_list;
 }
 
+static ListNode_t *codegen_builtin_setstring(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
+{
+    assert(stmt != NULL);
+    if (ctx == NULL)
+        return inst_list;
+
+    ListNode_t *args_expr = stmt->stmt_data.procedure_call_data.expr_args;
+    if (args_expr == NULL || args_expr->next == NULL || args_expr->next->next == NULL)
+    {
+        fprintf(stderr, "ERROR: SetString expects three arguments.\n");
+        return inst_list;
+    }
+
+    struct Expression *target_expr = (struct Expression *)args_expr->cur;
+    struct Expression *buffer_expr = (struct Expression *)args_expr->next->cur;
+    struct Expression *len_expr = (struct Expression *)args_expr->next->next->cur;
+    if (target_expr == NULL || buffer_expr == NULL || len_expr == NULL)
+        return inst_list;
+
+    if (!codegen_expr_is_addressable(target_expr))
+    {
+        codegen_report_error(ctx, "ERROR: SetString target must be addressable.");
+        return inst_list;
+    }
+
+    /* Get address of target string variable */
+    Register_t *addr_reg = NULL;
+    inst_list = codegen_address_for_expr(target_expr, inst_list, ctx, &addr_reg);
+    if (codegen_had_error(ctx) || addr_reg == NULL)
+        return inst_list;
+
+    /* Spill addr_reg to avoid clobbering by nested evaluations */
+    StackNode_t *addr_slot = codegen_alloc_temp_slot("setstring_addr");
+    if (addr_slot == NULL)
+    {
+        free_reg(get_reg_stack(), addr_reg);
+        codegen_report_error(ctx, "ERROR: Unable to allocate spill slot for SetString target.");
+        return inst_list;
+    }
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", addr_reg->bit_64, addr_slot->offset);
+    inst_list = add_inst(inst_list, buffer);
+    free_reg(get_reg_stack(), addr_reg);
+    addr_reg = NULL;
+
+    /* Get buffer pointer value */
+    Register_t *buffer_reg = NULL;
+    inst_list = codegen_expr_with_result(buffer_expr, inst_list, ctx, &buffer_reg);
+    if (codegen_had_error(ctx) || buffer_reg == NULL)
+    {
+        if (buffer_reg != NULL)
+            free_reg(get_reg_stack(), buffer_reg);
+        return inst_list;
+    }
+
+    /* Spill buffer_reg */
+    StackNode_t *buffer_slot = codegen_alloc_temp_slot("setstring_buf");
+    if (buffer_slot == NULL)
+    {
+        free_reg(get_reg_stack(), buffer_reg);
+        codegen_report_error(ctx, "ERROR: Unable to allocate spill slot for SetString buffer.");
+        return inst_list;
+    }
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", buffer_reg->bit_64, buffer_slot->offset);
+    inst_list = add_inst(inst_list, buffer);
+    free_reg(get_reg_stack(), buffer_reg);
+    buffer_reg = NULL;
+
+    /* Get length value */
+    Register_t *length_reg = NULL;
+    inst_list = codegen_expr_with_result(len_expr, inst_list, ctx, &length_reg);
+    if (codegen_had_error(ctx) || length_reg == NULL)
+    {
+        if (length_reg != NULL)
+            free_reg(get_reg_stack(), length_reg);
+        return inst_list;
+    }
+
+    /* Sign-extend length to 64-bit if needed */
+    if (!expr_uses_qword_kgpctype(len_expr))
+        inst_list = codegen_sign_extend32_to64(inst_list, length_reg->bit_32, length_reg->bit_64);
+
+    /* Set up arguments for kgpc_setstring(char **target, const char *buffer, int64_t length) */
+    const char *arg0 = current_arg_reg64(0);  /* %rdi or %rcx */
+    const char *arg1 = current_arg_reg64(1);  /* %rsi or %rdx */
+    const char *arg2 = current_arg_reg64(2);  /* %rdx or %r8 */
+
+    /* Move length to arg2 first (it's in a register) */
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", length_reg->bit_64, arg2);
+    inst_list = add_inst(inst_list, buffer);
+    free_reg(get_reg_stack(), length_reg);
+
+    /* Reload buffer and addr from spill slots */
+    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", buffer_slot->offset, arg1);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", addr_slot->offset, arg0);
+    inst_list = add_inst(inst_list, buffer);
+
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = add_inst(inst_list, "\tcall\tkgpc_setstring\n");
+
+    free_arg_regs();
+    return inst_list;
+}
+
 static ListNode_t *codegen_builtin_str(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     if (stmt == NULL || ctx == NULL)
@@ -4849,6 +4956,15 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
     if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "SetLength"))
     {
         inst_list = codegen_builtin_setlength(stmt, inst_list, ctx);
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+        #endif
+        return inst_list;
+    }
+
+    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "SetString"))
+    {
+        inst_list = codegen_builtin_setstring(stmt, inst_list, ctx);
         #ifdef DEBUG_CODEGEN
         CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
         #endif

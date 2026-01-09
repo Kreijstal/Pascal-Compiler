@@ -5923,6 +5923,15 @@ void semcheck_add_builtins(SymTab_t *symtab)
         free(setlength_name);
     }
 
+    char *setstring_name = strdup("SetString");
+    if (setstring_name != NULL) {
+        KgpcType *setstring_type = create_procedure_type(NULL, NULL);
+        assert(setstring_type != NULL && "Failed to create SetString procedure type");
+        AddBuiltinProc_Typed(symtab, setstring_name, setstring_type);
+        destroy_kgpc_type(setstring_type);
+        free(setstring_name);
+    }
+
     char *write_name = strdup("write");
     if (write_name != NULL) {
         KgpcType *write_type = create_procedure_type(NULL, NULL);

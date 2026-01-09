@@ -932,6 +932,77 @@ static int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, 
     return return_val;
 }
 
+static int semcheck_builtin_setstring(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    int return_val = 0;
+    if (stmt == NULL)
+        return 0;
+
+    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+    if (args == NULL || args->next == NULL || args->next->next == NULL || args->next->next->next != NULL)
+    {
+        semcheck_error_with_context("Error on line %d, SetString expects exactly three arguments.\n", stmt->line_num);
+        return 1;
+    }
+
+    struct Expression *string_expr = (struct Expression *)args->cur;
+    struct Expression *buffer_expr = (struct Expression *)args->next->cur;
+    struct Expression *length_expr = (struct Expression *)args->next->next->cur;
+
+    /* First argument must be a string variable (output parameter) */
+    int string_type = UNKNOWN_TYPE;
+    return_val += semcheck_expr_main(&string_type, symtab, string_expr, max_scope_lev, MUTATE);
+    if (string_type != STRING_TYPE && string_type != UNKNOWN_TYPE)
+    {
+        semcheck_error_with_context("Error on line %d, SetString first argument must be a string variable.\n", stmt->line_num);
+        ++return_val;
+    }
+
+    /* Second argument must be a PChar/pointer to char */
+    int buffer_type = UNKNOWN_TYPE;
+    return_val += semcheck_expr_main(&buffer_type, symtab, buffer_expr, max_scope_lev, NO_MUTATE);
+    if (buffer_type != POINTER_TYPE && buffer_type != UNKNOWN_TYPE)
+    {
+        /* Allow if it's an array of char or similar */
+        int is_valid = 0;
+        if (buffer_expr != NULL && buffer_expr->resolved_kgpc_type != NULL)
+        {
+            KgpcType *t = buffer_expr->resolved_kgpc_type;
+            if (t->kind == TYPE_KIND_POINTER)
+                is_valid = 1;
+        }
+        if (!is_valid)
+        {
+            semcheck_error_with_context("Error on line %d, SetString second argument must be a pointer (PChar).\n", stmt->line_num);
+            ++return_val;
+        }
+    }
+
+    /* Third argument must be an integer length */
+    int length_type = UNKNOWN_TYPE;
+    return_val += semcheck_expr_main(&length_type, symtab, length_expr, max_scope_lev, NO_MUTATE);
+    if (!is_integer_type(length_type))
+    {
+        semcheck_error_with_context("Error on line %d, SetString length argument must be an integer.\n", stmt->line_num);
+        ++return_val;
+    }
+
+    /* Set the mangled function name for codegen */
+    if (stmt->stmt_data.procedure_call_data.mangled_id != NULL)
+    {
+        free(stmt->stmt_data.procedure_call_data.mangled_id);
+        stmt->stmt_data.procedure_call_data.mangled_id = NULL;
+    }
+    stmt->stmt_data.procedure_call_data.mangled_id = strdup("kgpc_setstring");
+    if (stmt->stmt_data.procedure_call_data.mangled_id == NULL)
+    {
+        fprintf(stderr, "Error: failed to allocate mangled name for SetString.\n");
+        ++return_val;
+    }
+
+    return return_val;
+}
+
 static int semcheck_statement_list_nodes(SymTab_t *symtab, ListNode_t *stmts, int max_scope_lev)
 {
     int result = 0;
@@ -2985,6 +3056,12 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     handled_builtin = 0;
     return_val += try_resolve_builtin_procedure(symtab, stmt, "SetLength",
         semcheck_builtin_setlength, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
+
+    handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "SetString",
+        semcheck_builtin_setstring, max_scope_lev, &handled_builtin);
     if (handled_builtin)
         return return_val;
 

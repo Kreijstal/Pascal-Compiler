@@ -104,7 +104,6 @@ function LoadLibrary(const Name: AnsiString): NativeUInt;
 function GetProcedureAddress(LibHandle: NativeUInt; const ProcName: AnsiString): NativeUInt;
 function FreeLibrary(LibHandle: NativeUInt): Boolean;
 procedure SetString(out S: AnsiString; Buffer: PAnsiChar; Len: Integer);
-procedure SetCodePage(var S: RawByteString; CodePage: Word; Convert: Boolean);
 function FileDateToDateTime(FileDate: LongInt): TDateTime;
 function StringToGUID(const S: AnsiString): TGUID;
 
@@ -806,13 +805,6 @@ begin
             P := PAnsiChar(NativeUInt(P) + 1);
         end;
     end;
-end;
-
-procedure SetCodePage(var S: RawByteString; CodePage: Word; Convert: Boolean);
-begin
-    { This is a stub implementation - actual code page conversion is not supported.
-      The string is left unchanged. This allows code that uses SetCodePage to compile
-      and run, though the code page is ignored. }
 end;
 
 constructor Exception.Create(const Msg: AnsiString);
