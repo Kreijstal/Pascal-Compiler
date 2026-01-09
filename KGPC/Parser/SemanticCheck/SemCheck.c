@@ -1091,21 +1091,6 @@ void semcheck_mark_static_link_needed(int scope_level, HashNode_t *node)
         return;
     if (g_semcheck_current_subprogram == NULL || node == NULL)
         return;
-    
-    /* Global variables (scope_level == 1 from a top-level function) don't need static links.
-     * Static links are only needed for accessing LOCAL variables of enclosing functions.
-     * Global variables are accessed via their static labels, not through frame pointer chains.
-     * 
-     * We check if the current subprogram is at nesting level 1 (top-level).
-     * If so, and scope_level is 1, the variable is global and no static link is needed.
-     * If nesting_level > 1, then scope_level > 0 means accessing an enclosing function's locals,
-     * which does need a static link. */
-    int current_nesting = g_semcheck_current_subprogram->tree_data.subprogram_data.nesting_level;
-    if (current_nesting <= 1 && scope_level == 1)
-    {
-        /* Top-level function accessing global variable - no static link needed */
-        return;
-    }
 
     switch (node->hash_type)
     {
@@ -1122,19 +1107,13 @@ void semcheck_mark_static_link_needed(int scope_level, HashNode_t *node)
 
 void semcheck_mark_call_requires_static_link(HashNode_t *callee)
 {
-    /* NOTE: This function previously propagated requires_static_link from callee to caller,
-     * but this was incorrect. If MakeRec calls Inner which requires a static link,
-     * MakeRec needs to PASS a static link (its %rbp) to Inner, but MakeRec does NOT
-     * need to RECEIVE a static link from ITS caller unless MakeRec itself accesses
-     * outer scope variables. The static link is determined by nesting level, not by
-     * what functions are called.
-     *
-     * The requires_static_link flag should only indicate whether a function RECEIVES
-     * a static link from its caller, which is determined by:
-     * 1. The function's nesting level (nested functions receive static link)
-     * 2. Whether the function accesses outer scope variables
-     */
-    (void)callee;  /* Suppress unused parameter warning */
+    if (callee == NULL)
+        return;
+    if (g_semcheck_current_subprogram == NULL)
+        return;
+    if (!hashnode_requires_static_link(callee))
+        return;
+    g_semcheck_current_subprogram->tree_data.subprogram_data.requires_static_link = 1;
 }
 
 int semcheck_program(SymTab_t *symtab, Tree_t *tree);
@@ -8869,11 +8848,12 @@ int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scop
             continue;
         }
         return_val += semcheck_subprogram(symtab, child, max_scope_lev);
-        /* NOTE: We do NOT propagate requires_static_link from child to parent.
-         * The requires_static_link flag indicates whether a function RECEIVES a static link
-         * from its caller (based on its own nesting level), not whether it has nested children.
-         * A parent function like MakeRec should not receive a static link just because it
-         * contains nested functions - it only needs to PASS a static link when calling them. */
+        if (parent_subprogram != NULL &&
+            child != NULL &&
+            child->tree_data.subprogram_data.requires_static_link)
+        {
+            parent_subprogram->tree_data.subprogram_data.requires_static_link = 1;
+        }
         cur = cur->next;
     }
 
