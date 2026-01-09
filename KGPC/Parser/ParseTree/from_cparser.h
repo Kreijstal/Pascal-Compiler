@@ -53,6 +53,10 @@ void append_generic_method_clones(Tree_t *program_tree);
  */
 struct MethodTemplate *from_cparser_get_method_template(struct RecordType *record, const char *method_name);
 
+/* Convert a method template params AST into a parameter list (Tree_t var decls).
+ * Returns a list of Tree_t* (LIST_TREE) or NULL if no params. */
+ListNode_t *from_cparser_convert_params_ast(ast_t *params_ast);
+
 /* Register a method template with the class method binding system.
  * This is used by the semantic checker to ensure method templates are findable.
  */

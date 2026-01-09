@@ -189,6 +189,21 @@ static int semcheck_map_builtin_type_name_local(const char *id)
     return UNKNOWN_TYPE;
 }
 
+static char *semcheck_dup_type_id_from_ast(ast_t *node)
+{
+    if (node == NULL)
+        return NULL;
+    if (node->sym != NULL && node->sym->name != NULL)
+        return strdup(node->sym->name);
+    for (ast_t *child = node->child; child != NULL; child = child->next)
+    {
+        char *found = semcheck_dup_type_id_from_ast(child);
+        if (found != NULL)
+            return found;
+    }
+    return NULL;
+}
+
 static int semcheck_is_char_alias_name(const char *id)
 {
     return (id != NULL &&
@@ -1560,6 +1575,22 @@ static int evaluate_string_const_expr(SymTab_t *symtab, struct Expression *expr,
 
     fprintf(stderr, "Error: unsupported string const expression.\n");
     return 1;
+}
+
+static int semcheck_param_list_equivalent(ListNode_t *lhs, ListNode_t *rhs)
+{
+    ListNode_t *lcur = lhs;
+    ListNode_t *rcur = rhs;
+    while (lcur != NULL && rcur != NULL)
+    {
+        Tree_t *lhs_decl = (Tree_t *)lcur->cur;
+        Tree_t *rhs_decl = (Tree_t *)rcur->cur;
+        if (!semcheck_param_decl_equivalent(lhs_decl, rhs_decl))
+            return 0;
+        lcur = lcur->next;
+        rcur = rcur->next;
+    }
+    return (lcur == NULL && rcur == NULL);
 }
 
 static int evaluate_real_const_expr(SymTab_t *symtab, struct Expression *expr, double *out_value)
@@ -4412,17 +4443,68 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                         }
                                     }
 
-                                    /* Add as forward declaration to symbol table */
+                                    /* Add as forward declaration to symbol table (allow overloads). */
                                     HashNode_t *existing = NULL;
-                                    if (FindIdent(&existing, symtab, mangled) == -1)
+                                    ListNode_t *existing_list = FindAllIdents(symtab, mangled);
+                                    int has_matching_signature = 0;
+
+                                    ListNode_t *params = NULL;
+                                    if (tmpl->params_ast != NULL)
+                                        params = from_cparser_convert_params_ast(tmpl->params_ast);
+                                    if (!tmpl->is_static)
+                                    {
+                                        const char *self_type_id = tree->tree_data.type_decl_data.id;
+                                        int self_is_var = 1;
+                                        if (record_info != NULL && record_info->is_type_helper)
+                                        {
+                                            if (record_info->helper_base_type_id != NULL)
+                                                self_type_id = record_info->helper_base_type_id;
+                                            self_is_var = 0;
+                                        }
+                                        ListNode_t *self_ids = CreateListNode(strdup("Self"), LIST_STRING);
+                                        if (self_ids != NULL && self_type_id != NULL)
+                                        {
+                                            Tree_t *self_param = mk_vardecl(0, self_ids, UNKNOWN_TYPE,
+                                                strdup(self_type_id), self_is_var, 0, NULL, NULL, NULL, NULL);
+                                            ListNode_t *self_node = CreateListNode(self_param, LIST_TREE);
+                                            if (self_node != NULL)
+                                            {
+                                                self_node->next = params;
+                                                params = self_node;
+                                            }
+                                        }
+                                    }
+
+                                    if (existing_list != NULL)
+                                    {
+                                        ListNode_t *cur = existing_list;
+                                        while (cur != NULL)
+                                        {
+                                            HashNode_t *candidate = (HashNode_t *)cur->cur;
+                                            if (candidate != NULL && candidate->type != NULL &&
+                                                candidate->type->kind == TYPE_KIND_PROCEDURE)
+                                            {
+                                                if (semcheck_param_list_equivalent(
+                                                        candidate->type->info.proc_info.params, params))
+                                                {
+                                                    existing = candidate;
+                                                    has_matching_signature = 1;
+                                                    break;
+                                                }
+                                            }
+                                            cur = cur->next;
+                                        }
+                                    }
+
+                                    if (!has_matching_signature)
                                     {
                                         KgpcType *return_type = NULL;
                                         char *return_type_id = NULL;
                                         int is_function_template = (tmpl->kind == METHOD_TEMPLATE_FUNCTION ||
                                             tmpl->kind == METHOD_TEMPLATE_CONSTRUCTOR ||
                                             tmpl->has_return_type);
-                                        ast_t *return_type_node = NULL;
-                                        if (tmpl->method_ast != NULL)
+                                        ast_t *return_type_node = tmpl->return_type_ast;
+                                        if (return_type_node == NULL && tmpl->method_ast != NULL)
                                         {
                                             struct ast_t *method_ast = tmpl->method_ast;
                                             for (ast_t *child = method_ast->child; child != NULL; child = child->next)
@@ -4437,17 +4519,25 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                             }
                                         }
 
-                                        if (return_type_node != NULL && return_type_node->child != NULL)
+                                        if (return_type_node != NULL)
                                         {
-                                            return_type = convert_type_spec_to_kgpctype(return_type_node->child, symtab);
-                                            if (return_type_id == NULL &&
-                                                return_type_node->child->sym != NULL &&
-                                                return_type_node->child->sym->name != NULL)
-                                            {
-                                                return_type_id = strdup(return_type_node->child->sym->name);
-                                            }
+                                            if (return_type_node->child != NULL)
+                                                return_type = convert_type_spec_to_kgpctype(return_type_node->child, symtab);
+                                            if (return_type_id == NULL)
+                                                return_type_id = semcheck_dup_type_id_from_ast(return_type_node);
                                         }
-                                        else if (return_type_id != NULL)
+                                        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL && tmpl->name != NULL &&
+                                            (strcasecmp(tmpl->name, "GetAnsiString") == 0 ||
+                                             strcasecmp(tmpl->name, "GetString") == 0))
+                                        {
+                                            fprintf(stderr,
+                                                "[SemCheck] tmpl %s return_type_node=%p return_type_id=%s return_type=%p\n",
+                                                tmpl->name,
+                                                (void *)return_type_node,
+                                                return_type_id != NULL ? return_type_id : "<null>",
+                                                (void *)return_type);
+                                        }
+                                        if (return_type == NULL && return_type_id != NULL)
                                         {
                                             HashNode_t *type_node = NULL;
                                             if (FindIdent(&type_node, symtab, return_type_id) != -1 &&
@@ -4464,7 +4554,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                             }
                                         }
 
-                                        KgpcType *proc_type = create_procedure_type(NULL, return_type);
+                                        KgpcType *proc_type = create_procedure_type(params, return_type);
                                         if (proc_type != NULL && return_type_id != NULL)
                                             proc_type->info.proc_info.return_type_id = strdup(return_type_id);
 
@@ -4498,36 +4588,33 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                         {
                                             KgpcType *return_type = NULL;
                                             char *return_type_id = NULL;
-                                            ast_t *return_type_node = NULL;
-                                            if (tmpl->method_ast != NULL)
+                                        ast_t *return_type_node = tmpl->return_type_ast;
+                                        if (return_type_node == NULL && tmpl->method_ast != NULL)
+                                        {
+                                            struct ast_t *method_ast = tmpl->method_ast;
+                                            for (ast_t *child = method_ast->child; child != NULL; child = child->next)
                                             {
-                                                struct ast_t *method_ast = tmpl->method_ast;
-                                                for (ast_t *child = method_ast->child; child != NULL; child = child->next)
+                                                if (child->typ == PASCAL_T_RETURN_TYPE)
                                                 {
-                                                    if (child->typ == PASCAL_T_RETURN_TYPE)
-                                                    {
-                                                        return_type_node = child;
-                                                        if (child->sym != NULL && child->sym->name != NULL)
-                                                            return_type_id = strdup(child->sym->name);
-                                                        break;
-                                                    }
+                                                    return_type_node = child;
+                                                    if (child->sym != NULL && child->sym->name != NULL)
+                                                        return_type_id = strdup(child->sym->name);
+                                                    break;
                                                 }
                                             }
+                                        }
 
-                                            if (return_type_node != NULL && return_type_node->child != NULL)
-                                            {
+                                        if (return_type_node != NULL)
+                                        {
+                                            if (return_type_node->child != NULL)
                                                 return_type = convert_type_spec_to_kgpctype(return_type_node->child, symtab);
-                                                if (return_type_id == NULL &&
-                                                    return_type_node->child->sym != NULL &&
-                                                    return_type_node->child->sym->name != NULL)
-                                                {
-                                                    return_type_id = strdup(return_type_node->child->sym->name);
-                                                }
-                                            }
-                                            else if (return_type_id != NULL)
-                                            {
-                                                HashNode_t *type_node = NULL;
-                                                if (FindIdent(&type_node, symtab, return_type_id) != -1 &&
+                                            if (return_type_id == NULL)
+                                                return_type_id = semcheck_dup_type_id_from_ast(return_type_node);
+                                        }
+                                        if (return_type == NULL && return_type_id != NULL)
+                                        {
+                                            HashNode_t *type_node = NULL;
+                                            if (FindIdent(&type_node, symtab, return_type_id) != -1 &&
                                                     type_node != NULL && type_node->type != NULL)
                                                 {
                                                     kgpc_type_retain(type_node->type);
@@ -4546,7 +4633,18 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                             if (return_type_id != NULL)
                                                 free(return_type_id);
                                         }
+                                        if (existing != NULL && existing->type != NULL &&
+                                            existing->type->kind == TYPE_KIND_PROCEDURE &&
+                                            existing->type->info.proc_info.params == NULL)
+                                        {
+                                            existing->type->info.proc_info.params = CopyListShallow(params);
+                                        }
                                     }
+
+                                    if (params != NULL)
+                                        DestroyList(params);
+                                    if (existing_list != NULL)
+                                        DestroyList(existing_list);
                                     free(mangled);
                                 }
                             }
@@ -4942,6 +5040,19 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 if (alias_info->is_array)
                 {
                     resolve_array_bounds_in_kgpctype(symtab, existing_type->type, alias_info);
+                }
+            }
+            /* Avoid double-free: ownership is in the symbol table for predeclared types. */
+            if (tree->tree_data.type_decl_data.kgpc_type != NULL)
+            {
+                if (existing_type != NULL && tree->tree_data.type_decl_data.kgpc_type == existing_type->type)
+                {
+                    tree->tree_data.type_decl_data.kgpc_type = NULL;
+                }
+                else
+                {
+                    destroy_kgpc_type(tree->tree_data.type_decl_data.kgpc_type);
+                    tree->tree_data.type_decl_data.kgpc_type = NULL;
                 }
             }
             func_return = 0;  /* No error */
@@ -5354,6 +5465,10 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                 if (value_expr != NULL && value_expr->type == EXPR_SET)
                 {
                     const_type = create_primitive_type(SET_TYPE);
+                }
+                else if (value_expr != NULL && value_expr->type == EXPR_BOOL)
+                {
+                    const_type = create_primitive_type(BOOL);
                 }
                 /* Check if the expression has enum type (e.g., scoped enum literals like TEnum.Value) */
                 else if (value_expr != NULL && value_expr->resolved_kgpc_type != NULL)
@@ -7874,6 +7989,25 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
 
     assert(subprogram->type == TREE_SUBPROGRAM);
 
+    const char *prev_owner = semcheck_get_current_method_owner();
+    char *owner_copy = NULL;
+    if (subprogram->tree_data.subprogram_data.mangled_id != NULL)
+    {
+        const char *mangled = subprogram->tree_data.subprogram_data.mangled_id;
+        const char *sep = strstr(mangled, "__");
+        if (sep != NULL && sep != mangled)
+        {
+            size_t len = (size_t)(sep - mangled);
+            owner_copy = (char *)malloc(len + 1);
+            if (owner_copy != NULL)
+            {
+                memcpy(owner_copy, mangled, len);
+                owner_copy[len] = '\0';
+                semcheck_set_current_method_owner(owner_copy);
+            }
+        }
+    }
+
     /* For class methods, copy default parameter values from the class declaration
      * to the implementation. This is needed because Pascal allows defaults only in
      * the declaration, not in the implementation. */
@@ -8422,6 +8556,12 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_subprogram %s returning at end: %d\n", subprogram->tree_data.subprogram_data.id, return_val);
 #endif
+    if (owner_copy != NULL)
+    {
+        semcheck_set_current_method_owner(prev_owner);
+        free(owner_copy);
+    }
+
     return return_val;
 }
 

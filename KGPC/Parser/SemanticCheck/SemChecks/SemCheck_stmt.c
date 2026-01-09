@@ -2472,6 +2472,36 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             }
         }
         
+        int lhs_is_char = (lhs_kgpctype->kind == TYPE_KIND_PRIMITIVE &&
+            lhs_kgpctype->info.primitive_type_tag == CHAR_TYPE);
+        int rhs_is_single_char_literal = 0;
+        int rhs_is_single_char_const = 0;
+        if (lhs_is_char && expr != NULL && expr->type == EXPR_STRING &&
+            expr->expr_data.string != NULL && strlen(expr->expr_data.string) == 1)
+        {
+            rhs_is_single_char_literal = 1;
+        }
+        if (lhs_is_char && expr != NULL && expr->type == EXPR_VAR_ID &&
+            expr->expr_data.id != NULL)
+        {
+            HashNode_t *rhs_node = NULL;
+            if (FindIdent(&rhs_node, symtab, expr->expr_data.id) >= 0 &&
+                rhs_node != NULL && rhs_node->is_constant &&
+                rhs_node->const_string_value != NULL &&
+                strlen(rhs_node->const_string_value) == 1)
+            {
+                rhs_is_single_char_const = 1;
+            }
+        }
+        if ((rhs_is_single_char_literal || rhs_is_single_char_const) && lhs_is_char)
+        {
+            expr->resolved_type = CHAR_TYPE;
+            if (expr->resolved_kgpc_type != NULL)
+                destroy_kgpc_type(expr->resolved_kgpc_type);
+            expr->resolved_kgpc_type = create_primitive_type(CHAR_TYPE);
+            goto assignment_types_ok;
+        }
+
         if (!are_types_compatible_for_assignment(lhs_kgpctype, rhs_kgpctype, symtab))
         {
             int allow_char_literal = 0;

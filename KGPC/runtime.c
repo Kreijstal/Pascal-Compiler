@@ -2738,6 +2738,16 @@ int64_t kgpc_string_length(const char *value)
     return (int64_t)kgpc_string_known_length(value);
 }
 
+int64_t kgpc_widechar_length(const uint16_t *value)
+{
+    if (value == NULL)
+        return 0;
+    const uint16_t *cursor = value;
+    while (*cursor != 0)
+        cursor++;
+    return (int64_t)(cursor - value);
+}
+
 char *kgpc_string_copy(const char *value, int64_t index, int64_t count)
 {
     if (value == NULL)

@@ -312,6 +312,22 @@ void destroy_kgpc_type(KgpcType *type) {
      * Instead of crashing, we log a warning and return safely. */
     if (type->ref_count <= 0) {
         static int warn_once = 0;
+        if (getenv("KGPC_DEBUG_TYPE_FREE") != NULL) {
+            fprintf(stderr,
+                "[KgpcType] destroy_kgpc_type ref_count=%d type=%p kind=%d",
+                type->ref_count, (void *)type, type->kind);
+            if (type->type_alias != NULL) {
+                if (type->type_alias->alias_name != NULL)
+                    fprintf(stderr, " alias=%s", type->type_alias->alias_name);
+                if (type->type_alias->target_type_id != NULL)
+                    fprintf(stderr, " target=%s", type->type_alias->target_type_id);
+            }
+            if (type->kind == TYPE_KIND_RECORD &&
+                type->info.record_info != NULL &&
+                type->info.record_info->type_id != NULL)
+                fprintf(stderr, " record=%s", type->info.record_info->type_id);
+            fprintf(stderr, "\n");
+        }
         if (!warn_once) {
             fprintf(stderr,
                 "Warning: Attempting to destroy KgpcType with ref_count=%d (possible double-free)\n",
@@ -352,6 +368,10 @@ void destroy_kgpc_type(KgpcType *type) {
     
     /* Free the copied type_alias if it exists */
     if (type->type_alias != NULL) {
+        if (type->type_alias->kgpc_type == type) {
+            /* Avoid releasing self-referential aliases during teardown. */
+            type->type_alias->kgpc_type = NULL;
+        }
         free_copied_type_alias(type->type_alias);
         type->type_alias = NULL;
     }
