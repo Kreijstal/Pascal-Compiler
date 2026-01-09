@@ -1099,9 +1099,9 @@ static ParseResult implicit_string_concat_fn(input_t* in, void* args, char* pars
     
     // Parse first item: try char literal first, then string, then char code
     combinator_t* first_item = token(multi(new_combinator(), PASCAL_T_NONE,
+        pascal_string(PASCAL_T_STRING),
         char_literal(PASCAL_T_CHAR),
         control_char_literal(PASCAL_T_CHAR),
-        pascal_string(PASCAL_T_STRING),
         char_code_literal(PASCAL_T_CHAR_CODE),
         NULL
     ));
@@ -1151,7 +1151,13 @@ static ParseResult implicit_string_concat_fn(input_t* in, void* args, char* pars
         result = concat;
     }
     
-    // If we only got one item and it was a CHAR, return it as-is
+    // Preserve char literals when the input is a single-quoted single character.
+    if (item_count == 1 && result->typ == PASCAL_T_STRING && result->sym && result->sym->name) {
+        if (strlen(result->sym->name) == 1) {
+            result->typ = PASCAL_T_CHAR;
+            return make_success(result);
+        }
+    }
     if (item_count == 1 && result->typ == PASCAL_T_CHAR) {
         return make_success(result);
     }
@@ -1280,6 +1286,18 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
         NULL
     ), build_array_or_pointer_chain);
 
+    // Type cast parser for identifier types with required suffixes (e.g. PAnsiChar(x)^, PByte(x)[0])
+    combinator_t* typecast_any = seq(new_combinator(), PASCAL_T_TYPECAST,
+        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
+        between(token(match("(")), token(match(")")), lazy(p)),
+        NULL
+    );
+    combinator_t* typecast_any_with_suffixes = map(seq(new_combinator(), PASCAL_T_NONE,
+        typecast_any,
+        suffixes,
+        NULL
+    ), build_array_or_pointer_chain);
+
     // Boolean literal parsers
     combinator_t* boolean_true = map(token(keyword_ci("true")), wrap_true_literal);
     combinator_t* boolean_false = map(token(keyword_ci("false")), wrap_false_literal);
@@ -1326,6 +1344,7 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
         token(boolean_false),                     // Boolean false
         nil_literal,                              // Nil literal
         typecast_with_suffixes,                   // Type casts with suffixes (e.g., shortstring(x)[1])
+        typecast_any_with_suffixes,               // Identifier casts with suffixes (e.g., PAnsiChar(x)^)
         typecast,                                 // Type casts Integer(x) - try before func_call
         array_access,                             // Array access (supports pointer dereference)
         func_call,                                // Function calls func(x)
