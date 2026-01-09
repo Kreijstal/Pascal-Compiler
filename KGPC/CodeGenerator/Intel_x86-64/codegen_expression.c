@@ -80,6 +80,8 @@ static ListNode_t *codegen_materialize_array_literal(struct Expression *expr,
     ListNode_t *inst_list, CodeGenContext *ctx, Register_t **out_reg);
 static ListNode_t *codegen_materialize_array_of_const(struct Expression *expr,
     ListNode_t *inst_list, CodeGenContext *ctx, Register_t **out_reg);
+static ListNode_t *codegen_set_expr(struct Expression *expr, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t **out_reg);
 static int formal_decl_is_open_array(Tree_t *decl);
 static long long codegen_static_array_length(const struct Expression *expr);
 static Register_t *codegen_try_get_reg(ListNode_t **inst_list, CodeGenContext *ctx, const char *usage);
@@ -3049,6 +3051,15 @@ ListNode_t *codegen_expr_with_result(struct Expression *expr, ListNode_t *inst_l
     #endif
     assert(out_reg != NULL);
     
+    /* Handle set expressions specially - they need codegen_set_expr for proper bitmask generation */
+    if (expr != NULL && expr_has_type_tag(expr, SET_TYPE))
+    {
+        inst_list = codegen_set_expr(expr, inst_list, ctx, out_reg);
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s (SET_TYPE path)\n", __func__);
+        #endif
+        return inst_list;
+    }
 
     inst_list = codegen_expr_tree_value(expr, inst_list, ctx, out_reg);
 
@@ -4734,10 +4745,11 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         {
             // Pass by value
             if (arg_expr->type == EXPR_AS || arg_expr->type == EXPR_IS ||
-                arg_expr->type == EXPR_ARRAY_LITERAL)
+                arg_expr->type == EXPR_ARRAY_LITERAL ||
+                expr_has_type_tag(arg_expr, SET_TYPE))
             {
                 Register_t *value_reg = NULL;
-                inst_list = codegen_expr_tree_value(arg_expr, inst_list, ctx, &value_reg);
+                inst_list = codegen_expr_with_result(arg_expr, inst_list, ctx, &value_reg);
                 if (codegen_had_error(ctx) || value_reg == NULL)
                 {
                     if (arg_infos != NULL)

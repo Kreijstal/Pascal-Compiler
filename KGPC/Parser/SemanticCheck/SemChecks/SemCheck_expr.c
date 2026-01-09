@@ -2625,16 +2625,21 @@ static int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
     assert(expr->type == EXPR_FUNCTION_CALL);
 
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
-    if (args == NULL || args->next == NULL || args->next->next == NULL || args->next->next->next != NULL)
+    int arg_count = ListLength(args);
+
+    /* Copy accepts 2 or 3 arguments:
+       Copy(S, Index) - copies from Index to end of string
+       Copy(S, Index, Count) - copies Count characters starting from Index */
+    if (arg_count < 2 || arg_count > 3)
     {
-        semcheck_error_with_context("Error on line %d, Copy expects exactly three arguments.\n", expr->line_num);
+        semcheck_error_with_context("Error on line %d, Copy expects two or three arguments.\n", expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
     }
 
     struct Expression *source_expr = (struct Expression *)args->cur;
     struct Expression *index_expr = (struct Expression *)args->next->cur;
-    struct Expression *count_expr = (struct Expression *)args->next->next->cur;
+    struct Expression *count_expr = NULL;
 
     int error_count = 0;
     int source_type = UNKNOWN_TYPE;
@@ -2653,12 +2658,27 @@ static int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
         error_count++;
     }
 
-    int count_type = UNKNOWN_TYPE;
-    error_count += semcheck_expr_main(&count_type, symtab, count_expr, max_scope_lev, NO_MUTATE);
-    if (error_count == 0 && !is_integer_type(count_type))
+    if (arg_count == 3)
     {
-        semcheck_error_with_context("Error on line %d, Copy count must be an integer.\n", expr->line_num);
-        error_count++;
+        count_expr = (struct Expression *)args->next->next->cur;
+        int count_type = UNKNOWN_TYPE;
+        error_count += semcheck_expr_main(&count_type, symtab, count_expr, max_scope_lev, NO_MUTATE);
+        if (error_count == 0 && !is_integer_type(count_type))
+        {
+            semcheck_error_with_context("Error on line %d, Copy count must be an integer.\n", expr->line_num);
+            error_count++;
+        }
+    }
+    else
+    {
+        /* 2-argument form: synthesize a large count value to copy to end of string.
+           MaxInt (2147483647) is used as runtime clips to available length. */
+        count_expr = mk_inum(expr->line_num, 2147483647LL);
+        assert(count_expr != NULL);
+        count_expr->resolved_type = LONGINT_TYPE;
+        ListNode_t *count_node = CreateListNode(count_expr, LIST_EXPR);
+        assert(count_node != NULL);
+        args->next->next = count_node;
     }
 
     if (error_count == 0)

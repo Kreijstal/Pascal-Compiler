@@ -43,9 +43,15 @@ type
         function GetAnsiString(const Bytes: TBytes; Index, Count: Integer): AnsiString; overload; virtual;
     end;
 
+    TReplaceFlag = (rfReplaceAll, rfIgnoreCase);
+    TReplaceFlags = set of TReplaceFlag;
+
 const
     PathDelim = '/';
     AltPathDelim = '\';
+    CP_UTF8 = 65001;
+    
+    AlphaNum: set of char = ['A'..'Z', 'a'..'z', '0'..'9'];
 
 procedure Sleep(milliseconds: integer);
 function GetTickCount64: longint;
@@ -61,6 +67,7 @@ function AnsiLowerCase(const S: AnsiString): AnsiString;
 function CompareText(const S1, S2: AnsiString): Integer;
 function SameText(const S1, S2: AnsiString): Boolean;
 function StringReplace(const S, OldPattern, NewPattern: AnsiString): AnsiString;
+function StringReplace(const S, OldPattern, NewPattern: AnsiString; Flags: TReplaceFlags): AnsiString;
 function Pos(Substr: AnsiString; S: AnsiString): integer;
 function FormatDateTime(const FormatStr: string; DateTime: TDateTime): AnsiString;
 function DateTimeToStr(DateTime: TDateTime): AnsiString;
@@ -97,6 +104,7 @@ function LoadLibrary(const Name: AnsiString): NativeUInt;
 function GetProcedureAddress(LibHandle: NativeUInt; const ProcName: AnsiString): NativeUInt;
 function FreeLibrary(LibHandle: NativeUInt): Boolean;
 procedure SetString(out S: AnsiString; Buffer: PAnsiChar; Len: Integer);
+procedure SetCodePage(var S: RawByteString; CodePage: Word; Convert: Boolean);
 function FileDateToDateTime(FileDate: LongInt): TDateTime;
 function StringToGUID(const S: AnsiString): TGUID;
 
@@ -521,6 +529,50 @@ begin
     StringReplace := result;
 end;
 
+function StringReplace(const S, OldPattern, NewPattern: AnsiString; Flags: TReplaceFlags): AnsiString;
+var
+    i: integer;
+    result: AnsiString;
+    ignoreCase: Boolean;
+    replaceAll: Boolean;
+    oldLen: integer;
+    matched: Boolean;
+begin
+    result := '';
+    i := 1;
+    oldLen := Length(OldPattern);
+    ignoreCase := rfIgnoreCase in Flags;
+    replaceAll := rfReplaceAll in Flags;
+    
+    while i <= Length(S) do
+    begin
+        if ignoreCase then
+            matched := SameText(Copy(S, i, oldLen), OldPattern)
+        else
+            matched := Copy(S, i, oldLen) = OldPattern;
+            
+        if matched then
+        begin
+            result := result + NewPattern;
+            i := i + oldLen;
+            if not replaceAll then
+            begin
+                { Copy rest of string and exit }
+                result := result + Copy(S, i, Length(S) - i + 1);
+                StringReplace := result;
+                exit;
+            end;
+        end
+        else
+        begin
+            result := result + S[i];
+            i := i + 1;
+        end;
+    end;
+    
+    StringReplace := result;
+end;
+
 function Pos(Substr: AnsiString; S: AnsiString): integer;
 var
     i, j: integer;
@@ -754,6 +806,13 @@ begin
             P := PAnsiChar(NativeUInt(P) + 1);
         end;
     end;
+end;
+
+procedure SetCodePage(var S: RawByteString; CodePage: Word; Convert: Boolean);
+begin
+    { This is a stub implementation - actual code page conversion is not supported.
+      The string is left unchanged. This allows code that uses SetCodePage to compile
+      and run, though the code page is ignored. }
 end;
 
 constructor Exception.Create(const Msg: AnsiString);
