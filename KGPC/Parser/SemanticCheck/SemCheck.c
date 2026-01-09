@@ -1091,6 +1091,17 @@ void semcheck_mark_static_link_needed(int scope_level, HashNode_t *node)
         return;
     if (g_semcheck_current_subprogram == NULL || node == NULL)
         return;
+    
+    /* Only set requires_static_link if the function is actually nested (nesting_level > 1).
+     * Top-level functions (nesting_level == 1) that access global variables do NOT need
+     * a static link because global variables are accessed via their static labels.
+     * 
+     * This check prevents the issue where a top-level function like SetBacking, which
+     * accesses a global variable, would incorrectly get requires_static_link=1 and then
+     * callers would fail trying to pass a static link. */
+    int nesting_level = g_semcheck_current_subprogram->tree_data.subprogram_data.nesting_level;
+    if (nesting_level <= 1)
+        return;
 
     switch (node->hash_type)
     {
@@ -1113,7 +1124,11 @@ void semcheck_mark_call_requires_static_link(HashNode_t *callee)
         return;
     if (!hashnode_requires_static_link(callee))
         return;
-    g_semcheck_current_subprogram->tree_data.subprogram_data.requires_static_link = 1;
+    /* When calling a function that requires a static link, the caller needs to
+     * be able to PASS a static link. Mark the caller as having nested children
+     * that need links, not as requiring a static link itself.
+     * The caller only RECEIVES a static link if it's nested or accesses outer vars. */
+    g_semcheck_current_subprogram->tree_data.subprogram_data.has_nested_requiring_link = 1;
 }
 
 int semcheck_program(SymTab_t *symtab, Tree_t *tree);
@@ -8543,6 +8558,8 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                 {
                     node->requires_static_link =
                         subprogram->tree_data.subprogram_data.requires_static_link ? 1 : 0;
+                    node->has_nested_requiring_link =
+                        subprogram->tree_data.subprogram_data.has_nested_requiring_link ? 1 : 0;
                 }
             }
             iter = iter->next;
@@ -8848,11 +8865,15 @@ int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scop
             continue;
         }
         return_val += semcheck_subprogram(symtab, child, max_scope_lev);
+        /* If child needs a static link, mark parent as having nested children that need links.
+         * This is used by codegen to know when to PASS a static link when calling nested functions.
+         * We do NOT propagate requires_static_link to parent - the parent only needs to RECEIVE
+         * a static link if it's nested itself or accesses outer scope variables. */
         if (parent_subprogram != NULL &&
             child != NULL &&
             child->tree_data.subprogram_data.requires_static_link)
         {
-            parent_subprogram->tree_data.subprogram_data.requires_static_link = 1;
+            parent_subprogram->tree_data.subprogram_data.has_nested_requiring_link = 1;
         }
         cur = cur->next;
     }

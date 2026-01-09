@@ -1037,7 +1037,7 @@ ListNode_t *gencode_modulus(const char *left, const char *right, ListNode_t *ins
 
     assert(left != NULL);
     assert(right != NULL);
-    assert(inst_list != NULL);
+    /* Note: inst_list can be NULL at the start of code generation */
 
     // Move dividend (A, right) to eax
     snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%eax\n", right);
@@ -2276,7 +2276,7 @@ ListNode_t *gencode_case2(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     #endif
     assert(node != NULL);
     assert(node->expr != NULL);
-    assert(inst_list != NULL);
+    /* Note: inst_list can be NULL at the start of code generation */
     assert(ctx != NULL);
     assert(target_reg != NULL);
 
@@ -2328,7 +2328,7 @@ ListNode_t *gencode_case3(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     #endif
     assert(node != NULL);
     assert(node->expr != NULL);
-    assert(inst_list != NULL);
+    /* Note: inst_list can be NULL at the start of code generation */
     assert(ctx != NULL);
     assert(target_reg != NULL);
 

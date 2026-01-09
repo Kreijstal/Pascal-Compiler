@@ -81,7 +81,8 @@ typedef struct HashNode
     char *const_set_label;          /* Optional emitted label for codegen reuse */
 
     int is_var_parameter;
-    int requires_static_link;
+    int requires_static_link;      /* 1 if this function needs to RECEIVE a static link from caller */
+    int has_nested_requiring_link; /* 1 if this function has nested children that need static links */
     int defined_in_unit;
     int unit_is_public;
 
@@ -193,6 +194,11 @@ static inline int hashnode_get_element_size(const HashNode_t *node)
 static inline int hashnode_requires_static_link(const HashNode_t *node)
 {
     return (node != NULL) ? node->requires_static_link : 0;
+}
+
+static inline int hashnode_has_nested_requiring_link(const HashNode_t *node)
+{
+    return (node != NULL) ? node->has_nested_requiring_link : 0;
 }
 
 /* Get record type from node */
