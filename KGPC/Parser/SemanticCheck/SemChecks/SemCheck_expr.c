@@ -1163,6 +1163,8 @@ static void semcheck_set_array_info_from_hashnode(struct Expression *expr, SymTa
         expr->array_is_dynamic = 1;
         expr->array_element_type = ARRAY_OF_CONST_TYPE;
         expr->array_element_size = (int)sizeof(kgpc_tvarrec);
+        expr->array_element_record_type = semcheck_lookup_record_type(symtab, "TVarRec");
+        expr->array_element_type_id = strdup("TVarRec");
         return;
     }
     
@@ -6331,7 +6333,7 @@ static int semcheck_recordaccess(int *type_return,
     if (resolve_record_field(symtab, record_info, field_id, &field_desc,
             &field_offset, expr->line_num, silent_mode) != 0 || field_desc == NULL)
     {
-        if (record_type_is_class(record_info))
+        if (record_type_is_class(record_info) || record_info->is_type_helper)
         {
             struct RecordType *property_owner = NULL;
             struct ClassProperty *property = semcheck_find_class_property(symtab,
@@ -7211,6 +7213,11 @@ int set_type_from_hashtype(int *type, HashNode_t *hash_node)
             *type = UNKNOWN_TYPE;
             return 0;
         }
+        else if (hash_node->type->kind == TYPE_KIND_ARRAY_OF_CONST)
+        {
+            *type = ARRAY_OF_CONST_TYPE;
+            return 0;
+        }
         *type = UNKNOWN_TYPE;
         return 0;
     }
@@ -7540,18 +7547,16 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
 
             if (expr->is_array_expr)
             {
-                int start_index = expr->array_lower_bound;
-                int end_index = expr->array_upper_bound;
-                if (expr->array_is_dynamic)
-                {
-                    start_index = 0;
-                    end_index = -1;
-                }
-
                 KgpcType *element_type = NULL;
                 if (expr->array_element_record_type != NULL)
                 {
                     element_type = create_record_type(expr->array_element_record_type);
+                }
+                else if (expr->array_element_type == ARRAY_OF_CONST_TYPE)
+                {
+                    struct RecordType *tvarrec_record = semcheck_lookup_record_type(symtab, "TVarRec");
+                    if (tvarrec_record != NULL)
+                        element_type = create_record_type(tvarrec_record);
                 }
                 else if (expr->array_element_type != UNKNOWN_TYPE)
                 {
@@ -7562,7 +7567,7 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                 {
                     if (owns_type != NULL)
                         *owns_type = 1;
-                    return create_array_type(element_type, start_index, end_index);
+                    return element_type;
                 }
             }
             break;
@@ -9369,6 +9374,11 @@ int semcheck_arrayaccess(int *type_return,
         }
         if (element_type == UNKNOWN_TYPE && array_expr->array_element_record_type != NULL)
             element_type = RECORD_TYPE;
+        if (element_type == ARRAY_OF_CONST_TYPE)
+        {
+            element_type = RECORD_TYPE;
+            expr->record_type = semcheck_lookup_record_type(symtab, "TVarRec");
+        }
 
         if (array_expr->array_element_type_id != NULL)
         {
@@ -9786,9 +9796,7 @@ int semcheck_funccall(int *type_return,
         struct Expression *first_arg = (struct Expression *)args_given->cur;
         if (first_arg != NULL && first_arg->type == EXPR_VAR_ID && first_arg->expr_data.id != NULL)
         {
-            HashNode_t *unit_check = NULL;
-            if (FindIdent(&unit_check, symtab, first_arg->expr_data.id) == -1 &&
-                semcheck_is_unit_name(first_arg->expr_data.id))
+            if (semcheck_is_unit_name(first_arg->expr_data.id))
             {
                 char *real_func_name = strdup(id + 2);
                 if (real_func_name != NULL)
@@ -9824,9 +9832,7 @@ int semcheck_funccall(int *type_return,
         struct Expression *first_arg = (struct Expression *)args_given->cur;
         if (first_arg != NULL && first_arg->type == EXPR_VAR_ID && first_arg->expr_data.id != NULL)
         {
-            HashNode_t *unit_check = NULL;
-            if (FindIdent(&unit_check, symtab, first_arg->expr_data.id) == -1 &&
-                semcheck_is_unit_name(first_arg->expr_data.id))
+            if (semcheck_is_unit_name(first_arg->expr_data.id))
             {
                 ListNode_t *remaining_args = args_given->next;
                 destroy_expr(first_arg);
@@ -9848,11 +9854,50 @@ int semcheck_funccall(int *type_return,
             if (FindIdent(&self_node, symtab, "Self") == 0 && self_node != NULL)
             {
                 struct RecordType *self_record = get_record_type_from_node(self_node);
+                int self_is_helper = 0;
+                if (self_record == NULL)
+                {
+                    int self_type_tag = UNKNOWN_TYPE;
+                    const char *self_type_name = NULL;
+                    set_type_from_hashtype(&self_type_tag, self_node);
+                    if (self_node->type != NULL &&
+                        self_node->type->type_alias != NULL &&
+                        self_node->type->type_alias->target_type_id != NULL)
+                    {
+                        self_type_name = self_node->type->type_alias->target_type_id;
+                    }
+                    struct RecordType *helper_record = semcheck_lookup_type_helper(symtab,
+                        self_type_tag, self_type_name);
+                    if (helper_record != NULL)
+                    {
+                        self_record = helper_record;
+                        self_is_helper = 1;
+                    }
+                }
                 
                 /* If Self lookup returns a different class than expected (e.g., TBase instead of TDerived
                  * when we're in a TDerived method), try to find the correct class from the scope. */
                 if (self_record != NULL)
                 {
+                    if (self_is_helper)
+                    {
+                        ListNode_t *direct_matches = FindAllIdents(symtab, id);
+                        if (direct_matches != NULL)
+                        {
+                            DestroyList(direct_matches);
+                            return return_val;
+                        }
+                    }
+                    if (self_is_helper && args_given != NULL)
+                    {
+                        struct Expression *first_arg = (struct Expression *)args_given->cur;
+                        if (first_arg != NULL && first_arg->type == EXPR_VAR_ID &&
+                            first_arg->expr_data.id != NULL &&
+                            pascal_identifier_equals(first_arg->expr_data.id, "Self"))
+                        {
+                            return return_val;
+                        }
+                    }
                     /* First, try to find the method in Self's class */
                     HashNode_t *method_node = semcheck_find_class_method(symtab,
                         self_record, id, NULL);
@@ -10803,6 +10848,83 @@ int semcheck_funccall(int *type_return,
                         /* Continue with normal function call processing using the resolved method */
                         hash_return = method_node;
                         goto method_call_resolved;
+                    }
+                }
+            }
+            else
+            {
+                const char *type_name = get_expr_type_name(first_arg, symtab);
+                struct RecordType *helper_record = semcheck_lookup_type_helper(symtab,
+                    first_arg_type_tag, type_name);
+                if (helper_record != NULL && helper_record->type_id != NULL)
+                {
+                    record_info = helper_record;
+                    /* Retry helper method lookup */
+                    const char *method_name = id;
+                    if (method_name != NULL &&
+                        (strncasecmp(method_name, "Create", 6) == 0 ||
+                         strcasecmp(method_name, "Destroy") == 0))
+                    {
+                        /* Defer constructor/destructor handling to the specialized path below. */
+                    }
+                    else
+                    {
+                        int is_static = from_cparser_is_method_static(record_info->type_id, method_name);
+                        HashNode_t *method_node = semcheck_find_class_method(symtab, record_info, method_name, NULL);
+                        if (method_node != NULL)
+                        {
+                            set_type_from_hashtype(type_return, method_node);
+                            semcheck_expr_set_resolved_kgpc_type_shared(expr, method_node->type);
+                            expr->expr_data.function_call_data.resolved_func = method_node;
+                            const char *resolved_method_name = (method_node->mangled_id != NULL) ?
+                                method_node->mangled_id : method_node->id;
+                            if (expr->expr_data.function_call_data.mangled_id != NULL)
+                                free(expr->expr_data.function_call_data.mangled_id);
+                            expr->expr_data.function_call_data.mangled_id =
+                                (resolved_method_name != NULL) ? strdup(resolved_method_name) : NULL;
+
+                            if (is_static) {
+                                ListNode_t *old_head = args_given;
+                                expr->expr_data.function_call_data.args_expr = old_head->next;
+                                old_head->next = NULL;
+                                args_given = expr->expr_data.function_call_data.args_expr;
+                            }
+
+                            char *mangled_method_name = NULL;
+                            if (record_info->type_id != NULL && method_name != NULL)
+                            {
+                                size_t class_len = strlen(record_info->type_id);
+                                size_t method_len = strlen(method_name);
+                                mangled_method_name = (char *)malloc(class_len + 2 + method_len + 1);
+                                if (mangled_method_name != NULL)
+                                    snprintf(mangled_method_name, class_len + 2 + method_len + 1,
+                                        "%s__%s", record_info->type_id, method_name);
+                            }
+
+                            ListNode_t *method_candidates = NULL;
+                            if (mangled_method_name != NULL)
+                                method_candidates = FindAllIdents(symtab, mangled_method_name);
+
+                            if (mangled_name != NULL)
+                                free(mangled_name);
+                            mangled_name = (mangled_method_name != NULL) ? strdup(mangled_method_name)
+                                                                        : (resolved_method_name != NULL ? strdup(resolved_method_name) : NULL);
+
+                            if (method_candidates != NULL)
+                            {
+                                overload_candidates = method_candidates;
+                            }
+                            else
+                            {
+                                overload_candidates = CreateListNode(method_node, LIST_UNSPECIFIED);
+                            }
+
+                            if (mangled_method_name != NULL)
+                                free(mangled_method_name);
+
+                            hash_return = method_node;
+                            goto method_call_resolved;
+                        }
                     }
                 }
             }

@@ -4654,9 +4654,11 @@ int semcheck_for_in(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
         int collection_type_owned = 0;
         int collection_is_array = 0;
         int collection_is_list = 0;
+        int collection_is_string = 0;
         const char *list_element_id = NULL;
 
         return_val += semcheck_expr_main(&collection_type, symtab, collection, INT_MAX, NO_MUTATE);
+        collection_is_string = is_string_type(collection_type);
         
         KgpcType *collection_kgpc_type = semcheck_resolve_expression_kgpc_type(symtab, collection, 
                                                                             INT_MAX, NO_MUTATE, &collection_type_owned);
@@ -4682,6 +4684,9 @@ int semcheck_for_in(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
                 }
             }
         }
+
+        if (collection_is_string)
+            collection_is_array = 1;
 
         if (!collection_is_array && !collection_is_list) {
             semcheck_error_with_context("Error on line %d: for-in loop requires an array expression!\n\n",

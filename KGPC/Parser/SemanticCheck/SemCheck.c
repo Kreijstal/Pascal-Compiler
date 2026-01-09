@@ -110,6 +110,8 @@ int semcheck_is_unit_name(const char *name)
 {
     if (name == NULL || name[0] == '\0')
         return 0;
+    if (pascal_identifier_equals(name, "System"))
+        return 1;
 
     ListNode_t *cur = g_semcheck_unit_names;
     while (cur != NULL)
