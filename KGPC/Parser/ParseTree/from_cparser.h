@@ -42,6 +42,11 @@ void get_class_methods(const char *class_name, ListNode_t **methods_out, int *co
  */
 int from_cparser_is_method_static(const char *class_name, const char *method_name);
 
+/* Check if a method is virtual (needs VMT dispatch).
+ * Returns 1 if virtual or override, 0 otherwise.
+ */
+int from_cparser_is_method_virtual(const char *class_name, const char *method_name);
+
 void from_cparser_enable_pending_specializations(void);
 void from_cparser_disable_pending_specializations(void);
 void resolve_pending_generic_aliases(Tree_t *program_tree);

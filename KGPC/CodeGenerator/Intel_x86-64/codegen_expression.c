@@ -41,6 +41,36 @@ static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
     return hashnode_get_record_type(node);
 }
 
+static int codegen_self_param_is_class(Tree_t *formal_arg_decl, CodeGenContext *ctx)
+{
+    if (formal_arg_decl == NULL || formal_arg_decl->type != TREE_VAR_DECL)
+        return 0;
+
+    KgpcType *type = formal_arg_decl->tree_data.var_decl_data.cached_kgpc_type;
+    const char *type_id = formal_arg_decl->tree_data.var_decl_data.type_id;
+    if (type == NULL && ctx != NULL && ctx->symtab != NULL && type_id != NULL)
+    {
+        HashNode_t *type_node = NULL;
+        if (FindIdent(&type_node, ctx->symtab, type_id) == 0 &&
+            type_node != NULL && type_node->type != NULL)
+            type = type_node->type;
+    }
+
+    if (type == NULL)
+        return 0;
+
+    if (kgpc_type_is_pointer(type) &&
+        type->info.points_to != NULL &&
+        type->info.points_to->kind == TYPE_KIND_RECORD &&
+        type->info.points_to->info.record_info != NULL)
+        return record_type_is_class(type->info.points_to->info.record_info);
+
+    if (type->kind == TYPE_KIND_RECORD && type->info.record_info != NULL)
+        return record_type_is_class(type->info.record_info);
+
+    return 0;
+}
+
 static StackNode_t *codegen_alloc_temp_bytes(const char *prefix, int size);
 static const char *codegen_register_name8(const Register_t *reg);
 const char *codegen_register_name16(const Register_t *reg);
@@ -4081,7 +4111,19 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             formal_arg_decl = (Tree_t *)formal_args->cur;
         }
 
-        int is_var_param = (formal_arg_decl != NULL && formal_arg_decl->tree_data.var_decl_data.is_var_param);
+        int is_self_param = 0;
+        if (formal_arg_decl != NULL && formal_arg_decl->type == TREE_VAR_DECL)
+        {
+            ListNode_t *ids = formal_arg_decl->tree_data.var_decl_data.ids;
+            const char *formal_id = (ids != NULL) ? (const char *)ids->cur : NULL;
+            if (formal_id != NULL && pascal_identifier_equals(formal_id, "Self"))
+                is_self_param = 1;
+        }
+
+        int is_var_param = (formal_arg_decl != NULL &&
+            formal_arg_decl->tree_data.var_decl_data.is_var_param);
+        if (is_self_param && codegen_self_param_is_class(formal_arg_decl, ctx))
+            is_var_param = 0;
         int is_array_param = (formal_arg_decl != NULL && formal_arg_decl->type == TREE_ARR_DECL);
         int formal_is_open_array = formal_decl_is_open_array(formal_arg_decl);
         int formal_is_dynarray = codegen_formal_is_dynamic_array(formal_arg_decl, ctx->symtab);
@@ -4675,26 +4717,42 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         else
         {
             // Pass by value
-            expr_tree = build_expr_tree(arg_expr);
-            top_reg = get_free_reg(get_reg_stack(), &inst_list);
-            if (top_reg == NULL)
+            if (arg_expr->type == EXPR_AS || arg_expr->type == EXPR_IS ||
+                arg_expr->type == EXPR_ARRAY_LITERAL)
             {
-                /* Try spilling to get a register */
-                top_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+                Register_t *value_reg = NULL;
+                inst_list = codegen_expr_tree_value(arg_expr, inst_list, ctx, &value_reg);
+                if (codegen_had_error(ctx) || value_reg == NULL)
+                {
+                    if (arg_infos != NULL)
+                        free(arg_infos);
+                    return inst_list;
+                }
+                top_reg = value_reg;
             }
-            CODEGEN_DEBUG("DEBUG: top_reg at %p\n", top_reg);
-            if (top_reg == NULL)
+            else
             {
+                expr_tree = build_expr_tree(arg_expr);
+                top_reg = get_free_reg(get_reg_stack(), &inst_list);
+                if (top_reg == NULL)
+                {
+                    /* Try spilling to get a register */
+                    top_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+                }
+                CODEGEN_DEBUG("DEBUG: top_reg at %p\n", top_reg);
+                if (top_reg == NULL)
+                {
+                    free_expr_tree(expr_tree);
+                    codegen_report_error(ctx,
+                        "ERROR: Unable to allocate register for argument evaluation. "
+                        "Expression may be too complex for available registers.");
+                    if (arg_infos != NULL)
+                        free(arg_infos);
+                    return inst_list;
+                }
+                inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, top_reg);
                 free_expr_tree(expr_tree);
-                codegen_report_error(ctx,
-                    "ERROR: Unable to allocate register for argument evaluation. "
-                    "Expression may be too complex for available registers.");
-                if (arg_infos != NULL)
-                    free(arg_infos);
-                return inst_list;
             }
-            inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, top_reg);
-            free_expr_tree(expr_tree);
 
             if (expected_type == REAL_TYPE)
                 inst_list = codegen_expr_maybe_convert_int_like_to_real(expected_type,

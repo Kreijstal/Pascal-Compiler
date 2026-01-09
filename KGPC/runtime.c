@@ -4518,3 +4518,10 @@ void Halt(int64_t code)
 {
     exit((int)code);
 }
+
+/* Called when an abstract method is invoked - should never happen in correct code */
+void __kgpc_abstract_method_error(void)
+{
+    fprintf(stderr, "Runtime error: Abstract method called\n");
+    abort();
+}

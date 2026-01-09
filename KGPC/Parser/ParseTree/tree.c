@@ -2000,6 +2000,7 @@ Tree_t *mk_procedure(int line_num, char *id, ListNode_t *args, ListNode_t *const
     new_tree->tree_data.subprogram_data.nesting_level = 0;
     new_tree->tree_data.subprogram_data.requires_static_link = 0;
     new_tree->tree_data.subprogram_data.defined_in_unit = 0;
+    new_tree->tree_data.subprogram_data.has_nested_requiring_link = 0;
     new_tree->tree_data.subprogram_data.unit_is_public = 0;
     new_tree->tree_data.subprogram_data.declarations = var_decl;
     new_tree->tree_data.subprogram_data.subprograms = subprograms;
@@ -2035,6 +2036,7 @@ Tree_t *mk_function(int line_num, char *id, ListNode_t *args, ListNode_t *const_
     new_tree->tree_data.subprogram_data.overload_flag = overload_flag;
     new_tree->tree_data.subprogram_data.nesting_level = 0;
     new_tree->tree_data.subprogram_data.requires_static_link = 0;
+    new_tree->tree_data.subprogram_data.has_nested_requiring_link = 0;
     new_tree->tree_data.subprogram_data.defined_in_unit = 0;
     new_tree->tree_data.subprogram_data.unit_is_public = 0;
     new_tree->tree_data.subprogram_data.declarations = var_decl;
@@ -2551,7 +2553,20 @@ static void init_expression(struct Expression *expr, int line_num, enum ExprType
     expr->expr_data.array_literal_data.elements = NULL;
     expr->expr_data.array_literal_data.element_count = 0;
     expr->expr_data.array_literal_data.elements_semchecked = 0;
+    expr->expr_data.function_call_data.id = NULL;
+    expr->expr_data.function_call_data.mangled_id = NULL;
+    expr->expr_data.function_call_data.args_expr = NULL;
+    expr->expr_data.function_call_data.resolved_func = NULL;
+    expr->expr_data.function_call_data.call_hash_type = HASHTYPE_VAR;
+    expr->expr_data.function_call_data.call_kgpc_type = NULL;
+    expr->expr_data.function_call_data.is_call_info_valid = 0;
+    expr->expr_data.function_call_data.is_procedural_var_call = 0;
+    expr->expr_data.function_call_data.procedural_var_symbol = NULL;
+    expr->expr_data.function_call_data.procedural_var_expr = NULL;
     expr->expr_data.function_call_data.is_method_call_placeholder = 0;
+    expr->expr_data.function_call_data.is_virtual_call = 0;
+    expr->expr_data.function_call_data.vmt_index = -1;
+    expr->expr_data.function_call_data.self_class_name = NULL;
 }
 
 struct Expression *mk_relop(int line_num, int type, struct Expression *left,
