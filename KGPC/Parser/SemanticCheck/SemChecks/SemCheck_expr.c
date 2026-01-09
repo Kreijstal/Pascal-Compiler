@@ -4203,6 +4203,20 @@ static int sizeof_from_type_ref(SymTab_t *symtab, int type_tag,
         return 1;
     }
 
+    if (type_id != NULL)
+    {
+        HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, type_id);
+        if (type_node != NULL && type_node->type != NULL)
+        {
+            long long size = kgpc_type_sizeof(type_node->type);
+            if (size > 0)
+            {
+                *size_out = size;
+                return 0;
+            }
+        }
+    }
+
     if (type_tag != UNKNOWN_TYPE)
     {
         long long base_size = sizeof_from_type_tag(type_tag);

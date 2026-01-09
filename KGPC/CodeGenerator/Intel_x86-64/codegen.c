@@ -28,9 +28,40 @@
 #include "../../Parser/ParseTree/from_cparser.h"
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
 #include "../../Parser/SemanticCheck/SemChecks/SemCheck_expr.h"
+#include "../../identifier_utils.h"
 
 #define CODEGEN_POINTER_SIZE_BYTES 8
 #define CODEGEN_LABEL_BUFFER_SIZE 256
+
+static int codegen_self_param_is_class(Tree_t *arg_decl, SymTab_t *symtab)
+{
+    if (arg_decl == NULL || arg_decl->type != TREE_VAR_DECL)
+        return 0;
+
+    KgpcType *type = arg_decl->tree_data.var_decl_data.cached_kgpc_type;
+    const char *type_id = arg_decl->tree_data.var_decl_data.type_id;
+    if (type == NULL && symtab != NULL && type_id != NULL)
+    {
+        HashNode_t *type_node = NULL;
+        if (FindIdent(&type_node, symtab, type_id) == 0 &&
+            type_node != NULL && type_node->type != NULL)
+            type = type_node->type;
+    }
+
+    if (type == NULL)
+        return 0;
+
+    if (kgpc_type_is_pointer(type) &&
+        type->info.points_to != NULL &&
+        type->info.points_to->kind == TYPE_KIND_RECORD &&
+        type->info.points_to->info.record_info != NULL)
+        return record_type_is_class(type->info.points_to->info.record_info);
+
+    if (type->kind == TYPE_KIND_RECORD && type->info.record_info != NULL)
+        return record_type_is_class(type->info.record_info);
+
+    return 0;
+}
 
 /* Escape a string for use in assembly .string directive */
 void escape_string(char *dest, const char *src, size_t dest_size)
@@ -3589,6 +3620,18 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                 {
                     int tree_is_var_param = arg_decl->tree_data.var_decl_data.is_var_param;
                     int symbol_is_var_param = tree_is_var_param;
+                    int is_self_param = 0;
+                    if (arg_decl->tree_data.var_decl_data.ids != NULL)
+                    {
+                        const char *first_id = (const char *)arg_decl->tree_data.var_decl_data.ids->cur;
+                        if (first_id != NULL && pascal_identifier_equals(first_id, "Self"))
+                            is_self_param = 1;
+                    }
+                    if (is_self_param && codegen_self_param_is_class(arg_decl, symtab))
+                    {
+                        tree_is_var_param = 0;
+                        symbol_is_var_param = 0;
+                    }
                     struct RecordType *record_type_info = NULL;
                     int is_dynarray_param = 0;
                     int dynarray_elem_size = 0;
