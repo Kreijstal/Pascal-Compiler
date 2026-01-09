@@ -409,25 +409,52 @@ void semcheck_add_builtins(SymTab_t *symtab);
 void semantic_error(int line_num, int col_num, const char *format, ...)
 {
     const char *file_path = (file_to_parse != NULL && *file_to_parse != '\0') ? file_to_parse : NULL;
-    
-    /* Print the error message */
+
     fprintf(stderr, "Error on line %d", line_num);
-    if (col_num > 0)
+    if (col_num > 0) {
         fprintf(stderr, ", column %d", col_num);
+    }
     fprintf(stderr, ": ");
-    
+
     va_list args;
     va_start(args, format);
     vfprintf(stderr, format, args);
     va_end(args);
     fprintf(stderr, "\n");
-    
-    /* Print source code context if we have a file */
-    if (file_path != NULL && line_num > 0)
-    {
+
+    if (file_path != NULL && line_num > 0) {
         print_source_context(file_path, line_num, col_num, 2);
     }
-    
+
+    fprintf(stderr, "\n");
+}
+
+/* Helper for legacy error prints that already include "Error on line %d". */
+void semcheck_error_with_context(const char *format, ...)
+{
+    const char *file_path = (file_to_parse != NULL && *file_to_parse != '\0') ? file_to_parse : NULL;
+    int line_num = 0;
+
+    va_list args;
+    va_start(args, format);
+
+    va_list args_copy;
+    va_copy(args_copy, args);
+    line_num = va_arg(args_copy, int);
+    va_end(args_copy);
+
+    vfprintf(stderr, format, args);
+    va_end(args);
+
+    size_t len = format ? strlen(format) : 0;
+    if (len == 0 || format[len - 1] != '\n') {
+        fprintf(stderr, "\n");
+    }
+
+    if (file_path != NULL && line_num > 0) {
+        print_source_context(file_path, line_num, 0, 2);
+    }
+
     fprintf(stderr, "\n");
 }
 
@@ -2997,7 +3024,7 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                                         continue;
                                     }
                                     /* Different value - this is a real conflict */
-                                    fprintf(stderr,
+                                    semcheck_error_with_context(
                                             "Error on line %d, redeclaration of enum literal %s with different value!\n",
                                             tree->line_num, literal_name);
                                     ++errors;
@@ -3009,7 +3036,7 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                                 /* Use typed API with shared enum KgpcType - all literals reference same type */
                                 if (PushConstOntoScope_Typed(symtab, literal_name, ordinal, alias_info->kgpc_type) > 0)
                                 {
-                                    fprintf(stderr,
+                                    semcheck_error_with_context(
                                             "Error on line %d, redeclaration of enum literal %s!\n",
                                             tree->line_num, literal_name);
                                     ++errors;
@@ -3743,7 +3770,7 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
     /* Check for circular inheritance */
     if (check_circular_inheritance(symtab, class_name, record_info->parent_class_name, 100))
     {
-        fprintf(stderr, "Error on line %d, circular inheritance detected for class '%s'!\n",
+        semcheck_error_with_context("Error on line %d, circular inheritance detected for class '%s'!\n",
                 line_num, class_name ? class_name : "<unknown>");
         return 1;
     }
@@ -3752,7 +3779,7 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
     HashNode_t *parent_node = NULL;
     if (FindIdent(&parent_node, symtab, record_info->parent_class_name) == -1 || parent_node == NULL)
     {
-        fprintf(stderr, "Error on line %d, parent class '%s' not found!\n", 
+        semcheck_error_with_context("Error on line %d, parent class '%s' not found!\n", 
                 line_num, record_info->parent_class_name);
         return 1;
     }
@@ -3761,7 +3788,7 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
     struct RecordType *parent_record = get_record_type_from_node(parent_node);
     if (parent_record == NULL)
     {
-        fprintf(stderr, "Error on line %d, parent class '%s' is not a class/record type!\n",
+        semcheck_error_with_context("Error on line %d, parent class '%s' is not a class/record type!\n",
                 line_num, record_info->parent_class_name);
         return 1;
     }
@@ -5247,7 +5274,7 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
             char *string_value = NULL;
             if (evaluate_string_const_expr(symtab, value_expr, &string_value) != 0)
             {
-                fprintf(stderr, "Error on line %d, unsupported string const expression.\n", tree->line_num);
+                semcheck_error_with_context("Error on line %d, unsupported string const expression.\n", tree->line_num);
                 ++return_val;
             }
             else
@@ -5256,7 +5283,7 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                 free(string_value);  /* PushStringConstOntoScope makes its own copy */
                 if (push_result > 0)
                 {
-                    fprintf(stderr, "Error on line %d, redeclaration of const %s!\n",
+                    semcheck_error_with_context("Error on line %d, redeclaration of const %s!\n",
                             tree->line_num, tree->tree_data.const_decl_data.id);
                     ++return_val;
                 }
@@ -5278,7 +5305,7 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
             double real_value = 0.0;
             if (evaluate_real_const_expr(symtab, value_expr, &real_value) != 0)
             {
-                fprintf(stderr, "Error on line %d, unsupported real const expression.\n", tree->line_num);
+                semcheck_error_with_context("Error on line %d, unsupported real const expression.\n", tree->line_num);
                 ++return_val;
             }
             else
@@ -5286,7 +5313,7 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                 int push_result = PushRealConstOntoScope(symtab, tree->tree_data.const_decl_data.id, real_value);
                 if (push_result > 0)
                 {
-                    fprintf(stderr, "Error on line %d, redeclaration of const %s!\n",
+                    semcheck_error_with_context("Error on line %d, redeclaration of const %s!\n",
                             tree->line_num, tree->tree_data.const_decl_data.id);
                     ++return_val;
                 }
@@ -5312,7 +5339,7 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
             if (evaluate_set_const_bytes(symtab, value_expr, set_bytes, sizeof(set_bytes),
                     &set_size, &mask, &is_char_set) != 0)
             {
-                fprintf(stderr, "Error on line %d, unsupported const expression.\n", tree->line_num);
+                semcheck_error_with_context("Error on line %d, unsupported const expression.\n", tree->line_num);
                 ++return_val;
             }
             else
@@ -5327,7 +5354,7 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                     set_bytes, (int)set_size, const_type);
                 if (push_result > 0)
                 {
-                    fprintf(stderr, "Error on line %d, redeclaration of const %s!\n",
+                    semcheck_error_with_context("Error on line %d, redeclaration of const %s!\n",
                             tree->line_num, tree->tree_data.const_decl_data.id);
                     ++return_val;
                 }
@@ -5374,7 +5401,7 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                     
                     if (push_result > 0)
                     {
-                        fprintf(stderr, "Error on line %d, redeclaration of const %s!\n",
+                        semcheck_error_with_context("Error on line %d, redeclaration of const %s!\n",
                                 tree->line_num, tree->tree_data.const_decl_data.id);
                         ++return_val;
                     }
@@ -5403,7 +5430,7 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                     
                     if (push_result > 0)
                     {
-                        fprintf(stderr, "Error on line %d, redeclaration of const %s!\n",
+                        semcheck_error_with_context("Error on line %d, redeclaration of const %s!\n",
                                 tree->line_num, tree->tree_data.const_decl_data.id);
                         ++return_val;
                     }
@@ -5421,14 +5448,14 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                 }
                 else
                 {
-                    fprintf(stderr, "Error on line %d, '%s' is not a procedure or function.\n",
+                    semcheck_error_with_context("Error on line %d, '%s' is not a procedure or function.\n",
                             tree->line_num, proc_name);
                     ++return_val;
                 }
             }
             else
             {
-                fprintf(stderr, "Error on line %d, invalid procedure address expression.\n",
+                semcheck_error_with_context("Error on line %d, invalid procedure address expression.\n",
                         tree->line_num);
                 ++return_val;
             }
@@ -5446,7 +5473,7 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
             
             if (evaluate_const_expr(symtab, value_expr, &value) != 0)
             {
-                fprintf(stderr, "Error on line %d, unsupported const expression.\n", tree->line_num);
+                semcheck_error_with_context("Error on line %d, unsupported const expression.\n", tree->line_num);
                 ++return_val;
             }
             else
@@ -5520,7 +5547,7 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                 
                 if (push_result > 0)
                 {
-                    fprintf(stderr, "Error on line %d, redeclaration of const %s!\n",
+                    semcheck_error_with_context("Error on line %d, redeclaration of const %s!\n",
                             tree->line_num, tree->tree_data.const_decl_data.id);
                     ++return_val;
                 }
@@ -6787,7 +6814,7 @@ int semcheck_args(SymTab_t *symtab, ListNode_t *args, int line_num)
         /* Greater than 0 signifies an error */
         if(func_return > 0)
         {
-            fprintf(stderr, "Error on line %d, redeclaration of name %s!\n",
+            semcheck_error_with_context("Error on line %d, redeclaration of name %s!\n",
                 line_num, (char *)cur->cur);
             return_val += func_return;
         }
@@ -7455,7 +7482,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         }
                         else
                         {
-                            fprintf(stderr, "Error on line %d: undefined type %s\n",
+                            semcheck_error_with_context("Error on line %d: undefined type %s\n",
                                 tree->line_num, tree->tree_data.arr_decl_data.type_id);
                             return_val++;
                         }
@@ -7680,7 +7707,7 @@ next_identifier:
             }
             else if (ids_head == NULL || ids_head->next != NULL)
             {
-                fprintf(stderr, "Error on line %d, type inference initializers must declare a single identifier.\n",
+                semcheck_error_with_context("Error on line %d, type inference initializers must declare a single identifier.\n",
                     tree->line_num);
                 ++return_val;
             }
@@ -7690,7 +7717,7 @@ next_identifier:
                 HashNode_t *var_node = NULL;
                 if (FindIdent(&var_node, symtab, var_name) == -1 || var_node == NULL)
                 {
-                    fprintf(stderr, "Error on line %d, failed to resolve variable %s for initializer.\n",
+                    semcheck_error_with_context("Error on line %d, failed to resolve variable %s for initializer.\n",
                         tree->line_num, var_name);
                     ++return_val;
                 }
@@ -7700,7 +7727,7 @@ next_identifier:
                     struct Expression *init_expr = init_stmt->stmt_data.var_assign_data.expr;
                     if (init_expr == NULL)
                     {
-                        fprintf(stderr, "Error on line %d, initializer expression is NULL for %s.\n",
+                        semcheck_error_with_context("Error on line %d, initializer expression is NULL for %s.\n",
                             tree->line_num, var_name);
                         ++return_val;
                         /* Skip remaining processing for this variable but continue with the loop */
@@ -7803,7 +7830,7 @@ next_identifier:
 
                     if (expr_type == UNKNOWN_TYPE)
                     {
-                        fprintf(stderr, "Error on line %d, unable to infer type for %s.\n", tree->line_num, var_name);
+                        semcheck_error_with_context("Error on line %d, unable to infer type for %s.\n", tree->line_num, var_name);
                         ++return_val;
                     }
                     else
@@ -7859,7 +7886,7 @@ next_identifier:
                                 normalized_type = RECORD_TYPE;
                                 break;
                             default:
-                                fprintf(stderr, "Error on line %d, unsupported inferred type for %s.\n",
+                                semcheck_error_with_context("Error on line %d, unsupported inferred type for %s.\n",
                                     tree->line_num, var_name);
                                 ++return_val;
                                 inferred_var_type = HASHVAR_UNTYPED;
@@ -7965,7 +7992,7 @@ next_identifier:
 
                             if (!compatible)
                             {
-                                fprintf(stderr, "Error on line %d, initializer type mismatch for %s.\n",
+                                semcheck_error_with_context("Error on line %d, initializer type mismatch for %s.\n",
                                     tree->line_num, var_name);
                                 ++return_val;
                             }

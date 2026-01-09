@@ -796,7 +796,7 @@ static int semcheck_try_reinterpret_as_typecast(int *type_return,
     }
     if (args == NULL || args->next != NULL)
     {
-        fprintf(stderr, "Error on line %d, typecast to %s expects exactly one argument.\n",
+        semcheck_error_with_context("Error on line %d, typecast to %s expects exactly one argument.\n",
             expr->line_num, id);
         *type_return = UNKNOWN_TYPE;
         free(id_copy);
@@ -1416,7 +1416,7 @@ static int semcheck_typecheck_array_literal(struct Expression *expr, SymTab_t *s
 
             if (!compatible)
             {
-                fprintf(stderr, "Error on line %d, element %d of array literal "
+                semcheck_error_with_context("Error on line %d, element %d of array literal "
                     "does not match expected type.\n", line_num, index);
                 ++error_count;
             }
@@ -1458,7 +1458,7 @@ int semcheck_prepare_array_literal_argument(Tree_t *formal_decl, struct Expressi
     {
         if (semcheck_convert_set_literal_to_array_literal(arg_expr) != 0)
         {
-            fprintf(stderr, "Error on line %d, open array literal cannot contain ranges.\n",
+            semcheck_error_with_context("Error on line %d, open array literal cannot contain ranges.\n",
                 line_num);
             return 1;
         }
@@ -1643,7 +1643,7 @@ static int semcheck_typecheck_record_constructor(struct Expression *expr, SymTab
 
     if (record_type == NULL)
     {
-        fprintf(stderr, "Error on line %d, unable to infer record type for constructor.\n",
+        semcheck_error_with_context("Error on line %d, unable to infer record type for constructor.\n",
             line_num);
         expr->resolved_type = UNKNOWN_TYPE;
         return 1;
@@ -1674,7 +1674,7 @@ static int semcheck_typecheck_record_constructor(struct Expression *expr, SymTab
             if (prior != NULL && prior->field_id != NULL &&
                 pascal_identifier_equals(prior->field_id, field->field_id))
             {
-                fprintf(stderr, "Error on line %d, duplicate record constructor field %s.\n",
+                semcheck_error_with_context("Error on line %d, duplicate record constructor field %s.\n",
                     line_num, field->field_id);
                 ++error_count;
                 break;
@@ -1771,7 +1771,7 @@ static int semcheck_typecheck_record_constructor(struct Expression *expr, SymTab
             {
                 if (semcheck_convert_set_literal_to_array_literal(field->value) != 0)
                 {
-                    fprintf(stderr, "Error on line %d, array field %s cannot use set ranges.\n",
+                    semcheck_error_with_context("Error on line %d, array field %s cannot use set ranges.\n",
                         line_num, field->field_id);
                     ++error_count;
                 }
@@ -1820,7 +1820,7 @@ static int semcheck_typecheck_record_constructor(struct Expression *expr, SymTab
         KgpcType *expected_type = semcheck_field_expected_kgpc_type(symtab, field_desc);
         if (expected_type == NULL)
         {
-            fprintf(stderr, "Error on line %d, unable to resolve type for field %s.\n",
+            semcheck_error_with_context("Error on line %d, unable to resolve type for field %s.\n",
                 line_num, field->field_id);
             ++error_count;
         }
@@ -1831,7 +1831,7 @@ static int semcheck_typecheck_record_constructor(struct Expression *expr, SymTab
                 symtab, field->value, max_scope_lev, NO_MUTATE, &value_owned);
             if (value_type_kgpc == NULL)
             {
-                fprintf(stderr, "Error on line %d, unable to resolve type for field %s.\n",
+                semcheck_error_with_context("Error on line %d, unable to resolve type for field %s.\n",
                     line_num, field->field_id);
                 ++error_count;
             }
@@ -1870,7 +1870,7 @@ int semcheck_prepare_record_constructor_argument(Tree_t *formal_decl, struct Exp
     struct RecordType *record_type = semcheck_record_type_from_decl(formal_decl, symtab);
     if (record_type == NULL)
     {
-        fprintf(stderr, "Error on line %d, unable to infer record type for constructor.\n",
+        semcheck_error_with_context("Error on line %d, unable to infer record type for constructor.\n",
             line_num);
         return 1;
     }
@@ -2239,7 +2239,7 @@ int resolve_record_field(SymTab_t *symtab, struct RecordType *record,
     if (!found)
     {
         if (!silent)
-            fprintf(stderr, "Error on line %d, record field %s not found.\n", line_num, field_name);
+            semcheck_error_with_context("Error on line %d, record field %s not found.\n", line_num, field_name);
         return 1;
     }
 
@@ -2258,7 +2258,7 @@ static int semcheck_builtin_chr(int *type_return, SymTab_t *symtab,
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
     if (args == NULL || args->next != NULL)
     {
-        fprintf(stderr, "Error on line %d, Chr expects exactly one argument.\\n",
+        semcheck_error_with_context("Error on line %d, Chr expects exactly one argument.\\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -2270,7 +2270,7 @@ static int semcheck_builtin_chr(int *type_return, SymTab_t *symtab,
         max_scope_lev, NO_MUTATE);
     if (error_count == 0 && arg_type != INT_TYPE && arg_type != LONGINT_TYPE)
     {
-        fprintf(stderr, "Error on line %d, Chr expects an integer argument.\\n",
+        semcheck_error_with_context("Error on line %d, Chr expects an integer argument.\\n",
             expr->line_num);
         error_count++;
     }
@@ -2312,7 +2312,7 @@ static int semcheck_builtin_ord(int *type_return, SymTab_t *symtab,
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
     if (args == NULL || args->next != NULL)
     {
-        fprintf(stderr, "Error on line %d, Ord expects exactly one argument.\\n",
+        semcheck_error_with_context("Error on line %d, Ord expects exactly one argument.\\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -2336,14 +2336,14 @@ static int semcheck_builtin_ord(int *type_return, SymTab_t *symtab,
             char *literal = arg_expr->expr_data.string;
             if (literal == NULL || literal[0] == '\0')
             {
-                fprintf(stderr, "Error on line %d, Ord expects a non-empty character literal.\\n",
+                semcheck_error_with_context("Error on line %d, Ord expects a non-empty character literal.\\n",
                     expr->line_num);
                 *type_return = UNKNOWN_TYPE;
                 return 1;
             }
             if (literal[1] != '\0')
             {
-                fprintf(stderr, "Error on line %d, Ord expects a single character literal.\\n",
+                semcheck_error_with_context("Error on line %d, Ord expects a single character literal.\\n",
                     expr->line_num);
                 *type_return = UNKNOWN_TYPE;
                 return 1;
@@ -2441,7 +2441,7 @@ static int semcheck_builtin_ord(int *type_return, SymTab_t *symtab,
         return 0;
     }
 
-    fprintf(stderr, "Error on line %d, Ord expects an integer, character, or boolean argument.\\n",
+    semcheck_error_with_context("Error on line %d, Ord expects an integer, character, or boolean argument.\\n",
         expr->line_num);
     *type_return = UNKNOWN_TYPE;
     return 1;
@@ -2460,7 +2460,7 @@ static int semcheck_builtin_length(int *type_return, SymTab_t *symtab,
     {
         if (getenv("KGPC_DEBUG_LENGTH_ARGS") != NULL)
             fprintf(stderr, "[KGPC] Length args count=0\n");
-        fprintf(stderr, "Error on line %d, Length expects exactly one argument.\n", expr->line_num);
+        semcheck_error_with_context("Error on line %d, Length expects exactly one argument.\n", expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
     }
@@ -2497,7 +2497,7 @@ static int semcheck_builtin_length(int *type_return, SymTab_t *symtab,
         }
         if (args == NULL || args->next != NULL)
         {
-            fprintf(stderr, "Error on line %d, Length expects exactly one argument.\n", expr->line_num);
+            semcheck_error_with_context("Error on line %d, Length expects exactly one argument.\n", expr->line_num);
             *type_return = UNKNOWN_TYPE;
             return 1;
         }
@@ -2586,7 +2586,7 @@ static int semcheck_builtin_length(int *type_return, SymTab_t *symtab,
                 is_dynamic_array,
                 is_shortstring);
         }
-        fprintf(stderr, "Error on line %d, Length supports string or dynamic array arguments.\n", expr->line_num);
+        semcheck_error_with_context("Error on line %d, Length supports string or dynamic array arguments.\n", expr->line_num);
         error_count++;
     }
 
@@ -2625,7 +2625,7 @@ static int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
     if (args == NULL || args->next == NULL || args->next->next == NULL || args->next->next->next != NULL)
     {
-        fprintf(stderr, "Error on line %d, Copy expects exactly three arguments.\n", expr->line_num);
+        semcheck_error_with_context("Error on line %d, Copy expects exactly three arguments.\n", expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
     }
@@ -2639,7 +2639,7 @@ static int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
     error_count += semcheck_expr_main(&source_type, symtab, source_expr, max_scope_lev, NO_MUTATE);
     if (error_count == 0 && source_type != STRING_TYPE)
     {
-        fprintf(stderr, "Error on line %d, Copy expects its first argument to be a string.\n", expr->line_num);
+        semcheck_error_with_context("Error on line %d, Copy expects its first argument to be a string.\n", expr->line_num);
         error_count++;
     }
 
@@ -2647,7 +2647,7 @@ static int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
     error_count += semcheck_expr_main(&index_type, symtab, index_expr, max_scope_lev, NO_MUTATE);
     if (error_count == 0 && !is_integer_type(index_type))
     {
-        fprintf(stderr, "Error on line %d, Copy index must be an integer.\n", expr->line_num);
+        semcheck_error_with_context("Error on line %d, Copy index must be an integer.\n", expr->line_num);
         error_count++;
     }
 
@@ -2655,7 +2655,7 @@ static int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
     error_count += semcheck_expr_main(&count_type, symtab, count_expr, max_scope_lev, NO_MUTATE);
     if (error_count == 0 && !is_integer_type(count_type))
     {
-        fprintf(stderr, "Error on line %d, Copy count must be an integer.\n", expr->line_num);
+        semcheck_error_with_context("Error on line %d, Copy count must be an integer.\n", expr->line_num);
         error_count++;
     }
 
@@ -2694,7 +2694,7 @@ static int semcheck_builtin_pos(int *type_return, SymTab_t *symtab,
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
     if (args == NULL || args->next == NULL || args->next->next != NULL)
     {
-        fprintf(stderr, "Error on line %d, Pos expects exactly two arguments.\n", expr->line_num);
+        semcheck_error_with_context("Error on line %d, Pos expects exactly two arguments.\n", expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
     }
@@ -2712,7 +2712,7 @@ static int semcheck_builtin_pos(int *type_return, SymTab_t *symtab,
     
     if (error_count == 0 && !is_valid_substr)
     {
-        fprintf(stderr, "Error on line %d, Pos substring must be a string.\n", expr->line_num);
+        semcheck_error_with_context("Error on line %d, Pos substring must be a string.\n", expr->line_num);
         ++error_count;
     }
 
@@ -2725,7 +2725,7 @@ static int semcheck_builtin_pos(int *type_return, SymTab_t *symtab,
     
     if (error_count == 0 && !is_valid_value)
     {
-        fprintf(stderr, "Error on line %d, Pos target must be a string.\n", expr->line_num);
+        semcheck_error_with_context("Error on line %d, Pos target must be a string.\n", expr->line_num);
         ++error_count;
     }
 
@@ -2764,7 +2764,7 @@ static int semcheck_builtin_strpas(int *type_return, SymTab_t *symtab,
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
     if (args == NULL || args->next != NULL)
     {
-        fprintf(stderr, "Error on line %d, StrPas expects exactly one argument.\n",
+        semcheck_error_with_context("Error on line %d, StrPas expects exactly one argument.\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -2779,7 +2779,7 @@ static int semcheck_builtin_strpas(int *type_return, SymTab_t *symtab,
     if (error_count == 0 &&
         !(arg_type == STRING_TYPE || arg_type == POINTER_TYPE || arg_type == CHAR_TYPE))
     {
-        fprintf(stderr, "Error on line %d, StrPas expects a PChar or PAnsiChar argument.\n",
+        semcheck_error_with_context("Error on line %d, StrPas expects a PChar or PAnsiChar argument.\n",
             expr->line_num);
         ++error_count;
     }
@@ -2837,7 +2837,7 @@ static int semcheck_builtin_eof(int *type_return, SymTab_t *symtab,
         error_count += semcheck_expr_main(&file_type, symtab, check_expr, max_scope_lev, NO_MUTATE);
         if (file_type != TEXT_TYPE)
         {
-            fprintf(stderr, "Error on line %d, EOF expects a text file argument.\n", expr->line_num);
+            semcheck_error_with_context("Error on line %d, EOF expects a text file argument.\n", expr->line_num);
             error_count++;
         }
         else
@@ -2851,7 +2851,7 @@ static int semcheck_builtin_eof(int *type_return, SymTab_t *symtab,
     }
     else
     {
-        fprintf(stderr, "Error on line %d, EOF expects zero or one argument.\n", expr->line_num);
+        semcheck_error_with_context("Error on line %d, EOF expects zero or one argument.\n", expr->line_num);
         error_count++;
     }
 
@@ -2908,7 +2908,7 @@ static int semcheck_builtin_eoln(int *type_return, SymTab_t *symtab,
         error_count += semcheck_expr_main(&file_type, symtab, check_expr, max_scope_lev, NO_MUTATE);
         if (file_type != TEXT_TYPE)
         {
-            fprintf(stderr, "Error on line %d, EOLN expects a text file argument.\n", expr->line_num);
+            semcheck_error_with_context("Error on line %d, EOLN expects a text file argument.\n", expr->line_num);
             error_count++;
         }
         else
@@ -2922,7 +2922,7 @@ static int semcheck_builtin_eoln(int *type_return, SymTab_t *symtab,
     }
     else
     {
-        fprintf(stderr, "Error on line %d, EOLN expects zero or one argument.\n", expr->line_num);
+        semcheck_error_with_context("Error on line %d, EOLN expects zero or one argument.\n", expr->line_num);
         error_count++;
     }
 
@@ -3044,7 +3044,7 @@ static int semcheck_builtin_assigned(int *type_return, SymTab_t *symtab,
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
     if (args == NULL || args->next != NULL)
     {
-        fprintf(stderr, "Error on line %d, Assigned expects exactly one argument.\n", expr->line_num);
+        semcheck_error_with_context("Error on line %d, Assigned expects exactly one argument.\n", expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
     }
@@ -3055,7 +3055,7 @@ static int semcheck_builtin_assigned(int *type_return, SymTab_t *symtab,
 
     if (error_count == 0 && arg_type != POINTER_TYPE && arg_type != PROCEDURE)
     {
-        fprintf(stderr, "Error on line %d, Assigned expects a pointer or procedure variable.\n", expr->line_num);
+        semcheck_error_with_context("Error on line %d, Assigned expects a pointer or procedure variable.\n", expr->line_num);
         ++error_count;
     }
 
@@ -3094,7 +3094,7 @@ static int semcheck_builtin_abs(int *type_return, SymTab_t *symtab,
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
     if (args == NULL || args->next != NULL)
     {
-        fprintf(stderr, "Error on line %d, Abs expects exactly one argument.\n", expr->line_num);
+        semcheck_error_with_context("Error on line %d, Abs expects exactly one argument.\n", expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
     }
@@ -3129,7 +3129,7 @@ static int semcheck_builtin_abs(int *type_return, SymTab_t *symtab,
         }
         else
         {
-            fprintf(stderr, "Error on line %d, Abs expects integer or real arguments.\n", expr->line_num);
+            semcheck_error_with_context("Error on line %d, Abs expects integer or real arguments.\n", expr->line_num);
             ++error_count;
         }
     }
@@ -3176,7 +3176,7 @@ static int semcheck_builtin_unary_real(int *type_return, SymTab_t *symtab,
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
     if (args == NULL || args->next != NULL)
     {
-        fprintf(stderr, "Error on line %d, %s expects exactly one argument.\n",
+        semcheck_error_with_context("Error on line %d, %s expects exactly one argument.\n",
             expr->line_num, display_name);
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -3189,7 +3189,7 @@ static int semcheck_builtin_unary_real(int *type_return, SymTab_t *symtab,
     if (error_count == 0 && arg_type != REAL_TYPE &&
         arg_type != INT_TYPE && arg_type != LONGINT_TYPE)
     {
-        fprintf(stderr, "Error on line %d, %s expects a real argument.\n",
+        semcheck_error_with_context("Error on line %d, %s expects a real argument.\n",
             expr->line_num, display_name);
         ++error_count;
     }
@@ -3230,7 +3230,7 @@ static int semcheck_builtin_arctan2(int *type_return, SymTab_t *symtab,
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
     if (args == NULL || args->next == NULL || args->next->next != NULL)
     {
-        fprintf(stderr, "Error on line %d, ArcTan2 expects exactly two arguments.\n",
+        semcheck_error_with_context("Error on line %d, ArcTan2 expects exactly two arguments.\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -3247,13 +3247,13 @@ static int semcheck_builtin_arctan2(int *type_return, SymTab_t *symtab,
 
     if (y_type != REAL_TYPE && y_type != INT_TYPE && y_type != LONGINT_TYPE)
     {
-        fprintf(stderr, "Error on line %d, ArcTan2 expects numeric arguments.\n",
+        semcheck_error_with_context("Error on line %d, ArcTan2 expects numeric arguments.\n",
             expr->line_num);
         ++error_count;
     }
     if (x_type != REAL_TYPE && x_type != INT_TYPE && x_type != LONGINT_TYPE)
     {
-        fprintf(stderr, "Error on line %d, ArcTan2 expects numeric arguments.\n",
+        semcheck_error_with_context("Error on line %d, ArcTan2 expects numeric arguments.\n",
             expr->line_num);
         ++error_count;
     }
@@ -3300,7 +3300,7 @@ static int semcheck_builtin_hypot(int *type_return, SymTab_t *symtab,
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
     if (args == NULL || args->next == NULL || args->next->next != NULL)
     {
-        fprintf(stderr, "Error on line %d, Hypot expects exactly two arguments.\n",
+        semcheck_error_with_context("Error on line %d, Hypot expects exactly two arguments.\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -3317,13 +3317,13 @@ static int semcheck_builtin_hypot(int *type_return, SymTab_t *symtab,
 
     if (x_type != REAL_TYPE && x_type != INT_TYPE && x_type != LONGINT_TYPE)
     {
-        fprintf(stderr, "Error on line %d, Hypot expects numeric arguments.\n",
+        semcheck_error_with_context("Error on line %d, Hypot expects numeric arguments.\n",
             expr->line_num);
         ++error_count;
     }
     if (y_type != REAL_TYPE && y_type != INT_TYPE && y_type != LONGINT_TYPE)
     {
-        fprintf(stderr, "Error on line %d, Hypot expects numeric arguments.\n",
+        semcheck_error_with_context("Error on line %d, Hypot expects numeric arguments.\n",
             expr->line_num);
         ++error_count;
     }
@@ -3370,7 +3370,7 @@ static int semcheck_builtin_logn(int *type_return, SymTab_t *symtab,
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
     if (args == NULL || args->next == NULL || args->next->next != NULL)
     {
-        fprintf(stderr, "Error on line %d, LogN expects exactly two arguments.\n",
+        semcheck_error_with_context("Error on line %d, LogN expects exactly two arguments.\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -3387,13 +3387,13 @@ static int semcheck_builtin_logn(int *type_return, SymTab_t *symtab,
 
     if (base_type != REAL_TYPE && base_type != INT_TYPE && base_type != LONGINT_TYPE)
     {
-        fprintf(stderr, "Error on line %d, LogN expects numeric arguments.\n",
+        semcheck_error_with_context("Error on line %d, LogN expects numeric arguments.\n",
             expr->line_num);
         ++error_count;
     }
     if (value_type != REAL_TYPE && value_type != INT_TYPE && value_type != LONGINT_TYPE)
     {
-        fprintf(stderr, "Error on line %d, LogN expects numeric arguments.\n",
+        semcheck_error_with_context("Error on line %d, LogN expects numeric arguments.\n",
             expr->line_num);
         ++error_count;
     }
@@ -3441,7 +3441,7 @@ static int semcheck_builtin_upcase(int *type_return, SymTab_t *symtab,
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
     if (args == NULL || args->next != NULL)
     {
-        fprintf(stderr, "Error on line %d, UpCase expects exactly one argument.\n",
+        semcheck_error_with_context("Error on line %d, UpCase expects exactly one argument.\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -3466,7 +3466,7 @@ static int semcheck_builtin_upcase(int *type_return, SymTab_t *symtab,
         }
         else
         {
-            fprintf(stderr, "Error on line %d, UpCase expects a char argument.\n",
+            semcheck_error_with_context("Error on line %d, UpCase expects a char argument.\n",
                 expr->line_num);
             ++error_count;
         }
@@ -3512,7 +3512,7 @@ static int semcheck_builtin_predsucc(int *type_return, SymTab_t *symtab,
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
     if (args == NULL || args->next != NULL)
     {
-        fprintf(stderr, "Error on line %d, %s expects exactly one argument.\n",
+        semcheck_error_with_context("Error on line %d, %s expects exactly one argument.\n",
             expr->line_num, is_succ ? "Succ" : "Pred");
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -3524,7 +3524,7 @@ static int semcheck_builtin_predsucc(int *type_return, SymTab_t *symtab,
     if (error_count == 0 &&
         arg_type != INT_TYPE && arg_type != LONGINT_TYPE && arg_type != INT64_TYPE)
     {
-        fprintf(stderr, "Error on line %d, %s expects an integer argument.\n",
+        semcheck_error_with_context("Error on line %d, %s expects an integer argument.\n",
             expr->line_num, is_succ ? "Succ" : "Pred");
         ++error_count;
     }
@@ -3539,7 +3539,7 @@ static int semcheck_builtin_predsucc(int *type_return, SymTab_t *symtab,
     struct Expression *rhs = mk_inum(expr->line_num, 1);
     if (rhs == NULL)
     {
-        fprintf(stderr, "Error on line %d, failed to build %s expression.\n",
+        semcheck_error_with_context("Error on line %d, failed to build %s expression.\n",
             expr->line_num, is_succ ? "Succ" : "Pred");
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -3578,7 +3578,7 @@ static int semcheck_builtin_odd(int *type_return, SymTab_t *symtab,
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
     if (args == NULL || args->next != NULL)
     {
-        fprintf(stderr, "Error on line %d, Odd expects exactly one argument.\n",
+        semcheck_error_with_context("Error on line %d, Odd expects exactly one argument.\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -3590,7 +3590,7 @@ static int semcheck_builtin_odd(int *type_return, SymTab_t *symtab,
 
     if (error_count == 0 && arg_type != INT_TYPE && arg_type != LONGINT_TYPE)
     {
-        fprintf(stderr, "Error on line %d, Odd expects an integer argument.\n",
+        semcheck_error_with_context("Error on line %d, Odd expects an integer argument.\n",
             expr->line_num);
         ++error_count;
     }
@@ -3630,7 +3630,7 @@ static int semcheck_builtin_sqr(int *type_return, SymTab_t *symtab,
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
     if (args == NULL || args->next != NULL)
     {
-        fprintf(stderr, "Error on line %d, Sqr expects exactly one argument.\n",
+        semcheck_error_with_context("Error on line %d, Sqr expects exactly one argument.\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -3662,7 +3662,7 @@ static int semcheck_builtin_sqr(int *type_return, SymTab_t *symtab,
         }
         else
         {
-            fprintf(stderr, "Error on line %d, Sqr expects integer or real arguments.\n",
+            semcheck_error_with_context("Error on line %d, Sqr expects integer or real arguments.\n",
                 expr->line_num);
             ++error_count;
         }
@@ -3705,7 +3705,7 @@ static int semcheck_builtin_default(int *type_return, SymTab_t *symtab,
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
     if (args == NULL || args->next != NULL)
     {
-        fprintf(stderr, "Error on line %d, Default expects exactly one argument.\n",
+        semcheck_error_with_context("Error on line %d, Default expects exactly one argument.\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -3755,7 +3755,7 @@ static int semcheck_builtin_default(int *type_return, SymTab_t *symtab,
 
     if (target_type == UNKNOWN_TYPE)
     {
-        fprintf(stderr, "Error on line %d, Default requires a type identifier or typed expression.\n",
+        semcheck_error_with_context("Error on line %d, Default requires a type identifier or typed expression.\n",
             expr->line_num);
         if (target_kgpc_type != NULL)
             destroy_kgpc_type(target_kgpc_type);
@@ -3862,7 +3862,7 @@ static int semcheck_builtin_default(int *type_return, SymTab_t *symtab,
             *type_return = ENUM_TYPE;
             return 0;
         default:
-            fprintf(stderr, "Error on line %d, Default for this type is unsupported in this context.\n",
+            semcheck_error_with_context("Error on line %d, Default for this type is unsupported in this context.\n",
                 expr->line_num);
             *type_return = UNKNOWN_TYPE;
             return 1;
@@ -3879,7 +3879,7 @@ static int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
     if (args == NULL || args->next != NULL)
     {
-        fprintf(stderr, "Error on line %d, %s expects exactly one argument.\n",
+        semcheck_error_with_context("Error on line %d, %s expects exactly one argument.\n",
             expr->line_num, is_high ? "High" : "Low");
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -4055,7 +4055,7 @@ static int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
             long long upper = arg_expr->array_upper_bound;
             if (is_high && upper < lower)
             {
-                fprintf(stderr, "Error on line %d, invalid array bounds for High().\n",
+                semcheck_error_with_context("Error on line %d, invalid array bounds for High().\n",
                     expr->line_num);
                 *type_return = UNKNOWN_TYPE;
                 return 1;
@@ -4148,7 +4148,7 @@ static int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
         return 0;
     }
 
-    fprintf(stderr, "Error on line %d, %s currently supports only array or string arguments.\n",
+    semcheck_error_with_context("Error on line %d, %s currently supports only array or string arguments.\n",
         expr->line_num, is_high ? "High" : "Low");
     *type_return = UNKNOWN_TYPE;
     return 1;
@@ -4198,7 +4198,7 @@ static int sizeof_from_type_ref(SymTab_t *symtab, int type_tag,
 
     if (depth > SIZEOF_RECURSION_LIMIT)
     {
-        fprintf(stderr, "Error on line %d, SizeOf exceeded recursion depth while resolving type.\n",
+        semcheck_error_with_context("Error on line %d, SizeOf exceeded recursion depth while resolving type.\n",
             line_num);
         return 1;
     }
@@ -4281,7 +4281,7 @@ static int sizeof_from_record(SymTab_t *symtab, struct RecordType *record,
 
     if (depth > SIZEOF_RECURSION_LIMIT)
     {
-        fprintf(stderr, "Error on line %d, SizeOf exceeded recursion depth while resolving record type.\n",
+        semcheck_error_with_context("Error on line %d, SizeOf exceeded recursion depth while resolving record type.\n",
             line_num);
         return 1;
     }
@@ -4385,7 +4385,7 @@ static int compute_field_size(SymTab_t *symtab, struct RecordField *field,
 
     if (depth > SIZEOF_RECURSION_LIMIT)
     {
-        fprintf(stderr, "Error on line %d, SizeOf exceeded recursion depth while resolving record field.\n",
+        semcheck_error_with_context("Error on line %d, SizeOf exceeded recursion depth while resolving record field.\n",
             line_num);
         return 1;
     }
@@ -4424,7 +4424,7 @@ static int compute_field_size(SymTab_t *symtab, struct RecordField *field,
         long long count = (long long)field->array_end - (long long)field->array_start + 1;
         if (count < 0)
         {
-            fprintf(stderr, "Error on line %d, invalid bounds for array field %s.\n",
+            semcheck_error_with_context("Error on line %d, invalid bounds for array field %s.\n",
                 line_num, field->name != NULL ? field->name : "");
             return 1;
         }
@@ -4513,7 +4513,7 @@ static int sizeof_from_variant_part(SymTab_t *symtab, struct VariantPart *varian
 
     if (depth > SIZEOF_RECURSION_LIMIT)
     {
-        fprintf(stderr, "Error on line %d, SizeOf exceeded recursion depth while resolving variant part.\n",
+        semcheck_error_with_context("Error on line %d, SizeOf exceeded recursion depth while resolving variant part.\n",
             line_num);
         return 1;
     }
@@ -4654,7 +4654,7 @@ static int sizeof_from_alias(SymTab_t *symtab, struct TypeAlias *alias,
 
     if (alias == NULL)
     {
-        fprintf(stderr, "Error on line %d, SizeOf encountered incomplete type alias.\n",
+        semcheck_error_with_context("Error on line %d, SizeOf encountered incomplete type alias.\n",
             line_num);
         return 1;
     }
@@ -4674,7 +4674,7 @@ static int sizeof_from_alias(SymTab_t *symtab, struct TypeAlias *alias,
 
     if (depth > SIZEOF_RECURSION_LIMIT)
     {
-        fprintf(stderr, "Error on line %d, SizeOf exceeded recursion depth while resolving type alias.\n",
+        semcheck_error_with_context("Error on line %d, SizeOf exceeded recursion depth while resolving type alias.\n",
             line_num);
         return 1;
     }
@@ -4683,7 +4683,7 @@ static int sizeof_from_alias(SymTab_t *symtab, struct TypeAlias *alias,
     {
         if (alias->is_open_array || alias->array_end < alias->array_start)
         {
-            fprintf(stderr, "Error on line %d, SizeOf cannot determine size of open array type.\n",
+            semcheck_error_with_context("Error on line %d, SizeOf cannot determine size of open array type.\n",
                 line_num);
             return 1;
         }
@@ -4696,7 +4696,7 @@ static int sizeof_from_alias(SymTab_t *symtab, struct TypeAlias *alias,
         long long count = (long long)alias->array_end - (long long)alias->array_start + 1;
         if (count < 0)
         {
-            fprintf(stderr, "Error on line %d, invalid bounds for array type in SizeOf.\n",
+            semcheck_error_with_context("Error on line %d, invalid bounds for array type in SizeOf.\n",
                 line_num);
             return 1;
         }
@@ -4715,7 +4715,7 @@ static int sizeof_from_alias(SymTab_t *symtab, struct TypeAlias *alias,
         return sizeof_from_type_ref(symtab, UNKNOWN_TYPE, alias->target_type_id,
             size_out, depth + 1, line_num);
 
-    fprintf(stderr, "Error on line %d, SizeOf encountered unresolved type alias.\n",
+    semcheck_error_with_context("Error on line %d, SizeOf encountered unresolved type alias.\n",
         line_num);
     return 1;
 }
@@ -4728,14 +4728,14 @@ static int sizeof_from_hashnode(SymTab_t *symtab, HashNode_t *node,
 
     if (node == NULL)
     {
-        fprintf(stderr, "Error on line %d, SizeOf encountered null symbol information.\n",
+        semcheck_error_with_context("Error on line %d, SizeOf encountered null symbol information.\n",
             line_num);
         return 1;
     }
 
     if (depth > SIZEOF_RECURSION_LIMIT)
     {
-        fprintf(stderr, "Error on line %d, SizeOf exceeded recursion depth while resolving symbol.\n",
+        semcheck_error_with_context("Error on line %d, SizeOf exceeded recursion depth while resolving symbol.\n",
             line_num);
         return 1;
     }
@@ -4783,7 +4783,7 @@ static int sizeof_from_hashnode(SymTab_t *symtab, HashNode_t *node,
         
         if (is_dynamic)
         {
-            fprintf(stderr, "Error on line %d, SizeOf cannot determine size of dynamic array %s.\n",
+            semcheck_error_with_context("Error on line %d, SizeOf cannot determine size of dynamic array %s.\n",
                 line_num, node->id);
             return 1;
         }
@@ -4792,7 +4792,7 @@ static int sizeof_from_hashnode(SymTab_t *symtab, HashNode_t *node,
         long long element_size = hashnode_get_element_size(node);
         if (element_size <= 0)
         {
-            fprintf(stderr, "Error on line %d, cannot determine element size for array %s.\n",
+            semcheck_error_with_context("Error on line %d, cannot determine element size for array %s.\n",
                 line_num, node->id);
             return 1;
         }
@@ -4804,7 +4804,7 @@ static int sizeof_from_hashnode(SymTab_t *symtab, HashNode_t *node,
         long long count = (long long)array_end - (long long)array_start + 1;
         if (count < 0)
         {
-            fprintf(stderr, "Error on line %d, invalid bounds for array %s in SizeOf.\n",
+            semcheck_error_with_context("Error on line %d, invalid bounds for array %s in SizeOf.\n",
                 line_num, node->id);
             return 1;
         }
@@ -4824,7 +4824,7 @@ static int sizeof_from_hashnode(SymTab_t *symtab, HashNode_t *node,
     if (alias != NULL)
         return sizeof_from_alias(symtab, alias, size_out, depth + 1, line_num);
 
-    fprintf(stderr, "Error on line %d, SizeOf cannot determine size of %s.\n",
+    semcheck_error_with_context("Error on line %d, SizeOf cannot determine size of %s.\n",
         line_num, node->id != NULL ? node->id : "symbol");
     return 1;
 }
@@ -4840,7 +4840,7 @@ static int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
     if (args == NULL || args->next != NULL)
     {
-        fprintf(stderr, "Error on line %d, SizeOf expects exactly one argument.\n",
+        semcheck_error_with_context("Error on line %d, SizeOf expects exactly one argument.\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -4901,7 +4901,7 @@ static int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
             
             if (!is_builtin_type)
             {
-                fprintf(stderr, "Error on line %d, SizeOf references undeclared identifier %s.\n",
+                semcheck_error_with_context("Error on line %d, SizeOf references undeclared identifier %s.\n",
                     expr->line_num, arg_id);
                 error_count++;
             }
@@ -4910,7 +4910,7 @@ static int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
         {
             if (node->hash_type != HASHTYPE_TYPE && scope > max_scope_lev)
             {
-                fprintf(stderr, "Error on line %d, SizeOf cannot access %s due to scope restrictions.\n",
+                semcheck_error_with_context("Error on line %d, SizeOf cannot access %s due to scope restrictions.\n",
                     expr->line_num, arg_id);
                 error_count++;
             }
@@ -4924,7 +4924,7 @@ static int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
                 }
                 else if (node->hash_type != HASHTYPE_TYPE)
                 {
-                    fprintf(stderr, "Error on line %d, SizeOf argument %s is not a data object.\n",
+                    semcheck_error_with_context("Error on line %d, SizeOf argument %s is not a data object.\n",
                         expr->line_num, arg_id);
                     error_count++;
                 }
@@ -5003,7 +5003,7 @@ static int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
     {
         if (computed_size < 0)
         {
-            fprintf(stderr, "Error on line %d, SizeOf produced an invalid result.\n",
+            semcheck_error_with_context("Error on line %d, SizeOf produced an invalid result.\n",
                 expr->line_num);
             error_count++;
         }
@@ -5247,14 +5247,14 @@ static int resolve_type_identifier(int *out_type, SymTab_t *symtab,
     HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, type_id);
     if (type_node == NULL)
     {
-        fprintf(stderr, "Error on line %d, typecast references unknown type %s!\n\n",
+        semcheck_error_with_context("Error on line %d, typecast references unknown type %s!\n\n",
             line_num, type_id);
         return 1;
     }
 
     if (type_node->hash_type != HASHTYPE_TYPE)
     {
-        fprintf(stderr, "Error on line %d, %s is not a type identifier.\n\n",
+        semcheck_error_with_context("Error on line %d, %s is not a type identifier.\n\n",
             line_num, type_id);
         return 1;
     }
@@ -5338,7 +5338,7 @@ static int semcheck_typecast(int *type_return,
     if (target_type == UNKNOWN_TYPE &&
         expr->expr_data.typecast_data.target_type_id == NULL)
     {
-        fprintf(stderr, "Error on line %d, typecast requires a target type.\n\n",
+        semcheck_error_with_context("Error on line %d, typecast requires a target type.\n\n",
             expr->line_num);
         ++error_count;
     }
@@ -5481,7 +5481,7 @@ static int semcheck_is_expr(int *type_return,
     struct Expression *value_expr = expr->expr_data.is_data.expr;
     if (value_expr == NULL)
     {
-        fprintf(stderr, "Error on line %d, \"is\" operator requires a value expression.\n\n",
+        semcheck_error_with_context("Error on line %d, \"is\" operator requires a value expression.\n\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -5505,7 +5505,7 @@ static int semcheck_is_expr(int *type_return,
 
     if (!is_valid_class)
     {
-        fprintf(stderr, "Error on line %d, \"is\" operator requires a class instance on the left-hand side.\n\n",
+        semcheck_error_with_context("Error on line %d, \"is\" operator requires a class instance on the left-hand side.\n\n",
             expr->line_num);
         ++error_count;
     }
@@ -5535,7 +5535,7 @@ static int semcheck_is_expr(int *type_return,
     
     if (!is_valid_target)
     {
-        fprintf(stderr, "Error on line %d, \"is\" operator requires a class type on the right-hand side.\n\n",
+        semcheck_error_with_context("Error on line %d, \"is\" operator requires a class type on the right-hand side.\n\n",
             expr->line_num);
         ++error_count;
     }
@@ -5561,7 +5561,7 @@ static int semcheck_as_expr(int *type_return,
     struct Expression *value_expr = expr->expr_data.as_data.expr;
     if (value_expr == NULL)
     {
-        fprintf(stderr, "Error on line %d, \"as\" operator requires a value expression.\n\n",
+        semcheck_error_with_context("Error on line %d, \"as\" operator requires a value expression.\n\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -5585,7 +5585,7 @@ static int semcheck_as_expr(int *type_return,
 
     if (!is_valid_class)
     {
-        fprintf(stderr, "Error on line %d, \"as\" operator requires a class instance on the left-hand side.\n\n",
+        semcheck_error_with_context("Error on line %d, \"as\" operator requires a class instance on the left-hand side.\n\n",
             expr->line_num);
         ++error_count;
     }
@@ -5607,7 +5607,7 @@ static int semcheck_as_expr(int *type_return,
     
     if (!is_valid_target)
     {
-        fprintf(stderr, "Error on line %d, \"as\" operator requires a class type on the right-hand side.\n\n",
+        semcheck_error_with_context("Error on line %d, \"as\" operator requires a class type on the right-hand side.\n\n",
             expr->line_num);
         ++error_count;
     }
@@ -5662,7 +5662,7 @@ static int semcheck_pointer_deref(int *type_return,
     struct Expression *pointer_expr = expr->expr_data.pointer_deref_data.pointer_expr;
     if (pointer_expr == NULL)
     {
-        fprintf(stderr, "Error on line %d, dereference operator requires an operand.\\n\\n",
+        semcheck_error_with_context("Error on line %d, dereference operator requires an operand.\\n\\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -5675,7 +5675,7 @@ static int semcheck_pointer_deref(int *type_return,
 
     if (pointer_type != POINTER_TYPE)
     {
-        fprintf(stderr, "Error on line %d, dereference operator requires a pointer expression.\\n\\n",
+        semcheck_error_with_context("Error on line %d, dereference operator requires a pointer expression.\\n\\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return ++error_count;
@@ -5823,7 +5823,7 @@ static int semcheck_property_type_info(SymTab_t *symtab, struct ClassProperty *p
     {
         if (resolve_type_identifier(&resolved_type, symtab, property->type_id, line_num) != 0)
         {
-            fprintf(stderr, "Error on line %d, unable to resolve type for property %s.\n\n",
+            semcheck_error_with_context("Error on line %d, unable to resolve type for property %s.\n\n",
                 line_num, property->name != NULL ? property->name : "<unnamed>");
             return 1;
         }
@@ -5831,7 +5831,7 @@ static int semcheck_property_type_info(SymTab_t *symtab, struct ClassProperty *p
 
     if (resolved_type == UNKNOWN_TYPE && property->type_id == NULL)
     {
-        fprintf(stderr, "Error on line %d, property %s must specify a type.\n\n",
+        semcheck_error_with_context("Error on line %d, property %s must specify a type.\n\n",
             line_num, property->name != NULL ? property->name : "<unnamed>");
         return 1;
     }
@@ -5861,7 +5861,7 @@ static int semcheck_transform_property_getter_call(int *type_return,
     struct Expression *object_expr = expr->expr_data.record_access_data.record_expr;
     if (object_expr == NULL)
     {
-        fprintf(stderr, "Error on line %d, property getter requires an object instance.\n\n",
+        semcheck_error_with_context("Error on line %d, property getter requires an object instance.\n\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -5901,7 +5901,7 @@ static int semcheck_transform_property_getter_call(int *type_return,
         arg_node = CreateListNode(object_expr, LIST_EXPR);
         if (arg_node == NULL)
         {
-            fprintf(stderr, "Error on line %d, unable to allocate getter argument list.\n\n",
+            semcheck_error_with_context("Error on line %d, unable to allocate getter argument list.\n\n",
                 expr->line_num);
             expr->expr_data.record_access_data.record_expr = object_expr;
             *type_return = UNKNOWN_TYPE;
@@ -5922,7 +5922,7 @@ static int semcheck_transform_property_getter_call(int *type_return,
     if ((method_node->id != NULL && id_copy == NULL) ||
         (method_node->mangled_id != NULL && mangled_copy == NULL))
     {
-        fprintf(stderr, "Error on line %d, unable to prepare property getter call.\n\n",
+        semcheck_error_with_context("Error on line %d, unable to prepare property getter call.\n\n",
             expr->line_num);
         free(id_copy);
         free(mangled_copy);
@@ -5973,7 +5973,7 @@ static int semcheck_recordaccess(int *type_return,
     const char *field_id = expr->expr_data.record_access_data.field_id;
     if (record_expr == NULL || field_id == NULL)
     {
-        fprintf(stderr, "Error on line %d, malformed record field access.\n\n", expr->line_num);
+        semcheck_error_with_context("Error on line %d, malformed record field access.\n\n", expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
     }
@@ -5995,7 +5995,7 @@ static int semcheck_recordaccess(int *type_return,
                 struct Expression *new_record_access = (struct Expression *)calloc(1, sizeof(struct Expression));
                 if (new_record_access == NULL)
                 {
-                    fprintf(stderr, "Error on line %d: failed to allocate expression for AST transformation in semcheck_recordaccess.\n",
+                    semcheck_error_with_context("Error on line %d: failed to allocate expression for AST transformation in semcheck_recordaccess.\n",
                         expr->line_num);
                     *type_return = UNKNOWN_TYPE;
                     return 1;
@@ -6007,7 +6007,7 @@ static int semcheck_recordaccess(int *type_return,
                 new_record_access->expr_data.record_access_data.field_id = strdup(field_id);
                 if (new_record_access->expr_data.record_access_data.field_id == NULL)
                 {
-                    fprintf(stderr, "Error on line %d: failed to duplicate field name in AST transformation.\n",
+                    semcheck_error_with_context("Error on line %d: failed to duplicate field name in AST transformation.\n",
                         expr->line_num);
                     free(new_record_access);
                     *type_return = UNKNOWN_TYPE;
@@ -6060,7 +6060,7 @@ static int semcheck_recordaccess(int *type_return,
         struct Expression *new_record_access = (struct Expression *)calloc(1, sizeof(struct Expression));
         if (new_record_access == NULL)
         {
-            fprintf(stderr, "Error on line %d: failed to allocate expression for AST transformation in semcheck_recordaccess.\n",
+            semcheck_error_with_context("Error on line %d: failed to allocate expression for AST transformation in semcheck_recordaccess.\n",
                 expr->line_num);
             *type_return = UNKNOWN_TYPE;
             return 1;
@@ -6072,7 +6072,7 @@ static int semcheck_recordaccess(int *type_return,
         new_record_access->expr_data.record_access_data.field_id = strdup(field_id);
         if (new_record_access->expr_data.record_access_data.field_id == NULL)
         {
-            fprintf(stderr, "Error on line %d: failed to duplicate field name in AST transformation.\n",
+            semcheck_error_with_context("Error on line %d: failed to duplicate field name in AST transformation.\n",
                 expr->line_num);
             free(new_record_access);
             *type_return = UNKNOWN_TYPE;
@@ -6137,7 +6137,7 @@ static int semcheck_recordaccess(int *type_return,
                     char *field_copy = strdup(field_id);
                     if (field_copy == NULL)
                     {
-                        fprintf(stderr, "Error on line %d: failed to allocate memory for unit-qualified variable.\n",
+                        semcheck_error_with_context("Error on line %d: failed to allocate memory for unit-qualified variable.\n",
                             expr->line_num);
                         *type_return = UNKNOWN_TYPE;
                         return 1;
@@ -6152,7 +6152,7 @@ static int semcheck_recordaccess(int *type_return,
                     char *field_copy = strdup(field_id);
                     if (field_copy == NULL)
                     {
-                        fprintf(stderr, "Error on line %d: failed to allocate memory for unit-qualified type.\n",
+                        semcheck_error_with_context("Error on line %d: failed to allocate memory for unit-qualified type.\n",
                             expr->line_num);
                         *type_return = UNKNOWN_TYPE;
                         return 1;
@@ -6203,7 +6203,7 @@ static int semcheck_recordaccess(int *type_return,
                     literal_node = literal_node->next;
                 }
                 /* Enum literal not found in this type */
-                fprintf(stderr, "Error on line %d, '%s' is not a value of enum type '%s'.\n\n",
+                semcheck_error_with_context("Error on line %d, '%s' is not a value of enum type '%s'.\n\n",
                     expr->line_num, field_id, unit_id);
                 *type_return = UNKNOWN_TYPE;
                 return 1;
@@ -6278,7 +6278,7 @@ static int semcheck_recordaccess(int *type_return,
 
         if (record_info == NULL)
         {
-            fprintf(stderr, "Error on line %d, pointer does not reference a record type.\n\n",
+            semcheck_error_with_context("Error on line %d, pointer does not reference a record type.\n\n",
                 expr->line_num);
             *type_return = UNKNOWN_TYPE;
             return error_count + 1;
@@ -6303,7 +6303,7 @@ static int semcheck_recordaccess(int *type_return,
         }
         else
         {
-            fprintf(stderr, "Error on line %d, field access requires a record value.\n\n", expr->line_num);
+            semcheck_error_with_context("Error on line %d, field access requires a record value.\n\n", expr->line_num);
             *type_return = UNKNOWN_TYPE;
             return error_count + 1;
         }
@@ -6316,7 +6316,7 @@ static int semcheck_recordaccess(int *type_return,
 
     if (record_info == NULL)
     {
-        fprintf(stderr, "Error on line %d, unable to resolve record type for field %s.\n\n",
+        semcheck_error_with_context("Error on line %d, unable to resolve record type for field %s.\n\n",
             expr->line_num, field_id);
         *type_return = UNKNOWN_TYPE;
         return error_count + 1;
@@ -6343,7 +6343,7 @@ static int semcheck_recordaccess(int *type_return,
                 {
                     if (property->read_accessor == NULL)
                     {
-                        fprintf(stderr, "Error on line %d, property %s is write-only.\n\n",
+                        semcheck_error_with_context("Error on line %d, property %s is write-only.\n\n",
                             expr->line_num, property->name != NULL ? property->name : field_id);
                         *type_return = UNKNOWN_TYPE;
                         return error_count + 1;
@@ -6375,7 +6375,7 @@ static int semcheck_recordaccess(int *type_return,
                             expr->expr_data.record_access_data.field_id = strdup(property->read_accessor);
                             if (expr->expr_data.record_access_data.field_id == NULL)
                             {
-                                fprintf(stderr, "Error on line %d, failed to allocate property field name.\n\n",
+                                semcheck_error_with_context("Error on line %d, failed to allocate property field name.\n\n",
                                     expr->line_num);
                                 *type_return = UNKNOWN_TYPE;
                                 return error_count + 1;
@@ -6388,7 +6388,7 @@ static int semcheck_recordaccess(int *type_return,
                         property_owner, property->read_accessor, NULL);
                     if (getter_node == NULL)
                     {
-                        fprintf(stderr, "Error on line %d, getter %s for property %s not found.\n\n",
+                        semcheck_error_with_context("Error on line %d, getter %s for property %s not found.\n\n",
                             expr->line_num,
                             property->read_accessor != NULL ? property->read_accessor : "<unknown>",
                             property->name != NULL ? property->name : field_id);
@@ -6427,7 +6427,7 @@ static int semcheck_recordaccess(int *type_return,
                     }
                     if (!getter_is_function)
                     {
-                        fprintf(stderr, "Error on line %d, property getter %s must be a function.\n\n",
+                        semcheck_error_with_context("Error on line %d, property getter %s must be a function.\n\n",
                             expr->line_num, property->read_accessor);
                         *type_return = UNKNOWN_TYPE;
                         return error_count + 1;
@@ -6440,7 +6440,7 @@ static int semcheck_recordaccess(int *type_return,
                 {
                     if (property->write_accessor == NULL)
                     {
-                        fprintf(stderr, "Error on line %d, property %s is read-only.\n\n",
+                        semcheck_error_with_context("Error on line %d, property %s is read-only.\n\n",
                             expr->line_num, property->name != NULL ? property->name : field_id);
                         *type_return = UNKNOWN_TYPE;
                         return error_count + 1;
@@ -6460,7 +6460,7 @@ static int semcheck_recordaccess(int *type_return,
                             expr->expr_data.record_access_data.field_id = strdup(property->write_accessor);
                             if (expr->expr_data.record_access_data.field_id == NULL)
                             {
-                                fprintf(stderr, "Error on line %d, failed to allocate property field name.\n\n",
+                                semcheck_error_with_context("Error on line %d, failed to allocate property field name.\n\n",
                                     expr->line_num);
                                 *type_return = UNKNOWN_TYPE;
                                 return error_count + 1;
@@ -6471,7 +6471,7 @@ static int semcheck_recordaccess(int *type_return,
 
                     if (mutating == BOTH_MUTATE_REFERENCE)
                     {
-                        fprintf(stderr, "Error on line %d, property %s cannot be passed as a var parameter.\n\n",
+                        semcheck_error_with_context("Error on line %d, property %s cannot be passed as a var parameter.\n\n",
                             expr->line_num, property->name != NULL ? property->name : field_id);
                         *type_return = UNKNOWN_TYPE;
                         return error_count + 1;
@@ -6481,7 +6481,7 @@ static int semcheck_recordaccess(int *type_return,
                         property_owner, property->write_accessor, NULL);
                     if (setter_node == NULL)
                     {
-                        fprintf(stderr, "Error on line %d, setter %s for property %s not found.\n\n",
+                        semcheck_error_with_context("Error on line %d, setter %s for property %s not found.\n\n",
                             expr->line_num,
                             property->write_accessor != NULL ? property->write_accessor : "<unknown>",
                             property->name != NULL ? property->name : field_id);
@@ -6490,7 +6490,7 @@ static int semcheck_recordaccess(int *type_return,
                     }
                     if (setter_node->hash_type != HASHTYPE_PROCEDURE)
                     {
-                        fprintf(stderr, "Error on line %d, property setter %s must be a procedure.\n\n",
+                        semcheck_error_with_context("Error on line %d, property setter %s must be a procedure.\n\n",
                             expr->line_num, property->write_accessor);
                         *type_return = UNKNOWN_TYPE;
                         return error_count + 1;
@@ -6591,7 +6591,7 @@ static int semcheck_recordaccess(int *type_return,
                 /* Calculate class size using KgpcType */
                 KgpcType *record_kgpc = create_record_type(record_info);
                 if (record_kgpc == NULL) {
-                    fprintf(stderr, "Error on line %d: Unable to create KgpcType for class %s\n", 
+                    semcheck_error_with_context("Error on line %d: Unable to create KgpcType for class %s\n", 
                         expr->line_num, expr_name);
                     destroy_expr(record_expr);
                     return error_count + 1;
@@ -6599,7 +6599,7 @@ static int semcheck_recordaccess(int *type_return,
                 
                 long long class_size = kgpc_type_sizeof(record_kgpc);
                 if (class_size <= 0) {
-                    fprintf(stderr, "Error on line %d: Unable to determine size for class %s\n", 
+                    semcheck_error_with_context("Error on line %d: Unable to determine size for class %s\n", 
                         expr->line_num, expr_name);
                     destroy_expr(record_expr);
                     return error_count + 1;
@@ -6749,7 +6749,7 @@ static int semcheck_recordaccess(int *type_return,
                 free(mangled_const);
         }
 
-        fprintf(stderr, "Error on line %d, record field %s not found.\n", expr->line_num, field_id);
+        semcheck_error_with_context("Error on line %d, record field %s not found.\n", expr->line_num, field_id);
         *type_return = UNKNOWN_TYPE;
         return error_count + 1;
     }
@@ -6862,7 +6862,7 @@ FIELD_RESOLVED:
 
     if (field_type == UNKNOWN_TYPE && field_record == NULL)
     {
-        fprintf(stderr, "Error on line %d, unable to resolve type for field %s.\n\n",
+        semcheck_error_with_context("Error on line %d, unable to resolve type for field %s.\n\n",
             expr->line_num, field_id);
         *type_return = UNKNOWN_TYPE;
         return error_count + 1;
@@ -6870,7 +6870,7 @@ FIELD_RESOLVED:
 
     if (field_type == RECORD_TYPE && field_record == NULL)
     {
-        fprintf(stderr, "Error on line %d, missing record definition for field %s.\n\n",
+        semcheck_error_with_context("Error on line %d, missing record definition for field %s.\n\n",
             expr->line_num, field_id);
         *type_return = UNKNOWN_TYPE;
         return error_count + 1;
@@ -6933,7 +6933,7 @@ static int semcheck_addressof(int *type_return,
     struct Expression *inner = expr->expr_data.addr_data.expr;
     if (inner == NULL)
     {
-        fprintf(stderr, "Error on line %d, address-of operator requires an operand.\\n\\n",
+        semcheck_error_with_context("Error on line %d, address-of operator requires an operand.\\n\\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -7822,7 +7822,7 @@ int semcheck_expr_main(int *type_return,
             if (expr->array_element_type == UNKNOWN_TYPE &&
                 expr->array_element_type_id == NULL)
             {
-                fprintf(stderr, "Error on line %d, unable to infer type for array literal.\n",
+                semcheck_error_with_context("Error on line %d, unable to infer type for array literal.\n",
                     expr->line_num);
                 *type_return = UNKNOWN_TYPE;
                 return 1;
@@ -7848,7 +7848,7 @@ int semcheck_expr_main(int *type_return,
         {
             if (expr->record_type == NULL)
             {
-                fprintf(stderr, "Error on line %d, unable to infer record type for constructor.\n",
+                semcheck_error_with_context("Error on line %d, unable to infer record type for constructor.\n",
                     expr->line_num);
                 *type_return = UNKNOWN_TYPE;
                 return 1;
@@ -8053,7 +8053,7 @@ int semcheck_relop(int *type_return,
             expr->expr_data.mulop_data.right_factor = neg_one;
             return semcheck_mulop(type_return, symtab, expr, max_scope_lev, mutating);
         }
-        fprintf(stderr, "Error on line %d, expected relational type after \"NOT\"!\n\n",
+        semcheck_error_with_context("Error on line %d, expected relational type after \"NOT\"!\n\n",
             expr->line_num);
         ++return_val;
         *type_return = UNKNOWN_TYPE;
@@ -8087,14 +8087,14 @@ int semcheck_relop(int *type_return,
 
                 if (type_second != SET_TYPE)
                 {
-                    fprintf(stderr, "Error on line %d, expected set operand on right side of IN expression!\n\n",
+                    semcheck_error_with_context("Error on line %d, expected set operand on right side of IN expression!\n\n",
                         expr->line_num);
                     ++return_val;
                 }
                 if (!is_integer_type(type_first) && type_first != ENUM_TYPE &&
                     type_first != CHAR_TYPE && type_first != BOOL)
                 {
-                    fprintf(stderr, "Error on line %d, expected integer operand on left side of IN expression!\n\n",
+                    semcheck_error_with_context("Error on line %d, expected integer operand on left side of IN expression!\n\n",
                         expr->line_num);
                     ++return_val;
                 }
@@ -8246,7 +8246,7 @@ int semcheck_relop(int *type_return,
                 
                 if (!numeric_ok && !boolean_ok && !string_ok && !char_ok && !pointer_ok && !enum_ok && !string_pchar_ok)
                 {
-                    fprintf(stderr, "Error on line %d, equality comparison requires matching numeric, boolean, string, character, or pointer types!\n\n",
+                    semcheck_error_with_context("Error on line %d, equality comparison requires matching numeric, boolean, string, character, or pointer types!\n\n",
                         expr->line_num);
                     ++return_val;
                 }
@@ -8334,7 +8334,7 @@ int semcheck_signterm(int *type_return,
     /* Checking types */
     if(!is_type_ir(type_return))
     {
-        fprintf(stderr, "Error on line %d, expected int or real after \"-\"!\n\n",
+        semcheck_error_with_context("Error on line %d, expected int or real after \"-\"!\n\n",
             expr->line_num);
         ++return_val;
     }
@@ -8378,7 +8378,7 @@ int semcheck_addop(int *type_return,
                 *type_return = INT_TYPE;
             return return_val;
         }
-        fprintf(stderr, "Error on line %d, expected boolean or integer operands for OR expression!\n\n",
+        semcheck_error_with_context("Error on line %d, expected boolean or integer operands for OR expression!\n\n",
             expr->line_num);
         if (getenv("KGPC_DEBUG_ANDOR") != NULL)
         {
@@ -8403,7 +8403,7 @@ int semcheck_addop(int *type_return,
         }
         else
         {
-            fprintf(stderr, "Error on line %d, unsupported set additive operator.\n\n",
+            semcheck_error_with_context("Error on line %d, unsupported set additive operator.\n\n",
                 expr->line_num);
             ++return_val;
             *type_return = SET_TYPE;
@@ -8720,7 +8720,7 @@ int semcheck_mulop(int *type_return,
         }
         
         /* Invalid operand types for AND/XOR */
-        fprintf(stderr, "Error on line %d, expected boolean, integer, or set operands for %s expression!\n\n",
+        semcheck_error_with_context("Error on line %d, expected boolean, integer, or set operands for %s expression!\n\n",
             expr->line_num, op_type == AND ? "AND" : "XOR");
         if (getenv("KGPC_DEBUG_ANDOR") != NULL)
         {
@@ -8747,7 +8747,7 @@ int semcheck_mulop(int *type_return,
         }
         else
         {
-            fprintf(stderr, "Error on line %d, unsupported set multiplicative operator.\n\n",
+            semcheck_error_with_context("Error on line %d, unsupported set multiplicative operator.\n\n",
                 expr->line_num);
             ++return_val;
             *type_return = SET_TYPE;
@@ -8859,13 +8859,13 @@ int semcheck_mulop(int *type_return,
     /* Checking numeric types */
     if(!types_numeric_compatible(type_first, type_second))
     {
-        fprintf(stderr, "Error on line %d, type mismatch on mulop!\n\n",
+        semcheck_error_with_context("Error on line %d, type mismatch on mulop!\n\n",
             expr->line_num);
         ++return_val;
     }
     if(!is_type_ir(&type_first) || !is_type_ir(&type_second))
     {
-        fprintf(stderr, "Error on line %d, expected int/real on both sides of mulop!\n\n",
+        semcheck_error_with_context("Error on line %d, expected int/real on both sides of mulop!\n\n",
             expr->line_num);
         ++return_val;
     }
@@ -8875,7 +8875,7 @@ int semcheck_mulop(int *type_return,
     {
         if (type_first == REAL_TYPE || type_second == REAL_TYPE)
         {
-            fprintf(stderr, "Error on line %d, DIV and MOD operators require integer operands!\n\n",
+            semcheck_error_with_context("Error on line %d, DIV and MOD operators require integer operands!\n\n",
                 expr->line_num);
             ++return_val;
         }
@@ -9109,7 +9109,7 @@ int semcheck_varid(int *type_return,
             if (hash_return->hash_type != HASHTYPE_CONST &&
                 hash_return->hash_type != HASHTYPE_TYPE)
             {
-                fprintf(stderr, "Error on line %d, cannot change \"%s\", invalid scope!\n",
+                semcheck_error_with_context("Error on line %d, cannot change \"%s\", invalid scope!\n",
                     expr->line_num, id);
                 fprintf(stderr, "[Was it defined above a function declaration?]\n\n");
                 ++return_val;
@@ -9165,7 +9165,7 @@ int semcheck_varid(int *type_return,
             }
             else
             {
-                fprintf(stderr, "Error on line %d, cannot assign \"%s\", is not a scalar variable!\n\n",
+                semcheck_error_with_context("Error on line %d, cannot assign \"%s\", is not a scalar variable!\n\n",
                     expr->line_num, id);
                 ++return_val;
             }
@@ -9274,7 +9274,7 @@ int semcheck_arrayaccess(int *type_return,
 
     if (array_expr == NULL)
     {
-        fprintf(stderr, "Error on line %d, array access requires a base expression.\n\n",
+        semcheck_error_with_context("Error on line %d, array access requires a base expression.\n\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -9307,7 +9307,7 @@ int semcheck_arrayaccess(int *type_return,
         if (property_result >= 0)
             return return_val + property_result;
 
-        fprintf(stderr, "Error on line %d, expression is not indexable as an array.\n\n",
+        semcheck_error_with_context("Error on line %d, expression is not indexable as an array.\n\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return return_val + 1;
@@ -9437,7 +9437,7 @@ int semcheck_arrayaccess(int *type_return,
     return_val += semcheck_expr_main(&index_type, symtab, access_expr, max_scope_lev, NO_MUTATE);
     if (!is_ordinal_type(index_type))
     {
-        fprintf(stderr, "Error on line %d, expected ordinal type (integer, char, boolean, or enum) in array index expression!\n\n",
+        semcheck_error_with_context("Error on line %d, expected ordinal type (integer, char, boolean, or enum) in array index expression!\n\n",
             expr->line_num);
         ++return_val;
     }
@@ -9679,14 +9679,14 @@ static int append_default_args(ListNode_t **args_head, ListNode_t *formal_params
         struct Expression *default_expr = get_param_default_value(param_decl);
         if (default_expr == NULL)
         {
-            fprintf(stderr, "Error on line %d, missing default value expression.\n", line_num);
+            semcheck_error_with_context("Error on line %d, missing default value expression.\n", line_num);
             return 1;
         }
 
         struct Expression *default_clone = clone_expression(default_expr);
         if (default_clone == NULL)
         {
-            fprintf(stderr, "Error on line %d, failed to clone default argument expression.\n", line_num);
+            semcheck_error_with_context("Error on line %d, failed to clone default argument expression.\n", line_num);
             return 1;
         }
 
@@ -9694,7 +9694,7 @@ static int append_default_args(ListNode_t **args_head, ListNode_t *formal_params
         if (node == NULL)
         {
             destroy_expr(default_clone);
-            fprintf(stderr, "Error on line %d, failed to allocate default argument node.\n", line_num);
+            semcheck_error_with_context("Error on line %d, failed to allocate default argument node.\n", line_num);
             return 1;
         }
 
@@ -9741,7 +9741,7 @@ int semcheck_funccall(int *type_return,
             char *unqualified = strdup(dot + 1);
             if (unqualified == NULL)
             {
-                fprintf(stderr, "Error on line %d: failed to allocate memory for unit-qualified call '%s'.\n",
+                semcheck_error_with_context("Error on line %d: failed to allocate memory for unit-qualified call '%s'.\n",
                     expr->line_num, id);
                 *type_return = UNKNOWN_TYPE;
                 return 1;
@@ -10099,7 +10099,7 @@ int semcheck_funccall(int *type_return,
                     struct Expression *proc_expr = (struct Expression *)calloc(1, sizeof(struct Expression));
                     if (proc_expr == NULL)
                     {
-                        fprintf(stderr, "Error on line %d: failed to allocate procedural field expression.\n",
+                        semcheck_error_with_context("Error on line %d: failed to allocate procedural field expression.\n",
                             expr->line_num);
                         *type_return = UNKNOWN_TYPE;
                         return ++return_val;
@@ -10118,7 +10118,7 @@ int semcheck_funccall(int *type_return,
                         ListNode_t *formal_params = kgpc_type_get_procedure_params(proc_type);
                         if (ListLength(formal_params) != ListLength(remaining_args))
                         {
-                            fprintf(stderr, "Error on line %d, call to procedural field %s: expected %d arguments, got %d\n",
+                            semcheck_error_with_context("Error on line %d, call to procedural field %s: expected %d arguments, got %d\n",
                                 expr->line_num, id, ListLength(formal_params), ListLength(remaining_args));
                             if (proc_type != NULL)
                                 destroy_kgpc_type(proc_type);
@@ -10211,7 +10211,7 @@ int semcheck_funccall(int *type_return,
         ListNode_t *args = expr->expr_data.function_call_data.args_expr;
         if (args == NULL || args->next != NULL)
         {
-            fprintf(stderr, "Error on line %d, GetMem expects exactly one argument.\n",
+            semcheck_error_with_context("Error on line %d, GetMem expects exactly one argument.\n",
                 expr->line_num);
             *type_return = UNKNOWN_TYPE;
             return 1;
@@ -10286,7 +10286,7 @@ int semcheck_funccall(int *type_return,
         ListNode_t *args = expr->expr_data.function_call_data.args_expr;
         if (args == NULL || args->next != NULL)
         {
-            fprintf(stderr, "Error on line %d, ToSingleByteFileSystemEncodedFileName expects exactly one argument.\n",
+            semcheck_error_with_context("Error on line %d, ToSingleByteFileSystemEncodedFileName expects exactly one argument.\n",
                 expr->line_num);
             *type_return = UNKNOWN_TYPE;
             return 1;
@@ -10313,7 +10313,7 @@ int semcheck_funccall(int *type_return,
         ListNode_t *args = expr->expr_data.function_call_data.args_expr;
         if (args == NULL || args->next == NULL || args->next->next != NULL)
         {
-            fprintf(stderr, "Error on line %d, ArrayStringToPPchar expects exactly two arguments.\n",
+            semcheck_error_with_context("Error on line %d, ArrayStringToPPchar expects exactly two arguments.\n",
                 expr->line_num);
             *type_return = UNKNOWN_TYPE;
             return 1;
@@ -11034,7 +11034,7 @@ constructor_resolved:
             /* Validate arguments match the procedural type's signature */
             if (ListLength(formal_params) != ListLength(args_given))
             {
-                fprintf(stderr, "Error on line %d, call to procedural variable %s: expected %d arguments, got %d\n",
+                semcheck_error_with_context("Error on line %d, call to procedural variable %s: expected %d arguments, got %d\n",
                     expr->line_num, id, ListLength(formal_params), ListLength(args_given));
                 destroy_list(overload_candidates);
                 if (mangled_name != NULL) free(mangled_name);
@@ -11113,7 +11113,7 @@ constructor_resolved:
     }
     
     if (id == NULL) {
-        fprintf(stderr, "Error on line %d: function call with NULL id\n", expr->line_num);
+        semcheck_error_with_context("Error on line %d: function call with NULL id\n", expr->line_num);
         *type_return = UNKNOWN_TYPE;
         destroy_list(overload_candidates);
         return ++return_val;
@@ -11746,7 +11746,7 @@ method_call_resolved:
                 }
             }
         }
-        fprintf(stderr, "Error on line %d, call to function %s does not match any available overload\n", expr->line_num, id);
+        semcheck_error_with_context("Error on line %d, call to function %s does not match any available overload\n", expr->line_num, id);
         *type_return = UNKNOWN_TYPE;
         final_status = ++return_val;
         goto funccall_cleanup;
@@ -11776,7 +11776,7 @@ method_call_resolved:
                 cur = cur->next;
             }
         }
-        fprintf(stderr, "Error on line %d, call to function %s is ambiguous\n", expr->line_num, id);
+        semcheck_error_with_context("Error on line %d, call to function %s is ambiguous\n", expr->line_num, id);
         *type_return = UNKNOWN_TYPE;
         final_status = ++return_val;
         goto funccall_cleanup;
@@ -11788,7 +11788,7 @@ skip_overload_resolution:
 
     if(scope_return == -1) // Should not happen if match_count > 0
     {
-        fprintf(stderr, "Error on line %d, undeclared function %s (mangled to %s)!\n\n", expr->line_num, id, mangled_name);
+        semcheck_error_with_context("Error on line %d, undeclared function %s (mangled to %s)!\n\n", expr->line_num, id, mangled_name);
         ++return_val;
 
         *type_return = UNKNOWN_TYPE;
@@ -11802,7 +11802,7 @@ skip_overload_resolution:
                 fprintf(stderr, "[SemCheck] semcheck_funccall: scope_return (%d) > max_scope_lev (%d)\n",
                     scope_return, max_scope_lev);
             }
-            fprintf(stderr, "Error on line %d, cannot change \"%s\", invalid scope!\n\n",
+            semcheck_error_with_context("Error on line %d, cannot change \"%s\", invalid scope!\n\n",
                 expr->line_num, id);
             fprintf(stderr, "[Was it defined above a function declaration?]\n\n");
             ++return_val;
@@ -11811,7 +11811,7 @@ skip_overload_resolution:
             hash_return->hash_type != HASHTYPE_FUNCTION_RETURN &&
             hash_return->hash_type != HASHTYPE_PROCEDURE)
         {
-            fprintf(stderr, "Error on line %d, \"%s\" is not a function!\n\n",
+            semcheck_error_with_context("Error on line %d, \"%s\" is not a function!\n\n",
                 expr->line_num, id);
             ++return_val;
         }
@@ -12031,7 +12031,7 @@ skip_overload_resolution:
             arg_decl = (Tree_t *)true_args_to_validate->cur;
             if (arg_decl->type != TREE_VAR_DECL && arg_decl->type != TREE_ARR_DECL)
             {
-                fprintf(stderr, "Error on line %d, unsupported parameter declaration in call to %s.\n",
+                semcheck_error_with_context("Error on line %d, unsupported parameter declaration in call to %s.\n",
                     expr->line_num, id);
                 ++return_val;
                 true_args_to_validate = true_args_to_validate->next;
@@ -12199,7 +12199,7 @@ skip_overload_resolution:
                                 "[SemCheck] call %s arg %d type mismatch: expected=%d actual=%d\n",
                                 id ? id : "<null>", cur_arg, expected_type, arg_type);
                         }
-                        fprintf(stderr, "Error on line %d, on function call %s, argument %d: Type mismatch!\n\n",
+                        semcheck_error_with_context("Error on line %d, on function call %s, argument %d: Type mismatch!\n\n",
                             expr->line_num, id, cur_arg);
                         ++return_val;
                     }
@@ -12250,7 +12250,7 @@ skip_overload_resolution:
             }
             if (!allow_forward_params)
             {
-                fprintf(stderr, "Error on line %d, on function call %s, too many arguments given!\n\n",
+                semcheck_error_with_context("Error on line %d, on function call %s, too many arguments given!\n\n",
                     expr->line_num, id);
                 ++return_val;
             }
@@ -12258,7 +12258,7 @@ skip_overload_resolution:
         }
         else if(true_args_to_validate != NULL && args_to_validate == NULL)
         {
-            fprintf(stderr, "Error on line %d, on function call %s, not enough arguments given!\n\n",
+            semcheck_error_with_context("Error on line %d, on function call %s, not enough arguments given!\n\n",
                 expr->line_num, id);
             ++return_val;
         }
@@ -12310,7 +12310,7 @@ static int semcheck_builtin_random(int *type_return, SymTab_t *symtab,
 
     if (args->next != NULL)
     {
-        fprintf(stderr, "Error on line %d, Random expects zero or one argument.\n",
+        semcheck_error_with_context("Error on line %d, Random expects zero or one argument.\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -12322,7 +12322,7 @@ static int semcheck_builtin_random(int *type_return, SymTab_t *symtab,
     int is_real_upper = (upper_type == REAL_TYPE);
     if (!is_real_upper && upper_type != INT_TYPE && upper_type != LONGINT_TYPE)
     {
-        fprintf(stderr, "Error on line %d, Random parameter must be numeric.\n",
+        semcheck_error_with_context("Error on line %d, Random parameter must be numeric.\n",
             expr->line_num);
         ++error_count;
     }
@@ -12377,7 +12377,7 @@ static int semcheck_builtin_randomrange(int *type_return, SymTab_t *symtab,
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
     if (args == NULL || args->next == NULL || args->next->next != NULL)
     {
-        fprintf(stderr, "Error on line %d, RandomRange expects exactly two arguments.\n",
+        semcheck_error_with_context("Error on line %d, RandomRange expects exactly two arguments.\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -12394,13 +12394,13 @@ static int semcheck_builtin_randomrange(int *type_return, SymTab_t *symtab,
 
     if (low_type != INT_TYPE && low_type != LONGINT_TYPE)
     {
-        fprintf(stderr, "Error on line %d, RandomRange lower bound must be integer.\n",
+        semcheck_error_with_context("Error on line %d, RandomRange lower bound must be integer.\n",
             expr->line_num);
         ++error_count;
     }
     if (high_type != INT_TYPE && high_type != LONGINT_TYPE)
     {
-        fprintf(stderr, "Error on line %d, RandomRange upper bound must be integer.\n",
+        semcheck_error_with_context("Error on line %d, RandomRange upper bound must be integer.\n",
             expr->line_num);
         ++error_count;
     }
@@ -12450,7 +12450,7 @@ static int semcheck_builtin_power(int *type_return, SymTab_t *symtab,
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
     if (args == NULL || args->next == NULL || args->next->next != NULL)
     {
-        fprintf(stderr, "Error on line %d, Power expects exactly two arguments.\n",
+        semcheck_error_with_context("Error on line %d, Power expects exactly two arguments.\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -12467,12 +12467,12 @@ static int semcheck_builtin_power(int *type_return, SymTab_t *symtab,
 
     if (base_type != REAL_TYPE && base_type != INT_TYPE && base_type != LONGINT_TYPE)
     {
-        fprintf(stderr, "Error on line %d, Power base must be numeric.\n", expr->line_num);
+        semcheck_error_with_context("Error on line %d, Power base must be numeric.\n", expr->line_num);
         ++error_count;
     }
     if (exp_type != REAL_TYPE && exp_type != INT_TYPE && exp_type != LONGINT_TYPE)
     {
-        fprintf(stderr, "Error on line %d, Power exponent must be numeric.\n",
+        semcheck_error_with_context("Error on line %d, Power exponent must be numeric.\n",
             expr->line_num);
         ++error_count;
     }
@@ -12520,7 +12520,7 @@ static int semcheck_builtin_randseed(int *type_return, SymTab_t *symtab,
 
     if (expr->expr_data.function_call_data.args_expr != NULL)
     {
-        fprintf(stderr, "Error on line %d, RandSeed expects no arguments.\n",
+        semcheck_error_with_context("Error on line %d, RandSeed expects no arguments.\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
