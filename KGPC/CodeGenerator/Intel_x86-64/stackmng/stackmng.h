@@ -65,6 +65,8 @@ StackNode_t *add_l_t_bytes(char *label, int size);
 StackNode_t *add_l_x(char *, int size);
 StackNode_t *add_l_z(char *);
 StackNode_t *add_q_z(char *);
+void reserve_z_offset(int size);
+void unreserve_z_offset(void);
 StackNode_t *add_array(char *label, int total_size, int element_size, int lower_bound);
 StackNode_t *add_dynamic_array(char *label, int element_size, int lower_bound,
     int use_static_storage, const char *static_label);

@@ -3412,37 +3412,112 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
 
     next_gpr_index = arg_start_index;
 
-    /* Pre-pass: Save all parameter registers to temp stack slots to prevent them from being
-     * clobbered during kgpc_move setup for record parameters. This is necessary because
-     * processing one record parameter may clobber registers containing subsequent parameters. */
+    /* Pre-pass phase 1: Check if there's any record/dynarray parameter that will need kgpc_move.
+     * If so, we need to pre-allocate ALL parameter storage and save registers to final locations
+     * before processing starts, to avoid register clobbering issues. */
     ListNode_t *args_scan = args;
-    int scan_gpr_index = arg_start_index;
+    int has_record_or_dynarray = 0;
+    int param_count_for_alloc = 0;
+    
     while(args_scan != NULL)
     {
         Tree_t *scan_decl = (Tree_t *)args_scan->cur;
         if (scan_decl->type == TREE_VAR_DECL)
         {
             ListNode_t *scan_ids = scan_decl->tree_data.var_decl_data.ids;
+            int scan_type = scan_decl->tree_data.var_decl_data.type;
+            KgpcType *scan_cached_type = scan_decl->tree_data.var_decl_data.cached_kgpc_type;
+            int is_var = scan_decl->tree_data.var_decl_data.is_var_param;
+            
             while(scan_ids != NULL)
             {
-                const char *param_reg = alloc_integer_arg_reg(1, &scan_gpr_index);
-                if (param_reg != NULL)
+                param_count_for_alloc++;
+                
+                /* Check if this parameter is a record or dynarray that needs kgpc_move */
+                if (!is_var)
                 {
-                    /* Allocate temp slot and save parameter register */
-                    char temp_name[64];
-                    snprintf(temp_name, sizeof(temp_name), "__param_%s__", (char *)scan_ids->cur);
-                    StackNode_t *temp_slot = add_l_x(temp_name, CODEGEN_POINTER_SIZE_BYTES);
-                    if (temp_slot != NULL)
+                    HashNode_t *scan_type_node = NULL;
+                    if (scan_type == UNKNOWN_TYPE && scan_decl->tree_data.var_decl_data.type_id != NULL && symtab != NULL)
                     {
-                        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
-                            param_reg, temp_slot->offset);
-                        inst_list = add_inst(inst_list, buffer);
+                        FindIdent(&scan_type_node, symtab, scan_decl->tree_data.var_decl_data.type_id);
+                    }
+                    
+                    struct RecordType *rec = NULL;
+                    if (scan_type_node != NULL)
+                        rec = get_record_type_from_node(scan_type_node);
+                    if (rec == NULL && scan_cached_type != NULL)
+                    {
+                        HashNode_t cached_node;
+                        memset(&cached_node, 0, sizeof(cached_node));
+                        cached_node.type = scan_cached_type;
+                        rec = get_record_type_from_node(&cached_node);
+                    }
+                    
+                    if (rec != NULL)
+                    {
+                        has_record_or_dynarray = 1;
+                    }
+                    else if (scan_cached_type != NULL &&
+                             scan_cached_type->kind == TYPE_KIND_ARRAY &&
+                             kgpc_type_is_dynamic_array(scan_cached_type))
+                    {
+                        has_record_or_dynarray = 1;
+                    }
+                    else if (scan_type_node != NULL && scan_type_node->type != NULL &&
+                             scan_type_node->type->kind == TYPE_KIND_ARRAY &&
+                             kgpc_type_is_dynamic_array(scan_type_node->type))
+                    {
+                        has_record_or_dynarray = 1;
                     }
                 }
                 scan_ids = scan_ids->next;
             }
         }
+        else if (scan_decl->type == TREE_ARR_DECL)
+        {
+            ListNode_t *scan_ids = scan_decl->tree_data.arr_decl_data.ids;
+            while(scan_ids != NULL)
+            {
+                param_count_for_alloc++;
+                scan_ids = scan_ids->next;
+            }
+        }
         args_scan = args_scan->next;
+    }
+    
+    /* Pre-pass phase 2: If there are record/dynarray parameters, pre-allocate ALL storage
+     * and save registers to their final locations before processing starts. */
+    if (has_record_or_dynarray && param_count_for_alloc > 0)
+    {
+        args_scan = args;
+        int scan_gpr_index = arg_start_index;
+        while(args_scan != NULL)
+        {
+            Tree_t *scan_decl = (Tree_t *)args_scan->cur;
+            if (scan_decl->type == TREE_VAR_DECL)
+            {
+                ListNode_t *scan_ids = scan_decl->tree_data.var_decl_data.ids;
+                while(scan_ids != NULL)
+                {
+                    const char *param_reg = alloc_integer_arg_reg(1, &scan_gpr_index);
+                    if (param_reg != NULL)
+                    {
+                        /* Allocate final storage slot and save register directly */
+                        char temp_name[64];
+                        snprintf(temp_name, sizeof(temp_name), "__presaved_%s__", (char *)scan_ids->cur);
+                        StackNode_t *presaved_slot = add_q_z(temp_name);
+                        if (presaved_slot != NULL)
+                        {
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                                param_reg, presaved_slot->offset);
+                            inst_list = add_inst(inst_list, buffer);
+                        }
+                    }
+                    scan_ids = scan_ids->next;
+                }
+            }
+            args_scan = args_scan->next;
+        }
     }
     
     /* Reset for main processing pass */
@@ -3584,22 +3659,22 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                         arg_reg = alloc_integer_arg_reg(1, &next_gpr_index);
                         Register_t *stack_value_reg = NULL;
                         
-                        /* Load parameter from temp slot that was saved in pre-pass */
-                        char temp_name[64];
-                        snprintf(temp_name, sizeof(temp_name), "__param_%s__", (char *)arg_ids->cur);
-                        StackNode_t *temp_param_slot = find_label(temp_name);
+                        /* Load parameter from presaved slot that was saved in pre-pass */
+                        char presaved_name[64];
+                        snprintf(presaved_name, sizeof(presaved_name), "__presaved_%s__", (char *)arg_ids->cur);
+                        StackNode_t *presaved_slot = find_label(presaved_name);
                         
                         const char *record_src_reg = NULL;
                         Register_t *loaded_param_reg = NULL;
                         
-                        if (temp_param_slot != NULL)
+                        if (presaved_slot != NULL)
                         {
-                            /* Load from temp slot */
+                            /* Load from presaved slot */
                             loaded_param_reg = get_free_reg(get_reg_stack(), &inst_list);
                             if (loaded_param_reg != NULL)
                             {
                                 snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-                                    temp_param_slot->offset, loaded_param_reg->bit_64);
+                                    presaved_slot->offset, loaded_param_reg->bit_64);
                                 inst_list = add_inst(inst_list, buffer);
                                 record_src_reg = loaded_param_reg->bit_64;
                             }
@@ -3718,7 +3793,42 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     {
                         arg_reg = alloc_integer_arg_reg(use_64bit, &next_gpr_index);
                         Register_t *stack_value_reg = NULL;
-                        const char *value_source = arg_reg;
+                        const char *value_source = NULL;
+                        
+                        /* Check if we have a presaved slot from pre-pass. We must use it
+                         * because the argument registers may have been clobbered by kgpc_move
+                         * calls when processing earlier record/dynarray parameters. */
+                        char presaved_name[64];
+                        snprintf(presaved_name, sizeof(presaved_name), "__presaved_%s__", (char *)arg_ids->cur);
+                        StackNode_t *presaved_slot = find_label(presaved_name);
+                        
+                        if (presaved_slot != NULL && arg_reg != NULL)
+                        {
+                            /* Load from presaved slot since register may be clobbered */
+                            stack_value_reg = get_free_reg(get_reg_stack(), &inst_list);
+                            if (stack_value_reg != NULL)
+                            {
+                                if (use_64bit)
+                                {
+                                    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                                        presaved_slot->offset, stack_value_reg->bit_64);
+                                    value_source = stack_value_reg->bit_64;
+                                }
+                                else
+                                {
+                                    snprintf(buffer, sizeof(buffer), "\tmovl\t-%d(%%rbp), %s\n",
+                                        presaved_slot->offset, stack_value_reg->bit_32);
+                                    value_source = stack_value_reg->bit_32;
+                                }
+                                inst_list = add_inst(inst_list, buffer);
+                            }
+                        }
+                        
+                        if (value_source == NULL)
+                        {
+                            value_source = arg_reg;
+                        }
+                        
                         if (value_source == NULL)
                         {
                             stack_value_reg = get_free_reg(get_reg_stack(), &inst_list);
