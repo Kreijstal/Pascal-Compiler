@@ -753,6 +753,11 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
     /* If kinds are different, generally incompatible */
     /* Exception: we need to check for special cases */
     if (lhs_type->kind != rhs_type->kind) {
+        /* Allow array literals to be assigned to array of const parameters.
+         * Any array (TYPE_KIND_ARRAY) can be passed to array of const (TYPE_KIND_ARRAY_OF_CONST). */
+        if (lhs_type->kind == TYPE_KIND_ARRAY_OF_CONST && rhs_type->kind == TYPE_KIND_ARRAY) {
+            return 1;  /* Array literal or array variable to array of const */
+        }
         /* Allow nil (represented as pointer) to be assigned to any pointer */
         /* This is a common Pascal idiom: var p: PNode; begin p := nil; end; */
         if (lhs_type->kind == TYPE_KIND_POINTER && rhs_type->kind == TYPE_KIND_POINTER) {

@@ -12364,6 +12364,13 @@ skip_overload_resolution:
                     {
                         type_compatible = 1;
                     }
+                    /* For array of const: accept any array literal - elements are converted to TVarRec */
+                    else if (expected_type == ARRAY_OF_CONST_TYPE &&
+                             current_arg_expr != NULL &&
+                             current_arg_expr->type == EXPR_ARRAY_LITERAL)
+                    {
+                        type_compatible = 1;
+                    }
                     /* For complex types (records, files, etc.), if both have the same type tag,
                      * consider them compatible. The overload resolution already ensured we have
                      * the right function via name mangling. */
