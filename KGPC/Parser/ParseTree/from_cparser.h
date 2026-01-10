@@ -42,6 +42,11 @@ void get_class_methods(const char *class_name, ListNode_t **methods_out, int *co
  */
 int from_cparser_is_method_static(const char *class_name, const char *method_name);
 
+/* Check if a method is virtual (needs VMT dispatch).
+ * Returns 1 if virtual or override, 0 otherwise.
+ */
+int from_cparser_is_method_virtual(const char *class_name, const char *method_name);
+
 void from_cparser_enable_pending_specializations(void);
 void from_cparser_disable_pending_specializations(void);
 void resolve_pending_generic_aliases(Tree_t *program_tree);
@@ -52,6 +57,10 @@ void append_generic_method_clones(Tree_t *program_tree);
  * This is used to copy default parameter values from class declarations to implementations.
  */
 struct MethodTemplate *from_cparser_get_method_template(struct RecordType *record, const char *method_name);
+
+/* Convert a method template params AST into a parameter list (Tree_t var decls).
+ * Returns a list of Tree_t* (LIST_TREE) or NULL if no params. */
+ListNode_t *from_cparser_convert_params_ast(ast_t *params_ast);
 
 /* Register a method template with the class method binding system.
  * This is used by the semantic checker to ensure method templates are findable.

@@ -449,6 +449,40 @@ StackNode_t *add_q_z(char *label)
     return new_node;
 }
 
+/* Reserved z_offset value for temporary reservation */
+static int g_reserved_z_offset = 0;
+
+/* Reserves z_offset space to prevent overlap between x pool (temp slots) and z pool (final storage).
+ * This should be called before allocating temp slots so they are placed after the z pool region. */
+void reserve_z_offset(int size)
+{
+    assert(global_stackmng != NULL);
+    assert(global_stackmng->cur_scope != NULL);
+    
+    g_reserved_z_offset = global_stackmng->cur_scope->z_offset;
+    global_stackmng->cur_scope->z_offset = size;
+    
+    #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: Reserved z_offset to %d (was %d)\n", size, g_reserved_z_offset);
+    #endif
+}
+
+/* Unreserves z_offset by restoring the original value.
+ * This should be called after allocating temp slots so z allocations start from the beginning. */
+void unreserve_z_offset(void)
+{
+    assert(global_stackmng != NULL);
+    assert(global_stackmng->cur_scope != NULL);
+    
+    #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: Unreserved z_offset from %d to %d\n",
+            global_stackmng->cur_scope->z_offset, g_reserved_z_offset);
+    #endif
+    
+    global_stackmng->cur_scope->z_offset = g_reserved_z_offset;
+    g_reserved_z_offset = 0;
+}
+
 RegStack_t *get_reg_stack()
 {
     assert(global_stackmng != NULL);

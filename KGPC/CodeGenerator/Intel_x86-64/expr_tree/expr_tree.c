@@ -1037,7 +1037,7 @@ ListNode_t *gencode_modulus(const char *left, const char *right, ListNode_t *ins
 
     assert(left != NULL);
     assert(right != NULL);
-    assert(inst_list != NULL);
+    /* Note: inst_list can be NULL at the start of code generation */
 
     // Move dividend (A, right) to eax
     snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%eax\n", right);
@@ -1668,6 +1668,34 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 inst_list = add_inst(inst_list, buffer);
             }
         }
+        else if (expr->expr_data.function_call_data.is_virtual_call &&
+                 expr->expr_data.function_call_data.vmt_index >= 0)
+        {
+            /* Virtual method call - dispatch through VMT.
+             * The instance pointer (Self) lives in the first argument register:
+             *   - SysV:  %rdi
+             *   - Win64: %rcx
+             * The instance has the VMT pointer at offset 0.
+             * We need to:
+             *   1. Get the VMT pointer from the instance
+             *   2. Index into the VMT to get the method pointer
+             *   3. Call through the method pointer */
+            int vmt_index = expr->expr_data.function_call_data.vmt_index;
+            const char *self_reg = codegen_target_is_windows() ? "%rcx" : "%rdi";
+            /* Copy instance pointer to r11 */
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r11\n", self_reg);
+            inst_list = add_inst(inst_list, buffer);
+            /* Get VMT pointer (at offset 0 of instance) */
+            snprintf(buffer, sizeof(buffer), "\tmovq\t(%%r11), %%r11\n");
+            inst_list = add_inst(inst_list, buffer);
+            /* VMT layout: [typeinfo at 0, method1 at 8, method2 at 16, ...] */
+            int vmt_offset = vmt_index * 8;
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%d(%%r11), %%r11\n", vmt_offset);
+            inst_list = add_inst(inst_list, buffer);
+            /* Call through the VMT entry */
+            snprintf(buffer, sizeof(buffer), "\tcall\t*%%r11\n");
+            inst_list = add_inst(inst_list, buffer);
+        }
         else
         {
             /* Normal function call */
@@ -2276,7 +2304,7 @@ ListNode_t *gencode_case2(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     #endif
     assert(node != NULL);
     assert(node->expr != NULL);
-    assert(inst_list != NULL);
+    /* Note: inst_list can be NULL at the start of code generation */
     assert(ctx != NULL);
     assert(target_reg != NULL);
 
@@ -2328,7 +2356,7 @@ ListNode_t *gencode_case3(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     #endif
     assert(node != NULL);
     assert(node->expr != NULL);
-    assert(inst_list != NULL);
+    /* Note: inst_list can be NULL at the start of code generation */
     assert(ctx != NULL);
     assert(target_reg != NULL);
 

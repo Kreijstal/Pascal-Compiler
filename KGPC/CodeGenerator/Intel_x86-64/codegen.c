@@ -28,9 +28,40 @@
 #include "../../Parser/ParseTree/from_cparser.h"
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
 #include "../../Parser/SemanticCheck/SemChecks/SemCheck_expr.h"
+#include "../../identifier_utils.h"
 
 #define CODEGEN_POINTER_SIZE_BYTES 8
 #define CODEGEN_LABEL_BUFFER_SIZE 256
+
+static int codegen_self_param_is_class(Tree_t *arg_decl, SymTab_t *symtab)
+{
+    if (arg_decl == NULL || arg_decl->type != TREE_VAR_DECL)
+        return 0;
+
+    KgpcType *type = arg_decl->tree_data.var_decl_data.cached_kgpc_type;
+    const char *type_id = arg_decl->tree_data.var_decl_data.type_id;
+    if (type == NULL && symtab != NULL && type_id != NULL)
+    {
+        HashNode_t *type_node = NULL;
+        if (FindIdent(&type_node, symtab, type_id) == 0 &&
+            type_node != NULL && type_node->type != NULL)
+            type = type_node->type;
+    }
+
+    if (type == NULL)
+        return 0;
+
+    if (kgpc_type_is_pointer(type) &&
+        type->info.points_to != NULL &&
+        type->info.points_to->kind == TYPE_KIND_RECORD &&
+        type->info.points_to->info.record_info != NULL)
+        return record_type_is_class(type->info.points_to->info.record_info);
+
+    if (type->kind == TYPE_KIND_RECORD && type->info.record_info != NULL)
+        return record_type_is_class(type->info.record_info);
+
+    return 0;
+}
 
 /* Escape a string for use in assembly .string directive */
 void escape_string(char *dest, const char *src, size_t dest_size)
@@ -1410,7 +1441,12 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
     fprintf(ctx->output_file, "\n");
     fprintf(ctx->output_file, "# Class RTTI metadata and Virtual Method Tables (VMT)\n");
     fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());
-    
+
+    /* Track emitted class labels to avoid duplicates (e.g., TObject from merged units) */
+    #define MAX_EMITTED_CLASSES 256
+    const char *emitted_classes[MAX_EMITTED_CLASSES];
+    int emitted_count = 0;
+
     /* Iterate through all type declarations */
     ListNode_t *cur = type_decls;
     while (cur != NULL) {
@@ -1438,6 +1474,23 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
             }
 
             if (record_info != NULL && record_type_is_class(record_info) && class_label != NULL) {
+                    /* Check if this class was already emitted (can happen with merged units) */
+                    int already_emitted = 0;
+                    for (int i = 0; i < emitted_count; i++) {
+                        if (emitted_classes[i] != NULL && strcmp(emitted_classes[i], class_label) == 0) {
+                            already_emitted = 1;
+                            break;
+                        }
+                    }
+                    if (already_emitted) {
+                        cur = cur->next;
+                        continue;
+                    }
+                    /* Track this class as emitted */
+                    if (emitted_count < MAX_EMITTED_CLASSES) {
+                        emitted_classes[emitted_count++] = class_label;
+                    }
+
                     fprintf(ctx->output_file, "\n# RTTI for class %s\n", class_label);
                     fprintf(ctx->output_file, "\t.align 8\n");
                     fprintf(ctx->output_file, ".globl %s_TYPEINFO\n", class_label);
@@ -1471,7 +1524,23 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
                         while (method_node != NULL) {
                             struct MethodInfo *method = (struct MethodInfo *)method_node->cur;
                             if (method != NULL && method->mangled_name != NULL) {
-                                fprintf(ctx->output_file, "\t.quad\t%s_p\n", method->mangled_name);
+                                /* Look up the actual function symbol to get its full mangled name.
+                                 * Only use it if the method has a definition (body), not just a declaration. */
+                                HashNode_t *func_sym = NULL;
+                                const char *full_mangled = NULL;
+                                if (FindIdent(&func_sym, symtab, method->mangled_name) == 0 &&
+                                    func_sym != NULL && func_sym->mangled_id != NULL &&
+                                    func_sym->type != NULL &&
+                                    func_sym->type->kind == TYPE_KIND_PROCEDURE &&
+                                    func_sym->type->info.proc_info.definition != NULL) {
+                                    full_mangled = func_sym->mangled_id;
+                                }
+                                if (full_mangled != NULL) {
+                                    fprintf(ctx->output_file, "\t.quad\t%s\n", full_mangled);
+                                } else {
+                                    /* Abstract method or no definition - emit reference to runtime error handler */
+                                    fprintf(ctx->output_file, "\t.quad\t__kgpc_abstract_method_error\n");
+                                }
                             }
                             method_node = method_node->next;
                         }
@@ -1783,18 +1852,23 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
             {
                 HashNode_t cached_type_node;
                 HashNode_t *fallback_type_node = NULL;
+                HashNode_t *var_info = NULL;
                 if (cached_type != NULL)
                 {
                     memset(&cached_type_node, 0, sizeof(cached_type_node));
                     cached_type_node.type = cached_type;
                     fallback_type_node = &cached_type_node;
                 }
+                if (symtab != NULL)
+                    FindIdent(&var_info, symtab, (char *)id_list->cur);
 
                 HashNode_t *effective_type_node = type_node;
                 if (effective_type_node == NULL)
                     effective_type_node = fallback_type_node;
 
                 struct TypeAlias *alias = get_type_alias_from_node(effective_type_node);
+                if (alias == NULL && var_info != NULL)
+                    alias = get_type_alias_from_node(var_info);
                 if (alias != NULL && alias->is_array)
                 {
                     long long computed_size = 0;
@@ -1898,10 +1972,72 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                         }
                     }
                 }
+                else if (var_info != NULL && var_info->type != NULL && kgpc_type_is_array(var_info->type))
+                {
+                    KgpcType *array_type = var_info->type;
+                    KgpcType *element_type = array_type->info.array_info.element_type;
+                    long long element_size_ll = kgpc_type_get_array_element_size(array_type);
+                    if (element_size_ll <= 0 && element_type != NULL)
+                        element_size_ll = kgpc_type_sizeof(element_type);
+                    if (element_size_ll <= 0)
+                        element_size_ll = 4;
+
+                    int start = 0;
+                    int end = -1;
+                    kgpc_type_get_array_bounds(array_type, &start, &end);
+                    int is_open_array = kgpc_type_is_dynamic_array(array_type);
+
+                    if (is_open_array)
+                    {
+                        char *static_label = NULL;
+                        if (is_program_scope)
+                        {
+                            static_label = codegen_make_program_var_label(ctx, (char *)id_list->cur);
+                            if (ctx->output_file != NULL && static_label != NULL)
+                            {
+                                int descriptor_bytes = codegen_dynamic_array_descriptor_bytes((int)element_size_ll);
+                                int alignment = descriptor_bytes >= 8 ? 8 : DOUBLEWORD;
+                                fprintf(ctx->output_file, "\t.comm\t%s,%d,%d\n",
+                                    static_label, descriptor_bytes, alignment);
+                            }
+                        }
+                        add_dynamic_array((char *)id_list->cur, (int)element_size_ll,
+                            start, is_program_scope, static_label);
+                        if (static_label != NULL)
+                            free(static_label);
+                    }
+                    else
+                    {
+                        int length = end - start + 1;
+                        if (length < 0)
+                            length = 0;
+                        long long total_size = (long long)length * element_size_ll;
+                        if (total_size <= 0)
+                            total_size = element_size_ll;
+                        if (is_program_scope)
+                        {
+                            char *static_label = codegen_make_program_var_label(ctx, (char *)id_list->cur);
+                            if (ctx->output_file != NULL && static_label != NULL)
+                            {
+                                int alignment = total_size >= 8 ? 8 : DOUBLEWORD;
+                                fprintf(ctx->output_file, "\t.comm\t%s,%d,%d\n",
+                                    static_label, (int)total_size, alignment);
+                            }
+                            add_static_array((char *)id_list->cur, (int)total_size,
+                                (int)element_size_ll, start, static_label);
+                            if (static_label != NULL)
+                                free(static_label);
+                        }
+                        else
+                        {
+                            add_array((char *)id_list->cur, (int)total_size,
+                                (int)element_size_ll, start);
+                        }
+                    }
+                }
                 else
                 {
                     int alloc_size = DOUBLEWORD;
-                    HashNode_t *var_info = NULL;
                     HashNode_t *size_node = NULL;  /* Node to get size from */
                     HashNode_t temp_size_node;
                     
@@ -2936,8 +3072,14 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     else if (has_record_return && return_dest_slot != NULL && record_return_size > 0)
     {
         Register_t *dest_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (dest_reg == NULL)
+            dest_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
         Register_t *src_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (src_reg == NULL)
+            src_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
         Register_t *size_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (size_reg == NULL)
+            size_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
         if (dest_reg == NULL || src_reg == NULL || size_reg == NULL)
         {
             if (dest_reg != NULL)
@@ -3412,37 +3554,112 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
 
     next_gpr_index = arg_start_index;
 
-    /* Pre-pass: Save all parameter registers to temp stack slots to prevent them from being
-     * clobbered during kgpc_move setup for record parameters. This is necessary because
-     * processing one record parameter may clobber registers containing subsequent parameters. */
+    /* Pre-pass phase 1: Check if there's any record/dynarray parameter that will need kgpc_move.
+     * If so, we need to pre-allocate ALL parameter storage and save registers to final locations
+     * before processing starts, to avoid register clobbering issues. */
     ListNode_t *args_scan = args;
-    int scan_gpr_index = arg_start_index;
+    int has_record_or_dynarray = 0;
+    int param_count_for_alloc = 0;
+    
     while(args_scan != NULL)
     {
         Tree_t *scan_decl = (Tree_t *)args_scan->cur;
         if (scan_decl->type == TREE_VAR_DECL)
         {
             ListNode_t *scan_ids = scan_decl->tree_data.var_decl_data.ids;
+            int scan_type = scan_decl->tree_data.var_decl_data.type;
+            KgpcType *scan_cached_type = scan_decl->tree_data.var_decl_data.cached_kgpc_type;
+            int is_var = scan_decl->tree_data.var_decl_data.is_var_param;
+            
             while(scan_ids != NULL)
             {
-                const char *param_reg = alloc_integer_arg_reg(1, &scan_gpr_index);
-                if (param_reg != NULL)
+                param_count_for_alloc++;
+                
+                /* Check if this parameter is a record or dynarray that needs kgpc_move */
+                if (!is_var)
                 {
-                    /* Allocate temp slot and save parameter register */
-                    char temp_name[64];
-                    snprintf(temp_name, sizeof(temp_name), "__param_%s__", (char *)scan_ids->cur);
-                    StackNode_t *temp_slot = add_l_x(temp_name, CODEGEN_POINTER_SIZE_BYTES);
-                    if (temp_slot != NULL)
+                    HashNode_t *scan_type_node = NULL;
+                    if (scan_type == UNKNOWN_TYPE && scan_decl->tree_data.var_decl_data.type_id != NULL && symtab != NULL)
                     {
-                        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
-                            param_reg, temp_slot->offset);
-                        inst_list = add_inst(inst_list, buffer);
+                        FindIdent(&scan_type_node, symtab, scan_decl->tree_data.var_decl_data.type_id);
+                    }
+                    
+                    struct RecordType *rec = NULL;
+                    if (scan_type_node != NULL)
+                        rec = get_record_type_from_node(scan_type_node);
+                    if (rec == NULL && scan_cached_type != NULL)
+                    {
+                        HashNode_t cached_node;
+                        memset(&cached_node, 0, sizeof(cached_node));
+                        cached_node.type = scan_cached_type;
+                        rec = get_record_type_from_node(&cached_node);
+                    }
+                    
+                    if (rec != NULL)
+                    {
+                        has_record_or_dynarray = 1;
+                    }
+                    else if (scan_cached_type != NULL &&
+                             scan_cached_type->kind == TYPE_KIND_ARRAY &&
+                             kgpc_type_is_dynamic_array(scan_cached_type))
+                    {
+                        has_record_or_dynarray = 1;
+                    }
+                    else if (scan_type_node != NULL && scan_type_node->type != NULL &&
+                             scan_type_node->type->kind == TYPE_KIND_ARRAY &&
+                             kgpc_type_is_dynamic_array(scan_type_node->type))
+                    {
+                        has_record_or_dynarray = 1;
                     }
                 }
                 scan_ids = scan_ids->next;
             }
         }
+        else if (scan_decl->type == TREE_ARR_DECL)
+        {
+            ListNode_t *scan_ids = scan_decl->tree_data.arr_decl_data.ids;
+            while(scan_ids != NULL)
+            {
+                param_count_for_alloc++;
+                scan_ids = scan_ids->next;
+            }
+        }
         args_scan = args_scan->next;
+    }
+    
+    /* Pre-pass phase 2: If there are record/dynarray parameters, pre-allocate ALL storage
+     * and save registers to their final locations before processing starts. */
+    if (has_record_or_dynarray && param_count_for_alloc > 0)
+    {
+        args_scan = args;
+        int scan_gpr_index = arg_start_index;
+        while(args_scan != NULL)
+        {
+            Tree_t *scan_decl = (Tree_t *)args_scan->cur;
+            if (scan_decl->type == TREE_VAR_DECL)
+            {
+                ListNode_t *scan_ids = scan_decl->tree_data.var_decl_data.ids;
+                while(scan_ids != NULL)
+                {
+                    const char *param_reg = alloc_integer_arg_reg(1, &scan_gpr_index);
+                    if (param_reg != NULL)
+                    {
+                        /* Allocate final storage slot and save register directly */
+                        char temp_name[64];
+                        snprintf(temp_name, sizeof(temp_name), "__presaved_%s__", (char *)scan_ids->cur);
+                        StackNode_t *presaved_slot = add_q_z(temp_name);
+                        if (presaved_slot != NULL)
+                        {
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                                param_reg, presaved_slot->offset);
+                            inst_list = add_inst(inst_list, buffer);
+                        }
+                    }
+                    scan_ids = scan_ids->next;
+                }
+            }
+            args_scan = args_scan->next;
+        }
     }
     
     /* Reset for main processing pass */
@@ -3498,6 +3715,18 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                 {
                     int tree_is_var_param = arg_decl->tree_data.var_decl_data.is_var_param;
                     int symbol_is_var_param = tree_is_var_param;
+                    int is_self_param = 0;
+                    if (arg_decl->tree_data.var_decl_data.ids != NULL)
+                    {
+                        const char *first_id = (const char *)arg_decl->tree_data.var_decl_data.ids->cur;
+                        if (first_id != NULL && pascal_identifier_equals(first_id, "Self"))
+                            is_self_param = 1;
+                    }
+                    if (is_self_param && codegen_self_param_is_class(arg_decl, symtab))
+                    {
+                        tree_is_var_param = 0;
+                        symbol_is_var_param = 0;
+                    }
                     struct RecordType *record_type_info = NULL;
                     int is_dynarray_param = 0;
                     int dynarray_elem_size = 0;
@@ -3584,22 +3813,22 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                         arg_reg = alloc_integer_arg_reg(1, &next_gpr_index);
                         Register_t *stack_value_reg = NULL;
                         
-                        /* Load parameter from temp slot that was saved in pre-pass */
-                        char temp_name[64];
-                        snprintf(temp_name, sizeof(temp_name), "__param_%s__", (char *)arg_ids->cur);
-                        StackNode_t *temp_param_slot = find_label(temp_name);
+                        /* Load parameter from presaved slot that was saved in pre-pass */
+                        char presaved_name[64];
+                        snprintf(presaved_name, sizeof(presaved_name), "__presaved_%s__", (char *)arg_ids->cur);
+                        StackNode_t *presaved_slot = find_label(presaved_name);
                         
                         const char *record_src_reg = NULL;
                         Register_t *loaded_param_reg = NULL;
                         
-                        if (temp_param_slot != NULL)
+                        if (presaved_slot != NULL)
                         {
-                            /* Load from temp slot */
+                            /* Load from presaved slot */
                             loaded_param_reg = get_free_reg(get_reg_stack(), &inst_list);
                             if (loaded_param_reg != NULL)
                             {
                                 snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-                                    temp_param_slot->offset, loaded_param_reg->bit_64);
+                                    presaved_slot->offset, loaded_param_reg->bit_64);
                                 inst_list = add_inst(inst_list, buffer);
                                 record_src_reg = loaded_param_reg->bit_64;
                             }
@@ -3628,6 +3857,8 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                         }
 
                         Register_t *size_reg = get_free_reg(get_reg_stack(), &inst_list);
+                        if (size_reg == NULL)
+                            size_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
                         if (size_reg == NULL)
                         {
                             codegen_report_error(ctx,
@@ -3718,7 +3949,42 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     {
                         arg_reg = alloc_integer_arg_reg(use_64bit, &next_gpr_index);
                         Register_t *stack_value_reg = NULL;
-                        const char *value_source = arg_reg;
+                        const char *value_source = NULL;
+                        
+                        /* Check if we have a presaved slot from pre-pass. We must use it
+                         * because the argument registers may have been clobbered by kgpc_move
+                         * calls when processing earlier record/dynarray parameters. */
+                        char presaved_name[64];
+                        snprintf(presaved_name, sizeof(presaved_name), "__presaved_%s__", (char *)arg_ids->cur);
+                        StackNode_t *presaved_slot = find_label(presaved_name);
+                        
+                        if (presaved_slot != NULL && arg_reg != NULL)
+                        {
+                            /* Load from presaved slot since register may be clobbered */
+                            stack_value_reg = get_free_reg(get_reg_stack(), &inst_list);
+                            if (stack_value_reg != NULL)
+                            {
+                                if (use_64bit)
+                                {
+                                    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                                        presaved_slot->offset, stack_value_reg->bit_64);
+                                    value_source = stack_value_reg->bit_64;
+                                }
+                                else
+                                {
+                                    snprintf(buffer, sizeof(buffer), "\tmovl\t-%d(%%rbp), %s\n",
+                                        presaved_slot->offset, stack_value_reg->bit_32);
+                                    value_source = stack_value_reg->bit_32;
+                                }
+                                inst_list = add_inst(inst_list, buffer);
+                            }
+                        }
+                        
+                        if (value_source == NULL)
+                        {
+                            value_source = arg_reg;
+                        }
+                        
                         if (value_source == NULL)
                         {
                             stack_value_reg = get_free_reg(get_reg_stack(), &inst_list);
