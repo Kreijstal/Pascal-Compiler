@@ -112,6 +112,8 @@ static Tree_t* map_find(SubprogramMap *map, const char *mangled_id) {
 /* Forward declarations */
 static void mark_expr_calls(struct Expression *expr, SubprogramMap *map);
 static void mark_stmt_calls(struct Statement *stmt, SubprogramMap *map);
+static void mark_vmt_methods_used(Tree_t *program, SubprogramMap *map);
+static void mark_subprograms_by_id(SubprogramMap *map, const char *id);
 
 /* Mark a subprogram and recursively mark all functions it calls */
 static void mark_subprogram_recursive(Tree_t *sub, SubprogramMap *map) {
@@ -594,6 +596,9 @@ void mark_used_functions(Tree_t *program, SymTab_t *symtab) {
         }
         final = final->next;
     }
+
+    /* Ensure VMT methods are retained even if they are not explicitly called. */
+    mark_vmt_methods_used(program, &map);
     
     /* IMPORTANT: Second pass to sync forward declarations with implementations */
     /* For each subprogram, if it has the same mangled_id as another, sync is_used */
@@ -621,4 +626,71 @@ void mark_used_functions(Tree_t *program, SymTab_t *symtab) {
     #endif
     
     map_destroy(&map);
+}
+
+static void mark_vmt_methods_used(Tree_t *program, SubprogramMap *map)
+{
+    if (program == NULL || program->type != TREE_PROGRAM_TYPE || map == NULL)
+        return;
+
+    ListNode_t *type_node = program->tree_data.program_data.type_declaration;
+    while (type_node != NULL)
+    {
+        if (type_node->type == LIST_TREE && type_node->cur != NULL)
+        {
+            Tree_t *type_tree = (Tree_t *)type_node->cur;
+            if (type_tree->type == TREE_TYPE_DECL)
+            {
+                struct RecordType *record_info = NULL;
+                if (type_tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD)
+                {
+                    record_info = type_tree->tree_data.type_decl_data.info.record;
+                }
+                else if (type_tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS)
+                {
+                    record_info = type_tree->tree_data.type_decl_data.info.alias.inline_record_type;
+                }
+
+                if (record_info != NULL && record_type_is_class(record_info))
+                {
+                    ListNode_t *method_node = record_info->methods;
+                    while (method_node != NULL)
+                    {
+                        struct MethodInfo *method = (struct MethodInfo *)method_node->cur;
+                        const char *lookup_id = NULL;
+                        if (method != NULL)
+                            lookup_id = method->mangled_name != NULL ? method->mangled_name : method->name;
+                        if (lookup_id != NULL)
+                        {
+                            Tree_t *sub = map_find(map, lookup_id);
+                            if (sub != NULL)
+                                mark_subprogram_recursive(sub, map);
+                            /* Also mark all overloads that share the base id. */
+                            mark_subprograms_by_id(map, lookup_id);
+                        }
+                        method_node = method_node->next;
+                    }
+                }
+            }
+        }
+        type_node = type_node->next;
+    }
+}
+
+static void mark_subprograms_by_id(SubprogramMap *map, const char *id)
+{
+    if (map == NULL || id == NULL)
+        return;
+
+    for (int i = 0; i < map->count; i++)
+    {
+        Tree_t *sub = map->entries[i].subprogram;
+        if (sub == NULL || sub->type != TREE_SUBPROGRAM)
+            continue;
+        const char *sub_id = sub->tree_data.subprogram_data.id;
+        if (sub_id != NULL && pascal_identifier_equals(sub_id, id))
+        {
+            mark_subprogram_recursive(sub, map);
+        }
+    }
 }

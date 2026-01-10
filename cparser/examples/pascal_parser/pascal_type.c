@@ -1365,16 +1365,28 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
     prim_args* pargs = (prim_args*)args;
     InputState state; save_input_state(in, &state);
 
-    bool is_packed = false;
-    combinator_t* packed_keyword = token(keyword_ci("packed"));
-    ParseResult packed_res = parse(in, packed_keyword);
-    if (packed_res.is_success) {
-        is_packed = true;
-        free_ast(packed_res.value.ast);
+    const char* pack_sym = NULL;
+    combinator_t* bitpacked_keyword = token(keyword_ci("bitpacked"));
+    ParseResult bitpacked_res = parse(in, bitpacked_keyword);
+    if (bitpacked_res.is_success) {
+        pack_sym = "bitpacked";
+        free_ast(bitpacked_res.value.ast);
     } else {
-        discard_failure(packed_res);
+        discard_failure(bitpacked_res);
     }
-    free_combinator(packed_keyword);
+    free_combinator(bitpacked_keyword);
+
+    if (pack_sym == NULL) {
+        combinator_t* packed_keyword = token(keyword_ci("packed"));
+        ParseResult packed_res = parse(in, packed_keyword);
+        if (packed_res.is_success) {
+            pack_sym = "packed";
+            free_ast(packed_res.value.ast);
+        } else {
+            discard_failure(packed_res);
+        }
+        free_combinator(packed_keyword);
+    }
 
     combinator_t* record_keyword = token(keyword_ci("record"));
     ParseResult record_res = parse(in, record_keyword);
@@ -1914,7 +1926,7 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
 
     ast_t* record_ast = new_ast();
     record_ast->typ = pargs->tag;
-    record_ast->sym = is_packed ? sym_lookup("packed") : NULL;
+    record_ast->sym = pack_sym ? sym_lookup(pack_sym) : NULL;
     record_ast->child = fields_ast;
     record_ast->next = NULL;
 

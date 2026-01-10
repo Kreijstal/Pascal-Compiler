@@ -110,6 +110,8 @@ int semcheck_is_unit_name(const char *name)
 {
     if (name == NULL || name[0] == '\0')
         return 0;
+    if (pascal_identifier_equals(name, "System"))
+        return 1;
 
     ListNode_t *cur = g_semcheck_unit_names;
     while (cur != NULL)
@@ -187,6 +189,21 @@ static int semcheck_map_builtin_type_name_local(const char *id)
     if (pascal_identifier_equals(id, "file"))
         return FILE_TYPE;
     return UNKNOWN_TYPE;
+}
+
+static char *semcheck_dup_type_id_from_ast(ast_t *node)
+{
+    if (node == NULL)
+        return NULL;
+    if (node->sym != NULL && node->sym->name != NULL)
+        return strdup(node->sym->name);
+    for (ast_t *child = node->child; child != NULL; child = child->next)
+    {
+        char *found = semcheck_dup_type_id_from_ast(child);
+        if (found != NULL)
+            return found;
+    }
+    return NULL;
 }
 
 static int semcheck_is_char_alias_name(const char *id)
@@ -394,25 +411,52 @@ void semcheck_add_builtins(SymTab_t *symtab);
 void semantic_error(int line_num, int col_num, const char *format, ...)
 {
     const char *file_path = (file_to_parse != NULL && *file_to_parse != '\0') ? file_to_parse : NULL;
-    
-    /* Print the error message */
+
     fprintf(stderr, "Error on line %d", line_num);
-    if (col_num > 0)
+    if (col_num > 0) {
         fprintf(stderr, ", column %d", col_num);
+    }
     fprintf(stderr, ": ");
-    
+
     va_list args;
     va_start(args, format);
     vfprintf(stderr, format, args);
     va_end(args);
     fprintf(stderr, "\n");
-    
-    /* Print source code context if we have a file */
-    if (file_path != NULL && line_num > 0)
-    {
+
+    if (file_path != NULL && line_num > 0) {
         print_source_context(file_path, line_num, col_num, 2);
     }
-    
+
+    fprintf(stderr, "\n");
+}
+
+/* Helper for legacy error prints that already include "Error on line %d". */
+void semcheck_error_with_context(const char *format, ...)
+{
+    const char *file_path = (file_to_parse != NULL && *file_to_parse != '\0') ? file_to_parse : NULL;
+    int line_num = 0;
+
+    va_list args;
+    va_start(args, format);
+
+    va_list args_copy;
+    va_copy(args_copy, args);
+    line_num = va_arg(args_copy, int);
+    va_end(args_copy);
+
+    vfprintf(stderr, format, args);
+    va_end(args);
+
+    size_t len = format ? strlen(format) : 0;
+    if (len == 0 || format[len - 1] != '\n') {
+        fprintf(stderr, "\n");
+    }
+
+    if (file_path != NULL && line_num > 0) {
+        print_source_context(file_path, line_num, 0, 2);
+    }
+
     fprintf(stderr, "\n");
 }
 
@@ -1076,6 +1120,17 @@ void semcheck_mark_static_link_needed(int scope_level, HashNode_t *node)
         return;
     if (g_semcheck_current_subprogram == NULL || node == NULL)
         return;
+    
+    /* Only set requires_static_link if the function is actually nested (nesting_level > 1).
+     * Top-level functions (nesting_level == 1) that access global variables do NOT need
+     * a static link because global variables are accessed via their static labels.
+     * 
+     * This check prevents the issue where a top-level function like SetBacking, which
+     * accesses a global variable, would incorrectly get requires_static_link=1 and then
+     * callers would fail trying to pass a static link. */
+    int nesting_level = g_semcheck_current_subprogram->tree_data.subprogram_data.nesting_level;
+    if (nesting_level <= 1)
+        return;
 
     switch (node->hash_type)
     {
@@ -1098,7 +1153,11 @@ void semcheck_mark_call_requires_static_link(HashNode_t *callee)
         return;
     if (!hashnode_requires_static_link(callee))
         return;
-    g_semcheck_current_subprogram->tree_data.subprogram_data.requires_static_link = 1;
+    /* When calling a function that requires a static link, the caller needs to
+     * be able to PASS a static link. Mark the caller as having nested children
+     * that need links, not as requiring a static link itself.
+     * The caller only RECEIVES a static link if it's nested or accesses outer vars. */
+    g_semcheck_current_subprogram->tree_data.subprogram_data.has_nested_requiring_link = 1;
 }
 
 int semcheck_program(SymTab_t *symtab, Tree_t *tree);
@@ -1560,6 +1619,22 @@ static int evaluate_string_const_expr(SymTab_t *symtab, struct Expression *expr,
 
     fprintf(stderr, "Error: unsupported string const expression.\n");
     return 1;
+}
+
+static int semcheck_param_list_equivalent(ListNode_t *lhs, ListNode_t *rhs)
+{
+    ListNode_t *lcur = lhs;
+    ListNode_t *rcur = rhs;
+    while (lcur != NULL && rcur != NULL)
+    {
+        Tree_t *lhs_decl = (Tree_t *)lcur->cur;
+        Tree_t *rhs_decl = (Tree_t *)rcur->cur;
+        if (!semcheck_param_decl_equivalent(lhs_decl, rhs_decl))
+            return 0;
+        lcur = lcur->next;
+        rcur = rcur->next;
+    }
+    return (lcur == NULL && rcur == NULL);
 }
 
 static int evaluate_real_const_expr(SymTab_t *symtab, struct Expression *expr, double *out_value)
@@ -2951,7 +3026,7 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                                         continue;
                                     }
                                     /* Different value - this is a real conflict */
-                                    fprintf(stderr,
+                                    semcheck_error_with_context(
                                             "Error on line %d, redeclaration of enum literal %s with different value!\n",
                                             tree->line_num, literal_name);
                                     ++errors;
@@ -2963,7 +3038,7 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                                 /* Use typed API with shared enum KgpcType - all literals reference same type */
                                 if (PushConstOntoScope_Typed(symtab, literal_name, ordinal, alias_info->kgpc_type) > 0)
                                 {
-                                    fprintf(stderr,
+                                    semcheck_error_with_context(
                                             "Error on line %d, redeclaration of enum literal %s!\n",
                                             tree->line_num, literal_name);
                                     ++errors;
@@ -3697,7 +3772,7 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
     /* Check for circular inheritance */
     if (check_circular_inheritance(symtab, class_name, record_info->parent_class_name, 100))
     {
-        fprintf(stderr, "Error on line %d, circular inheritance detected for class '%s'!\n",
+        semcheck_error_with_context("Error on line %d, circular inheritance detected for class '%s'!\n",
                 line_num, class_name ? class_name : "<unknown>");
         return 1;
     }
@@ -3706,7 +3781,7 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
     HashNode_t *parent_node = NULL;
     if (FindIdent(&parent_node, symtab, record_info->parent_class_name) == -1 || parent_node == NULL)
     {
-        fprintf(stderr, "Error on line %d, parent class '%s' not found!\n", 
+        semcheck_error_with_context("Error on line %d, parent class '%s' not found!\n", 
                 line_num, record_info->parent_class_name);
         return 1;
     }
@@ -3715,7 +3790,7 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
     struct RecordType *parent_record = get_record_type_from_node(parent_node);
     if (parent_record == NULL)
     {
-        fprintf(stderr, "Error on line %d, parent class '%s' is not a class/record type!\n",
+        semcheck_error_with_context("Error on line %d, parent class '%s' is not a class/record type!\n",
                 line_num, record_info->parent_class_name);
         return 1;
     }
@@ -4412,43 +4487,208 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                         }
                                     }
 
-                                    /* Add as forward declaration to symbol table */
+                                    /* Add as forward declaration to symbol table (allow overloads). */
                                     HashNode_t *existing = NULL;
-                                    if (FindIdent(&existing, symtab, mangled) == -1)
+                                    ListNode_t *existing_list = FindAllIdents(symtab, mangled);
+                                    int has_matching_signature = 0;
+
+                                    ListNode_t *params = NULL;
+                                    if (tmpl->params_ast != NULL)
+                                        params = from_cparser_convert_params_ast(tmpl->params_ast);
+                                    if (!tmpl->is_static)
                                     {
-                                        /* Create a placeholder type for the forward declaration */
-                                        KgpcType *proc_type = create_procedure_type(NULL, NULL);
-                                        if (proc_type != NULL)
+                                        const char *self_type_id = tree->tree_data.type_decl_data.id;
+                                        int self_is_var = 1;
+                                        if (record_info != NULL && record_info->is_type_helper)
                                         {
-                                            /* Check if this is a function or procedure */
-                                            if (tmpl->method_ast != NULL)
+                                            if (record_info->helper_base_type_id != NULL)
+                                                self_type_id = record_info->helper_base_type_id;
+                                            self_is_var = 0;
+                                        }
+                                        ListNode_t *self_ids = CreateListNode(strdup("Self"), LIST_STRING);
+                                        if (self_ids != NULL && self_type_id != NULL)
+                                        {
+                                            Tree_t *self_param = mk_vardecl(0, self_ids, UNKNOWN_TYPE,
+                                                strdup(self_type_id), self_is_var, 0, NULL, NULL, NULL, NULL);
+                                            ListNode_t *self_node = CreateListNode(self_param, LIST_TREE);
+                                            if (self_node != NULL)
                                             {
-                                                struct ast_t *method_ast = tmpl->method_ast;
-                                                /* Find the return type in the method AST */
-                                                for (ast_t *child = method_ast->child; child != NULL; child = child->next)
+                                                self_node->next = params;
+                                                params = self_node;
+                                            }
+                                        }
+                                    }
+
+                                    if (existing_list != NULL)
+                                    {
+                                        ListNode_t *cur = existing_list;
+                                        while (cur != NULL)
+                                        {
+                                            HashNode_t *candidate = (HashNode_t *)cur->cur;
+                                            if (candidate != NULL && candidate->type != NULL &&
+                                                candidate->type->kind == TYPE_KIND_PROCEDURE)
+                                            {
+                                                if (semcheck_param_list_equivalent(
+                                                        candidate->type->info.proc_info.params, params))
                                                 {
-                                                    if (child->typ == PASCAL_T_RETURN_TYPE)
-                                                    {
-                                                        if (child->sym != NULL && child->sym->name != NULL)
-                                                        {
-                                                            proc_type->kind = TYPE_KIND_PROCEDURE;
-                                                            proc_type->info.proc_info.return_type_id = strdup(child->sym->name);
-                                                        }
-                                                        break;
-                                                    }
+                                                    existing = candidate;
+                                                    has_matching_signature = 1;
+                                                    break;
+                                                }
+                                            }
+                                            cur = cur->next;
+                                        }
+                                    }
+
+                                    if (!has_matching_signature)
+                                    {
+                                        KgpcType *return_type = NULL;
+                                        char *return_type_id = NULL;
+                                        int is_function_template = (tmpl->kind == METHOD_TEMPLATE_FUNCTION ||
+                                            tmpl->kind == METHOD_TEMPLATE_CONSTRUCTOR ||
+                                            tmpl->has_return_type);
+                                        ast_t *return_type_node = tmpl->return_type_ast;
+                                        if (return_type_node == NULL && tmpl->method_ast != NULL)
+                                        {
+                                            struct ast_t *method_ast = tmpl->method_ast;
+                                            for (ast_t *child = method_ast->child; child != NULL; child = child->next)
+                                            {
+                                                if (child->typ == PASCAL_T_RETURN_TYPE)
+                                                {
+                                                    return_type_node = child;
+                                                    if (child->sym != NULL && child->sym->name != NULL)
+                                                        return_type_id = strdup(child->sym->name);
+                                                    break;
                                                 }
                                             }
                                         }
 
-                                        /* Add to symbol table as forward declaration - use mangled as both id and mangled_id */
-                                        PushProcedureOntoScope_Typed(symtab, mangled, mangled, proc_type);
-                                        destroy_kgpc_type(proc_type);
+                                        if (return_type_node != NULL)
+                                        {
+                                            if (return_type_node->child != NULL)
+                                                return_type = convert_type_spec_to_kgpctype(return_type_node->child, symtab);
+                                            if (return_type_id == NULL)
+                                                return_type_id = semcheck_dup_type_id_from_ast(return_type_node);
+                                        }
+                                        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL && tmpl->name != NULL &&
+                                            (strcasecmp(tmpl->name, "GetAnsiString") == 0 ||
+                                             strcasecmp(tmpl->name, "GetString") == 0))
+                                        {
+                                            fprintf(stderr,
+                                                "[SemCheck] tmpl %s return_type_node=%p return_type_id=%s return_type=%p\n",
+                                                tmpl->name,
+                                                (void *)return_type_node,
+                                                return_type_id != NULL ? return_type_id : "<null>",
+                                                (void *)return_type);
+                                        }
+                                        if (return_type == NULL && return_type_id != NULL)
+                                        {
+                                            HashNode_t *type_node = NULL;
+                                            if (FindIdent(&type_node, symtab, return_type_id) != -1 &&
+                                                type_node != NULL && type_node->type != NULL)
+                                            {
+                                                kgpc_type_retain(type_node->type);
+                                                return_type = type_node->type;
+                                            }
+                                            else
+                                            {
+                                                int tag = semcheck_map_builtin_type_name_local(return_type_id);
+                                                if (tag != UNKNOWN_TYPE)
+                                                    return_type = create_primitive_type(tag);
+                                            }
+                                        }
+
+                                        KgpcType *proc_type = create_procedure_type(params, return_type);
+                                        if (proc_type != NULL && return_type_id != NULL)
+                                            proc_type->info.proc_info.return_type_id = strdup(return_type_id);
+
+                                        if (return_type_id != NULL)
+                                            free(return_type_id);
+
+                                        if (is_function_template)
+                                            PushFunctionOntoScope_Typed(symtab, mangled, mangled, proc_type);
+                                        else
+                                            PushProcedureOntoScope_Typed(symtab, mangled, mangled, proc_type);
+
+                                        if (proc_type != NULL)
+                                            destroy_kgpc_type(proc_type);
 
                                         if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                                             fprintf(stderr, "[SemCheck] Added method forward declaration: %s -> %s\n",
                                                 tmpl->name, mangled);
                                         }
                                     }
+                                    else
+                                    {
+                                        int is_function_template = (tmpl->kind == METHOD_TEMPLATE_FUNCTION ||
+                                            tmpl->kind == METHOD_TEMPLATE_CONSTRUCTOR ||
+                                            tmpl->has_return_type);
+                                        if (is_function_template && existing != NULL &&
+                                            existing->hash_type == HASHTYPE_PROCEDURE)
+                                            existing->hash_type = HASHTYPE_FUNCTION;
+                                        if (existing != NULL && existing->type != NULL &&
+                                            existing->type->kind == TYPE_KIND_PROCEDURE &&
+                                            existing->type->info.proc_info.return_type == NULL)
+                                        {
+                                            KgpcType *return_type = NULL;
+                                            char *return_type_id = NULL;
+                                        ast_t *return_type_node = tmpl->return_type_ast;
+                                        if (return_type_node == NULL && tmpl->method_ast != NULL)
+                                        {
+                                            struct ast_t *method_ast = tmpl->method_ast;
+                                            for (ast_t *child = method_ast->child; child != NULL; child = child->next)
+                                            {
+                                                if (child->typ == PASCAL_T_RETURN_TYPE)
+                                                {
+                                                    return_type_node = child;
+                                                    if (child->sym != NULL && child->sym->name != NULL)
+                                                        return_type_id = strdup(child->sym->name);
+                                                    break;
+                                                }
+                                            }
+                                        }
+
+                                        if (return_type_node != NULL)
+                                        {
+                                            if (return_type_node->child != NULL)
+                                                return_type = convert_type_spec_to_kgpctype(return_type_node->child, symtab);
+                                            if (return_type_id == NULL)
+                                                return_type_id = semcheck_dup_type_id_from_ast(return_type_node);
+                                        }
+                                        if (return_type == NULL && return_type_id != NULL)
+                                        {
+                                            HashNode_t *type_node = NULL;
+                                            if (FindIdent(&type_node, symtab, return_type_id) != -1 &&
+                                                    type_node != NULL && type_node->type != NULL)
+                                                {
+                                                    kgpc_type_retain(type_node->type);
+                                                    return_type = type_node->type;
+                                                }
+                                                else
+                                                {
+                                                    int tag = semcheck_map_builtin_type_name_local(return_type_id);
+                                                    if (tag != UNKNOWN_TYPE)
+                                                        return_type = create_primitive_type(tag);
+                                                }
+                                            }
+
+                                            if (return_type != NULL)
+                                                existing->type->info.proc_info.return_type = return_type;
+                                            if (return_type_id != NULL)
+                                                free(return_type_id);
+                                        }
+                                        if (existing != NULL && existing->type != NULL &&
+                                            existing->type->kind == TYPE_KIND_PROCEDURE &&
+                                            existing->type->info.proc_info.params == NULL)
+                                        {
+                                            existing->type->info.proc_info.params = CopyListShallow(params);
+                                        }
+                                    }
+
+                                    if (params != NULL)
+                                        DestroyList(params);
+                                    if (existing_list != NULL)
+                                        DestroyList(existing_list);
                                     free(mangled);
                                 }
                             }
@@ -4846,6 +5086,19 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                     resolve_array_bounds_in_kgpctype(symtab, existing_type->type, alias_info);
                 }
             }
+            /* Avoid double-free: ownership is in the symbol table for predeclared types. */
+            if (tree->tree_data.type_decl_data.kgpc_type != NULL)
+            {
+                if (existing_type != NULL && tree->tree_data.type_decl_data.kgpc_type == existing_type->type)
+                {
+                    tree->tree_data.type_decl_data.kgpc_type = NULL;
+                }
+                else
+                {
+                    destroy_kgpc_type(tree->tree_data.type_decl_data.kgpc_type);
+                    tree->tree_data.type_decl_data.kgpc_type = NULL;
+                }
+            }
             func_return = 0;  /* No error */
         }
         else if (kgpc_type != NULL) {
@@ -5023,7 +5276,7 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
             char *string_value = NULL;
             if (evaluate_string_const_expr(symtab, value_expr, &string_value) != 0)
             {
-                fprintf(stderr, "Error on line %d, unsupported string const expression.\n", tree->line_num);
+                semcheck_error_with_context("Error on line %d, unsupported string const expression.\n", tree->line_num);
                 ++return_val;
             }
             else
@@ -5032,7 +5285,7 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                 free(string_value);  /* PushStringConstOntoScope makes its own copy */
                 if (push_result > 0)
                 {
-                    fprintf(stderr, "Error on line %d, redeclaration of const %s!\n",
+                    semcheck_error_with_context("Error on line %d, redeclaration of const %s!\n",
                             tree->line_num, tree->tree_data.const_decl_data.id);
                     ++return_val;
                 }
@@ -5054,7 +5307,7 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
             double real_value = 0.0;
             if (evaluate_real_const_expr(symtab, value_expr, &real_value) != 0)
             {
-                fprintf(stderr, "Error on line %d, unsupported real const expression.\n", tree->line_num);
+                semcheck_error_with_context("Error on line %d, unsupported real const expression.\n", tree->line_num);
                 ++return_val;
             }
             else
@@ -5062,7 +5315,7 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                 int push_result = PushRealConstOntoScope(symtab, tree->tree_data.const_decl_data.id, real_value);
                 if (push_result > 0)
                 {
-                    fprintf(stderr, "Error on line %d, redeclaration of const %s!\n",
+                    semcheck_error_with_context("Error on line %d, redeclaration of const %s!\n",
                             tree->line_num, tree->tree_data.const_decl_data.id);
                     ++return_val;
                 }
@@ -5088,7 +5341,7 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
             if (evaluate_set_const_bytes(symtab, value_expr, set_bytes, sizeof(set_bytes),
                     &set_size, &mask, &is_char_set) != 0)
             {
-                fprintf(stderr, "Error on line %d, unsupported const expression.\n", tree->line_num);
+                semcheck_error_with_context("Error on line %d, unsupported const expression.\n", tree->line_num);
                 ++return_val;
             }
             else
@@ -5103,7 +5356,7 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                     set_bytes, (int)set_size, const_type);
                 if (push_result > 0)
                 {
-                    fprintf(stderr, "Error on line %d, redeclaration of const %s!\n",
+                    semcheck_error_with_context("Error on line %d, redeclaration of const %s!\n",
                             tree->line_num, tree->tree_data.const_decl_data.id);
                     ++return_val;
                 }
@@ -5150,7 +5403,7 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                     
                     if (push_result > 0)
                     {
-                        fprintf(stderr, "Error on line %d, redeclaration of const %s!\n",
+                        semcheck_error_with_context("Error on line %d, redeclaration of const %s!\n",
                                 tree->line_num, tree->tree_data.const_decl_data.id);
                         ++return_val;
                     }
@@ -5179,7 +5432,7 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                     
                     if (push_result > 0)
                     {
-                        fprintf(stderr, "Error on line %d, redeclaration of const %s!\n",
+                        semcheck_error_with_context("Error on line %d, redeclaration of const %s!\n",
                                 tree->line_num, tree->tree_data.const_decl_data.id);
                         ++return_val;
                     }
@@ -5197,14 +5450,14 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                 }
                 else
                 {
-                    fprintf(stderr, "Error on line %d, '%s' is not a procedure or function.\n",
+                    semcheck_error_with_context("Error on line %d, '%s' is not a procedure or function.\n",
                             tree->line_num, proc_name);
                     ++return_val;
                 }
             }
             else
             {
-                fprintf(stderr, "Error on line %d, invalid procedure address expression.\n",
+                semcheck_error_with_context("Error on line %d, invalid procedure address expression.\n",
                         tree->line_num);
                 ++return_val;
             }
@@ -5222,7 +5475,7 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
             
             if (evaluate_const_expr(symtab, value_expr, &value) != 0)
             {
-                fprintf(stderr, "Error on line %d, unsupported const expression.\n", tree->line_num);
+                semcheck_error_with_context("Error on line %d, unsupported const expression.\n", tree->line_num);
                 ++return_val;
             }
             else
@@ -5256,6 +5509,10 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                 if (value_expr != NULL && value_expr->type == EXPR_SET)
                 {
                     const_type = create_primitive_type(SET_TYPE);
+                }
+                else if (value_expr != NULL && value_expr->type == EXPR_BOOL)
+                {
+                    const_type = create_primitive_type(BOOL);
                 }
                 /* Check if the expression has enum type (e.g., scoped enum literals like TEnum.Value) */
                 else if (value_expr != NULL && value_expr->resolved_kgpc_type != NULL)
@@ -5292,7 +5549,7 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                 
                 if (push_result > 0)
                 {
-                    fprintf(stderr, "Error on line %d, redeclaration of const %s!\n",
+                    semcheck_error_with_context("Error on line %d, redeclaration of const %s!\n",
                             tree->line_num, tree->tree_data.const_decl_data.id);
                     ++return_val;
                 }
@@ -5664,6 +5921,15 @@ void semcheck_add_builtins(SymTab_t *symtab)
         AddBuiltinProc_Typed(symtab, setlength_name, setlength_type);
         destroy_kgpc_type(setlength_type);
         free(setlength_name);
+    }
+
+    char *setstring_name = strdup("SetString");
+    if (setstring_name != NULL) {
+        KgpcType *setstring_type = create_procedure_type(NULL, NULL);
+        assert(setstring_type != NULL && "Failed to create SetString procedure type");
+        AddBuiltinProc_Typed(symtab, setstring_name, setstring_type);
+        destroy_kgpc_type(setstring_type);
+        free(setstring_name);
     }
 
     char *write_name = strdup("write");
@@ -6559,7 +6825,7 @@ int semcheck_args(SymTab_t *symtab, ListNode_t *args, int line_num)
         /* Greater than 0 signifies an error */
         if(func_return > 0)
         {
-            fprintf(stderr, "Error on line %d, redeclaration of name %s!\n",
+            semcheck_error_with_context("Error on line %d, redeclaration of name %s!\n",
                 line_num, (char *)cur->cur);
             return_val += func_return;
         }
@@ -7227,7 +7493,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         }
                         else
                         {
-                            fprintf(stderr, "Error on line %d: undefined type %s\n",
+                            semcheck_error_with_context("Error on line %d: undefined type %s\n",
                                 tree->line_num, tree->tree_data.arr_decl_data.type_id);
                             return_val++;
                         }
@@ -7452,7 +7718,7 @@ next_identifier:
             }
             else if (ids_head == NULL || ids_head->next != NULL)
             {
-                fprintf(stderr, "Error on line %d, type inference initializers must declare a single identifier.\n",
+                semcheck_error_with_context("Error on line %d, type inference initializers must declare a single identifier.\n",
                     tree->line_num);
                 ++return_val;
             }
@@ -7462,7 +7728,7 @@ next_identifier:
                 HashNode_t *var_node = NULL;
                 if (FindIdent(&var_node, symtab, var_name) == -1 || var_node == NULL)
                 {
-                    fprintf(stderr, "Error on line %d, failed to resolve variable %s for initializer.\n",
+                    semcheck_error_with_context("Error on line %d, failed to resolve variable %s for initializer.\n",
                         tree->line_num, var_name);
                     ++return_val;
                 }
@@ -7472,7 +7738,7 @@ next_identifier:
                     struct Expression *init_expr = init_stmt->stmt_data.var_assign_data.expr;
                     if (init_expr == NULL)
                     {
-                        fprintf(stderr, "Error on line %d, initializer expression is NULL for %s.\n",
+                        semcheck_error_with_context("Error on line %d, initializer expression is NULL for %s.\n",
                             tree->line_num, var_name);
                         ++return_val;
                         /* Skip remaining processing for this variable but continue with the loop */
@@ -7575,7 +7841,7 @@ next_identifier:
 
                     if (expr_type == UNKNOWN_TYPE)
                     {
-                        fprintf(stderr, "Error on line %d, unable to infer type for %s.\n", tree->line_num, var_name);
+                        semcheck_error_with_context("Error on line %d, unable to infer type for %s.\n", tree->line_num, var_name);
                         ++return_val;
                     }
                     else
@@ -7631,7 +7897,7 @@ next_identifier:
                                 normalized_type = RECORD_TYPE;
                                 break;
                             default:
-                                fprintf(stderr, "Error on line %d, unsupported inferred type for %s.\n",
+                                semcheck_error_with_context("Error on line %d, unsupported inferred type for %s.\n",
                                     tree->line_num, var_name);
                                 ++return_val;
                                 inferred_var_type = HASHVAR_UNTYPED;
@@ -7737,7 +8003,7 @@ next_identifier:
 
                             if (!compatible)
                             {
-                                fprintf(stderr, "Error on line %d, initializer type mismatch for %s.\n",
+                                semcheck_error_with_context("Error on line %d, initializer type mismatch for %s.\n",
                                     tree->line_num, var_name);
                                 ++return_val;
                             }
@@ -7775,6 +8041,25 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
 #endif
 
     assert(subprogram->type == TREE_SUBPROGRAM);
+
+    const char *prev_owner = semcheck_get_current_method_owner();
+    char *owner_copy = NULL;
+    if (subprogram->tree_data.subprogram_data.mangled_id != NULL)
+    {
+        const char *mangled = subprogram->tree_data.subprogram_data.mangled_id;
+        const char *sep = strstr(mangled, "__");
+        if (sep != NULL && sep != mangled)
+        {
+            size_t len = (size_t)(sep - mangled);
+            owner_copy = (char *)malloc(len + 1);
+            if (owner_copy != NULL)
+            {
+                memcpy(owner_copy, mangled, len);
+                owner_copy[len] = '\0';
+                semcheck_set_current_method_owner(owner_copy);
+            }
+        }
+    }
 
     /* For class methods, copy default parameter values from the class declaration
      * to the implementation. This is needed because Pascal allows defaults only in
@@ -8311,6 +8596,8 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                 {
                     node->requires_static_link =
                         subprogram->tree_data.subprogram_data.requires_static_link ? 1 : 0;
+                    node->has_nested_requiring_link =
+                        subprogram->tree_data.subprogram_data.has_nested_requiring_link ? 1 : 0;
                 }
             }
             iter = iter->next;
@@ -8324,6 +8611,12 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_subprogram %s returning at end: %d\n", subprogram->tree_data.subprogram_data.id, return_val);
 #endif
+    if (owner_copy != NULL)
+    {
+        semcheck_set_current_method_owner(prev_owner);
+        free(owner_copy);
+    }
+
     return return_val;
 }
 
@@ -8610,11 +8903,15 @@ int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scop
             continue;
         }
         return_val += semcheck_subprogram(symtab, child, max_scope_lev);
+        /* If child needs a static link, mark parent as having nested children that need links.
+         * This is used by codegen to know when to PASS a static link when calling nested functions.
+         * We do NOT propagate requires_static_link to parent - the parent only needs to RECEIVE
+         * a static link if it's nested itself or accesses outer scope variables. */
         if (parent_subprogram != NULL &&
             child != NULL &&
             child->tree_data.subprogram_data.requires_static_link)
         {
-            parent_subprogram->tree_data.subprogram_data.requires_static_link = 1;
+            parent_subprogram->tree_data.subprogram_data.has_nested_requiring_link = 1;
         }
         cur = cur->next;
     }

@@ -1388,10 +1388,18 @@ int main(int argc, char **argv)
         load_units_from_list(user_tree, user_tree->tree_data.unit_data.implementation_uses, &visited_units);
         
         /* If {$MODE objfpc} was detected, automatically load ObjPas unit.
-         * This makes types like TEndian available without explicit 'uses objpas'. */
+         * This makes types like TEndian available without explicit 'uses objpas'.
+         * Also add ObjPas to the uses list so that unit-qualified references work. */
         if (pascal_frontend_is_objfpc_mode())
         {
             load_unit(user_tree, "objpas", &visited_units);
+            /* Add ObjPas to interface_uses for semcheck_is_unit_name to recognize it */
+            ListNode_t *objpas_node = CreateListNode(strdup("ObjPas"), LIST_STRING);
+            if (objpas_node != NULL)
+            {
+                objpas_node->next = user_tree->tree_data.unit_data.interface_uses;
+                user_tree->tree_data.unit_data.interface_uses = objpas_node;
+            }
         }
         
         debug_check_type_presence(user_tree);
@@ -1549,10 +1557,19 @@ int main(int argc, char **argv)
     load_units_from_list(user_tree, user_tree->tree_data.program_data.uses_units, &visited_units);
     
     /* If {$MODE objfpc} was detected, automatically load ObjPas unit.
-     * This makes types like TEndian available without explicit 'uses objpas'. */
+     * This makes types like TEndian available without explicit 'uses objpas'.
+     * Also add ObjPas to the uses list so that unit-qualified references
+     * like ObjPas.TEndian work correctly. */
     if (pascal_frontend_is_objfpc_mode())
     {
         load_unit(user_tree, "objpas", &visited_units);
+        /* Add ObjPas to uses list for semcheck_is_unit_name to recognize it */
+        ListNode_t *objpas_node = CreateListNode(strdup("ObjPas"), LIST_STRING);
+        if (objpas_node != NULL)
+        {
+            objpas_node->next = user_tree->tree_data.program_data.uses_units;
+            user_tree->tree_data.program_data.uses_units = objpas_node;
+        }
     }
     
     debug_check_type_presence(user_tree);

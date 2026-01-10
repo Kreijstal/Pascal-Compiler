@@ -584,6 +584,23 @@ int from_cparser_is_method_static(const char *class_name, const char *method_nam
     return is_method_static(class_name, method_name);
 }
 
+/* Check if a method is virtual (needs VMT dispatch) */
+int from_cparser_is_method_virtual(const char *class_name, const char *method_name) {
+    if (class_name == NULL || method_name == NULL)
+        return 0;
+
+    ListNode_t *cur = class_method_bindings;
+    while (cur != NULL) {
+        ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
+        if (binding != NULL && binding->class_name != NULL && binding->method_name != NULL &&
+            strcasecmp(binding->class_name, class_name) == 0 &&
+            strcasecmp(binding->method_name, method_name) == 0)
+            return binding->is_virtual || binding->is_override;
+        cur = cur->next;
+    }
+    return 0;
+}
+
 /* Find all class names that have a method with the given name */
 ListNode_t *from_cparser_find_classes_with_method(const char *method_name, int *count_out) {
     if (count_out != NULL) *count_out = 0;
@@ -1203,6 +1220,92 @@ static void append_subprogram_node(ListNode_t **dest, Tree_t *tree)
     *tail = node;
 }
 
+static Tree_t *convert_procedure(ast_t *proc_node);
+static Tree_t *convert_function(ast_t *func_node);
+static Tree_t *convert_method_impl(ast_t *method_node);
+
+static int subprogram_list_has_decl(const ListNode_t *subprograms, const Tree_t *tree)
+{
+    if (subprograms == NULL || tree == NULL || tree->type != TREE_SUBPROGRAM)
+        return 0;
+
+    const char *id = tree->tree_data.subprogram_data.id;
+    int line_num = tree->line_num;
+    enum TreeType sub_type = tree->tree_data.subprogram_data.sub_type;
+
+    const ListNode_t *cur = subprograms;
+    while (cur != NULL)
+    {
+        Tree_t *existing = (Tree_t *)cur->cur;
+        if (existing != NULL && existing->type == TREE_SUBPROGRAM)
+        {
+            if (existing->line_num == line_num &&
+                existing->tree_data.subprogram_data.sub_type == sub_type)
+            {
+                const char *existing_id = existing->tree_data.subprogram_data.id;
+                if (existing_id != NULL && id != NULL &&
+                    pascal_identifier_equals(existing_id, id))
+                {
+                    return 1;
+                }
+            }
+        }
+        cur = cur->next;
+    }
+
+    return 0;
+}
+
+static void append_subprogram_if_unique(ListNode_t **dest, Tree_t *tree)
+{
+    if (dest == NULL || tree == NULL)
+        return;
+
+    if (subprogram_list_has_decl(*dest, tree))
+        return;
+
+    append_subprogram_node(dest, tree);
+}
+
+static void append_subprograms_from_ast_recursive(ast_t *node, ListNode_t **subprograms,
+    VisitedSet *visited)
+{
+    if (node == NULL || node == ast_nil || subprograms == NULL || visited == NULL)
+        return;
+
+    if (!is_safe_to_continue(visited, node))
+        return;
+
+    switch (node->typ)
+    {
+    case PASCAL_T_PROCEDURE_DECL: {
+        Tree_t *proc = convert_procedure(node);
+        append_subprogram_if_unique(subprograms, proc);
+        append_subprograms_from_ast_recursive(node->next, subprograms, visited);
+        return;
+    }
+    case PASCAL_T_FUNCTION_DECL: {
+        Tree_t *func = convert_function(node);
+        append_subprogram_if_unique(subprograms, func);
+        append_subprograms_from_ast_recursive(node->next, subprograms, visited);
+        return;
+    }
+    case PASCAL_T_METHOD_IMPL:
+    case PASCAL_T_CONSTRUCTOR_DECL:
+    case PASCAL_T_DESTRUCTOR_DECL: {
+        Tree_t *method_tree = convert_method_impl(node);
+        append_subprogram_if_unique(subprograms, method_tree);
+        append_subprograms_from_ast_recursive(node->next, subprograms, visited);
+        return;
+    }
+    default:
+        break;
+    }
+
+    append_subprograms_from_ast_recursive(node->child, subprograms, visited);
+    append_subprograms_from_ast_recursive(node->next, subprograms, visited);
+}
+
 static void sync_method_impls_from_generic_template(struct RecordType *record)
 {
     if (record == NULL || record->generic_decl == NULL ||
@@ -1416,6 +1519,40 @@ static void substitute_record_type_parameters(struct RecordType *record, Generic
 static void substitute_record_field(struct RecordField *field, GenericTypeDecl *generic_decl, char **arg_types);
 static void record_generic_method_impl(const char *class_name, const char *method_name, ast_t *method_ast);
 static Tree_t *instantiate_method_template(struct MethodTemplate *method_template, struct RecordType *record);
+
+static ast_t *find_ast_node_type(ast_t *node, int typ)
+{
+    if (node == NULL)
+        return NULL;
+    if (node->typ == typ)
+        return node;
+    for (ast_t *child = node->child; child != NULL; child = child->next)
+    {
+        ast_t *found = find_ast_node_type(child, typ);
+        if (found != NULL)
+            return found;
+    }
+    return NULL;
+}
+
+static int is_method_decl_keyword(const char *sym_name)
+{
+    if (sym_name == NULL)
+        return 0;
+    return (strcasecmp(sym_name, "virtual") == 0 ||
+            strcasecmp(sym_name, "override") == 0 ||
+            strcasecmp(sym_name, "static") == 0 ||
+            strcasecmp(sym_name, "abstract") == 0 ||
+            strcasecmp(sym_name, "inline") == 0 ||
+            strcasecmp(sym_name, "cdecl") == 0 ||
+            strcasecmp(sym_name, "stdcall") == 0 ||
+            strcasecmp(sym_name, "constructor") == 0 ||
+            strcasecmp(sym_name, "destructor") == 0 ||
+            strcasecmp(sym_name, "function") == 0 ||
+            strcasecmp(sym_name, "procedure") == 0 ||
+            strcasecmp(sym_name, "operator") == 0 ||
+            strcasecmp(sym_name, "class") == 0);
+}
 static void append_specialized_method_clones(Tree_t *decl, ListNode_t **subprograms);
 static void rewrite_method_impl_ast(ast_t *method_ast, struct RecordType *record);
 static void substitute_generic_identifier_nodes(ast_t *node, struct RecordType *record);
@@ -3697,6 +3834,18 @@ static void annotate_method_template(struct MethodTemplate *method_template, ast
         const char *sym_name = (node->sym != NULL) ? node->sym->name : NULL;
         switch (node->typ)
         {
+            case PASCAL_T_IDENTIFIER:
+                if (method_template->return_type_ast == NULL &&
+                    method_template->params_ast != NULL &&
+                    sym_name != NULL &&
+                    method_template->name != NULL &&
+                    strcasecmp(sym_name, method_template->name) != 0 &&
+                    !is_method_decl_keyword(sym_name))
+                {
+                    method_template->return_type_ast = node;
+                    method_template->has_return_type = 1;
+                }
+                break;
             case PASCAL_T_PARAM_LIST:
             case PASCAL_T_PARAM:
                 if (method_template->params_ast == NULL)
@@ -3709,6 +3858,8 @@ static void annotate_method_template(struct MethodTemplate *method_template, ast
                 {
                     if (strcasecmp(sym_name, "virtual") == 0)
                         method_template->is_virtual = 1;
+                    else if (strcasecmp(sym_name, "abstract") == 0)
+                        method_template->is_virtual = 1;  /* Abstract methods are implicitly virtual */
                     else if (strcasecmp(sym_name, "override") == 0)
                     {
                         method_template->is_override = 1;
@@ -3717,27 +3868,55 @@ static void annotate_method_template(struct MethodTemplate *method_template, ast
                     else if (strcasecmp(sym_name, "static") == 0)
                         method_template->is_static = 1;
                 }
-                /* Also check the child for static keyword */
+                /* Also check the child for all directive keywords */
                 if (node->child != NULL) {
                     ast_t *dir_child = unwrap_pascal_node(node->child);
                     if (dir_child != NULL && dir_child->sym != NULL && dir_child->sym->name != NULL) {
-                        if (strcasecmp(dir_child->sym->name, "static") == 0)
+                        const char *child_name = dir_child->sym->name;
+                        if (strcasecmp(child_name, "static") == 0)
                             method_template->is_static = 1;
+                        else if (strcasecmp(child_name, "abstract") == 0)
+                            method_template->is_virtual = 1;
+                        else if (strcasecmp(child_name, "virtual") == 0)
+                            method_template->is_virtual = 1;
+                        else if (strcasecmp(child_name, "override") == 0) {
+                            method_template->is_override = 1;
+                            method_template->is_virtual = 1;
+                        }
                     }
                 }
-                /* Also recursively check all children of the directive to find static */
+                /* Also recursively check all children of the directive to find directives */
                 ast_t *dir_cur = node->child;
                 while (dir_cur != NULL) {
                     ast_t *unwrapped_dir = unwrap_pascal_node(dir_cur);
-                    if (unwrapped_dir != NULL && unwrapped_dir->sym != NULL && 
-                        unwrapped_dir->sym->name != NULL && strcasecmp(unwrapped_dir->sym->name, "static") == 0) {
-                        method_template->is_static = 1;
+                    if (unwrapped_dir != NULL && unwrapped_dir->sym != NULL &&
+                        unwrapped_dir->sym->name != NULL) {
+                        const char *dir_name = unwrapped_dir->sym->name;
+                        if (strcasecmp(dir_name, "static") == 0)
+                            method_template->is_static = 1;
+                        else if (strcasecmp(dir_name, "abstract") == 0)
+                            method_template->is_virtual = 1;
+                        else if (strcasecmp(dir_name, "virtual") == 0)
+                            method_template->is_virtual = 1;
+                        else if (strcasecmp(dir_name, "override") == 0) {
+                            method_template->is_override = 1;
+                            method_template->is_virtual = 1;
+                        }
                     }
                     /* Check identifier child of token */
                     if (unwrapped_dir != NULL && unwrapped_dir->typ == PASCAL_T_IDENTIFIER &&
-                        unwrapped_dir->sym != NULL && unwrapped_dir->sym->name != NULL &&
-                        strcasecmp(unwrapped_dir->sym->name, "static") == 0) {
-                        method_template->is_static = 1;
+                        unwrapped_dir->sym != NULL && unwrapped_dir->sym->name != NULL) {
+                        const char *id_name = unwrapped_dir->sym->name;
+                        if (strcasecmp(id_name, "static") == 0)
+                            method_template->is_static = 1;
+                        else if (strcasecmp(id_name, "abstract") == 0)
+                            method_template->is_virtual = 1;
+                        else if (strcasecmp(id_name, "virtual") == 0)
+                            method_template->is_virtual = 1;
+                        else if (strcasecmp(id_name, "override") == 0) {
+                            method_template->is_override = 1;
+                            method_template->is_virtual = 1;
+                        }
                     }
                     dir_cur = dir_cur->next;
                 }
@@ -3749,8 +3928,10 @@ static void annotate_method_template(struct MethodTemplate *method_template, ast
             default:
                 if (sym_name != NULL)
                 {
-                    if (strcasecmp(sym_name, "class") == 0)
+                    if (strcasecmp(sym_name, "class") == 0) {
                         method_template->is_class_method = 1;
+                        method_template->is_static = 1;
+                    }
                     else if (strcasecmp(sym_name, "static") == 0)
                         method_template->is_static = 1;
                     else if (strcasecmp(sym_name, "constructor") == 0)
@@ -3773,6 +3954,12 @@ static void annotate_method_template(struct MethodTemplate *method_template, ast
     {
         method_template->kind = method_template->has_return_type ?
             METHOD_TEMPLATE_FUNCTION : METHOD_TEMPLATE_PROCEDURE;
+    }
+    if (method_template->return_type_ast == NULL)
+    {
+        method_template->return_type_ast = find_ast_node_type(method_ast, PASCAL_T_RETURN_TYPE);
+        if (method_template->return_type_ast != NULL)
+            method_template->has_return_type = 1;
     }
 }
 
@@ -4541,6 +4728,18 @@ static ListNode_t *convert_param_list(ast_t **cursor) {
 
     *cursor = cur;
     return params;
+}
+
+ListNode_t *from_cparser_convert_params_ast(ast_t *params_ast)
+{
+    if (params_ast == NULL)
+        return NULL;
+
+    ast_t *cursor = params_ast;
+    if (cursor->typ == PASCAL_T_PARAM_LIST)
+        cursor = cursor->child;
+
+    return convert_param_list(&cursor);
 }
 
 static Tree_t *convert_var_decl(ast_t *decl_node) {
@@ -9792,6 +9991,17 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
             }
         }
 
+        if (interface_node != NULL)
+        {
+            VisitedSet *visited_subs = visited_set_create();
+            if (visited_subs != NULL)
+            {
+                append_subprograms_from_ast_recursive(interface_node->child, &subprograms,
+                    visited_subs);
+                visited_set_destroy(visited_subs);
+            }
+        }
+
         if (implementation_node != NULL && implementation_node->typ == PASCAL_T_IMPLEMENTATION_SECTION) {
             /* Create visited set for implementation sections */
             VisitedSet *visited_impl = visited_set_create();
@@ -9862,6 +10072,28 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                     definition = definition->next;
                 }
                 visited_set_destroy(visited_impl);
+            }
+        }
+
+        if (implementation_node != NULL)
+        {
+            VisitedSet *visited_subs = visited_set_create();
+            if (visited_subs != NULL)
+            {
+                append_subprograms_from_ast_recursive(implementation_node->child, &subprograms,
+                    visited_subs);
+                visited_set_destroy(visited_subs);
+            }
+        }
+
+        {
+            /* Final safety scan: walk the full unit AST to pick up any subprograms
+             * that are not wired into the interface/implementation sibling chains. */
+            VisitedSet *visited_subs = visited_set_create();
+            if (visited_subs != NULL)
+            {
+                append_subprograms_from_ast_recursive(cur, &subprograms, visited_subs);
+                visited_set_destroy(visited_subs);
             }
         }
 

@@ -388,8 +388,23 @@ static ParseResult statement_dispatch_fn(input_t* in, void* args, char* parser_n
             return make_failure_v2(in, parser_name, strdup("Reserved keyword cannot start a statement here"), NULL);
         }
 
-        if (dispatch->assignment_parser != NULL && peek_assignment_operator(in)) {
-            return parse(in, dispatch->assignment_parser);
+        if (dispatch->assignment_parser != NULL) {
+            if (peek_assignment_operator(in)) {
+                return parse(in, dispatch->assignment_parser);
+            }
+            InputState assign_state;
+            save_input_state(in, &assign_state);
+            ParseResult assign_res = parse(in, dispatch->assignment_parser);
+            if (assign_res.is_success) {
+                return assign_res;
+            }
+            if (assign_res.value.error != NULL && assign_res.value.error->committed) {
+                return assign_res;
+            }
+            if (assign_res.value.error != NULL) {
+                free_error(assign_res.value.error);
+            }
+            restore_input_state(in, &assign_state);
         }
 
         if (dispatch->expr_parser != NULL) {
@@ -720,11 +735,23 @@ void init_pascal_statement_parser(combinator_t** p) {
     );
     combinator_t* suffixes = many(suffix_choice);
 
-    combinator_t* typecast_lvalue = seq(new_combinator(), PASCAL_T_TYPECAST,
+    combinator_t* lvalue_type_name = multi(new_combinator(), PASCAL_T_NONE,
         token(type_name(PASCAL_T_IDENTIFIER)),
+        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
+        NULL
+    );
+
+    combinator_t* typecast_base = seq(new_combinator(), PASCAL_T_TYPECAST,
+        lvalue_type_name,
         between(token(match("(")), token(match(")")), lazy(expr_parser)),
         NULL
     );
+
+    combinator_t* typecast_lvalue = map(seq(new_combinator(), PASCAL_T_NONE,
+        typecast_base,
+        suffixes,
+        NULL
+    ), build_pointer_lvalue_chain);
 
     combinator_t* simple_lvalue = map(seq(new_combinator(), PASCAL_T_NONE,
         simple_identifier,

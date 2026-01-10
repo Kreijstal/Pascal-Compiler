@@ -79,6 +79,9 @@ HashNode_t *semcheck_find_class_method(SymTab_t *symtab,
     struct RecordType *record_info, const char *method_name,
     struct RecordType **owner_out);
 
+void semcheck_set_current_method_owner(const char *owner_id);
+const char *semcheck_get_current_method_owner(void);
+
 void semcheck_register_type_helper(struct RecordType *record_info, SymTab_t *symtab);
 struct RecordType *semcheck_lookup_type_helper(SymTab_t *symtab,
     int base_type_tag, const char *type_name);
