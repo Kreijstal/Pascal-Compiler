@@ -12,5 +12,8 @@ void parser_error_report(const char *message, const char *yytext, int yyleng);
  * num_context_lines: number of lines to show before and after the error line (default 2)
  */
 void print_source_context(const char *file_path, int error_line, int error_col, int num_context_lines);
+int print_source_context_from_buffer(const char *buffer, size_t length,
+                                     int error_line, int error_col,
+                                     int num_context_lines);
 
 #endif

@@ -45,6 +45,84 @@
 #include <stdarg.h>
 
 static ListNode_t *g_semcheck_unit_names = NULL;
+static char *g_semcheck_source_path = NULL;
+static char *g_semcheck_source_buffer = NULL;
+static size_t g_semcheck_source_length = 0;
+
+void semcheck_set_source_path(const char *path)
+{
+    if (g_semcheck_source_path != NULL)
+    {
+        free(g_semcheck_source_path);
+        g_semcheck_source_path = NULL;
+    }
+    if (path != NULL)
+        g_semcheck_source_path = strdup(path);
+}
+
+void semcheck_set_source_buffer(const char *buffer, size_t length)
+{
+    if (g_semcheck_source_buffer != NULL)
+    {
+        free(g_semcheck_source_buffer);
+        g_semcheck_source_buffer = NULL;
+    }
+    g_semcheck_source_length = 0;
+
+    if (buffer == NULL || length == 0)
+        return;
+
+    g_semcheck_source_buffer = (char *)malloc(length + 1);
+    if (g_semcheck_source_buffer == NULL)
+        return;
+
+    memcpy(g_semcheck_source_buffer, buffer, length);
+    g_semcheck_source_buffer[length] = '\0';
+    g_semcheck_source_length = length;
+}
+
+static int semcheck_print_context_from_file(const char *file_path, int line_num, int col_num, int context_lines)
+{
+    if (file_path == NULL || line_num <= 0)
+        return 0;
+
+    FILE *fp = fopen(file_path, "rb");
+    if (fp == NULL)
+        return 0;
+
+    if (fseek(fp, 0, SEEK_END) != 0)
+    {
+        fclose(fp);
+        return 0;
+    }
+
+    long size = ftell(fp);
+    if (size < 0)
+    {
+        fclose(fp);
+        return 0;
+    }
+    if (fseek(fp, 0, SEEK_SET) != 0)
+    {
+        fclose(fp);
+        return 0;
+    }
+
+    char *buffer = (char *)malloc((size_t)size + 1);
+    if (buffer == NULL)
+    {
+        fclose(fp);
+        return 0;
+    }
+
+    size_t read_len = fread(buffer, 1, (size_t)size, fp);
+    fclose(fp);
+    buffer[read_len] = '\0';
+
+    int printed = print_source_context_from_buffer(buffer, read_len, line_num, col_num, context_lines);
+    free(buffer);
+    return printed;
+}
 
 static void semcheck_unit_names_reset(void)
 {
@@ -410,7 +488,15 @@ void semcheck_add_builtins(SymTab_t *symtab);
 /* Helper function to print semantic error with source code context */
 void semantic_error(int line_num, int col_num, const char *format, ...)
 {
-    const char *file_path = (file_to_parse != NULL && *file_to_parse != '\0') ? file_to_parse : NULL;
+    const char *file_path = (file_to_parse != NULL && *file_to_parse != '\0')
+                                ? file_to_parse
+                                : ((preprocessed_path != NULL && *preprocessed_path != '\0') ? preprocessed_path
+                                                                                              : pascal_frontend_current_path());
+    if (file_path == NULL)
+        file_path = g_semcheck_source_path;
+    size_t context_len = preprocessed_length;
+    if (context_len == 0 && preprocessed_source != NULL)
+        context_len = strlen(preprocessed_source);
 
     fprintf(stderr, "Error on line %d", line_num);
     if (col_num > 0) {
@@ -424,8 +510,29 @@ void semantic_error(int line_num, int col_num, const char *format, ...)
     va_end(args);
     fprintf(stderr, "\n");
 
-    if (file_path != NULL && line_num > 0) {
-        print_source_context(file_path, line_num, col_num, 2);
+    if (line_num > 0) {
+        const char *context_buf = preprocessed_source;
+        size_t context_buf_len = context_len;
+        if (context_buf == NULL || context_buf_len == 0)
+        {
+            context_buf = g_semcheck_source_buffer;
+            context_buf_len = g_semcheck_source_length;
+        }
+        if (getenv("KGPC_DEBUG_SEM_CONTEXT") != NULL)
+        {
+            fprintf(stderr,
+                "[SemCheck] context file=%s pre_len=%zu buf_len=%zu line=%d col=%d\n",
+                file_path != NULL ? file_path : "<null>",
+                context_len,
+                context_buf_len,
+                line_num,
+                col_num);
+        }
+        int printed = print_source_context_from_buffer(context_buf, context_buf_len, line_num, col_num, 2);
+        if (!printed)
+            printed = semcheck_print_context_from_file(file_path, line_num, col_num, 2);
+        if (!printed && file_path != NULL)
+            print_source_context(file_path, line_num, col_num, 2);
     }
 
     fprintf(stderr, "\n");
@@ -434,7 +541,15 @@ void semantic_error(int line_num, int col_num, const char *format, ...)
 /* Helper for legacy error prints that already include "Error on line %d". */
 void semcheck_error_with_context(const char *format, ...)
 {
-    const char *file_path = (file_to_parse != NULL && *file_to_parse != '\0') ? file_to_parse : NULL;
+    const char *file_path = (file_to_parse != NULL && *file_to_parse != '\0')
+                                ? file_to_parse
+                                : ((preprocessed_path != NULL && *preprocessed_path != '\0') ? preprocessed_path
+                                                                                              : pascal_frontend_current_path());
+    if (file_path == NULL)
+        file_path = g_semcheck_source_path;
+    size_t context_len = preprocessed_length;
+    if (context_len == 0 && preprocessed_source != NULL)
+        context_len = strlen(preprocessed_source);
     int line_num = 0;
 
     va_list args;
@@ -453,8 +568,29 @@ void semcheck_error_with_context(const char *format, ...)
         fprintf(stderr, "\n");
     }
 
-    if (file_path != NULL && line_num > 0) {
-        print_source_context(file_path, line_num, 0, 2);
+    if (line_num > 0) {
+        const char *context_buf = preprocessed_source;
+        size_t context_buf_len = context_len;
+        if (context_buf == NULL || context_buf_len == 0)
+        {
+            context_buf = g_semcheck_source_buffer;
+            context_buf_len = g_semcheck_source_length;
+        }
+        if (getenv("KGPC_DEBUG_SEM_CONTEXT") != NULL)
+        {
+            fprintf(stderr,
+                "[SemCheck] context file=%s pre_len=%zu buf_len=%zu line=%d col=%d\n",
+                file_path != NULL ? file_path : "<null>",
+                context_len,
+                context_buf_len,
+                line_num,
+                0);
+        }
+        int printed = print_source_context_from_buffer(context_buf, context_buf_len, line_num, 0, 2);
+        if (!printed)
+            printed = semcheck_print_context_from_file(file_path, line_num, 0, 2);
+        if (!printed && file_path != NULL)
+            print_source_context(file_path, line_num, 0, 2);
     }
 
     fprintf(stderr, "\n");
@@ -2951,6 +3087,16 @@ SymTab_t *start_semcheck(Tree_t *parse_tree, int *sem_result)
 
     assert(parse_tree != NULL);
     assert(sem_result != NULL);
+
+    if (g_semcheck_source_path != NULL)
+        file_to_parse = g_semcheck_source_path;
+    if (g_semcheck_source_buffer != NULL)
+    {
+        if (preprocessed_source != NULL)
+            free(preprocessed_source);
+        preprocessed_source = strdup(g_semcheck_source_buffer);
+        preprocessed_length = g_semcheck_source_length;
+    }
 
     symtab = InitSymTab();
     PushScope(symtab);  /* Push global scope for built-in constants and types */
