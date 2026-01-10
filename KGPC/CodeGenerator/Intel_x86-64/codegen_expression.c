@@ -41,6 +41,30 @@ static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
     return hashnode_get_record_type(node);
 }
 
+static int codegen_expr_is_shortstring_array_local(const struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+    if (expr->resolved_type == SHORTSTRING_TYPE)
+        return 1;
+    if (expr->resolved_kgpc_type != NULL)
+    {
+        struct TypeAlias *alias = kgpc_type_get_type_alias(expr->resolved_kgpc_type);
+        if (alias != NULL && alias->is_shortstring)
+            return 1;
+    }
+    if (expr->is_array_expr &&
+        expr->array_element_type == CHAR_TYPE &&
+        expr_get_array_lower_bound(expr) == 0 &&
+        expr_get_array_upper_bound(expr) == 255)
+    {
+        if (expr->resolved_kgpc_type == NULL ||
+            kgpc_type_get_type_alias(expr->resolved_kgpc_type) == NULL)
+            return 1;
+    }
+    return 0;
+}
+
 static int codegen_self_param_is_class(Tree_t *formal_arg_decl, CodeGenContext *ctx)
 {
     if (formal_arg_decl == NULL || formal_arg_decl->type != TREE_VAR_DECL)
@@ -80,6 +104,8 @@ static ListNode_t *codegen_materialize_array_literal(struct Expression *expr,
     ListNode_t *inst_list, CodeGenContext *ctx, Register_t **out_reg);
 static ListNode_t *codegen_materialize_array_of_const(struct Expression *expr,
     ListNode_t *inst_list, CodeGenContext *ctx, Register_t **out_reg);
+static ListNode_t *codegen_set_expr(struct Expression *expr, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t **out_reg);
 static int formal_decl_is_open_array(Tree_t *decl);
 static long long codegen_static_array_length(const struct Expression *expr);
 static Register_t *codegen_try_get_reg(ListNode_t **inst_list, CodeGenContext *ctx, const char *usage);
@@ -3049,6 +3075,15 @@ ListNode_t *codegen_expr_with_result(struct Expression *expr, ListNode_t *inst_l
     #endif
     assert(out_reg != NULL);
     
+    /* Handle set expressions specially - they need codegen_set_expr for proper bitmask generation */
+    if (expr != NULL && expr_has_type_tag(expr, SET_TYPE))
+    {
+        inst_list = codegen_set_expr(expr, inst_list, ctx, out_reg);
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s (SET_TYPE path)\n", __func__);
+        #endif
+        return inst_list;
+    }
 
     inst_list = codegen_expr_tree_value(expr, inst_list, ctx, out_reg);
 
@@ -3125,6 +3160,35 @@ static int codegen_get_indexable_element_size(struct Expression *array_expr,
     }
 
     element_size_ll = expr_get_array_element_size(array_expr, ctx);
+    if (element_size_ll <= 0 && ctx != NULL && ctx->symtab != NULL &&
+        array_expr->type == EXPR_VAR_ID && array_expr->expr_data.id != NULL)
+    {
+        HashNode_t *array_node = NULL;
+        if (FindIdent(&array_node, ctx->symtab, array_expr->expr_data.id) == 0 &&
+            array_node != NULL && array_node->type != NULL &&
+            kgpc_type_is_array(array_node->type))
+        {
+            element_size_ll = kgpc_type_get_array_element_size(array_node->type);
+            if (element_size_ll <= 0 && array_node->type->info.array_info.element_type != NULL)
+                element_size_ll = kgpc_type_sizeof(array_node->type->info.array_info.element_type);
+            if (element_size_ll > 0)
+            {
+                *out_size = element_size_ll;
+                return 1;
+            }
+        }
+    }
+    if (element_size_ll <= 0 && array_stack_node != NULL &&
+        array_stack_node->is_array && array_stack_node->element_size > 0)
+    {
+        *out_size = array_stack_node->element_size;
+        return 1;
+    }
+    if (element_size_ll <= 0 && codegen_expr_is_shortstring_array_local(array_expr))
+    {
+        *out_size = 1;
+        return 1;
+    }
 
     int need_element_size = 0;
     if (element_size_ll <= 0)
@@ -3144,6 +3208,30 @@ static int codegen_get_indexable_element_size(struct Expression *array_expr,
                 array_expr->array_element_record_type,
                 &element_size_ll, 0) != 0 || element_size_ll <= 0)
         {
+            if (getenv("KGPC_DEBUG_ARRAY_ACCESS") != NULL)
+            {
+                fprintf(stderr,
+                    "[KGPC_DEBUG_ARRAY_ACCESS] elem size fail: expr_type=%d resolved_type=%d array_elem_type=%d elem_id=%s is_array=%d dyn=%d\n",
+                    array_expr->type,
+                    array_expr->resolved_type,
+                    array_expr->array_element_type,
+                    array_expr->array_element_type_id ? array_expr->array_element_type_id : "<null>",
+                    array_expr->is_array_expr,
+                    array_expr->array_is_dynamic);
+                fprintf(stderr,
+                    "[KGPC_DEBUG_ARRAY_ACCESS] base_is_array=%d stack_is_array=%d stack_elem_size=%d\n",
+                    base_is_array,
+                    array_stack_node != NULL ? array_stack_node->is_array : -1,
+                    array_stack_node != NULL ? array_stack_node->element_size : -1);
+                if (array_expr->type == EXPR_VAR_ID && array_expr->expr_data.id != NULL)
+                    fprintf(stderr,
+                        "[KGPC_DEBUG_ARRAY_ACCESS] base id: %s\n",
+                        array_expr->expr_data.id);
+                if (array_expr->resolved_kgpc_type != NULL)
+                    fprintf(stderr,
+                        "[KGPC_DEBUG_ARRAY_ACCESS] kgpc type: %s\n",
+                        kgpc_type_to_string(array_expr->resolved_kgpc_type));
+            }
             codegen_report_error(ctx, "ERROR: Unable to determine element size for array access.");
             return 0;
         }
@@ -4734,10 +4822,11 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         {
             // Pass by value
             if (arg_expr->type == EXPR_AS || arg_expr->type == EXPR_IS ||
-                arg_expr->type == EXPR_ARRAY_LITERAL)
+                arg_expr->type == EXPR_ARRAY_LITERAL ||
+                expr_has_type_tag(arg_expr, SET_TYPE))
             {
                 Register_t *value_reg = NULL;
-                inst_list = codegen_expr_tree_value(arg_expr, inst_list, ctx, &value_reg);
+                inst_list = codegen_expr_with_result(arg_expr, inst_list, ctx, &value_reg);
                 if (codegen_had_error(ctx) || value_reg == NULL)
                 {
                     if (arg_infos != NULL)

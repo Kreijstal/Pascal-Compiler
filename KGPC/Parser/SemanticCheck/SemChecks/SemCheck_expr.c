@@ -2625,16 +2625,21 @@ static int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
     assert(expr->type == EXPR_FUNCTION_CALL);
 
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
-    if (args == NULL || args->next == NULL || args->next->next == NULL || args->next->next->next != NULL)
+    int arg_count = ListLength(args);
+
+    /* Copy accepts 2 or 3 arguments:
+       Copy(S, Index) - copies from Index to end of string
+       Copy(S, Index, Count) - copies Count characters starting from Index */
+    if (arg_count < 2 || arg_count > 3)
     {
-        semcheck_error_with_context("Error on line %d, Copy expects exactly three arguments.\n", expr->line_num);
+        semcheck_error_with_context("Error on line %d, Copy expects two or three arguments.\n", expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
     }
 
     struct Expression *source_expr = (struct Expression *)args->cur;
     struct Expression *index_expr = (struct Expression *)args->next->cur;
-    struct Expression *count_expr = (struct Expression *)args->next->next->cur;
+    struct Expression *count_expr = NULL;
 
     int error_count = 0;
     int source_type = UNKNOWN_TYPE;
@@ -2653,12 +2658,27 @@ static int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
         error_count++;
     }
 
-    int count_type = UNKNOWN_TYPE;
-    error_count += semcheck_expr_main(&count_type, symtab, count_expr, max_scope_lev, NO_MUTATE);
-    if (error_count == 0 && !is_integer_type(count_type))
+    if (arg_count == 3)
     {
-        semcheck_error_with_context("Error on line %d, Copy count must be an integer.\n", expr->line_num);
-        error_count++;
+        count_expr = (struct Expression *)args->next->next->cur;
+        int count_type = UNKNOWN_TYPE;
+        error_count += semcheck_expr_main(&count_type, symtab, count_expr, max_scope_lev, NO_MUTATE);
+        if (error_count == 0 && !is_integer_type(count_type))
+        {
+            semcheck_error_with_context("Error on line %d, Copy count must be an integer.\n", expr->line_num);
+            error_count++;
+        }
+    }
+    else
+    {
+        /* 2-argument form: synthesize a large count value to copy to end of string.
+           Using INT_MAX as runtime clips to available length. */
+        count_expr = mk_inum(expr->line_num, (long long)INT_MAX);
+        assert(count_expr != NULL);
+        count_expr->resolved_type = LONGINT_TYPE;
+        ListNode_t *count_node = CreateListNode(count_expr, LIST_EXPR);
+        assert(count_node != NULL);
+        args->next->next = count_node;
     }
 
     if (error_count == 0)
@@ -6303,6 +6323,65 @@ static int semcheck_recordaccess(int *type_return,
             record_type = RECORD_TYPE;
             record_info = helper_record;
         }
+        /* FPC string helper methods: Transform S.Trim into Trim(S), S.Substring(i) into Substring(S, i) etc.
+         * This provides FPC-compatible string method syntax without full type helper infrastructure. */
+        else if (record_type == STRING_TYPE && field_id != NULL)
+        {
+            /* List of known string helper methods that map to SysUtils functions */
+            HashNode_t *func_node = NULL;
+            int is_string_method = 0;
+            if (pascal_identifier_equals(field_id, "Trim") ||
+                pascal_identifier_equals(field_id, "TrimLeft") ||
+                pascal_identifier_equals(field_id, "TrimRight") ||
+                pascal_identifier_equals(field_id, "UpperCase") ||
+                pascal_identifier_equals(field_id, "LowerCase") ||
+                pascal_identifier_equals(field_id, "Length"))
+            {
+                /* These are no-arg methods that take the string as single argument */
+                if (FindIdent(&func_node, symtab, (char *)field_id) == 0 &&
+                    func_node != NULL && func_node->hash_type == HASHTYPE_FUNCTION)
+                {
+                    is_string_method = 1;
+                }
+            }
+            else if (pascal_identifier_equals(field_id, "Substring") ||
+                     pascal_identifier_equals(field_id, "IndexOf") ||
+                     pascal_identifier_equals(field_id, "Contains") ||
+                     pascal_identifier_equals(field_id, "StartsWith") ||
+                     pascal_identifier_equals(field_id, "EndsWith"))
+            {
+                /* These methods take additional arguments - handled by method call transformation */
+                if (FindIdent(&func_node, symtab, (char *)field_id) == 0 &&
+                    func_node != NULL && func_node->hash_type == HASHTYPE_FUNCTION)
+                {
+                    is_string_method = 1;
+                }
+            }
+            
+            if (is_string_method && func_node != NULL)
+            {
+                /* Transform this record access into a function call: field_id(record_expr)
+                 * This works because the parser converts S.Trim() into a method call with S prepended */
+                char *func_id = strdup(field_id);
+                if (func_id != NULL)
+                {
+                    /* Create a function call expression with the string as first argument */
+                    ListNode_t *args_list = CreateListNode(record_expr, LIST_EXPR);
+                    
+                    expr->type = EXPR_FUNCTION_CALL;
+                    memset(&expr->expr_data.function_call_data, 0, sizeof(expr->expr_data.function_call_data));
+                    expr->expr_data.function_call_data.id = func_id;
+                    expr->expr_data.function_call_data.args_expr = args_list;
+                    expr->expr_data.function_call_data.mangled_id = NULL;
+                    
+                    return semcheck_funccall(type_return, symtab, expr, max_scope_lev, mutating);
+                }
+            }
+            
+            semcheck_error_with_context("Error on line %d, field access requires a record value.\n\n", expr->line_num);
+            *type_return = UNKNOWN_TYPE;
+            return error_count + 1;
+        }
         else
         {
             semcheck_error_with_context("Error on line %d, field access requires a record value.\n\n", expr->line_num);
@@ -9826,7 +9905,18 @@ int semcheck_funccall(int *type_return,
         }
     }
 
-    /* Handle unit-qualified calls parsed as member access: UnitName.Func(args). */
+    /* Handle unit-qualified calls parsed as member access: UnitName.Func(args).
+     * For expressions like ObjPas.TEndian(0), the parser creates a method call
+     * with ObjPas as the receiver and TEndian as the function name.
+     * If ObjPas is a unit name, strip it and check if this is a typecast. */
+    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL && args_given != NULL) {
+        struct Expression *first_arg = (struct Expression *)args_given->cur;
+        fprintf(stderr, "[SemCheck] funccall id='%s' is_method_call_placeholder=%d first_arg_type=%d first_arg_id=%s\n",
+            id ? id : "(null)",
+            expr->expr_data.function_call_data.is_method_call_placeholder,
+            first_arg ? first_arg->type : -1,
+            (first_arg && first_arg->type == EXPR_VAR_ID && first_arg->expr_data.id) ? first_arg->expr_data.id : "(null)");
+    }
     if (expr->expr_data.function_call_data.is_method_call_placeholder && args_given != NULL)
     {
         struct Expression *first_arg = (struct Expression *)args_given->cur;
@@ -9842,6 +9932,12 @@ int semcheck_funccall(int *type_return,
                 expr->expr_data.function_call_data.args_expr = remaining_args;
                 args_given = remaining_args;
                 expr->expr_data.function_call_data.is_method_call_placeholder = 0;
+
+                /* After stripping the unit prefix, immediately check if this is a typecast.
+                 * This handles unit-qualified typecasts like ObjPas.TEndian(0). */
+                int typecast_result = semcheck_try_reinterpret_as_typecast(type_return, symtab, expr, max_scope_lev);
+                if (typecast_result != 0 || expr->type == EXPR_TYPECAST)
+                    return typecast_result;
             }
         }
     }
@@ -12265,6 +12361,13 @@ skip_overload_resolution:
                     /* For enum types: integer literals and scoped enum literals are compatible with enum parameters */
                     else if (expected_type == ENUM_TYPE && 
                              (is_integer_type(arg_type) || arg_type == ENUM_TYPE))
+                    {
+                        type_compatible = 1;
+                    }
+                    /* For array of const: accept any array literal - elements are converted to TVarRec */
+                    else if (expected_type == ARRAY_OF_CONST_TYPE &&
+                             current_arg_expr != NULL &&
+                             current_arg_expr->type == EXPR_ARRAY_LITERAL)
                     {
                         type_compatible = 1;
                     }

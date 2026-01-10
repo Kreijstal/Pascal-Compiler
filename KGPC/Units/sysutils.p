@@ -43,9 +43,15 @@ type
         function GetAnsiString(const Bytes: TBytes; Index, Count: Integer): AnsiString; overload; virtual;
     end;
 
+    TReplaceFlag = (rfReplaceAll, rfIgnoreCase);
+    TReplaceFlags = set of TReplaceFlag;
+
 const
     PathDelim = '/';
     AltPathDelim = '\';
+    CP_UTF8 = 65001;
+    
+    AlphaNum: set of char = ['A'..'Z', 'a'..'z', '0'..'9'];
 
 procedure Sleep(milliseconds: integer);
 function GetTickCount64: longint;
@@ -61,6 +67,7 @@ function AnsiLowerCase(const S: AnsiString): AnsiString;
 function CompareText(const S1, S2: AnsiString): Integer;
 function SameText(const S1, S2: AnsiString): Boolean;
 function StringReplace(const S, OldPattern, NewPattern: AnsiString): AnsiString;
+function StringReplace(const S, OldPattern, NewPattern: AnsiString; Flags: TReplaceFlags): AnsiString;
 function Pos(Substr: AnsiString; S: AnsiString): integer;
 function FormatDateTime(const FormatStr: string; DateTime: TDateTime): AnsiString;
 function DateTimeToStr(DateTime: TDateTime): AnsiString;
@@ -99,6 +106,10 @@ function FreeLibrary(LibHandle: NativeUInt): Boolean;
 procedure SetString(out S: AnsiString; Buffer: PAnsiChar; Len: Integer);
 function FileDateToDateTime(FileDate: LongInt): TDateTime;
 function StringToGUID(const S: AnsiString): TGUID;
+
+{ String helper methods - these allow FPC-style S.Method() syntax }
+function Substring(const S: AnsiString; StartIndex: Integer): AnsiString;
+function Substring(const S: AnsiString; StartIndex, Length: Integer): AnsiString;
 
 { Generic procedure to free an object and set its reference to nil }
 procedure FreeAndNil(var Obj: Pointer);
@@ -521,6 +532,50 @@ begin
     StringReplace := result;
 end;
 
+function StringReplace(const S, OldPattern, NewPattern: AnsiString; Flags: TReplaceFlags): AnsiString;
+var
+    i: integer;
+    result: AnsiString;
+    ignoreCase: Boolean;
+    replaceAll: Boolean;
+    oldLen: integer;
+    matched: Boolean;
+begin
+    result := '';
+    i := 1;
+    oldLen := Length(OldPattern);
+    ignoreCase := rfIgnoreCase in Flags;
+    replaceAll := rfReplaceAll in Flags;
+    
+    while i <= Length(S) do
+    begin
+        if ignoreCase then
+            matched := SameText(Copy(S, i, oldLen), OldPattern)
+        else
+            matched := Copy(S, i, oldLen) = OldPattern;
+            
+        if matched then
+        begin
+            result := result + NewPattern;
+            i := i + oldLen;
+            if not replaceAll then
+            begin
+                { Copy rest of string and exit }
+                result := result + Copy(S, i, Length(S) - i + 1);
+                StringReplace := result;
+                exit;
+            end;
+        end
+        else
+        begin
+            result := result + S[i];
+            i := i + 1;
+        end;
+    end;
+    
+    StringReplace := result;
+end;
+
 function Pos(Substr: AnsiString; S: AnsiString): integer;
 var
     i, j: integer;
@@ -551,6 +606,22 @@ begin
     end;
     
     Pos := 0;
+end;
+
+{ Substring - extract a portion of a string
+  Note: FPC's TStringHelper.Substring uses 0-based indexing,
+  but this Copy wrapper uses 1-based indexing for consistency.
+  For S.Substring(StartIndex), we convert to Copy(S, StartIndex+1). }
+function Substring(const S: AnsiString; StartIndex: Integer): AnsiString;
+begin
+    { Convert from 0-based (FPC TStringHelper convention) to 1-based (Pascal convention) }
+    Substring := Copy(S, StartIndex + 1);
+end;
+
+function Substring(const S: AnsiString; StartIndex, Length: Integer): AnsiString;
+begin
+    { Convert from 0-based (FPC TStringHelper convention) to 1-based (Pascal convention) }
+    Substring := Copy(S, StartIndex + 1, Length);
 end;
 
 function FormatDateTime(const FormatStr: string; DateTime: TDateTime): AnsiString;

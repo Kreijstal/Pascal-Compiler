@@ -663,6 +663,60 @@ static int semcheck_expr_is_char_set(SymTab_t *symtab, struct Expression *expr)
     return 0;
 }
 
+/* Helper to check if a TypeAlias represents WideChar/UnicodeChar.
+ * WideChar = Word (integer type), so we check alias_name, not CHAR_TYPE. */
+static int semcheck_alias_is_widechar(struct TypeAlias *alias)
+{
+    if (alias == NULL)
+        return 0;
+    /* Check alias_name - this is the declared type name (e.g., "WideChar") */
+    if (alias->alias_name != NULL &&
+        (pascal_identifier_equals(alias->alias_name, "WideChar") ||
+         pascal_identifier_equals(alias->alias_name, "UnicodeChar")))
+        return 1;
+    return 0;
+}
+
+/* Check if an expression's type is WideChar (or aliased to WideChar).
+ * WideChar = Word (integer type), so we check alias_name, not CHAR_TYPE. */
+static int semcheck_expr_is_widechar(SymTab_t *symtab, struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+
+    /* Check resolved_kgpc_type */
+    if (expr->resolved_kgpc_type != NULL)
+    {
+        KgpcType *ktype = expr->resolved_kgpc_type;
+        struct TypeAlias *alias = ktype->type_alias;
+        if (semcheck_alias_is_widechar(alias))
+            return 1;
+    }
+
+    /* For EXPR_VAR_ID, look up the variable's type */
+    if (expr->type == EXPR_VAR_ID && symtab != NULL && expr->expr_data.id != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindIdent(&node, symtab, expr->expr_data.id) >= 0 && node != NULL)
+        {
+            if (node->type != NULL)
+            {
+                KgpcType *ntype = node->type;
+                /* Check alias_name in KgpcType's type_alias */
+                if (semcheck_alias_is_widechar(ntype->type_alias))
+                    return 1;
+            }
+
+            /* Check TypeAlias from node directly (fallback) */
+            struct TypeAlias *alias = get_type_alias_from_node(node);
+            if (semcheck_alias_is_widechar(alias))
+                return 1;
+        }
+    }
+
+    return 0;
+}
+
 int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 
 int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
@@ -926,6 +980,77 @@ static int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, 
     if (!is_integer_type(length_type))
     {
         semcheck_error_with_context("Error on line %d, SetLength length argument must be an integer.\n", stmt->line_num);
+        ++return_val;
+    }
+
+    return return_val;
+}
+
+static int semcheck_builtin_setstring(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    int return_val = 0;
+    if (stmt == NULL)
+        return 0;
+
+    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+    if (args == NULL || args->next == NULL || args->next->next == NULL || args->next->next->next != NULL)
+    {
+        semcheck_error_with_context("Error on line %d, SetString expects exactly three arguments.\n", stmt->line_num);
+        return 1;
+    }
+
+    struct Expression *string_expr = (struct Expression *)args->cur;
+    struct Expression *buffer_expr = (struct Expression *)args->next->cur;
+    struct Expression *length_expr = (struct Expression *)args->next->next->cur;
+
+    /* First argument must be a string variable (output parameter) */
+    int string_type = UNKNOWN_TYPE;
+    return_val += semcheck_expr_main(&string_type, symtab, string_expr, max_scope_lev, MUTATE);
+    if (string_type != STRING_TYPE && string_type != UNKNOWN_TYPE)
+    {
+        semcheck_error_with_context("Error on line %d, SetString first argument must be a string variable.\n", stmt->line_num);
+        ++return_val;
+    }
+
+    /* Second argument must be a PChar/pointer to char */
+    int buffer_type = UNKNOWN_TYPE;
+    return_val += semcheck_expr_main(&buffer_type, symtab, buffer_expr, max_scope_lev, NO_MUTATE);
+    if (buffer_type != POINTER_TYPE && buffer_type != UNKNOWN_TYPE)
+    {
+        /* Allow if it's an array of char or similar */
+        int is_valid = 0;
+        if (buffer_expr != NULL && buffer_expr->resolved_kgpc_type != NULL)
+        {
+            KgpcType *t = buffer_expr->resolved_kgpc_type;
+            if (t->kind == TYPE_KIND_POINTER)
+                is_valid = 1;
+        }
+        if (!is_valid)
+        {
+            semcheck_error_with_context("Error on line %d, SetString second argument must be a pointer (PChar).\n", stmt->line_num);
+            ++return_val;
+        }
+    }
+
+    /* Third argument must be an integer length */
+    int length_type = UNKNOWN_TYPE;
+    return_val += semcheck_expr_main(&length_type, symtab, length_expr, max_scope_lev, NO_MUTATE);
+    if (!is_integer_type(length_type))
+    {
+        semcheck_error_with_context("Error on line %d, SetString length argument must be an integer.\n", stmt->line_num);
+        ++return_val;
+    }
+
+    /* Set the mangled function name for codegen */
+    if (stmt->stmt_data.procedure_call_data.mangled_id != NULL)
+    {
+        free(stmt->stmt_data.procedure_call_data.mangled_id);
+        stmt->stmt_data.procedure_call_data.mangled_id = NULL;
+    }
+    stmt->stmt_data.procedure_call_data.mangled_id = strdup("kgpc_setstring");
+    if (stmt->stmt_data.procedure_call_data.mangled_id == NULL)
+    {
+        fprintf(stderr, "Error: failed to allocate mangled name for SetString.\n");
         ++return_val;
     }
 
@@ -2502,6 +2627,20 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             goto assignment_types_ok;
         }
 
+        /* Allow WideChar to string assignment - WideChar (aliased to Word) converts to single-char string.
+         * Check if LHS is string and RHS is WideChar before the general compatibility check. */
+        int lhs_is_string = (lhs_kgpctype->kind == TYPE_KIND_PRIMITIVE &&
+            lhs_kgpctype->info.primitive_type_tag == STRING_TYPE);
+        if (lhs_is_string && expr != NULL && semcheck_expr_is_widechar(symtab, expr))
+        {
+            /* Mark expression as CHAR_TYPE for codegen to promote to string */
+            expr->resolved_type = CHAR_TYPE;
+            if (expr->resolved_kgpc_type != NULL)
+                destroy_kgpc_type(expr->resolved_kgpc_type);
+            expr->resolved_kgpc_type = create_primitive_type(CHAR_TYPE);
+            goto assignment_types_ok;
+        }
+
         if (!are_types_compatible_for_assignment(lhs_kgpctype, rhs_kgpctype, symtab))
         {
             int allow_char_literal = 0;
@@ -2609,6 +2748,16 @@ assignment_types_ok:
             {
                 types_compatible = 1;
                 /* Keep CHAR_TYPE so code generator knows to promote */
+            }
+            /* Allow WideChar to string assignment - WideChar will be converted to single-character string.
+             * WideChar is aliased to Word (integer), so we need to check the type name. */
+            else if (type_first == STRING_TYPE && is_integer_type(type_second) &&
+                var != NULL && !var->is_array_expr &&
+                expr != NULL && semcheck_expr_is_widechar(symtab, expr))
+            {
+                types_compatible = 1;
+                /* Mark expression as CHAR_TYPE for codegen to promote to string */
+                expr->resolved_type = CHAR_TYPE;
             }
             /* Allow char assignment to char arrays (FPC compatibility) */
             else if (type_first == CHAR_TYPE && type_second == CHAR_TYPE &&
@@ -2985,6 +3134,12 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     handled_builtin = 0;
     return_val += try_resolve_builtin_procedure(symtab, stmt, "SetLength",
         semcheck_builtin_setlength, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
+
+    handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "SetString",
+        semcheck_builtin_setstring, max_scope_lev, &handled_builtin);
     if (handled_builtin)
         return return_val;
 

@@ -2126,6 +2126,41 @@ void kgpc_string_setlength(char **target, int64_t new_length)
     *target = resized;
 }
 
+void kgpc_setstring(char **target, const char *buffer, int64_t length)
+{
+    if (target == NULL)
+        return;
+
+    if (buffer == NULL || length <= 0)
+    {
+        /* Set to empty string */
+        char *empty = kgpc_alloc_empty_string();
+        char *current = *target;
+        if (current != NULL && kgpc_string_release_allocation(current))
+            free(current);
+        *target = empty;
+        return;
+    }
+
+    size_t copy_len = (size_t)length;
+    char *result = (char *)malloc(copy_len + 1);
+    if (result == NULL)
+    {
+        fprintf(stderr, "KGPC runtime: failed to allocate string (%zu bytes including null).\n",
+            copy_len + 1);
+        exit(EXIT_FAILURE);
+    }
+
+    memcpy(result, buffer, copy_len);
+    result[copy_len] = '\0';
+
+    kgpc_string_register_allocation(result, copy_len);
+    char *current = *target;
+    if (current != NULL && kgpc_string_release_allocation(current))
+        free(current);
+    *target = result;
+}
+
 void kgpc_string_delete(char **target, int64_t index, int64_t count)
 {
     if (target == NULL || index <= 0 || count <= 0)
