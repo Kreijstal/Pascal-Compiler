@@ -20,6 +20,7 @@ static int g_user_include_path_count = 0;
 
 static char *g_user_defines[MAX_USER_DEFINES];
 static int g_user_define_count = 0;
+static char *g_last_parse_path = NULL;
 
 /* Flag set when {$MODE objfpc} is detected in the current parse.
  * Used to automatically inject ObjPas unit dependency. */
@@ -132,6 +133,11 @@ const char * const *pascal_frontend_get_include_paths(int *count)
     return (const char * const *)g_user_include_paths;
 }
 
+const char *pascal_frontend_current_path(void)
+{
+    return g_last_parse_path;
+}
+
 #include "ParseTree/from_cparser.h"
 #include "ParseTree/tree.h"
 #include "ParseTree/generic_types.h"
@@ -195,6 +201,37 @@ static char *read_file(const char *path, size_t *out_len)
         *out_len = (size_t)len;
 
     return buffer;
+}
+
+static void set_preprocessed_context(const char *buffer, size_t length, const char *path)
+{
+    if (preprocessed_source != NULL)
+    {
+        free(preprocessed_source);
+        preprocessed_source = NULL;
+    }
+    if (preprocessed_path != NULL)
+    {
+        free(preprocessed_path);
+        preprocessed_path = NULL;
+    }
+    preprocessed_length = 0;
+
+    if (buffer == NULL || length == 0)
+        return;
+
+    preprocessed_source = (char *)malloc(length + 1);
+    if (preprocessed_source == NULL)
+        return;
+
+    memcpy(preprocessed_source, buffer, length);
+    preprocessed_source[length] = '\0';
+    preprocessed_length = length;
+
+    if (path != NULL)
+        preprocessed_path = strdup(path);
+    if (path != NULL)
+        file_to_parse = (char *)path;
 }
 
 static const char *skip_utf8_bom(const char *cursor, const char *end)
@@ -403,6 +440,22 @@ void pascal_frontend_cleanup(void)
         generic_registry_cleanup();
         generic_registry_ready = false;
     }
+    if (g_last_parse_path != NULL)
+    {
+        free(g_last_parse_path);
+        g_last_parse_path = NULL;
+    }
+    if (preprocessed_source != NULL)
+    {
+        free(preprocessed_source);
+        preprocessed_source = NULL;
+    }
+    if (preprocessed_path != NULL)
+    {
+        free(preprocessed_path);
+        preprocessed_path = NULL;
+    }
+    preprocessed_length = 0;
 }
 
 bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tree, ParseError **error_out)
@@ -411,6 +464,14 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
         *error_out = NULL;
 
     ensure_generic_registry();
+
+    if (g_last_parse_path != NULL)
+    {
+        free(g_last_parse_path);
+        g_last_parse_path = NULL;
+    }
+    if (path != NULL)
+        g_last_parse_path = strdup(path);
 
     size_t length = 0;
     char *buffer = read_file(path, &length);
@@ -621,6 +682,7 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
     free(buffer);
     buffer = preprocessed_buffer;
     length = preprocessed_length;
+    set_preprocessed_context(buffer, length, path);
 
     /* Detect {$MODE objfpc} in the preprocessed source.
      * If found, set flag so ObjPas unit can be auto-imported. */

@@ -25,6 +25,8 @@ SymTab_t *start_semcheck(Tree_t *parse_tree, int *sem_result);
  */
 void semantic_error(int line_num, int col_num, const char *format, ...);
 void semcheck_error_with_context(const char *format, ...);
+void semcheck_set_source_path(const char *path);
+void semcheck_set_source_buffer(const char *buffer, size_t length);
 
 HashNode_t *semcheck_find_type_node_with_kgpc_type(SymTab_t *symtab, const char *type_id);
 int semcheck_is_unit_name(const char *name);

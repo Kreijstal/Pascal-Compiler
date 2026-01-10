@@ -6848,7 +6848,8 @@ FIELD_RESOLVED:
         field_id != NULL &&
         (pascal_identifier_equals(field_id, "st_ctime") ||
          pascal_identifier_equals(field_id, "st_mtime") ||
-         pascal_identifier_equals(field_id, "st_atime")))
+         pascal_identifier_equals(field_id, "st_atime") ||
+         pascal_identifier_equals(field_id, "VChar")))
     {
         fprintf(stderr,
             "[KGPC_DEBUG_RECORD_FIELD] field=%s type=%d type_id=%s record=%p\n",
@@ -9741,6 +9742,38 @@ static int count_required_params(ListNode_t *params)
     return required;
 }
 
+static int method_accepts_arg_count(ListNode_t *params, int arg_count, int *expects_self_out)
+{
+    int expects_self = 0;
+    int total_params = ListLength(params);
+    int required_params = count_required_params(params);
+
+    if (params != NULL)
+    {
+        Tree_t *first_param = (Tree_t *)params->cur;
+        if (first_param != NULL && first_param->type == TREE_VAR_DECL &&
+            first_param->tree_data.var_decl_data.ids != NULL)
+        {
+            const char *first_id = (const char *)first_param->tree_data.var_decl_data.ids->cur;
+            if (first_id != NULL && pascal_identifier_equals(first_id, "Self"))
+                expects_self = 1;
+        }
+    }
+
+    if (expects_self)
+    {
+        if (required_params > 0)
+            required_params -= 1;
+        if (total_params > 0)
+            total_params -= 1;
+    }
+
+    if (expects_self_out != NULL)
+        *expects_self_out = expects_self;
+
+    return (arg_count >= required_params && arg_count <= total_params);
+}
+
 static int append_default_args(ListNode_t **args_head, ListNode_t *formal_params, int line_num)
 {
     if (args_head == NULL)
@@ -10079,63 +10112,79 @@ int semcheck_funccall(int *type_return,
                             self_record->type_id ? self_record->type_id : "(null)",
                             id ? id : "(null)", (void*)method_node);
                     }
+                    int args_count = ListLength(args_given);
+                    int expects_self = 0;
+                    int args_compatible = 0;
+                    ListNode_t *method_params = NULL;
+
+                    if (method_node != NULL && method_node->type != NULL)
+                    {
+                        method_params = kgpc_type_get_procedure_params(method_node->type);
+                        args_compatible = method_accepts_arg_count(method_params, args_count, &expects_self);
+                    }
+
+                    if (!args_compatible)
+                        method_node = NULL;
+
                     if (method_node != NULL)
-                {
-                    ListNode_t *method_params = kgpc_type_get_procedure_params(method_node->type);
-                    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
                     {
-                        fprintf(stderr, "[SemCheck] Implicit Self injection? method_params_len=%d mangled=%s\n",
-                            ListLength(method_params),
-                            method_node->mangled_id ? method_node->mangled_id : "(null)");
-                    }
-                    if (method_params != NULL)
-                    {
-                        struct Expression *self_expr = mk_varid(expr->line_num, strdup("Self"));
-                        ListNode_t *self_arg = CreateListNode(self_expr, LIST_EXPR);
-                        self_arg->next = args_given;
-                        expr->expr_data.function_call_data.args_expr = self_arg;
-                        args_given = self_arg;
-                    }
-                    if (expr->expr_data.function_call_data.resolved_func == NULL)
-                        expr->expr_data.function_call_data.resolved_func = method_node;
-                    if (expr->expr_data.function_call_data.mangled_id == NULL)
-                    {
-                        const char *resolved_name = method_node->mangled_id ?
-                            method_node->mangled_id :
-                            (method_node->id ? method_node->id : id);
-                        if (resolved_name != NULL)
-                            expr->expr_data.function_call_data.mangled_id = strdup(resolved_name);
-                    }
-                    /* Check if this is a virtual method call that needs VMT dispatch */
-                    const char *class_name = self_record->type_id;
-                    if (class_name != NULL && from_cparser_is_method_virtual(class_name, id))
-                    {
-                        expr->expr_data.function_call_data.is_virtual_call = 1;
-                        /* Find VMT index by looking through the class methods */
-                        int vmt_index = -1;
-                        if (self_record->methods != NULL)
-                        {
-                            ListNode_t *method_entry = self_record->methods;
-                            while (method_entry != NULL)
-                            {
-                                struct MethodInfo *info = (struct MethodInfo *)method_entry->cur;
-                                if (info != NULL && info->name != NULL &&
-                                    strcasecmp(info->name, id) == 0)
-                                {
-                                    vmt_index = info->vmt_index;
-                                    break;
-                                }
-                                method_entry = method_entry->next;
-                            }
-                        }
-                        expr->expr_data.function_call_data.vmt_index = vmt_index;
                         if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
                         {
-                            fprintf(stderr, "[SemCheck] Virtual method call: %s.%s vmt_index=%d\n",
-                                class_name, id, vmt_index);
+                            fprintf(stderr, "[SemCheck] Implicit Self injection? method_params_len=%d mangled=%s\n",
+                                ListLength(method_params),
+                                method_node->mangled_id ? method_node->mangled_id : "(null)");
+                        }
+                        if (expects_self)
+                        {
+                            struct Expression *self_expr = mk_varid(expr->line_num, strdup("Self"));
+                            ListNode_t *self_arg = CreateListNode(self_expr, LIST_EXPR);
+                            self_arg->next = args_given;
+                            expr->expr_data.function_call_data.args_expr = self_arg;
+                            args_given = self_arg;
+                        }
+                        if (expr->expr_data.function_call_data.resolved_func == NULL)
+                            expr->expr_data.function_call_data.resolved_func = method_node;
+                        if (expr->expr_data.function_call_data.mangled_id == NULL)
+                        {
+                            const char *resolved_name = method_node->mangled_id ?
+                                method_node->mangled_id :
+                                (method_node->id ? method_node->id : id);
+                            if (resolved_name != NULL)
+                                expr->expr_data.function_call_data.mangled_id = strdup(resolved_name);
+                        }
+                        /* Check if this is a virtual method call that needs VMT dispatch */
+                        if (expects_self)
+                        {
+                            const char *class_name = self_record->type_id;
+                            if (class_name != NULL && from_cparser_is_method_virtual(class_name, id))
+                            {
+                                expr->expr_data.function_call_data.is_virtual_call = 1;
+                                /* Find VMT index by looking through the class methods */
+                                int vmt_index = -1;
+                                if (self_record->methods != NULL)
+                                {
+                                    ListNode_t *method_entry = self_record->methods;
+                                    while (method_entry != NULL)
+                                    {
+                                        struct MethodInfo *info = (struct MethodInfo *)method_entry->cur;
+                                        if (info != NULL && info->name != NULL &&
+                                            strcasecmp(info->name, id) == 0)
+                                        {
+                                            vmt_index = info->vmt_index;
+                                            break;
+                                        }
+                                        method_entry = method_entry->next;
+                                    }
+                                }
+                                expr->expr_data.function_call_data.vmt_index = vmt_index;
+                                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+                                {
+                                    fprintf(stderr, "[SemCheck] Virtual method call: %s.%s vmt_index=%d\n",
+                                        class_name, id, vmt_index);
+                                }
+                            }
                         }
                     }
-                }
             }
         }
     }

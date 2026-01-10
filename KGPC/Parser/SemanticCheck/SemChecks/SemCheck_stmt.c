@@ -2664,7 +2664,7 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             const char *lhs_name = "<expression>";
             if (var != NULL && var->type == EXPR_VAR_ID)
                 lhs_name = var->expr_data.id;
-            fprintf(stderr,
+            semcheck_error_with_context(
                 "Error on line %d, incompatible types in assignment for %s (lhs: %s, rhs: %s)!\n\n",
                 stmt->line_num,
                 lhs_name,
@@ -2781,7 +2781,7 @@ assignment_types_ok:
                 if (string_len > (size_t)array_size)
                 {
                     const char *lhs_name = (var->type == EXPR_VAR_ID) ? var->expr_data.id : "<expression>";
-                    fprintf(stderr,
+                    semcheck_error_with_context(
                         "Error on line %d, string literal too long for array %s (string length: %zu, array size: %d)!\n\n",
                         stmt->line_num,
                         lhs_name,

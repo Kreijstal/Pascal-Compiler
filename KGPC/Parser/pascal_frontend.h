@@ -19,6 +19,7 @@ void pascal_frontend_clear_user_config(void);
 
 /* Get the list of user-defined include paths for unit search */
 const char * const *pascal_frontend_get_include_paths(int *count);
+const char *pascal_frontend_current_path(void);
 
 /* ObjFPC mode detection - used for automatic ObjPas import */
 bool pascal_frontend_is_objfpc_mode(void);
