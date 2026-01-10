@@ -9846,7 +9846,18 @@ int semcheck_funccall(int *type_return,
         }
     }
 
-    /* Handle unit-qualified calls parsed as member access: UnitName.Func(args). */
+    /* Handle unit-qualified calls parsed as member access: UnitName.Func(args).
+     * For expressions like ObjPas.TEndian(0), the parser creates a method call
+     * with ObjPas as the receiver and TEndian as the function name.
+     * If ObjPas is a unit name, strip it and check if this is a typecast. */
+    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL && args_given != NULL) {
+        struct Expression *first_arg = (struct Expression *)args_given->cur;
+        fprintf(stderr, "[SemCheck] funccall id='%s' is_method_call_placeholder=%d first_arg_type=%d first_arg_id=%s\n",
+            id ? id : "(null)",
+            expr->expr_data.function_call_data.is_method_call_placeholder,
+            first_arg ? first_arg->type : -1,
+            (first_arg && first_arg->type == EXPR_VAR_ID && first_arg->expr_data.id) ? first_arg->expr_data.id : "(null)");
+    }
     if (expr->expr_data.function_call_data.is_method_call_placeholder && args_given != NULL)
     {
         struct Expression *first_arg = (struct Expression *)args_given->cur;
@@ -9862,6 +9873,12 @@ int semcheck_funccall(int *type_return,
                 expr->expr_data.function_call_data.args_expr = remaining_args;
                 args_given = remaining_args;
                 expr->expr_data.function_call_data.is_method_call_placeholder = 0;
+
+                /* After stripping the unit prefix, immediately check if this is a typecast.
+                 * This handles unit-qualified typecasts like ObjPas.TEndian(0). */
+                int typecast_result = semcheck_try_reinterpret_as_typecast(type_return, symtab, expr, max_scope_lev);
+                if (typecast_result != 0 || expr->type == EXPR_TYPECAST)
+                    return typecast_result;
             }
         }
     }

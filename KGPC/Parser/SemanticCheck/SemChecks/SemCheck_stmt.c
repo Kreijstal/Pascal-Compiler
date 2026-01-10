@@ -663,6 +663,73 @@ static int semcheck_expr_is_char_set(SymTab_t *symtab, struct Expression *expr)
     return 0;
 }
 
+/* Check if an expression's type is WideChar (or aliased to WideChar).
+ * WideChar is CHAR_TYPE with storage_size 2 (vs regular Char which is size 1). */
+static int semcheck_expr_is_widechar(SymTab_t *symtab, struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+
+    /* Check resolved_kgpc_type */
+    if (expr->resolved_kgpc_type != NULL)
+    {
+        KgpcType *ktype = expr->resolved_kgpc_type;
+        /* WideChar is created as CHAR_TYPE with storage_size 2 */
+        if (ktype->kind == TYPE_KIND_PRIMITIVE &&
+            ktype->info.primitive_type_tag == CHAR_TYPE &&
+            ktype->type_alias != NULL &&
+            ktype->type_alias->storage_size == 2)
+            return 1;
+
+        /* Also check target_type_id */
+        struct TypeAlias *alias = ktype->type_alias;
+        if (alias != NULL && alias->target_type_id != NULL)
+        {
+            if (pascal_identifier_equals(alias->target_type_id, "WideChar") ||
+                pascal_identifier_equals(alias->target_type_id, "UnicodeChar"))
+                return 1;
+        }
+    }
+
+    /* For EXPR_VAR_ID, look up the variable's type */
+    if (expr->type == EXPR_VAR_ID && symtab != NULL && expr->expr_data.id != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindIdent(&node, symtab, expr->expr_data.id) >= 0 && node != NULL)
+        {
+            /* Check if node's type is WideChar (CHAR_TYPE with size 2) */
+            if (node->type != NULL)
+            {
+                KgpcType *ntype = node->type;
+                if (ntype->kind == TYPE_KIND_PRIMITIVE &&
+                    ntype->info.primitive_type_tag == CHAR_TYPE &&
+                    ntype->type_alias != NULL &&
+                    ntype->type_alias->storage_size == 2)
+                    return 1;
+
+                /* Also check target_type_id in KgpcType's alias */
+                if (ntype->type_alias != NULL && ntype->type_alias->target_type_id != NULL)
+                {
+                    if (pascal_identifier_equals(ntype->type_alias->target_type_id, "WideChar") ||
+                        pascal_identifier_equals(ntype->type_alias->target_type_id, "UnicodeChar"))
+                        return 1;
+                }
+            }
+
+            /* Check TypeAlias from node directly */
+            struct TypeAlias *alias = get_type_alias_from_node(node);
+            if (alias != NULL && alias->target_type_id != NULL)
+            {
+                if (pascal_identifier_equals(alias->target_type_id, "WideChar") ||
+                    pascal_identifier_equals(alias->target_type_id, "UnicodeChar"))
+                    return 1;
+            }
+        }
+    }
+
+    return 0;
+}
+
 int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 
 int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
@@ -2680,6 +2747,16 @@ assignment_types_ok:
             {
                 types_compatible = 1;
                 /* Keep CHAR_TYPE so code generator knows to promote */
+            }
+            /* Allow WideChar to string assignment - WideChar will be converted to single-character string.
+             * WideChar is aliased to Word (integer), so we need to check the type name. */
+            else if (type_first == STRING_TYPE && is_integer_type(type_second) &&
+                var != NULL && !var->is_array_expr &&
+                expr != NULL && semcheck_expr_is_widechar(symtab, expr))
+            {
+                types_compatible = 1;
+                /* Mark expression as CHAR_TYPE for codegen to promote to string */
+                expr->resolved_type = CHAR_TYPE;
             }
             /* Allow char assignment to char arrays (FPC compatibility) */
             else if (type_first == CHAR_TYPE && type_second == CHAR_TYPE &&
