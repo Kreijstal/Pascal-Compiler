@@ -6323,6 +6323,65 @@ static int semcheck_recordaccess(int *type_return,
             record_type = RECORD_TYPE;
             record_info = helper_record;
         }
+        /* FPC string helper methods: Transform S.Trim into Trim(S), S.Substring(i) into Substring(S, i) etc.
+         * This provides FPC-compatible string method syntax without full type helper infrastructure. */
+        else if (record_type == STRING_TYPE && field_id != NULL)
+        {
+            /* List of known string helper methods that map to SysUtils functions */
+            HashNode_t *func_node = NULL;
+            int is_string_method = 0;
+            if (pascal_identifier_equals(field_id, "Trim") ||
+                pascal_identifier_equals(field_id, "TrimLeft") ||
+                pascal_identifier_equals(field_id, "TrimRight") ||
+                pascal_identifier_equals(field_id, "UpperCase") ||
+                pascal_identifier_equals(field_id, "LowerCase") ||
+                pascal_identifier_equals(field_id, "Length"))
+            {
+                /* These are no-arg methods that take the string as single argument */
+                if (FindIdent(&func_node, symtab, (char *)field_id) == 0 &&
+                    func_node != NULL && func_node->hash_type == HASHTYPE_FUNCTION)
+                {
+                    is_string_method = 1;
+                }
+            }
+            else if (pascal_identifier_equals(field_id, "Substring") ||
+                     pascal_identifier_equals(field_id, "IndexOf") ||
+                     pascal_identifier_equals(field_id, "Contains") ||
+                     pascal_identifier_equals(field_id, "StartsWith") ||
+                     pascal_identifier_equals(field_id, "EndsWith"))
+            {
+                /* These methods take additional arguments - handled by method call transformation */
+                if (FindIdent(&func_node, symtab, (char *)field_id) == 0 &&
+                    func_node != NULL && func_node->hash_type == HASHTYPE_FUNCTION)
+                {
+                    is_string_method = 1;
+                }
+            }
+            
+            if (is_string_method && func_node != NULL)
+            {
+                /* Transform this record access into a function call: field_id(record_expr)
+                 * This works because the parser converts S.Trim() into a method call with S prepended */
+                char *func_id = strdup(field_id);
+                if (func_id != NULL)
+                {
+                    /* Create a function call expression with the string as first argument */
+                    ListNode_t *args_list = CreateListNode(record_expr, LIST_EXPR);
+                    
+                    expr->type = EXPR_FUNCTION_CALL;
+                    memset(&expr->expr_data.function_call_data, 0, sizeof(expr->expr_data.function_call_data));
+                    expr->expr_data.function_call_data.id = func_id;
+                    expr->expr_data.function_call_data.args_expr = args_list;
+                    expr->expr_data.function_call_data.mangled_id = NULL;
+                    
+                    return semcheck_funccall(type_return, symtab, expr, max_scope_lev, mutating);
+                }
+            }
+            
+            semcheck_error_with_context("Error on line %d, field access requires a record value.\n\n", expr->line_num);
+            *type_return = UNKNOWN_TYPE;
+            return error_count + 1;
+        }
         else
         {
             semcheck_error_with_context("Error on line %d, field access requires a record value.\n\n", expr->line_num);

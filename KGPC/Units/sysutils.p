@@ -107,6 +107,10 @@ procedure SetString(out S: AnsiString; Buffer: PAnsiChar; Len: Integer);
 function FileDateToDateTime(FileDate: LongInt): TDateTime;
 function StringToGUID(const S: AnsiString): TGUID;
 
+{ String helper methods - these allow FPC-style S.Method() syntax }
+function Substring(const S: AnsiString; StartIndex: Integer): AnsiString;
+function Substring(const S: AnsiString; StartIndex, Length: Integer): AnsiString;
+
 { Generic procedure to free an object and set its reference to nil }
 procedure FreeAndNil(var Obj: Pointer);
 
@@ -602,6 +606,22 @@ begin
     end;
     
     Pos := 0;
+end;
+
+{ Substring - extract a portion of a string
+  Note: FPC's TStringHelper.Substring uses 0-based indexing,
+  but this Copy wrapper uses 1-based indexing for consistency.
+  For S.Substring(StartIndex), we convert to Copy(S, StartIndex+1). }
+function Substring(const S: AnsiString; StartIndex: Integer): AnsiString;
+begin
+    { Convert from 0-based (FPC TStringHelper convention) to 1-based (Pascal convention) }
+    Substring := Copy(S, StartIndex + 1);
+end;
+
+function Substring(const S: AnsiString; StartIndex, Length: Integer): AnsiString;
+begin
+    { Convert from 0-based (FPC TStringHelper convention) to 1-based (Pascal convention) }
+    Substring := Copy(S, StartIndex + 1, Length);
 end;
 
 function FormatDateTime(const FormatStr: string; DateTime: TDateTime): AnsiString;
