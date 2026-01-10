@@ -6915,14 +6915,15 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
         inst_list = add_inst(inst_list, buffer);
 
         // Call kgpc_string_length to get string length
-        // Move string pointer to %rdi (first argument)
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", str_reg->bit_64);
+        // Move string pointer to platform-specific first argument register
+        const char *arg0 = current_arg_reg64(0);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", str_reg->bit_64, arg0);
         inst_list = add_inst(inst_list, buffer);
         free_reg(get_reg_stack(), str_reg);
         str_reg = NULL;
 
-        // Call kgpc_string_length
-        inst_list = add_inst(inst_list, "\tcall\tkgpc_string_length@PLT\n");
+        // Call kgpc_string_length with proper shadow space on Windows
+        inst_list = codegen_call_with_shadow_space(inst_list, ctx, "kgpc_string_length");
 
         // Result is in %rax - save to length slot
         snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, -%d(%%rbp)\n", length_slot->offset);
