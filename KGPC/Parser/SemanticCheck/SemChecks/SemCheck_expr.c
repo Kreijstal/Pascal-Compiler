@@ -10023,27 +10023,10 @@ int semcheck_funccall(int *type_return,
                 {
                     if (self_is_helper)
                     {
-                        /* Check if the identifier resolves to a function/method (not a type).
-                         * Type identifiers like TSingleRec should be handled as typecasts later,
-                         * not cause an early return. */
-                        ListNode_t *direct_matches = FindAllIdents(symtab, id);
-                        if (direct_matches != NULL)
-                        {
-                            int has_non_type_match = 0;
-                            for (ListNode_t *cur = direct_matches; cur != NULL; cur = cur->next)
-                            {
-                                HashNode_t *match = (HashNode_t *)cur->cur;
-                                if (match != NULL && match->hash_type != HASHTYPE_TYPE)
-                                {
-                                    has_non_type_match = 1;
-                                    break;
-                                }
-                            }
-                            DestroyList(direct_matches);
-                            if (has_non_type_match)
-                                return return_val;
-                            /* If only type matches found, fall through to typecast handling */
-                        }
+                        /* For type helpers, we need to let both function/method calls and
+                         * typecast handling proceed through normal resolution.
+                         * The code below handles method lookup, and typecast handling
+                         * is done later in semcheck_try_reinterpret_as_typecast. */
                     }
                     if (self_is_helper && args_given != NULL)
                     {
@@ -10052,119 +10035,164 @@ int semcheck_funccall(int *type_return,
                             first_arg->expr_data.id != NULL &&
                             pascal_identifier_equals(first_arg->expr_data.id, "Self"))
                         {
-                            /* Before returning, check if this might be a typecast.
-                             * TypeName(Self) should be treated as a cast, not a method call. */
+                            /* Check if this might be a typecast like TSingleRec(Self).
+                             * If the identifier is a type, fall through to typecast handling.
+                             * If it's a function (like Length), continue to method lookup
+                             * and eventually to builtin function handling. */
                             HashNode_t *id_node = NULL;
                             int find_result = FindIdent(&id_node, symtab, id);
                             if (find_result >= 0 &&
                                 id_node != NULL && id_node->hash_type == HASHTYPE_TYPE)
                             {
-                                /* This is a typecast like TSingleRec(Self), fall through */
+                                /* This is a typecast like TSingleRec(Self), fall through to typecast handling */
                             }
-                            else
-                            {
-                                return return_val;
-                            }
+                            /* Note: Don't return early for function calls like Length(Self).
+                             * Let the code continue to method lookup and builtin handling. */
                         }
                     }
-                    /* First, try to find the method in Self's class */
-                    HashNode_t *method_node = semcheck_find_class_method(symtab,
-                        self_record, id, NULL);
+                    /* First, try to find the method in Self's class.
+                     * For overloaded methods, we need to check ALL overloads to find one
+                     * that matches our argument count. */
+                    HashNode_t *method_node = NULL;
+                    int args_count = ListLength(args_given);
+                    int expects_self = 0;
+                    ListNode_t *method_params = NULL;
                     
-                    /* Check if the method was found but has wrong parameter count (0 params = forward decl) */
-                    int method_params_len = 0;
-                    if (method_node != NULL && method_node->type != NULL)
+                    /* Build the mangled method name */
+                    char mangled_method_name[256];
+                    if (self_record->type_id != NULL)
                     {
-                        ListNode_t *method_params = kgpc_type_get_procedure_params(method_node->type);
-                        method_params_len = ListLength(method_params);
-                    }
-                    
-                    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
-                        fprintf(stderr, "[SemCheck] Method check: method_node=%p method_params_len=%d condition=%d\n",
-                            (void*)method_node, method_params_len,
-                            (method_node == NULL || method_params_len == 0));
-                    }
-                    
-                    /* If method not found, or has wrong params (0 params = forward declaration),
-                     * try looking up the method using class_method_bindings */
-                    if (method_node == NULL || method_params_len == 0)
-                    {
-                        int class_count = 0;
-                        int found_correct_method = 0;
-                        ListNode_t *class_list = from_cparser_find_classes_with_method((char *)id, &class_count);
-                        if (class_list != NULL)
+                        snprintf(mangled_method_name, sizeof(mangled_method_name), "%s__%s",
+                            self_record->type_id, id);
+                        
+                        /* Get ALL overloads of this method */
+                        ListNode_t *all_methods = FindAllIdents(symtab, mangled_method_name);
+                        if (all_methods != NULL)
                         {
-                            ListNode_t *cur_class = class_list;
-                            while (cur_class != NULL)
+                            /* Find the overload that matches our argument count */
+                            ListNode_t *cur = all_methods;
+                            while (cur != NULL)
                             {
-                                char *class_name = (char *)cur_class->cur;
-                                if (class_name != NULL)
+                                HashNode_t *candidate = (HashNode_t *)cur->cur;
+                                if (candidate != NULL &&
+                                    (candidate->hash_type == HASHTYPE_FUNCTION ||
+                                     candidate->hash_type == HASHTYPE_PROCEDURE) &&
+                                    candidate->type != NULL)
                                 {
-                                    /* Look up this class */
-                                    HashNode_t *class_node = NULL;
-                                    int find_result = FindIdent(&class_node, symtab, class_name);
-                                    if (find_result != -1 && class_node != NULL)
+                                    ListNode_t *candidate_params = kgpc_type_get_procedure_params(candidate->type);
+                                    int candidate_expects_self = 0;
+                                    int candidate_compatible = method_accepts_arg_count(candidate_params,
+                                        args_count, &candidate_expects_self);
+                                    
+                                    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                                        fprintf(stderr, "[SemCheck] Method overload check: candidate=%s params=%d args=%d compatible=%d\n",
+                                            candidate->mangled_id ? candidate->mangled_id : candidate->id,
+                                            ListLength(candidate_params), args_count, candidate_compatible);
+                                    }
+                                    
+                                    if (candidate_compatible)
                                     {
-                                        struct RecordType *correct_record = get_record_type_from_node(class_node);
-                                        if (correct_record != NULL)
+                                        method_node = candidate;
+                                        method_params = candidate_params;
+                                        expects_self = candidate_expects_self;
+                                        break;
+                                    }
+                                }
+                                cur = cur->next;
+                            }
+                            DestroyList(all_methods);
+                        }
+                    }
+                    
+                    /* Fallback: use semcheck_find_class_method if no match found via overloads */
+                    if (method_node == NULL)
+                    {
+                        method_node = semcheck_find_class_method(symtab, self_record, id, NULL);
+                        
+                        /* Check if the method was found but has wrong parameter count (0 params = forward decl) */
+                        int method_params_len = 0;
+                        if (method_node != NULL && method_node->type != NULL)
+                        {
+                            method_params = kgpc_type_get_procedure_params(method_node->type);
+                            method_params_len = ListLength(method_params);
+                            int found_compatible = method_accepts_arg_count(method_params, args_count, &expects_self);
+                            if (!found_compatible)
+                                method_node = NULL;
+                        }
+                        
+                        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                            fprintf(stderr, "[SemCheck] Method check (fallback): method_node=%p method_params_len=%d\n",
+                                (void*)method_node, method_params_len);
+                        }
+                        
+                        /* If method not found, or has wrong params (0 params = forward declaration),
+                         * try looking up the method using class_method_bindings */
+                        if (method_node == NULL || method_params_len == 0)
+                        {
+                            int class_count = 0;
+                            int found_correct_method = 0;
+                            ListNode_t *class_list = from_cparser_find_classes_with_method((char *)id, &class_count);
+                            if (class_list != NULL)
+                            {
+                                ListNode_t *cur_class = class_list;
+                                while (cur_class != NULL)
+                                {
+                                    char *class_name = (char *)cur_class->cur;
+                                    if (class_name != NULL)
+                                    {
+                                        /* Look up this class */
+                                        HashNode_t *class_node = NULL;
+                                        int find_result = FindIdent(&class_node, symtab, class_name);
+                                        if (find_result != -1 && class_node != NULL)
                                         {
-                                            /* Don't use semcheck_find_class_method because it walks up inheritance
-                                             * and finds forward declarations in parent classes.
-                                             * Instead, look for the exact mangled name directly. */
-                                            char mangled_name[256];
-                                            snprintf(mangled_name, sizeof(mangled_name), "%s__%s", 
-                                                class_name, (char *)id);
-                                            
-                                            HashNode_t *correct_method = NULL;
-                                            FindIdent(&correct_method, symtab, mangled_name);
-                                            
-                                            /* Check if the correct method has proper parameters */
-                                            int correct_params_len = 0;
-                                            if (correct_method != NULL && correct_method->type != NULL)
+                                            struct RecordType *correct_record = get_record_type_from_node(class_node);
+                                            if (correct_record != NULL)
                                             {
-                                                ListNode_t *correct_params = kgpc_type_get_procedure_params(correct_method->type);
-                                                correct_params_len = ListLength(correct_params);
-                                            }
-                                            
-                                            if (correct_method != NULL && correct_params_len > 0)
-                                            {
-                                                self_record = correct_record;
-                                                method_node = correct_method;
-                                                found_correct_method = 1;
-                                                break;
+                                                /* Don't use semcheck_find_class_method because it walks up inheritance
+                                                 * and finds forward declarations in parent classes.
+                                                 * Instead, look for the exact mangled name directly. */
+                                                char local_mangled_name[256];
+                                                snprintf(local_mangled_name, sizeof(local_mangled_name), "%s__%s", 
+                                                    class_name, (char *)id);
+                                                
+                                                HashNode_t *correct_method = NULL;
+                                                FindIdent(&correct_method, symtab, local_mangled_name);
+                                                
+                                                /* Check if the correct method has proper parameters */
+                                                int correct_params_len = 0;
+                                                if (correct_method != NULL && correct_method->type != NULL)
+                                                {
+                                                    ListNode_t *correct_params = kgpc_type_get_procedure_params(correct_method->type);
+                                                    correct_params_len = ListLength(correct_params);
+                                                }
+                                                
+                                                if (correct_method != NULL && correct_params_len > 0)
+                                                {
+                                                    self_record = correct_record;
+                                                    method_node = correct_method;
+                                                    found_correct_method = 1;
+                                                    break;
+                                                }
                                             }
                                         }
                                     }
+                                    ListNode_t *next_class = cur_class->next;
+                                    free(cur_class->cur);
+                                    cur_class = next_class;
                                 }
-                                ListNode_t *next_class = cur_class->next;
-                                free(cur_class->cur);
-                                cur_class = next_class;
-                            }
-                            /* Only destroy list if we haven't already (i.e., if we didn't break early) */
-                            if (!found_correct_method && class_list != NULL) {
-                                DestroyList(class_list);
+                                /* Only destroy list if we haven't already (i.e., if we didn't break early) */
+                                if (!found_correct_method && class_list != NULL) {
+                                    DestroyList(class_list);
+                                }
                             }
                         }
                     }
                     
                     if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
-                        fprintf(stderr, "[SemCheck] Self injection: Self found, self_record=%s, method=%s, method_node=%p\n",
+                        fprintf(stderr, "[SemCheck] Self injection: Self found, self_record=%s, method=%s, method_node=%p expects_self=%d\n",
                             self_record->type_id ? self_record->type_id : "(null)",
-                            id ? id : "(null)", (void*)method_node);
+                            id ? id : "(null)", (void*)method_node, expects_self);
                     }
-                    int args_count = ListLength(args_given);
-                    int expects_self = 0;
-                    int args_compatible = 0;
-                    ListNode_t *method_params = NULL;
-
-                    if (method_node != NULL && method_node->type != NULL)
-                    {
-                        method_params = kgpc_type_get_procedure_params(method_node->type);
-                        args_compatible = method_accepts_arg_count(method_params, args_count, &expects_self);
-                    }
-
-                    if (!args_compatible)
-                        method_node = NULL;
 
                     if (method_node != NULL)
                     {
