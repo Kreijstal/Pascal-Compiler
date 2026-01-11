@@ -230,6 +230,15 @@ static int expr_value_requires_64bit(const struct Expression *expr, CodeGenConte
     return 0;
 }
 
+/**
+ * Check if a variable target is a Single (4-byte float) type.
+ * Used to determine when to use 32-bit operations and double-to-single conversion.
+ */
+static int is_single_float_type(int type_tag, long long storage_size)
+{
+    return (type_tag == REAL_TYPE && storage_size == 4);
+}
+
 /* Check if an expression's type is unsigned */
 static int expr_is_unsigned_type(const struct Expression *expr)
 {
@@ -5452,14 +5461,16 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         {
             int use_qword = codegen_type_uses_qword(var_type);
             /* Override for Single type (4-byte float): check actual storage size */
-            int is_single_target = (var_type == REAL_TYPE && var->size == 4 && !var->is_reference);
+            int is_single_target = is_single_float_type(var_type, var->size) && !var->is_reference;
             if (is_single_target)
                 use_qword = 0;
             if (!var->is_reference && var->size >= 8)
                 use_qword = 1;
             
-            /* For Single targets, convert double to single precision */
-            if (is_single_target)
+            /* For Single targets with real source, convert double to single precision.
+             * Only convert if the source expression is a real type (double), not integer etc. */
+            int assign_type = expr_get_type_tag(assign_expr);
+            if (is_single_target && assign_type == REAL_TYPE)
             {
                 /* The value in reg is a 64-bit double bit pattern. Convert to 32-bit single. */
                 /* Move to xmm0, convert double to single, move back to integer register */
@@ -5597,12 +5608,10 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             inst_list = codegen_get_nonlocal(inst_list, var_expr->expr_data.id, &offset);
             int use_qword = codegen_type_uses_qword(var_type);
             /* Override for Single type (4-byte float): check resolved type storage */
-            if (var_type == REAL_TYPE && var_expr->resolved_kgpc_type != NULL)
-            {
-                long long size = kgpc_type_sizeof(var_expr->resolved_kgpc_type);
-                if (size == 4)
-                    use_qword = 0;
-            }
+            long long resolved_size = (var_expr->resolved_kgpc_type != NULL) ?
+                kgpc_type_sizeof(var_expr->resolved_kgpc_type) : 8;
+            if (is_single_float_type(var_type, resolved_size))
+                use_qword = 0;
             int use_byte = 0;
             const char *value_reg8 = NULL;
             if (!use_qword && var_type == CHAR_TYPE)
