@@ -7348,7 +7348,8 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
     }
     // Propagate type information from the loop variable to the update expression
     // This ensures Int64 loop variables use 64-bit operations
-    if (for_var != NULL && update_expr != NULL)
+    // Note: for_var is guaranteed non-NULL here (checked above at line 7336)
+    if (update_expr != NULL)
     {
         update_expr->resolved_type = for_var->resolved_type;
         if (for_var->resolved_kgpc_type != NULL)

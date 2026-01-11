@@ -10023,30 +10023,10 @@ int semcheck_funccall(int *type_return,
                 {
                     if (self_is_helper)
                     {
-                        /* Check if the identifier resolves ONLY to type matches (for typecast handling).
-                         * If we find function/method matches, continue to method lookup below.
-                         * Type identifiers like TSingleRec should be handled as typecasts later. */
-                        ListNode_t *direct_matches = FindAllIdents(symtab, id);
-                        if (direct_matches != NULL)
-                        {
-                            int has_non_type_match = 0;
-                            for (ListNode_t *cur = direct_matches; cur != NULL; cur = cur->next)
-                            {
-                                HashNode_t *match = (HashNode_t *)cur->cur;
-                                if (match != NULL && match->hash_type != HASHTYPE_TYPE)
-                                {
-                                    has_non_type_match = 1;
-                                    break;
-                                }
-                            }
-                            DestroyList(direct_matches);
-                            /* Note: Don't return early for function/method matches - 
-                             * we need to continue to method lookup below which handles
-                             * unqualified method calls within type helper methods by
-                             * properly injecting Self as the first argument. */
-                            (void)has_non_type_match; /* Suppress unused variable warning */
-                            /* If only type matches found, fall through to typecast handling */
-                        }
+                        /* For type helpers, we need to let both function/method calls and
+                         * typecast handling proceed through normal resolution.
+                         * The code below handles method lookup, and typecast handling
+                         * is done later in semcheck_try_reinterpret_as_typecast. */
                     }
                     if (self_is_helper && args_given != NULL)
                     {
