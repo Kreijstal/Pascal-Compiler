@@ -21,10 +21,7 @@ type
   QWord = Int64;
   UInt64 = QWord;
 
-  { Real aliases }
-  Single = Real;
-  Double = Real;
-  Extended = Real;
+  { Single, Double, Extended are now builtin types with correct sizes (4, 8, 8 bytes) }
 
   { Size types - platform dependent }
   NativeInt = Int64;

@@ -4263,7 +4263,10 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             }
         }
 
-        int is_pointer_like = (is_var_param || is_array_param || is_array_arg || treat_self_by_value || formal_is_dynarray);
+        /* NOTE: treat_self_by_value is excluded because when passing Self by value
+         * (for type helpers on primitive types), we pass the actual value, not a pointer.
+         * The appropriate register class (SSE for floats, INT for integers) should be used. */
+        int is_pointer_like = (is_var_param || is_array_param || is_array_arg || formal_is_dynarray);
 
         if (arg_infos != NULL)
         {
