@@ -5451,8 +5451,25 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         if(var != NULL)
         {
             int use_qword = codegen_type_uses_qword(var_type);
+            /* Override for Single type (4-byte float): check actual storage size */
+            int is_single_target = (var_type == REAL_TYPE && var->size == 4 && !var->is_reference);
+            if (is_single_target)
+                use_qword = 0;
             if (!var->is_reference && var->size >= 8)
                 use_qword = 1;
+            
+            /* For Single targets, convert double to single precision */
+            if (is_single_target)
+            {
+                /* The value in reg is a 64-bit double bit pattern. Convert to 32-bit single. */
+                /* Move to xmm0, convert double to single, move back to integer register */
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm0\n", reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                inst_list = add_inst(inst_list, "\tcvtsd2ss\t%xmm0, %xmm0\n");
+                snprintf(buffer, sizeof(buffer), "\tmovd\t%%xmm0, %s\n", reg->bit_32);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            
             int use_byte = 0;
             int use_word = 0;
             const char *value_reg8 = NULL;
@@ -5579,6 +5596,13 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
 
             inst_list = codegen_get_nonlocal(inst_list, var_expr->expr_data.id, &offset);
             int use_qword = codegen_type_uses_qword(var_type);
+            /* Override for Single type (4-byte float): check resolved type storage */
+            if (var_type == REAL_TYPE && var_expr->resolved_kgpc_type != NULL)
+            {
+                long long size = kgpc_type_sizeof(var_expr->resolved_kgpc_type);
+                if (size == 4)
+                    use_qword = 0;
+            }
             int use_byte = 0;
             const char *value_reg8 = NULL;
             if (!use_qword && var_type == CHAR_TYPE)
