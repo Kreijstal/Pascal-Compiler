@@ -10055,19 +10055,19 @@ int semcheck_funccall(int *type_return,
                             first_arg->expr_data.id != NULL &&
                             pascal_identifier_equals(first_arg->expr_data.id, "Self"))
                         {
-                            /* Before returning, check if this might be a typecast.
-                             * TypeName(Self) should be treated as a cast, not a method call. */
+                            /* Check if this might be a typecast like TSingleRec(Self).
+                             * If the identifier is a type, fall through to typecast handling.
+                             * If it's a function (like Length), continue to method lookup
+                             * and eventually to builtin function handling. */
                             HashNode_t *id_node = NULL;
                             int find_result = FindIdent(&id_node, symtab, id);
                             if (find_result >= 0 &&
                                 id_node != NULL && id_node->hash_type == HASHTYPE_TYPE)
                             {
-                                /* This is a typecast like TSingleRec(Self), fall through */
+                                /* This is a typecast like TSingleRec(Self), fall through to typecast handling */
                             }
-                            else
-                            {
-                                return return_val;
-                            }
+                            /* Note: Don't return early for function calls like Length(Self).
+                             * Let the code continue to method lookup and builtin handling. */
                         }
                     }
                     /* First, try to find the method in Self's class.
