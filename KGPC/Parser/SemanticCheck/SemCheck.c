@@ -7077,6 +7077,14 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     HashNode_t *type_node = resolved_type;
                     const char *type_id = tree->tree_data.var_decl_data.type_id;
                     int declared_type = tree->tree_data.var_decl_data.type;
+                    if (getenv("KGPC_DEBUG_TYPE_HELPER") != NULL && ids && ids->cur &&
+                        pascal_identifier_equals((char*)ids->cur, "Self"))
+                    {
+                        fprintf(stderr, "[KGPC] semcheck_decls Self: type_id=%s declared_type=%d type_node=%p type_node->type=%p kind=%d\n",
+                            type_id ? type_id : "<null>", declared_type, (void*)type_node,
+                            type_node && type_node->type ? (void*)type_node->type : NULL,
+                            type_node && type_node->type ? type_node->type->kind : -1);
+                    }
                     
                     if (declared_type == SET_TYPE)
                     {
@@ -7149,6 +7157,9 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     /* Check if it's a builtin type even if not in symbol table */
                     if (type_node == NULL)
                     {
+                        if (getenv("KGPC_DEBUG_TYPE_HELPER") != NULL && ids && ids->cur)
+                            fprintf(stderr, "[KGPC] semcheck_decls: %s has type_id=%s but type_node is NULL\n",
+                                (char*)ids->cur, type_id);
                         /* Check for builtin types */
                         if (pascal_identifier_equals(type_id, "Integer"))
                             var_type = HASHVAR_INTEGER;
@@ -7280,6 +7291,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             int element_type_tag = alias->array_element_type;
 
                             /* If element type is a type reference, resolve it */
+                            int element_type_owned = 0;  /* Track if we own element_type */
                             if (element_type_tag == UNKNOWN_TYPE && alias->array_element_type_id != NULL)
                             {
                                 HashNode_t *element_type_node = NULL;
@@ -7287,26 +7299,28 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                                     element_type_node != NULL && element_type_node->type != NULL)
                                 {
                                     element_type = element_type_node->type;
-                                }
-                                else if (element_type_node != NULL && element_type_node->type != NULL)
-                                {
-                                    /* Get KgpcType from element_type_node */
-                                    element_type = element_type_node->type;
+                                    /* CRITICAL: Retain element_type since it's borrowed from symbol table
+                                     * and create_array_type takes ownership. Without this, both the symbol
+                                     * table and array_type would try to free the same type, causing double-free. */
+                                    kgpc_type_retain(element_type);
+                                    element_type_owned = 1;
                                 }
                             }
                             else if (element_type_tag != UNKNOWN_TYPE)
                             {
                                 /* Direct primitive type tag - use create_primitive_type */
                                 element_type = create_primitive_type(element_type_tag);
+                                element_type_owned = 1;
                             }
 
                             /* If element type is still NULL, create an unknown type to avoid crash */
                             if (element_type == NULL)
                             {
                                 element_type = create_primitive_type(UNKNOWN_TYPE);
+                                element_type_owned = 1;
                             }
-                            
-                            /* Create array KgpcType */
+
+                            /* Create array KgpcType - takes ownership of element_type */
                             KgpcType *array_type = create_array_type(element_type, start, end);
                             assert(array_type != NULL && "Failed to create array type");
                             
@@ -7334,6 +7348,12 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         {
                             /* Type node already has a KgpcType - reference it (don't clone) */
                             var_kgpc_type = type_node->type;
+                            if (getenv("KGPC_DEBUG_TYPE_HELPER") != NULL && ids && ids->cur &&
+                                pascal_identifier_equals((char*)ids->cur, "Self"))
+                            {
+                                fprintf(stderr, "[KGPC] semcheck_decls: Pushing Self with type_node->type kind=%d\n",
+                                    var_kgpc_type ? var_kgpc_type->kind : -1);
+                            }
                             func_return = PushVarOntoScope_Typed(symtab, (char *)ids->cur, var_kgpc_type);
                         }
                         else
@@ -7391,8 +7411,11 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             
                             /* Always use _Typed variant, even if KgpcType is NULL (UNTYPED) */
                             func_return = PushVarOntoScope_Typed(symtab, (char *)ids->cur, var_kgpc_type);
+                            if (getenv("KGPC_DEBUG_TYPE_HELPER") != NULL && ids && ids->cur &&
+                                pascal_identifier_equals((char*)ids->cur, "Self"))
+                                fprintf(stderr, "[KGPC] semcheck_decls: PushVarOntoScope_Typed for Self returned %d\n", func_return);
                         }
-                        
+
                         if (func_return == 0)
                         {
                             HashNode_t *var_node = NULL;
@@ -7486,6 +7509,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         /* Get element type */
                         KgpcType *element_type = NULL;
                         int element_type_tag = alias->array_element_type;
+                        int element_type_borrowed = 0;  /* Track if borrowed from symbol table */
 
                         if (element_type_tag == UNKNOWN_TYPE && alias->array_element_type_id != NULL)
                         {
@@ -7494,6 +7518,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                                 element_type_node != NULL && element_type_node->type != NULL)
                             {
                                 element_type = element_type_node->type;
+                                element_type_borrowed = 1;
                             }
                             else
                             {
@@ -7510,6 +7535,10 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
 
                         if (element_type != NULL)
                         {
+                            /* CRITICAL: Retain element_type if borrowed from symbol table
+                             * since create_array_type takes ownership. */
+                            if (element_type_borrowed)
+                                kgpc_type_retain(element_type);
                             var_kgpc_type = create_array_type(element_type, start, end);
                             kgpc_type_set_type_alias(var_kgpc_type, alias);
                         }
@@ -7604,8 +7633,9 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         tree->tree_data.arr_decl_data.is_typed_const);
 
                 KgpcType *element_type = NULL;
+                int element_type_borrowed = 0;  /* Track if borrowed from symbol table */
                 int is_array_of_const = (tree->tree_data.arr_decl_data.type == ARRAY_OF_CONST_TYPE);
-                
+
                 /* If type_id is specified, resolve it to get the element type */
                 if (!is_array_of_const && tree->tree_data.arr_decl_data.type_id != NULL)
                 {
@@ -7616,6 +7646,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     {
                         /* Use the KgpcType from the resolved type node */
                         element_type = element_type_node->type;
+                        element_type_borrowed = 1;  /* Mark as borrowed */
                         if (element_type == NULL)
                         {
                             /* Fallback for migration: some nodes may not have KgpcType populated yet.
@@ -7625,6 +7656,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             {
                                 /* Use the canonical RecordType, not a clone */
                                 element_type = create_record_type(record_type);
+                                element_type_borrowed = 0;  /* New type, not borrowed */
                             }
                         }
                     }
@@ -7760,6 +7792,10 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 }
                 else
                 {
+                    /* CRITICAL: Retain element_type if borrowed from symbol table
+                     * since create_array_type takes ownership. */
+                    if (element_type_borrowed && element_type != NULL)
+                        kgpc_type_retain(element_type);
                     array_type = create_array_type(
                         element_type,
                         start_bound,
@@ -8503,10 +8539,13 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         }
 
         PushScope(symtab);
-        
+        if (getenv("KGPC_DEBUG_TYPE_HELPER") != NULL)
+            fprintf(stderr, "[KGPC] semcheck_subprogram (func): PushScope for %s\n",
+                subprogram->tree_data.subprogram_data.id);
+
         /* For method implementations, add class vars to scope */
         add_class_vars_to_method_scope(symtab, subprogram->tree_data.subprogram_data.id);
-        
+
         // **THIS IS THE FIX FOR THE RETURN VALUE**:
         // Use the ORIGINAL name for the internal return variable with KgpcType
         // Always use _Typed variant, even if KgpcType is NULL
@@ -8601,6 +8640,22 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     }
 
     /* These arguments are themselves like declarations */
+    if (getenv("KGPC_DEBUG_TYPE_HELPER") != NULL) {
+        ListNode_t *arg_debug = subprogram->tree_data.subprogram_data.args_var;
+        fprintf(stderr, "[KGPC] semcheck_subprogram: %s args:\n", subprogram->tree_data.subprogram_data.id);
+        while (arg_debug != NULL) {
+            if (arg_debug->type == LIST_TREE && arg_debug->cur != NULL) {
+                Tree_t *arg_tree = (Tree_t *)arg_debug->cur;
+                if (arg_tree->type == TREE_VAR_DECL) {
+                    ListNode_t *ids = arg_tree->tree_data.var_decl_data.ids;
+                    if (ids != NULL && ids->cur != NULL)
+                        fprintf(stderr, "  - %s (type_id=%s)\n", (char*)ids->cur,
+                            arg_tree->tree_data.var_decl_data.type_id ? arg_tree->tree_data.var_decl_data.type_id : "<null>");
+                }
+            }
+            arg_debug = arg_debug->next;
+        }
+    }
     return_val += semcheck_decls(symtab, subprogram->tree_data.subprogram_data.args_var);
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_subprogram %s error after args: %d\n", subprogram->tree_data.subprogram_data.id, return_val);

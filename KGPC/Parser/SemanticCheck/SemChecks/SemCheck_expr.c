@@ -7509,6 +7509,7 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                                     {
                                         /* Array field */
                                         KgpcType *element_type = NULL;
+                                        int element_type_borrowed = 0;
                                         if (field->array_element_type_id != NULL)
                                         {
                                             HashNode_t *elem_type_node =
@@ -7516,6 +7517,7 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                                             if (elem_type_node != NULL)
                                             {
                                                 element_type = elem_type_node->type;
+                                                element_type_borrowed = 1;
                                             }
                                         }
                                         else if (field->array_element_type != UNKNOWN_TYPE)
@@ -7524,11 +7526,15 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                                                 *owns_type = 1;
                                             element_type = create_primitive_type(field->array_element_type);
                                         }
-                                        
+
                                         if (element_type != NULL)
                                         {
                                             if (owns_type != NULL)
                                                 *owns_type = 1;
+                                            /* CRITICAL: Retain element_type if borrowed from symbol table
+                                             * since create_array_type takes ownership. */
+                                            if (element_type_borrowed)
+                                                kgpc_type_retain(element_type);
                                             field_type = create_array_type(element_type, field->array_start, field->array_end);
                                         }
                                     }
@@ -9016,6 +9022,13 @@ int semcheck_varid(int *type_return,
     }
 
     scope_return = FindIdent(&hash_return, symtab, id);
+    if (getenv("KGPC_DEBUG_TYPE_HELPER") != NULL && id != NULL &&
+        pascal_identifier_equals(id, "Self"))
+    {
+        fprintf(stderr, "[KGPC] semcheck_varid: FindIdent Self scope_return=%d hash_return=%p kind=%d\n",
+            scope_return, (void*)hash_return,
+            hash_return && hash_return->type ? hash_return->type->kind : -1);
+    }
     if (scope_return == -1)
     {
         if (scope_return == -1)
@@ -10010,11 +10023,26 @@ int semcheck_funccall(int *type_return,
                 {
                     if (self_is_helper)
                     {
+                        /* Check if the identifier resolves to a function/method (not a type).
+                         * Type identifiers like TSingleRec should be handled as typecasts later,
+                         * not cause an early return. */
                         ListNode_t *direct_matches = FindAllIdents(symtab, id);
                         if (direct_matches != NULL)
                         {
+                            int has_non_type_match = 0;
+                            for (ListNode_t *cur = direct_matches; cur != NULL; cur = cur->next)
+                            {
+                                HashNode_t *match = (HashNode_t *)cur->cur;
+                                if (match != NULL && match->hash_type != HASHTYPE_TYPE)
+                                {
+                                    has_non_type_match = 1;
+                                    break;
+                                }
+                            }
                             DestroyList(direct_matches);
-                            return return_val;
+                            if (has_non_type_match)
+                                return return_val;
+                            /* If only type matches found, fall through to typecast handling */
                         }
                     }
                     if (self_is_helper && args_given != NULL)
@@ -10024,7 +10052,19 @@ int semcheck_funccall(int *type_return,
                             first_arg->expr_data.id != NULL &&
                             pascal_identifier_equals(first_arg->expr_data.id, "Self"))
                         {
-                            return return_val;
+                            /* Before returning, check if this might be a typecast.
+                             * TypeName(Self) should be treated as a cast, not a method call. */
+                            HashNode_t *id_node = NULL;
+                            int find_result = FindIdent(&id_node, symtab, id);
+                            if (find_result >= 0 &&
+                                id_node != NULL && id_node->hash_type == HASHTYPE_TYPE)
+                            {
+                                /* This is a typecast like TSingleRec(Self), fall through */
+                            }
+                            else
+                            {
+                                return return_val;
+                            }
                         }
                     }
                     /* First, try to find the method in Self's class */

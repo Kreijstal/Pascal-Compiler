@@ -6030,6 +6030,9 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
         if (record_type->is_type_helper && record_type->helper_base_type_id != NULL &&
             record_type->type_id != NULL)
         {
+            if (getenv("KGPC_DEBUG_TYPE_HELPER") != NULL)
+                fprintf(stderr, "[KGPC] Registering type helper mapping: %s -> %s\n",
+                    record_type->type_id, record_type->helper_base_type_id);
             register_type_helper_mapping(record_type->type_id, record_type->helper_base_type_id);
         }
         
@@ -8912,6 +8915,9 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
 
     const char *helper_base = (effective_class != NULL) ? lookup_type_helper_base(effective_class) : NULL;
     int is_helper_method = (helper_base != NULL);
+    if (getenv("KGPC_DEBUG_TYPE_HELPER") != NULL && effective_class != NULL)
+        fprintf(stderr, "[KGPC] convert_method_impl: looking up helper base for %s -> %s\n",
+            effective_class, helper_base ? helper_base : "(not found)");
 
     /* Add Self parameter only for instance methods, not for class operators or static methods */
     if (!is_class_operator && !is_static_method) {

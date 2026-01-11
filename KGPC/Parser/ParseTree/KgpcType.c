@@ -165,16 +165,16 @@ KgpcType* create_kgpc_type_from_type_alias(struct TypeAlias *alias, struct SymTa
     if (alias->is_array) {
         int start = alias->array_start;
         int end = alias->array_end;
-        
+
         if (alias->is_open_array) {
             start = 0;
             end = -1;
         }
-        
+
         /* Resolve element type */
         KgpcType *element_type = NULL;
         int element_type_tag = alias->array_element_type;
-        
+
         if (element_type_tag != UNKNOWN_TYPE) {
             /* Direct primitive type tag */
             element_type = create_primitive_type(element_type_tag);
@@ -182,15 +182,17 @@ KgpcType* create_kgpc_type_from_type_alias(struct TypeAlias *alias, struct SymTa
             /* Type reference - try to resolve it */
             HashNode_t *element_node = kgpc_find_type_node(symtab, alias->array_element_type_id);
             if (element_node != NULL && element_node->type != NULL) {
-                /* Use the resolved type (don't clone, just reference) */
+                /* Use the resolved type - MUST retain since it's borrowed from symbol table
+                 * and create_array_type takes ownership. */
                 element_type = element_node->type;
+                kgpc_type_retain(element_type);
             } else {
                 /* Forward reference - create NULL element type for now
                  * This will be resolved when the array is actually used */
                 element_type = NULL;
             }
         }
-        
+
         /* Create array type even if element type is NULL (forward reference) */
         result = create_array_type(element_type, start, end);
         if (result != NULL) {
@@ -203,7 +205,7 @@ KgpcType* create_kgpc_type_from_type_alias(struct TypeAlias *alias, struct SymTa
     if (alias->is_pointer) {
         KgpcType *pointee_type = NULL;
         int pointer_type_tag = alias->pointer_type;
-        
+
         if (pointer_type_tag != UNKNOWN_TYPE) {
             /* Direct primitive type tag */
             pointee_type = create_primitive_type(pointer_type_tag);
@@ -211,8 +213,10 @@ KgpcType* create_kgpc_type_from_type_alias(struct TypeAlias *alias, struct SymTa
             /* Type reference - try to resolve it */
             HashNode_t *pointee_node = kgpc_find_type_node(symtab, alias->pointer_type_id);
             if (pointee_node != NULL && pointee_node->type != NULL) {
-                /* Use the resolved type (don't clone, just reference) */
+                /* Use the resolved type - MUST retain since it's borrowed from symbol table
+                 * and create_pointer_type takes ownership. */
                 pointee_type = pointee_node->type;
+                kgpc_type_retain(pointee_type);
             } else {
                 /* Forward reference or unresolved type
                  * Create a pointer to NULL - this is valid in Pascal
@@ -220,7 +224,7 @@ KgpcType* create_kgpc_type_from_type_alias(struct TypeAlias *alias, struct SymTa
                 pointee_type = NULL;
             }
         }
-        
+
         /* Create pointer type even if pointee is NULL (forward reference) */
         result = create_pointer_type(pointee_type);
         if (result != NULL) {
@@ -439,7 +443,8 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
         }
 
         KgpcType *elem_type = NULL;
-        
+        int elem_type_borrowed = 0;
+
         /* Resolve element type */
         if (elem_type_tag != UNKNOWN_TYPE && elem_type_tag != -1)
         {
@@ -452,11 +457,16 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
             if (elem_node != NULL && elem_node->type != NULL)
             {
                 elem_type = elem_node->type;
+                elem_type_borrowed = 1;
             }
         }
-        
+
         if (elem_type != NULL)
         {
+            /* CRITICAL: Retain elem_type if borrowed from symbol table
+             * since create_array_type takes ownership. */
+            if (elem_type_borrowed)
+                kgpc_type_retain(elem_type);
             /* Create a new array KgpcType - caller owns this */
             if (owns_type != NULL)
                 *owns_type = 1;
