@@ -41,20 +41,58 @@ The FPC RTL cannot be fully compiled because kgpc has bugs and missing features 
    - Missing FPC preprocessor directives
 
 ## Build Command
-```
-build/KGPC/kgpc <file>.pp <file>.s \
-  -IFPCSource/rtl/inc \
-  -IFPCSource/rtl/x86_64 \
-  -IFPCSource/rtl/unix \
-  -IFPCSource/rtl/linux \
-  -IFPCSource/rtl/linux/x86_64 \
-  -IFPCSource/rtl/objpas \
-  -IFPCSource/rtl/objpas/sysutils \
+
+### sysutils.pp (635 errors remaining as of 2025-01-11)
+```bash
+./builddir/KGPC/kgpc ./FPCSource/rtl/unix/sysutils.pp /tmp/sysutils.s \
   --no-stdlib \
-  -Cg -dCPUX86_64
+  -I./FPCSource/rtl/unix \
+  -I./FPCSource/rtl/objpas \
+  -I./FPCSource/rtl/objpas/sysutils \
+  -I./FPCSource/rtl/inc \
+  -I./FPCSource/rtl/linux \
+  -I./FPCSource/rtl/linux/x86_64 \
+  -I./FPCSource/rtl/x86_64 \
+  -I./FPCSource/packages/rtl-objpas/src/inc
 ```
 
-Note: The `sysutils.pp` unit requires `-IFPCSource/rtl/objpas` and `-IFPCSource/rtl/objpas/sysutils` paths to find `TEndian` (from `ObjPas`) and `SCannotCreateEmptyDir` (from `SysConst`).
+### Top error categories (635 total):
+| Count | Error | Root Cause |
+|-------|-------|------------|
+| 174 | type mismatch on addop | **BUG**: Int64 return type in type helper overload calls |
+| 88 | type mismatch on mulop | Same as above |
+| 51 | Result type mismatch (string/unsupported) | Same as above |
+| 48 | relational op type mismatch | Same as above |
+| 40 | Result type mismatch (unsupported/integer) | Same as above |
+| 33 | equality comparison type mismatch | Same as above |
+| 24 | Move argument type mismatch | Unknown |
+| 20 | Aligned function not found | Missing intrinsic |
+| 20 | AND expression type mismatch | Unknown |
+| 20 | expected relational inside if statement | Unknown |
+| 16 | Result type mismatch (unsupported/pointer) | Int64 bug |
+| 15 | Str value must be an integer | Unknown |
+| 8 | undeclared identifier "Self" | Type helper bug |
+| 8 | record field "Length" not found | Unknown |
+
+### Key Bug: Int64/QWord return type in type helper overload calls
+
+When a type helper method returns `Int64` or `QWord` and calls another overloaded method of the same name, `Result`'s type becomes "unsupported". This causes ~300+ cascading errors because FPC's sysutils uses `SizeInt` (=Int64 on x86_64) extensively.
+
+**Reproduction**:
+```pascal
+type
+  THelper = type helper for AnsiString
+    function Foo: Int64;
+    function Foo(x: Integer): Int64;
+  end;
+
+function THelper.Foo: Int64;
+begin
+  Result := Foo(0);  // BUG: Result is 'unsupported'
+end;
+```
+
+Note: The `sysutils.pp` unit requires all the include paths above to resolve architecture-specific includes (stat.inc, strings.inc, etc.).
 
 ## Compiles Successfully (RTL Units)
 - `system.pp` - Core system unit (dead code eliminated)
@@ -77,12 +115,14 @@ Note: The `sysutils.pp` unit requires `-IFPCSource/rtl/objpas` and `-IFPCSource/
 - `dl.pp` - Dynamic loading
 
 ## Units with Compilation Errors
-- `sysutils.pp` - Missing paths (now fixed), plus ~77 remaining semantic errors:
-  - Overload resolution failures (EInOutError.Create, TryCase, etc.)
-  - Bitwise AND/OR incorrectly rejected as non-boolean
-  - Property getter resolution failures (SystemEncoding, Unicode)
-  - Type mismatches (char vs string, arithmetic operands)
-  - Scope/visibility bugs (SysBeep not found in the same unit)
+- `sysutils.pp` - **635 errors** (as of 2025-01-11, with `--no-stdlib`):
+  - Type mismatches in arithmetic ops (262 errors) - likely type helper related
+  - Result type mismatches (122 errors)
+  - Relational/comparison type mismatches (101 errors)
+  - Missing `Aligned` intrinsic (20 errors)
+  - Move argument type issues (24 errors)
+  - AND expression type issues (20 errors)
+  - Undeclared `Self` in type helpers (8 errors)
 - `math.pp` - Depends on sysutils
 - `cthreads.pp` - Missing ThreadingAlreadyUsed
 - `charset.pp` - Type incompatibilities
