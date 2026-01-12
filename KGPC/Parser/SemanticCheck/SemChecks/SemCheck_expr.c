@@ -8469,8 +8469,28 @@ int semcheck_relop(int *type_return,
                         }
                     }
                 }
+
+                /* Check for dynamic array compared with nil.
+                 * In Pascal, dynamic arrays can be compared with nil to check if they are empty/uninitialized.
+                 * A := nil; if A = nil then ... */
+                int dynarray_nil_ok = 0;
+                if (!pointer_ok && expr1 != NULL && expr2 != NULL)
+                {
+                    KgpcType *kgpc1 = expr1->resolved_kgpc_type;
+                    KgpcType *kgpc2 = expr2->resolved_kgpc_type;
+                    if (kgpc1 != NULL && kgpc2 != NULL)
+                    {
+                        int is_dynarray1 = kgpc_type_is_dynamic_array(kgpc1);
+                        int is_dynarray2 = kgpc_type_is_dynamic_array(kgpc2);
+                        int is_nil1 = (kgpc1->kind == TYPE_KIND_POINTER && kgpc1->info.points_to == NULL);
+                        int is_nil2 = (kgpc2->kind == TYPE_KIND_POINTER && kgpc2->info.points_to == NULL);
+                        
+                        if ((is_dynarray1 && is_nil2) || (is_nil1 && is_dynarray2))
+                            dynarray_nil_ok = 1;
+                    }
+                }
                 
-                if (!numeric_ok && !boolean_ok && !string_ok && !char_ok && !pointer_ok && !enum_ok && !string_pchar_ok)
+                if (!numeric_ok && !boolean_ok && !string_ok && !char_ok && !pointer_ok && !enum_ok && !string_pchar_ok && !dynarray_nil_ok)
                 {
                     semcheck_error_with_context("Error on line %d, equality comparison requires matching numeric, boolean, string, character, or pointer types!\n\n",
                         expr->line_num);
@@ -8527,7 +8547,25 @@ int semcheck_relop(int *type_return,
                     }
                 }
 
-                if(!numeric_ok && !string_ok && !char_ok && !pointer_ok && !enum_ok && !string_pchar_ok)
+                /* Check for dynamic array compared with nil */
+                int dynarray_nil_ok = 0;
+                if (!pointer_ok && expr1 != NULL && expr2 != NULL)
+                {
+                    KgpcType *kgpc1 = expr1->resolved_kgpc_type;
+                    KgpcType *kgpc2 = expr2->resolved_kgpc_type;
+                    if (kgpc1 != NULL && kgpc2 != NULL)
+                    {
+                        int is_dynarray1 = kgpc_type_is_dynamic_array(kgpc1);
+                        int is_dynarray2 = kgpc_type_is_dynamic_array(kgpc2);
+                        int is_nil1 = (kgpc1->kind == TYPE_KIND_POINTER && kgpc1->info.points_to == NULL);
+                        int is_nil2 = (kgpc2->kind == TYPE_KIND_POINTER && kgpc2->info.points_to == NULL);
+                        
+                        if ((is_dynarray1 && is_nil2) || (is_nil1 && is_dynarray2))
+                            dynarray_nil_ok = 1;
+                    }
+                }
+
+                if(!numeric_ok && !string_ok && !char_ok && !pointer_ok && !enum_ok && !string_pchar_ok && !dynarray_nil_ok)
                 {
                     fprintf(stderr,
                         "Error on line %d, expected compatible numeric, string, or character types between relational op!\n\n",
@@ -12658,8 +12696,16 @@ skip_overload_resolution:
                 continue;
             }
 
+            /* Check if the formal parameter is a var or out parameter.
+             * If so, mark the actual argument expression as mutated. */
+            int arg_mutating = NO_MUTATE;
+            if (arg_decl->type == TREE_VAR_DECL && arg_decl->tree_data.var_decl_data.is_var_param)
+            {
+                arg_mutating = MUTATE;
+            }
+
             return_val += semcheck_expr_main(&arg_type,
-                symtab, current_arg_expr, max_scope_lev, NO_MUTATE);
+                symtab, current_arg_expr, max_scope_lev, arg_mutating);
             if (getenv("KGPC_DEBUG_CALL_TYPES") != NULL &&
                 id != NULL &&
                 (pascal_identifier_equals(id, "FileDateToDateTime") ||
