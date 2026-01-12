@@ -577,6 +577,8 @@ static int semcheck_builtin_randseed(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev);
 static int semcheck_builtin_power(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev);
+static int semcheck_builtin_aligned(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev);
 static int semcheck_typecheck_array_literal(struct Expression *expr, SymTab_t *symtab,
     int max_scope_lev, int expected_type, const char *expected_type_id, int line_num);
 
@@ -6830,6 +6832,45 @@ static int semcheck_recordaccess(int *type_return,
                 free(mangled_const);
         }
 
+        /* Type helper string builtins: In type helpers for strings,
+         * Self.Length should resolve to Length(Self) */
+        if (record_info != NULL && record_info->is_type_helper &&
+            record_info->helper_base_type_id != NULL &&
+            (pascal_identifier_equals(record_info->helper_base_type_id, "AnsiString") ||
+             pascal_identifier_equals(record_info->helper_base_type_id, "String") ||
+             pascal_identifier_equals(record_info->helper_base_type_id, "ShortString") ||
+             pascal_identifier_equals(record_info->helper_base_type_id, "UnicodeString")))
+        {
+            if (pascal_identifier_equals(field_id, "Length"))
+            {
+                /* Transform 'Self.Length' into 'Length(Self)' */
+                char *func_id = strdup("Length");
+                if (func_id != NULL)
+                {
+                    /* record_expr is already the Self expression */
+                    ListNode_t *args_list = CreateListNode(record_expr, LIST_EXPR);
+                    if (args_list != NULL)
+                    {
+                        /* Clear field_id and convert to function call */
+                        if (expr->expr_data.record_access_data.field_id != NULL)
+                        {
+                            free(expr->expr_data.record_access_data.field_id);
+                        }
+                        
+                        expr->type = EXPR_FUNCTION_CALL;
+                        memset(&expr->expr_data.function_call_data, 0,
+                            sizeof(expr->expr_data.function_call_data));
+                        expr->expr_data.function_call_data.id = func_id;
+                        expr->expr_data.function_call_data.args_expr = args_list;
+                        expr->expr_data.function_call_data.mangled_id = NULL;
+                        semcheck_reset_function_call_cache(expr);
+                        return semcheck_funccall(type_return, symtab, expr, max_scope_lev, mutating);
+                    }
+                    free(func_id);
+                }
+            }
+        }
+
         semcheck_error_with_context("Error on line %d, record field %s not found.\n", expr->line_num, field_id);
         *type_return = UNKNOWN_TYPE;
         return error_count + 1;
@@ -9135,6 +9176,68 @@ int semcheck_varid(int *type_return,
                             /* If we reach here, memory allocation failed - fall through to error handling */
                         }
                     }
+                    
+                    /* Type helper string builtins: In type helpers for strings, 
+                     * bare 'Length' should resolve to Length(Self).
+                     * Check both when Self is a record type helper or when it's a primitive string type. */
+                    int is_string_type_helper = 0;
+                    if (self_record != NULL && self_record->is_type_helper &&
+                        self_record->helper_base_type_id != NULL &&
+                        (pascal_identifier_equals(self_record->helper_base_type_id, "AnsiString") ||
+                         pascal_identifier_equals(self_record->helper_base_type_id, "String") ||
+                         pascal_identifier_equals(self_record->helper_base_type_id, "ShortString") ||
+                         pascal_identifier_equals(self_record->helper_base_type_id, "UnicodeString")))
+                    {
+                        is_string_type_helper = 1;
+                    }
+                    /* Also check when Self is a primitive string type - this happens when
+                     * type helper passes the primitive directly as Self parameter */
+                    if (!is_string_type_helper && self_node->type != NULL)
+                    {
+                        const char *current_owner = semcheck_get_current_method_owner();
+                        if (current_owner != NULL)
+                        {
+                            struct RecordType *owner_record = semcheck_lookup_record_type(symtab, current_owner);
+                            if (owner_record != NULL && owner_record->is_type_helper &&
+                                owner_record->helper_base_type_id != NULL &&
+                                (pascal_identifier_equals(owner_record->helper_base_type_id, "AnsiString") ||
+                                 pascal_identifier_equals(owner_record->helper_base_type_id, "String") ||
+                                 pascal_identifier_equals(owner_record->helper_base_type_id, "ShortString") ||
+                                 pascal_identifier_equals(owner_record->helper_base_type_id, "UnicodeString")))
+                            {
+                                is_string_type_helper = 1;
+                            }
+                        }
+                    }
+                    
+                    if (is_string_type_helper && pascal_identifier_equals(id, "Length"))
+                    {
+                        /* Transform 'Length' into 'Length(Self)' */
+                        char *self_str = strdup("Self");
+                        if (self_str != NULL)
+                        {
+                            struct Expression *self_expr = mk_varid(expr->line_num, self_str);
+                            if (self_expr != NULL)
+                            {
+                                ListNode_t *args_list = CreateListNode(self_expr, LIST_EXPR);
+                                if (args_list != NULL)
+                                {
+                                    char *saved_id = expr->expr_data.id;
+                                    expr->expr_data.id = NULL;
+                                    
+                                    expr->type = EXPR_FUNCTION_CALL;
+                                    memset(&expr->expr_data.function_call_data, 0,
+                                        sizeof(expr->expr_data.function_call_data));
+                                    expr->expr_data.function_call_data.id = saved_id;
+                                    expr->expr_data.function_call_data.args_expr = args_list;
+                                    expr->expr_data.function_call_data.mangled_id = NULL;
+                                    semcheck_reset_function_call_cache(expr);
+                                    return semcheck_funccall(type_return, symtab, expr, max_scope_lev, mutating);
+                                }
+                                destroy_expr(self_expr);
+                            }
+                        }
+                    }
                 }
             }
 
@@ -9183,6 +9286,43 @@ int semcheck_varid(int *type_return,
             expr->expr_data.function_call_data.args_expr = NULL;
             expr->expr_data.function_call_data.mangled_id = NULL;
             semcheck_reset_function_call_cache(expr);
+            
+            /* Type helper string builtins: In type helpers for strings, 
+             * bare 'Length' should resolve to Length(Self) */
+            if (pascal_identifier_equals(func_id, "Length"))
+            {
+                const char *current_owner = semcheck_get_current_method_owner();
+                if (current_owner != NULL)
+                {
+                    struct RecordType *owner_record = semcheck_lookup_record_type(symtab, current_owner);
+                    if (owner_record != NULL && owner_record->is_type_helper &&
+                        owner_record->helper_base_type_id != NULL &&
+                        (pascal_identifier_equals(owner_record->helper_base_type_id, "AnsiString") ||
+                         pascal_identifier_equals(owner_record->helper_base_type_id, "String") ||
+                         pascal_identifier_equals(owner_record->helper_base_type_id, "ShortString") ||
+                         pascal_identifier_equals(owner_record->helper_base_type_id, "UnicodeString")))
+                    {
+                        /* Add Self as the argument */
+                        char *self_str = strdup("Self");
+                        if (self_str != NULL)
+                        {
+                            struct Expression *self_expr = mk_varid(expr->line_num, self_str);
+                            if (self_expr != NULL)
+                            {
+                                ListNode_t *args_list = CreateListNode(self_expr, LIST_EXPR);
+                                if (args_list != NULL)
+                                {
+                                    expr->expr_data.function_call_data.args_expr = args_list;
+                                }
+                                else
+                                {
+                                    destroy_expr(self_expr);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             
             return semcheck_funccall(type_return, symtab, expr, max_scope_lev, mutating);
         }
@@ -10893,6 +11033,9 @@ int semcheck_funccall(int *type_return,
 
     if (id != NULL && pascal_identifier_equals(id, "RandSeed"))
         return semcheck_builtin_randseed(type_return, symtab, expr, max_scope_lev);
+
+    if (id != NULL && pascal_identifier_equals(id, "Aligned"))
+        return semcheck_builtin_aligned(type_return, symtab, expr, max_scope_lev);
 
     /***** FIRST VERIFY FUNCTION IDENTIFIER *****/
 
@@ -12891,4 +13034,74 @@ static int semcheck_builtin_randseed(int *type_return, SymTab_t *symtab,
     expr->resolved_kgpc_type = create_primitive_type(LONGINT_TYPE);
     *type_return = LONGINT_TYPE;
     return 0;
+}
+
+static int semcheck_builtin_aligned(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev)
+{
+    (void)symtab;
+
+    assert(type_return != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_FUNCTION_CALL);
+
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    if (args == NULL || args->next == NULL || args->next->next != NULL)
+    {
+        semcheck_error_with_context("Error on line %d, Aligned expects exactly two arguments: pointer and alignment.\n",
+            expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    /* First argument: pointer */
+    struct Expression *ptr_arg = (struct Expression *)args->cur;
+    int ptr_type = UNKNOWN_TYPE;
+    int error_count = semcheck_expr_main(&ptr_type, symtab, ptr_arg, max_scope_lev, NO_MUTATE);
+    if (error_count == 0 && ptr_type != POINTER_TYPE)
+    {
+        semcheck_error_with_context("Error on line %d, Aligned first argument must be a pointer.\n",
+            expr->line_num);
+        ++error_count;
+    }
+
+    /* Second argument: alignment (integer) */
+    struct Expression *align_arg = (struct Expression *)args->next->cur;
+    int align_type = UNKNOWN_TYPE;
+    error_count += semcheck_expr_main(&align_type, symtab, align_arg, max_scope_lev, NO_MUTATE);
+    if (error_count == 0 && !is_integer_type(align_type))
+    {
+        semcheck_error_with_context("Error on line %d, Aligned second argument must be an integer.\n",
+            expr->line_num);
+        ++error_count;
+    }
+
+    if (error_count == 0)
+    {
+        if (expr->expr_data.function_call_data.mangled_id != NULL)
+        {
+            free(expr->expr_data.function_call_data.mangled_id);
+            expr->expr_data.function_call_data.mangled_id = NULL;
+        }
+        expr->expr_data.function_call_data.mangled_id = strdup("kgpc_aligned");
+        if (expr->expr_data.function_call_data.mangled_id == NULL)
+        {
+            fprintf(stderr, "Error: failed to allocate mangled name for Aligned.\n");
+            *type_return = UNKNOWN_TYPE;
+            return 1;
+        }
+        semcheck_reset_function_call_cache(expr);
+        if (expr->resolved_kgpc_type != NULL)
+        {
+            destroy_kgpc_type(expr->resolved_kgpc_type);
+            expr->resolved_kgpc_type = NULL;
+        }
+        expr->resolved_type = BOOL;
+        expr->resolved_kgpc_type = create_primitive_type(BOOL);
+        *type_return = BOOL;
+        return 0;
+    }
+
+    *type_return = UNKNOWN_TYPE;
+    return error_count;
 }

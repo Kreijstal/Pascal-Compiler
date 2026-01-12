@@ -4238,6 +4238,11 @@ int64_t kgpc_assigned(const void *ptr)
     return (ptr != NULL) ? 1 : 0;
 }
 
+int64_t kgpc_aligned(const void *ptr, int64_t alignment)
+{
+    return (((uintptr_t)ptr % alignment) == 0) ? 1 : 0;
+}
+
 int32_t kgpc_abs_int(int32_t value)
 {
     return (value < 0) ? -value : value;
