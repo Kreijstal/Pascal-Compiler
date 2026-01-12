@@ -4469,6 +4469,27 @@ long long kgpc_trunc(double value)
     return (long long)ceil(value);
 }
 
+/* Trunc for Currency type - Currency stores values scaled by 10000.
+ * The value is passed as a double (bit-pattern) because the code generator
+ * passes it via xmm0 as if it were a real argument. We reinterpret the bits
+ * as int64 and then perform the Currency-specific truncation. */
+long long kgpc_trunc_currency(double bits_as_double)
+{
+    /* Reinterpret the double bits as int64 */
+    union {
+        double d;
+        long long ll;
+    } u;
+    u.d = bits_as_double;
+    long long currency_value = u.ll;
+
+    /* Currency is stored as value * 10000, so divide by 10000 to get actual value */
+    /* Truncate towards zero */
+    if (currency_value >= 0)
+        return currency_value / 10000;
+    return -((-currency_value) / 10000);
+}
+
 long long kgpc_int(double value)
 {
     return kgpc_trunc(value);

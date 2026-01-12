@@ -44,6 +44,27 @@ static inline struct RecordType* semcheck_stmt_get_record_type_from_node(HashNod
 #include "../../ParseTree/KgpcType.h"
 #include "../../ParseTree/from_cparser.h"
 #include "../../../identifier_utils.h"
+#include <math.h>
+
+/* Check if the given KgpcType represents a Currency type.
+ * Currency is a special type that stores values scaled by 10000 internally.
+ * Returns 1 if the type is Currency, 0 otherwise.
+ */
+static int semcheck_is_currency_kgpc_type(KgpcType *type)
+{
+    if (type == NULL)
+        return 0;
+    if (type->kind != TYPE_KIND_PRIMITIVE)
+        return 0;
+    if (type->info.primitive_type_tag != INT64_TYPE)
+        return 0;
+    /* Check if the type alias name is "Currency" */
+    struct TypeAlias *alias = kgpc_type_get_type_alias(type);
+    if (alias != NULL && alias->alias_name != NULL &&
+        pascal_identifier_equals(alias->alias_name, "Currency"))
+        return 1;
+    return 0;
+}
 
 static KgpcType *semcheck_param_effective_type(Tree_t *param_decl, KgpcType *expected)
 {
@@ -2638,6 +2659,25 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             if (expr->resolved_kgpc_type != NULL)
                 destroy_kgpc_type(expr->resolved_kgpc_type);
             expr->resolved_kgpc_type = create_primitive_type(CHAR_TYPE);
+            goto assignment_types_ok;
+        }
+
+        /* Special handling for Currency := Real assignment.
+         * Currency is a fixed-point type that stores values scaled by 10000.
+         * When assigning a real literal to Currency, we scale it at compile time. */
+        if (semcheck_is_currency_kgpc_type(lhs_kgpctype) &&
+            rhs_kgpctype->kind == TYPE_KIND_PRIMITIVE &&
+            rhs_kgpctype->info.primitive_type_tag == REAL_TYPE &&
+            expr != NULL && expr->type == EXPR_RNUM)
+        {
+            /* Scale the real value by 10000 and convert to integer */
+            long long scaled = llround(expr->expr_data.r_num * 10000.0);
+            expr->type = EXPR_INUM;
+            expr->expr_data.i_num = scaled;
+            expr->resolved_type = INT64_TYPE;
+            if (expr->resolved_kgpc_type != NULL)
+                destroy_kgpc_type(expr->resolved_kgpc_type);
+            expr->resolved_kgpc_type = create_primitive_type(INT64_TYPE);
             goto assignment_types_ok;
         }
 

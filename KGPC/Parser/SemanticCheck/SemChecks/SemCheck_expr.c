@@ -58,6 +58,26 @@ static const char *semcheck_base_type_name(const char *id)
     return (dot != NULL && dot[1] != '\0') ? (dot + 1) : id;
 }
 
+/* Check if the given KgpcType represents a Currency type.
+ * Currency is a special type that stores values scaled by 10000 internally.
+ * Returns 1 if the type is Currency, 0 otherwise.
+ */
+static int semcheck_is_currency_kgpc_type(KgpcType *type)
+{
+    if (type == NULL)
+        return 0;
+    if (type->kind != TYPE_KIND_PRIMITIVE)
+        return 0;
+    if (type->info.primitive_type_tag != INT64_TYPE)
+        return 0;
+    /* Check if the type alias name is "Currency" */
+    struct TypeAlias *alias = kgpc_type_get_type_alias(type);
+    if (alias != NULL && alias->alias_name != NULL &&
+        pascal_identifier_equals(alias->alias_name, "Currency"))
+        return 1;
+    return 0;
+}
+
 int is_type_ir(int *type);
 static int types_numeric_compatible(int lhs, int rhs);
 static void semcheck_coerce_char_string_operands(int *type_first, struct Expression *expr1,
@@ -2646,7 +2666,18 @@ static int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
     int error_count = 0;
     int source_type = UNKNOWN_TYPE;
     error_count += semcheck_expr_main(&source_type, symtab, source_expr, max_scope_lev, NO_MUTATE);
-    if (error_count == 0 && source_type != STRING_TYPE)
+
+    /* Check for ShortString (array[0..N] of char) like Length does */
+    int is_shortstring = 0;
+    if (source_expr != NULL && source_expr->is_array_expr &&
+        source_expr->array_element_type == CHAR_TYPE &&
+        source_expr->array_lower_bound == 0 &&
+        source_expr->array_upper_bound >= 0)
+    {
+        is_shortstring = 1;
+    }
+
+    if (error_count == 0 && !is_string_type(source_type) && !is_shortstring)
     {
         semcheck_error_with_context("Error on line %d, Copy expects its first argument to be a string.\n", expr->line_num);
         error_count++;
@@ -3211,7 +3242,7 @@ static int semcheck_builtin_unary_real(int *type_return, SymTab_t *symtab,
     int error_count = semcheck_expr_main(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
 
     if (error_count == 0 && arg_type != REAL_TYPE &&
-        arg_type != INT_TYPE && arg_type != LONGINT_TYPE)
+        arg_type != INT_TYPE && arg_type != LONGINT_TYPE && arg_type != INT64_TYPE)
     {
         semcheck_error_with_context("Error on line %d, %s expects a real argument.\n",
             expr->line_num, display_name);
@@ -3236,6 +3267,69 @@ static int semcheck_builtin_unary_real(int *type_return, SymTab_t *symtab,
         semcheck_reset_function_call_cache(expr);
         expr->resolved_type = result_type;
         *type_return = result_type;
+        return 0;
+    }
+
+    *type_return = UNKNOWN_TYPE;
+    return error_count;
+}
+
+/* Special Trunc handler that detects Currency type and uses appropriate scaling. */
+static int semcheck_builtin_trunc(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev)
+{
+    assert(type_return != NULL);
+    assert(symtab != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_FUNCTION_CALL);
+
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    if (args == NULL || args->next != NULL)
+    {
+        semcheck_error_with_context("Error on line %d, Trunc expects exactly one argument.\n",
+            expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    struct Expression *arg_expr = (struct Expression *)args->cur;
+    int arg_type = UNKNOWN_TYPE;
+    int error_count = semcheck_expr_main(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
+
+    if (error_count == 0 && arg_type != REAL_TYPE &&
+        arg_type != INT_TYPE && arg_type != LONGINT_TYPE && arg_type != INT64_TYPE)
+    {
+        semcheck_error_with_context("Error on line %d, Trunc expects a real argument.\n",
+            expr->line_num);
+        ++error_count;
+    }
+
+    if (error_count == 0)
+    {
+        const char *mangled = "kgpc_trunc";
+        
+        /* Check if argument is Currency type - if so, use currency-specific trunc */
+        if (arg_expr->resolved_kgpc_type != NULL &&
+            semcheck_is_currency_kgpc_type(arg_expr->resolved_kgpc_type))
+        {
+            mangled = "kgpc_trunc_currency";
+        }
+
+        if (expr->expr_data.function_call_data.mangled_id != NULL)
+        {
+            free(expr->expr_data.function_call_data.mangled_id);
+            expr->expr_data.function_call_data.mangled_id = NULL;
+        }
+        expr->expr_data.function_call_data.mangled_id = strdup(mangled);
+        if (expr->expr_data.function_call_data.mangled_id == NULL)
+        {
+            fprintf(stderr, "Error: failed to allocate mangled name for Trunc.\n");
+            *type_return = UNKNOWN_TYPE;
+            return 1;
+        }
+        semcheck_reset_function_call_cache(expr);
+        expr->resolved_type = LONGINT_TYPE;
+        *type_return = LONGINT_TYPE;
         return 0;
     }
 
@@ -10979,8 +11073,7 @@ int semcheck_funccall(int *type_return,
             "Round", "kgpc_round", LONGINT_TYPE);
 
     if (id != NULL && pascal_identifier_equals(id, "Trunc"))
-        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
-            "Trunc", "kgpc_trunc", LONGINT_TYPE);
+        return semcheck_builtin_trunc(type_return, symtab, expr, max_scope_lev);
 
     if (id != NULL && pascal_identifier_equals(id, "Int"))
         return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
