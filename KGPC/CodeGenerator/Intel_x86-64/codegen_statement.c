@@ -3659,8 +3659,15 @@ static ListNode_t *codegen_builtin_writestr(struct Statement *stmt, ListNode_t *
     if (accum_slot == NULL)
         return inst_list;
 
-    /* Initialize accumulator to empty string */
-    inst_list = add_inst(inst_list, "\txorq\t%rdi, %rdi\n");
+    /* Initialize accumulator to empty string - use correct ABI for the platform */
+    if (codegen_target_is_windows())
+    {
+        inst_list = add_inst(inst_list, "\txorq\t%rcx, %rcx\n");
+    }
+    else
+    {
+        inst_list = add_inst(inst_list, "\txorq\t%rdi, %rdi\n");
+    }
     inst_list = codegen_vect_reg(inst_list, 0);
     inst_list = add_inst(inst_list, "\tcall\tkgpc_string_duplicate\n");
     free_arg_regs();
