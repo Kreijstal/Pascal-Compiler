@@ -2812,6 +2812,39 @@ char *kgpc_string_copy(const char *value, int64_t index, int64_t count)
     return result;
 }
 
+/* Copy from ShortString (length byte at index 0, chars at 1..255) */
+char *kgpc_shortstring_copy(const char *value, int64_t index, int64_t count)
+{
+    if (value == NULL)
+        return kgpc_alloc_empty_string();
+
+    /* ShortString has length byte at position 0 */
+    size_t len = (unsigned char)value[0];
+    const char *chars = value + 1;  /* Actual characters start at position 1 */
+
+    if (index < 1 || index > (int64_t)len)
+        return kgpc_alloc_empty_string();
+
+    if (count < 0)
+        count = 0;
+
+    size_t start = (size_t)(index - 1);
+    size_t available = len - start;
+    size_t to_copy = (size_t)count;
+    if (to_copy > available)
+        to_copy = available;
+
+    char *result = (char *)malloc(to_copy + 1);
+    if (result == NULL)
+        return kgpc_alloc_empty_string();
+
+    if (to_copy > 0)
+        memcpy(result, chars + start, to_copy);
+    result[to_copy] = '\0';
+    kgpc_string_register_allocation(result, to_copy);
+    return result;
+}
+
 int64_t kgpc_string_compare(const char *lhs, const char *rhs)
 {
     if (lhs == NULL)
@@ -3107,6 +3140,33 @@ char *kgpc_char_to_string(int64_t value)
     result[0] = (char)value;
     result[1] = '\0';
     kgpc_string_register_allocation(result, 1);
+    return result;
+}
+
+/* Alias for WriteStr compatibility */
+char *kgpc_char_to_str(int64_t value)
+{
+    return kgpc_char_to_string(value);
+}
+
+char *kgpc_bool_to_str(int64_t value)
+{
+    return kgpc_string_duplicate(value ? "TRUE" : "FALSE");
+}
+
+char *kgpc_real_to_str(double value)
+{
+    char buffer[64];
+    int written = snprintf(buffer, sizeof(buffer), "%g", value);
+    if (written < 0 || written >= (int)sizeof(buffer))
+        return kgpc_alloc_empty_string();
+
+    char *result = (char *)malloc((size_t)written + 1);
+    if (result == NULL)
+        return kgpc_alloc_empty_string();
+
+    memcpy(result, buffer, (size_t)written + 1);
+    kgpc_string_register_allocation(result, (size_t)written);
     return result;
 }
 

@@ -1516,6 +1516,58 @@ static int semcheck_builtin_write_like(SymTab_t *symtab, struct Statement *stmt,
     return return_val;
 }
 
+/* WriteStr(var S: string; args...) - format values into a string variable */
+static int semcheck_builtin_writestr(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    int return_val = 0;
+    if (stmt == NULL)
+        return 0;
+
+    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+    if (args == NULL)
+    {
+        semcheck_error_with_context("Error on line %d, WriteStr requires at least one argument.\n",
+                stmt->line_num);
+        return 1;
+    }
+
+    /* First argument must be a string variable (var parameter) */
+    struct Expression *dest_expr = (struct Expression *)args->cur;
+    int dest_type = UNKNOWN_TYPE;
+    return_val += semcheck_expr_main(&dest_type, symtab, dest_expr, max_scope_lev, MUTATE);
+    
+    if (dest_type != STRING_TYPE && dest_type != SHORTSTRING_TYPE)
+    {
+        semcheck_error_with_context("Error on line %d, WriteStr first argument must be a string variable.\n",
+                stmt->line_num);
+        ++return_val;
+    }
+
+    /* Remaining arguments are values to format */
+    args = args->next;
+    int arg_index = 2;
+    while (args != NULL)
+    {
+        struct Expression *expr = (struct Expression *)args->cur;
+        int expr_type = UNKNOWN_TYPE;
+        return_val += semcheck_expr_main(&expr_type, symtab, expr, INT_MAX, NO_MUTATE);
+
+        if (!is_integer_type(expr_type) && expr_type != STRING_TYPE && expr_type != SHORTSTRING_TYPE && 
+            expr_type != BOOL && expr_type != POINTER_TYPE && expr_type != REAL_TYPE && 
+            expr_type != CHAR_TYPE && expr_type != ENUM_TYPE)
+        {
+            semcheck_error_with_context("Error on line %d, WriteStr argument %d must be integer, real, boolean, string, pointer, or enum.\n",
+                    stmt->line_num, arg_index);
+            ++return_val;
+        }
+
+        args = args->next;
+        ++arg_index;
+    }
+
+    return return_val;
+}
+
 static int semcheck_builtin_read_like(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
     int return_val = 0;
@@ -3192,6 +3244,12 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     handled_builtin = 0;
     return_val += try_resolve_builtin_procedure(symtab, stmt, "writeln",
         semcheck_builtin_write_like, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
+
+    handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "writestr",
+        semcheck_builtin_writestr, max_scope_lev, &handled_builtin);
     if (handled_builtin)
         return return_val;
 

@@ -2721,7 +2721,9 @@ static int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
             free(expr->expr_data.function_call_data.mangled_id);
             expr->expr_data.function_call_data.mangled_id = NULL;
         }
-        expr->expr_data.function_call_data.mangled_id = strdup("kgpc_string_copy");
+        /* Use ShortString-specific copy if source is a ShortString */
+        const char *copy_func = is_shortstring ? "kgpc_shortstring_copy" : "kgpc_string_copy";
+        expr->expr_data.function_call_data.mangled_id = strdup(copy_func);
         if (expr->expr_data.function_call_data.mangled_id == NULL)
         {
             fprintf(stderr, "Error: failed to allocate mangled name for Copy.\n");
