@@ -3196,6 +3196,65 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                         /* KgpcType is owned by TypeAlias, will be cleaned up when tree is destroyed */
                     }
                 }
+                /* Also handle set types with inline anonymous enum: set of (val1, val2, ...) */
+                if (alias_info != NULL && alias_info->is_enum_set && alias_info->inline_enum_values != NULL)
+                {
+                    /* Create a local KgpcType for the inline enum values (not stored in alias).
+                     * The set type itself remains SET_TYPE, but the enum values need their own type. */
+                    KgpcType *inline_enum_type = create_primitive_type(ENUM_TYPE);
+                    if (inline_enum_type == NULL)
+                    {
+                        fprintf(stderr, "Error: Failed to create inline enum type for set %s\n",
+                                tree->tree_data.type_decl_data.id);
+                        ++errors;
+                    }
+                    else
+                    {
+                        int ordinal = 0;
+                        ListNode_t *literal_node = alias_info->inline_enum_values;
+                        while (literal_node != NULL)
+                        {
+                            if (literal_node->cur != NULL)
+                            {
+                                char *literal_name = (char *)literal_node->cur;
+                                
+                                /* Check if this enum literal already exists */
+                                HashNode_t *existing = NULL;
+                                if (FindIdent(&existing, symtab, literal_name) != -1 && existing != NULL)
+                                {
+                                    /* If it exists as a constant with the same value, skip silently */
+                                    if (existing->is_constant && existing->const_int_value == ordinal)
+                                    {
+                                        literal_node = literal_node->next;
+                                        ++ordinal;
+                                        continue;
+                                    }
+                                    /* Different value - this is a real conflict */
+                                    semcheck_error_with_context(
+                                            "Error on line %d, redeclaration of inline enum literal %s with different value!\n",
+                                            tree->line_num, literal_name);
+                                    ++errors;
+                                    literal_node = literal_node->next;
+                                    ++ordinal;
+                                    continue;
+                                }
+                                
+                                /* Use typed API with shared enum KgpcType */
+                                if (PushConstOntoScope_Typed(symtab, literal_name, ordinal, inline_enum_type) > 0)
+                                {
+                                    semcheck_error_with_context(
+                                            "Error on line %d, redeclaration of inline enum literal %s!\n",
+                                            tree->line_num, literal_name);
+                                    ++errors;
+                                }
+                            }
+                            ++ordinal;
+                            literal_node = literal_node->next;
+                        }
+                        /* The enum constants now hold references to inline_enum_type, so we can release our ref */
+                        destroy_kgpc_type(inline_enum_type);
+                    }
+                }
             }
         }
         cur = cur->next;

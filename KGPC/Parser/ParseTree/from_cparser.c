@@ -247,6 +247,8 @@ typedef struct {
     int is_set;
     int set_element_type;
     char *set_element_type_id;
+    int is_enum_set;           /* Set with inline anonymous enum as element type */
+    ListNode_t *inline_enum_values; /* Enum values for inline enum in set type */
     int is_enum;
     ListNode_t *enum_literals;
     int is_file;
@@ -319,6 +321,10 @@ static void destroy_type_info_contents(TypeInfo *info) {
     if (info->set_element_type_id != NULL) {
         free(info->set_element_type_id);
         info->set_element_type_id = NULL;
+    }
+    if (info->inline_enum_values != NULL) {
+        destroy_list(info->inline_enum_values);
+        info->inline_enum_values = NULL;
     }
     if (info->file_type_id != NULL) {
         free(info->file_type_id);
@@ -2929,6 +2935,20 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                         type_info->set_element_type_id = dup;
                     else if (mapped != UNKNOWN_TYPE)
                         free(dup);
+                }
+                /* Handle anonymous enum as set element type: set of (val1, val2, ...) */
+                else if (elem->typ == PASCAL_T_ENUMERATED_TYPE) {
+                    type_info->is_enum_set = 1;
+                    type_info->set_element_type = ENUM_TYPE;
+                    ListBuilder enum_builder;
+                    list_builder_init(&enum_builder);
+                    ast_t *value = elem->child;
+                    while (value != NULL) {
+                        if (value->typ == PASCAL_T_IDENTIFIER)
+                            list_builder_append(&enum_builder, dup_symbol(value), LIST_STRING);
+                        value = value->next;
+                    }
+                    type_info->inline_enum_values = list_builder_finish(&enum_builder);
                 }
             }
         }
@@ -6127,6 +6147,11 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
         if (type_info.set_element_type_id != NULL) {
             alias->set_element_type_id = type_info.set_element_type_id;
             type_info.set_element_type_id = NULL;
+        }
+        alias->is_enum_set = type_info.is_enum_set;
+        if (type_info.inline_enum_values != NULL) {
+            alias->inline_enum_values = type_info.inline_enum_values;
+            type_info.inline_enum_values = NULL;
         }
         alias->is_enum = type_info.is_enum;
         if (type_info.enum_literals != NULL) {
