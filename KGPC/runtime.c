@@ -2812,6 +2812,39 @@ char *kgpc_string_copy(const char *value, int64_t index, int64_t count)
     return result;
 }
 
+/* Copy from ShortString (length byte at index 0, chars at 1..255) */
+char *kgpc_shortstring_copy(const char *value, int64_t index, int64_t count)
+{
+    if (value == NULL)
+        return kgpc_alloc_empty_string();
+
+    /* ShortString has length byte at position 0 */
+    size_t len = (unsigned char)value[0];
+    const char *chars = value + 1;  /* Actual characters start at position 1 */
+
+    if (index < 1 || index > (int64_t)len)
+        return kgpc_alloc_empty_string();
+
+    if (count < 0)
+        count = 0;
+
+    size_t start = (size_t)(index - 1);
+    size_t available = len - start;
+    size_t to_copy = (size_t)count;
+    if (to_copy > available)
+        to_copy = available;
+
+    char *result = (char *)malloc(to_copy + 1);
+    if (result == NULL)
+        return kgpc_alloc_empty_string();
+
+    if (to_copy > 0)
+        memcpy(result, chars + start, to_copy);
+    result[to_copy] = '\0';
+    kgpc_string_register_allocation(result, to_copy);
+    return result;
+}
+
 int64_t kgpc_string_compare(const char *lhs, const char *rhs)
 {
     if (lhs == NULL)
@@ -3107,6 +3140,33 @@ char *kgpc_char_to_string(int64_t value)
     result[0] = (char)value;
     result[1] = '\0';
     kgpc_string_register_allocation(result, 1);
+    return result;
+}
+
+/* Alias for WriteStr compatibility */
+char *kgpc_char_to_str(int64_t value)
+{
+    return kgpc_char_to_string(value);
+}
+
+char *kgpc_bool_to_str(int64_t value)
+{
+    return kgpc_string_duplicate(value ? "TRUE" : "FALSE");
+}
+
+char *kgpc_real_to_str(double value)
+{
+    char buffer[64];
+    int written = snprintf(buffer, sizeof(buffer), "%g", value);
+    if (written < 0 || written >= (int)sizeof(buffer))
+        return kgpc_alloc_empty_string();
+
+    char *result = (char *)malloc((size_t)written + 1);
+    if (result == NULL)
+        return kgpc_alloc_empty_string();
+
+    memcpy(result, buffer, (size_t)written + 1);
+    kgpc_string_register_allocation(result, (size_t)written);
     return result;
 }
 
@@ -4467,6 +4527,27 @@ long long kgpc_trunc(double value)
     if (value >= 0.0)
         return (long long)floor(value);
     return (long long)ceil(value);
+}
+
+/* Trunc for Currency type - Currency stores values scaled by 10000.
+ * The value is passed as a double (bit-pattern) because the code generator
+ * passes it via xmm0 as if it were a real argument. We reinterpret the bits
+ * as int64 and then perform the Currency-specific truncation. */
+long long kgpc_trunc_currency(double bits_as_double)
+{
+    /* Reinterpret the double bits as int64 */
+    union {
+        double d;
+        long long ll;
+    } u;
+    u.d = bits_as_double;
+    long long currency_value = u.ll;
+
+    /* Currency is stored as value * 10000, so divide by 10000 to get actual value */
+    /* Truncate towards zero */
+    if (currency_value >= 0)
+        return currency_value / 10000;
+    return -((-currency_value) / 10000);
 }
 
 long long kgpc_int(double value)

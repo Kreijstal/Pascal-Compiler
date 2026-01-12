@@ -45,6 +45,8 @@ struct TypeAlias
     int is_set;
     int set_element_type;
     char *set_element_type_id;
+    int is_enum_set;           /* Set with inline anonymous enum as element type */
+    ListNode_t *inline_enum_values; /* Enum values for inline enum in set type */
     int is_enum;
     ListNode_t *enum_literals;
     int is_file;

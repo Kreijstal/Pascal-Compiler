@@ -2110,6 +2110,8 @@ Tree_t *mk_typealiasdecl(int line_num, char *id, int is_array, int actual_type, 
     alias->is_set = 0;
     alias->set_element_type = UNKNOWN_TYPE;
     alias->set_element_type_id = NULL;
+    alias->is_enum_set = 0;
+    alias->inline_enum_values = NULL;
     alias->is_enum = 0;
     alias->enum_literals = NULL;
     alias->is_file = 0;
@@ -2960,6 +2962,11 @@ static void clear_type_alias_fields(struct TypeAlias *alias)
     {
         free(alias->set_element_type_id);
         alias->set_element_type_id = NULL;
+    }
+    if (alias->inline_enum_values != NULL)
+    {
+        destroy_list(alias->inline_enum_values);
+        alias->inline_enum_values = NULL;
     }
     if (alias->enum_literals != NULL)
     {

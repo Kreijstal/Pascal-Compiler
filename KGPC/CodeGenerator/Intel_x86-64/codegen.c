@@ -3211,6 +3211,7 @@ static void add_alias_for_return_var(StackNode_t *return_var, const char *alias_
     
     result_alias->element_size = return_var->element_size;
     result_alias->is_alias = 1;
+    result_alias->is_dynamic = return_var->is_dynamic;  /* Copy dynamic array flag */
     if (return_var->is_static && return_var->static_label != NULL)
         result_alias->static_label = strdup(return_var->static_label);
     

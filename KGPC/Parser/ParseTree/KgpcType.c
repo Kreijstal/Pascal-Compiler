@@ -781,6 +781,15 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
                 return 1;
             }
         }
+
+        /* Allow nil (represented as pointer) to be assigned to dynamic arrays.
+         * Dynamic arrays in Pascal can be assigned nil to clear/empty them.
+         * This is a common Pascal idiom: var A: array of Integer; begin A := nil; end; */
+        if (lhs_type->kind == TYPE_KIND_ARRAY && kgpc_type_is_dynamic_array(lhs_type) &&
+            rhs_type->kind == TYPE_KIND_POINTER && rhs_type->info.points_to == NULL)
+        {
+            return 1;  /* nil can be assigned to any dynamic array */
+        }
         
         /* Allow typed pointer (^T) to be assigned to untyped Pointer (primitive POINTER_TYPE) */
         /* This is needed for procedures like: procedure foo(p: Pointer); ... foo(@myInt64); */
