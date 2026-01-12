@@ -3117,6 +3117,14 @@ static ListNode_t *codegen_builtin_setlength(struct Statement *stmt, ListNode_t 
     }
 
     StackNode_t *array_node = find_label((char *)array_id);
+
+    /* If "Result" not found, try the current function name (function return variable) */
+    if (array_node == NULL && pascal_identifier_equals(array_id, "Result") &&
+        ctx != NULL && ctx->current_subprogram_id != NULL)
+    {
+        array_node = find_label((char *)ctx->current_subprogram_id);
+    }
+
     int is_field_array = 0;
     long long field_offset = 0;
     
