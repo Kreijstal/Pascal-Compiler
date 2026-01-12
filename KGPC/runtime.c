@@ -4240,6 +4240,8 @@ int64_t kgpc_assigned(const void *ptr)
 
 int64_t kgpc_aligned(const void *ptr, int64_t alignment)
 {
+    /* Validate alignment: must be positive */
+    assert(alignment > 0);
     return (((uintptr_t)ptr % alignment) == 0) ? 1 : 0;
 }
 
