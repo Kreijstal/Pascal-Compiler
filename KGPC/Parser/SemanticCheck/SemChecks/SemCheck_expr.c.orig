@@ -86,7 +86,6 @@ static int semcheck_expr_is_char_like(struct Expression *expr);
 static int semcheck_expr_is_char_pointer(struct Expression *expr);
 static void semcheck_promote_pointer_expr_to_string(struct Expression *expr);
 static int semcheck_expr_is_wide_char_pointer(struct Expression *expr);
-static int count_required_params(ListNode_t *params);
 
 static const char *semcheck_type_tag_name(int type_tag)
 {
@@ -6709,60 +6708,6 @@ static int semcheck_recordaccess(int *type_return,
                     int is_static_method = 0;
                     if (record_info->type_id != NULL && field_id != NULL) {
                         is_static_method = from_cparser_is_method_static(record_info->type_id, field_id);
-                    }
-
-                    /* For overloaded methods, we need to find the correct overload based on
-                     * argument count. Since this is a bare record access (s.Foo without parens),
-                     * there are no explicit arguments - only the implicit Self parameter.
-                     * Find the overload that accepts just Self (1 param). */
-                    int args_for_call = is_static_method ? 0 : 1; /* Just Self for non-static */
-                    
-                    if (record_info->type_id != NULL) {
-                        char mangled_base[256];
-                        snprintf(mangled_base, sizeof(mangled_base), "%s__%s",
-                            record_info->type_id, field_id);
-                        
-                        ListNode_t *all_methods = FindAllIdents(symtab, mangled_base);
-                        if (all_methods != NULL) {
-                            /* Find the best overload: one that requires exactly args_for_call params */
-                            ListNode_t *cur = all_methods;
-                            HashNode_t *best_match = NULL;
-                            
-                            while (cur != NULL) {
-                                HashNode_t *candidate = (HashNode_t *)cur->cur;
-                                if (candidate != NULL &&
-                                    (candidate->hash_type == HASHTYPE_FUNCTION ||
-                                     candidate->hash_type == HASHTYPE_PROCEDURE) &&
-                                    candidate->type != NULL)
-                                {
-                                    ListNode_t *params = kgpc_type_get_procedure_params(candidate->type);
-                                    int total_params = ListLength(params);
-                                    int required_params = count_required_params(params);
-                                    
-                                    /* Check if this overload accepts args_for_call arguments */
-                                    if (args_for_call >= required_params && args_for_call <= total_params) {
-                                        /* Prefer exact match over range match */
-                                        if (best_match == NULL) {
-                                            best_match = candidate;
-                                        } else {
-                                            /* Pick the one with fewer total params (more specific) */
-                                            ListNode_t *best_params = kgpc_type_get_procedure_params(best_match->type);
-                                            int best_total = ListLength(best_params);
-                                            if (total_params < best_total) {
-                                                best_match = candidate;
-                                            }
-                                        }
-                                    }
-                                }
-                                cur = cur->next;
-                            }
-                            
-                            if (best_match != NULL) {
-                                method_node = best_match;
-                            }
-                            
-                            DestroyList(all_methods);
-                        }
                     }
 
                     /* Transform record access into an explicit method call: receiver.Method() */
