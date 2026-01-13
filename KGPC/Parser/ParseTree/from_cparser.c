@@ -8948,9 +8948,18 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     if (!is_class_operator && !is_static_method) {
         ListNode_t *self_ids = CreateListNode(strdup("Self"), LIST_STRING);
         char *self_type_id = NULL;
-        if (effective_class != NULL)
-            self_type_id = strdup(is_helper_method ? helper_base : effective_class);
-        Tree_t *self_param = mk_vardecl(method_node->line, self_ids, UNKNOWN_TYPE,
+        int self_type_tag = UNKNOWN_TYPE;
+        if (effective_class != NULL) {
+            if (is_helper_method) {
+                self_type_id = strdup(helper_base);
+                /* Resolve the type tag for type helper Self parameters.
+                 * This is important for correct calling convention (e.g., Double should use xmm0). */
+                self_type_tag = map_type_name(helper_base, NULL);
+            } else {
+                self_type_id = strdup(effective_class);
+            }
+        }
+        Tree_t *self_param = mk_vardecl(method_node->line, self_ids, self_type_tag,
             self_type_id, is_helper_method ? 0 : 1, 0, NULL, NULL, NULL, NULL);
         list_builder_append(&params_builder, self_param, LIST_TREE);
     }

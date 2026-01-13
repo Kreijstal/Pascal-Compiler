@@ -6399,10 +6399,30 @@ static int semcheck_recordaccess(int *type_return,
 
         if (record_info == NULL)
         {
-            semcheck_error_with_context("Error on line %d, pointer does not reference a record type.\n\n",
-                expr->line_num);
-            *type_return = UNKNOWN_TYPE;
-            return error_count + 1;
+            /* Check for type helpers on Pointer type before giving up.
+             * Type helpers can be defined for Pointer, PChar, etc. */
+            const char *expr_type_name = get_expr_type_name(record_expr, symtab);
+            const char *alias_type_name = NULL;
+            if (record_expr->resolved_kgpc_type != NULL &&
+                record_expr->resolved_kgpc_type->type_alias != NULL &&
+                record_expr->resolved_kgpc_type->type_alias->target_type_id != NULL)
+            {
+                alias_type_name = record_expr->resolved_kgpc_type->type_alias->target_type_id;
+            }
+            struct RecordType *helper_record = semcheck_lookup_type_helper(symtab, record_type,
+                alias_type_name != NULL ? alias_type_name : expr_type_name);
+            if (helper_record != NULL)
+            {
+                record_type = RECORD_TYPE;
+                record_info = helper_record;
+            }
+            else
+            {
+                semcheck_error_with_context("Error on line %d, pointer does not reference a record type.\n\n",
+                    expr->line_num);
+                *type_return = UNKNOWN_TYPE;
+                return error_count + 1;
+            }
         }
     }
     else
