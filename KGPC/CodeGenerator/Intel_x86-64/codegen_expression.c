@@ -4207,6 +4207,13 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             if (formal_id != NULL && pascal_identifier_equals(formal_id, "Self"))
                 is_self_param = 1;
         }
+        /* Also detect Self parameter when the argument expression IS the Self variable */
+        if (!is_self_param && arg_num == 0 && arg_expr != NULL &&
+            arg_expr->type == EXPR_VAR_ID && arg_expr->expr_data.id != NULL &&
+            pascal_identifier_equals(arg_expr->expr_data.id, "Self"))
+        {
+            is_self_param = 1;
+        }
 
         int is_var_param = (formal_arg_decl != NULL &&
             formal_arg_decl->tree_data.var_decl_data.is_var_param);
@@ -4246,6 +4253,14 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 expected_type = INT_TYPE;
             else if (expected_type == UNKNOWN_TYPE)
                 expected_type = LONGINT_TYPE;
+        }
+        /* For type helper Self parameters passed by value, infer type from expression.
+         * This ensures floating-point Self parameters use xmm registers. */
+        if (expected_type == UNKNOWN_TYPE && is_self_param && arg_expr != NULL)
+        {
+            int arg_type = expr_get_type_tag(arg_expr);
+            if (arg_type == REAL_TYPE)
+                expected_type = REAL_TYPE;
         }
         if (is_var_param && arg_num == 0 && arg_expr != NULL &&
             !codegen_expr_is_addressable(arg_expr))

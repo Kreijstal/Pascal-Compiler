@@ -6960,7 +6960,9 @@ static int semcheck_recordaccess(int *type_return,
                     else if (method_id != NULL)
                         expr->expr_data.function_call_data.mangled_id = strdup(method_id);
                     expr->expr_data.function_call_data.resolved_func = method_node;
+                    expr->expr_data.function_call_data.call_hash_type = method_node->hash_type;
                     semcheck_expr_set_call_kgpc_type(expr, method_node->type, 0);
+                    expr->expr_data.function_call_data.is_call_info_valid = 1;
 
                     /* For static methods, don't pass a receiver/Self */
                     if (is_static_method) {
@@ -10569,6 +10571,12 @@ int semcheck_funccall(int *type_return,
                             if (resolved_name != NULL)
                                 expr->expr_data.function_call_data.mangled_id = strdup(resolved_name);
                         }
+                        /* Set call_kgpc_type for correct calling convention (e.g., float Self in xmm0) */
+                        if (method_node->type != NULL) {
+                            semcheck_expr_set_call_kgpc_type(expr, method_node->type, 0);
+                            expr->expr_data.function_call_data.call_hash_type = method_node->hash_type;
+                            expr->expr_data.function_call_data.is_call_info_valid = 1;
+                        }
                         /* Check if this is a virtual method call that needs VMT dispatch */
                         if (expects_self)
                         {
@@ -11675,6 +11683,12 @@ constructor_resolved:
         /* Constructor already resolved, skip to argument validation */
         hash_return = expr->expr_data.function_call_data.resolved_func;
         scope_return = 0; /* Constructor is in current scope */
+        /* Ensure call_kgpc_type is set for code generator calling convention */
+        if (hash_return->type != NULL && !expr->expr_data.function_call_data.is_call_info_valid) {
+            semcheck_expr_set_call_kgpc_type(expr, hash_return->type, 0);
+            expr->expr_data.function_call_data.call_hash_type = hash_return->hash_type;
+            expr->expr_data.function_call_data.is_call_info_valid = 1;
+        }
         goto skip_overload_resolution;
     }
 
