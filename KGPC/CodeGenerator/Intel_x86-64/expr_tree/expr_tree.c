@@ -1226,14 +1226,35 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         if (expr->expr_data.function_call_data.is_call_info_valid)
         {
             func_type = expr->expr_data.function_call_data.call_kgpc_type;
+            if (func_type == NULL && getenv("KGPC_DEBUG_CODEGEN") != NULL) {
+                fprintf(stderr, "[CodeGen] expr_tree: is_call_info_valid=1 but call_kgpc_type is NULL for id='%s'\n",
+                    expr->expr_data.function_call_data.id ? expr->expr_data.function_call_data.id : "(null)");
+            }
         }
-        else if (ctx != NULL && ctx->symtab != NULL &&
-            expr->expr_data.function_call_data.id != NULL)
+        else if (ctx != NULL && ctx->symtab != NULL)
         {
-            if (FindIdent(&func_node, ctx->symtab,
+            if (getenv("KGPC_DEBUG_CODEGEN") != NULL) {
+                fprintf(stderr, "[CodeGen] expr_tree: is_call_info_valid=0 for id='%s', doing symbol lookup\n",
+                    expr->expr_data.function_call_data.id ? expr->expr_data.function_call_data.id : "(null)");
+            }
+            /* First try lookup by id (short name like "Foo") */
+            if (expr->expr_data.function_call_data.id != NULL &&
+                FindIdent(&func_node, ctx->symtab,
                     expr->expr_data.function_call_data.id) >= 0 && func_node != NULL)
             {
                 func_type = func_node->type;
+            }
+            /* If not found, try the mangled name (e.g., "TDoubleHelper__Foo_r_i") */
+            else if (expr->expr_data.function_call_data.mangled_id != NULL &&
+                FindIdent(&func_node, ctx->symtab,
+                    expr->expr_data.function_call_data.mangled_id) >= 0 && func_node != NULL)
+            {
+                func_type = func_node->type;
+            }
+            if (func_type == NULL && getenv("KGPC_DEBUG_CODEGEN") != NULL) {
+                fprintf(stderr, "[CodeGen] expr_tree: func_type lookup FAILED for id='%s' mangled='%s'\n",
+                    expr->expr_data.function_call_data.id ? expr->expr_data.function_call_data.id : "(null)",
+                    expr->expr_data.function_call_data.mangled_id ? expr->expr_data.function_call_data.mangled_id : "(null)");
             }
         }
         
