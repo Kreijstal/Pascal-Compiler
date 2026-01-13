@@ -8949,18 +8949,32 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         ListNode_t *self_ids = CreateListNode(strdup("Self"), LIST_STRING);
         char *self_type_id = NULL;
         int self_type_tag = UNKNOWN_TYPE;
+        struct TypeAlias *self_type_alias = NULL;
         if (effective_class != NULL) {
             if (is_helper_method) {
                 self_type_id = strdup(helper_base);
                 /* Resolve the type tag for type helper Self parameters.
                  * This is important for correct calling convention (e.g., Double should use xmm0). */
                 self_type_tag = map_type_name(helper_base, NULL);
+                /* Create type alias with storage size for Single (4) vs Double (8).
+                 * This is needed for correct SSE register operations (movss vs movsd). */
+                if (self_type_tag == REAL_TYPE) {
+                    self_type_alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
+                    if (self_type_alias != NULL) {
+                        self_type_alias->base_type = REAL_TYPE;
+                        /* Determine storage size from type name */
+                        if (pascal_identifier_equals(helper_base, "Single"))
+                            self_type_alias->storage_size = 4;
+                        else
+                            self_type_alias->storage_size = 8;  /* Double or other real types */
+                    }
+                }
             } else {
                 self_type_id = strdup(effective_class);
             }
         }
         Tree_t *self_param = mk_vardecl(method_node->line, self_ids, self_type_tag,
-            self_type_id, is_helper_method ? 0 : 1, 0, NULL, NULL, NULL, NULL);
+            self_type_id, is_helper_method ? 0 : 1, 0, NULL, NULL, self_type_alias, NULL);
         list_builder_append(&params_builder, self_param, LIST_TREE);
     }
 
