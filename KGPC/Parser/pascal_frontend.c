@@ -529,6 +529,10 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
     if (buffer == NULL)
         return false;
 
+    /* Detect {$H+/-} directive on original source BEFORE preprocessing,
+     * since the preprocessor strips directive comments. */
+    detect_shortstring_default(buffer, length, &g_default_shortstring);
+
     PascalPreprocessor *preprocessor = pascal_preprocessor_create();
     if (preprocessor == NULL)
     {
@@ -736,10 +740,11 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
     set_preprocessed_context(buffer, length, path);
 
     /* Detect {$MODE objfpc} in the preprocessed source.
-     * If found, set flag so ObjPas unit can be auto-imported. */
+     * If found, set flag so ObjPas unit can be auto-imported.
+     * Note: {$H+/-} detection moved to before preprocessing since that directive
+     * gets stripped during preprocessing. */
     if (detect_objfpc_mode(buffer, length))
         g_objfpc_mode_detected = true;
-    detect_shortstring_default(buffer, length, &g_default_shortstring);
 
     const char *dump_path = getenv("KGPC_DUMP_PREPROCESSED");
     if (dump_path != NULL && dump_path[0] != '\0')

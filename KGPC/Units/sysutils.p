@@ -685,22 +685,11 @@ end;
 function TStringHelper.Split(const Separators: array of AnsiChar; ACount: SizeInt): TStringArray;
 var
     i: Integer;
+    j: Integer;
     start_pos: Integer;
     part_count: SizeInt;
-    function IsSeparator(ch: AnsiChar): Boolean;
-    var
-        j: Integer;
-    begin
-        Result := False;
-        for j := Low(Separators) to High(Separators) do
-        begin
-            if Separators[j] = ch then
-            begin
-                Result := True;
-                exit;
-            end;
-        end;
-    end;
+    ch: AnsiChar;
+    is_sep: Boolean;
 begin
     SetLength(Result, 0);
     start_pos := 1;
@@ -710,7 +699,17 @@ begin
 
     for i := 1 to Length(Self) do
     begin
-        if IsSeparator(Self[i]) then
+        ch := Self[i];
+        is_sep := False;
+        for j := Low(Separators) to High(Separators) do
+        begin
+            if Separators[j] = ch then
+            begin
+                is_sep := True;
+                break;
+            end;
+        end;
+        if is_sep then
         begin
             if part_count + 1 >= ACount then
             begin

@@ -4990,8 +4990,13 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
             }
             else if (expr_type == SHORTSTRING_TYPE || codegen_expr_is_shortstring_array(expr))
             {
-                /* Handle ShortString type - use special write function that handles length prefix */
-                call_target = "kgpc_write_shortstring";
+                /* Handle ShortString type - use special write function that handles length prefix.
+                 * Exception: string literals are still stored as C strings even when typed as
+                 * SHORTSTRING_TYPE (via {$H-}), so use regular string write for those. */
+                if (expr != NULL && expr->type == EXPR_STRING)
+                    call_target = "kgpc_write_string";
+                else
+                    call_target = "kgpc_write_shortstring";
             }
             else
             {
@@ -6079,6 +6084,25 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         
         if (var_type == STRING_TYPE)
         {
+            /* If assigning a char to a string array element, promote it first */
+            int assign_type = expr_get_type_tag(assign_expr);
+            if (assign_type == CHAR_TYPE)
+            {
+                /* Call kgpc_char_to_string to convert char to string */
+                const char *arg_reg32 = codegen_target_is_windows() ? "%ecx" : "%edi";
+                char arg_buffer[128];
+                
+                /* Move char value to argument register (32-bit, zero-extended) */
+                snprintf(arg_buffer, sizeof(arg_buffer), "\tmovl\t%s, %s\n", value_reg->bit_32, arg_reg32);
+                inst_list = add_inst(inst_list, arg_buffer);
+                
+                /* Call the conversion function */
+                inst_list = add_inst(inst_list, "\tcall\tkgpc_char_to_string\n");
+                
+                /* Move result (string pointer) back to value register */
+                snprintf(arg_buffer, sizeof(arg_buffer), "\tmovq\t%%rax, %s\n", value_reg->bit_64);
+                inst_list = add_inst(inst_list, arg_buffer);
+            }
             inst_list = codegen_call_string_assign(inst_list, ctx, addr_reload, value_reg);
         }
         else if ((var_type == SHORTSTRING_TYPE || targets_shortstring) &&
