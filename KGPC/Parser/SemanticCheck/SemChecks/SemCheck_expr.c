@@ -5374,6 +5374,89 @@ static void semcheck_promote_pointer_expr_to_string(struct Expression *expr)
     expr->resolved_type = STRING_TYPE;
 }
 
+static char *semcheck_dup_type_id_from_ast_expr(ast_t *node)
+{
+    if (node == NULL)
+        return NULL;
+    if (node->sym != NULL && node->sym->name != NULL)
+        return strdup(node->sym->name);
+    for (ast_t *child = node->child; child != NULL; child = child->next)
+    {
+        char *found = semcheck_dup_type_id_from_ast_expr(child);
+        if (found != NULL)
+            return found;
+    }
+    return NULL;
+}
+
+static void semcheck_patch_method_return_type(HashNode_t *method_node, SymTab_t *symtab,
+    struct RecordType *record_info, const char *method_name, int line_num)
+{
+    if (method_node == NULL || symtab == NULL || record_info == NULL || method_name == NULL)
+        return;
+    if (method_node->type == NULL || method_node->type->kind != TYPE_KIND_PROCEDURE)
+        return;
+    if (kgpc_type_get_return_type(method_node->type) != NULL)
+        return;
+
+    struct MethodTemplate *tmpl = from_cparser_get_method_template(record_info, method_name);
+    if (tmpl == NULL)
+        return;
+
+    int is_function_template = (tmpl->kind == METHOD_TEMPLATE_FUNCTION ||
+        tmpl->kind == METHOD_TEMPLATE_CONSTRUCTOR ||
+        tmpl->has_return_type);
+    if (!is_function_template)
+        return;
+
+    KgpcType *return_type = NULL;
+    char *return_type_id = NULL;
+    ast_t *return_type_node = tmpl->return_type_ast;
+    if (return_type_node == NULL && tmpl->method_ast != NULL)
+    {
+        for (ast_t *child = tmpl->method_ast->child; child != NULL; child = child->next)
+        {
+            if (child->typ == PASCAL_T_RETURN_TYPE)
+            {
+                return_type_node = child;
+                break;
+            }
+        }
+    }
+    if (return_type_node != NULL)
+    {
+        if (return_type_node->child != NULL)
+            return_type = convert_type_spec_to_kgpctype(return_type_node->child, symtab);
+        if (return_type_id == NULL)
+            return_type_id = semcheck_dup_type_id_from_ast_expr(return_type_node);
+    }
+    if (return_type == NULL && return_type_id != NULL)
+    {
+        HashNode_t *type_node = NULL;
+        if (FindIdent(&type_node, symtab, return_type_id) != -1 &&
+            type_node != NULL && type_node->type != NULL)
+        {
+            kgpc_type_retain(type_node->type);
+            return_type = type_node->type;
+        }
+        else
+        {
+            int tag = semcheck_map_builtin_type_name(symtab, return_type_id);
+            if (tag != UNKNOWN_TYPE)
+                return_type = create_primitive_type(tag);
+        }
+    }
+
+    if (return_type != NULL)
+    {
+        method_node->type->info.proc_info.return_type = return_type;
+        method_node->hash_type = HASHTYPE_FUNCTION;
+    }
+
+    if (return_type_id != NULL)
+        free(return_type_id);
+}
+
 static int resolve_type_identifier(int *out_type, SymTab_t *symtab,
     const char *type_id, int line_num)
 {
