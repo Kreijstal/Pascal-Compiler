@@ -10917,6 +10917,15 @@ int semcheck_funccall(int *type_return,
             return error_count;
         }
 
+        /* Validate that size argument is an integer type */
+        if (!is_integer_type(size_type))
+        {
+            semcheck_error_with_context("Error on line %d, AllocMem size argument must be an integer.\n",
+                expr->line_num);
+            *type_return = UNKNOWN_TYPE;
+            return 1;
+        }
+
         semcheck_reset_function_call_cache(expr);
         if (expr->expr_data.function_call_data.mangled_id != NULL)
         {
