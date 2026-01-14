@@ -3639,6 +3639,21 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     {
                         has_record_or_dynarray = 1;
                     }
+                    else
+                    {
+                        KgpcType *param_type = NULL;
+                        if (scan_type_node != NULL)
+                            param_type = scan_type_node->type;
+                        else if (scan_cached_type != NULL)
+                            param_type = scan_cached_type;
+                        if (param_type != NULL &&
+                            param_type->kind == TYPE_KIND_PRIMITIVE &&
+                            kgpc_type_get_primitive_tag(param_type) == SET_TYPE &&
+                            kgpc_type_sizeof(param_type) > 4)
+                        {
+                            has_record_or_dynarray = 1;
+                        }
+                    }
                 }
                 scan_ids = scan_ids->next;
             }
@@ -3805,12 +3820,38 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                         }
                     }
 
-                    if (record_type_info != NULL || is_dynarray_param)
+                    int is_char_set_param = 0;
+                    long long char_set_size = 0;
+                    if (!symbol_is_var_param)
+                    {
+                        KgpcType *param_type = NULL;
+                        if (resolved_type_node != NULL)
+                            param_type = resolved_type_node->type;
+                        else if (cached_arg_type != NULL)
+                            param_type = cached_arg_type;
+                        if (param_type != NULL &&
+                            param_type->kind == TYPE_KIND_PRIMITIVE &&
+                            kgpc_type_get_primitive_tag(param_type) == SET_TYPE)
+                        {
+                            long long size = kgpc_type_sizeof(param_type);
+                            if (size > 4)
+                            {
+                                is_char_set_param = 1;
+                                char_set_size = size;
+                            }
+                        }
+                    }
+
+                    if (record_type_info != NULL || is_dynarray_param || is_char_set_param)
                     {
                         long long record_size = 0;
                         if (is_dynarray_param)
                         {
                             record_size = codegen_dynamic_array_descriptor_bytes(dynarray_elem_size);
+                        }
+                        else if (is_char_set_param)
+                        {
+                            record_size = char_set_size;
                         }
                         else if (codegen_sizeof_type_reference(ctx, RECORD_TYPE, NULL,
                                 record_type_info, &record_size) != 0 || record_size <= 0)

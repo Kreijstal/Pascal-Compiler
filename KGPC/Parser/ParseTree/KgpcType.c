@@ -1218,7 +1218,10 @@ long long kgpc_type_sizeof(KgpcType *type)
                     /* Check if this is a character set (set of char) */
                     if (type->type_alias != NULL && type->type_alias->is_set)
                     {
-                        if (type->type_alias->set_element_type == CHAR_TYPE)
+                        if (type->type_alias->set_element_type == CHAR_TYPE ||
+                            (type->type_alias->set_element_type_id != NULL &&
+                             (pascal_identifier_equals(type->type_alias->set_element_type_id, "Char") ||
+                              pascal_identifier_equals(type->type_alias->set_element_type_id, "AnsiChar"))))
                         {
                             /* Character sets need 256 bits = 32 bytes */
                             return 32;

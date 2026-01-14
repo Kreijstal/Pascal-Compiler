@@ -25,6 +25,7 @@ static char *g_last_parse_path = NULL;
 /* Flag set when {$MODE objfpc} is detected in the current parse.
  * Used to automatically inject ObjPas unit dependency. */
 static bool g_objfpc_mode_detected = false;
+static bool g_default_shortstring = false;
 
 /* Check if source buffer contains {$MODE objfpc} directive */
 static bool detect_objfpc_mode(const char *buffer, size_t length)
@@ -83,6 +84,50 @@ static bool detect_objfpc_mode(const char *buffer, size_t length)
     return false;
 }
 
+static int detect_shortstring_default(const char *buffer, size_t length, bool *out_shortstring)
+{
+    if (buffer == NULL || length == 0 || out_shortstring == NULL)
+        return 0;
+
+    const char *pos = buffer;
+    const char *end = buffer + length;
+    int found = 0;
+    bool value = false;
+
+    while (pos < end)
+    {
+        if (*pos == '{' && (pos + 1) < end && pos[1] == '$')
+        {
+            const char *dir_start = pos + 2;
+            const char *dir_end = dir_start;
+            while (dir_end < end && *dir_end != '}')
+                dir_end++;
+
+            for (const char *cur = dir_start; cur < dir_end; ++cur)
+            {
+                if (*cur == 'H' || *cur == 'h')
+                {
+                    const char *next = cur + 1;
+                    while (next < dir_end && isspace((unsigned char)*next))
+                        next++;
+                    if (next < dir_end && (*next == '+' || *next == '-'))
+                    {
+                        value = (*next == '-');
+                        found = 1;
+                    }
+                }
+            }
+
+            pos = dir_end;
+        }
+        pos++;
+    }
+
+    if (found)
+        *out_shortstring = value;
+    return found;
+}
+
 /* Getter for objfpc mode flag - used by main_cparser.c to inject ObjPas */
 bool pascal_frontend_is_objfpc_mode(void)
 {
@@ -93,6 +138,12 @@ bool pascal_frontend_is_objfpc_mode(void)
 void pascal_frontend_reset_objfpc_mode(void)
 {
     g_objfpc_mode_detected = false;
+    g_default_shortstring = false;
+}
+
+bool pascal_frontend_default_shortstring(void)
+{
+    return g_default_shortstring;
 }
 
 void pascal_frontend_add_include_path(const char *path)
@@ -688,6 +739,7 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
      * If found, set flag so ObjPas unit can be auto-imported. */
     if (detect_objfpc_mode(buffer, length))
         g_objfpc_mode_detected = true;
+    detect_shortstring_default(buffer, length, &g_default_shortstring);
 
     const char *dump_path = getenv("KGPC_DUMP_PREPROCESSED");
     if (dump_path != NULL && dump_path[0] != '\0')

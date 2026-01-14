@@ -35,6 +35,7 @@
 #include "../../ParseTree/type_tags.h"
 #include "../../ParseTree/KgpcType.h"
 #include "../../ParseTree/from_cparser.h"
+#include "../../pascal_frontend.h"
 #include "../../../identifier_utils.h"
 #include "../../../format_arg.h"
 
@@ -2536,6 +2537,18 @@ static int semcheck_builtin_length(int *type_return, SymTab_t *symtab,
 
 
     int is_dynamic_array = (arg_expr != NULL && arg_expr->is_array_expr && arg_expr->array_is_dynamic);
+    if (!is_dynamic_array && arg_expr != NULL && arg_expr->resolved_kgpc_type != NULL &&
+        kgpc_type_is_dynamic_array(arg_expr->resolved_kgpc_type))
+    {
+        is_dynamic_array = 1;
+    }
+    if (!is_dynamic_array && arg_expr != NULL && arg_expr->resolved_kgpc_type != NULL &&
+        kgpc_type_is_array(arg_expr->resolved_kgpc_type))
+    {
+        struct TypeAlias *alias = kgpc_type_get_type_alias(arg_expr->resolved_kgpc_type);
+        if (alias != NULL && alias->is_open_array)
+            is_dynamic_array = 1;
+    }
     int is_static_array = (arg_expr != NULL && arg_expr->is_array_expr && !arg_expr->array_is_dynamic);
     int is_shortstring = 0;
 
@@ -2567,10 +2580,10 @@ static int semcheck_builtin_length(int *type_return, SymTab_t *symtab,
     int is_wide_char_pointer = 0;
     if (is_char_pointer)
         is_wide_char_pointer = semcheck_expr_is_wide_char_pointer(arg_expr);
-    if (error_count == 0 && (is_string_type(arg_type) || is_shortstring))
-        mangled_name = is_shortstring ? "kgpc_shortstring_length" : "kgpc_string_length";
-    else if (error_count == 0 && is_dynamic_array)
+    if (error_count == 0 && is_dynamic_array)
         mangled_name = "__kgpc_dynarray_length";
+    else if (error_count == 0 && (is_string_type(arg_type) || is_shortstring))
+        mangled_name = is_shortstring ? "kgpc_shortstring_length" : "kgpc_string_length";
     else if (error_count == 0 && is_char_pointer)
         mangled_name = is_wide_char_pointer ? "kgpc_widechar_length" : "kgpc_string_length";
     else if (error_count == 0 && is_static_array)
@@ -8101,7 +8114,11 @@ int semcheck_expr_main(int *type_return,
             break;
 
         case EXPR_STRING:
-            *type_return = STRING_TYPE;
+            if (pascal_frontend_default_shortstring())
+                *type_return = SHORTSTRING_TYPE;
+            else
+                *type_return = STRING_TYPE;
+            expr->resolved_type = *type_return;
             break;
 
         case EXPR_CHAR_CODE:
@@ -12148,7 +12165,10 @@ method_call_resolved:
                         current_score += 0;
                     else if (is_string_literal && formal_type == SHORTSTRING_TYPE &&
                         call_type == STRING_TYPE)
-                        current_score += 0;
+                        current_score -= 5;
+                    else if (is_string_literal && formal_type == STRING_TYPE &&
+                        call_type == STRING_TYPE)
+                        current_score += 3;
                     else if(formal_type == call_type)
                         current_score += 0;
                     else if (formal_type == LONGINT_TYPE && call_type == INT_TYPE)
@@ -12160,6 +12180,26 @@ method_call_resolved:
                         current_score += 1; /* Allow implicit char-to-string promotion */
                     else
                         current_score += 1000; // Mismatch
+
+                    if (is_string_literal && formal_decl != NULL && formal_decl->type == TREE_VAR_DECL)
+                    {
+                        const char *type_id = formal_decl->tree_data.var_decl_data.type_id;
+                        if (type_id != NULL)
+                        {
+                            if (pascal_identifier_equals(type_id, "ShortString"))
+                            {
+                                /* Prefer ShortString overloads for string literals. */
+                            }
+                            else if (pascal_identifier_equals(type_id, "String") ||
+                                     pascal_identifier_equals(type_id, "AnsiString") ||
+                                     pascal_identifier_equals(type_id, "RawByteString") ||
+                                     pascal_identifier_equals(type_id, "UnicodeString") ||
+                                     pascal_identifier_equals(type_id, "WideString"))
+                            {
+                                current_score += 3;
+                            }
+                        }
+                    }
 
                     current_score += pointer_penalty;
                     if (formal_type == LONGINT_TYPE && call_type == LONGINT_TYPE)

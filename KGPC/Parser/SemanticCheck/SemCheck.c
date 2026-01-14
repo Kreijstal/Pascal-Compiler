@@ -7163,6 +7163,16 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             kgpc_type_set_type_alias(set_type,
                                 tree->tree_data.var_decl_data.inline_type_alias);
                         }
+                        if (tree->tree_data.var_decl_data.cached_kgpc_type != NULL)
+                        {
+                            destroy_kgpc_type(tree->tree_data.var_decl_data.cached_kgpc_type);
+                            tree->tree_data.var_decl_data.cached_kgpc_type = NULL;
+                        }
+                        if (set_type != NULL)
+                        {
+                            kgpc_type_retain(set_type);
+                            tree->tree_data.var_decl_data.cached_kgpc_type = set_type;
+                        }
                         func_return = PushVarOntoScope_Typed(symtab, (char *)ids->cur, set_type);
                         if (func_return == 0)
                         {
@@ -7637,6 +7647,17 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         var_kgpc_type = kgpc_type_from_var_type(var_type);
                     }
                     
+                    if (var_kgpc_type != NULL)
+                    {
+                        if (tree->tree_data.var_decl_data.cached_kgpc_type != NULL)
+                        {
+                            destroy_kgpc_type(tree->tree_data.var_decl_data.cached_kgpc_type);
+                            tree->tree_data.var_decl_data.cached_kgpc_type = NULL;
+                        }
+                        kgpc_type_retain(var_kgpc_type);
+                        tree->tree_data.var_decl_data.cached_kgpc_type = var_kgpc_type;
+                    }
+
                     /* Add metadata from resolved_type if present */
                     if (var_kgpc_type != NULL && resolved_type != NULL)
                     {

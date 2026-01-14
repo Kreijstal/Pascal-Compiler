@@ -666,7 +666,11 @@ static int semcheck_expr_is_char_set(SymTab_t *symtab, struct Expression *expr)
     if (expr->resolved_kgpc_type != NULL)
     {
         struct TypeAlias *alias = expr->resolved_kgpc_type->type_alias;
-        if (alias != NULL && alias->is_set && alias->set_element_type == CHAR_TYPE)
+        if (alias != NULL && alias->is_set &&
+            (alias->set_element_type == CHAR_TYPE ||
+             (alias->set_element_type_id != NULL &&
+              (pascal_identifier_equals(alias->set_element_type_id, "Char") ||
+               pascal_identifier_equals(alias->set_element_type_id, "AnsiChar")))))
             return 1;
     }
 
@@ -676,7 +680,11 @@ static int semcheck_expr_is_char_set(SymTab_t *symtab, struct Expression *expr)
         if (FindIdent(&node, symtab, expr->expr_data.id) >= 0 && node != NULL)
         {
             struct TypeAlias *alias = get_type_alias_from_node(node);
-            if (alias != NULL && alias->is_set && alias->set_element_type == CHAR_TYPE)
+            if (alias != NULL && alias->is_set &&
+                (alias->set_element_type == CHAR_TYPE ||
+                 (alias->set_element_type_id != NULL &&
+                  (pascal_identifier_equals(alias->set_element_type_id, "Char") ||
+                   pascal_identifier_equals(alias->set_element_type_id, "AnsiChar")))))
                 return 1;
         }
     }
@@ -933,6 +941,27 @@ static int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, 
     return_val += semcheck_expr_main(&target_type, symtab, array_expr, max_scope_lev, MUTATE);
 
     int target_is_string = (target_type == STRING_TYPE);
+    if (target_is_string)
+    {
+        int target_is_dynarray = 0;
+        if (array_expr != NULL && array_expr->resolved_kgpc_type != NULL &&
+            kgpc_type_is_dynamic_array(array_expr->resolved_kgpc_type))
+        {
+            target_is_dynarray = 1;
+        }
+        else if (array_expr != NULL && array_expr->type == EXPR_VAR_ID)
+        {
+            HashNode_t *array_node = NULL;
+            if (FindIdent(&array_node, symtab, array_expr->expr_data.id) != -1 &&
+                array_node != NULL && array_node->type != NULL &&
+                kgpc_type_is_dynamic_array(array_node->type))
+            {
+                target_is_dynarray = 1;
+            }
+        }
+        if (target_is_dynarray)
+            target_is_string = 0;
+    }
 
     if (target_is_string)
     {
@@ -1199,6 +1228,28 @@ static int semcheck_builtin_strproc(SymTab_t *symtab, struct Statement *stmt, in
     {
         semcheck_error_with_context("Error on line %d, Str value must be an integer or real.\n", stmt->line_num);
         ++return_val;
+    }
+
+    if (value_expr != NULL && value_expr->field_width != NULL)
+    {
+        int width_type = UNKNOWN_TYPE;
+        return_val += semcheck_expr_main(&width_type, symtab, value_expr->field_width, INT_MAX, NO_MUTATE);
+        if (!is_integer_type(width_type))
+        {
+            semcheck_error_with_context("Error on line %d, Str field width must be an integer.\n", stmt->line_num);
+            ++return_val;
+        }
+    }
+
+    if (value_expr != NULL && value_expr->field_precision != NULL)
+    {
+        int precision_type = UNKNOWN_TYPE;
+        return_val += semcheck_expr_main(&precision_type, symtab, value_expr->field_precision, INT_MAX, NO_MUTATE);
+        if (!is_integer_type(precision_type))
+        {
+            semcheck_error_with_context("Error on line %d, Str field precision must be an integer.\n", stmt->line_num);
+            ++return_val;
+        }
     }
 
     int target_type = UNKNOWN_TYPE;

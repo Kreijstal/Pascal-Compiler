@@ -117,6 +117,7 @@ function Substring(const S: AnsiString; StartIndex, Length: Integer): AnsiString
 type
     TStringHelper = type helper for AnsiString
     public
+        function Trim: AnsiString; overload;
         function Trim(const TrimChars: set of AnsiChar): AnsiString; overload;
         function Split(const Separators: array of AnsiChar; ACount: SizeInt): TStringArray;
         function LastIndexOf(const AValue: AnsiString; AStartIndex, ACount: SizeInt): SizeInt;
@@ -655,6 +656,13 @@ begin
             exit;
         end;
     end;
+end;
+
+function TStringHelper.Trim: AnsiString;
+const
+    DefaultTrimChars: set of AnsiChar = [' ', #9, #10, #13];
+begin
+    Result := Trim(DefaultTrimChars);
 end;
 
 function TStringHelper.Trim(const TrimChars: set of AnsiChar): AnsiString;

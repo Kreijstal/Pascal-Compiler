@@ -20,6 +20,7 @@ static uint64_t kgpc_rand_state = 0x9e3779b97f4a7c15ULL;
 /* Forward decl for optional debug flag helper */
 static int kgpc_env_flag(const char *name);
 char *kgpc_float_to_string(double value, int precision);
+static char *kgpc_apply_field_width(char *value, int64_t width);
 
 #ifdef _WIN32
 #include <windows.h>
@@ -3244,6 +3245,42 @@ char *kgpc_int_to_str(int64_t value)
     return result;
 }
 
+static char *kgpc_apply_field_width(char *value, int64_t width)
+{
+    if (value == NULL)
+        return NULL;
+
+    if (width == -1 || width == 0)
+        return value;
+
+    int left_align = (width < 0);
+    uint64_t abs_width = (width < 0) ? (uint64_t)(-width) : (uint64_t)width;
+    size_t len = kgpc_string_known_length(value);
+    if (abs_width <= len)
+        return value;
+
+    size_t pad = abs_width - len;
+    char *result = (char *)malloc(abs_width + 1);
+    if (result == NULL)
+        return value;
+
+    if (left_align)
+    {
+        memcpy(result, value, len);
+        memset(result + len, ' ', pad);
+    }
+    else
+    {
+        memset(result, ' ', pad);
+        memcpy(result + pad, value, len);
+    }
+    result[abs_width] = '\0';
+    kgpc_string_register_allocation(result, abs_width);
+    if (kgpc_string_release_allocation(value))
+        free(value);
+    return result;
+}
+
 void kgpc_str_int64(int64_t value, char **target)
 {
     if (target == NULL)
@@ -3259,6 +3296,23 @@ void kgpc_str_int64(int64_t value, char **target)
     *target = result;
 }
 
+void kgpc_str_int64_fmt(int64_t value, int64_t width, char **target)
+{
+    if (target == NULL)
+        return;
+
+    char *result = kgpc_int_to_str(value);
+    if (result == NULL)
+        return;
+
+    result = kgpc_apply_field_width(result, width);
+
+    char *existing = *target;
+    if (existing != NULL && kgpc_string_release_allocation(existing))
+        free(existing);
+    *target = result;
+}
+
 void kgpc_str_real(double value, char **target)
 {
     if (target == NULL)
@@ -3267,6 +3321,23 @@ void kgpc_str_real(double value, char **target)
     char *result = kgpc_float_to_string(value, -1);
     if (result == NULL)
         return;
+
+    char *existing = *target;
+    if (existing != NULL && kgpc_string_release_allocation(existing))
+        free(existing);
+    *target = result;
+}
+
+void kgpc_str_real_fmt(double value, int64_t width, int64_t precision, char **target)
+{
+    if (target == NULL)
+        return;
+
+    char *result = kgpc_float_to_string(value, (int)precision);
+    if (result == NULL)
+        return;
+
+    result = kgpc_apply_field_width(result, width);
 
     char *existing = *target;
     if (existing != NULL && kgpc_string_release_allocation(existing))

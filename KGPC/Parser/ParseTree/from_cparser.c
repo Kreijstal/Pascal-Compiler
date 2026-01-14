@@ -4700,6 +4700,19 @@ static ListNode_t *convert_param(ast_t *param_node) {
         char *type_id_copy = type_id != NULL ? strdup(type_id) : NULL;
         
         Tree_t *param_decl = NULL;
+        struct TypeAlias *inline_alias = NULL;
+        if (type_info.is_set)
+        {
+            inline_alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
+            if (inline_alias != NULL)
+            {
+                inline_alias->is_set = 1;
+                inline_alias->set_element_type = type_info.set_element_type;
+                inline_alias->base_type = SET_TYPE;
+                if (type_info.set_element_type_id != NULL)
+                    inline_alias->set_element_type_id = strdup(type_info.set_element_type_id);
+            }
+        }
         /* Create TREE_ARR_DECL for inline array parameters */
         if (type_info.is_array)
         {
@@ -4721,7 +4734,7 @@ static ListNode_t *convert_param(ast_t *param_node) {
         else
         {
             param_decl = mk_vardecl(param_node->line, id_node, var_type, type_id_copy,
-                is_var_param, 0, default_init, NULL, NULL, NULL);
+                is_var_param, 0, default_init, NULL, inline_alias, NULL);
         }
         
         list_builder_append(&result_builder, param_decl, LIST_TREE);
