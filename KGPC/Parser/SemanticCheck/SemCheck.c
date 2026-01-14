@@ -7616,6 +7616,21 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             var_kgpc_type = kgpc_type_from_var_type(var_type);
                         }
                     }
+                    else if (tree->tree_data.var_decl_data.inline_type_alias != NULL)
+                    {
+                        struct TypeAlias *alias = tree->tree_data.var_decl_data.inline_type_alias;
+                        if (alias->storage_size > 0)
+                        {
+                            var_kgpc_type = create_primitive_type_with_size(alias->base_type,
+                                (int)alias->storage_size);
+                        }
+                        else
+                        {
+                            var_kgpc_type = create_primitive_type(alias->base_type);
+                        }
+                        if (var_kgpc_type != NULL)
+                            kgpc_type_set_type_alias(var_kgpc_type, alias);
+                    }
                     else
                     {
                         /* Create KgpcType from var_type */

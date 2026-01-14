@@ -432,6 +432,33 @@ static const char *alloc_sse_arg_reg(int *next_index)
     return reg;
 }
 
+static int codegen_real_param_storage_size(Tree_t *arg_decl,
+    HashNode_t *resolved_type_node, KgpcType *cached_arg_type)
+{
+    if (arg_decl != NULL && arg_decl->type == TREE_VAR_DECL)
+    {
+        struct TypeAlias *alias = arg_decl->tree_data.var_decl_data.inline_type_alias;
+        if (alias != NULL && alias->storage_size > 0)
+            return (int)alias->storage_size;
+    }
+
+    if (resolved_type_node != NULL && resolved_type_node->type != NULL)
+    {
+        long long size = kgpc_type_sizeof(resolved_type_node->type);
+        if (size > 0)
+            return (int)size;
+    }
+
+    if (cached_arg_type != NULL)
+    {
+        long long size = kgpc_type_sizeof(cached_arg_type);
+        if (size > 0)
+            return (int)size;
+    }
+
+    return 8;
+}
+
 /* Helper function to determine variable storage size (for stack allocation)
  * Returns size in bytes, or -1 on error */
 static inline int get_var_storage_size(HashNode_t *node)
@@ -3908,6 +3935,7 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     int is_var_param = symbol_is_var_param;
                     int is_array_type = 0;
                     int type_requires_qword = 0;
+                    int real_storage_size = 8;
                     
                     /* Determine if parameter is an array type via resolved type only */
                     if (resolved_type_node != NULL && resolved_type_node->type != NULL &&
@@ -3930,10 +3958,15 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     {
                         type_requires_qword = kgpc_type_uses_qword(cached_arg_type);
                     }
+
+                    if (inferred_type_tag == REAL_TYPE)
+                        real_storage_size = codegen_real_param_storage_size(arg_decl,
+                            resolved_type_node, cached_arg_type);
                     
                      int use_64bit = is_var_param || is_array_type || type_requires_qword ||
                          (inferred_type_tag == STRING_TYPE || inferred_type_tag == POINTER_TYPE ||
-                          inferred_type_tag == REAL_TYPE || type == PROCEDURE);
+                          type == PROCEDURE ||
+                          (inferred_type_tag == REAL_TYPE && real_storage_size > 4));
                     int use_sse_reg = (!is_var_param && !is_array_type &&
                         inferred_type_tag == REAL_TYPE);
                     arg_stack = use_64bit ? add_q_z((char *)arg_ids->cur) : add_l_z((char *)arg_ids->cur);
@@ -3942,8 +3975,12 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     if (use_sse_reg)
                     {
                         const char *xmm_reg = alloc_sse_arg_reg(&next_sse_index);
-                        snprintf(buffer, sizeof(buffer), "\tmovsd\t%s, -%d(%%rbp)\n",
-                            xmm_reg, arg_stack->offset);
+                        if (real_storage_size == 4)
+                            snprintf(buffer, sizeof(buffer), "\tmovss\t%s, -%d(%%rbp)\n",
+                                xmm_reg, arg_stack->offset);
+                        else
+                            snprintf(buffer, sizeof(buffer), "\tmovsd\t%s, -%d(%%rbp)\n",
+                                xmm_reg, arg_stack->offset);
                         inst_list = add_inst(inst_list, buffer);
                     }
                     else
