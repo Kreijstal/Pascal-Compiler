@@ -4806,6 +4806,10 @@ static const char* translate_unix_path(const char *path)
     return path;
 }
 
+/* Linux open flag constants for cross-platform translation */
+#define LINUX_O_CREAT  0x40
+#define LINUX_O_TRUNC  0x200
+
 /* Translate Unix open flags to Windows _open flags */
 static int translate_flags(int flags)
 {
@@ -4820,12 +4824,10 @@ static int translate_flags(int flags)
     else if (accmode == 2)  /* O_RDWR */
         wflags |= _O_RDWR;
     
-    /* O_CREAT = 0x40 on Linux */
-    if (flags & 0x40)
+    if (flags & LINUX_O_CREAT)
         wflags |= _O_CREAT;
     
-    /* O_TRUNC = 0x200 on Linux */
-    if (flags & 0x200)
+    if (flags & LINUX_O_TRUNC)
         wflags |= _O_TRUNC;
     
     return wflags;
@@ -4857,14 +4859,16 @@ int fpClose_i(int fd)
 
 ssize_t fpRead(int fd, void *buf, size_t count)
 {
-    /* _read takes unsigned int count on Windows */
-    return (ssize_t)_read(fd, buf, (unsigned int)count);
+    /* _read takes unsigned int count on Windows, handle large counts by capping */
+    unsigned int safe_count = (count > UINT_MAX) ? UINT_MAX : (unsigned int)count;
+    return (ssize_t)_read(fd, buf, safe_count);
 }
 
 ssize_t fpWrite(int fd, const void *buf, size_t count)
 {
-    /* _write takes unsigned int count on Windows */
-    return (ssize_t)_write(fd, buf, (unsigned int)count);
+    /* _write takes unsigned int count on Windows, handle large counts by capping */
+    unsigned int safe_count = (count > UINT_MAX) ? UINT_MAX : (unsigned int)count;
+    return (ssize_t)_write(fd, buf, safe_count);
 }
 
 off_t fplSeek(int fd, off_t offset, int whence)
