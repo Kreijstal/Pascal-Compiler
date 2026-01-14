@@ -2735,11 +2735,6 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
         KgpcType *return_type = kgpc_type_get_return_type(func_node->type);
         if (return_type != NULL)
         {
-            if (getenv("KGPC_DEBUG_CODEGEN") != NULL)
-            {
-                fprintf(stderr, "[codegen] %s: return_type->kind=%d is_dyn_array=%d\n",
-                    func->id, return_type->kind, kgpc_type_is_dynamic_array(return_type));
-            }
             if (kgpc_type_is_record(return_type))
             {
                 struct RecordType *record_desc = kgpc_type_get_record(return_type);

@@ -3109,6 +3109,7 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                             snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%esi\n", ctx->dynamic_array_descriptor_size);
                             inst_list = add_inst(inst_list, buffer);
                         }
+                        /* Zero vector register count before call (required by ABI) */
                         inst_list = codegen_vect_reg(inst_list, 0);
                         inst_list = add_inst(inst_list, "\tcall\tkgpc_dynarray_clone_descriptor\n");
                         free_arg_regs();
