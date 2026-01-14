@@ -10896,6 +10896,47 @@ int semcheck_funccall(int *type_return,
         return 0;
     }
 
+    /* AllocMem: allocates memory and zero-initializes it, returns a Pointer */
+    if (id != NULL && pascal_identifier_equals(id, "AllocMem"))
+    {
+        ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+        if (args == NULL || args->next != NULL)
+        {
+            semcheck_error_with_context("Error on line %d, AllocMem expects exactly one argument.\n",
+                expr->line_num);
+            *type_return = UNKNOWN_TYPE;
+            return 1;
+        }
+
+        struct Expression *size_expr = (struct Expression *)args->cur;
+        int size_type = UNKNOWN_TYPE;
+        int error_count = semcheck_expr_main(&size_type, symtab, size_expr, max_scope_lev, NO_MUTATE);
+        if (error_count != 0)
+        {
+            *type_return = UNKNOWN_TYPE;
+            return error_count;
+        }
+
+        semcheck_reset_function_call_cache(expr);
+        if (expr->expr_data.function_call_data.mangled_id != NULL)
+        {
+            free(expr->expr_data.function_call_data.mangled_id);
+            expr->expr_data.function_call_data.mangled_id = NULL;
+        }
+        expr->expr_data.function_call_data.mangled_id = strdup("kgpc_allocmem");
+        if (expr->expr_data.function_call_data.mangled_id == NULL)
+        {
+            fprintf(stderr, "Error: failed to allocate mangled name for AllocMem.\n");
+            *type_return = UNKNOWN_TYPE;
+            return 1;
+        }
+        /* Mark as fully resolved internal runtime call */
+        expr->resolved_type = POINTER_TYPE;
+        expr->expr_data.function_call_data.is_call_info_valid = 1;
+        *type_return = POINTER_TYPE;
+        return 0;
+    }
+
     if (id != NULL && pascal_identifier_equals(id, "ToSingleByteFileSystemEncodedFileName"))
     {
         ListNode_t *args = expr->expr_data.function_call_data.args_expr;
@@ -12867,6 +12908,42 @@ skip_overload_resolution:
                     else if (arg_type == expected_type)
                     {
                         type_compatible = 1;
+                    }
+
+                    /* Allow string literals to be passed as PAnsiChar/PChar parameters.
+                     * In Pascal, string literals are implicitly convertible to PChar. */
+                    if (!type_compatible && current_arg_expr != NULL &&
+                        (arg_type == STRING_TYPE || arg_type == SHORTSTRING_TYPE ||
+                         current_arg_expr->type == EXPR_STRING))
+                    {
+                        const char *param_type_id = NULL;
+                        if (arg_decl->type == TREE_VAR_DECL)
+                            param_type_id = arg_decl->tree_data.var_decl_data.type_id;
+                        if (param_type_id != NULL &&
+                            (pascal_identifier_equals(param_type_id, "PAnsiChar") ||
+                             pascal_identifier_equals(param_type_id, "PChar") ||
+                             pascal_identifier_equals(param_type_id, "PWideChar")))
+                        {
+                            type_compatible = 1;
+                        }
+                        /* Also check if parameter is a pointer type pointing to char */
+                        if (!type_compatible && expected_type == POINTER_TYPE)
+                        {
+                            int owns_expected = 0;
+                            KgpcType *expected_kgpc = resolve_type_from_vardecl(arg_decl, symtab, &owns_expected);
+                            if (expected_kgpc != NULL && kgpc_type_is_pointer(expected_kgpc))
+                            {
+                                KgpcType *points_to = expected_kgpc->info.points_to;
+                                if (points_to != NULL && 
+                                    points_to->kind == TYPE_KIND_PRIMITIVE &&
+                                    points_to->info.primitive_type_tag == CHAR_TYPE)
+                                {
+                                    type_compatible = 1;
+                                }
+                            }
+                            if (owns_expected && expected_kgpc != NULL)
+                                destroy_kgpc_type(expected_kgpc);
+                        }
                     }
 
                     /* Allow dynamic array parameters to match when both sides are arrays. */

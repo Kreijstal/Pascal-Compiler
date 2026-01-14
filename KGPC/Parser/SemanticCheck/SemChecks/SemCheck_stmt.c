@@ -2753,6 +2753,26 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             if (allow_char_literal)
                 goto assignment_types_ok;
 
+            /* Allow assigning string literals to PChar/PAnsiChar.
+             * In Pascal, string literals can be implicitly converted to PChar. */
+            int allow_string_to_pchar = 0;
+            if (kgpc_type_is_pointer(lhs_kgpctype))
+            {
+                KgpcType *points_to = lhs_kgpctype->info.points_to;
+                if (points_to != NULL && 
+                    points_to->kind == TYPE_KIND_PRIMITIVE &&
+                    points_to->info.primitive_type_tag == CHAR_TYPE &&
+                    (rhs_kgpctype->kind == TYPE_KIND_PRIMITIVE &&
+                     (rhs_kgpctype->info.primitive_type_tag == STRING_TYPE ||
+                      rhs_kgpctype->info.primitive_type_tag == SHORTSTRING_TYPE ||
+                      rhs_kgpctype->info.primitive_type_tag == CHAR_TYPE)))
+                {
+                    allow_string_to_pchar = 1;
+                }
+            }
+            if (allow_string_to_pchar)
+                goto assignment_types_ok;
+
             const char *lhs_name = "<expression>";
             if (var != NULL && var->type == EXPR_VAR_ID)
                 lhs_name = var->expr_data.id;

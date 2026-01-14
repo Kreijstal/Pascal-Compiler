@@ -2707,6 +2707,22 @@ void kgpc_getmem(void **target, size_t size)
     *target = memory;
 }
 
+/* AllocMem: allocates memory and zero-initializes it (like calloc) */
+void *kgpc_allocmem(size_t size)
+{
+    if (size == 0)
+        return NULL;
+
+    void *memory = calloc(1, size);
+    if (memory == NULL)
+    {
+        fprintf(stderr, "KGPC runtime: failed to allocate %zu bytes via AllocMem.\n", size);
+        exit(EXIT_FAILURE);
+    }
+
+    return memory;
+}
+
 void kgpc_freemem(void *ptr)
 {
     if (ptr != NULL)
@@ -4636,6 +4652,53 @@ void kgpc_sincos_bits(int64_t angle_bits, double *sin_out, double *cos_out)
     if (cos_out != NULL)
         *cos_out = cos(angle);
 }
+
+/* BaseUnix wrapper functions */
+#ifndef _WIN32
+int fpOpen(const char *path, int flags)
+{
+    return open(path, flags);
+}
+
+int fpOpen_i_i_i(const char *path, int flags, int mode)
+{
+    return open(path, flags, (mode_t)mode);
+}
+
+int fpClose(int fd)
+{
+    return close(fd);
+}
+
+int fpClose_i(int fd)
+{
+    return close(fd);
+}
+
+ssize_t fpRead(int fd, void *buf, size_t count)
+{
+    return read(fd, buf, count);
+}
+
+ssize_t fpWrite(int fd, const void *buf, size_t count)
+{
+    return write(fd, buf, count);
+}
+
+off_t fplSeek(int fd, off_t offset, int whence)
+{
+    return lseek(fd, offset, whence);
+}
+#else
+/* Windows stubs */
+int fpOpen(const char *path, int flags) { return -1; }
+int fpOpen_i_i_i(const char *path, int flags, int mode) { return -1; }
+int fpClose(int fd) { return -1; }
+int fpClose_i(int fd) { return -1; }
+ssize_t fpRead(int fd, void *buf, size_t count) { return -1; }
+ssize_t fpWrite(int fd, const void *buf, size_t count) { return -1; }
+off_t fplSeek(int fd, off_t offset, int whence) { return -1; }
+#endif
 
 void Halt(int64_t code)
 {
