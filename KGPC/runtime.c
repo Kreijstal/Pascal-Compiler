@@ -19,6 +19,7 @@ static uint64_t kgpc_rand_state = 0x9e3779b97f4a7c15ULL;
 
 /* Forward decl for optional debug flag helper */
 static int kgpc_env_flag(const char *name);
+char *kgpc_float_to_string(double value, int precision);
 
 #ifdef _WIN32
 #include <windows.h>
@@ -3249,6 +3250,21 @@ void kgpc_str_int64(int64_t value, char **target)
         return;
 
     char *result = kgpc_int_to_str(value);
+    if (result == NULL)
+        return;
+
+    char *existing = *target;
+    if (existing != NULL && kgpc_string_release_allocation(existing))
+        free(existing);
+    *target = result;
+}
+
+void kgpc_str_real(double value, char **target)
+{
+    if (target == NULL)
+        return;
+
+    char *result = kgpc_float_to_string(value, -1);
     if (result == NULL)
         return;
 

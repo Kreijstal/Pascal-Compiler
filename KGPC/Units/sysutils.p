@@ -45,6 +45,7 @@ type
 
     TReplaceFlag = (rfReplaceAll, rfIgnoreCase);
     TReplaceFlags = set of TReplaceFlag;
+    TStringArray = array of AnsiString;
 
 const
     PathDelim = '/';
@@ -74,6 +75,8 @@ function DateTimeToStr(DateTime: TDateTime): AnsiString;
 function TimeToStr(DateTime: TDateTime): AnsiString;
 function UnixToDateTime(UnixTime: Int64): TDateTime;
 function Format(const Fmt: string; const Args: array of const): string;
+procedure FmtStr(var Res: AnsiString; const Fmt: AnsiString; const Args: array of const);
+function IsDelimiter(const Delimiters, S: AnsiString; Index: Integer): Boolean;
 function StrPas(P: PAnsiChar): AnsiString;
 function StrPas(P: PChar): AnsiString;
 function StrLen(P: PAnsiChar): SizeInt;
@@ -110,6 +113,14 @@ function StringToGUID(const S: AnsiString): TGUID;
 { String helper methods - these allow FPC-style S.Method() syntax }
 function Substring(const S: AnsiString; StartIndex: Integer): AnsiString;
 function Substring(const S: AnsiString; StartIndex, Length: Integer): AnsiString;
+
+type
+    TStringHelper = type helper for AnsiString
+    public
+        function Trim(const TrimChars: set of AnsiChar): AnsiString; overload;
+        function Split(const Separators: array of AnsiChar; ACount: SizeInt): TStringArray;
+        function LastIndexOf(const AValue: AnsiString; AStartIndex, ACount: SizeInt): SizeInt;
+    end;
 
 { Generic procedure to free an object and set its reference to nil }
 procedure FreeAndNil(var Obj: Pointer);
@@ -624,6 +635,148 @@ begin
     Substring := Copy(S, StartIndex + 1, Length);
 end;
 
+function IsDelimiter(const Delimiters, S: AnsiString; Index: Integer): Boolean;
+var
+    i: Integer;
+    ch: AnsiChar;
+begin
+    if (Index < 1) or (Index > Length(S)) then
+    begin
+        Result := False;
+        exit;
+    end;
+    ch := S[Index];
+    Result := False;
+    for i := 1 to Length(Delimiters) do
+    begin
+        if Delimiters[i] = ch then
+        begin
+            Result := True;
+            exit;
+        end;
+    end;
+end;
+
+function TStringHelper.Trim(const TrimChars: set of AnsiChar): AnsiString;
+var
+    start_pos: Integer;
+    end_pos: Integer;
+begin
+    start_pos := 1;
+    end_pos := Length(Self);
+    while (start_pos <= end_pos) and (Self[start_pos] in TrimChars) do
+        Inc(start_pos);
+    while (end_pos >= start_pos) and (Self[end_pos] in TrimChars) do
+        Dec(end_pos);
+    if end_pos < start_pos then
+        Result := ''
+    else
+        Result := Copy(Self, start_pos, end_pos - start_pos + 1);
+end;
+
+function TStringHelper.Split(const Separators: array of AnsiChar; ACount: SizeInt): TStringArray;
+var
+    i: Integer;
+    start_pos: Integer;
+    part_count: SizeInt;
+    function IsSeparator(ch: AnsiChar): Boolean;
+    var
+        j: Integer;
+    begin
+        Result := False;
+        for j := Low(Separators) to High(Separators) do
+        begin
+            if Separators[j] = ch then
+            begin
+                Result := True;
+                exit;
+            end;
+        end;
+    end;
+begin
+    SetLength(Result, 0);
+    start_pos := 1;
+    part_count := 0;
+    if ACount <= 0 then
+        ACount := High(SizeInt);
+
+    for i := 1 to Length(Self) do
+    begin
+        if IsSeparator(Self[i]) then
+        begin
+            if part_count + 1 >= ACount then
+            begin
+                SetLength(Result, part_count + 1);
+                Result[part_count] := Copy(Self, start_pos, Length(Self) - start_pos + 1);
+                exit;
+            end;
+            SetLength(Result, part_count + 1);
+            Result[part_count] := Copy(Self, start_pos, i - start_pos);
+            Inc(part_count);
+            start_pos := i + 1;
+        end;
+    end;
+
+    SetLength(Result, part_count + 1);
+    Result[part_count] := Copy(Self, start_pos, Length(Self) - start_pos + 1);
+end;
+
+function TStringHelper.LastIndexOf(const AValue: AnsiString; AStartIndex, ACount: SizeInt): SizeInt;
+var
+    i: SizeInt;
+    j: Integer;
+    max_start: SizeInt;
+    min_start: SizeInt;
+    found: Boolean;
+begin
+    if (AValue = '') or (Length(Self) = 0) then
+    begin
+        Result := -1;
+        exit;
+    end;
+
+    max_start := Length(Self) - Length(AValue);
+    if max_start < 0 then
+    begin
+        Result := -1;
+        exit;
+    end;
+
+    if AStartIndex < 0 then
+        AStartIndex := 0;
+    if AStartIndex > max_start then
+        AStartIndex := max_start;
+
+    if ACount <= 0 then
+        min_start := 0
+    else
+    begin
+        min_start := AStartIndex - ACount + 1;
+        if min_start < 0 then
+            min_start := 0;
+    end;
+
+    for i := AStartIndex downto min_start do
+    begin
+        found := True;
+        for j := 1 to Length(AValue) do
+        begin
+            if Self[i + j] <> AValue[j] then
+            begin
+                found := False;
+                break;
+            end;
+        end;
+        if found then
+        begin
+            Result := i;
+            exit;
+        end;
+    end;
+
+    Result := -1;
+end;
+
 function FormatDateTime(const FormatStr: string; DateTime: TDateTime): AnsiString;
 begin
     FormatDateTime := kgpc_format_datetime(ToPChar(FormatStr), DateTime);
@@ -654,6 +807,11 @@ begin
     else
         ArgPointer := nil;
     Format := kgpc_format(Fmt, ArgPointer, Length(Args));
+end;
+
+procedure FmtStr(var Res: AnsiString; const Fmt: AnsiString; const Args: array of const);
+begin
+    Res := Format(Fmt, Args);
 end;
 
 function FloatToStr(Value: Real): AnsiString;

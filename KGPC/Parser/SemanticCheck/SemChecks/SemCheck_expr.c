@@ -600,6 +600,8 @@ static int semcheck_builtin_power(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev);
 static int semcheck_builtin_aligned(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev);
+static int semcheck_builtin_allocmem(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev);
 static int semcheck_typecheck_array_literal(struct Expression *expr, SymTab_t *symtab,
     int max_scope_lev, int expected_type, const char *expected_type_id, int line_num);
 
@@ -10898,53 +10900,7 @@ int semcheck_funccall(int *type_return,
 
     /* AllocMem: allocates memory and zero-initializes it, returns a Pointer */
     if (id != NULL && pascal_identifier_equals(id, "AllocMem"))
-    {
-        ListNode_t *args = expr->expr_data.function_call_data.args_expr;
-        if (args == NULL || args->next != NULL)
-        {
-            semcheck_error_with_context("Error on line %d, AllocMem expects exactly one argument.\n",
-                expr->line_num);
-            *type_return = UNKNOWN_TYPE;
-            return 1;
-        }
-
-        struct Expression *size_expr = (struct Expression *)args->cur;
-        int size_type = UNKNOWN_TYPE;
-        int error_count = semcheck_expr_main(&size_type, symtab, size_expr, max_scope_lev, NO_MUTATE);
-        if (error_count != 0)
-        {
-            *type_return = UNKNOWN_TYPE;
-            return error_count;
-        }
-
-        /* Validate that size argument is an integer type */
-        if (!is_integer_type(size_type))
-        {
-            semcheck_error_with_context("Error on line %d, AllocMem size argument must be an integer.\n",
-                expr->line_num);
-            *type_return = UNKNOWN_TYPE;
-            return 1;
-        }
-
-        semcheck_reset_function_call_cache(expr);
-        if (expr->expr_data.function_call_data.mangled_id != NULL)
-        {
-            free(expr->expr_data.function_call_data.mangled_id);
-            expr->expr_data.function_call_data.mangled_id = NULL;
-        }
-        expr->expr_data.function_call_data.mangled_id = strdup("kgpc_allocmem");
-        if (expr->expr_data.function_call_data.mangled_id == NULL)
-        {
-            fprintf(stderr, "Error: failed to allocate mangled name for AllocMem.\n");
-            *type_return = UNKNOWN_TYPE;
-            return 1;
-        }
-        /* Mark as fully resolved internal runtime call */
-        expr->resolved_type = POINTER_TYPE;
-        expr->expr_data.function_call_data.is_call_info_valid = 1;
-        *type_return = POINTER_TYPE;
-        return 0;
-    }
+        return semcheck_builtin_allocmem(type_return, symtab, expr, max_scope_lev);
 
     if (id != NULL && pascal_identifier_equals(id, "ToSingleByteFileSystemEncodedFileName"))
     {
@@ -12463,6 +12419,8 @@ method_call_resolved:
     }
     else if (num_best_matches == 0)
     {
+        if (id != NULL && pascal_identifier_equals(id, "AllocMem"))
+            return semcheck_builtin_allocmem(type_return, symtab, expr, max_scope_lev);
         if (getenv("KGPC_DEBUG_CREATE_OVERLOAD") != NULL &&
             id != NULL && strncasecmp(id, "Create", 6) == 0)
         {
@@ -13420,4 +13378,57 @@ static int semcheck_builtin_aligned(int *type_return, SymTab_t *symtab,
 
     *type_return = UNKNOWN_TYPE;
     return error_count;
+}
+
+static int semcheck_builtin_allocmem(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev)
+{
+    assert(type_return != NULL);
+    assert(symtab != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_FUNCTION_CALL);
+
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    if (args == NULL || args->next != NULL)
+    {
+        semcheck_error_with_context("Error on line %d, AllocMem expects exactly one argument.\n",
+            expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    struct Expression *size_expr = (struct Expression *)args->cur;
+    int size_type = UNKNOWN_TYPE;
+    int error_count = semcheck_expr_main(&size_type, symtab, size_expr, max_scope_lev, NO_MUTATE);
+    if (error_count != 0)
+    {
+        *type_return = UNKNOWN_TYPE;
+        return error_count;
+    }
+
+    if (!is_integer_type(size_type))
+    {
+        semcheck_error_with_context("Error on line %d, AllocMem size argument must be an integer.\n",
+            expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    semcheck_reset_function_call_cache(expr);
+    if (expr->expr_data.function_call_data.mangled_id != NULL)
+    {
+        free(expr->expr_data.function_call_data.mangled_id);
+        expr->expr_data.function_call_data.mangled_id = NULL;
+    }
+    expr->expr_data.function_call_data.mangled_id = strdup("kgpc_allocmem");
+    if (expr->expr_data.function_call_data.mangled_id == NULL)
+    {
+        fprintf(stderr, "Error: failed to allocate mangled name for AllocMem.\n");
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+    expr->resolved_type = POINTER_TYPE;
+    expr->expr_data.function_call_data.is_call_info_valid = 1;
+    *type_return = POINTER_TYPE;
+    return 0;
 }

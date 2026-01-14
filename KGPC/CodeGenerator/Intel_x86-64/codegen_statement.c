@@ -3573,7 +3573,8 @@ static ListNode_t *codegen_builtin_str(struct Statement *stmt, ListNode_t *inst_
     if (codegen_had_error(ctx) || value_reg == NULL)
         return inst_list;
 
-    if (!expr_uses_qword_kgpctype(value_expr))
+    int value_is_real = (value_expr != NULL && expr_has_type_tag(value_expr, REAL_TYPE));
+    if (!value_is_real && !expr_uses_qword_kgpctype(value_expr))
         inst_list = codegen_sign_extend32_to64(inst_list, value_reg->bit_32, value_reg->bit_64);
 
     if (!codegen_expr_is_addressable(target_expr))
@@ -3592,23 +3593,43 @@ static ListNode_t *codegen_builtin_str(struct Statement *stmt, ListNode_t *inst_
     }
 
     char buffer[128];
-    if (codegen_target_is_windows())
+    if (value_is_real)
     {
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", value_reg->bit_64);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm0\n", value_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", addr_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
+        if (codegen_target_is_windows())
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        inst_list = codegen_vect_reg(inst_list, 0);
+        inst_list = add_inst(inst_list, "\tcall\tkgpc_str_real\n");
     }
     else
     {
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", value_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", addr_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-    }
+        if (codegen_target_is_windows())
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", value_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", value_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
 
-    inst_list = codegen_vect_reg(inst_list, 0);
-    inst_list = add_inst(inst_list, "\tcall\tkgpc_str_int64\n");
+        inst_list = codegen_vect_reg(inst_list, 0);
+        inst_list = add_inst(inst_list, "\tcall\tkgpc_str_int64\n");
+    }
 
     free_reg(get_reg_stack(), addr_reg);
     free_reg(get_reg_stack(), value_reg);

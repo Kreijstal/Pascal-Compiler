@@ -1195,9 +1195,9 @@ static int semcheck_builtin_strproc(SymTab_t *symtab, struct Statement *stmt, in
 
     int value_type = UNKNOWN_TYPE;
     return_val += semcheck_expr_main(&value_type, symtab, value_expr, INT_MAX, NO_MUTATE);
-    if (!is_integer_type(value_type))
+    if (!is_integer_type(value_type) && value_type != REAL_TYPE)
     {
-        semcheck_error_with_context("Error on line %d, Str value must be an integer.\n", stmt->line_num);
+        semcheck_error_with_context("Error on line %d, Str value must be an integer or real.\n", stmt->line_num);
         ++return_val;
     }
 
