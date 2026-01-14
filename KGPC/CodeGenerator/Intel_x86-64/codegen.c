@@ -2735,6 +2735,11 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
         KgpcType *return_type = kgpc_type_get_return_type(func_node->type);
         if (return_type != NULL)
         {
+            if (getenv("KGPC_DEBUG_CODEGEN") != NULL)
+            {
+                fprintf(stderr, "[codegen] %s: return_type->kind=%d is_dyn_array=%d\n",
+                    func->id, return_type->kind, kgpc_type_is_dynamic_array(return_type));
+            }
             if (kgpc_type_is_record(return_type))
             {
                 struct RecordType *record_desc = kgpc_type_get_record(return_type);
@@ -3008,6 +3013,10 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
             dynamic_array_lower_bound, 0, NULL);
     else
         return_var = add_l_x(func->id, return_size);
+
+    /* Store dynamic array return info in context for exit statement handling */
+    ctx->returns_dynamic_array = returns_dynamic_array;
+    ctx->dynamic_array_descriptor_size = dynamic_array_descriptor_size;
 
     /* Allow Delphi-style Result alias in regular functions too. */
     add_result_alias_for_return_var(return_var);
