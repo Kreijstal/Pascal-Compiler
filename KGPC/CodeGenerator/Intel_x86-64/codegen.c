@@ -432,6 +432,33 @@ static const char *alloc_sse_arg_reg(int *next_index)
     return reg;
 }
 
+static int codegen_real_param_storage_size(Tree_t *arg_decl,
+    HashNode_t *resolved_type_node, KgpcType *cached_arg_type)
+{
+    if (arg_decl != NULL && arg_decl->type == TREE_VAR_DECL)
+    {
+        struct TypeAlias *alias = arg_decl->tree_data.var_decl_data.inline_type_alias;
+        if (alias != NULL && alias->storage_size > 0)
+            return (int)alias->storage_size;
+    }
+
+    if (resolved_type_node != NULL && resolved_type_node->type != NULL)
+    {
+        long long size = kgpc_type_sizeof(resolved_type_node->type);
+        if (size > 0)
+            return (int)size;
+    }
+
+    if (cached_arg_type != NULL)
+    {
+        long long size = kgpc_type_sizeof(cached_arg_type);
+        if (size > 0)
+            return (int)size;
+    }
+
+    return 8;
+}
+
 /* Helper function to determine variable storage size (for stack allocation)
  * Returns size in bytes, or -1 on error */
 static inline int get_var_storage_size(HashNode_t *node)
@@ -2982,6 +3009,10 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     else
         return_var = add_l_x(func->id, return_size);
 
+    /* Store dynamic array return info in context for exit statement handling */
+    ctx->returns_dynamic_array = returns_dynamic_array;
+    ctx->dynamic_array_descriptor_size = dynamic_array_descriptor_size;
+
     /* Allow Delphi-style Result alias in regular functions too. */
     add_result_alias_for_return_var(return_var);
     /* For class methods, also alias the unmangled method name to the return slot */
@@ -3612,6 +3643,21 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     {
                         has_record_or_dynarray = 1;
                     }
+                    else
+                    {
+                        KgpcType *param_type = NULL;
+                        if (scan_type_node != NULL)
+                            param_type = scan_type_node->type;
+                        else if (scan_cached_type != NULL)
+                            param_type = scan_cached_type;
+                        if (param_type != NULL &&
+                            param_type->kind == TYPE_KIND_PRIMITIVE &&
+                            kgpc_type_get_primitive_tag(param_type) == SET_TYPE &&
+                            kgpc_type_sizeof(param_type) > 4)
+                        {
+                            has_record_or_dynarray = 1;
+                        }
+                    }
                 }
                 scan_ids = scan_ids->next;
             }
@@ -3778,12 +3824,38 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                         }
                     }
 
-                    if (record_type_info != NULL || is_dynarray_param)
+                    int is_char_set_param = 0;
+                    long long char_set_size = 0;
+                    if (!symbol_is_var_param)
+                    {
+                        KgpcType *param_type = NULL;
+                        if (resolved_type_node != NULL)
+                            param_type = resolved_type_node->type;
+                        else if (cached_arg_type != NULL)
+                            param_type = cached_arg_type;
+                        if (param_type != NULL &&
+                            param_type->kind == TYPE_KIND_PRIMITIVE &&
+                            kgpc_type_get_primitive_tag(param_type) == SET_TYPE)
+                        {
+                            long long size = kgpc_type_sizeof(param_type);
+                            if (size > 4)
+                            {
+                                is_char_set_param = 1;
+                                char_set_size = size;
+                            }
+                        }
+                    }
+
+                    if (record_type_info != NULL || is_dynarray_param || is_char_set_param)
                     {
                         long long record_size = 0;
                         if (is_dynarray_param)
                         {
                             record_size = codegen_dynamic_array_descriptor_bytes(dynarray_elem_size);
+                        }
+                        else if (is_char_set_param)
+                        {
+                            record_size = char_set_size;
                         }
                         else if (codegen_sizeof_type_reference(ctx, RECORD_TYPE, NULL,
                                 record_type_info, &record_size) != 0 || record_size <= 0)
@@ -3908,6 +3980,7 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     int is_var_param = symbol_is_var_param;
                     int is_array_type = 0;
                     int type_requires_qword = 0;
+                    int real_storage_size = 8;
                     
                     /* Determine if parameter is an array type via resolved type only */
                     if (resolved_type_node != NULL && resolved_type_node->type != NULL &&
@@ -3930,10 +4003,15 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     {
                         type_requires_qword = kgpc_type_uses_qword(cached_arg_type);
                     }
+
+                    if (inferred_type_tag == REAL_TYPE)
+                        real_storage_size = codegen_real_param_storage_size(arg_decl,
+                            resolved_type_node, cached_arg_type);
                     
                      int use_64bit = is_var_param || is_array_type || type_requires_qword ||
                          (inferred_type_tag == STRING_TYPE || inferred_type_tag == POINTER_TYPE ||
-                          inferred_type_tag == REAL_TYPE || type == PROCEDURE);
+                          type == PROCEDURE ||
+                          (inferred_type_tag == REAL_TYPE && real_storage_size > 4));
                     int use_sse_reg = (!is_var_param && !is_array_type &&
                         inferred_type_tag == REAL_TYPE);
                     arg_stack = use_64bit ? add_q_z((char *)arg_ids->cur) : add_l_z((char *)arg_ids->cur);
@@ -3942,8 +4020,12 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     if (use_sse_reg)
                     {
                         const char *xmm_reg = alloc_sse_arg_reg(&next_sse_index);
-                        snprintf(buffer, sizeof(buffer), "\tmovsd\t%s, -%d(%%rbp)\n",
-                            xmm_reg, arg_stack->offset);
+                        if (real_storage_size == 4)
+                            snprintf(buffer, sizeof(buffer), "\tmovss\t%s, -%d(%%rbp)\n",
+                                xmm_reg, arg_stack->offset);
+                        else
+                            snprintf(buffer, sizeof(buffer), "\tmovsd\t%s, -%d(%%rbp)\n",
+                                xmm_reg, arg_stack->offset);
                         inst_list = add_inst(inst_list, buffer);
                     }
                     else

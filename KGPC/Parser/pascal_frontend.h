@@ -24,5 +24,6 @@ const char *pascal_frontend_current_path(void);
 /* ObjFPC mode detection - used for automatic ObjPas import */
 bool pascal_frontend_is_objfpc_mode(void);
 void pascal_frontend_reset_objfpc_mode(void);
+bool pascal_frontend_default_shortstring(void);
 
 #endif

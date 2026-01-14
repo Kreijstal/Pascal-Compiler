@@ -74,6 +74,7 @@ VALGRIND_MODE = os.environ.get("VALGRIND", "false").lower() in ("1", "true", "ye
 # from TestCompiler.tearDownClass() and written to stderr to keep TAP output
 # intact.
 COMPILER_RUNS = []
+LINK_ARGS_BY_ASM = {}
 
 FAILURE_ARTIFACT_DIR_ENV = os.environ.get("KGPC_CI_FAILURE_DIR")
 FAILURE_ARTIFACT_DIR = Path(FAILURE_ARTIFACT_DIR_ENV) if FAILURE_ARTIFACT_DIR_ENV else None
@@ -394,6 +395,8 @@ def run_compiler(input_file, output_file, flags=None):
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
 
     command = [KGPC_PATH, input_file, output_file]
+    if "--emit-link-args" not in flags:
+        command.append("--emit-link-args")
     if IS_WINDOWS_ABI and not _has_explicit_target_flag(flags):
         command.append("--target-windows")
     command.extend(flags)
@@ -423,6 +426,10 @@ def run_compiler(input_file, output_file, flags=None):
             run_kwargs["timeout"] = COMPILER_TIMEOUT
         result = subprocess.run(command, **run_kwargs)
         duration = time.perf_counter() - start
+        for line in result.stderr.splitlines():
+            if line.startswith("KGPC_LINK_ARGS:"):
+                raw_args = line[len("KGPC_LINK_ARGS:"):].strip()
+                LINK_ARGS_BY_ASM[output_file] = raw_args.split() if raw_args else []
         COMPILER_RUNS.append(
             {
                 "command": command,
@@ -887,6 +894,7 @@ class TestCompiler(unittest.TestCase):
             extra_objects = []
         if extra_link_args is None:
             extra_link_args = []
+        extra_link_args.extend(LINK_ARGS_BY_ASM.get(asm_file, []))
         try:
             command = list(self.c_compiler_cmd)
             command.append("-O2")
@@ -906,8 +914,6 @@ class TestCompiler(unittest.TestCase):
             ])
             command.extend(list(extra_objects))
             command.extend(list(extra_link_args))
-            if not IS_WINDOWS_ABI:
-                command.append("-lm")
             compile_kwargs = {
                 "check": True,
                 "capture_output": True,

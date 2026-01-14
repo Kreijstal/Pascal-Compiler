@@ -278,6 +278,7 @@ const
   RTL_SIGDEFAULT = -1;
 
 var
+  IsMultiThread: Boolean = False;
   IsLibrary: Boolean = False;
   InOutRes: Word;
   FirstDotAtFileNameStartIsExtension: Boolean;

@@ -6223,7 +6223,34 @@ void semcheck_add_builtins(SymTab_t *symtab)
     }
     char *move_proc = strdup("Move");
     if (move_proc != NULL) {
-        KgpcType *move_type = create_procedure_type(NULL, NULL);
+        ListNode_t *move_params = NULL;
+        ListNode_t *move_tail = NULL;
+        ListNode_t *param = NULL;
+
+        param = semcheck_create_builtin_param_var("source", UNKNOWN_TYPE);
+        if (param != NULL) {
+            move_params = param;
+            move_tail = param;
+        }
+
+        param = semcheck_create_builtin_param_var("dest", UNKNOWN_TYPE);
+        if (param != NULL) {
+            if (move_tail != NULL)
+                move_tail->next = param;
+            else
+                move_params = param;
+            move_tail = param;
+        }
+
+        param = semcheck_create_builtin_param("count", LONGINT_TYPE);
+        if (param != NULL) {
+            if (move_tail != NULL)
+                move_tail->next = param;
+            else
+                move_params = param;
+        }
+
+        KgpcType *move_type = create_procedure_type(move_params, NULL);
         assert(move_type != NULL && "Failed to create Move procedure type");
         AddBuiltinProc_Typed(symtab, move_proc, move_type);
         destroy_kgpc_type(move_type);
@@ -7163,6 +7190,16 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             kgpc_type_set_type_alias(set_type,
                                 tree->tree_data.var_decl_data.inline_type_alias);
                         }
+                        if (tree->tree_data.var_decl_data.cached_kgpc_type != NULL)
+                        {
+                            destroy_kgpc_type(tree->tree_data.var_decl_data.cached_kgpc_type);
+                            tree->tree_data.var_decl_data.cached_kgpc_type = NULL;
+                        }
+                        if (set_type != NULL)
+                        {
+                            kgpc_type_retain(set_type);
+                            tree->tree_data.var_decl_data.cached_kgpc_type = set_type;
+                        }
                         func_return = PushVarOntoScope_Typed(symtab, (char *)ids->cur, set_type);
                         if (func_return == 0)
                         {
@@ -7616,12 +7653,38 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             var_kgpc_type = kgpc_type_from_var_type(var_type);
                         }
                     }
+                    else if (tree->tree_data.var_decl_data.inline_type_alias != NULL)
+                    {
+                        struct TypeAlias *alias = tree->tree_data.var_decl_data.inline_type_alias;
+                        if (alias->storage_size > 0)
+                        {
+                            var_kgpc_type = create_primitive_type_with_size(alias->base_type,
+                                (int)alias->storage_size);
+                        }
+                        else
+                        {
+                            var_kgpc_type = create_primitive_type(alias->base_type);
+                        }
+                        if (var_kgpc_type != NULL)
+                            kgpc_type_set_type_alias(var_kgpc_type, alias);
+                    }
                     else
                     {
                         /* Create KgpcType from var_type */
                         var_kgpc_type = kgpc_type_from_var_type(var_type);
                     }
                     
+                    if (var_kgpc_type != NULL)
+                    {
+                        if (tree->tree_data.var_decl_data.cached_kgpc_type != NULL)
+                        {
+                            destroy_kgpc_type(tree->tree_data.var_decl_data.cached_kgpc_type);
+                            tree->tree_data.var_decl_data.cached_kgpc_type = NULL;
+                        }
+                        kgpc_type_retain(var_kgpc_type);
+                        tree->tree_data.var_decl_data.cached_kgpc_type = var_kgpc_type;
+                    }
+
                     /* Add metadata from resolved_type if present */
                     if (var_kgpc_type != NULL && resolved_type != NULL)
                     {

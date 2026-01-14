@@ -4700,6 +4700,19 @@ static ListNode_t *convert_param(ast_t *param_node) {
         char *type_id_copy = type_id != NULL ? strdup(type_id) : NULL;
         
         Tree_t *param_decl = NULL;
+        struct TypeAlias *inline_alias = NULL;
+        if (type_info.is_set)
+        {
+            inline_alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
+            if (inline_alias != NULL)
+            {
+                inline_alias->is_set = 1;
+                inline_alias->set_element_type = type_info.set_element_type;
+                inline_alias->base_type = SET_TYPE;
+                if (type_info.set_element_type_id != NULL)
+                    inline_alias->set_element_type_id = strdup(type_info.set_element_type_id);
+            }
+        }
         /* Create TREE_ARR_DECL for inline array parameters */
         if (type_info.is_array)
         {
@@ -4721,7 +4734,7 @@ static ListNode_t *convert_param(ast_t *param_node) {
         else
         {
             param_decl = mk_vardecl(param_node->line, id_node, var_type, type_id_copy,
-                is_var_param, 0, default_init, NULL, NULL, NULL);
+                is_var_param, 0, default_init, NULL, inline_alias, NULL);
         }
         
         list_builder_append(&result_builder, param_decl, LIST_TREE);
@@ -8948,10 +8961,33 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     if (!is_class_operator && !is_static_method) {
         ListNode_t *self_ids = CreateListNode(strdup("Self"), LIST_STRING);
         char *self_type_id = NULL;
-        if (effective_class != NULL)
-            self_type_id = strdup(is_helper_method ? helper_base : effective_class);
-        Tree_t *self_param = mk_vardecl(method_node->line, self_ids, UNKNOWN_TYPE,
-            self_type_id, is_helper_method ? 0 : 1, 0, NULL, NULL, NULL, NULL);
+        int self_type_tag = UNKNOWN_TYPE;
+        struct TypeAlias *self_type_alias = NULL;
+        if (effective_class != NULL) {
+            if (is_helper_method) {
+                self_type_id = strdup(helper_base);
+                /* Resolve the type tag for type helper Self parameters.
+                 * This is important for correct calling convention (e.g., Double should use xmm0). */
+                self_type_tag = map_type_name(helper_base, NULL);
+                /* Create type alias with storage size for Single (4) vs Double (8).
+                 * This is needed for correct SSE register operations (movss vs movsd). */
+                if (self_type_tag == REAL_TYPE) {
+                    self_type_alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
+                    if (self_type_alias != NULL) {
+                        self_type_alias->base_type = REAL_TYPE;
+                        /* Determine storage size from type name */
+                        if (pascal_identifier_equals(helper_base, "Single"))
+                            self_type_alias->storage_size = 4;
+                        else
+                            self_type_alias->storage_size = 8;  /* Double or other real types */
+                    }
+                }
+            } else {
+                self_type_id = strdup(effective_class);
+            }
+        }
+        Tree_t *self_param = mk_vardecl(method_node->line, self_ids, self_type_tag,
+            self_type_id, is_helper_method ? 0 : 1, 0, NULL, NULL, self_type_alias, NULL);
         list_builder_append(&params_builder, self_param, LIST_TREE);
     }
 

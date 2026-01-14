@@ -35,6 +35,7 @@
 #include "../../ParseTree/type_tags.h"
 #include "../../ParseTree/KgpcType.h"
 #include "../../ParseTree/from_cparser.h"
+#include "../../pascal_frontend.h"
 #include "../../../identifier_utils.h"
 #include "../../../format_arg.h"
 
@@ -86,6 +87,7 @@ static int semcheck_expr_is_char_like(struct Expression *expr);
 static int semcheck_expr_is_char_pointer(struct Expression *expr);
 static void semcheck_promote_pointer_expr_to_string(struct Expression *expr);
 static int semcheck_expr_is_wide_char_pointer(struct Expression *expr);
+static int count_required_params(ListNode_t *params);
 
 static const char *semcheck_type_tag_name(int type_tag)
 {
@@ -598,6 +600,8 @@ static int semcheck_builtin_randseed(int *type_return, SymTab_t *symtab,
 static int semcheck_builtin_power(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev);
 static int semcheck_builtin_aligned(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev);
+static int semcheck_builtin_allocmem(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev);
 static int semcheck_typecheck_array_literal(struct Expression *expr, SymTab_t *symtab,
     int max_scope_lev, int expected_type, const char *expected_type_id, int line_num);
@@ -2533,6 +2537,18 @@ static int semcheck_builtin_length(int *type_return, SymTab_t *symtab,
 
 
     int is_dynamic_array = (arg_expr != NULL && arg_expr->is_array_expr && arg_expr->array_is_dynamic);
+    if (!is_dynamic_array && arg_expr != NULL && arg_expr->resolved_kgpc_type != NULL &&
+        kgpc_type_is_dynamic_array(arg_expr->resolved_kgpc_type))
+    {
+        is_dynamic_array = 1;
+    }
+    if (!is_dynamic_array && arg_expr != NULL && arg_expr->resolved_kgpc_type != NULL &&
+        kgpc_type_is_array(arg_expr->resolved_kgpc_type))
+    {
+        struct TypeAlias *alias = kgpc_type_get_type_alias(arg_expr->resolved_kgpc_type);
+        if (alias != NULL && alias->is_open_array)
+            is_dynamic_array = 1;
+    }
     int is_static_array = (arg_expr != NULL && arg_expr->is_array_expr && !arg_expr->array_is_dynamic);
     int is_shortstring = 0;
 
@@ -2564,10 +2580,10 @@ static int semcheck_builtin_length(int *type_return, SymTab_t *symtab,
     int is_wide_char_pointer = 0;
     if (is_char_pointer)
         is_wide_char_pointer = semcheck_expr_is_wide_char_pointer(arg_expr);
-    if (error_count == 0 && (is_string_type(arg_type) || is_shortstring))
-        mangled_name = is_shortstring ? "kgpc_shortstring_length" : "kgpc_string_length";
-    else if (error_count == 0 && is_dynamic_array)
+    if (error_count == 0 && is_dynamic_array)
         mangled_name = "__kgpc_dynarray_length";
+    else if (error_count == 0 && (is_string_type(arg_type) || is_shortstring))
+        mangled_name = is_shortstring ? "kgpc_shortstring_length" : "kgpc_string_length";
     else if (error_count == 0 && is_char_pointer)
         mangled_name = is_wide_char_pointer ? "kgpc_widechar_length" : "kgpc_string_length";
     else if (error_count == 0 && is_static_array)
@@ -5358,6 +5374,89 @@ static void semcheck_promote_pointer_expr_to_string(struct Expression *expr)
     expr->resolved_type = STRING_TYPE;
 }
 
+static char *semcheck_dup_type_id_from_ast_expr(ast_t *node)
+{
+    if (node == NULL)
+        return NULL;
+    if (node->sym != NULL && node->sym->name != NULL)
+        return strdup(node->sym->name);
+    for (ast_t *child = node->child; child != NULL; child = child->next)
+    {
+        char *found = semcheck_dup_type_id_from_ast_expr(child);
+        if (found != NULL)
+            return found;
+    }
+    return NULL;
+}
+
+static void semcheck_patch_method_return_type(HashNode_t *method_node, SymTab_t *symtab,
+    struct RecordType *record_info, const char *method_name, int line_num)
+{
+    if (method_node == NULL || symtab == NULL || record_info == NULL || method_name == NULL)
+        return;
+    if (method_node->type == NULL || method_node->type->kind != TYPE_KIND_PROCEDURE)
+        return;
+    if (kgpc_type_get_return_type(method_node->type) != NULL)
+        return;
+
+    struct MethodTemplate *tmpl = from_cparser_get_method_template(record_info, method_name);
+    if (tmpl == NULL)
+        return;
+
+    int is_function_template = (tmpl->kind == METHOD_TEMPLATE_FUNCTION ||
+        tmpl->kind == METHOD_TEMPLATE_CONSTRUCTOR ||
+        tmpl->has_return_type);
+    if (!is_function_template)
+        return;
+
+    KgpcType *return_type = NULL;
+    char *return_type_id = NULL;
+    ast_t *return_type_node = tmpl->return_type_ast;
+    if (return_type_node == NULL && tmpl->method_ast != NULL)
+    {
+        for (ast_t *child = tmpl->method_ast->child; child != NULL; child = child->next)
+        {
+            if (child->typ == PASCAL_T_RETURN_TYPE)
+            {
+                return_type_node = child;
+                break;
+            }
+        }
+    }
+    if (return_type_node != NULL)
+    {
+        if (return_type_node->child != NULL)
+            return_type = convert_type_spec_to_kgpctype(return_type_node->child, symtab);
+        if (return_type_id == NULL)
+            return_type_id = semcheck_dup_type_id_from_ast_expr(return_type_node);
+    }
+    if (return_type == NULL && return_type_id != NULL)
+    {
+        HashNode_t *type_node = NULL;
+        if (FindIdent(&type_node, symtab, return_type_id) != -1 &&
+            type_node != NULL && type_node->type != NULL)
+        {
+            kgpc_type_retain(type_node->type);
+            return_type = type_node->type;
+        }
+        else
+        {
+            int tag = semcheck_map_builtin_type_name(symtab, return_type_id);
+            if (tag != UNKNOWN_TYPE)
+                return_type = create_primitive_type(tag);
+        }
+    }
+
+    if (return_type != NULL)
+    {
+        method_node->type->info.proc_info.return_type = return_type;
+        method_node->hash_type = HASHTYPE_FUNCTION;
+    }
+
+    if (return_type_id != NULL)
+        free(return_type_id);
+}
+
 static int resolve_type_identifier(int *out_type, SymTab_t *symtab,
     const char *type_id, int line_num)
 {
@@ -6398,10 +6497,30 @@ static int semcheck_recordaccess(int *type_return,
 
         if (record_info == NULL)
         {
-            semcheck_error_with_context("Error on line %d, pointer does not reference a record type.\n\n",
-                expr->line_num);
-            *type_return = UNKNOWN_TYPE;
-            return error_count + 1;
+            /* Check for type helpers on Pointer type before giving up.
+             * Type helpers can be defined for Pointer, PChar, etc. */
+            const char *expr_type_name = get_expr_type_name(record_expr, symtab);
+            const char *alias_type_name = NULL;
+            if (record_expr->resolved_kgpc_type != NULL &&
+                record_expr->resolved_kgpc_type->type_alias != NULL &&
+                record_expr->resolved_kgpc_type->type_alias->target_type_id != NULL)
+            {
+                alias_type_name = record_expr->resolved_kgpc_type->type_alias->target_type_id;
+            }
+            struct RecordType *helper_record = semcheck_lookup_type_helper(symtab, record_type,
+                alias_type_name != NULL ? alias_type_name : expr_type_name);
+            if (helper_record != NULL)
+            {
+                record_type = RECORD_TYPE;
+                record_info = helper_record;
+            }
+            else
+            {
+                semcheck_error_with_context("Error on line %d, pointer does not reference a record type.\n\n",
+                    expr->line_num);
+                *type_return = UNKNOWN_TYPE;
+                return error_count + 1;
+            }
         }
     }
     else
@@ -6710,6 +6829,60 @@ static int semcheck_recordaccess(int *type_return,
                         is_static_method = from_cparser_is_method_static(record_info->type_id, field_id);
                     }
 
+                    /* For overloaded methods, we need to find the correct overload based on
+                     * argument count. Since this is a bare record access (s.Foo without parens),
+                     * there are no explicit arguments - only the implicit Self parameter.
+                     * Find the overload that accepts just Self (1 param). */
+                    int args_for_call = is_static_method ? 0 : 1; /* Just Self for non-static */
+                    
+                    if (record_info->type_id != NULL) {
+                        char mangled_base[256];
+                        snprintf(mangled_base, sizeof(mangled_base), "%s__%s",
+                            record_info->type_id, field_id);
+                        
+                        ListNode_t *all_methods = FindAllIdents(symtab, mangled_base);
+                        if (all_methods != NULL) {
+                            /* Find the best overload: one that requires exactly args_for_call params */
+                            ListNode_t *cur = all_methods;
+                            HashNode_t *best_match = NULL;
+                            
+                            while (cur != NULL) {
+                                HashNode_t *candidate = (HashNode_t *)cur->cur;
+                                if (candidate != NULL &&
+                                    (candidate->hash_type == HASHTYPE_FUNCTION ||
+                                     candidate->hash_type == HASHTYPE_PROCEDURE) &&
+                                    candidate->type != NULL)
+                                {
+                                    ListNode_t *params = kgpc_type_get_procedure_params(candidate->type);
+                                    int total_params = ListLength(params);
+                                    int required_params = count_required_params(params);
+                                    
+                                    /* Check if this overload accepts args_for_call arguments */
+                                    if (args_for_call >= required_params && args_for_call <= total_params) {
+                                        /* Prefer exact match over range match */
+                                        if (best_match == NULL) {
+                                            best_match = candidate;
+                                        } else {
+                                            /* Pick the one with fewer total params (more specific) */
+                                            ListNode_t *best_params = kgpc_type_get_procedure_params(best_match->type);
+                                            int best_total = ListLength(best_params);
+                                            if (total_params < best_total) {
+                                                best_match = candidate;
+                                            }
+                                        }
+                                    }
+                                }
+                                cur = cur->next;
+                            }
+                            
+                            if (best_match != NULL) {
+                                method_node = best_match;
+                            }
+                            
+                            DestroyList(all_methods);
+                        }
+                    }
+
                     /* Transform record access into an explicit method call: receiver.Method() */
                     char *method_id = (field_id != NULL) ? strdup(field_id) : NULL;
 
@@ -6885,7 +7058,9 @@ static int semcheck_recordaccess(int *type_return,
                     else if (method_id != NULL)
                         expr->expr_data.function_call_data.mangled_id = strdup(method_id);
                     expr->expr_data.function_call_data.resolved_func = method_node;
+                    expr->expr_data.function_call_data.call_hash_type = method_node->hash_type;
                     semcheck_expr_set_call_kgpc_type(expr, method_node->type, 0);
+                    expr->expr_data.function_call_data.is_call_info_valid = 1;
 
                     /* For static methods, don't pass a receiver/Self */
                     if (is_static_method) {
@@ -8022,7 +8197,11 @@ int semcheck_expr_main(int *type_return,
             break;
 
         case EXPR_STRING:
-            *type_return = STRING_TYPE;
+            if (pascal_frontend_default_shortstring())
+                *type_return = SHORTSTRING_TYPE;
+            else
+                *type_return = STRING_TYPE;
+            expr->resolved_type = *type_return;
             break;
 
         case EXPR_CHAR_CODE:
@@ -10494,6 +10673,12 @@ int semcheck_funccall(int *type_return,
                             if (resolved_name != NULL)
                                 expr->expr_data.function_call_data.mangled_id = strdup(resolved_name);
                         }
+                        /* Set call_kgpc_type for correct calling convention (e.g., float Self in xmm0) */
+                        if (method_node->type != NULL) {
+                            semcheck_expr_set_call_kgpc_type(expr, method_node->type, 0);
+                            expr->expr_data.function_call_data.call_hash_type = method_node->hash_type;
+                            expr->expr_data.function_call_data.is_call_info_valid = 1;
+                        }
                         /* Check if this is a virtual method call that needs VMT dispatch */
                         if (expects_self)
                         {
@@ -10812,6 +10997,10 @@ int semcheck_funccall(int *type_return,
         expr->resolved_type = POINTER_TYPE;
         return 0;
     }
+
+    /* AllocMem: allocates memory and zero-initializes it, returns a Pointer */
+    if (id != NULL && pascal_identifier_equals(id, "AllocMem"))
+        return semcheck_builtin_allocmem(type_return, symtab, expr, max_scope_lev);
 
     if (id != NULL && pascal_identifier_equals(id, "ToSingleByteFileSystemEncodedFileName"))
     {
@@ -11600,6 +11789,12 @@ constructor_resolved:
         /* Constructor already resolved, skip to argument validation */
         hash_return = expr->expr_data.function_call_data.resolved_func;
         scope_return = 0; /* Constructor is in current scope */
+        /* Ensure call_kgpc_type is set for code generator calling convention */
+        if (hash_return->type != NULL && !expr->expr_data.function_call_data.is_call_info_valid) {
+            semcheck_expr_set_call_kgpc_type(expr, hash_return->type, 0);
+            expr->expr_data.function_call_data.call_hash_type = hash_return->hash_type;
+            expr->expr_data.function_call_data.is_call_info_valid = 1;
+        }
         goto skip_overload_resolution;
     }
 
@@ -12053,7 +12248,10 @@ method_call_resolved:
                         current_score += 0;
                     else if (is_string_literal && formal_type == SHORTSTRING_TYPE &&
                         call_type == STRING_TYPE)
-                        current_score += 0;
+                        current_score -= 5;
+                    else if (is_string_literal && formal_type == STRING_TYPE &&
+                        call_type == STRING_TYPE)
+                        current_score += 3;
                     else if(formal_type == call_type)
                         current_score += 0;
                     else if (formal_type == LONGINT_TYPE && call_type == INT_TYPE)
@@ -12065,6 +12263,26 @@ method_call_resolved:
                         current_score += 1; /* Allow implicit char-to-string promotion */
                     else
                         current_score += 1000; // Mismatch
+
+                    if (is_string_literal && formal_decl != NULL && formal_decl->type == TREE_VAR_DECL)
+                    {
+                        const char *type_id = formal_decl->tree_data.var_decl_data.type_id;
+                        if (type_id != NULL)
+                        {
+                            if (pascal_identifier_equals(type_id, "ShortString"))
+                            {
+                                /* Prefer ShortString overloads for string literals. */
+                            }
+                            else if (pascal_identifier_equals(type_id, "String") ||
+                                     pascal_identifier_equals(type_id, "AnsiString") ||
+                                     pascal_identifier_equals(type_id, "RawByteString") ||
+                                     pascal_identifier_equals(type_id, "UnicodeString") ||
+                                     pascal_identifier_equals(type_id, "WideString"))
+                            {
+                                current_score += 3;
+                            }
+                        }
+                    }
 
                     current_score += pointer_penalty;
                     if (formal_type == LONGINT_TYPE && call_type == LONGINT_TYPE)
@@ -12324,6 +12542,8 @@ method_call_resolved:
     }
     else if (num_best_matches == 0)
     {
+        if (id != NULL && pascal_identifier_equals(id, "AllocMem"))
+            return semcheck_builtin_allocmem(type_return, symtab, expr, max_scope_lev);
         if (getenv("KGPC_DEBUG_CREATE_OVERLOAD") != NULL &&
             id != NULL && strncasecmp(id, "Create", 6) == 0)
         {
@@ -12778,6 +12998,42 @@ skip_overload_resolution:
                     else if (arg_type == expected_type)
                     {
                         type_compatible = 1;
+                    }
+
+                    /* Allow string literals to be passed as PAnsiChar/PChar parameters.
+                     * In Pascal, string literals are implicitly convertible to PChar. */
+                    if (!type_compatible && current_arg_expr != NULL &&
+                        (arg_type == STRING_TYPE || arg_type == SHORTSTRING_TYPE ||
+                         current_arg_expr->type == EXPR_STRING))
+                    {
+                        const char *param_type_id = NULL;
+                        if (arg_decl->type == TREE_VAR_DECL)
+                            param_type_id = arg_decl->tree_data.var_decl_data.type_id;
+                        if (param_type_id != NULL &&
+                            (pascal_identifier_equals(param_type_id, "PAnsiChar") ||
+                             pascal_identifier_equals(param_type_id, "PChar") ||
+                             pascal_identifier_equals(param_type_id, "PWideChar")))
+                        {
+                            type_compatible = 1;
+                        }
+                        /* Also check if parameter is a pointer type pointing to char */
+                        if (!type_compatible && expected_type == POINTER_TYPE)
+                        {
+                            int owns_expected = 0;
+                            KgpcType *expected_kgpc = resolve_type_from_vardecl(arg_decl, symtab, &owns_expected);
+                            if (expected_kgpc != NULL && kgpc_type_is_pointer(expected_kgpc))
+                            {
+                                KgpcType *points_to = expected_kgpc->info.points_to;
+                                if (points_to != NULL && 
+                                    points_to->kind == TYPE_KIND_PRIMITIVE &&
+                                    points_to->info.primitive_type_tag == CHAR_TYPE)
+                                {
+                                    type_compatible = 1;
+                                }
+                            }
+                            if (owns_expected && expected_kgpc != NULL)
+                                destroy_kgpc_type(expected_kgpc);
+                        }
                     }
 
                     /* Allow dynamic array parameters to match when both sides are arrays. */
@@ -13245,4 +13501,57 @@ static int semcheck_builtin_aligned(int *type_return, SymTab_t *symtab,
 
     *type_return = UNKNOWN_TYPE;
     return error_count;
+}
+
+static int semcheck_builtin_allocmem(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev)
+{
+    assert(type_return != NULL);
+    assert(symtab != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_FUNCTION_CALL);
+
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    if (args == NULL || args->next != NULL)
+    {
+        semcheck_error_with_context("Error on line %d, AllocMem expects exactly one argument.\n",
+            expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    struct Expression *size_expr = (struct Expression *)args->cur;
+    int size_type = UNKNOWN_TYPE;
+    int error_count = semcheck_expr_main(&size_type, symtab, size_expr, max_scope_lev, NO_MUTATE);
+    if (error_count != 0)
+    {
+        *type_return = UNKNOWN_TYPE;
+        return error_count;
+    }
+
+    if (!is_integer_type(size_type))
+    {
+        semcheck_error_with_context("Error on line %d, AllocMem size argument must be an integer.\n",
+            expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    semcheck_reset_function_call_cache(expr);
+    if (expr->expr_data.function_call_data.mangled_id != NULL)
+    {
+        free(expr->expr_data.function_call_data.mangled_id);
+        expr->expr_data.function_call_data.mangled_id = NULL;
+    }
+    expr->expr_data.function_call_data.mangled_id = strdup("kgpc_allocmem");
+    if (expr->expr_data.function_call_data.mangled_id == NULL)
+    {
+        fprintf(stderr, "Error: failed to allocate mangled name for AllocMem.\n");
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+    expr->resolved_type = POINTER_TYPE;
+    expr->expr_data.function_call_data.is_call_info_valid = 1;
+    *type_return = POINTER_TYPE;
+    return 0;
 }

@@ -136,6 +136,12 @@ static enum VarType MapBuiltinTypeNameToVarType(const char *type_name) {
     if (strcasecmp(type_name, "Pointer") == 0)
         return HASHVAR_POINTER;
     
+    // PAnsiChar/PChar types (distinct from String for name mangling)
+    if (strcasecmp(type_name, "PChar") == 0 || strcasecmp(type_name, "PAnsiChar") == 0)
+        return HASHVAR_PANSICHAR;
+    if (strcasecmp(type_name, "PWideChar") == 0 || strcasecmp(type_name, "PWChar") == 0)
+        return HASHVAR_PWIDECHAR;
+    
     return HASHVAR_UNTYPED;
 }
 
@@ -262,7 +268,9 @@ static char* MangleNameFromTypeList(const char* original_name, ListNode_t* type_
             case HASHVAR_LONGINT: type_suffix = "_li"; break;
             case HASHVAR_INT64:   type_suffix = "_i64"; break;
             case HASHVAR_REAL:    type_suffix = "_r"; break;
-            case HASHVAR_PCHAR:   type_suffix = "_s"; break; // For string
+            case HASHVAR_PCHAR:   type_suffix = "_s"; break; // For String (keep backwards compat)
+            case HASHVAR_PANSICHAR: type_suffix = "_pc"; break; // For PAnsiChar/PChar
+            case HASHVAR_PWIDECHAR: type_suffix = "_pw"; break; // For PWideChar
             case HASHVAR_BOOLEAN: type_suffix = "_b"; break;
             case HASHVAR_CHAR:    type_suffix = "_c"; break;
             case HASHVAR_POINTER: type_suffix = "_p"; break;

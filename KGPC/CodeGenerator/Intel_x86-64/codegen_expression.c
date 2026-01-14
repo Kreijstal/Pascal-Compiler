@@ -18,6 +18,7 @@
 #include "../../Parser/ParseTree/tree.h"
 #include "../../Parser/ParseTree/tree_types.h"
 #include "../../Parser/ParseTree/type_tags.h"
+#include "../../identifier_utils.h"
 #include "../../Parser/ParseTree/KgpcType.h"
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
 #include "../../Parser/SemanticCheck/SymTab/SymTab.h"
@@ -116,6 +117,7 @@ typedef struct ArgInfo
     StackNode_t *spill;
     struct Expression *expr;
     int expected_type;
+    int expected_real_size;
     int is_pointer_like;
     int assigned_class;
     int assigned_index;
@@ -309,6 +311,75 @@ static int codegen_param_expected_type(Tree_t *decl, SymTab_t *symtab)
     return UNKNOWN_TYPE;
 }
 
+static int codegen_param_real_storage_size(Tree_t *decl, SymTab_t *symtab)
+{
+    if (decl == NULL)
+        return 8;
+
+    if (decl->type == TREE_VAR_DECL)
+    {
+        if (decl->tree_data.var_decl_data.type_id != NULL)
+        {
+            const char *type_id = decl->tree_data.var_decl_data.type_id;
+            if (pascal_identifier_equals(type_id, "Single"))
+                return 4;
+            if (pascal_identifier_equals(type_id, "Double") ||
+                pascal_identifier_equals(type_id, "Real") ||
+                pascal_identifier_equals(type_id, "Extended"))
+                return 8;
+        }
+        struct TypeAlias *alias = decl->tree_data.var_decl_data.inline_type_alias;
+        if (alias != NULL && alias->storage_size > 0)
+            return (int)alias->storage_size;
+        if (decl->tree_data.var_decl_data.cached_kgpc_type != NULL)
+        {
+            long long size = kgpc_type_sizeof(decl->tree_data.var_decl_data.cached_kgpc_type);
+            if (size > 0)
+                return (int)size;
+        }
+    }
+
+    if (decl->type == TREE_VAR_DECL && decl->tree_data.var_decl_data.type_id != NULL &&
+        symtab != NULL)
+    {
+        HashNode_t *type_node = NULL;
+        if (FindIdent(&type_node, symtab, decl->tree_data.var_decl_data.type_id) == 0 &&
+            type_node != NULL && type_node->type != NULL)
+        {
+            long long size = kgpc_type_sizeof(type_node->type);
+            if (size > 0)
+                return (int)size;
+        }
+    }
+
+    return 8;
+}
+
+static int codegen_expr_real_storage_size(const struct Expression *expr, CodeGenContext *ctx)
+{
+    if (expr == NULL)
+        return 8;
+
+    KgpcType *type = expr_get_kgpc_type(expr);
+    if (type == NULL && ctx != NULL && ctx->symtab != NULL &&
+        expr->type == EXPR_VAR_ID && expr->expr_data.id != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindIdent(&node, ctx->symtab, expr->expr_data.id) == 0 &&
+            node != NULL && node->type != NULL)
+            type = node->type;
+    }
+
+    if (type != NULL)
+    {
+        long long size = kgpc_type_sizeof(type);
+        if (size > 0)
+            return (int)size;
+    }
+
+    return 8;
+}
+
 static int codegen_expected_type_for_builtin(const char *name)
 {
     if (name == NULL)
@@ -441,6 +512,37 @@ static int formal_decl_is_open_array(Tree_t *decl)
 
     struct Array *arr = &decl->tree_data.arr_decl_data;
     return (arr->e_range < arr->s_range);
+}
+
+static int formal_decl_is_char_set(Tree_t *decl, SymTab_t *symtab)
+{
+    if (decl == NULL || decl->type != TREE_VAR_DECL)
+        return 0;
+
+    struct TypeAlias *alias = decl->tree_data.var_decl_data.inline_type_alias;
+    if (alias != NULL && alias->is_set)
+    {
+        if (alias->set_element_type == CHAR_TYPE ||
+            (alias->set_element_type_id != NULL &&
+             (pascal_identifier_equals(alias->set_element_type_id, "Char") ||
+              pascal_identifier_equals(alias->set_element_type_id, "AnsiChar"))))
+            return 1;
+    }
+
+    if (decl->tree_data.var_decl_data.type_id != NULL && symtab != NULL)
+    {
+        HashNode_t *type_node = NULL;
+        if (FindIdent(&type_node, symtab, decl->tree_data.var_decl_data.type_id) >= 0 &&
+            type_node != NULL && type_node->type != NULL)
+        {
+            if (type_node->type->kind == TYPE_KIND_PRIMITIVE &&
+                kgpc_type_get_primitive_tag(type_node->type) == SET_TYPE &&
+                kgpc_type_sizeof(type_node->type) > 4)
+                return 1;
+        }
+    }
+
+    return 0;
 }
 
 static long long codegen_static_array_length(const struct Expression *expr)
@@ -1097,7 +1199,11 @@ int expr_is_char_set_ctx(const struct Expression *expr, CodeGenContext *ctx)
     if (expr->resolved_kgpc_type != NULL)
     {
         struct TypeAlias *alias = expr->resolved_kgpc_type->type_alias;
-        if (alias != NULL && alias->is_set && alias->set_element_type == CHAR_TYPE)
+        if (alias != NULL && alias->is_set &&
+            (alias->set_element_type == CHAR_TYPE ||
+             (alias->set_element_type_id != NULL &&
+              (pascal_identifier_equals(alias->set_element_type_id, "Char") ||
+               pascal_identifier_equals(alias->set_element_type_id, "AnsiChar")))))
             return 1;
     }
     
@@ -1110,7 +1216,11 @@ int expr_is_char_set_ctx(const struct Expression *expr, CodeGenContext *ctx)
             if (node->type != NULL)
             {
                 struct TypeAlias *alias = node->type->type_alias;
-                if (alias != NULL && alias->is_set && alias->set_element_type == CHAR_TYPE)
+                if (alias != NULL && alias->is_set &&
+                    (alias->set_element_type == CHAR_TYPE ||
+                     (alias->set_element_type_id != NULL &&
+                      (pascal_identifier_equals(alias->set_element_type_id, "Char") ||
+                       pascal_identifier_equals(alias->set_element_type_id, "AnsiChar")))))
                     return 1;
             }
             if (node->hash_type == HASHTYPE_CONST &&
@@ -4207,6 +4317,13 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             if (formal_id != NULL && pascal_identifier_equals(formal_id, "Self"))
                 is_self_param = 1;
         }
+        /* Also detect Self parameter when the argument expression IS the Self variable */
+        if (!is_self_param && arg_num == 0 && arg_expr != NULL &&
+            arg_expr->type == EXPR_VAR_ID && arg_expr->expr_data.id != NULL &&
+            pascal_identifier_equals(arg_expr->expr_data.id, "Self"))
+        {
+            is_self_param = 1;
+        }
 
         int is_var_param = (formal_arg_decl != NULL &&
             formal_arg_decl->tree_data.var_decl_data.is_var_param);
@@ -4214,6 +4331,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             is_var_param = 0;
         int is_array_param = (formal_arg_decl != NULL && formal_arg_decl->type == TREE_ARR_DECL);
         int formal_is_open_array = formal_decl_is_open_array(formal_arg_decl);
+        int formal_is_char_set = formal_decl_is_char_set(formal_arg_decl, ctx->symtab);
         int formal_is_dynarray = codegen_formal_is_dynamic_array(formal_arg_decl, ctx->symtab);
         
         /* Also check if we're passing a static array argument (even if not declared as var param) */
@@ -4247,6 +4365,14 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             else if (expected_type == UNKNOWN_TYPE)
                 expected_type = LONGINT_TYPE;
         }
+        /* For type helper Self parameters passed by value, infer type from expression.
+         * This ensures floating-point Self parameters use xmm registers. */
+        if (expected_type == UNKNOWN_TYPE && is_self_param && arg_expr != NULL)
+        {
+            int arg_type = expr_get_type_tag(arg_expr);
+            if (arg_type == REAL_TYPE)
+                expected_type = REAL_TYPE;
+        }
         if (is_var_param && arg_num == 0 && arg_expr != NULL &&
             !codegen_expr_is_addressable(arg_expr))
         {
@@ -4271,9 +4397,22 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         if (arg_infos != NULL)
         {
             arg_infos[arg_num].expected_type = expected_type;
+            arg_infos[arg_num].expected_real_size = 0;
             arg_infos[arg_num].is_pointer_like = is_pointer_like;
             arg_infos[arg_num].assigned_class = ARG_CLASS_INT;
             arg_infos[arg_num].assigned_index = -1;
+        }
+        if (arg_infos != NULL && expected_type == REAL_TYPE)
+            arg_infos[arg_num].expected_real_size =
+                codegen_param_real_storage_size(formal_arg_decl, ctx->symtab);
+        if (arg_infos != NULL && expected_type == REAL_TYPE &&
+            (arg_infos[arg_num].expected_real_size == 0 ||
+             (is_self_param &&
+              arg_infos[arg_num].expected_real_size == 8 &&
+              codegen_expr_real_storage_size(arg_expr, ctx) == 4)))
+        {
+            arg_infos[arg_num].expected_real_size =
+                codegen_expr_real_storage_size(arg_expr, ctx);
         }
 
         if (formal_is_open_array && is_array_arg)
@@ -4636,6 +4775,45 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             else if (arg_infos != NULL)
             {
                 arginfo_assign_register(&arg_infos[arg_num], addr_reg, arg_expr);
+            }
+        }
+        else if (formal_is_char_set && arg_expr != NULL && expr_has_type_tag(arg_expr, SET_TYPE))
+        {
+            Register_t *addr_reg = NULL;
+            if (arg_expr->type == EXPR_SET)
+            {
+                inst_list = codegen_set_literal(arg_expr, inst_list, ctx, &addr_reg, 1);
+            }
+            else
+            {
+                if (!codegen_expr_is_addressable(arg_expr))
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Unsupported expression type for set parameter.");
+                    return inst_list;
+                }
+                inst_list = codegen_address_for_expr(arg_expr, inst_list, ctx, &addr_reg);
+            }
+            if (codegen_had_error(ctx) || addr_reg == NULL)
+                return inst_list;
+
+            StackNode_t *arg_spill = add_l_t("arg_eval");
+            if (arg_spill != NULL && arg_infos != NULL)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                    addr_reg->bit_64, arg_spill->offset);
+                inst_list = add_inst(inst_list, buffer);
+                free_reg(get_reg_stack(), addr_reg);
+
+                arg_infos[arg_num].reg = NULL;
+                arg_infos[arg_num].spill = arg_spill;
+                arg_infos[arg_num].expr = arg_expr;
+                arg_infos[arg_num].is_pointer_like = 1;
+            }
+            else if (arg_infos != NULL)
+            {
+                arginfo_assign_register(&arg_infos[arg_num], addr_reg, arg_expr);
+                arg_infos[arg_num].is_pointer_like = 1;
             }
         }
         else if (formal_is_dynarray && arg_expr != NULL &&
@@ -5027,6 +5205,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
     for (int i = arg_num - 1; i >= 0; --i)
     {
         int expected_type = (arg_infos != NULL) ? arg_infos[i].expected_type : UNKNOWN_TYPE;
+        int expected_real_size = (arg_infos != NULL) ? arg_infos[i].expected_real_size : 0;
         int actual_type = (arg_infos != NULL && arg_infos[i].expr != NULL)
             ? expr_get_type_tag(arg_infos[i].expr) : UNKNOWN_TYPE;
         int needs_int_to_long = (expected_type == LONGINT_TYPE && actual_type == INT_TYPE);
@@ -5072,6 +5251,30 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         struct Expression *source_expr = arg_infos != NULL ? arg_infos[i].expr : NULL;
         if (stored_reg != NULL)
         {
+            if (expected_type == REAL_TYPE && expected_real_size == 4 &&
+                arg_infos != NULL && arg_infos[i].assigned_class == ARG_CLASS_SSE)
+            {
+                if (stored_reg->bit_64 != NULL &&
+                    strncmp(stored_reg->bit_64, "%xmm", 4) == 0)
+                    snprintf(buffer, sizeof(buffer), "\tmovapd\t%s, %%xmm0\n", stored_reg->bit_64);
+                else
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm0\n", stored_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                inst_list = add_inst(inst_list, "\tcvtsd2ss\t%xmm0, %xmm0\n");
+                if (pass_on_stack)
+                {
+                    char stack_dest[64];
+                    snprintf(stack_dest, sizeof(stack_dest), "%d(%%rsp)", arg_infos[i].stack_offset);
+                    snprintf(buffer, sizeof(buffer), "\tmovss\t%%xmm0, %s\n", stack_dest);
+                }
+                else
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovss\t%%xmm0, %s\n", arg_reg_char);
+                }
+                inst_list = add_inst(inst_list, buffer);
+                free_reg(get_reg_stack(), stored_reg);
+                continue;
+            }
             if (needs_int_to_long && arg_infos != NULL &&
                 arg_infos[i].assigned_class == ARG_CLASS_INT)
             {
@@ -5095,6 +5298,26 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         else if (arg_infos != NULL && arg_infos[i].spill != NULL)
         {
             Register_t *temp_reg = NULL;
+            if (expected_type == REAL_TYPE && expected_real_size == 4 &&
+                arg_infos[i].assigned_class == ARG_CLASS_SSE)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovsd\t-%d(%%rbp), %%xmm0\n",
+                    arg_infos[i].spill->offset);
+                inst_list = add_inst(inst_list, buffer);
+                inst_list = add_inst(inst_list, "\tcvtsd2ss\t%xmm0, %xmm0\n");
+                if (pass_on_stack)
+                {
+                    char stack_dest[64];
+                    snprintf(stack_dest, sizeof(stack_dest), "%d(%%rsp)", arg_infos[i].stack_offset);
+                    snprintf(buffer, sizeof(buffer), "\tmovss\t%%xmm0, %s\n", stack_dest);
+                }
+                else
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovss\t%%xmm0, %s\n", arg_reg_char);
+                }
+                inst_list = add_inst(inst_list, buffer);
+                continue;
+            }
             if (needs_int_to_long && arg_infos[i].assigned_class == ARG_CLASS_INT)
             {
                 temp_reg = get_free_reg(get_reg_stack(), &inst_list);

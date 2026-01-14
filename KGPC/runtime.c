@@ -19,6 +19,8 @@ static uint64_t kgpc_rand_state = 0x9e3779b97f4a7c15ULL;
 
 /* Forward decl for optional debug flag helper */
 static int kgpc_env_flag(const char *name);
+char *kgpc_float_to_string(double value, int precision);
+static char *kgpc_apply_field_width(char *value, int64_t width);
 
 #ifdef _WIN32
 #include <windows.h>
@@ -36,6 +38,7 @@ static int kgpc_env_flag(const char *name);
 #include <sys/ioctl.h>
 #include <termios.h>
 #include <sys/select.h>
+#include <pthread.h>
 #include <sys/utsname.h>
 #include <sys/wait.h>
 #include <sys/types.h>
@@ -55,6 +58,7 @@ static int kgpc_env_flag(const char *name);
 
 int64_t kgpc_current_exception = 0;
 static __thread int kgpc_ioresult = 0;
+static int kgpc_threading_used = 0;
 
 int kgpc_ioresult_get_and_clear(void)
 {
@@ -71,6 +75,23 @@ void kgpc_ioresult_set(int value)
 int kgpc_ioresult_peek(void)
 {
     return kgpc_ioresult;
+}
+
+void kgpc_cthreads_init(void)
+{
+#ifndef _WIN32
+    (void)pthread_self();
+#endif
+}
+
+int kgpc_threading_already_used(void)
+{
+    return kgpc_threading_used;
+}
+
+int ThreadingAlreadyUsed_void(void)
+{
+    return kgpc_threading_already_used();
 }
 
 void kgpc_interlocked_exchange_add_i32(int32_t *target, int32_t value, int32_t *result)
@@ -2707,6 +2728,22 @@ void kgpc_getmem(void **target, size_t size)
     *target = memory;
 }
 
+/* AllocMem: allocates memory and zero-initializes it (like calloc) */
+void *kgpc_allocmem(size_t size)
+{
+    if (size == 0)
+        return NULL;
+
+    void *memory = calloc(1, size);
+    if (memory == NULL)
+    {
+        fprintf(stderr, "KGPC runtime: failed to allocate %zu bytes via AllocMem.\n", size);
+        exit(EXIT_FAILURE);
+    }
+
+    return memory;
+}
+
 void kgpc_freemem(void *ptr)
 {
     if (ptr != NULL)
@@ -3227,6 +3264,42 @@ char *kgpc_int_to_str(int64_t value)
     return result;
 }
 
+static char *kgpc_apply_field_width(char *value, int64_t width)
+{
+    if (value == NULL)
+        return NULL;
+
+    if (width == -1 || width == 0)
+        return value;
+
+    int left_align = (width < 0);
+    uint64_t abs_width = (width < 0) ? (uint64_t)(-width) : (uint64_t)width;
+    size_t len = kgpc_string_known_length(value);
+    if (abs_width <= len)
+        return value;
+
+    size_t pad = abs_width - len;
+    char *result = (char *)malloc(abs_width + 1);
+    if (result == NULL)
+        return value;
+
+    if (left_align)
+    {
+        memcpy(result, value, len);
+        memset(result + len, ' ', pad);
+    }
+    else
+    {
+        memset(result, ' ', pad);
+        memcpy(result + pad, value, len);
+    }
+    result[abs_width] = '\0';
+    kgpc_string_register_allocation(result, abs_width);
+    if (kgpc_string_release_allocation(value))
+        free(value);
+    return result;
+}
+
 void kgpc_str_int64(int64_t value, char **target)
 {
     if (target == NULL)
@@ -3235,6 +3308,55 @@ void kgpc_str_int64(int64_t value, char **target)
     char *result = kgpc_int_to_str(value);
     if (result == NULL)
         return;
+
+    char *existing = *target;
+    if (existing != NULL && kgpc_string_release_allocation(existing))
+        free(existing);
+    *target = result;
+}
+
+void kgpc_str_int64_fmt(int64_t value, int64_t width, char **target)
+{
+    if (target == NULL)
+        return;
+
+    char *result = kgpc_int_to_str(value);
+    if (result == NULL)
+        return;
+
+    result = kgpc_apply_field_width(result, width);
+
+    char *existing = *target;
+    if (existing != NULL && kgpc_string_release_allocation(existing))
+        free(existing);
+    *target = result;
+}
+
+void kgpc_str_real(double value, char **target)
+{
+    if (target == NULL)
+        return;
+
+    char *result = kgpc_float_to_string(value, -1);
+    if (result == NULL)
+        return;
+
+    char *existing = *target;
+    if (existing != NULL && kgpc_string_release_allocation(existing))
+        free(existing);
+    *target = result;
+}
+
+void kgpc_str_real_fmt(double value, int64_t width, int64_t precision, char **target)
+{
+    if (target == NULL)
+        return;
+
+    char *result = kgpc_float_to_string(value, (int)precision);
+    if (result == NULL)
+        return;
+
+    result = kgpc_apply_field_width(result, width);
 
     char *existing = *target;
     if (existing != NULL && kgpc_string_release_allocation(existing))
@@ -4636,6 +4758,124 @@ void kgpc_sincos_bits(int64_t angle_bits, double *sin_out, double *cos_out)
     if (cos_out != NULL)
         *cos_out = cos(angle);
 }
+
+/* BaseUnix wrapper functions */
+#ifndef _WIN32
+int fpOpen(const char *path, int flags)
+{
+    return open(path, flags);
+}
+
+int fpOpen_i_i_i(const char *path, int flags, int mode)
+{
+    return open(path, flags, (mode_t)mode);
+}
+
+int fpClose(int fd)
+{
+    return close(fd);
+}
+
+int fpClose_i(int fd)
+{
+    return close(fd);
+}
+
+ssize_t fpRead(int fd, void *buf, size_t count)
+{
+    return read(fd, buf, count);
+}
+
+ssize_t fpWrite(int fd, const void *buf, size_t count)
+{
+    return write(fd, buf, count);
+}
+
+off_t fplSeek(int fd, off_t offset, int whence)
+{
+    return lseek(fd, offset, whence);
+}
+#else
+/* Windows implementations using POSIX-like functions from io.h */
+/* Translate Unix paths to Windows equivalents */
+static const char* translate_unix_path(const char *path)
+{
+    /* Map /dev/null to NUL */
+    if (path != NULL && strcmp(path, "/dev/null") == 0)
+        return "NUL";
+    return path;
+}
+
+/* Linux open flag constants for cross-platform translation */
+#define LINUX_O_CREAT  0x40
+#define LINUX_O_TRUNC  0x200
+
+/* Translate Unix open flags to Windows _open flags */
+static int translate_flags(int flags)
+{
+    int wflags = _O_BINARY;  /* Always use binary mode on Windows */
+    
+    /* O_RDONLY = 0, O_WRONLY = 1, O_RDWR = 2 */
+    int accmode = flags & 3;
+    if (accmode == 0)       /* O_RDONLY */
+        wflags |= _O_RDONLY;
+    else if (accmode == 1)  /* O_WRONLY */
+        wflags |= _O_WRONLY;
+    else if (accmode == 2)  /* O_RDWR */
+        wflags |= _O_RDWR;
+    
+    if (flags & LINUX_O_CREAT)
+        wflags |= _O_CREAT;
+    
+    if (flags & LINUX_O_TRUNC)
+        wflags |= _O_TRUNC;
+    
+    return wflags;
+}
+
+int fpOpen(const char *path, int flags)
+{
+    const char *wpath = translate_unix_path(path);
+    int wflags = translate_flags(flags);
+    return _open(wpath, wflags);
+}
+
+int fpOpen_i_i_i(const char *path, int flags, int mode)
+{
+    const char *wpath = translate_unix_path(path);
+    int wflags = translate_flags(flags);
+    return _open(wpath, wflags, mode);
+}
+
+int fpClose(int fd)
+{
+    return _close(fd);
+}
+
+int fpClose_i(int fd)
+{
+    return _close(fd);
+}
+
+ssize_t fpRead(int fd, void *buf, size_t count)
+{
+    /* _read takes unsigned int count on Windows, handle large counts by capping */
+    unsigned int safe_count = (count > UINT_MAX) ? UINT_MAX : (unsigned int)count;
+    return (ssize_t)_read(fd, buf, safe_count);
+}
+
+ssize_t fpWrite(int fd, const void *buf, size_t count)
+{
+    /* _write takes unsigned int count on Windows, handle large counts by capping */
+    unsigned int safe_count = (count > UINT_MAX) ? UINT_MAX : (unsigned int)count;
+    return (ssize_t)_write(fd, buf, safe_count);
+}
+
+off_t fplSeek(int fd, off_t offset, int whence)
+{
+    return (off_t)_lseeki64(fd, (__int64)offset, whence);
+}
+#endif
 
 void Halt(int64_t code)
 {
