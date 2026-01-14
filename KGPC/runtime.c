@@ -38,6 +38,7 @@ static char *kgpc_apply_field_width(char *value, int64_t width);
 #include <sys/ioctl.h>
 #include <termios.h>
 #include <sys/select.h>
+#include <pthread.h>
 #include <sys/utsname.h>
 #include <sys/wait.h>
 #include <sys/types.h>
@@ -57,6 +58,7 @@ static char *kgpc_apply_field_width(char *value, int64_t width);
 
 int64_t kgpc_current_exception = 0;
 static __thread int kgpc_ioresult = 0;
+static int kgpc_threading_used = 0;
 
 int kgpc_ioresult_get_and_clear(void)
 {
@@ -73,6 +75,19 @@ void kgpc_ioresult_set(int value)
 int kgpc_ioresult_peek(void)
 {
     return kgpc_ioresult;
+}
+
+void kgpc_cthreads_init(void)
+{
+    kgpc_threading_used = 1;
+#ifndef _WIN32
+    (void)pthread_self();
+#endif
+}
+
+int kgpc_threading_already_used(void)
+{
+    return kgpc_threading_used;
 }
 
 void kgpc_interlocked_exchange_add_i32(int32_t *target, int32_t value, int32_t *result)
