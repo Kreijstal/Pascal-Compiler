@@ -79,7 +79,6 @@ int kgpc_ioresult_peek(void)
 
 void kgpc_cthreads_init(void)
 {
-    kgpc_threading_used = 1;
 #ifndef _WIN32
     (void)pthread_self();
 #endif
@@ -88,6 +87,11 @@ void kgpc_cthreads_init(void)
 int kgpc_threading_already_used(void)
 {
     return kgpc_threading_used;
+}
+
+int ThreadingAlreadyUsed_void(void)
+{
+    return kgpc_threading_already_used();
 }
 
 void kgpc_interlocked_exchange_add_i32(int32_t *target, int32_t value, int32_t *result)

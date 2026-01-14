@@ -226,9 +226,19 @@ static int semcheck_param_decl_equivalent_stmt(const Tree_t *lhs, const Tree_t *
         return 0;
     if (lhs->tree_data.var_decl_data.is_var_param != rhs->tree_data.var_decl_data.is_var_param)
         return 0;
-    if (lhs->tree_data.var_decl_data.type != rhs->tree_data.var_decl_data.type)
+    int lhs_type = lhs->tree_data.var_decl_data.type;
+    int rhs_type = rhs->tree_data.var_decl_data.type;
+    int types_equivalent = 0;
+    if (lhs_type == rhs_type)
+        types_equivalent = 1;
+    else if ((lhs_type == INT_TYPE && rhs_type == LONGINT_TYPE) ||
+             (lhs_type == LONGINT_TYPE && rhs_type == INT_TYPE))
+        types_equivalent = 1;
+    if (!types_equivalent)
         return 0;
     if (lhs->tree_data.var_decl_data.type_id == NULL || rhs->tree_data.var_decl_data.type_id == NULL)
+        return 1;
+    if (lhs_type != rhs_type)
         return 1;
     return strcasecmp(lhs->tree_data.var_decl_data.type_id,
         rhs->tree_data.var_decl_data.type_id) == 0;

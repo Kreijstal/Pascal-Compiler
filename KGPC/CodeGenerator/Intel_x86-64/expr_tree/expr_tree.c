@@ -2939,9 +2939,21 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
             {
                 const int use_qword_op = codegen_type_uses_qword(expr->resolved_type);
                 const char arith_suffix = use_qword_op ? 'q' : 'l';
+                char left32_buf[16];
+                char right32_buf[16];
+                const char *left_op = left;
+                const char *right_op = right;
+                if (arith_suffix == 'l')
+                {
+                    left_op = reg_to_reg32(left, left32_buf, sizeof(left32_buf));
+                    if (right != NULL && right[0] == '$')
+                        right_op = right;
+                    else
+                        right_op = reg_to_reg32(right, right32_buf, sizeof(right32_buf));
+                }
                 if (type == OR)
                 {
-                    snprintf(buffer, sizeof(buffer), "\tor%c\t%s, %s\n", arith_suffix, right, left);
+                    snprintf(buffer, sizeof(buffer), "\tor%c\t%s, %s\n", arith_suffix, right_op, left_op);
                     inst_list = add_inst(inst_list, buffer);
                     break;
                 }
@@ -2954,14 +2966,14 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                      * special case lets us use INC instead of ADD to save an instruction byte.
                      */
                     if(strcmp(right, "$1") == 0)
-                        snprintf(buffer, sizeof(buffer), "\tinc%c\t%s\n", arith_suffix, left);
+                        snprintf(buffer, sizeof(buffer), "\tinc%c\t%s\n", arith_suffix, left_op);
                     else
-                        snprintf(buffer, sizeof(buffer), "\tadd%c\t%s, %s\n", arith_suffix, right, left);
+                        snprintf(buffer, sizeof(buffer), "\tadd%c\t%s, %s\n", arith_suffix, right_op, left_op);
                     inst_list = add_inst(inst_list, buffer);
                     break;
                 }
                 case MINUS:
-                    snprintf(buffer, sizeof(buffer), "\tsub%c\t%s, %s\n", arith_suffix, right, left);
+                    snprintf(buffer, sizeof(buffer), "\tsub%c\t%s, %s\n", arith_suffix, right_op, left_op);
                     inst_list = add_inst(inst_list, buffer);
                     break;
                 default:

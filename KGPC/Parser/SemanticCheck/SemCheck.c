@@ -6223,7 +6223,34 @@ void semcheck_add_builtins(SymTab_t *symtab)
     }
     char *move_proc = strdup("Move");
     if (move_proc != NULL) {
-        KgpcType *move_type = create_procedure_type(NULL, NULL);
+        ListNode_t *move_params = NULL;
+        ListNode_t *move_tail = NULL;
+        ListNode_t *param = NULL;
+
+        param = semcheck_create_builtin_param_var("source", UNKNOWN_TYPE);
+        if (param != NULL) {
+            move_params = param;
+            move_tail = param;
+        }
+
+        param = semcheck_create_builtin_param_var("dest", UNKNOWN_TYPE);
+        if (param != NULL) {
+            if (move_tail != NULL)
+                move_tail->next = param;
+            else
+                move_params = param;
+            move_tail = param;
+        }
+
+        param = semcheck_create_builtin_param("count", LONGINT_TYPE);
+        if (param != NULL) {
+            if (move_tail != NULL)
+                move_tail->next = param;
+            else
+                move_params = param;
+        }
+
+        KgpcType *move_type = create_procedure_type(move_params, NULL);
         assert(move_type != NULL && "Failed to create Move procedure type");
         AddBuiltinProc_Typed(symtab, move_proc, move_type);
         destroy_kgpc_type(move_type);
