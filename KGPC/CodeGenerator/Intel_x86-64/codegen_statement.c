@@ -3685,20 +3685,22 @@ static ListNode_t *codegen_builtin_str(struct Statement *stmt, ListNode_t *inst_
             }
             if (codegen_target_is_windows())
             {
+                /* Move addr_reg to R9 first to avoid clobbering if addr_reg is R8 */
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r9\n", addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
                 snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", width_reg->bit_64);
                 inst_list = add_inst(inst_list, buffer);
                 snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r8\n", precision_reg->bit_64);
                 inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r9\n", addr_reg->bit_64);
-                inst_list = add_inst(inst_list, buffer);
             }
             else
             {
+                /* Move addr_reg to RDX first to avoid clobbering if addr_reg is RSI */
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
                 snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", width_reg->bit_64);
                 inst_list = add_inst(inst_list, buffer);
                 snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", precision_reg->bit_64);
-                inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", addr_reg->bit_64);
                 inst_list = add_inst(inst_list, buffer);
             }
             inst_list = codegen_vect_reg(inst_list, 0);

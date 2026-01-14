@@ -4796,14 +4796,81 @@ off_t fplSeek(int fd, off_t offset, int whence)
     return lseek(fd, offset, whence);
 }
 #else
-/* Windows stubs */
-int fpOpen(const char *path, int flags) { return -1; }
-int fpOpen_i_i_i(const char *path, int flags, int mode) { return -1; }
-int fpClose(int fd) { return -1; }
-int fpClose_i(int fd) { return -1; }
-ssize_t fpRead(int fd, void *buf, size_t count) { return -1; }
-ssize_t fpWrite(int fd, const void *buf, size_t count) { return -1; }
-off_t fplSeek(int fd, off_t offset, int whence) { return -1; }
+/* Windows implementations using POSIX-like functions from io.h */
+/* Translate Unix paths to Windows equivalents */
+static const char* translate_unix_path(const char *path)
+{
+    /* Map /dev/null to NUL */
+    if (path != NULL && strcmp(path, "/dev/null") == 0)
+        return "NUL";
+    return path;
+}
+
+/* Translate Unix open flags to Windows _open flags */
+static int translate_flags(int flags)
+{
+    int wflags = _O_BINARY;  /* Always use binary mode on Windows */
+    
+    /* O_RDONLY = 0, O_WRONLY = 1, O_RDWR = 2 */
+    int accmode = flags & 3;
+    if (accmode == 0)       /* O_RDONLY */
+        wflags |= _O_RDONLY;
+    else if (accmode == 1)  /* O_WRONLY */
+        wflags |= _O_WRONLY;
+    else if (accmode == 2)  /* O_RDWR */
+        wflags |= _O_RDWR;
+    
+    /* O_CREAT = 0x40 on Linux */
+    if (flags & 0x40)
+        wflags |= _O_CREAT;
+    
+    /* O_TRUNC = 0x200 on Linux */
+    if (flags & 0x200)
+        wflags |= _O_TRUNC;
+    
+    return wflags;
+}
+
+int fpOpen(const char *path, int flags)
+{
+    const char *wpath = translate_unix_path(path);
+    int wflags = translate_flags(flags);
+    return _open(wpath, wflags);
+}
+
+int fpOpen_i_i_i(const char *path, int flags, int mode)
+{
+    const char *wpath = translate_unix_path(path);
+    int wflags = translate_flags(flags);
+    return _open(wpath, wflags, mode);
+}
+
+int fpClose(int fd)
+{
+    return _close(fd);
+}
+
+int fpClose_i(int fd)
+{
+    return _close(fd);
+}
+
+ssize_t fpRead(int fd, void *buf, size_t count)
+{
+    /* _read takes unsigned int count on Windows */
+    return (ssize_t)_read(fd, buf, (unsigned int)count);
+}
+
+ssize_t fpWrite(int fd, const void *buf, size_t count)
+{
+    /* _write takes unsigned int count on Windows */
+    return (ssize_t)_write(fd, buf, (unsigned int)count);
+}
+
+off_t fplSeek(int fd, off_t offset, int whence)
+{
+    return (off_t)_lseeki64(fd, (__int64)offset, whence);
+}
 #endif
 
 void Halt(int64_t code)
