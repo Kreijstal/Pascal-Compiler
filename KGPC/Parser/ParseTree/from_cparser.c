@@ -4170,6 +4170,7 @@ static struct RecordType *convert_class_type_ex(const char *class_name, ast_t *c
     record->is_class = 1;
     record->is_type_helper = 0;
     record->helper_base_type_id = NULL;
+    record->helper_parent_id = NULL;
     record->type_id = class_name != NULL ? strdup(class_name) : NULL;
     record->has_cached_size = 0;
     record->cached_size = 0;
@@ -4506,6 +4507,7 @@ static struct RecordType *convert_record_type_ex(ast_t *record_node, ListNode_t 
         record->is_class = 0;
         record->is_type_helper = 1;
         record->helper_base_type_id = NULL;
+        record->helper_parent_id = NULL;
         record->type_id = NULL;
         record->has_cached_size = 0;
         record->cached_size = 0;
@@ -4514,17 +4516,28 @@ static struct RecordType *convert_record_type_ex(ast_t *record_node, ListNode_t 
         record->num_generic_args = 0;
         record->method_clones_emitted = 0;
 
-        int saw_base = 0;
+        /* Parse helper children:
+         * For "type helper(ParentHelper) for BaseType":
+         *   - First identifier: ParentHelper
+         *   - Second identifier: BaseType
+         * For "type helper for BaseType":
+         *   - Only one identifier: BaseType
+         */
+        ast_t *first_ident = NULL;
+        ast_t *second_ident = NULL;
         ast_t *base_node = record_node->child;
+        
         while (base_node != NULL) {
             ast_t *unwrapped = unwrap_pascal_node(base_node);
-            if (!saw_base &&
-                unwrapped != NULL &&
+            if (unwrapped != NULL &&
                 (unwrapped->typ == PASCAL_T_IDENTIFIER || unwrapped->typ == PASCAL_T_QUALIFIED_IDENTIFIER) &&
                 unwrapped->sym != NULL && unwrapped->sym->name != NULL)
             {
-                record->helper_base_type_id = strdup(unwrapped->sym->name);
-                saw_base = 1;
+                if (first_ident == NULL) {
+                    first_ident = unwrapped;
+                } else if (second_ident == NULL) {
+                    second_ident = unwrapped;
+                }
                 base_node = base_node->next;
                 continue;
             }
@@ -4537,6 +4550,15 @@ static struct RecordType *convert_record_type_ex(ast_t *record_node, ListNode_t 
                 list_builder_append(&helper_fields_builder, unwrapped, LIST_UNSPECIFIED);
             }
             base_node = base_node->next;
+        }
+        
+        /* If we have two identifiers, first is parent helper, second is base type.
+         * If we have one identifier, it's the base type (no parent helper). */
+        if (second_ident != NULL) {
+            record->helper_parent_id = strdup(first_ident->sym->name);
+            record->helper_base_type_id = strdup(second_ident->sym->name);
+        } else if (first_ident != NULL) {
+            record->helper_base_type_id = strdup(first_ident->sym->name);
         }
 
         record->fields = list_builder_finish(&helper_fields_builder);
@@ -4570,6 +4592,7 @@ static struct RecordType *convert_record_type_ex(ast_t *record_node, ListNode_t 
     record->is_class = 0;
     record->is_type_helper = 0;
     record->helper_base_type_id = NULL;
+    record->helper_parent_id = NULL;
     record->type_id = NULL;
     record->has_cached_size = 0;
     record->cached_size = 0;

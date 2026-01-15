@@ -1,3 +1,4 @@
+{$mode delphi}
 { Test: Complex record helper with const default parameter }
 { Verifies parser handles const enum value as default param }
 program impl_guidhelper_methods;

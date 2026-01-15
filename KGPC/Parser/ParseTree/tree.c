@@ -1684,6 +1684,7 @@ void destroy_record_type(struct RecordType *record_type)
     }
     free(record_type->parent_class_name);
     free(record_type->helper_base_type_id);
+    free(record_type->helper_parent_id);
     free(record_type->type_id);
     
     /* Free methods list */
@@ -1731,6 +1732,8 @@ struct RecordType *clone_record_type(const struct RecordType *record_type)
     clone->is_type_helper = record_type->is_type_helper;
     clone->helper_base_type_id = record_type->helper_base_type_id ?
         strdup(record_type->helper_base_type_id) : NULL;
+    clone->helper_parent_id = record_type->helper_parent_id ?
+        strdup(record_type->helper_parent_id) : NULL;
     clone->type_id = record_type->type_id ? strdup(record_type->type_id) : NULL;
     clone->has_cached_size = record_type->has_cached_size;
     clone->cached_size = record_type->cached_size;

@@ -1,3 +1,4 @@
+{$mode delphi}
 { Test: Record helper method with default parameter }
 { Verifies parser handles default params in helper methods }
 program impl_method_default_param;

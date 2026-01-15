@@ -542,6 +542,26 @@ HashNode_t *semcheck_find_class_method(SymTab_t *symtab,
                 return method_node;
             }
         }
+        
+        /* For type helpers, walk up the helper parent chain */
+        if (current->is_type_helper && current->helper_parent_id != NULL)
+        {
+            HashNode_t *parent_node = NULL;
+            if (FindIdent(&parent_node, symtab, current->helper_parent_id) != -1 && parent_node != NULL)
+            {
+                struct RecordType *parent_helper = get_record_type_from_node(parent_node);
+                if (parent_helper != NULL && parent_helper->is_type_helper)
+                {
+                    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                        fprintf(stderr, "[SemCheck] semcheck_find_class_method: Walking up helper parent chain to '%s'\n", 
+                            current->helper_parent_id);
+                    }
+                    current = parent_helper;
+                    continue;
+                }
+            }
+        }
+        
         current = semcheck_lookup_parent_record(symtab, current);
     }
     return NULL;
@@ -9487,6 +9507,43 @@ int semcheck_varid(int *type_return,
                 if (FindIdent(&self_node, symtab, "Self") == 0 && self_node != NULL)
                 {
                     struct RecordType *self_record = get_record_type_from_node(self_node);
+                    
+                    /* For type helpers, Self might not have a direct record type.
+                     * Instead, we need to look up the type helper for Self's type. */
+                    if (self_record == NULL)
+                    {
+                        int self_type_tag = UNKNOWN_TYPE;
+                        const char *self_type_name = NULL;
+                        set_type_from_hashtype(&self_type_tag, self_node);
+                        if (self_node->type != NULL &&
+                            self_node->type->type_alias != NULL &&
+                            self_node->type->type_alias->target_type_id != NULL)
+                        {
+                            self_type_name = self_node->type->type_alias->target_type_id;
+                        }
+                        if (self_type_name == NULL && self_node->type != NULL)
+                        {
+                            /* For pointer types, get the pointed-to type name */
+                            KgpcType *pointed = kgpc_type_is_pointer(self_node->type) ?
+                                self_node->type->info.points_to : NULL;
+                            if (pointed != NULL && pointed->type_alias != NULL &&
+                                pointed->type_alias->target_type_id != NULL)
+                            {
+                                self_type_name = pointed->type_alias->target_type_id;
+                            }
+                        }
+                        struct RecordType *helper_record = semcheck_lookup_type_helper(symtab,
+                            self_type_tag, self_type_name);
+                        if (helper_record != NULL)
+                        {
+                            self_record = helper_record;
+                            if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                                fprintf(stderr, "[SemCheck] varid fallback: Using type helper %s for Self\n",
+                                    helper_record->type_id ? helper_record->type_id : "(null)");
+                            }
+                        }
+                    }
+                    
                     if (self_record != NULL)
                     {
                         /* First check if it's a method */
@@ -11529,6 +11586,29 @@ int semcheck_funccall(int *type_return,
                 
                     /* Look up the method */
                     HashNode_t *method_node = semcheck_find_class_method(symtab, record_info, method_name, NULL);
+                    
+                    /* If method not found on record directly, try record helper */
+                    struct RecordType *effective_record = record_info;
+                    if (method_node == NULL && !record_type_is_class(record_info) && 
+                        record_info->type_id != NULL && !record_info->is_type_helper)
+                    {
+                        struct RecordType *helper_record = semcheck_lookup_type_helper(symtab,
+                            UNKNOWN_TYPE, record_info->type_id);
+                        if (helper_record != NULL)
+                        {
+                            method_node = semcheck_find_class_method(symtab, helper_record, method_name, NULL);
+                            if (method_node != NULL)
+                            {
+                                effective_record = helper_record;
+                                is_static = from_cparser_is_method_static(helper_record->type_id, method_name);
+                                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                                    fprintf(stderr, "[SemCheck] semcheck_funccall: Found method %s via record helper %s\n",
+                                        method_name, helper_record->type_id);
+                                }
+                            }
+                        }
+                    }
+                    
                     if (method_node != NULL) {
                         /* Resolve the method name */
                         set_type_from_hashtype(type_return, method_node);
@@ -11555,14 +11635,14 @@ int semcheck_funccall(int *type_return,
 
                         /* Prefer all overloads of the resolved method for scoring. */
                         char *mangled_method_name = NULL;
-                        if (record_info->type_id != NULL && method_name != NULL)
+                        if (effective_record->type_id != NULL && method_name != NULL)
                         {
-                            size_t class_len = strlen(record_info->type_id);
+                            size_t class_len = strlen(effective_record->type_id);
                             size_t method_len = strlen(method_name);
                             mangled_method_name = (char *)malloc(class_len + 2 + method_len + 1);
                             if (mangled_method_name != NULL)
                                 snprintf(mangled_method_name, class_len + 2 + method_len + 1,
-                                    "%s__%s", record_info->type_id, method_name);
+                                    "%s__%s", effective_record->type_id, method_name);
                         }
 
                         ListNode_t *method_candidates = NULL;

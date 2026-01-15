@@ -1,3 +1,5 @@
+{$mode objfpc}
+{$modeswitch typehelpers}
 { Test: Type helper inheritance in implementation }
 { Verifies parser handles type helper(ParentHelper) syntax }
 program impl_type_helper_inherit;
