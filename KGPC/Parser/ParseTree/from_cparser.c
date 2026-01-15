@@ -5670,6 +5670,15 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_build
     }
 
     if (type_id != NULL) {
+        int empty_tuple_record_const = 0;
+        if (value_node != NULL && (value_node->typ == PASCAL_T_TUPLE || value_node->typ == PASCAL_T_NONE)) {
+            ast_t *child = value_node->child;
+            if (child == NULL ||
+                (child->typ == PASCAL_T_NONE && child->child == NULL && child->next == NULL)) {
+                empty_tuple_record_const = 1;
+            }
+        }
+
         int typed_const_tag = map_type_name(type_id, NULL);
         if (typed_const_tag == STRING_TYPE) {
             struct Expression *init_expr = convert_expression(value_node);
@@ -5693,7 +5702,7 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_build
             destroy_type_info_contents(&type_info);
             return NULL;
         }
-        if (value_node != NULL && value_node->typ != PASCAL_T_RECORD_CONSTRUCTOR) {
+        if (value_node != NULL && value_node->typ != PASCAL_T_RECORD_CONSTRUCTOR && !empty_tuple_record_const) {
             struct Expression *init_expr = convert_expression(value_node);
             if (init_expr == NULL) {
                 fprintf(stderr, "ERROR: Unsupported typed const expression for %s.\n", id);
@@ -5711,6 +5720,23 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_build
                                       initializer_stmt, NULL, NULL, NULL);
             decl->tree_data.var_decl_data.is_typed_const = 1;
             list_builder_append(var_builder, decl, LIST_TREE);
+
+            destroy_type_info_contents(&type_info);
+            return NULL;
+        }
+
+        if (empty_tuple_record_const) {
+            int var_type = UNKNOWN_TYPE;
+            if (type_id != NULL)
+                var_type = map_type_name(type_id, NULL);
+
+            ListNode_t *var_ids = CreateListNode(id, LIST_STRING);
+            Tree_t *var_decl = mk_vardecl(const_decl_node->line, var_ids, var_type,
+                type_id, 0, 0, NULL, NULL, NULL, NULL);
+            var_decl->tree_data.var_decl_data.is_typed_const = 1;
+
+            if (var_builder != NULL)
+                list_builder_append(var_builder, var_decl, LIST_TREE);
 
             destroy_type_info_contents(&type_info);
             return NULL;

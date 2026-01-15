@@ -3812,7 +3812,11 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                                 param_type = resolved_type_node->type;
                             else if (cached_arg_type != NULL)
                                 param_type = cached_arg_type;
-                            if (param_type != NULL &&
+                            if (param_type != NULL && kgpc_type_is_record(param_type))
+                            {
+                                record_type_info = kgpc_type_get_record(param_type);
+                            }
+                            else if (param_type != NULL &&
                                 param_type->kind == TYPE_KIND_ARRAY &&
                                 kgpc_type_is_dynamic_array(param_type))
                             {
@@ -3858,7 +3862,7 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                             record_size = char_set_size;
                         }
                         else if (codegen_sizeof_type_reference(ctx, RECORD_TYPE, NULL,
-                                record_type_info, &record_size) != 0 || record_size <= 0)
+                                record_type_info, &record_size) != 0 || record_size < 0)
                         {
                             codegen_report_error(ctx,
                                 "ERROR: Unable to determine size for record parameter %s.",
