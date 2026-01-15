@@ -1,8 +1,12 @@
 # FPC Bootstrap Analysis
 
-## Status: BLOCKED - Compiler Bugs/Limitations
+## Status: BLOCKED - Compiler Bugs/Limitations (with Regressions)
 
 The FPC RTL cannot be fully compiled because kgpc has bugs and missing features that need to be fixed.
+
+**⚠️ REGRESSION ALERT (as of 2026-01-15):**
+Units `baseunix.pp`, `unix.pp`, and `linux.pp` that previously compiled successfully now fail to compile. 
+See "Regressions" section below for details.
 
 ## Previously Documented Features (Now Working)
 
@@ -12,6 +16,29 @@ The FPC RTL cannot be fully compiled because kgpc has bugs and missing features 
 - Exit(value)
 - Set constants (set of char, ranges)
 - ShortString type
+
+## Regressions Introduced in Commit 5687905 ("Gaps #374")
+
+The following FPC RTL units that compiled at commit 9d96c77 (Jan 5, 2026) no longer compile:
+
+### Affected Units
+- `baseunix.pp` - Now fails with 12 errors
+- `unix.pp` - Now fails with multiple errors  
+- `linux.pp` - Now fails (depends on baseunix.pp)
+
+### Root Cause
+The preprocessor/semantic state handling changed in commit 5687905, causing different code paths to be included in the FPC RTL files. Specifically, code that was previously being excluded (like `bunxsysc.inc`) is now being included, which uses functions and constants not defined in KGPC:
+
+1. **Missing `strlen` function** - FPC's `bunxsysc.inc` uses `strlen(@array[0])` but KGPC doesn't define `strlen`
+2. **Missing `fmAppend` constant** - File mode constant not defined in KGPC's prelude/system units
+3. **Missing `flush` procedure** - Text file flush procedure not found
+4. **Record field type resolution** - `sa_mask` array field type fails to resolve
+5. **Function pointer type assignments** - Incompatible procedure vs pointer types
+
+### Bisect Information
+- **Last Good Commit:** 9d96c77 (Jan 5, 2026) - "Fix class vars access in static methods"
+- **First Bad Commit:** 5687905 (Jan 10, 2026) - "Gaps (#374)"
+- **Files Changed:** 79 files with significant changes to semantic checking and parser
 
 ## Known Issues to Fix
 
@@ -25,6 +52,7 @@ The FPC RTL cannot be fully compiled because kgpc has bugs and missing features 
    - CP_* constants missing (CP_ACP, CP_UTF8, CP_NONE)
    - ThreadingAlreadyUsed not found
    - fpc_in_cpu_first not defined
+   - **fmAppend** - File mode constant missing
 
 3. **Operators**
    - AND/OR expressions with non-boolean operands
@@ -39,6 +67,11 @@ The FPC RTL cannot be fully compiled because kgpc has bugs and missing features 
 
 5. **Preprocessor**
    - Missing FPC preprocessor directives
+   - **Changed behavior in 5687905** affecting include file selection
+
+6. **Missing Built-ins (for FPC RTL)**
+   - `strlen` - String length for PAnsiChar
+   - `flush` - Text file flush procedure
 
 ## Build Command
 
@@ -95,19 +128,23 @@ end;
 Note: The `sysutils.pp` unit requires all the include paths above to resolve architecture-specific includes (stat.inc, strings.inc, etc.).
 
 ## Compiles Successfully (RTL Units)
+
+**NOTE:** As of 2026-01-15, units marked with ⚠️ have regressed and no longer compile.
+The units below compiled at commit 9d96c77 (Jan 5, 2026).
+
 - `system.pp` - Core system unit (dead code eliminated)
 - `fpintres.pp` - Resource strings
 - `si_prc.pp` - Process startup
 - `si_c.pp` - C startup
 - `si_g.pp` - GNU startup
 - `si_dll.pp` - DLL startup
-- `linux.pp` - Linux unit
-- `unix.pp` - Unix unit
+- ⚠️ `linux.pp` - Linux unit **[REGRESSED]**
+- ⚠️ `unix.pp` - Unix unit **[REGRESSED]**
 - `objpas.pp` - Object Pascal RTL
 - `strings.pp` - String handling
 - `ctypes.pp` - C types
 - `sysconst.pp` - System constants
-- `baseunix.pp` - Base Unix functions
+- ⚠️ `baseunix.pp` - Base Unix functions **[REGRESSED]**
 - `types.pp` - Type helpers
 - `cpu.pp` - CPU types (x86_64)
 - `errors.pp` - Unix errors
