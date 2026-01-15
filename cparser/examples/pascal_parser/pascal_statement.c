@@ -14,6 +14,9 @@
 #define strncasecmp _strnicmp
 #endif
 
+// Forward declaration
+static ast_t* build_pointer_lvalue_chain(ast_t* parsed);
+
 static bool peek_label_statement(input_t* in) {
     if (in == NULL || in->buffer == NULL) {
         return false;
@@ -451,6 +454,39 @@ static ast_t* wrap_pointer_lvalue_suffix(ast_t* parsed) {
     return node;
 }
 
+// Wrap a typecast followed by "^" into a dereference node with the typecast as child.
+// This handles lvalues like PCardinal(P)^ := value;
+static ast_t* wrap_typecast_deref_lvalue(ast_t* parsed) {
+    if (parsed == NULL || parsed == ast_nil)
+        return parsed;
+
+    // parsed is a flat list: typecast_node -> deref_node (from ^) -> optional suffixes
+    ast_t* typecast_node = parsed;
+    ast_t* deref_node = typecast_node->next;
+
+    if (deref_node == NULL || deref_node == ast_nil)
+        return parsed;  // No deref, shouldn't happen but be safe
+
+    // Detach typecast from the chain
+    typecast_node->next = NULL;
+
+    // Get any additional suffixes after the deref
+    ast_t* additional_suffixes = deref_node->next;
+    deref_node->next = NULL;
+
+    // Set the typecast as child of the deref
+    deref_node->child = typecast_node;
+
+    // Now chain any additional suffixes by passing through build_pointer_lvalue_chain
+    if (additional_suffixes != NULL && additional_suffixes != ast_nil) {
+        // Reconnect: deref_node -> additional_suffixes
+        deref_node->next = additional_suffixes;
+        return build_pointer_lvalue_chain(deref_node);
+    }
+
+    return deref_node;
+}
+
 static ast_t* wrap_array_lvalue_suffix(ast_t* parsed) {
     ast_t* node = new_ast();
     node->typ = PASCAL_T_ARRAY_ACCESS;
@@ -723,15 +759,34 @@ void init_pascal_statement_parser(combinator_t** p) {
     );
     combinator_t* suffixes = many(suffix_choice);
 
-    // NOTE: typecast_lvalue only supports simple type names (e.g., Integer(x), Word(y)).
-    // An attempt was made in commit fe74623 to support qualified identifiers and suffixes
-    // (e.g., PCardinal(@x)^) but this caused FPC RTL regressions because it matched too
-    // broadly and caused constructs like strlen(@array[0]) to be parsed as assignments.
-    combinator_t* typecast_lvalue = seq(new_combinator(), PASCAL_T_TYPECAST,
+    // Simple typecast lvalue without suffixes: Integer(x) := 42
+    // Uses type_name for built-in types only (safer, avoids matching function calls)
+    combinator_t* typecast_lvalue_simple = seq(new_combinator(), PASCAL_T_TYPECAST,
         token(type_name(PASCAL_T_IDENTIFIER)),
         between(token(match("(")), token(match(")")), lazy(expr_parser)),
         NULL
     );
+
+    // Typecast lvalue with required pointer suffix: PCardinal(@x)^ := 42
+    // This requires at least one suffix starting with '^' to be a valid lvalue.
+    // Uses cident to allow any type name (including user-defined pointer types).
+    // The required '^' suffix ensures function calls like strlen(@x) don't match.
+    combinator_t* typecast_base = seq(new_combinator(), PASCAL_T_TYPECAST,
+        token(cident(PASCAL_T_IDENTIFIER)),
+        between(token(match("(")), token(match(")")), lazy(expr_parser)),
+        NULL
+    );
+    // Require pointer suffix followed by optional additional suffixes
+    combinator_t* required_pointer_suffix = seq(new_combinator(), PASCAL_T_NONE,
+        pointer_suffix,
+        suffixes,
+        NULL
+    );
+    combinator_t* typecast_lvalue_with_deref = map(seq(new_combinator(), PASCAL_T_NONE,
+        typecast_base,
+        required_pointer_suffix,
+        NULL
+    ), wrap_typecast_deref_lvalue);
 
     combinator_t* simple_lvalue = map(seq(new_combinator(), PASCAL_T_NONE,
         simple_identifier,
@@ -740,8 +795,9 @@ void init_pascal_statement_parser(combinator_t** p) {
     ), build_pointer_lvalue_chain);
 
     combinator_t* lvalue = multi(new_combinator(), PASCAL_T_NONE,
-        typecast_lvalue,
-        simple_lvalue,
+        typecast_lvalue_with_deref,  // Try typecast with deref first (PCardinal(@x)^)
+        typecast_lvalue_simple,      // Then simple typecast (Integer(x))
+        simple_lvalue,               // Finally simple identifier with optional suffixes
         NULL
     );
 

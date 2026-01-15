@@ -7080,6 +7080,65 @@ static int semcheck_recordaccess(int *type_return,
             }
         }
 
+        /* Check for record helpers: If no method was found on the record itself,
+         * look for a "record helper for <RecordType>" and check for methods there. */
+        if (record_info != NULL && !record_type_is_class(record_info) &&
+            record_info->type_id != NULL && !record_info->is_type_helper)
+        {
+            struct RecordType *helper_record = semcheck_lookup_type_helper(symtab,
+                UNKNOWN_TYPE, record_info->type_id);
+            if (helper_record != NULL)
+            {
+                HashNode_t *method_node = semcheck_find_class_method(symtab,
+                    helper_record, field_id, NULL);
+                if (method_node != NULL)
+                {
+                    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                        fprintf(stderr, "[SemCheck] semcheck_recordaccess: Found record helper method %s on %s\n",
+                            field_id, helper_record->type_id);
+                    }
+
+                    if (method_node->hash_type == HASHTYPE_FUNCTION ||
+                        method_node->hash_type == HASHTYPE_PROCEDURE)
+                    {
+                        const char *type_name = helper_record->type_id;
+                        int is_static_method = 0;
+                        if (type_name != NULL && field_id != NULL) {
+                            is_static_method = from_cparser_is_method_static(type_name, field_id);
+                        }
+
+                        char *method_id = (field_id != NULL) ? strdup(field_id) : NULL;
+
+                        expr->type = EXPR_FUNCTION_CALL;
+                        memset(&expr->expr_data.function_call_data, 0,
+                            sizeof(expr->expr_data.function_call_data));
+                        expr->expr_data.function_call_data.id = method_id;
+                        if (method_node->mangled_id != NULL)
+                            expr->expr_data.function_call_data.mangled_id =
+                                strdup(method_node->mangled_id);
+                        else if (method_id != NULL)
+                            expr->expr_data.function_call_data.mangled_id = strdup(method_id);
+                        expr->expr_data.function_call_data.resolved_func = method_node;
+                        expr->expr_data.function_call_data.call_hash_type = method_node->hash_type;
+                        semcheck_expr_set_call_kgpc_type(expr, method_node->type, 0);
+                        expr->expr_data.function_call_data.is_call_info_valid = 1;
+
+                        if (is_static_method) {
+                            expr->expr_data.function_call_data.args_expr = NULL;
+                        } else {
+                            struct Expression *receiver = record_expr;
+                            ListNode_t *arg_node = CreateListNode(receiver, LIST_EXPR);
+                            expr->expr_data.function_call_data.args_expr = arg_node;
+                        }
+
+                        expr->record_type = NULL;
+                        expr->resolved_type = UNKNOWN_TYPE;
+                        return semcheck_funccall(type_return, symtab, expr, max_scope_lev, mutating);
+                    }
+                }
+            }
+        }
+
         if (record_info != NULL && record_info->is_type_helper && record_info->type_id != NULL)
         {
             char *mangled_const = semcheck_mangle_helper_const_id(record_info->type_id, field_id);
