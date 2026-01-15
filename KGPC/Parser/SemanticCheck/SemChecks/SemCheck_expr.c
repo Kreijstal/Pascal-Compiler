@@ -8583,7 +8583,9 @@ int semcheck_relop(int *type_return,
                 int boolean_ok = (type_first == BOOL && type_second == BOOL);
                 int string_ok = (is_string_type(type_first) && is_string_type(type_second));
                 int char_ok = (type_first == CHAR_TYPE && type_second == CHAR_TYPE);
-                int pointer_ok = (type_first == POINTER_TYPE && type_second == POINTER_TYPE);
+                /* Allow comparison of pointers AND procedures */
+                int pointer_ok = ((type_first == POINTER_TYPE || type_first == PROCEDURE) && 
+                                  (type_second == POINTER_TYPE || type_second == PROCEDURE));
                 int enum_ok = (type_first == ENUM_TYPE && type_second == ENUM_TYPE);
                 
                 /* Check for string/PChar comparison.
@@ -8686,7 +8688,9 @@ int semcheck_relop(int *type_return,
                                  is_type_ir(&type_first) && is_type_ir(&type_second);
                 int string_ok = (is_string_type(type_first) && is_string_type(type_second));
                 int char_ok = (type_first == CHAR_TYPE && type_second == CHAR_TYPE);
-                int pointer_ok = (type_first == POINTER_TYPE && type_second == POINTER_TYPE);
+                /* Allow comparison of pointers AND procedures */
+                int pointer_ok = ((type_first == POINTER_TYPE || type_first == PROCEDURE) && 
+                                  (type_second == POINTER_TYPE || type_second == PROCEDURE));
                 int enum_ok = (type_first == ENUM_TYPE && type_second == ENUM_TYPE);
                 
                 /* Check for string/PChar comparison.
@@ -12245,7 +12249,7 @@ method_call_resolved:
 
                     int is_string_literal = (call_expr != NULL && call_expr->type == EXPR_STRING);
                     if (formal_type == UNKNOWN_TYPE || formal_type == BUILTIN_ANY_TYPE)
-                        current_score += 0;
+                        current_score += 10; /* Untyped params match anything but prefer typed overloads */
                     else if (is_string_literal && formal_type == SHORTSTRING_TYPE &&
                         call_type == STRING_TYPE)
                         current_score -= 5;
@@ -13075,15 +13079,62 @@ skip_overload_resolution:
                                 "[KGPC_DEBUG_CALL_TYPES] call=%s arg=%d expected=%d actual=%d\n",
                                 id, cur_arg, expected_type, arg_type);
                         }
-                        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+                        /* Check for Char -> PChar mismatch (workaround for missing @ parser issue) */
+                        if (!type_compatible && expected_type == POINTER_TYPE && arg_type == CHAR_TYPE)
                         {
-                            fprintf(stderr,
-                                "[SemCheck] call %s arg %d type mismatch: expected=%d actual=%d\n",
-                                id ? id : "<null>", cur_arg, expected_type, arg_type);
+                            int expected_is_pchar = 0;
+                            int owns_expected = 0;
+                            KgpcType *expected_kgpc = resolve_type_from_vardecl(arg_decl, symtab, &owns_expected);
+                            
+                            if (expected_kgpc != NULL && kgpc_type_is_pointer(expected_kgpc))
+                            {
+                                KgpcType *points_to = expected_kgpc->info.points_to;
+                                if (points_to != NULL && 
+                                    points_to->kind == TYPE_KIND_PRIMITIVE &&
+                                    points_to->info.primitive_type_tag == CHAR_TYPE)
+                                {
+                                    expected_is_pchar = 1;
+                                }
+                            }
+                            
+                            if (expected_is_pchar)
+                            {
+                                /* Wrap in EXPR_ADDR */
+                                struct Expression *addr_expr = mk_addressof(current_arg_expr->line_num, current_arg_expr);
+                                int new_arg_type = UNKNOWN_TYPE;
+                                semcheck_expr_main(&new_arg_type, symtab, addr_expr, max_scope_lev, NO_MUTATE);
+                                
+                                if (new_arg_type == POINTER_TYPE)
+                                {
+                                    /* Fix applied */
+                                    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+                                        fprintf(stderr, "[SemCheck] Auto-fixing missing @ for PChar argument\n");
+                                        
+                                    /* Update list node */
+                                    args_to_validate->cur = addr_expr;
+                                    /* Update current_arg_expr */
+                                    current_arg_expr = addr_expr;
+                                    arg_type = new_arg_type;
+                                    type_compatible = 1;
+                                }
+                                else
+                                {
+                                    /* Failed to fix, discard wrapper */
+                                    addr_expr->expr_data.addr_data.expr = NULL; /* Detach child */
+                                    free(addr_expr); /* Shallow free since we detached child */
+                                }
+                            }
+                            
+                            if (owns_expected && expected_kgpc != NULL)
+                                destroy_kgpc_type(expected_kgpc);
                         }
-                        semcheck_error_with_context("Error on line %d, on function call %s, argument %d: Type mismatch!\n\n",
-                            expr->line_num, id, cur_arg);
-                        ++return_val;
+
+                        if (!type_compatible)
+                        {
+                            semcheck_error_with_context("Error on line %d, on function call %s, argument %d: Type mismatch!\n\n",
+                                expr->line_num, id, cur_arg);
+                            ++return_val;
+                        }
                     }
                 }
 

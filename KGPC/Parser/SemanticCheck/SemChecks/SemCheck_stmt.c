@@ -4145,7 +4145,8 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
 
                         if (expected == NULL)
                         {
-                            /* Untyped parameters accept any argument. */
+                            /* Untyped parameters accept any argument but prefer typed overloads. */
+                            score += 10;
                         }
                         else if (actual == NULL)
                         {
