@@ -496,8 +496,12 @@ HashNode_t *semcheck_find_class_method(SymTab_t *symtab,
         return NULL;
 
     struct RecordType *current = record_info;
-    while (current != NULL)
+    /* Limit iterations to prevent infinite loops from circular inheritance */
+    int max_iterations = 100;
+    int iterations = 0;
+    while (current != NULL && iterations < max_iterations)
     {
+        iterations++;
         if (current->type_id != NULL)
         {
             char mangled_name[256];
