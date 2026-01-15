@@ -4213,10 +4213,6 @@ static struct RecordType *convert_class_type_ex(const char *class_name, ast_t *c
     return record;
 }
 
-static struct RecordType *convert_class_type(const char *class_name, ast_t *class_node) {
-    return convert_class_type_ex(class_name, class_node, NULL);
-}
-
 static ListNode_t *convert_field_decl(ast_t *field_decl_node) {
     if (field_decl_node == NULL || field_decl_node->typ != PASCAL_T_FIELD_DECL)
         return NULL;
@@ -6323,7 +6319,7 @@ static Tree_t *convert_generic_type_decl(ast_t *type_decl_node) {
             {
                 if (getenv("KGPC_DEBUG_GENERIC_CLONES") != NULL)
                     fprintf(stderr, "[KGPC] generic class decl %s\n", id);
-                record_template = convert_class_type(id, spec_body);
+                record_template = convert_class_type_ex(id, spec_body, NULL);
             }
             else if (spec_body->typ == PASCAL_T_RECORD_TYPE || spec_body->typ == PASCAL_T_OBJECT_TYPE)
                 record_template = convert_record_type(spec_body);
