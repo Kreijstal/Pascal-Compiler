@@ -388,6 +388,9 @@ static ParseResult statement_dispatch_fn(input_t* in, void* args, char* parser_n
             return make_failure_v2(in, parser_name, strdup("Reserved keyword cannot start a statement here"), NULL);
         }
 
+        // NOTE: Do NOT use speculative assignment parsing here (trying assignment even without `:=`).
+        // This was attempted in commit fe74623 but caused FPC RTL regressions where constructs like
+        // strlen(@array[0]) in bunxsysc.inc would be parsed incorrectly.
         if (dispatch->assignment_parser != NULL && peek_assignment_operator(in)) {
             return parse(in, dispatch->assignment_parser);
         }
@@ -720,6 +723,10 @@ void init_pascal_statement_parser(combinator_t** p) {
     );
     combinator_t* suffixes = many(suffix_choice);
 
+    // NOTE: typecast_lvalue only supports simple type names (e.g., Integer(x), Word(y)).
+    // An attempt was made in commit fe74623 to support qualified identifiers and suffixes
+    // (e.g., PCardinal(@x)^) but this caused FPC RTL regressions because it matched too
+    // broadly and caused constructs like strlen(@array[0]) to be parsed as assignments.
     combinator_t* typecast_lvalue = seq(new_combinator(), PASCAL_T_TYPECAST,
         token(type_name(PASCAL_T_IDENTIFIER)),
         between(token(match("(")), token(match(")")), lazy(expr_parser)),
