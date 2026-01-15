@@ -4857,12 +4857,14 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             }
 
             long long record_size = 0;
-            if (codegen_get_record_size(ctx, arg_expr, &record_size) != 0 || record_size <= 0)
+            if (codegen_get_record_size(ctx, arg_expr, &record_size) != 0 || record_size < 0)
             {
                 codegen_report_error(ctx,
                     "ERROR: Unable to determine record size for argument.");
                 return inst_list;
             }
+            if (record_size == 0)
+                record_size = 1;
 
             if (record_size > INT_MAX)
             {

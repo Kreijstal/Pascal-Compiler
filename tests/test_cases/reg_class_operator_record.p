@@ -30,5 +30,16 @@ begin
   Result := RHS <> nil;
 end;
 
+var
+  p: Pointer;
+
 begin
+  p := NullPtr;
+  if p = nil then
+    WriteLn('NullPtr to Pointer: nil')
+  else
+    WriteLn('NullPtr to Pointer: non-nil');
+
+  WriteLn('NullPtr = nil: ', NullPtr = nil);
+  WriteLn('NullPtr <> nil: ', NullPtr <> nil);
 end.

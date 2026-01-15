@@ -8592,21 +8592,38 @@ int semcheck_relop(int *type_return,
             else if (relop_type == EQ || relop_type == NE)
             {
                 /* Check for operator overloading for record types first */
-                if (type_first == RECORD_TYPE && type_second == RECORD_TYPE)
+                if ((type_first == RECORD_TYPE && type_second == RECORD_TYPE) ||
+                    (type_first == RECORD_TYPE && type_second == POINTER_TYPE))
                 {
-                    const char *left_type_name = get_expr_type_name(expr1, symtab);
-                    const char *right_type_name = get_expr_type_name(expr2, symtab);
-                    
-                    if (left_type_name != NULL && right_type_name != NULL &&
-                        strcasecmp(left_type_name, right_type_name) == 0)
+                    struct Expression *record_expr = expr1;
+                    struct Expression *other_expr = expr2;
+                    const char *record_type_name = NULL;
+                    const char *right_type_name = NULL;
+
+                    if (type_first == RECORD_TYPE && type_second == RECORD_TYPE)
+                    {
+                        record_type_name = get_expr_type_name(expr1, symtab);
+                        right_type_name = get_expr_type_name(expr2, symtab);
+                        if (record_type_name == NULL || right_type_name == NULL ||
+                            strcasecmp(record_type_name, right_type_name) != 0)
+                            goto relop_fallback;
+                    }
+                    else
+                    {
+                        record_type_name = get_expr_type_name(record_expr, symtab);
+                        if (record_type_name == NULL)
+                            goto relop_fallback;
+                    }
+
+                    if (record_type_name != NULL)
                     {
                         const char *op_suffix = (relop_type == EQ) ? "op_eq" : "op_ne";
-                        size_t name_len = strlen(left_type_name) + strlen(op_suffix) + 3;
+                        size_t name_len = strlen(record_type_name) + strlen(op_suffix) + 3;
                         char *operator_method = (char *)malloc(name_len);
                         
                         if (operator_method != NULL)
                         {
-                            snprintf(operator_method, name_len, "%s__%s", left_type_name, op_suffix);
+                            snprintf(operator_method, name_len, "%s__%s", record_type_name, op_suffix);
                             
                             HashNode_t *operator_node = NULL;
                             if (FindIdent(&operator_node, symtab, operator_method) == 0 && operator_node != NULL)
@@ -8617,9 +8634,6 @@ int semcheck_relop(int *type_return,
                                     if (return_type != NULL)
                                     {
                                         /* Transform expression from RELOP to FUNCTION_CALL */
-                                        struct Expression *saved_left = expr->expr_data.relop_data.left;
-                                        struct Expression *saved_right = expr->expr_data.relop_data.right;
-
                                         expr->type = EXPR_FUNCTION_CALL;
                                         memset(&expr->expr_data.function_call_data, 0, sizeof(expr->expr_data.function_call_data));
 
@@ -8630,8 +8644,8 @@ int semcheck_relop(int *type_return,
                                         else
                                             expr->expr_data.function_call_data.mangled_id = strdup(operator_method);
                                         
-                                        ListNode_t *arg1 = CreateListNode(saved_left, LIST_EXPR);
-                                        ListNode_t *arg2 = CreateListNode(saved_right, LIST_EXPR);
+                                        ListNode_t *arg1 = CreateListNode(record_expr, LIST_EXPR);
+                                        ListNode_t *arg2 = CreateListNode(other_expr, LIST_EXPR);
                                         arg1->next = arg2;
                                         expr->expr_data.function_call_data.args_expr = arg1;
                                         
@@ -8658,6 +8672,7 @@ int semcheck_relop(int *type_return,
                         }
                     }
                 }
+relop_fallback:
                 
                 semcheck_coerce_char_string_operands(&type_first, expr1, &type_second, expr2);
 

@@ -1,0 +1,3 @@
+NullPtr to Pointer: nil
+NullPtr = nil: TRUE
+NullPtr <> nil: FALSE

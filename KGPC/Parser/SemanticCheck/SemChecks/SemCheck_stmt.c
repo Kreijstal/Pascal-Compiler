@@ -66,6 +66,107 @@ static int semcheck_is_currency_kgpc_type(KgpcType *type)
     return 0;
 }
 
+static int semcheck_try_record_assignment_operator(SymTab_t *symtab,
+    struct Statement *stmt, KgpcType *lhs_type, KgpcType **rhs_type,
+    int *rhs_owned)
+{
+    if (symtab == NULL || stmt == NULL || lhs_type == NULL || rhs_type == NULL ||
+        *rhs_type == NULL || stmt->type != STMT_VAR_ASSIGN)
+        return 0;
+
+    int lhs_is_pointer = kgpc_type_is_pointer(lhs_type) ||
+        (lhs_type->kind == TYPE_KIND_PRIMITIVE &&
+            lhs_type->info.primitive_type_tag == POINTER_TYPE);
+    if (!lhs_is_pointer || !kgpc_type_is_record(*rhs_type))
+        return 0;
+
+    struct Expression *rhs_expr = stmt->stmt_data.var_assign_data.expr;
+    if (rhs_expr == NULL)
+        return 0;
+
+    struct RecordType *record = kgpc_type_get_record(*rhs_type);
+    const char *record_type_id = (record != NULL) ? record->type_id : NULL;
+    if (record_type_id == NULL)
+    {
+        struct TypeAlias *alias = kgpc_type_get_type_alias(*rhs_type);
+        if (alias != NULL)
+        {
+            if (alias->target_type_id != NULL)
+                record_type_id = alias->target_type_id;
+            else if (alias->alias_name != NULL)
+                record_type_id = alias->alias_name;
+        }
+    }
+    if (record_type_id == NULL && rhs_expr->type == EXPR_VAR_ID &&
+        rhs_expr->expr_data.id != NULL)
+    {
+        HashNode_t *rhs_node = NULL;
+        if (FindIdent(&rhs_node, symtab, rhs_expr->expr_data.id) == 0 && rhs_node != NULL &&
+            rhs_node->type != NULL && kgpc_type_is_record(rhs_node->type))
+        {
+            struct RecordType *rhs_record = kgpc_type_get_record(rhs_node->type);
+            if (rhs_record != NULL && rhs_record->type_id != NULL)
+                record_type_id = rhs_record->type_id;
+        }
+    }
+
+    if (record_type_id == NULL)
+        return 0;
+
+    const char *op_suffix = "op_assign";
+    size_t name_len = strlen(record_type_id) + strlen(op_suffix) + 3;
+    char *operator_method = (char *)malloc(name_len);
+    if (operator_method == NULL)
+        return 0;
+    snprintf(operator_method, name_len, "%s__%s", record_type_id, op_suffix);
+
+    HashNode_t *operator_node = NULL;
+    if (FindIdent(&operator_node, symtab, operator_method) != 0 || operator_node == NULL ||
+        operator_node->type == NULL || !kgpc_type_is_procedure(operator_node->type))
+    {
+        free(operator_method);
+        return 0;
+    }
+
+    KgpcType *return_type = kgpc_type_get_return_type(operator_node->type);
+    if (return_type == NULL || !are_types_compatible_for_assignment(lhs_type, return_type, symtab))
+    {
+        free(operator_method);
+        return 0;
+    }
+
+    struct Expression *call_expr = mk_functioncall(rhs_expr->line_num, strdup(operator_method), NULL);
+    ListNode_t *arg = CreateListNode(rhs_expr, LIST_EXPR);
+    call_expr->expr_data.function_call_data.args_expr = arg;
+    if (operator_node->mangled_id != NULL)
+        call_expr->expr_data.function_call_data.mangled_id = strdup(operator_node->mangled_id);
+    else
+        call_expr->expr_data.function_call_data.mangled_id = strdup(operator_method);
+    call_expr->expr_data.function_call_data.resolved_func = operator_node;
+    call_expr->expr_data.function_call_data.call_hash_type = HASHTYPE_FUNCTION;
+    call_expr->expr_data.function_call_data.call_kgpc_type = operator_node->type;
+    kgpc_type_retain(operator_node->type);
+    call_expr->expr_data.function_call_data.is_call_info_valid = 1;
+
+    if (call_expr->resolved_kgpc_type != NULL)
+        destroy_kgpc_type(call_expr->resolved_kgpc_type);
+    call_expr->resolved_kgpc_type = return_type;
+    kgpc_type_retain(return_type);
+    call_expr->resolved_type = kgpc_type_get_legacy_tag(return_type);
+
+    stmt->stmt_data.var_assign_data.expr = call_expr;
+
+    if (rhs_owned != NULL && *rhs_owned && *rhs_type != NULL)
+        destroy_kgpc_type(*rhs_type);
+    if (rhs_type != NULL)
+        *rhs_type = return_type;
+    if (rhs_owned != NULL)
+        *rhs_owned = 0;
+
+    free(operator_method);
+    return 1;
+}
+
 static KgpcType *semcheck_param_effective_type(Tree_t *param_decl, KgpcType *expected)
 {
     if (param_decl == NULL || expected == NULL)
@@ -2796,6 +2897,14 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
 
         if (!are_types_compatible_for_assignment(lhs_kgpctype, rhs_kgpctype, symtab))
         {
+            if (semcheck_try_record_assignment_operator(symtab, stmt, lhs_kgpctype,
+                    &rhs_kgpctype, &rhs_owned))
+            {
+                expr = stmt->stmt_data.var_assign_data.expr;
+                type_second = kgpc_type_get_legacy_tag(rhs_kgpctype);
+                goto assignment_types_ok;
+            }
+
             int allow_char_literal = 0;
             if (lhs_kgpctype->kind == TYPE_KIND_PRIMITIVE &&
                 lhs_kgpctype->info.primitive_type_tag == CHAR_TYPE &&
