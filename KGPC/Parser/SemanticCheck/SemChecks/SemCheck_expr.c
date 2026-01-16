@@ -12564,17 +12564,44 @@ method_call_resolved:
                         
                         if (first_elem != NULL && first_elem->cur != NULL)
                         {
-                            struct Expression *elem_expr = (struct Expression *)first_elem->cur;
-                            if (elem_expr->type == EXPR_INUM)
-                                literal_elem_type = INT_TYPE;
-                            else if (elem_expr->type == EXPR_CHAR_CODE)
-                                literal_elem_type = CHAR_TYPE;
-                            else if (elem_expr->type == EXPR_STRING)
-                                literal_elem_type = STRING_TYPE;
-                            else if (elem_expr->type == EXPR_BOOL)
-                                literal_elem_type = BOOL;
-                            else if (elem_expr->type == EXPR_RNUM)
-                                literal_elem_type = REAL_TYPE;
+                            struct Expression *elem_expr = NULL;
+                            if (call_expr->type == EXPR_SET)
+                            {
+                                /* Set elements are SetElement* with lower/upper fields */
+                                struct SetElement *set_elem = (struct SetElement *)first_elem->cur;
+                                if (set_elem != NULL)
+                                    elem_expr = set_elem->lower;
+                            }
+                            else
+                            {
+                                /* Array literal elements are Expression* directly */
+                                elem_expr = (struct Expression *)first_elem->cur;
+                            }
+                            
+                            if (elem_expr != NULL)
+                            {
+                                if (getenv("KGPC_DEBUG_OVERLOAD") != NULL)
+                                {
+                                    fprintf(stderr, "[OVERLOAD] first_elem expr type=%d\n", elem_expr->type);
+                                }
+                                if (elem_expr->type == EXPR_INUM)
+                                    literal_elem_type = INT_TYPE;
+                                else if (elem_expr->type == EXPR_CHAR_CODE)
+                                    literal_elem_type = CHAR_TYPE;
+                                else if (elem_expr->type == EXPR_STRING)
+                                {
+                                    /* Single-character strings like 'a' should be treated as CHAR */
+                                    if (elem_expr->expr_data.string != NULL && 
+                                        strlen(elem_expr->expr_data.string) == 1)
+                                        literal_elem_type = CHAR_TYPE;
+                                    else
+                                        literal_elem_type = STRING_TYPE;
+                                }
+                                else if (elem_expr->type == EXPR_BOOL)
+                                    literal_elem_type = BOOL;
+                                else if (elem_expr->type == EXPR_RNUM)
+                                    literal_elem_type = REAL_TYPE;
+                            }
                         }
                         
                         if (getenv("KGPC_DEBUG_OVERLOAD") != NULL)
