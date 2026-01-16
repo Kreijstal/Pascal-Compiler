@@ -1405,7 +1405,7 @@ static int semcheck_builtin_strproc(SymTab_t *symtab, struct Statement *stmt, in
 
     int target_type = UNKNOWN_TYPE;
     return_val += semcheck_expr_main(&target_type, symtab, target_expr, max_scope_lev, MUTATE);
-    if (target_type != STRING_TYPE)
+    if (target_type != STRING_TYPE && target_type != SHORTSTRING_TYPE)
     {
         semcheck_error_with_context("Error on line %d, Str output must be a string variable.\n", stmt->line_num);
         ++return_val;

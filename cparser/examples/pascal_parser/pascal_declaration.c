@@ -3213,16 +3213,10 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         NULL
     );
 
-    // Create a method body parser that supports local var sections
-    // This is simpler than program_function_body since methods don't support nested functions
-    combinator_t* method_local_section = multi(new_combinator(), PASCAL_T_NONE,
-        create_label_section(),
-        local_var_section,
-        NULL
-    );
-
+    // Create a method body parser that supports local var sections and nested functions
+    // Methods DO support nested functions in FPC/Delphi, contrary to prior comment
     combinator_t* method_body = seq(new_combinator(), PASCAL_T_NONE,
-        many(method_local_section),                  // zero or more local sections
+        many(local_declaration_or_nested_function),  // zero or more local sections or nested functions
         lazy(stmt_parser),                           // begin-end block handled by statement parser
         NULL
     );

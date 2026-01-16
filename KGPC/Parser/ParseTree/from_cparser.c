@@ -9137,6 +9137,15 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         case PASCAL_T_LABEL_SECTION:
             append_labels_from_section(node, &label_builder);
             break;
+        case PASCAL_T_FUNCTION_DECL:
+        case PASCAL_T_PROCEDURE_DECL: {
+            /* Handle nested functions/procedures within method implementations */
+            Tree_t *sub = (node->typ == PASCAL_T_PROCEDURE_DECL)
+                              ? convert_procedure(node)
+                              : convert_function(node);
+            append_subprogram_node(&nested_subs, sub);
+            break;
+        }
         case PASCAL_T_FUNCTION_BODY:
             convert_routine_body(node, &const_decls, &var_builder, &label_builder,
                                  &nested_subs, &body, &type_decls);

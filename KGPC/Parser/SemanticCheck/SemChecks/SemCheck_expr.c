@@ -7705,6 +7705,13 @@ int set_type_from_hashtype(int *type, HashNode_t *hash_node)
         }
         else if (hash_node->type->kind == TYPE_KIND_ARRAY)
         {
+            /* Check if this is a ShortString (array[0..255] of Char with is_shortstring flag) */
+            if (hash_node->type->type_alias != NULL && hash_node->type->type_alias->is_shortstring)
+            {
+                *type = SHORTSTRING_TYPE;
+                return 0;
+            }
+            
             /* For arrays, return the element type's primitive tag if available */
             KgpcType *elem_type = hash_node->type->info.array_info.element_type;
             if (elem_type != NULL && elem_type->kind == TYPE_KIND_PRIMITIVE)
