@@ -263,7 +263,10 @@ static int semcheck_map_builtin_type_name_local(const char *id)
         return STRING_TYPE;
     if (pascal_identifier_equals(id, "ShortString"))
         return SHORTSTRING_TYPE;
-    if (pascal_identifier_equals(id, "Char"))
+    if (pascal_identifier_equals(id, "Char") ||
+        pascal_identifier_equals(id, "AnsiChar") ||
+        pascal_identifier_equals(id, "WideChar") ||
+        pascal_identifier_equals(id, "UnicodeChar"))
         return CHAR_TYPE;
     if (pascal_identifier_equals(id, "Boolean"))
         return BOOL;
@@ -8060,6 +8063,8 @@ next_identifier:
                 {
                     struct Statement *init_stmt = tree->tree_data.var_decl_data.initializer;
                     struct Expression *init_expr = init_stmt->stmt_data.var_assign_data.expr;
+                    int is_default_param = (init_stmt->type == STMT_VAR_ASSIGN &&
+                        init_stmt->stmt_data.var_assign_data.var == NULL);
                     if (init_expr == NULL)
                     {
                         semcheck_error_with_context("Error on line %d, initializer expression is NULL for %s.\n",
@@ -8165,8 +8170,11 @@ next_identifier:
 
                     if (expr_type == UNKNOWN_TYPE)
                     {
-                        semcheck_error_with_context("Error on line %d, unable to infer type for %s.\n", tree->line_num, var_name);
-                        ++return_val;
+                        if (!is_default_param)
+                        {
+                            semcheck_error_with_context("Error on line %d, unable to infer type for %s.\n", tree->line_num, var_name);
+                            ++return_val;
+                        }
                     }
                     else
                     {
@@ -8247,7 +8255,7 @@ next_identifier:
                                 }
                             }
                         }
-                        else
+                        else if (!is_default_param)
                         {
                             enum VarType current_var_type = get_var_type_from_node(var_node);
                             int compatible = (inferred_var_type == current_var_type);
@@ -8802,6 +8810,48 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_subprogram %s error after args: %d\n", subprogram->tree_data.subprogram_data.id, return_val);
 #endif
+
+    /* Ensure helper methods always have an implicit Self in scope even if the
+     * parameter list was parsed without it (e.g., macro-expanded helper types). */
+    {
+        HashNode_t *self_node = NULL;
+        if (FindIdent(&self_node, symtab, "Self") == -1)
+        {
+            const char *owner_id = semcheck_get_current_method_owner();
+            struct RecordType *owner_record = NULL;
+            if (owner_id != NULL)
+            {
+                HashNode_t *owner_node = semcheck_find_preferred_type_node(symtab, owner_id);
+                if (owner_node != NULL)
+                    owner_record = get_record_type_from_node(owner_node);
+            }
+            if (owner_record != NULL && owner_record->is_type_helper &&
+                owner_record->helper_base_type_id != NULL)
+            {
+                KgpcType *self_type = NULL;
+                HashNode_t *type_node = semcheck_find_preferred_type_node(symtab,
+                    owner_record->helper_base_type_id);
+                if (type_node != NULL && type_node->type != NULL)
+                {
+                    kgpc_type_retain(type_node->type);
+                    self_type = type_node->type;
+                }
+                else
+                {
+                    int builtin_tag = semcheck_map_builtin_type_name_local(
+                        owner_record->helper_base_type_id);
+                    if (builtin_tag != UNKNOWN_TYPE)
+                        self_type = create_primitive_type(builtin_tag);
+                }
+
+                if (self_type != NULL)
+                {
+                    PushVarOntoScope_Typed(symtab, "Self", self_type);
+                    destroy_kgpc_type(self_type);
+                }
+            }
+        }
+    }
 
     return_val += predeclare_enum_literals(symtab, subprogram->tree_data.subprogram_data.type_declarations);
     /* Pre-declare types so they're available for const expressions like High(MyType) */

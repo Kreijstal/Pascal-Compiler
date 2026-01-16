@@ -1235,6 +1235,30 @@ static void semcheck_set_array_info_from_hashnode(struct Expression *expr, SymTa
 
     expr->array_element_type = UNKNOWN_TYPE;
     set_type_from_hashtype(&expr->array_element_type, node);
+    if (node->type != NULL && kgpc_type_is_array(node->type))
+    {
+        KgpcType *elem_type = kgpc_type_get_array_element_type(node->type);
+        if (elem_type != NULL)
+        {
+            expr->array_element_type = kgpc_type_get_legacy_tag(elem_type);
+            if (expr->array_element_type == UNKNOWN_TYPE &&
+                elem_type->type_alias != NULL &&
+                elem_type->type_alias->target_type_id != NULL)
+            {
+                expr->array_element_type_id = strdup(elem_type->type_alias->target_type_id);
+            }
+            if (elem_type->kind == TYPE_KIND_RECORD)
+            {
+                expr->array_element_record_type = kgpc_type_get_record(elem_type);
+                if (expr->array_element_type_id == NULL &&
+                    expr->array_element_record_type != NULL &&
+                    expr->array_element_record_type->type_id != NULL)
+                {
+                    expr->array_element_type_id = strdup(expr->array_element_record_type->type_id);
+                }
+            }
+        }
+    }
 
     struct TypeAlias *type_alias = get_type_alias_from_node(node);
     if (type_alias != NULL && type_alias->is_array)
@@ -9638,6 +9662,49 @@ int semcheck_varid(int *type_return,
             }
         }
     }
+    HashNode_t *helper_self_node = NULL;
+    struct RecordType *helper_self_record = NULL;
+    int helper_context = 0;
+    if (FindIdent(&helper_self_node, symtab, "Self") == 0 && helper_self_node != NULL)
+    {
+        helper_self_record = get_record_type_from_node(helper_self_node);
+        if (helper_self_record == NULL)
+        {
+            int self_type_tag = UNKNOWN_TYPE;
+            const char *self_type_name = NULL;
+            set_type_from_hashtype(&self_type_tag, helper_self_node);
+            if (helper_self_node->type != NULL &&
+                helper_self_node->type->type_alias != NULL &&
+                helper_self_node->type->type_alias->target_type_id != NULL)
+            {
+                self_type_name = helper_self_node->type->type_alias->target_type_id;
+            }
+            if (self_type_name == NULL && helper_self_node->type != NULL)
+            {
+                KgpcType *pointed = kgpc_type_is_pointer(helper_self_node->type) ?
+                    helper_self_node->type->info.points_to : NULL;
+                if (pointed != NULL && pointed->type_alias != NULL &&
+                    pointed->type_alias->target_type_id != NULL)
+                {
+                    self_type_name = pointed->type_alias->target_type_id;
+                }
+            }
+            helper_self_record = semcheck_lookup_type_helper(symtab, self_type_tag, self_type_name);
+            if (helper_self_record == NULL)
+            {
+                const char *current_owner = semcheck_get_current_method_owner();
+                if (current_owner != NULL)
+                {
+                    struct RecordType *owner_record = semcheck_lookup_record_type(symtab, current_owner);
+                    if (owner_record != NULL && owner_record->is_type_helper)
+                        helper_self_record = owner_record;
+                }
+            }
+        }
+        if (helper_self_record != NULL && helper_self_record->is_type_helper)
+            helper_context = 1;
+    }
+
     if (scope_return == -1)
     {
         if (scope_return == -1)
@@ -9673,12 +9740,12 @@ int semcheck_varid(int *type_return,
                 }
             }
 
-            if (with_status != 0 && id != NULL)
+            if ((with_status != 0 || helper_context) && id != NULL)
             {
-                HashNode_t *self_node = NULL;
-                if (FindIdent(&self_node, symtab, "Self") == 0 && self_node != NULL)
+                HashNode_t *self_node = helper_self_node;
+                if (self_node != NULL)
                 {
-                    struct RecordType *self_record = get_record_type_from_node(self_node);
+                    struct RecordType *self_record = helper_self_record;
                     
                     /* For type helpers, Self might not have a direct record type.
                      * Instead, we need to look up the type helper for Self's type. */
@@ -9714,6 +9781,8 @@ int semcheck_varid(int *type_return,
                                     helper_record->type_id ? helper_record->type_id : "(null)");
                             }
                         }
+                        if (self_record == NULL)
+                            self_record = helper_self_record;
                     }
                     
                     if (self_record != NULL)
@@ -10063,7 +10132,8 @@ int semcheck_varid(int *type_return,
                         (pascal_identifier_equals(owner_record->helper_base_type_id, "AnsiString") ||
                          pascal_identifier_equals(owner_record->helper_base_type_id, "String") ||
                          pascal_identifier_equals(owner_record->helper_base_type_id, "ShortString") ||
-                         pascal_identifier_equals(owner_record->helper_base_type_id, "UnicodeString")))
+                         pascal_identifier_equals(owner_record->helper_base_type_id, "UnicodeString") ||
+                         pascal_identifier_equals(owner_record->helper_base_type_id, "WideString")))
                     {
                         /* Add Self as the argument */
                         char *self_str = strdup("Self");
@@ -10983,6 +11053,19 @@ int semcheck_funccall(int *type_return,
                     {
                         self_record = helper_record;
                         self_is_helper = 1;
+                    }
+                    if (self_record == NULL)
+                    {
+                        const char *current_owner = semcheck_get_current_method_owner();
+                        if (current_owner != NULL)
+                        {
+                            struct RecordType *owner_record = semcheck_lookup_record_type(symtab, current_owner);
+                            if (owner_record != NULL && owner_record->is_type_helper)
+                            {
+                                self_record = owner_record;
+                                self_is_helper = 1;
+                            }
+                        }
                     }
                 }
                 
@@ -12895,6 +12978,17 @@ method_call_resolved:
                                 elem_compatible = 1;
                             }
 
+                            if (!elem_compatible)
+                            {
+                                int formal_stringish = is_string_type(formal_elem_type) ||
+                                    formal_elem_type == SHORTSTRING_TYPE;
+                                int call_charish = (call_elem_type == CHAR_TYPE);
+                                if (formal_stringish && call_charish)
+                                {
+                                    elem_compatible = 1;
+                                    current_score += 2;
+                                }
+                            }
                             if (!elem_compatible)
                             {
                                 if (getenv("KGPC_DEBUG_OVERLOAD") != NULL)

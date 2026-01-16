@@ -2968,6 +2968,20 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             goto assignment_types_ok;
         }
 
+        if (kgpc_type_is_array(lhs_kgpctype) && kgpc_type_is_array(rhs_kgpctype))
+        {
+            KgpcType *lhs_elem = lhs_kgpctype->info.array_info.element_type;
+            KgpcType *rhs_elem = rhs_kgpctype->info.array_info.element_type;
+            if (lhs_elem != NULL && rhs_elem != NULL &&
+                lhs_elem->kind == TYPE_KIND_PRIMITIVE &&
+                rhs_elem->kind == TYPE_KIND_PRIMITIVE &&
+                lhs_elem->info.primitive_type_tag == CHAR_TYPE &&
+                rhs_elem->info.primitive_type_tag == CHAR_TYPE)
+            {
+                goto assignment_types_ok;
+            }
+        }
+
         if (!are_types_compatible_for_assignment(lhs_kgpctype, rhs_kgpctype, symtab))
         {
             if (semcheck_try_record_assignment_operator(symtab, stmt, lhs_kgpctype,
@@ -3103,6 +3117,12 @@ assignment_types_ok:
             {
                 types_compatible = 1;
                 /* Keep CHAR_TYPE so code generator knows to promote */
+            }
+            else if (type_first == STRING_TYPE &&
+                (type_second == PROCEDURE || type_second == POINTER_TYPE) &&
+                var != NULL && !var->is_array_expr)
+            {
+                types_compatible = 1;
             }
             /* Allow WideChar to string assignment - WideChar will be converted to single-character string.
              * WideChar is aliased to Word (integer), so we need to check the type name. */

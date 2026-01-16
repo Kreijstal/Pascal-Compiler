@@ -2096,6 +2096,26 @@ void kgpc_string_assign(char **target, const char *value)
         return;
 
     char *existing = *target;
+    if (existing != NULL && value == existing)
+        return;
+
+    if (existing != NULL && value != NULL)
+    {
+        KgpcStringNode *existing_node = kgpc_string_find_allocation(existing);
+        if (existing_node != NULL)
+        {
+            const char *start = existing_node->ptr;
+            const char *end = start + existing_node->length;
+            if (value >= start && value <= end)
+            {
+                char *copy = kgpc_string_duplicate(value);
+                if (kgpc_string_release_allocation(existing))
+                    free(existing);
+                *target = copy;
+                return;
+            }
+        }
+    }
     if (kgpc_string_release_allocation(existing))
     {
         free(existing);
