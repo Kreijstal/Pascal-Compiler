@@ -3945,14 +3945,21 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
         /* Get the first argument (should be the object/Self parameter) */
         struct Expression *first_arg = (struct Expression *)args_given->cur;
         if (first_arg != NULL) {
-            /* Resolve the type of the first argument */
+            /* IMPORTANT: Call semcheck_expr_main FIRST to resolve the expression type.
+             * This may modify/replace first_arg->resolved_kgpc_type.
+             * Only AFTER this call should we get the KgpcType, otherwise we risk
+             * getting a pointer that gets freed when semcheck_expr_main updates the type.
+             * (e.g., for 'as' expressions which destroy and replace resolved_kgpc_type)
+             */
+            int helper_tag = UNKNOWN_TYPE;
+            semcheck_expr_main(&helper_tag, symtab, first_arg, max_scope_lev, NO_MUTATE);
+            
+            /* Now it's safe to get the KgpcType since semcheck_expr_main has finalized it */
             int arg_type_owned = 0;
             KgpcType *arg_type = semcheck_resolve_expression_kgpc_type(symtab, first_arg, INT_MAX, NO_MUTATE, &arg_type_owned);
             
             if (arg_type != NULL) {
                 struct RecordType *obj_record_type = NULL;
-                int helper_tag = UNKNOWN_TYPE;
-                semcheck_expr_main(&helper_tag, symtab, first_arg, max_scope_lev, NO_MUTATE);
                 
                 if (arg_type->kind == TYPE_KIND_RECORD) {
                     obj_record_type = arg_type->info.record_info;
