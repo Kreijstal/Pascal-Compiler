@@ -12542,6 +12542,17 @@ method_call_resolved:
                     if (formal_decl != NULL && formal_decl->type == TREE_ARR_DECL &&
                         call_expr != NULL && (call_expr->type == EXPR_SET || call_expr->type == EXPR_ARRAY_LITERAL))
                     {
+                        /* Special case: array of const accepts any array literal without element type checking */
+                        int formal_elem_type_for_const = formal_decl->tree_data.arr_decl_data.type;
+                        const char *formal_elem_type_id_for_const = formal_decl->tree_data.arr_decl_data.type_id;
+                        if (formal_elem_type_for_const == ARRAY_OF_CONST_TYPE ||
+                            (formal_elem_type_id_for_const != NULL && strcasecmp(formal_elem_type_id_for_const, "const") == 0))
+                        {
+                            /* array of const - matches any array literal, skip element type checking */
+                            call_type = formal_type;
+                        }
+                        else
+                        {
                         /* Check element type compatibility for open array parameters */
                         int formal_elem_type = formal_decl->tree_data.arr_decl_data.type;
                         const char *formal_elem_type_id = formal_decl->tree_data.arr_decl_data.type_id;
@@ -12624,6 +12635,35 @@ method_call_resolved:
                                 call_type = formal_type;  /* Integer types are compatible */
                                 current_score += 1;  /* But add a small penalty */
                             }
+                            /* String types are compatible with each other (String, ShortString, etc.)
+                             * Also, Char literals can be converted to string types. */
+                            else if ((formal_elem_type == STRING_TYPE || formal_elem_type == SHORTSTRING_TYPE) &&
+                                     (literal_elem_type == STRING_TYPE || literal_elem_type == CHAR_TYPE || literal_elem_type == SHORTSTRING_TYPE))
+                            {
+                                call_type = formal_type;  /* String/Char literals are compatible with string array types */
+                                if (literal_elem_type == CHAR_TYPE)
+                                    current_score += 1;  /* Small penalty for char->string conversion */
+                            }
+                            /* Unknown formal element type with type_id - allow string literal match for RawByteString/AnsiString etc */
+                            else if (formal_elem_type == UNKNOWN_TYPE && formal_elem_type_id != NULL &&
+                                     (literal_elem_type == STRING_TYPE || literal_elem_type == CHAR_TYPE))
+                            {
+                                /* Check if formal_elem_type_id is a string-like type */
+                                if (strcasecmp(formal_elem_type_id, "RawByteString") == 0 ||
+                                    strcasecmp(formal_elem_type_id, "AnsiString") == 0 ||
+                                    strcasecmp(formal_elem_type_id, "UTF8String") == 0 ||
+                                    strcasecmp(formal_elem_type_id, "UnicodeString") == 0 ||
+                                    strcasecmp(formal_elem_type_id, "WideString") == 0)
+                                {
+                                    call_type = formal_type;  /* String literals compatible with string types */
+                                    current_score += 1;
+                                }
+                                else
+                                {
+                                    /* Unknown type_id - don't invalidate, allow match */
+                                    call_type = formal_type;
+                                }
+                            }
                             else
                             {
                                 /* Element types don't match - this overload is invalid */
@@ -12641,6 +12681,7 @@ method_call_resolved:
                             /* Unknown types, allow match */
                             call_type = formal_type;
                         }
+                        }  /* end else (not array of const) */
                     }
                     else
                     {
