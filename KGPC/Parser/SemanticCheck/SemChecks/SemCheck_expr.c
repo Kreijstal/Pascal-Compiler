@@ -9826,7 +9826,8 @@ int semcheck_varid(int *type_return,
                         (pascal_identifier_equals(self_record->helper_base_type_id, "AnsiString") ||
                          pascal_identifier_equals(self_record->helper_base_type_id, "String") ||
                          pascal_identifier_equals(self_record->helper_base_type_id, "ShortString") ||
-                         pascal_identifier_equals(self_record->helper_base_type_id, "UnicodeString")))
+                         pascal_identifier_equals(self_record->helper_base_type_id, "UnicodeString") ||
+                         pascal_identifier_equals(self_record->helper_base_type_id, "WideString")))
                     {
                         is_string_type_helper = 1;
                     }
@@ -9843,7 +9844,8 @@ int semcheck_varid(int *type_return,
                                 (pascal_identifier_equals(owner_record->helper_base_type_id, "AnsiString") ||
                                  pascal_identifier_equals(owner_record->helper_base_type_id, "String") ||
                                  pascal_identifier_equals(owner_record->helper_base_type_id, "ShortString") ||
-                                 pascal_identifier_equals(owner_record->helper_base_type_id, "UnicodeString")))
+                                 pascal_identifier_equals(owner_record->helper_base_type_id, "UnicodeString") ||
+                                 pascal_identifier_equals(owner_record->helper_base_type_id, "WideString")))
                             {
                                 is_string_type_helper = 1;
                             }
