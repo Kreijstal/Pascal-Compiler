@@ -9072,8 +9072,8 @@ int semcheck_addop(int *type_return,
     {
         int left_is_pointer = (type_first == POINTER_TYPE);
         int right_is_pointer = (type_second == POINTER_TYPE);
-        int left_is_int = (type_first == INT_TYPE || type_first == LONGINT_TYPE);
-        int right_is_int = (type_second == INT_TYPE || type_second == LONGINT_TYPE);
+        int left_is_int = (type_first == INT_TYPE || type_first == LONGINT_TYPE || type_first == INT64_TYPE);
+        int right_is_int = (type_second == INT_TYPE || type_second == LONGINT_TYPE || type_second == INT64_TYPE);
 
         /* pointer + integer or pointer - integer */
         if (left_is_pointer && right_is_int)
@@ -12835,6 +12835,76 @@ method_call_resolved:
                             goto funccall_cleanup;
                         }
                         semcheck_expr_main(&call_type, symtab, call_expr, max_scope_lev, NO_MUTATE);
+
+                        /* Check element types for array variables passed to open array parameters */
+                        if (formal_decl != NULL && formal_decl->type == TREE_ARR_DECL &&
+                            call_expr != NULL && call_expr->is_array_expr)
+                        {
+                            int formal_elem_type = formal_decl->tree_data.arr_decl_data.type;
+                            const char *formal_elem_type_id = formal_decl->tree_data.arr_decl_data.type_id;
+                            int call_elem_type = call_expr->array_element_type;
+                            const char *call_elem_type_id = call_expr->array_element_type_id;
+
+                            /* Resolve formal element type from type_id if needed */
+                            if (formal_elem_type == UNKNOWN_TYPE && formal_elem_type_id != NULL)
+                            {
+                                int mapped = semcheck_map_builtin_type_name(symtab, formal_elem_type_id);
+                                if (mapped != UNKNOWN_TYPE)
+                                    formal_elem_type = mapped;
+                            }
+
+                            /* Resolve call element type from type_id if needed */
+                            if (call_elem_type == UNKNOWN_TYPE && call_elem_type_id != NULL)
+                            {
+                                int mapped = semcheck_map_builtin_type_name(symtab, call_elem_type_id);
+                                if (mapped != UNKNOWN_TYPE)
+                                    call_elem_type = mapped;
+                            }
+
+                            if (getenv("KGPC_DEBUG_OVERLOAD") != NULL)
+                            {
+                                fprintf(stderr, "[OVERLOAD] array var check: formal_elem=%d(%s) call_elem=%d(%s)\n",
+                                    formal_elem_type, formal_elem_type_id ? formal_elem_type_id : "(null)",
+                                    call_elem_type, call_elem_type_id ? call_elem_type_id : "(null)");
+                            }
+
+                            /* Check compatibility */
+                            int elem_compatible = 0;
+                            if (formal_elem_type != UNKNOWN_TYPE && call_elem_type != UNKNOWN_TYPE)
+                            {
+                                if (formal_elem_type == call_elem_type)
+                                    elem_compatible = 1;
+                                /* Integer types are compatible with each other */
+                                else if ((formal_elem_type == INT_TYPE || formal_elem_type == LONGINT_TYPE || formal_elem_type == INT64_TYPE) &&
+                                         (call_elem_type == INT_TYPE || call_elem_type == LONGINT_TYPE || call_elem_type == INT64_TYPE))
+                                    elem_compatible = 1;
+                                /* String types are compatible with each other */
+                                else if ((formal_elem_type == STRING_TYPE || formal_elem_type == SHORTSTRING_TYPE) &&
+                                         (call_elem_type == STRING_TYPE || call_elem_type == SHORTSTRING_TYPE))
+                                    elem_compatible = 1;
+                            }
+                            else if (formal_elem_type_id != NULL && call_elem_type_id != NULL)
+                            {
+                                /* Compare type names case-insensitively */
+                                if (strcasecmp(formal_elem_type_id, call_elem_type_id) == 0)
+                                    elem_compatible = 1;
+                            }
+                            else
+                            {
+                                /* Unknown types - allow match */
+                                elem_compatible = 1;
+                            }
+
+                            if (!elem_compatible)
+                            {
+                                if (getenv("KGPC_DEBUG_OVERLOAD") != NULL)
+                                {
+                                    fprintf(stderr, "[OVERLOAD] candidate=%s INVALIDATED: array element types don't match\n",
+                                        candidate->id ? candidate->id : "(null)");
+                                }
+                                candidate_valid = 0;
+                            }
+                        }
                     }
                     if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                          fprintf(stderr, "[SemCheck] semcheck_funccall: call_expr=%p type=%d id=%s record_type=%p\n", 
