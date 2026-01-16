@@ -4495,6 +4495,8 @@ static struct RecordType *convert_record_type_ex(ast_t *record_node, ListNode_t 
             return NULL;
         ListBuilder helper_fields_builder;
         list_builder_init(&helper_fields_builder);
+        ListBuilder method_template_builder;
+        list_builder_init(&method_template_builder);
         record->fields = NULL;
         record->properties = NULL;
         record->parent_class_name = NULL;
@@ -4544,6 +4546,11 @@ static struct RecordType *convert_record_type_ex(ast_t *record_node, ListNode_t 
                  unwrapped->typ == PASCAL_T_DESTRUCTOR_DECL))
             {
                 list_builder_append(&helper_fields_builder, unwrapped, LIST_UNSPECIFIED);
+                /* Also create method template to preserve default parameter values */
+                struct MethodTemplate *template = create_method_template(unwrapped);
+                if (template != NULL) {
+                    list_builder_append(&method_template_builder, template, LIST_METHOD_TEMPLATE);
+                }
             }
             base_node = base_node->next;
         }
@@ -4558,6 +4565,7 @@ static struct RecordType *convert_record_type_ex(ast_t *record_node, ListNode_t 
         }
 
         record->fields = list_builder_finish(&helper_fields_builder);
+        record->method_templates = list_builder_finish(&method_template_builder);
         return record;
     }
 
