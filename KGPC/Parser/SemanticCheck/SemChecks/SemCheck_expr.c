@@ -2221,6 +2221,46 @@ struct Expression *clone_expression(const struct Expression *expr)
             clone->expr_data.record_constructor_data.fields = field_head;
             break;
         }
+        case EXPR_SET:
+        {
+            /* Clone set expression: copy bitmask, is_constant, and clone elements list */
+            clone->expr_data.set_data.bitmask = expr->expr_data.set_data.bitmask;
+            clone->expr_data.set_data.is_constant = expr->expr_data.set_data.is_constant;
+            
+            /* Clone the elements list if present */
+            ListNode_t *elem_head = NULL;
+            ListNode_t *elem_tail = NULL;
+            ListNode_t *cur = expr->expr_data.set_data.elements;
+            while (cur != NULL)
+            {
+                struct Expression *elem_expr = (struct Expression *)cur->cur;
+                struct Expression *elem_clone = clone_expression(elem_expr);
+                /* NULL elements are allowed in empty sets */
+                
+                ListNode_t *node = CreateListNode(elem_clone, LIST_EXPR);
+                if (node == NULL)
+                {
+                    if (elem_clone != NULL)
+                        destroy_expr(elem_clone);
+                    destroy_expr(clone);
+                    return NULL;
+                }
+                
+                if (elem_head == NULL)
+                {
+                    elem_head = node;
+                    elem_tail = node;
+                }
+                else
+                {
+                    elem_tail->next = node;
+                    elem_tail = node;
+                }
+                cur = cur->next;
+            }
+            clone->expr_data.set_data.elements = elem_head;
+            break;
+        }
         default:
             destroy_expr(clone);
             return NULL;
