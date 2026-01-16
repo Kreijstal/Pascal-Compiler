@@ -215,11 +215,18 @@ static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab
         } else { // Assume array or other type for now
             ids = decl_tree->tree_data.arr_decl_data.ids;
             /* For open array parameters, include the element type in mangling
-             * to distinguish between array of Char and array of Integer */
+             * to distinguish between array of Char and array of Integer.
+             * But array of const uses generic HASHVAR_ARRAY. */
             int element_type = decl_tree->tree_data.arr_decl_data.type;
             const char *element_type_id = decl_tree->tree_data.arr_decl_data.type_id;
             
-            if (element_type == UNKNOWN_TYPE && element_type_id != NULL)
+            /* Special case: array of const uses generic array mangling */
+            if (element_type == ARRAY_OF_CONST_TYPE || 
+                (element_type_id != NULL && strcasecmp(element_type_id, "const") == 0))
+            {
+                resolved_type = HASHVAR_ARRAY;
+            }
+            else if (element_type == UNKNOWN_TYPE && element_type_id != NULL)
             {
                 /* Try to map element type from type_id */
                 resolved_type = MapBuiltinTypeNameToVarType(element_type_id);
