@@ -8943,6 +8943,14 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     
     /* Check if this method was declared as static in the record/class declaration */
     int is_static_method = is_method_static(effective_class, method_name);
+    if (method_node != NULL && method_name != NULL)
+    {
+        struct MethodTemplate impl_template = {0};
+        impl_template.name = (char *)method_name;
+        annotate_method_template(&impl_template, method_node);
+        if (impl_template.is_static || impl_template.is_class_method)
+            is_static_method = 1;
+    }
     if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
         fprintf(stderr, "[KGPC] convert_method_impl: class=%s method=%s is_static=%d\n",
                 effective_class ? effective_class : "<null>", 

@@ -1,3 +1,6 @@
-NullPtr to Pointer: nil
-NullPtr = nil: TRUE
-NullPtr <> nil: FALSE
+PASS: NullPtr converts to nil Pointer
+PASS: Non-nil pointer setup
+PASS: NullPtr = nil is true
+PASS: NullPtr <> nil is false
+PASS: NullPtr = non-nil pointer is false
+PASS: NullPtr <> non-nil pointer is true

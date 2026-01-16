@@ -66,6 +66,38 @@ static int semcheck_is_currency_kgpc_type(KgpcType *type)
     return 0;
 }
 
+static int semcheck_expr_is_shortstring(const struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+    if (expr->resolved_kgpc_type != NULL)
+    {
+        struct TypeAlias *alias = kgpc_type_get_type_alias(expr->resolved_kgpc_type);
+        if (alias != NULL)
+        {
+            if (alias->is_shortstring)
+                return 1;
+            if ((alias->alias_name != NULL &&
+                 pascal_identifier_equals(alias->alias_name, "ShortString")) ||
+                (alias->target_type_id != NULL &&
+                 pascal_identifier_equals(alias->target_type_id, "ShortString")))
+            {
+                return 1;
+            }
+        }
+    }
+    if (expr->resolved_type == SHORTSTRING_TYPE)
+        return 1;
+    if (expr->is_array_expr &&
+        expr->array_element_type == CHAR_TYPE &&
+        expr->array_lower_bound == 0 &&
+        expr->array_upper_bound >= 0)
+    {
+        return 1;
+    }
+    return 0;
+}
+
 static int semcheck_try_record_assignment_operator(SymTab_t *symtab,
     struct Statement *stmt, KgpcType *lhs_type, KgpcType **rhs_type,
     int *rhs_owned)
@@ -1050,6 +1082,7 @@ static int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, 
 
     int target_type = UNKNOWN_TYPE;
     return_val += semcheck_expr_main(&target_type, symtab, array_expr, max_scope_lev, MUTATE);
+    int target_is_shortstring = semcheck_expr_is_shortstring(array_expr);
 
     int target_is_string = (target_type == STRING_TYPE);
     if (target_is_string)
@@ -1074,14 +1107,17 @@ static int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, 
             target_is_string = 0;
     }
 
-    if (target_is_string)
+    if (target_is_string || target_is_shortstring)
     {
         if (stmt->stmt_data.procedure_call_data.mangled_id != NULL)
         {
             free(stmt->stmt_data.procedure_call_data.mangled_id);
             stmt->stmt_data.procedure_call_data.mangled_id = NULL;
         }
-        stmt->stmt_data.procedure_call_data.mangled_id = strdup("__kgpc_setlength_string");
+        if (target_is_shortstring)
+            stmt->stmt_data.procedure_call_data.mangled_id = strdup("__kgpc_setlength_shortstring");
+        else
+            stmt->stmt_data.procedure_call_data.mangled_id = strdup("__kgpc_setlength_string");
         if (stmt->stmt_data.procedure_call_data.mangled_id == NULL)
         {
             fprintf(stderr, "Error: failed to allocate mangled name for SetLength.\n");
@@ -1167,7 +1203,8 @@ static int semcheck_builtin_setstring(SymTab_t *symtab, struct Statement *stmt, 
     /* First argument must be a string variable (output parameter) */
     int string_type = UNKNOWN_TYPE;
     return_val += semcheck_expr_main(&string_type, symtab, string_expr, max_scope_lev, MUTATE);
-    if (string_type != STRING_TYPE && string_type != UNKNOWN_TYPE)
+    int target_is_shortstring = semcheck_expr_is_shortstring(string_expr);
+    if (string_type != STRING_TYPE && string_type != UNKNOWN_TYPE && !target_is_shortstring)
     {
         semcheck_error_with_context("Error on line %d, SetString first argument must be a string variable.\n", stmt->line_num);
         ++return_val;
@@ -1208,7 +1245,10 @@ static int semcheck_builtin_setstring(SymTab_t *symtab, struct Statement *stmt, 
         free(stmt->stmt_data.procedure_call_data.mangled_id);
         stmt->stmt_data.procedure_call_data.mangled_id = NULL;
     }
-    stmt->stmt_data.procedure_call_data.mangled_id = strdup("kgpc_setstring");
+    if (target_is_shortstring)
+        stmt->stmt_data.procedure_call_data.mangled_id = strdup("kgpc_shortstring_setstring");
+    else
+        stmt->stmt_data.procedure_call_data.mangled_id = strdup("kgpc_setstring");
     if (stmt->stmt_data.procedure_call_data.mangled_id == NULL)
     {
         fprintf(stderr, "Error: failed to allocate mangled name for SetString.\n");
@@ -1395,7 +1435,8 @@ static int semcheck_builtin_insert(SymTab_t *symtab, struct Statement *stmt, int
 
     int source_type = UNKNOWN_TYPE;
     error_count += semcheck_expr_main(&source_type, symtab, source_expr, max_scope_lev, NO_MUTATE);
-    if (source_type != STRING_TYPE && source_type != CHAR_TYPE)
+    int source_is_shortstring = semcheck_expr_is_shortstring(source_expr);
+    if (source_type != STRING_TYPE && source_type != CHAR_TYPE && !source_is_shortstring)
     {
         semcheck_error_with_context("Error on line %d, Insert source must be a string or char.\n",
             stmt->line_num);
@@ -1404,7 +1445,8 @@ static int semcheck_builtin_insert(SymTab_t *symtab, struct Statement *stmt, int
 
     int target_type = UNKNOWN_TYPE;
     error_count += semcheck_expr_main(&target_type, symtab, target_expr, max_scope_lev, MUTATE);
-    if (target_type != STRING_TYPE)
+    int target_is_shortstring = semcheck_expr_is_shortstring(target_expr);
+    if (target_type != STRING_TYPE && !target_is_shortstring)
     {
         semcheck_error_with_context("Error on line %d, Insert target must be a string variable.\n",
             stmt->line_num);
@@ -1418,6 +1460,21 @@ static int semcheck_builtin_insert(SymTab_t *symtab, struct Statement *stmt, int
         semcheck_error_with_context("Error on line %d, Insert index must be an integer.\n",
             stmt->line_num);
         ++error_count;
+    }
+
+    if (error_count == 0 && target_is_shortstring)
+    {
+        if (stmt->stmt_data.procedure_call_data.mangled_id != NULL)
+        {
+            free(stmt->stmt_data.procedure_call_data.mangled_id);
+            stmt->stmt_data.procedure_call_data.mangled_id = NULL;
+        }
+        stmt->stmt_data.procedure_call_data.mangled_id = strdup("kgpc_shortstring_insert");
+        if (stmt->stmt_data.procedure_call_data.mangled_id == NULL)
+        {
+            fprintf(stderr, "Error: failed to allocate mangled name for Insert.\n");
+            ++error_count;
+        }
     }
 
     return error_count;
@@ -1446,8 +1503,9 @@ static int semcheck_builtin_delete(SymTab_t *symtab, struct Statement *stmt, int
     error_count += semcheck_expr_main(&target_type, symtab, target_expr, max_scope_lev, MUTATE);
     
     /* Check if target is a string type OR a shortstring (array of char) */
-    int is_valid_target = is_string_type(target_type) || 
+    int is_valid_target = is_string_type(target_type) ||
                           is_shortstring_array(target_type, target_expr->is_array_expr);
+    int target_is_shortstring = semcheck_expr_is_shortstring(target_expr);
     
     if (!is_valid_target)
     {
@@ -1472,6 +1530,21 @@ static int semcheck_builtin_delete(SymTab_t *symtab, struct Statement *stmt, int
         semcheck_error_with_context("Error on line %d, Delete count must be an integer.\n",
             stmt->line_num);
         ++error_count;
+    }
+
+    if (error_count == 0 && target_is_shortstring)
+    {
+        if (stmt->stmt_data.procedure_call_data.mangled_id != NULL)
+        {
+            free(stmt->stmt_data.procedure_call_data.mangled_id);
+            stmt->stmt_data.procedure_call_data.mangled_id = NULL;
+        }
+        stmt->stmt_data.procedure_call_data.mangled_id = strdup("kgpc_shortstring_delete");
+        if (stmt->stmt_data.procedure_call_data.mangled_id == NULL)
+        {
+            fprintf(stderr, "Error: failed to allocate mangled name for Delete.\n");
+            ++error_count;
+        }
     }
 
     return error_count;

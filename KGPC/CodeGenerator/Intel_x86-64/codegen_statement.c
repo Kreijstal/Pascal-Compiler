@@ -125,6 +125,8 @@ static ListNode_t *codegen_fail_register(CodeGenContext *ctx, ListNode_t *inst_l
     Register_t **out_reg, const char *message);
 static ListNode_t *codegen_builtin_setlength_string(struct Statement *stmt,
     ListNode_t *inst_list, CodeGenContext *ctx);
+static ListNode_t *codegen_builtin_setlength_shortstring(struct Statement *stmt,
+    ListNode_t *inst_list, CodeGenContext *ctx);
 static ListNode_t *codegen_builtin_setstring(struct Statement *stmt,
     ListNode_t *inst_list, CodeGenContext *ctx);
 static ListNode_t *codegen_builtin_str(struct Statement *stmt, ListNode_t *inst_list,
@@ -3188,6 +3190,8 @@ static ListNode_t *codegen_builtin_setlength(struct Statement *stmt, ListNode_t 
     const char *mangled = stmt->stmt_data.procedure_call_data.mangled_id;
     if (mangled != NULL && strcmp(mangled, "__kgpc_setlength_string") == 0)
         return codegen_builtin_setlength_string(stmt, inst_list, ctx);
+    if (mangled != NULL && strcmp(mangled, "__kgpc_setlength_shortstring") == 0)
+        return codegen_builtin_setlength_shortstring(stmt, inst_list, ctx);
 
     struct Expression *target_expr = (struct Expression *)args_expr->cur;
     struct Expression *len_expr = (struct Expression *)args_expr->next->cur;
@@ -3476,6 +3480,83 @@ static ListNode_t *codegen_builtin_setlength_string(struct Statement *stmt, List
     return inst_list;
 }
 
+static ListNode_t *codegen_builtin_setlength_shortstring(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
+{
+    assert(stmt != NULL);
+    if (ctx == NULL)
+        return inst_list;
+
+    ListNode_t *args_expr = stmt->stmt_data.procedure_call_data.expr_args;
+    if (args_expr == NULL || args_expr->next == NULL)
+    {
+        fprintf(stderr, "ERROR: SetLength expects two arguments.\n");
+        return inst_list;
+    }
+
+    struct Expression *target_expr = (struct Expression *)args_expr->cur;
+    struct Expression *len_expr = (struct Expression *)args_expr->next->cur;
+    if (target_expr == NULL || len_expr == NULL)
+        return inst_list;
+
+    if (!codegen_expr_is_addressable(target_expr))
+    {
+        fprintf(stderr, "ERROR: SetLength shortstring target must be addressable.\n");
+        return inst_list;
+    }
+
+    Register_t *addr_reg = NULL;
+    inst_list = codegen_address_for_expr(target_expr, inst_list, ctx, &addr_reg);
+    if (codegen_had_error(ctx) || addr_reg == NULL)
+        return inst_list;
+
+    Register_t *length_reg = NULL;
+    inst_list = codegen_expr_with_result(len_expr, inst_list, ctx, &length_reg);
+    if (codegen_had_error(ctx) || length_reg == NULL)
+    {
+        if (length_reg != NULL)
+            free_reg(get_reg_stack(), length_reg);
+        free_reg(get_reg_stack(), addr_reg);
+        return inst_list;
+    }
+
+    if (!expr_uses_qword_kgpctype(len_expr))
+        inst_list = codegen_sign_extend32_to64(inst_list, length_reg->bit_32, length_reg->bit_64);
+
+    char buffer[128];
+    const char *arg0 = current_arg_reg64(0);
+    const char *arg1 = current_arg_reg64(1);
+
+    if (strcmp(length_reg->bit_64, arg0) == 0)
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", length_reg->bit_64, arg1);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", addr_reg->bit_64, arg0);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else if (strcmp(addr_reg->bit_64, arg1) == 0)
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", addr_reg->bit_64, arg0);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", length_reg->bit_64, arg1);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", addr_reg->bit_64, arg0);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", length_reg->bit_64, arg1);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = add_inst(inst_list, "\tcall\tkgpc_shortstring_setlength\n");
+
+    free_reg(get_reg_stack(), addr_reg);
+    free_reg(get_reg_stack(), length_reg);
+    free_arg_regs();
+    return inst_list;
+}
+
 static ListNode_t *codegen_builtin_setstring(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     assert(stmt != NULL);
@@ -3558,7 +3639,12 @@ static ListNode_t *codegen_builtin_setstring(struct Statement *stmt, ListNode_t 
     if (!expr_uses_qword_kgpctype(len_expr))
         inst_list = codegen_sign_extend32_to64(inst_list, length_reg->bit_32, length_reg->bit_64);
 
-    /* Set up arguments for kgpc_setstring(char **target, const char *buffer, int64_t length) */
+    const char *call_target = "kgpc_setstring";
+    const char *mangled = stmt->stmt_data.procedure_call_data.mangled_id;
+    if (mangled != NULL && strcmp(mangled, "kgpc_shortstring_setstring") == 0)
+        call_target = "kgpc_shortstring_setstring";
+
+    /* Set up arguments for kgpc_setstring/shortstring_setstring */
     const char *arg0 = current_arg_reg64(0);  /* %rdi or %rcx */
     const char *arg1 = current_arg_reg64(1);  /* %rsi or %rdx */
     const char *arg2 = current_arg_reg64(2);  /* %rdx or %r8 */
@@ -3575,7 +3661,11 @@ static ListNode_t *codegen_builtin_setstring(struct Statement *stmt, ListNode_t 
     inst_list = add_inst(inst_list, buffer);
 
     inst_list = codegen_vect_reg(inst_list, 0);
-    inst_list = add_inst(inst_list, "\tcall\tkgpc_setstring\n");
+    {
+        char call_buffer[128];
+        snprintf(call_buffer, sizeof(call_buffer), "\tcall\t%s\n", call_target);
+        inst_list = add_inst(inst_list, call_buffer);
+    }
 
     free_arg_regs();
     return inst_list;
@@ -3948,13 +4038,30 @@ static ListNode_t *codegen_builtin_insert(struct Statement *stmt, ListNode_t *in
     struct Expression *target_expr = (struct Expression *)args_expr->next->cur;
     struct Expression *index_expr = (struct Expression *)args_expr->next->next->cur;
 
-    Register_t *source_reg = NULL;
-    inst_list = codegen_expr_with_result(source_expr, inst_list, ctx, &source_reg);
-    if (codegen_had_error(ctx) || source_reg == NULL)
-        return inst_list;
+    int target_is_shortstring = codegen_expr_is_shortstring_array(target_expr);
+    int source_is_shortstring = codegen_expr_is_shortstring_array(source_expr);
 
+    Register_t *source_reg = NULL;
     int source_is_char = (source_expr != NULL && source_expr->resolved_type == CHAR_TYPE);
     StackNode_t *char_buffer = NULL;
+    if (target_is_shortstring && source_is_shortstring)
+    {
+        if (!codegen_expr_is_addressable(source_expr))
+        {
+            codegen_report_error(ctx, "ERROR: Insert shortstring source must be addressable.");
+            return inst_list;
+        }
+        inst_list = codegen_address_for_expr(source_expr, inst_list, ctx, &source_reg);
+        if (codegen_had_error(ctx) || source_reg == NULL)
+            return inst_list;
+    }
+    else
+    {
+        inst_list = codegen_expr_with_result(source_expr, inst_list, ctx, &source_reg);
+        if (codegen_had_error(ctx) || source_reg == NULL)
+            return inst_list;
+    }
+
     if (source_is_char)
     {
         char_buffer = add_l_x("insert_char_buffer", 2);
@@ -3973,12 +4080,24 @@ static ListNode_t *codegen_builtin_insert(struct Statement *stmt, ListNode_t *in
                 "ERROR: Unable to acquire byte register for Insert char source.");
         }
 
-        snprintf(buffer, sizeof(buffer), "\tmovb\t$0, -%d(%%rbp)\n", char_buffer->offset - 1);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovb\t%s, -%d(%%rbp)\n", byte_reg, char_buffer->offset);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n", char_buffer->offset, source_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
+        if (target_is_shortstring)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovb\t$1, -%d(%%rbp)\n", char_buffer->offset);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovb\t%s, -%d(%%rbp)\n", byte_reg, char_buffer->offset - 1);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n", char_buffer->offset, source_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovb\t$0, -%d(%%rbp)\n", char_buffer->offset - 1);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovb\t%s, -%d(%%rbp)\n", byte_reg, char_buffer->offset);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n", char_buffer->offset, source_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
     }
 
     StackNode_t *source_temp = add_l_t("insert_source");
@@ -4038,6 +4157,7 @@ static ListNode_t *codegen_builtin_insert(struct Statement *stmt, ListNode_t *in
     const char *arg0 = current_arg_reg64(0);
     const char *arg1 = current_arg_reg64(1);
     const char *arg2 = current_arg_reg64(2);
+    const char *arg3 = current_arg_reg64(3);
 
     snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", source_temp->offset, arg0);
     inst_list = add_inst(inst_list, buffer);
@@ -4047,7 +4167,17 @@ static ListNode_t *codegen_builtin_insert(struct Statement *stmt, ListNode_t *in
     inst_list = add_inst(inst_list, buffer);
 
     inst_list = codegen_vect_reg(inst_list, 0);
-    inst_list = add_inst(inst_list, "\tcall\tkgpc_string_insert\n");
+    if (target_is_shortstring)
+    {
+        int value_is_shortstring = (source_is_shortstring || source_is_char) ? 1 : 0;
+        snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %s\n", value_is_shortstring, arg3);
+        inst_list = add_inst(inst_list, buffer);
+        inst_list = add_inst(inst_list, "\tcall\tkgpc_shortstring_insert\n");
+    }
+    else
+    {
+        inst_list = add_inst(inst_list, "\tcall\tkgpc_string_insert\n");
+    }
     free_arg_regs();
     return inst_list;
 }
@@ -4067,6 +4197,8 @@ static ListNode_t *codegen_builtin_delete(struct Statement *stmt, ListNode_t *in
     struct Expression *target_expr = (struct Expression *)args_expr->cur;
     struct Expression *index_expr = (struct Expression *)args_expr->next->cur;
     struct Expression *count_expr = (struct Expression *)args_expr->next->next->cur;
+
+    int target_is_shortstring = codegen_expr_is_shortstring_array(target_expr);
 
     if (!codegen_expr_is_addressable(target_expr))
     {
@@ -4144,7 +4276,10 @@ static ListNode_t *codegen_builtin_delete(struct Statement *stmt, ListNode_t *in
     inst_list = add_inst(inst_list, buffer);
 
     inst_list = codegen_vect_reg(inst_list, 0);
-    inst_list = add_inst(inst_list, "\tcall\tkgpc_string_delete\n");
+    if (target_is_shortstring)
+        inst_list = add_inst(inst_list, "\tcall\tkgpc_shortstring_delete\n");
+    else
+        inst_list = add_inst(inst_list, "\tcall\tkgpc_string_delete\n");
     free_arg_regs();
     return inst_list;
 }

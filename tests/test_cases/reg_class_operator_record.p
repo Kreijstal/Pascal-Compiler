@@ -32,14 +32,38 @@ end;
 
 var
   p: Pointer;
+  q: Pointer;
 
 begin
   p := NullPtr;
+  q := @p;
   if p = nil then
-    WriteLn('NullPtr to Pointer: nil')
+    WriteLn('PASS: NullPtr converts to nil Pointer')
   else
-    WriteLn('NullPtr to Pointer: non-nil');
+    WriteLn('FAIL: NullPtr converts to non-nil Pointer');
 
-  WriteLn('NullPtr = nil: ', NullPtr = nil);
-  WriteLn('NullPtr <> nil: ', NullPtr <> nil);
+  if q <> nil then
+    WriteLn('PASS: Non-nil pointer setup')
+  else
+    WriteLn('FAIL: Non-nil pointer setup');
+
+  if (NullPtr = nil) then
+    WriteLn('PASS: NullPtr = nil is true')
+  else
+    WriteLn('FAIL: NullPtr = nil is false');
+
+  if not (NullPtr <> nil) then
+    WriteLn('PASS: NullPtr <> nil is false')
+  else
+    WriteLn('FAIL: NullPtr <> nil is true');
+
+  if not (NullPtr = q) then
+    WriteLn('PASS: NullPtr = non-nil pointer is false')
+  else
+    WriteLn('FAIL: NullPtr = non-nil pointer is true');
+
+  if (NullPtr <> q) then
+    WriteLn('PASS: NullPtr <> non-nil pointer is true')
+  else
+    WriteLn('FAIL: NullPtr <> non-nil pointer is false');
 end.

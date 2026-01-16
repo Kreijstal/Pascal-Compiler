@@ -45,6 +45,7 @@
 #include <stdarg.h>
 
 static ListNode_t *g_semcheck_unit_names = NULL;
+static char *g_semcheck_current_unit_name = NULL;
 static char *g_semcheck_source_path = NULL;
 static char *g_semcheck_source_buffer = NULL;
 static size_t g_semcheck_source_length = 0;
@@ -135,6 +136,11 @@ static void semcheck_unit_names_reset(void)
     }
     DestroyList(g_semcheck_unit_names);
     g_semcheck_unit_names = NULL;
+    if (g_semcheck_current_unit_name != NULL)
+    {
+        free(g_semcheck_current_unit_name);
+        g_semcheck_current_unit_name = NULL;
+    }
 }
 
 static void semcheck_unit_name_add(const char *name)
@@ -189,6 +195,9 @@ int semcheck_is_unit_name(const char *name)
     if (name == NULL || name[0] == '\0')
         return 0;
     if (pascal_identifier_equals(name, "System"))
+        return 1;
+    if (g_semcheck_current_unit_name != NULL &&
+        pascal_identifier_equals(name, g_semcheck_current_unit_name))
         return 1;
 
     ListNode_t *cur = g_semcheck_unit_names;
@@ -6873,6 +6882,8 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
     semcheck_unit_names_reset();
     semcheck_unit_name_add("System");
     semcheck_unit_name_add(tree->tree_data.unit_data.unit_id);
+    if (tree->tree_data.unit_data.unit_id != NULL)
+        g_semcheck_current_unit_name = strdup(tree->tree_data.unit_data.unit_id);
     semcheck_unit_names_add_list(tree->tree_data.unit_data.interface_uses);
     semcheck_unit_names_add_list(tree->tree_data.unit_data.implementation_uses);
 
