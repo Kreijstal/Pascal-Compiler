@@ -12542,6 +12542,13 @@ method_call_resolved:
                     if (formal_decl != NULL && formal_decl->type == TREE_ARR_DECL &&
                         call_expr != NULL && (call_expr->type == EXPR_SET || call_expr->type == EXPR_ARRAY_LITERAL))
                     {
+                        /* If the argument is EXPR_SET (set literal) but the parameter is an array,
+                         * add a penalty - FPC prefers set types for set literals. */
+                        if (call_expr->type == EXPR_SET)
+                        {
+                            current_score += 10;  /* Penalty for set-to-array conversion */
+                        }
+                        
                         /* Special case: array of const accepts any array literal without element type checking */
                         int formal_elem_type_for_const = formal_decl->tree_data.arr_decl_data.type;
                         const char *formal_elem_type_id_for_const = formal_decl->tree_data.arr_decl_data.type_id;
