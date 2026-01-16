@@ -3686,6 +3686,9 @@ static ListNode_t *codegen_builtin_str(struct Statement *stmt, ListNode_t *inst_
     struct Expression *value_expr = (struct Expression *)args_expr->cur;
     struct Expression *target_expr = (struct Expression *)args_expr->next->cur;
 
+    /* Check if target is ShortString */
+    int target_is_shortstring = codegen_expr_is_shortstring_array(target_expr);
+
     Register_t *value_reg = NULL;
     inst_list = codegen_expr_with_result(value_expr, inst_list, ctx, &value_reg);
     if (codegen_had_error(ctx) || value_reg == NULL)
@@ -3740,6 +3743,8 @@ static ListNode_t *codegen_builtin_str(struct Statement *stmt, ListNode_t *inst_
     }
 
     char buffer[128];
+    const char *shortstring_suffix = target_is_shortstring ? "_shortstring" : "";
+    
     if (value_is_real)
     {
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm0\n", value_reg->bit_64);
@@ -3794,7 +3799,8 @@ static ListNode_t *codegen_builtin_str(struct Statement *stmt, ListNode_t *inst_
                 inst_list = add_inst(inst_list, buffer);
             }
             inst_list = codegen_vect_reg(inst_list, 0);
-            inst_list = add_inst(inst_list, "\tcall\tkgpc_str_real_fmt\n");
+            snprintf(buffer, sizeof(buffer), "\tcall\tkgpc_str_real_fmt%s\n", shortstring_suffix);
+            inst_list = add_inst(inst_list, buffer);
         }
         else
         {
@@ -3809,7 +3815,8 @@ static ListNode_t *codegen_builtin_str(struct Statement *stmt, ListNode_t *inst_
                 inst_list = add_inst(inst_list, buffer);
             }
             inst_list = codegen_vect_reg(inst_list, 0);
-            inst_list = add_inst(inst_list, "\tcall\tkgpc_str_real\n");
+            snprintf(buffer, sizeof(buffer), "\tcall\tkgpc_str_real%s\n", shortstring_suffix);
+            inst_list = add_inst(inst_list, buffer);
         }
     }
     else
@@ -3835,7 +3842,8 @@ static ListNode_t *codegen_builtin_str(struct Statement *stmt, ListNode_t *inst_
                 inst_list = add_inst(inst_list, buffer);
             }
             inst_list = codegen_vect_reg(inst_list, 0);
-            inst_list = add_inst(inst_list, "\tcall\tkgpc_str_int64_fmt\n");
+            snprintf(buffer, sizeof(buffer), "\tcall\tkgpc_str_int64_fmt%s\n", shortstring_suffix);
+            inst_list = add_inst(inst_list, buffer);
         }
         else
         {
@@ -3855,7 +3863,8 @@ static ListNode_t *codegen_builtin_str(struct Statement *stmt, ListNode_t *inst_
             }
 
             inst_list = codegen_vect_reg(inst_list, 0);
-            inst_list = add_inst(inst_list, "\tcall\tkgpc_str_int64\n");
+            snprintf(buffer, sizeof(buffer), "\tcall\tkgpc_str_int64%s\n", shortstring_suffix);
+            inst_list = add_inst(inst_list, buffer);
         }
     }
 

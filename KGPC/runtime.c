@@ -3468,6 +3468,72 @@ void kgpc_str_real_fmt(double value, int64_t width, int64_t precision, char **ta
     *target = result;
 }
 
+/* Str for ShortString targets - copies result to a fixed-size Pascal ShortString array.
+ * ShortString has format: first byte = length, followed by up to 255 characters. */
+void kgpc_str_int64_shortstring(int64_t value, char *target)
+{
+    if (target == NULL)
+        return;
+
+    char *result = kgpc_int_to_str(value);
+    if (result == NULL)
+        return;
+
+    /* Copy to ShortString format */
+    kgpc_string_to_shortstring(target, result, 256);
+    free(result);
+}
+
+void kgpc_str_int64_fmt_shortstring(int64_t value, int64_t width, char *target)
+{
+    if (target == NULL)
+        return;
+
+    char *result = kgpc_int_to_str(value);
+    if (result == NULL)
+        return;
+
+    result = kgpc_apply_field_width(result, width);
+    if (result == NULL)
+        return;
+
+    /* Copy to ShortString format */
+    kgpc_string_to_shortstring(target, result, 256);
+    free(result);
+}
+
+void kgpc_str_real_shortstring(double value, char *target)
+{
+    if (target == NULL)
+        return;
+
+    char *result = kgpc_float_to_string(value, -1);
+    if (result == NULL)
+        return;
+
+    /* Copy to ShortString format */
+    kgpc_string_to_shortstring(target, result, 256);
+    free(result);
+}
+
+void kgpc_str_real_fmt_shortstring(double value, int64_t width, int64_t precision, char *target)
+{
+    if (target == NULL)
+        return;
+
+    char *result = kgpc_float_to_string(value, (int)precision);
+    if (result == NULL)
+        return;
+
+    result = kgpc_apply_field_width(result, width);
+    if (result == NULL)
+        return;
+
+    /* Copy to ShortString format */
+    kgpc_string_to_shortstring(target, result, 256);
+    free(result);
+}
+
 double kgpc_now(void)
 {
 #ifdef _WIN32
