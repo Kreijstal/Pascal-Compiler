@@ -3836,8 +3836,62 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                         record_type = var_node->type->info.record_info;
                     }
                 }
-                
+
+                if (record_type == NULL || record_type->type_id == NULL)
+                {
+                    int arg_type_owned = 0;
+                    KgpcType *arg_type = semcheck_resolve_expression_kgpc_type(symtab,
+                        first_arg, max_scope_lev, NO_MUTATE, &arg_type_owned);
+                    int helper_tag = UNKNOWN_TYPE;
+                    semcheck_expr_main(&helper_tag, symtab, first_arg, max_scope_lev, NO_MUTATE);
+                    const char *helper_name = NULL;
+                    if (arg_type != NULL)
+                    {
+                        if (arg_type->kind == TYPE_KIND_PRIMITIVE)
+                            helper_tag = arg_type->info.primitive_type_tag;
+                        struct TypeAlias *alias = kgpc_type_get_type_alias(arg_type);
+                        if (alias != NULL)
+                        {
+                            if (alias->target_type_id != NULL)
+                                helper_name = alias->target_type_id;
+                            else if (alias->alias_name != NULL)
+                                helper_name = alias->alias_name;
+                        }
+                    }
+                    struct RecordType *helper_record = semcheck_lookup_type_helper(symtab,
+                        helper_tag, helper_name);
+                    if (helper_record == NULL && first_arg->type == EXPR_VAR_ID &&
+                        first_arg->expr_data.id != NULL)
+                    {
+                        HashNode_t *var_node = NULL;
+                        if (FindIdent(&var_node, symtab, first_arg->expr_data.id) != -1 &&
+                            var_node != NULL)
+                        {
+                            struct TypeAlias *var_alias = hashnode_get_type_alias(var_node);
+                            const char *var_helper_name = NULL;
+                            if (var_alias != NULL)
+                            {
+                                if (var_alias->target_type_id != NULL)
+                                    var_helper_name = var_alias->target_type_id;
+                                else if (var_alias->alias_name != NULL)
+                                    var_helper_name = var_alias->alias_name;
+                            }
+                            if (var_helper_name != NULL)
+                                helper_record = semcheck_lookup_type_helper(symtab,
+                                    UNKNOWN_TYPE, var_helper_name);
+                        }
+                    }
+                    if (helper_record != NULL)
+                        record_type = helper_record;
+                    if (arg_type_owned && arg_type != NULL)
+                        destroy_kgpc_type(arg_type);
+                }
+
                 if (record_type != NULL && record_type->type_id != NULL) {
+                    if (getenv("KGPC_DEBUG_TYPE_HELPER") != NULL) {
+                        fprintf(stderr, "[SemCheck] method placeholder: resolved helper record %s for %s\n",
+                            record_type->type_id, method_name != NULL ? method_name : "<null>");
+                    }
                     class_name = record_type->type_id;
                 }
             }
@@ -3897,6 +3951,8 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
             
             if (arg_type != NULL) {
                 struct RecordType *obj_record_type = NULL;
+                int helper_tag = UNKNOWN_TYPE;
+                semcheck_expr_main(&helper_tag, symtab, first_arg, max_scope_lev, NO_MUTATE);
                 
                 if (arg_type->kind == TYPE_KIND_RECORD) {
                     obj_record_type = arg_type->info.record_info;
@@ -3904,6 +3960,25 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                            arg_type->info.points_to != NULL &&
                            arg_type->info.points_to->kind == TYPE_KIND_RECORD) {
                     obj_record_type = arg_type->info.points_to->info.record_info;
+                }
+                
+                if (obj_record_type == NULL)
+                {
+                    const char *helper_name = NULL;
+                    if (arg_type->kind == TYPE_KIND_PRIMITIVE)
+                        helper_tag = arg_type->info.primitive_type_tag;
+                    struct TypeAlias *alias = kgpc_type_get_type_alias(arg_type);
+                    if (alias != NULL)
+                    {
+                        if (alias->target_type_id != NULL)
+                            helper_name = alias->target_type_id;
+                        else if (alias->alias_name != NULL)
+                            helper_name = alias->alias_name;
+                    }
+                    struct RecordType *helper_record = semcheck_lookup_type_helper(symtab,
+                        helper_tag, helper_name);
+                    if (helper_record != NULL)
+                        obj_record_type = helper_record;
                 }
                 
                 if (obj_record_type != NULL) {

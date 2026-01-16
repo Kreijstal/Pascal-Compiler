@@ -3586,6 +3586,8 @@ static struct ClassProperty *convert_property_decl(ast_t *property_node)
     int has_indexer = 0;
 
     ast_t *cursor = property_node->child;
+    if (cursor != NULL && cursor->typ == PASCAL_T_NONE && cursor->child != NULL)
+        cursor = cursor->child;
     if (getenv("KGPC_DEBUG_PROPERTY") != NULL)
     {
         fprintf(stderr, "[KGPC] property decl child list:\n");
@@ -4495,6 +4497,8 @@ static struct RecordType *convert_record_type_ex(ast_t *record_node, ListNode_t 
             return NULL;
         ListBuilder helper_fields_builder;
         list_builder_init(&helper_fields_builder);
+        ListBuilder helper_properties_builder;
+        list_builder_init(&helper_properties_builder);
         ListBuilder method_template_builder;
         list_builder_init(&method_template_builder);
         record->fields = NULL;
@@ -4540,6 +4544,37 @@ static struct RecordType *convert_record_type_ex(ast_t *record_node, ListNode_t 
                 continue;
             }
 
+            if (unwrapped != NULL && unwrapped->typ == PASCAL_T_CLASS_MEMBER)
+            {
+                ast_t *member = unwrapped->child;
+                while (member != NULL)
+                {
+                    ast_t *member_unwrapped = unwrap_pascal_node(member);
+                    if (member_unwrapped != NULL)
+                    {
+                        if (member_unwrapped->typ == PASCAL_T_METHOD_DECL ||
+                            member_unwrapped->typ == PASCAL_T_CONSTRUCTOR_DECL ||
+                            member_unwrapped->typ == PASCAL_T_DESTRUCTOR_DECL)
+                        {
+                            list_builder_append(&helper_fields_builder, member_unwrapped, LIST_UNSPECIFIED);
+                            struct MethodTemplate *template = create_method_template(member_unwrapped);
+                            if (template != NULL) {
+                                list_builder_append(&method_template_builder, template, LIST_METHOD_TEMPLATE);
+                            }
+                        }
+                        else if (member_unwrapped->typ == PASCAL_T_PROPERTY_DECL)
+                        {
+                            struct ClassProperty *property = convert_property_decl(member_unwrapped);
+                            if (property != NULL)
+                                list_builder_append(&helper_properties_builder, property, LIST_CLASS_PROPERTY);
+                        }
+                    }
+                    member = member->next;
+                }
+                base_node = base_node->next;
+                continue;
+            }
+
             if (unwrapped != NULL &&
                 (unwrapped->typ == PASCAL_T_METHOD_DECL ||
                  unwrapped->typ == PASCAL_T_CONSTRUCTOR_DECL ||
@@ -4551,6 +4586,12 @@ static struct RecordType *convert_record_type_ex(ast_t *record_node, ListNode_t 
                 if (template != NULL) {
                     list_builder_append(&method_template_builder, template, LIST_METHOD_TEMPLATE);
                 }
+            }
+            if (unwrapped != NULL && unwrapped->typ == PASCAL_T_PROPERTY_DECL)
+            {
+                struct ClassProperty *property = convert_property_decl(unwrapped);
+                if (property != NULL)
+                    list_builder_append(&helper_properties_builder, property, LIST_CLASS_PROPERTY);
             }
             base_node = base_node->next;
         }
@@ -4565,6 +4606,7 @@ static struct RecordType *convert_record_type_ex(ast_t *record_node, ListNode_t 
         }
 
         record->fields = list_builder_finish(&helper_fields_builder);
+        record->properties = list_builder_finish(&helper_properties_builder);
         record->method_templates = list_builder_finish(&method_template_builder);
         return record;
     }

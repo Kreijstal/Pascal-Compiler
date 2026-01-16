@@ -9918,6 +9918,127 @@ int semcheck_varid(int *type_return,
            which should remain as HASHTYPE_FUNCTION_RETURN access. */
         if(hash_return->hash_type == HASHTYPE_FUNCTION && mutating == NO_MUTATE)
         {
+            /* Prefer helper properties when inside a type helper method body. */
+            if (id != NULL)
+            {
+                HashNode_t *self_node = NULL;
+                if (FindIdent(&self_node, symtab, "Self") == 0 && self_node != NULL)
+                {
+                    struct RecordType *self_record = get_record_type_from_node(self_node);
+                    if (self_record == NULL)
+                    {
+                        int self_type_tag = UNKNOWN_TYPE;
+                        const char *self_type_name = NULL;
+                        set_type_from_hashtype(&self_type_tag, self_node);
+                        if (self_node->type != NULL &&
+                            self_node->type->type_alias != NULL &&
+                            self_node->type->type_alias->target_type_id != NULL)
+                        {
+                            self_type_name = self_node->type->type_alias->target_type_id;
+                        }
+                        if (self_type_name == NULL && self_node->type != NULL)
+                        {
+                            KgpcType *pointed = kgpc_type_is_pointer(self_node->type) ?
+                                self_node->type->info.points_to : NULL;
+                            if (pointed != NULL && pointed->type_alias != NULL &&
+                                pointed->type_alias->target_type_id != NULL)
+                            {
+                                self_type_name = pointed->type_alias->target_type_id;
+                            }
+                        }
+                        self_record = semcheck_lookup_type_helper(symtab, self_type_tag, self_type_name);
+                    }
+
+                    if (self_record == NULL)
+                    {
+                        const char *current_owner = semcheck_get_current_method_owner();
+                        if (current_owner != NULL)
+                        {
+                            struct RecordType *owner_record = semcheck_lookup_record_type(symtab, current_owner);
+                            if (owner_record != NULL && owner_record->is_type_helper)
+                                self_record = owner_record;
+                        }
+                    }
+
+                    if (self_record != NULL && self_record->is_type_helper)
+                    {
+                        struct RecordType *property_owner = NULL;
+                        struct ClassProperty *property = semcheck_find_class_property(symtab,
+                            self_record, id, &property_owner);
+                        if (property != NULL)
+                        {
+                            char *self_str = strdup("Self");
+                            if (self_str != NULL)
+                            {
+                                struct Expression *self_expr = mk_varid(expr->line_num, self_str);
+                                if (self_expr != NULL)
+                                {
+                                    self_expr->record_type = self_record;
+                                    if (self_node->type != NULL)
+                                    {
+                                        self_expr->resolved_kgpc_type = self_node->type;
+                                        kgpc_type_retain(self_node->type);
+                                    }
+
+                                    char *saved_id = expr->expr_data.id;
+                                    expr->expr_data.id = NULL;
+
+                                    expr->type = EXPR_RECORD_ACCESS;
+                                    memset(&expr->expr_data.record_access_data, 0,
+                                        sizeof(expr->expr_data.record_access_data));
+
+                                    expr->expr_data.record_access_data.record_expr = self_expr;
+                                    expr->expr_data.record_access_data.field_id = saved_id;
+
+                                    return semcheck_recordaccess(type_return, symtab, expr,
+                                        max_scope_lev, mutating);
+                                }
+                            }
+                        }
+                        else
+                        {
+                            size_t getter_len = strlen(id) + 4;
+                            char *getter_name = (char *)malloc(getter_len);
+                            if (getter_name != NULL)
+                            {
+                                snprintf(getter_name, getter_len, "Get%s", id);
+                                HashNode_t *getter_node = semcheck_find_class_method(symtab,
+                                    self_record, getter_name, NULL);
+                                if (getter_node != NULL)
+                                {
+                                    char *self_str = strdup("Self");
+                                    if (self_str != NULL)
+                                    {
+                                        struct Expression *self_expr = mk_varid(expr->line_num, self_str);
+                                        if (self_expr != NULL)
+                                        {
+                                            ListNode_t *args_list = CreateListNode(self_expr, LIST_EXPR);
+                                            if (args_list != NULL)
+                                            {
+                                                expr->type = EXPR_FUNCTION_CALL;
+                                                memset(&expr->expr_data.function_call_data, 0,
+                                                    sizeof(expr->expr_data.function_call_data));
+                                                expr->expr_data.function_call_data.id = getter_name;
+                                                expr->expr_data.function_call_data.args_expr = args_list;
+                                                expr->expr_data.function_call_data.mangled_id = NULL;
+                                                semcheck_reset_function_call_cache(expr);
+                                                return semcheck_funccall(type_return, symtab, expr,
+                                                    max_scope_lev, mutating);
+                                            }
+                                            destroy_expr(self_expr);
+                                        }
+                                    }
+                                    free(getter_name);
+                                }
+                                else
+                                {
+                                    free(getter_name);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             char *func_id = expr->expr_data.id;
             /* Set to NULL to transfer ownership to function_call_data.id and avoid double-free */
             expr->expr_data.id = NULL;
@@ -11951,6 +12072,8 @@ int semcheck_funccall(int *type_return,
             
             if (record_info != NULL && record_info->type_id != NULL) {
                 const char *method_name = id;
+                if (method_name != NULL && strncmp(method_name, "__", 2) == 0)
+                    method_name += 2;
                 if (method_name != NULL &&
                     (strncasecmp(method_name, "Create", 6) == 0 ||
                      strcasecmp(method_name, "Destroy") == 0))
@@ -12065,6 +12188,8 @@ int semcheck_funccall(int *type_return,
                     record_info = helper_record;
                     /* Retry helper method lookup */
                     const char *method_name = id;
+                    if (method_name != NULL && strncmp(method_name, "__", 2) == 0)
+                        method_name += 2;
                     if (method_name != NULL &&
                         (strncasecmp(method_name, "Create", 6) == 0 ||
                          strcasecmp(method_name, "Destroy") == 0))
