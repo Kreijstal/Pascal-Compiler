@@ -12507,6 +12507,7 @@ method_call_resolved:
                 ListNode_t *call_args = args_given;
 
                 /* Score only the provided arguments */
+                int candidate_valid = 1;  /* Assume valid until proven otherwise */
                 while(formal_args != NULL && call_args != NULL)
                 {
                     Tree_t *formal_decl = (Tree_t *)formal_args->cur;
@@ -12535,31 +12536,109 @@ method_call_resolved:
                             call_expr = call_expr->expr_data.relop_data.right;
                         }
                     }
-                    if (semcheck_prepare_array_literal_argument(formal_decl, call_expr,
-                            symtab, max_scope_lev, expr->line_num) != 0)
+                    /* During overload scoring, do NOT call semcheck_prepare_array_literal_argument
+                     * as it modifies the expression and can fail prematurely. Instead, check
+                     * element type compatibility for array literals against open array parameters. */
+                    if (formal_decl != NULL && formal_decl->type == TREE_ARR_DECL &&
+                        call_expr != NULL && (call_expr->type == EXPR_SET || call_expr->type == EXPR_ARRAY_LITERAL))
                     {
-                        *type_return = UNKNOWN_TYPE;
-                        final_status = ++return_val;
-                        goto funccall_cleanup;
+                        /* Check element type compatibility for open array parameters */
+                        int formal_elem_type = formal_decl->tree_data.arr_decl_data.type;
+                        const char *formal_elem_type_id = formal_decl->tree_data.arr_decl_data.type_id;
+                        
+                        /* If formal element type is unknown but we have a type_id, resolve it */
+                        if (formal_elem_type == UNKNOWN_TYPE && formal_elem_type_id != NULL)
+                        {
+                            int mapped = semcheck_map_builtin_type_name(symtab, formal_elem_type_id);
+                            if (mapped != UNKNOWN_TYPE)
+                                formal_elem_type = mapped;
+                        }
+                        
+                        /* Infer element type from set/array literal's first element */
+                        int literal_elem_type = UNKNOWN_TYPE;
+                        ListNode_t *first_elem = NULL;
+                        if (call_expr->type == EXPR_SET)
+                            first_elem = call_expr->expr_data.set_data.elements;
+                        else if (call_expr->type == EXPR_ARRAY_LITERAL)
+                            first_elem = call_expr->expr_data.array_literal_data.elements;
+                        
+                        if (first_elem != NULL && first_elem->cur != NULL)
+                        {
+                            struct Expression *elem_expr = (struct Expression *)first_elem->cur;
+                            if (elem_expr->type == EXPR_INUM)
+                                literal_elem_type = INT_TYPE;
+                            else if (elem_expr->type == EXPR_CHAR_CODE)
+                                literal_elem_type = CHAR_TYPE;
+                            else if (elem_expr->type == EXPR_STRING)
+                                literal_elem_type = STRING_TYPE;
+                            else if (elem_expr->type == EXPR_BOOL)
+                                literal_elem_type = BOOL;
+                            else if (elem_expr->type == EXPR_RNUM)
+                                literal_elem_type = REAL_TYPE;
+                        }
+                        
+                        if (getenv("KGPC_DEBUG_OVERLOAD") != NULL)
+                        {
+                            fprintf(stderr, "[OVERLOAD] candidate=%s formal_elem_type=%d literal_elem_type=%d formal_elem_type_id=%s\n",
+                                candidate->id ? candidate->id : "(null)", formal_elem_type, literal_elem_type, 
+                                formal_elem_type_id ? formal_elem_type_id : "(null)");
+                        }
+                        
+                        /* Check if element types are compatible */
+                        if (formal_elem_type != UNKNOWN_TYPE && literal_elem_type != UNKNOWN_TYPE)
+                        {
+                            if (formal_elem_type == literal_elem_type)
+                            {
+                                call_type = formal_type;  /* Exact match */
+                            }
+                            else if ((formal_elem_type == INT_TYPE || formal_elem_type == LONGINT_TYPE || formal_elem_type == INT64_TYPE) &&
+                                     (literal_elem_type == INT_TYPE || literal_elem_type == LONGINT_TYPE || literal_elem_type == INT64_TYPE))
+                            {
+                                call_type = formal_type;  /* Integer types are compatible */
+                                current_score += 1;  /* But add a small penalty */
+                            }
+                            else
+                            {
+                                /* Element types don't match - this overload is invalid */
+                                if (getenv("KGPC_DEBUG_OVERLOAD") != NULL)
+                                {
+                                    fprintf(stderr, "[OVERLOAD] candidate=%s INVALIDATED: formal_elem=%d != literal_elem=%d\n",
+                                        candidate->id ? candidate->id : "(null)", formal_elem_type, literal_elem_type);
+                                }
+                                candidate_valid = 0;
+                                break;
+                            }
+                        }
+                        else
+                        {
+                            /* Unknown types, allow match */
+                            call_type = formal_type;
+                        }
                     }
-                    if (semcheck_prepare_record_constructor_argument(formal_decl, call_expr,
-                            symtab, max_scope_lev, expr->line_num) != 0)
+                    else
                     {
-                        *type_return = UNKNOWN_TYPE;
-                        final_status = ++return_val;
-                        goto funccall_cleanup;
+                        /* For non-array-literal arguments, use normal type checking */
+                        if (semcheck_prepare_array_literal_argument(formal_decl, call_expr,
+                                symtab, max_scope_lev, expr->line_num) != 0)
+                        {
+                            *type_return = UNKNOWN_TYPE;
+                            final_status = ++return_val;
+                            goto funccall_cleanup;
+                        }
+                        if (semcheck_prepare_record_constructor_argument(formal_decl, call_expr,
+                                symtab, max_scope_lev, expr->line_num) != 0)
+                        {
+                            *type_return = UNKNOWN_TYPE;
+                            final_status = ++return_val;
+                            goto funccall_cleanup;
+                        }
+                        semcheck_expr_main(&call_type, symtab, call_expr, max_scope_lev, NO_MUTATE);
                     }
-                    semcheck_expr_main(&call_type, symtab, call_expr, max_scope_lev, NO_MUTATE);
                     if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                          fprintf(stderr, "[SemCheck] semcheck_funccall: call_expr=%p type=%d id=%s record_type=%p\n", 
                              (void*)call_expr, call_expr->type, 
                              (call_expr->type == EXPR_VAR_ID) ? call_expr->expr_data.id : "N/A",
                              call_expr->record_type);
-                    }
-                    if (formal_decl != NULL && formal_decl->type == TREE_ARR_DECL &&
-                        call_expr != NULL && call_expr->type == EXPR_ARRAY_LITERAL)
-                    {
-                        call_type = formal_type;
                     }
 
                     int pointer_penalty = 0;
@@ -12823,6 +12902,13 @@ method_call_resolved:
 
                     formal_args = formal_args->next;
                     call_args = call_args->next;
+                }
+                
+                /* Skip this candidate if element type checking found incompatibility */
+                if (!candidate_valid)
+                {
+                    cur = cur->next;
+                    continue;
                 }
                 
                 /* Add small penalty for using default parameters (prefer exact match) */

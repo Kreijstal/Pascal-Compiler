@@ -214,7 +214,41 @@ static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab
             }
         } else { // Assume array or other type for now
             ids = decl_tree->tree_data.arr_decl_data.ids;
-            resolved_type = -1; // Special marker for array
+            /* For open array parameters, include the element type in mangling
+             * to distinguish between array of Char and array of Integer */
+            int element_type = decl_tree->tree_data.arr_decl_data.type;
+            const char *element_type_id = decl_tree->tree_data.arr_decl_data.type_id;
+            
+            if (element_type == UNKNOWN_TYPE && element_type_id != NULL)
+            {
+                /* Try to map element type from type_id */
+                resolved_type = MapBuiltinTypeNameToVarType(element_type_id);
+                if (resolved_type == HASHVAR_UNTYPED)
+                {
+                    /* Look up in symbol table */
+                    HashNode_t *type_node = find_type_node_for_mangling(symtab, element_type_id);
+                    if (type_node != NULL)
+                        resolved_type = GetVarTypeFromTypeNode(type_node);
+                }
+                /* Prepend 'a' to indicate array with this element type */
+                if (resolved_type != HASHVAR_UNTYPED)
+                    resolved_type = resolved_type + 100;  /* Use 100+ range for array element types */
+                else
+                    resolved_type = HASHVAR_ARRAY;
+            }
+            else if (element_type != UNKNOWN_TYPE)
+            {
+                /* Use ConvertParserTypeToVarType and add 100 to indicate array */
+                resolved_type = ConvertParserTypeToVarType(element_type);
+                if (resolved_type != HASHVAR_UNTYPED)
+                    resolved_type = resolved_type + 100;  /* Use 100+ range for array element types */
+                else
+                    resolved_type = HASHVAR_ARRAY;
+            }
+            else
+            {
+                resolved_type = HASHVAR_ARRAY; /* Fallback for unknown element type */
+            }
         }
 
         ListNode_t* id_cur = ids;
@@ -263,26 +297,43 @@ static char* MangleNameFromTypeList(const char* original_name, ListNode_t* type_
     while (cur != NULL) {
         int type = *(int*)cur->cur;
         const char* type_suffix;
-        switch (type) {
-            case HASHVAR_INTEGER: type_suffix = "_i"; break;
-            case HASHVAR_LONGINT: type_suffix = "_li"; break;
-            case HASHVAR_INT64:   type_suffix = "_i64"; break;
-            case HASHVAR_REAL:    type_suffix = "_r"; break;
-            case HASHVAR_PCHAR:   type_suffix = "_s"; break; // For String (keep backwards compat)
-            case HASHVAR_PANSICHAR: type_suffix = "_pc"; break; // For PAnsiChar/PChar
-            case HASHVAR_PWIDECHAR: type_suffix = "_pw"; break; // For PWideChar
-            case HASHVAR_BOOLEAN: type_suffix = "_b"; break;
-            case HASHVAR_CHAR:    type_suffix = "_c"; break;
-            case HASHVAR_POINTER: type_suffix = "_p"; break;
-            case HASHVAR_SET:     type_suffix = "_set"; break;
-            case HASHVAR_ENUM:    type_suffix = "_e"; break;
-            case HASHVAR_FILE:    type_suffix = "_f"; break;
-            case HASHVAR_TEXT:    type_suffix = "_t"; break; // For text files
-            case HASHVAR_RECORD:  type_suffix = "_u"; break; // Record types treated as unknown for mangling
-            case HASHVAR_ARRAY:   type_suffix = "_a"; break; // Array
-            case HASHVAR_RAWBYTESTRING: type_suffix = "_rbs"; break; // RawByteString
-            case HASHVAR_UNICODESTRING: type_suffix = "_us"; break;  // UnicodeString
-            default:              type_suffix = "_u"; break; // Unknown/unsupported
+        /* Handle array element types (100+ range) */
+        if (type >= 100) {
+            int elem_type = type - 100;
+            switch (elem_type) {
+                case HASHVAR_INTEGER: type_suffix = "_ai"; break;   /* array of Integer */
+                case HASHVAR_LONGINT: type_suffix = "_ali"; break;  /* array of LongInt */
+                case HASHVAR_INT64:   type_suffix = "_ai64"; break; /* array of Int64 */
+                case HASHVAR_REAL:    type_suffix = "_ar"; break;   /* array of Real */
+                case HASHVAR_PCHAR:   type_suffix = "_as"; break;   /* array of String */
+                case HASHVAR_BOOLEAN: type_suffix = "_ab"; break;   /* array of Boolean */
+                case HASHVAR_CHAR:    type_suffix = "_ac"; break;   /* array of Char */
+                case HASHVAR_POINTER: type_suffix = "_ap"; break;   /* array of Pointer */
+                case HASHVAR_RECORD:  type_suffix = "_au"; break;   /* array of Record */
+                default:              type_suffix = "_a"; break;    /* array of unknown */
+            }
+        } else {
+            switch (type) {
+                case HASHVAR_INTEGER: type_suffix = "_i"; break;
+                case HASHVAR_LONGINT: type_suffix = "_li"; break;
+                case HASHVAR_INT64:   type_suffix = "_i64"; break;
+                case HASHVAR_REAL:    type_suffix = "_r"; break;
+                case HASHVAR_PCHAR:   type_suffix = "_s"; break; // For String (keep backwards compat)
+                case HASHVAR_PANSICHAR: type_suffix = "_pc"; break; // For PAnsiChar/PChar
+                case HASHVAR_PWIDECHAR: type_suffix = "_pw"; break; // For PWideChar
+                case HASHVAR_BOOLEAN: type_suffix = "_b"; break;
+                case HASHVAR_CHAR:    type_suffix = "_c"; break;
+                case HASHVAR_POINTER: type_suffix = "_p"; break;
+                case HASHVAR_SET:     type_suffix = "_set"; break;
+                case HASHVAR_ENUM:    type_suffix = "_e"; break;
+                case HASHVAR_FILE:    type_suffix = "_f"; break;
+                case HASHVAR_TEXT:    type_suffix = "_t"; break; // For text files
+                case HASHVAR_RECORD:  type_suffix = "_u"; break; // Record types treated as unknown for mangling
+                case HASHVAR_ARRAY:   type_suffix = "_a"; break; // Array
+                case HASHVAR_RAWBYTESTRING: type_suffix = "_rbs"; break; // RawByteString
+                case HASHVAR_UNICODESTRING: type_suffix = "_us"; break;  // UnicodeString
+                default:              type_suffix = "_u"; break; // Unknown/unsupported
+            }
         }
         strcat(mangled_name, type_suffix);
         cur = cur->next;
@@ -326,7 +377,24 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
             {
                 KgpcType *kgpc_type = arg_expr->resolved_kgpc_type;
                 if (kgpc_type_is_array(kgpc_type) || kgpc_type_is_array_of_const(kgpc_type))
-                    resolved_type = HASHVAR_ARRAY;
+                {
+                    /* For arrays, include element type in mangling (100+ range) */
+                    KgpcType *elem_type = kgpc_type_is_array(kgpc_type) ?
+                        kgpc_type->info.array_info.element_type : NULL;
+                    if (elem_type != NULL && elem_type->kind == TYPE_KIND_PRIMITIVE)
+                    {
+                        int elem_tag = elem_type->info.primitive_type_tag;
+                        enum VarType elem_var = ConvertParserTypeToVarType(elem_tag);
+                        if (elem_var != HASHVAR_UNTYPED)
+                            resolved_type = elem_var + 100;  /* Use 100+ range for array element types */
+                        else
+                            resolved_type = HASHVAR_ARRAY;
+                    }
+                    else
+                    {
+                        resolved_type = HASHVAR_ARRAY;
+                    }
+                }
                 else if (kgpc_type->kind == TYPE_KIND_RECORD)
                     resolved_type = HASHVAR_RECORD;
                 else if (kgpc_type->kind == TYPE_KIND_POINTER)
@@ -346,6 +414,43 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
                         else if (strcasecmp(alias->alias_name, "UnicodeString") == 0)
                             resolved_type = HASHVAR_UNICODESTRING;
                     }
+                }
+            }
+            /* Also handle array literals that don't have resolved_kgpc_type yet */
+            else if (arg_expr != NULL && (arg_expr->type == EXPR_ARRAY_LITERAL || arg_expr->type == EXPR_SET))
+            {
+                /* Get element type from first element of array literal */
+                ListNode_t *first_elem = NULL;
+                if (arg_expr->type == EXPR_ARRAY_LITERAL)
+                    first_elem = arg_expr->expr_data.array_literal_data.elements;
+                else if (arg_expr->type == EXPR_SET)
+                    first_elem = arg_expr->expr_data.set_data.elements;
+                
+                if (first_elem != NULL && first_elem->cur != NULL)
+                {
+                    struct Expression *elem_expr = (struct Expression *)first_elem->cur;
+                    /* Infer element type directly from expression type without calling semcheck_expr_main
+                     * since the expression may not be fully ready for semantic checking yet */
+                    enum VarType elem_var = HASHVAR_UNTYPED;
+                    if (elem_expr->type == EXPR_INUM)
+                        elem_var = HASHVAR_INTEGER;
+                    else if (elem_expr->type == EXPR_CHAR_CODE)
+                        elem_var = HASHVAR_CHAR;
+                    else if (elem_expr->type == EXPR_STRING)
+                        elem_var = HASHVAR_PCHAR;
+                    else if (elem_expr->type == EXPR_BOOL)
+                        elem_var = HASHVAR_BOOLEAN;
+                    else if (elem_expr->type == EXPR_RNUM)
+                        elem_var = HASHVAR_REAL;
+                    
+                    if (elem_var != HASHVAR_UNTYPED)
+                        resolved_type = elem_var + 100;  /* Use 100+ range for array element types */
+                    else
+                        resolved_type = HASHVAR_ARRAY;
+                }
+                else
+                {
+                    resolved_type = HASHVAR_ARRAY;
                 }
             }
         }
