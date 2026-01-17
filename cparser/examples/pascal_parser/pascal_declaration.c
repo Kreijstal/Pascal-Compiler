@@ -425,6 +425,12 @@ static ParseResult run_type_branch(input_t* in, combinator_t* branch) {
     return res;
 }
 
+/* Helper function to check if a character can start a range expression */
+static int is_range_start_char(unsigned char ch) {
+    return isdigit(ch) || ch == '\'' || ch == '$' || ch == '%' || 
+           ch == '#' || ch == '&' || ch == '+' || ch == '-';
+}
+
 static ParseResult type_definition_dispatch_fn(input_t* in, void* args, char* parser_name) {
     type_dispatch_args_t* dispatch = (type_dispatch_args_t*)args;
     if (dispatch == NULL) {
@@ -447,7 +453,7 @@ static ParseResult type_definition_dispatch_fn(input_t* in, void* args, char* pa
     if (dispatch->enumerated_parser && ch == '(') {
         return run_type_branch(in, dispatch->enumerated_parser);
     }
-    if (dispatch->range_parser && (isdigit(ch) || ch == '\'' || ch == '$' || ch == '%' || ch == '#' || ch == '&' || ch == '+' || ch == '-')) {
+    if (dispatch->range_parser && is_range_start_char(ch)) {
         return run_type_branch(in, dispatch->range_parser);
     }
 
@@ -473,9 +479,7 @@ static ParseResult type_definition_dispatch_fn(input_t* in, void* args, char* pa
                 int range_pos = skip_pascal_layout_preview(in, word.end_pos);
                 if (range_pos < length) {
                     unsigned char range_ch = (unsigned char)buffer[range_pos];
-                    if (isdigit(range_ch) || range_ch == '$' || range_ch == '%' ||
-                        range_ch == '#' || range_ch == '&' || range_ch == '+' ||
-                        range_ch == '-' || range_ch == '\'') {
+                    if (is_range_start_char(range_ch)) {
                         return run_type_branch(in, dispatch->distinct_type_range_parser);
                     }
                 }
