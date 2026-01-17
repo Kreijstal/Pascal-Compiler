@@ -11988,17 +11988,21 @@ int semcheck_funccall(int *type_return,
             struct RecordType *owner_record = semcheck_lookup_record_type(symtab, current_owner);
             if (owner_record != NULL)
             {
-                HashNode_t *method_node = semcheck_find_class_method(symtab, owner_record, id, NULL);
+                /* Use owner_out to get the ACTUAL owner where method was found (may be parent helper) */
+                struct RecordType *actual_method_owner = NULL;
+                HashNode_t *method_node = semcheck_find_class_method(symtab, owner_record, id, &actual_method_owner);
                 char *mangled_method_name = NULL;
                 ListNode_t *method_candidates = NULL;
-                if (owner_record->type_id != NULL)
+                /* Use actual_method_owner if found (for inherited methods), else fall back to owner_record */
+                struct RecordType *record_for_mangling = (actual_method_owner != NULL) ? actual_method_owner : owner_record;
+                if (record_for_mangling->type_id != NULL)
                 {
-                    size_t class_len = strlen(owner_record->type_id);
+                    size_t class_len = strlen(record_for_mangling->type_id);
                     size_t method_len = strlen(id);
                     mangled_method_name = (char *)malloc(class_len + 2 + method_len + 1);
                     if (mangled_method_name != NULL)
                         snprintf(mangled_method_name, class_len + 2 + method_len + 1,
-                            "%s__%s", owner_record->type_id, id);
+                            "%s__%s", record_for_mangling->type_id, id);
                 }
                 if (mangled_method_name != NULL)
                     method_candidates = FindAllIdents(symtab, mangled_method_name);
