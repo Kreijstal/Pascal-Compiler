@@ -12431,37 +12431,48 @@ int semcheck_funccall(int *type_return,
                 if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                     fprintf(stderr, "[SemCheck] semcheck_funccall: Found constructor/method %s in class\n", id);
                 }
-                
+
+                /* Check if this is a static method (class function with static modifier) */
+                int is_static_method = from_cparser_is_method_static(method_owner->type_id, id);
+                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                    fprintf(stderr, "[SemCheck] semcheck_funccall: is_static_method=%d for %s.%s\n",
+                        is_static_method, method_owner->type_id, id);
+                }
+
                 /* Remove the first argument (the class reference) from the argument list
                  * since it's not a real argument to the constructor */
                 ListNode_t *old_head = args_given;
                 expr->expr_data.function_call_data.args_expr = old_head->next;
                 old_head->next = NULL;  /* Detach to prevent dangling reference */
                 ListNode_t *user_args = expr->expr_data.function_call_data.args_expr;
-                
-                /* For constructors, add a placeholder Self argument at the front.
+                args_given = user_args;  /* Update args_given to reflect removed type arg */
+
+                /* For non-static constructors, add a placeholder Self argument at the front.
                  * Constructors have Self as first parameter, but from user's perspective
                  * they don't pass Self - it's implicitly created.
+                 * Static factory methods (class function Create: T; static;) do NOT have Self.
                  * We use EXPR_NIL as the placeholder - codegen will allocate memory. */
-                struct Expression *self_placeholder = (struct Expression *)calloc(1, sizeof(struct Expression));
-                if (self_placeholder != NULL) {
-                    /* Use nil as the placeholder - codegen will handle actual allocation */
-                    self_placeholder->type = EXPR_NIL;
-                    self_placeholder->resolved_type = POINTER_TYPE;
-                    self_placeholder->line_num = expr->line_num;
-                    /* Set the resolved_kgpc_type to match the class type for proper type matching */
-                    if (owner_type != NULL) {
-                        kgpc_type_retain(owner_type);
-                        self_placeholder->resolved_kgpc_type = owner_type;
-                    }
-                    /* Set record_type for class pointer compatibility */
-                    self_placeholder->record_type = record_info;
-                    
-                    ListNode_t *self_node = CreateListNode(self_placeholder, LIST_EXPR);
-                    if (self_node != NULL) {
-                        self_node->next = user_args;
-                        expr->expr_data.function_call_data.args_expr = self_node;
-                        args_given = self_node;
+                if (!is_static_method) {
+                    struct Expression *self_placeholder = (struct Expression *)calloc(1, sizeof(struct Expression));
+                    if (self_placeholder != NULL) {
+                        /* Use nil as the placeholder - codegen will handle actual allocation */
+                        self_placeholder->type = EXPR_NIL;
+                        self_placeholder->resolved_type = POINTER_TYPE;
+                        self_placeholder->line_num = expr->line_num;
+                        /* Set the resolved_kgpc_type to match the class type for proper type matching */
+                        if (owner_type != NULL) {
+                            kgpc_type_retain(owner_type);
+                            self_placeholder->resolved_kgpc_type = owner_type;
+                        }
+                        /* Set record_type for class pointer compatibility */
+                        self_placeholder->record_type = record_info;
+
+                        ListNode_t *self_node = CreateListNode(self_placeholder, LIST_EXPR);
+                        if (self_node != NULL) {
+                            self_node->next = user_args;
+                            expr->expr_data.function_call_data.args_expr = self_node;
+                            args_given = self_node;
+                        }
                     }
                 }
                 

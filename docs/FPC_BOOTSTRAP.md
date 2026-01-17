@@ -7,27 +7,22 @@ The FPC RTL cannot be fully compiled because kgpc has bugs and missing features 
 ## Known Issues to Fix
 
 1. **Type Helper Issues**
-   - Undeclared `Self` in some type helper methods
-   - Initializer type mismatch with default enum parameters
+   - IndexOfAny/IndexOfAnyUnQuoted overload resolution in type helpers
+   - TGUIDHelper.Create type mismatch with type casts
 
-2. **Type Resolution**
-   - Incompatible type assignments (char vs string, string vs pointer)
-   - Type mismatches in function arguments
+2. **Forward References**
+   - SysBeep used before declaration (forward reference support needed)
+   - Some procedure overloads not found due to forward reference issues
 
-3. **Function Overloads**
-   - IndexOfAny/IndexOfAnyUnQuoted overload resolution
-   - Format/CurrToStr argument type mismatch
-   - Some procedure overloads not matched
-
-4. **Missing Built-ins**
-   - `strlen` - String length for PAnsiChar
-   - `flush` - Text file flush procedure
+3. **Overload Resolution**
+   - StringReplace ambiguous when ShortString can convert to both AnsiString and UnicodeString
+   - Some procedure overloads not matched (InitInternational, InitExceptions, etc.)
 
 ## Build Command
 
-### sysutils.pp (67 errors)
+### sysutils.pp (28 errors)
 ```bash
-./builddir/KGPC/kgpc ./FPCSource/rtl/unix/sysutils.pp /tmp/sysutils.s \
+./build/KGPC/kgpc ./FPCSource/rtl/unix/sysutils.pp /tmp/sysutils.s \
   --no-stdlib \
   -I./FPCSource/rtl/unix \
   -I./FPCSource/rtl/objpas \
@@ -39,17 +34,17 @@ The FPC RTL cannot be fully compiled because kgpc has bugs and missing features 
   -I./FPCSource/packages/rtl-objpas/src/inc
 ```
 
-### Error categories (67 total):
+### Error categories (28 total):
 | Count | Error | Root Cause |
 |-------|-------|------------|
-| 14 | incompatible types in assignment for S | String/pointer conversion |
-| 12 | undeclared identifier "Self" | Type helper cascading errors |
-| 12 | initializer type mismatch | Default parameter issues |
-| 7 | incompatible types in assignment for Result | Int64 return type issues |
-| 7 | IndexOfAny* overload issues | Overload resolution |
-| 5 | procedure overload issues | Missing overloads |
-| 4 | Format/CurrToStr argument mismatch | Type conversion |
-| 6 | Other | Various |
+| 6 | IndexOfAny/IndexOfAnyUnQuoted overload not found | Missing overloads in FPC sysutils |
+| 6 | Result type incompatible | Cascading from overload errors |
+| 5 | procedure overload not found | Forward reference issues |
+| 3 | Create argument type mismatch | Type cast resolution |
+| 3 | ShortString assignment | Cascading from earlier errors |
+| 3 | SysBeep/OnBeep undeclared | Forward reference support needed |
+| 1 | StringReplace ambiguous | Overload resolution |
+| 1 | Result real type mismatch | Cascading |
 
 ## Compiles Successfully (RTL Units)
 
@@ -70,7 +65,7 @@ The FPC RTL cannot be fully compiled because kgpc has bugs and missing features 
 
 ## Units with Compilation Errors
 
-- `sysutils.pp` - **67 errors** (with `--no-stdlib`)
+- `sysutils.pp` - **28 errors** (with `--no-stdlib`)
 - `math.pp` - Depends on sysutils
 - `cthreads.pp` - Missing ThreadingAlreadyUsed
 - `charset.pp` - Type incompatibilities
