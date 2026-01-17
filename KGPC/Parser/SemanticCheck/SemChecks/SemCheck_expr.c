@@ -12286,7 +12286,9 @@ int semcheck_funccall(int *type_return,
                     else
                     {
                         int is_static = from_cparser_is_method_static(record_info->type_id, method_name);
-                        HashNode_t *method_node = semcheck_find_class_method(symtab, record_info, method_name, NULL);
+                        /* Use owner_out to get the actual owner where the method was found (may be parent helper) */
+                        struct RecordType *actual_method_owner = NULL;
+                        HashNode_t *method_node = semcheck_find_class_method(symtab, record_info, method_name, &actual_method_owner);
                         if (method_node != NULL)
                         {
                             set_type_from_hashtype(type_return, method_node);
@@ -12306,15 +12308,17 @@ int semcheck_funccall(int *type_return,
                                 args_given = expr->expr_data.function_call_data.args_expr;
                             }
 
+                            /* Use actual_method_owner for mangled name (for inherited methods from parent helpers) */
+                            struct RecordType *record_for_mangling = (actual_method_owner != NULL) ? actual_method_owner : record_info;
                             char *mangled_method_name = NULL;
-                            if (record_info->type_id != NULL && method_name != NULL)
+                            if (record_for_mangling->type_id != NULL && method_name != NULL)
                             {
-                                size_t class_len = strlen(record_info->type_id);
+                                size_t class_len = strlen(record_for_mangling->type_id);
                                 size_t method_len = strlen(method_name);
                                 mangled_method_name = (char *)malloc(class_len + 2 + method_len + 1);
                                 if (mangled_method_name != NULL)
                                     snprintf(mangled_method_name, class_len + 2 + method_len + 1,
-                                        "%s__%s", record_info->type_id, method_name);
+                                        "%s__%s", record_for_mangling->type_id, method_name);
                             }
 
                             ListNode_t *method_candidates = NULL;

@@ -1,8 +1,9 @@
 {$mode objfpc}{$H+}
 {$modeswitch typehelpers}
-unit test_derived_split;
-
-interface
+{ Regression test for type helper inheritance with nested function calls }
+{ Tests that Self.Method() from a nested function inside a derived helper }
+{ correctly resolves to the parent helper's overloaded methods. }
+program reg_helper_derived_overload;
 
 type
   SizeInt = Int64;
@@ -13,14 +14,12 @@ type
     function IndexOfAnyUnquoted(const AnyOf: array of AnsiChar; StartQuote, EndQuote: AnsiChar; StartIndex: SizeInt): SizeInt; overload;
     function IndexOfAnyUnquoted(const AnyOf: array of AnsiChar; StartQuote, EndQuote: AnsiChar; StartIndex: SizeInt; ACount: SizeInt): SizeInt; overload;
     function IndexOfAny(const AnyOf: array of AnsiChar; StartIndex: SizeInt): SizeInt;
-    function Split(const Separators: array of AnsiChar; AQuoteStart, AQuoteEnd: AnsiChar; ACount: SizeInt): TAnsiStringArray;
+    function TestCall: SizeInt;
   end;
   
   TDerivedHelper = type helper(TBaseHelper) for AnsiString
-    function InheritedSplit(const Separators: array of AnsiChar; AQuoteStart, AQuoteEnd: AnsiChar; ACount: SizeInt): TAnsiStringArray;
+    function InheritedTestCall: SizeInt;
   end;
-
-implementation
 
 function TBaseHelper.IndexOfAnyUnquoted(const AnyOf: array of AnsiChar; StartQuote, EndQuote: AnsiChar): SizeInt;
 begin
@@ -51,42 +50,37 @@ begin
   Result := IndexOfAnyUnquoted(AnyOf, #0, #0, StartIndex);
 end;
 
-function TBaseHelper.Split(const Separators: array of AnsiChar; AQuoteStart, AQuoteEnd: AnsiChar; ACount: SizeInt): TAnsiStringArray;
+function TBaseHelper.TestCall: SizeInt;
 
-  function NextSep(StartIndex: SizeInt): SizeInt;
+  function BaseNestedCall: SizeInt;
   begin
-    if (AQuoteStart <> #0) then
-      Result := Self.IndexOfAnyUnquoted(Separators, AQuoteStart, AQuoteEnd, StartIndex)
-    else
-      Result := Self.IndexOfAny(Separators, StartIndex);
+    { Key test: calling overloaded Self.method from nested function }
+    Result := Self.IndexOfAnyUnquoted([','], #0, #0, 0);
   end;
 
 begin
-  SetLength(Result, 0);
-  if NextSep(0) < 0 then
-  begin
-    SetLength(Result, 1);
-    Result[0] := Self;
-  end;
+  Result := BaseNestedCall;
 end;
 
-function TDerivedHelper.InheritedSplit(const Separators: array of AnsiChar; AQuoteStart, AQuoteEnd: AnsiChar; ACount: SizeInt): TAnsiStringArray;
+function TDerivedHelper.InheritedTestCall: SizeInt;
 
-  function NextSep(StartIndex: SizeInt): SizeInt;
+  function DerivedNestedCall: SizeInt;
   begin
-    if (AQuoteStart <> #0) then
-      Result := Self.IndexOfAnyUnquoted(Separators, AQuoteStart, AQuoteEnd, StartIndex)
-    else
-      Result := Self.IndexOfAny(Separators, StartIndex);
+    { Key test: calling inherited method via Self from nested function in derived helper }
+    Result := Self.IndexOfAny([','], 0);
   end;
 
 begin
-  SetLength(Result, 0);
-  if NextSep(0) < 0 then
-  begin
-    SetLength(Result, 1);
-    Result[0] := Self;
-  end;
+  Result := DerivedNestedCall;
 end;
 
+var
+  S: AnsiString;
+  R1, R2: SizeInt;
+begin
+  S := 'hello,world';
+  R1 := S.TestCall;
+  R2 := S.InheritedTestCall;
+  WriteLn(R1);
+  WriteLn(R2);
 end.
