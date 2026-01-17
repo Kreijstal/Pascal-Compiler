@@ -466,6 +466,20 @@ static ParseResult type_definition_dispatch_fn(input_t* in, void* args, char* pa
                     return run_type_branch(in, dispatch->distinct_type_parser);
                 }
             }
+            /* Handle "type <range>" (distinct type from subrange) - e.g., type 0..$10ffff
+               When the token after "type" starts with a digit or range-starting char,
+               use the distinct_type_range_parser if available. */
+            if (dispatch->distinct_type_range_parser) {
+                int range_pos = skip_pascal_layout_preview(in, word.end_pos);
+                if (range_pos < length) {
+                    unsigned char range_ch = (unsigned char)buffer[range_pos];
+                    if (isdigit(range_ch) || range_ch == '$' || range_ch == '%' ||
+                        range_ch == '#' || range_ch == '&' || range_ch == '+' ||
+                        range_ch == '-' || range_ch == '\'') {
+                        return run_type_branch(in, dispatch->distinct_type_range_parser);
+                    }
+                }
+            }
         }
         if (dispatch->helper_parser &&
             (pascal_word_equals_ci(&word, "record") || pascal_word_equals_ci(&word, "class"))) {
@@ -1532,6 +1546,13 @@ void init_pascal_unit_parser(combinator_t** p) {
         NULL
     );
     
+    /* Distinct type from range: "type 0..$10ffff" creates a distinct type from a subrange */
+    combinator_t* distinct_type_range_spec = seq(new_combinator(), PASCAL_T_DISTINCT_TYPE,
+        token(keyword_ci("type")),
+        range_spec,  /* reuse the range parser */
+        NULL
+    );
+    
     // Create parser for identifier with optional subscript (e.g., string[20])
     combinator_t* simple_identifier = new_combinator();
     simple_identifier->type = COMB_TYPE_DISPATCH;
@@ -1560,6 +1581,7 @@ void init_pascal_unit_parser(combinator_t** p) {
     type_args->constructed_parser = constructed_type;
     type_args->identifier_parser = simple_identifier;
     type_args->distinct_type_parser = distinct_type_spec;
+    type_args->distinct_type_range_parser = distinct_type_range_spec;
 
     combinator_t* type_definition = new_combinator();
     type_definition->type = COMB_TYPE_DISPATCH;
@@ -2783,6 +2805,13 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         distinct_type_codepage_param_prog,  /* optional (CODEPAGE) */
         NULL
     );
+    
+    /* Distinct type from range: "type 0..$10ffff" creates a distinct type from a subrange */
+    combinator_t* distinct_type_range_spec_prog = seq(new_combinator(), PASCAL_T_DISTINCT_TYPE,
+        token(keyword_ci("type")),
+        range_type(PASCAL_T_RANGE_TYPE),  /* reuse the range parser */
+        NULL
+    );
 
     combinator_t* helper_body = optional(create_helper_body_parser());
     combinator_t* helper_kind = multi(new_combinator(), PASCAL_T_NONE,
@@ -2810,6 +2839,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     combinator_t* type_spec = multi(new_combinator(), PASCAL_T_TYPE_SPEC,
         type_helper_type,                               // type helpers (e.g., type helper for Integer)
         distinct_type_spec_prog,                        // distinct types like "type Double"
+        distinct_type_range_spec_prog,                  // distinct types from range like "type 0..$10ffff"
         reference_to_type(PASCAL_T_REFERENCE_TO_TYPE),  // reference to procedure/function
         interface_type(PASCAL_T_INTERFACE_TYPE),        // interface types like interface ... end
         class_of_type(PASCAL_T_CLASS_OF_TYPE),          // class reference types like "class of TObject" (must be before class_type)

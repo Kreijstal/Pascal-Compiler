@@ -290,6 +290,7 @@ typedef struct type_dispatch_args {
     combinator_t* constructed_parser;
     combinator_t* identifier_parser;
     combinator_t* distinct_type_parser;  /* For "type <typename>" distinct type syntax */
+    combinator_t* distinct_type_range_parser;  /* For "type <range>" distinct type from subrange */
     combinator_t* procedure_parser;      /* For traditional procedure type (without "reference to") */
     combinator_t* function_parser;       /* For traditional function type (without "reference to") */
 } type_dispatch_args_t;
