@@ -1868,11 +1868,8 @@ static int evaluate_real_const_expr(SymTab_t *symtab, struct Expression *expr, d
                     *out_value = left * right;
                     return 0;
                 case SLASH:
-                    if (right == 0.0)
-                    {
-                        fprintf(stderr, "Error: division by zero in const expression.\n");
-                        return 1;
-                    }
+                    /* Allow 0.0/0.0 to produce NaN, and x/0.0 to produce Inf/-Inf
+                     * This is required for FPC's TSingleHelper.NaN/TDoubleHelper.NaN etc */
                     *out_value = left / right;
                     return 0;
                 default:
@@ -6920,6 +6917,30 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
      * This ensures function return types referencing implementation types can be resolved.
      * The same subprograms list is shared by interface and implementation. */
     before = return_val;
+
+    /* Debug: dump subprograms list before predeclaration */
+    if (getenv("KGPC_DEBUG_SUBPROGRAMS_LIST") != NULL)
+    {
+        fprintf(stderr, "[SUBPROGRAMS_LIST] Dumping subprograms list for unit:\n");
+        ListNode_t *debug_cur = tree->tree_data.unit_data.subprograms;
+        int count = 0;
+        while (debug_cur != NULL)
+        {
+            count++;
+            if (debug_cur->type == LIST_TREE && debug_cur->cur != NULL)
+            {
+                Tree_t *sub = (Tree_t *)debug_cur->cur;
+                if (sub->type == TREE_SUBPROGRAM)
+                {
+                    fprintf(stderr, "[SUBPROGRAMS_LIST] %d: %s (line %d)\n",
+                            count, sub->tree_data.subprogram_data.id, sub->line_num);
+                }
+            }
+            debug_cur = debug_cur->next;
+        }
+        fprintf(stderr, "[SUBPROGRAMS_LIST] Total: %d subprograms\n", count);
+    }
+
     return_val += predeclare_subprograms(symtab, tree->tree_data.unit_data.subprograms, 0, NULL);
     if (debug_steps != NULL && return_val != before)
         fprintf(stderr, "[SemCheck] subprogram predeclare +%d (total %d)\n",
@@ -8415,42 +8436,46 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     return_val += semcheck_id_not_main(subprogram->tree_data.subprogram_data.id);
 
     // --- Name Mangling Logic ---
-    static int debug_external = -1;
-    if (debug_external == -1)
-        debug_external = (getenv("KGPC_DEBUG_EXTERNAL") != NULL);
-    const char *explicit_name = subprogram->tree_data.subprogram_data.cname_override;
-    if (explicit_name != NULL) {
-        char *overload_mangled = MangleFunctionName(
-            subprogram->tree_data.subprogram_data.id,
-            subprogram->tree_data.subprogram_data.args_var,
-            symtab);
-        if (overload_mangled != NULL)
-            subprogram->tree_data.subprogram_data.mangled_id = overload_mangled;
-        else
-            subprogram->tree_data.subprogram_data.mangled_id = strdup(explicit_name);
-    } else if (subprogram->tree_data.subprogram_data.cname_flag) {
-        const char *export_name = subprogram->tree_data.subprogram_data.id;
-        if (debug_external) {
-            fprintf(stderr, "[SemCheck] cname_flag id=%s alias=%s\n",
+    // Only set mangled_id if not already set by predeclare_subprogram (which handles
+    // nested functions with unique parent$child naming)
+    if (subprogram->tree_data.subprogram_data.mangled_id == NULL) {
+        static int debug_external = -1;
+        if (debug_external == -1)
+            debug_external = (getenv("KGPC_DEBUG_EXTERNAL") != NULL);
+        const char *explicit_name = subprogram->tree_data.subprogram_data.cname_override;
+        if (explicit_name != NULL) {
+            char *overload_mangled = MangleFunctionName(
                 subprogram->tree_data.subprogram_data.id,
-                export_name != NULL ? export_name : "(null)");
+                subprogram->tree_data.subprogram_data.args_var,
+                symtab);
+            if (overload_mangled != NULL)
+                subprogram->tree_data.subprogram_data.mangled_id = overload_mangled;
+            else
+                subprogram->tree_data.subprogram_data.mangled_id = strdup(explicit_name);
+        } else if (subprogram->tree_data.subprogram_data.cname_flag) {
+            const char *export_name = subprogram->tree_data.subprogram_data.id;
+            if (debug_external) {
+                fprintf(stderr, "[SemCheck] cname_flag id=%s alias=%s\n",
+                    subprogram->tree_data.subprogram_data.id,
+                    export_name != NULL ? export_name : "(null)");
+            }
+            char *overload_mangled = MangleFunctionName(
+                subprogram->tree_data.subprogram_data.id,
+                subprogram->tree_data.subprogram_data.args_var,
+                symtab);
+            if (overload_mangled != NULL)
+                subprogram->tree_data.subprogram_data.mangled_id = overload_mangled;
+            else if (export_name != NULL)
+                subprogram->tree_data.subprogram_data.mangled_id = strdup(export_name);
+            else
+                subprogram->tree_data.subprogram_data.mangled_id = NULL;
+        } else {
+            // Pass the symbol table to the mangler
+            subprogram->tree_data.subprogram_data.mangled_id = MangleFunctionName(
+                subprogram->tree_data.subprogram_data.id,
+                subprogram->tree_data.subprogram_data.args_var,
+                symtab);
         }
-        char *overload_mangled = MangleFunctionName(
-            subprogram->tree_data.subprogram_data.id,
-            subprogram->tree_data.subprogram_data.args_var,
-            symtab);
-        if (overload_mangled != NULL)
-            subprogram->tree_data.subprogram_data.mangled_id = overload_mangled;
-        else if (export_name != NULL)
-            subprogram->tree_data.subprogram_data.mangled_id = strdup(export_name);
-        else
-            subprogram->tree_data.subprogram_data.mangled_id = NULL;
-    } else {
-        // Pass the symbol table to the mangler
-        subprogram->tree_data.subprogram_data.mangled_id = MangleFunctionName(
-            subprogram->tree_data.subprogram_data.id,
-            subprogram->tree_data.subprogram_data.args_var,
-            symtab); // <-- PASS symtab HERE
     }
     id_to_use_for_lookup = subprogram->tree_data.subprogram_data.id;
 
@@ -9018,23 +9043,32 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
  * This is used for forward declarations so all procedures are visible
  * before any bodies are processed.
  */
-static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
+static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev, Tree_t *parent_subprogram)
 {
     int return_val = 0;
     int func_return;
     enum TreeType sub_type;
-    
+
     assert(symtab != NULL);
     assert(subprogram != NULL);
     assert(subprogram->type == TREE_SUBPROGRAM);
-    
+
     char *id_to_use_for_lookup;
-    
+
     sub_type = subprogram->tree_data.subprogram_data.sub_type;
     assert(sub_type == TREE_SUBPROGRAM_PROC || sub_type == TREE_SUBPROGRAM_FUNC);
-    
+
     return_val += semcheck_id_not_main(subprogram->tree_data.subprogram_data.id);
-    
+
+    /* Debug output for procedure predeclaration */
+    if (getenv("KGPC_DEBUG_PREDECLARE_PROC") != NULL)
+    {
+        fprintf(stderr, "[PREDECLARE_PROC] %s (line %d) parent=%s\n",
+                subprogram->tree_data.subprogram_data.id,
+                subprogram->line_num,
+                parent_subprogram != NULL ? parent_subprogram->tree_data.subprogram_data.id : "(null)");
+    }
+
     // --- Name Mangling Logic ---
     const char *predeclare_name = subprogram->tree_data.subprogram_data.cname_override;
     if (predeclare_name != NULL) {
@@ -9043,11 +9077,34 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
         subprogram->tree_data.subprogram_data.mangled_id = strdup(subprogram->tree_data.subprogram_data.id);
     } else {
         // Pass the symbol table to the mangler
-        subprogram->tree_data.subprogram_data.mangled_id = MangleFunctionName(
+        char *base_mangled = MangleFunctionName(
             subprogram->tree_data.subprogram_data.id,
             subprogram->tree_data.subprogram_data.args_var,
             symtab);
+
+        // For nested functions, prepend the parent's mangled_id to make the name unique
+        if (parent_subprogram != NULL && parent_subprogram->tree_data.subprogram_data.mangled_id != NULL) {
+            const char *parent_mangled = parent_subprogram->tree_data.subprogram_data.mangled_id;
+            size_t len = strlen(parent_mangled) + 2 + strlen(base_mangled) + 1; // parent$nested\0
+            char *nested_mangled = malloc(len);
+            if (nested_mangled != NULL) {
+                snprintf(nested_mangled, len, "%s$%s", parent_mangled, base_mangled);
+                free(base_mangled);
+                subprogram->tree_data.subprogram_data.mangled_id = nested_mangled;
+            } else {
+                subprogram->tree_data.subprogram_data.mangled_id = base_mangled;
+            }
+        } else {
+            subprogram->tree_data.subprogram_data.mangled_id = base_mangled;
+        }
     }
+
+    if (getenv("KGPC_DEBUG_PREDECLARE_PROC") != NULL)
+    {
+        fprintf(stderr, "[PREDECLARE_PROC]   -> mangled_id=%s\n",
+                subprogram->tree_data.subprogram_data.mangled_id);
+    }
+
     id_to_use_for_lookup = subprogram->tree_data.subprogram_data.id;
     
     /* Check if this specific overload is already declared (by matching mangled name) */
@@ -9216,7 +9273,7 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
 /* Semantic check on multiple subprograms */
 /* A return value greater than 0 indicates how many errors occurred */
 /* Forward declaration - we'll define this after semcheck_subprogram */
-static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev);
+static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev, Tree_t *parent_subprogram);
 static void semcheck_update_symbol_alias(SymTab_t *symtab, const char *id, const char *alias);
 
 /* Predeclare a list of subprograms without processing bodies.
@@ -9231,13 +9288,12 @@ static int predeclare_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int
         assert(cur->cur != NULL);
         assert(cur->type == LIST_TREE);
         Tree_t *child = (Tree_t *)cur->cur;
-        return_val += predeclare_subprogram(symtab, child, max_scope_lev);
-        /* Optionally predeclare nested subprograms so their names are also visible early */
-        if (child->tree_data.subprogram_data.subprograms != NULL)
-        {
-            return_val += predeclare_subprograms(symtab,
-                child->tree_data.subprogram_data.subprograms, max_scope_lev + 1, child);
-        }
+        return_val += predeclare_subprogram(symtab, child, max_scope_lev, parent_subprogram);
+        /* Note: We intentionally do NOT predeclare nested subprograms here globally.
+         * Nested subprograms are predeclared within their parent's scope when
+         * semcheck_subprogram calls semcheck_subprograms (which has its own Pass 1).
+         * This ensures nested functions with the same name in different parents
+         * don't shadow each other. */
         cur = cur->next;
     }
     return return_val;
@@ -9271,10 +9327,10 @@ int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scop
     {
         assert(cur->cur != NULL);
         assert(cur->type == LIST_TREE);
-        return_val += predeclare_subprogram(symtab, (Tree_t *)cur->cur, max_scope_lev);
+        return_val += predeclare_subprogram(symtab, (Tree_t *)cur->cur, max_scope_lev, parent_subprogram);
         cur = cur->next;
     }
-    
+
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_subprograms error after Pass 1: %d\n", return_val);
 #endif

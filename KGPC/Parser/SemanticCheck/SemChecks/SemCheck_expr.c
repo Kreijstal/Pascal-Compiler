@@ -323,6 +323,44 @@ static void semcheck_reset_function_call_cache(struct Expression *expr)
     expr->expr_data.function_call_data.is_call_info_valid = 0;
 }
 
+static void semcheck_get_array_element_info_from_type(KgpcType *array_type,
+    int *elem_tag, const char **elem_id, struct RecordType **elem_record)
+{
+    if (array_type == NULL || elem_tag == NULL || elem_id == NULL || elem_record == NULL)
+        return;
+    if (!kgpc_type_is_array(array_type))
+        return;
+
+    KgpcType *elem = kgpc_type_get_array_element_type(array_type);
+    if (elem == NULL)
+        return;
+
+    if (elem->kind == TYPE_KIND_PRIMITIVE)
+    {
+        *elem_tag = elem->info.primitive_type_tag;
+    }
+    else if (elem->kind == TYPE_KIND_RECORD)
+    {
+        *elem_tag = RECORD_TYPE;
+        *elem_record = elem->info.record_info;
+        if (*elem_id == NULL && *elem_record != NULL && (*elem_record)->type_id != NULL)
+            *elem_id = (*elem_record)->type_id;
+    }
+    else if (elem->kind == TYPE_KIND_POINTER)
+    {
+        *elem_tag = POINTER_TYPE;
+        if (*elem_id == NULL && elem->type_alias != NULL &&
+            elem->type_alias->pointer_type_id != NULL)
+            *elem_id = elem->type_alias->pointer_type_id;
+    }
+
+    if (*elem_id == NULL && elem->type_alias != NULL &&
+        elem->type_alias->target_type_id != NULL)
+    {
+        *elem_id = elem->type_alias->target_type_id;
+    }
+}
+
 static void semcheck_set_function_call_target(struct Expression *expr, HashNode_t *target)
 {
     if (expr == NULL || expr->type != EXPR_FUNCTION_CALL)
@@ -629,6 +667,8 @@ static int semcheck_builtin_allocmem(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev);
 static int semcheck_typecheck_array_literal(struct Expression *expr, SymTab_t *symtab,
     int max_scope_lev, int expected_type, const char *expected_type_id, int line_num);
+static void semcheck_get_array_element_info_from_type(KgpcType *array_type,
+    int *elem_tag, const char **elem_id, struct RecordType **elem_record);
 
 static const char *semcheck_normalize_char_type_id(const char *id)
 {
@@ -12694,6 +12734,26 @@ method_call_resolved:
     int best_score = 9999;
     int num_best_matches = 0;
 
+    if (mangled_name != NULL && overload_candidates != NULL)
+    {
+        ListNode_t *cur = overload_candidates;
+        while (cur != NULL)
+        {
+            HashNode_t *candidate = (HashNode_t *)cur->cur;
+            if (candidate != NULL && candidate->mangled_id != NULL &&
+                strcmp(candidate->mangled_id, mangled_name) == 0)
+            {
+                best_match = candidate;
+                best_score = 0;
+                num_best_matches = 1;
+                break;
+            }
+            cur = cur->next;
+        }
+        if (best_match != NULL)
+            goto overload_scoring_done;
+    }
+
     if (overload_candidates != NULL)
     {
         ListNode_t *cur = overload_candidates;
@@ -12946,6 +13006,25 @@ method_call_resolved:
                             const char *formal_elem_type_id = formal_decl->tree_data.arr_decl_data.type_id;
                             int call_elem_type = call_expr->array_element_type;
                             const char *call_elem_type_id = call_expr->array_element_type_id;
+                            struct RecordType *formal_elem_record = NULL;
+                            struct RecordType *call_elem_record = NULL;
+                            int owns_formal_type = 0;
+                            KgpcType *formal_kgpc = resolve_type_from_vardecl(formal_decl, symtab, &owns_formal_type);
+
+                            if (formal_kgpc != NULL && kgpc_type_is_array(formal_kgpc))
+                            {
+                                semcheck_get_array_element_info_from_type(formal_kgpc,
+                                    &formal_elem_type, &formal_elem_type_id, &formal_elem_record);
+                            }
+                            if (owns_formal_type && formal_kgpc != NULL)
+                                destroy_kgpc_type(formal_kgpc);
+
+                            if (call_expr->resolved_kgpc_type != NULL &&
+                                kgpc_type_is_array(call_expr->resolved_kgpc_type))
+                            {
+                                semcheck_get_array_element_info_from_type(call_expr->resolved_kgpc_type,
+                                    &call_elem_type, &call_elem_type_id, &call_elem_record);
+                            }
 
                             /* Resolve formal element type from type_id if needed */
                             if (formal_elem_type == UNKNOWN_TYPE && formal_elem_type_id != NULL)
@@ -13007,6 +13086,23 @@ method_call_resolved:
                                     elem_compatible = 1;
                                     current_score += 2;
                                 }
+                            }
+                            int formal_is_open_array = 0;
+                            if (formal_decl != NULL && formal_decl->type == TREE_ARR_DECL &&
+                                formal_decl->tree_data.arr_decl_data.e_range <
+                                formal_decl->tree_data.arr_decl_data.s_range)
+                            {
+                                formal_is_open_array = 1;
+                            }
+                            if (!elem_compatible &&
+                                (formal_is_open_array ||
+                                 call_expr->array_is_dynamic ||
+                                 call_expr->array_upper_bound < call_expr->array_lower_bound))
+                            {
+                                /* Open array element types can be ambiguous; keep the candidate
+                                 * but apply a penalty so exact matches still win. */
+                                elem_compatible = 1;
+                                current_score += 10;
                             }
                             if (!elem_compatible)
                             {
@@ -13272,6 +13368,25 @@ method_call_resolved:
                         }
                     }
 
+                    /* When converting ShortString or AnsiChar to string types, prefer AnsiString
+                     * over UnicodeString since ShortString/AnsiChar are 8-bit types. This breaks
+                     * ambiguity when both AnsiString and UnicodeString overloads exist. */
+                    if (formal_decl != NULL && formal_decl->type == TREE_VAR_DECL &&
+                        (call_type == SHORTSTRING_TYPE || call_type == CHAR_TYPE))
+                    {
+                        const char *type_id = formal_decl->tree_data.var_decl_data.type_id;
+                        if (type_id != NULL)
+                        {
+                            if (pascal_identifier_equals(type_id, "UnicodeString") ||
+                                pascal_identifier_equals(type_id, "WideString") ||
+                                pascal_identifier_equals(type_id, "WideChar"))
+                            {
+                                /* Penalize UnicodeString/WideString when source is 8-bit type */
+                                current_score += 5;
+                            }
+                        }
+                    }
+
                     current_score += pointer_penalty;
                     if (formal_type == LONGINT_TYPE && call_type == LONGINT_TYPE)
                     {
@@ -13341,6 +13456,7 @@ method_call_resolved:
         }
     }
 
+overload_scoring_done:
     if (num_best_matches == 1)
     {
         if (best_match != NULL && best_match->type != NULL &&

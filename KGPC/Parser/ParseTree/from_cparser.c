@@ -10075,10 +10075,19 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
             
             if (section->typ == PASCAL_T_INTERFACE_SECTION) {
                 interface_node = section;
+                if (getenv("KGPC_DEBUG_UNIT_SECTIONS") != NULL) {
+                    fprintf(stderr, "[UNIT_SECTIONS] interface at line %d\n", section->line);
+                }
             } else if (section->typ == PASCAL_T_IMPLEMENTATION_SECTION) {
                 implementation_node = section;
+                if (getenv("KGPC_DEBUG_UNIT_SECTIONS") != NULL) {
+                    fprintf(stderr, "[UNIT_SECTIONS] implementation at line %d\n", section->line);
+                }
             } else if (section->typ == PASCAL_T_INITIALIZATION_SECTION) {
                 initialization_node = section;
+                if (getenv("KGPC_DEBUG_UNIT_SECTIONS") != NULL) {
+                    fprintf(stderr, "[UNIT_SECTIONS] initialization at line %d\n", section->line);
+                }
             } else if (section->typ == PASCAL_T_FINALIZATION_SECTION) {
                 finalization_node = section;
             }
@@ -10182,6 +10191,25 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
         }
 
         if (implementation_node != NULL && implementation_node->typ == PASCAL_T_IMPLEMENTATION_SECTION) {
+            /* Debug: count implementation section nodes */
+            if (getenv("KGPC_DEBUG_IMPL_SECTION") != NULL) {
+                ast_t *dbg = implementation_node->child;
+                int count = 0;
+                int max_line = 0;
+                int proc_count = 0, func_count = 0, method_count = 0, type_count = 0;
+                while (dbg != NULL) {
+                    count++;
+                    if (dbg->line > max_line) max_line = dbg->line;
+                    if (dbg->typ == PASCAL_T_PROCEDURE_DECL) proc_count++;
+                    else if (dbg->typ == PASCAL_T_FUNCTION_DECL) func_count++;
+                    else if (dbg->typ == PASCAL_T_METHOD_IMPL) method_count++;
+                    else if (dbg->typ == PASCAL_T_TYPE_SECTION) type_count++;
+                    dbg = dbg->next;
+                }
+                fprintf(stderr, "[IMPL_SECTION] child count=%d max_line=%d procs=%d funcs=%d methods=%d types=%d\n",
+                        count, max_line, proc_count, func_count, method_count, type_count);
+            }
+
             /* Create visited set for implementation sections */
             VisitedSet *visited_impl = visited_set_create();
             if (visited_impl == NULL) {
@@ -10194,7 +10222,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                         fprintf(stderr, "ERROR: Circular reference detected in implementation sections, stopping traversal\n");
                         break;
                     }
-                    
+
                     ast_t *node = unwrap_pascal_node(definition);
                     for (ast_t *node_cursor = node; node_cursor != NULL;
                          node_cursor = (definition->typ == PASCAL_T_NONE) ? node_cursor->next : NULL) {
@@ -10219,9 +10247,9 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                             break;
                         case PASCAL_T_PROCEDURE_DECL: {
                             Tree_t *proc = convert_procedure(node_cursor);
-                            if (kgpc_debug_subprog_enabled()) {
+                            if (kgpc_debug_subprog_enabled() || getenv("KGPC_DEBUG_IMPL_PROCS") != NULL) {
                                 char *proc_id = (node_cursor->child != NULL) ? dup_symbol(node_cursor->child) : strdup("?");
-                                fprintf(stderr, "[KGPC] convert_procedure(%s) => %p\n", proc_id, (void*)proc);
+                                fprintf(stderr, "[KGPC] impl convert_procedure(%s) line=%d => %p\n", proc_id, node_cursor->line, (void*)proc);
                                 free(proc_id);
                             }
                             append_subprogram_node(&subprograms, proc);
@@ -10229,9 +10257,9 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                         }
                         case PASCAL_T_FUNCTION_DECL: {
                             Tree_t *func = convert_function(node_cursor);
-                            if (kgpc_debug_subprog_enabled()) {
+                            if (kgpc_debug_subprog_enabled() || getenv("KGPC_DEBUG_IMPL_PROCS") != NULL) {
                                 char *func_id = (node_cursor->child != NULL) ? dup_symbol(node_cursor->child) : strdup("?");
-                                fprintf(stderr, "[KGPC] convert_function(%s) => %p\n", func_id, (void*)func);
+                                fprintf(stderr, "[KGPC] impl convert_function(%s) line=%d => %p\n", func_id, node_cursor->line, (void*)func);
                                 free(func_id);
                             }
                             append_subprogram_node(&subprograms, func);
