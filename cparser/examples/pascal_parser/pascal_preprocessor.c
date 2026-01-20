@@ -60,6 +60,7 @@ static bool string_builder_append_char(StringBuilder *sb, char c);
 static bool string_builder_append_string(StringBuilder *sb, const char *str);
 static void string_builder_free(StringBuilder *sb);
 static bool ensure_capacity(void **buffer, size_t element_size, size_t *capacity, size_t needed);
+static bool emit_line_directive(StringBuilder *sb, int line, const char *filename);
 static char *my_strdup(const char *s) {
     if (!s) return NULL;
     size_t len = strlen(s);
@@ -693,7 +694,16 @@ static bool handle_directive(PascalPreprocessor *pp,
                 }
             }
 
+            /* Emit line directive entering the included file */
+            emit_line_directive(output, 1, resolved_path);
+
             bool ok = preprocess_buffer_internal(pp, resolved_path, include_buffer, include_length, conditions, output, depth + 1, error_message);
+
+            /* Emit line directive returning to parent file */
+            if (ok) {
+                emit_line_directive(output, current_line + 1, filename);
+            }
+
             free(include_buffer);
             free(resolved_path);
             free(path_token);
@@ -851,7 +861,16 @@ static bool handle_directive(PascalPreprocessor *pp,
                 }
             }
 
+            /* Emit line directive entering the included file */
+            emit_line_directive(output, 1, resolved_path);
+
             bool ok = preprocess_buffer_internal(pp, resolved_path, include_buffer, include_length, conditions, output, depth + 1, error_message);
+
+            /* Emit line directive returning to parent file */
+            if (ok) {
+                emit_line_directive(output, current_line + 1, filename);
+            }
+
             free(include_buffer);
             free(resolved_path);
             if (!ok) {
@@ -1291,6 +1310,33 @@ static bool string_builder_append_string(StringBuilder *sb, const char *str) {
         ++str;
     }
     return true;
+}
+
+/* Emit a #line directive to track source file positions across include boundaries.
+ * Format: {#line <line_number> "<filename>"}
+ * The parser will recognize this and reset its line counter accordingly. */
+static bool emit_line_directive(StringBuilder *sb, int line, const char *filename) {
+    if (filename == NULL) {
+        return true;
+    }
+    char directive[512];
+    /* Escape backslashes in filename for Windows paths */
+    char escaped_filename[256];
+    size_t j = 0;
+    for (size_t i = 0; filename[i] && j < sizeof(escaped_filename) - 1; i++) {
+        if (filename[i] == '\\') {
+            if (j < sizeof(escaped_filename) - 2) {
+                escaped_filename[j++] = '\\';
+                escaped_filename[j++] = '\\';
+            }
+        } else {
+            escaped_filename[j++] = filename[i];
+        }
+    }
+    escaped_filename[j] = '\0';
+
+    snprintf(directive, sizeof(directive), "\n{#line %d \"%s\"}\n", line, escaped_filename);
+    return string_builder_append_string(sb, directive);
 }
 
 static void string_builder_free(StringBuilder *sb) {

@@ -339,9 +339,23 @@ static char* create_error_context(input_t* in, int line, int col, int index) {
         return NULL;
     }
 
-    (void)index;
+    (void)col;  /* col is for display only, not for finding context */
 
     int length = in->length;
+
+    /* Compute actual buffer line from index position, since 'line' may be
+     * the original source line (with #line directives) which doesn't match
+     * the preprocessed buffer line numbers. */
+    int buffer_line = 1;
+    if (index >= 0 && index <= length) {
+        for (int i = 0; i < index && i < length; i++) {
+            if (in->buffer[i] == '\n') {
+                buffer_line++;
+            }
+        }
+    }
+    /* Use computed buffer_line for finding context in the buffer */
+    int context_line = buffer_line;
     if (length <= 0 && in->buffer != NULL) {
         length = (int)strlen(in->buffer);
     }
@@ -350,17 +364,18 @@ static char* create_error_context(input_t* in, int line, int col, int index) {
         return NULL;
     }
 
-    int start_line = line - ERROR_CONTEXT_RADIUS;
-    if (start_line < 1) {
-        start_line = 1;
+    /* Use context_line (computed from buffer position) for finding context in buffer */
+    int start_context = context_line - ERROR_CONTEXT_RADIUS;
+    if (start_context < 1) {
+        start_context = 1;
     }
-    int end_line = line + ERROR_CONTEXT_RADIUS;
-    if (end_line < line) {
-        end_line = line;
+    int end_context = context_line + ERROR_CONTEXT_RADIUS;
+    if (end_context < context_line) {
+        end_context = context_line;
     }
 
     int width = 1;
-    int max_line_for_width = end_line;
+    int max_line_for_width = end_context;
     while (max_line_for_width >= 10) {
         width++;
         max_line_for_width /= 10;
@@ -368,13 +383,14 @@ static char* create_error_context(input_t* in, int line, int col, int index) {
 
     char* context = NULL;
     size_t context_len = 0;
-    append_format(&context, &context_len, "Context (lines %d-%d):\n", start_line, end_line);
+    /* Display buffer line numbers in context header (since we're showing buffer content) */
+    append_format(&context, &context_len, "Context (lines %d-%d):\n", start_context, end_context);
 
     const char* buffer = in->buffer;
     int pos = 0;
     int current_line = 1;
 
-    while (pos < length && current_line <= end_line) {
+    while (pos < length && current_line <= end_context) {
         int line_start_pos = pos;
         int line_end_pos = pos;
         while (line_end_pos < length && buffer[line_end_pos] != '\n' && buffer[line_end_pos] != '\r') {
@@ -383,14 +399,15 @@ static char* create_error_context(input_t* in, int line, int col, int index) {
 
         size_t line_len = (size_t)(line_end_pos - line_start_pos);
 
-        if (current_line >= start_line && current_line <= end_line) {
+        if (current_line >= start_context && current_line <= end_context) {
             char* line_text = (char*)safe_malloc(line_len + 1);
             memcpy(line_text, buffer + line_start_pos, line_len);
             line_text[line_len] = '\0';
 
             append_format(&context, &context_len, "%*d | %s\n", width, current_line, line_text);
 
-            if (current_line == line) {
+            /* Show caret on the context_line (buffer line where error is) */
+            if (current_line == context_line) {
                 int caret_col = col;
                 if (caret_col < 1) caret_col = 1;
                 if ((size_t)(caret_col - 1) > line_len) {
@@ -472,9 +489,26 @@ char* parser_format_context(input_t* in, int line, int col, int index) {
     return create_error_context(in, line, col, index);
 }
 
+/* Compute actual source line from buffer position using #line directive tracking */
+static int compute_source_line(input_t* in, int pos) {
+    if (in == NULL || pos < 0) return 0;
+
+    /* Count newlines from base position to current position */
+    int newlines = 0;
+    int start = in->source_line_base_pos;
+    int end = pos < in->length ? pos : in->length;
+    for (int i = start; i < end; i++) {
+        if (in->buffer[i] == '\n') {
+            newlines++;
+        }
+    }
+    return in->source_line_base + newlines;
+}
+
 ParseResult make_failure_v2(input_t* in, char* parser_name, char* message, char* unexpected) {
     ParseError* err = allocate_parse_error();
-    err->line = in ? in->line : 0;
+    int computed_line = in ? compute_source_line(in, in->start) : 0;
+    err->line = computed_line;
     err->col = in ? in->col : 0;
     err->index = in ? in->start : -1;
     err->message = message;
@@ -495,7 +529,8 @@ ParseResult make_failure(input_t* in, char* message) {
 
 ParseResult make_failure_with_ast(input_t* in, char* message, ast_t* partial_ast) {
     ParseError* err = allocate_parse_error();
-    err->line = in ? in->line : 0;
+    int computed_line = in ? compute_source_line(in, in->start) : 0;
+    err->line = computed_line;
     err->col = in ? in->col : 0;
     err->index = in ? in->start : -1;
     err->message = message;
@@ -553,7 +588,8 @@ ParseResult wrap_failure(input_t* in, char* message, char* parser_name, ParseRes
         err->context = cause_error->context ? strdup(cause_error->context) : NULL;
         err->committed = cause_error->committed;  // Preserve commit status
     } else {
-        err->line = in ? in->line : 0;
+        int computed_line = in ? compute_source_line(in, in->start) : 0;
+        err->line = computed_line;
         err->col = in ? in->col : 0;
         err->index = in ? in->start : -1;
         err->context = NULL;  // Don't create context - expensive
@@ -855,7 +891,9 @@ static ParseResult memo_entry_replay(memo_entry_t* entry, input_t* in) {
 
 input_t * new_input() {
     input_t * in = (input_t *) safe_malloc(sizeof(input_t));
-    in->buffer = NULL; in->alloc = 0; in->length = 0; in->start = 0; in->line = 1; in->col = 1; in->memo = NULL;
+    in->buffer = NULL; in->alloc = 0; in->length = 0; in->start = 0; in->line = 1; in->col = 1;
+    in->source_line = 1; in->source_line_base = 1; in->source_line_base_pos = 0;
+    in->memo = NULL;
     return in;
 }
 
@@ -881,6 +919,9 @@ void init_input_buffer(input_t *in, char *buffer, int length) {
     // Reset to beginning for parsing
     in->line = 1;
     in->col = 1;
+    in->source_line = 1;
+    in->source_line_base = 1;
+    in->source_line_base_pos = 0;
 }
 
 char read1(input_t * in) {
@@ -894,10 +935,12 @@ char read1(input_t * in) {
         in->buffer = (char*)safe_malloc(in->alloc);
         strcpy(in->buffer, linebuf);
         in->start = 0; in->line = 1; in->col = 1;
+        in->source_line = 1; in->source_line_base = 1; in->source_line_base_pos = 0;
     }
     if (in->start < in->length) {
         char c = in->buffer[in->start++];
         if (c == '\n') { in->line++; in->col = 1; } else { in->col++; }
+        /* Note: source_line is NOT incremented here - it's computed from directives */
         return c;
     }
     return EOF;

@@ -49,6 +49,9 @@ struct input_t {
    int start;
    int line;
    int col;
+   int source_line;  // Original source line (survives backtracking, updated by #line directives)
+   int source_line_base;  // Line number from last #line directive
+   int source_line_base_pos;  // Buffer position after last #line directive
    memo_table_t* memo;
 };
 

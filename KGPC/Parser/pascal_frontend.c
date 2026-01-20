@@ -749,7 +749,12 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
     const char *dump_path = getenv("KGPC_DUMP_PREPROCESSED");
     if (dump_path != NULL && dump_path[0] != '\0')
     {
-        FILE *dump = fopen(dump_path, "w");
+        /* Append file name to dump path to distinguish multiple parses */
+        char dump_full[512];
+        const char *basename = strrchr(path, '/');
+        basename = basename ? basename + 1 : path;
+        snprintf(dump_full, sizeof(dump_full), "%s_%s", dump_path, basename);
+        FILE *dump = fopen(dump_full, "w");
         if (dump != NULL)
         {
             fwrite(buffer, 1, length, dump);
