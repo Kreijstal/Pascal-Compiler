@@ -78,7 +78,10 @@ jobs:
       if: success()
       run: |
         cd quasi-msys2
-        bash -c 'source env/all.src && cd .. && meson test -C builddir-cross'
+        # Use timeout multiplier since Wine is slower than native execution
+        # Run with verbose output to see progress
+        bash -c 'source env/all.src && cd .. && meson test -C builddir-cross --timeout-multiplier=10 -v'
+      timeout-minutes: 60
 
     - name: Upload meson logs
       if: always()
