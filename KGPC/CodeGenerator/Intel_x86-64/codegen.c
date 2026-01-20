@@ -2663,6 +2663,8 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     int dynamic_array_descriptor_size = 0;
     int dynamic_array_element_size = 0;
     int dynamic_array_lower_bound = 0;
+    int prev_returns_dynamic_array = ctx->returns_dynamic_array;
+    int prev_dynamic_array_descriptor_size = ctx->dynamic_array_descriptor_size;
     long long record_return_size = 0;
 
     func = &func_tree->tree_data.subprogram_data;
@@ -3059,7 +3061,13 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     codegen_function_locals(func->declarations, ctx, symtab);
 
     /* Recursively generate nested subprograms */
-    codegen_subprograms(func->subprograms, ctx, symtab);
+    {
+        int saved_returns_dynamic_array = ctx->returns_dynamic_array;
+        int saved_dynamic_array_descriptor_size = ctx->dynamic_array_descriptor_size;
+        codegen_subprograms(func->subprograms, ctx, symtab);
+        ctx->returns_dynamic_array = saved_returns_dynamic_array;
+        ctx->dynamic_array_descriptor_size = saved_dynamic_array_descriptor_size;
+    }
     
     inst_list = codegen_var_initializers(func->declarations, inst_list, ctx, symtab);
     inst_list = codegen_stmt(func->statement_list, inst_list, ctx, symtab);
@@ -3219,6 +3227,8 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ctx->current_subprogram_id = prev_sub_id;
     ctx->current_subprogram_mangled = prev_sub_mangled;
     ctx->current_subprogram_lexical_depth = prev_depth;
+    ctx->returns_dynamic_array = prev_returns_dynamic_array;
+    ctx->dynamic_array_descriptor_size = prev_dynamic_array_descriptor_size;
 
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
