@@ -1,4 +1,4 @@
-{$mode objfpc}
+{$mode delphi}
 {$modeswitch typehelpers}
 { TDD: helper overload resolution with named parameter }
 program tdd_guidhelper_named_param;
@@ -22,7 +22,7 @@ type
 
 class function TGUIDHelper.Create(const Data; DataEndian: TEndian): TGUID;
 begin
-  Result := Create(Data, DataEndian=TEndian.Big);
+  Result := Create(Data, TEndian.Big);
 end;
 
 class function TGUIDHelper.Create(const B: TBytes; DataEndian: TEndian): TGUID;

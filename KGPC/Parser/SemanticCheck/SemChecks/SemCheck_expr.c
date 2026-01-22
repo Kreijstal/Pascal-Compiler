@@ -12282,6 +12282,23 @@ int semcheck_funccall(int *type_return,
                     }
                     
                     if (method_node != NULL) {
+                        if (!is_static && method_node->type != NULL)
+                        {
+                            ListNode_t *params = kgpc_type_get_procedure_params(method_node->type);
+                            const char *param_name = NULL;
+                            if (params != NULL && params->cur != NULL)
+                            {
+                                Tree_t *param_decl = (Tree_t *)params->cur;
+                                if (param_decl->type == TREE_VAR_DECL &&
+                                    param_decl->tree_data.var_decl_data.ids != NULL)
+                                    param_name = (const char *)param_decl->tree_data.var_decl_data.ids->cur;
+                                else if (param_decl->type == TREE_ARR_DECL &&
+                                    param_decl->tree_data.arr_decl_data.ids != NULL)
+                                    param_name = (const char *)param_decl->tree_data.arr_decl_data.ids->cur;
+                            }
+                            if (param_name == NULL || !pascal_identifier_equals(param_name, "Self"))
+                                is_static = 1;
+                        }
                         /* Resolve the method name */
                         set_type_from_hashtype(type_return, method_node);
                         semcheck_expr_set_resolved_kgpc_type_shared(expr, method_node->type);
@@ -12371,6 +12388,23 @@ int semcheck_funccall(int *type_return,
                         HashNode_t *method_node = semcheck_find_class_method(symtab, record_info, method_name, &actual_method_owner);
                         if (method_node != NULL)
                         {
+                            if (!is_static && method_node->type != NULL)
+                            {
+                                ListNode_t *params = kgpc_type_get_procedure_params(method_node->type);
+                                const char *param_name = NULL;
+                                if (params != NULL && params->cur != NULL)
+                                {
+                                    Tree_t *param_decl = (Tree_t *)params->cur;
+                                    if (param_decl->type == TREE_VAR_DECL &&
+                                        param_decl->tree_data.var_decl_data.ids != NULL)
+                                        param_name = (const char *)param_decl->tree_data.var_decl_data.ids->cur;
+                                    else if (param_decl->type == TREE_ARR_DECL &&
+                                        param_decl->tree_data.arr_decl_data.ids != NULL)
+                                        param_name = (const char *)param_decl->tree_data.arr_decl_data.ids->cur;
+                                }
+                                if (param_name == NULL || !pascal_identifier_equals(param_name, "Self"))
+                                    is_static = 1;
+                            }
                             set_type_from_hashtype(type_return, method_node);
                             semcheck_expr_set_resolved_kgpc_type_shared(expr, method_node->type);
                             expr->expr_data.function_call_data.resolved_func = method_node;
