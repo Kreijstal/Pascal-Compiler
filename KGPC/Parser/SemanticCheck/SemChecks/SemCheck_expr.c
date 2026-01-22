@@ -10606,6 +10606,32 @@ int resolve_param_type(Tree_t *decl, SymTab_t *symtab)
     return UNKNOWN_TYPE;
 }
 
+static int semcheck_param_list_contains_name(ListNode_t *params, const char *name)
+{
+    if (params == NULL || name == NULL)
+        return 0;
+
+    for (ListNode_t *cur = params; cur != NULL; cur = cur->next)
+    {
+        Tree_t *decl = (Tree_t *)cur->cur;
+        const char *param_name = NULL;
+        if (decl != NULL && decl->type == TREE_VAR_DECL &&
+            decl->tree_data.var_decl_data.ids != NULL)
+        {
+            param_name = (const char *)decl->tree_data.var_decl_data.ids->cur;
+        }
+        else if (decl != NULL && decl->type == TREE_ARR_DECL &&
+            decl->tree_data.arr_decl_data.ids != NULL)
+        {
+            param_name = (const char *)decl->tree_data.arr_decl_data.ids->cur;
+        }
+
+        if (param_name != NULL && pascal_identifier_equals(param_name, name))
+            return 1;
+    }
+    return 0;
+}
+
 static const char *semcheck_get_param_type_id(Tree_t *decl)
 {
     if (decl == NULL)
@@ -12819,10 +12845,17 @@ method_call_resolved:
                             formal_name = (const char *)formal_decl->tree_data.arr_decl_data.ids->cur;
 
                         const char *given_name = call_expr->expr_data.relop_data.left->expr_data.id;
-                        if (formal_name != NULL && given_name != NULL &&
-                            pascal_identifier_equals(formal_name, given_name))
+                        if (formal_name != NULL && given_name != NULL)
                         {
-                            call_expr = call_expr->expr_data.relop_data.right;
+                            if (pascal_identifier_equals(formal_name, given_name))
+                            {
+                                call_expr = call_expr->expr_data.relop_data.right;
+                            }
+                            else if (semcheck_param_list_contains_name(candidate_args, given_name))
+                            {
+                                candidate_valid = 0;
+                                break;
+                            }
                         }
                     }
                     /* During overload scoring, do NOT call semcheck_prepare_array_literal_argument
@@ -13898,9 +13931,35 @@ skip_overload_resolution:
                 id, ListLength(args_given), ListLength(true_args));
         }
 
-        if (id != NULL &&
-            (strncasecmp(id, "Create", 6) == 0 || strcasecmp(id, "Destroy") == 0) &&
-            args_given != NULL)
+        int is_constructor_call = 0;
+        if (args_given != NULL && hash_return != NULL)
+        {
+            const char *method_id = (hash_return->id != NULL) ? hash_return->id : hash_return->mangled_id;
+            const char *sep = (method_id != NULL) ? strstr(method_id, "__") : NULL;
+            if (sep != NULL && sep != method_id)
+            {
+                size_t class_len = (size_t)(sep - method_id);
+                char *class_name = (char *)malloc(class_len + 1);
+                if (class_name != NULL)
+                {
+                    memcpy(class_name, method_id, class_len);
+                    class_name[class_len] = '\0';
+                    const char *method_name = sep + 2;
+                    struct RecordType *record_info = semcheck_lookup_record_type(symtab, class_name);
+                    if (record_info != NULL && record_info->is_class &&
+                        method_name != NULL &&
+                        (pascal_identifier_equals(method_name, "Create") ||
+                         pascal_identifier_equals(method_name, "Destroy")) &&
+                        !from_cparser_is_method_static(class_name, method_name))
+                    {
+                        is_constructor_call = 1;
+                    }
+                    free(class_name);
+                }
+            }
+        }
+
+        if (is_constructor_call)
         {
             /* If lengths match, we assume first arg is class type and first param is Self -> skip both */
             if (ListLength(args_given) == ListLength(true_args)) {
@@ -13980,6 +14039,7 @@ skip_overload_resolution:
                 args_to_validate = args_to_validate->next;
                 continue;
             }
+            int named_arg_mismatch = 0;
             struct Expression *current_arg_expr = (struct Expression *)args_to_validate->cur;
             if (current_arg_expr != NULL && current_arg_expr->type == EXPR_RELOP &&
                 current_arg_expr->expr_data.relop_data.type == EQ &&
@@ -13995,18 +14055,24 @@ skip_overload_resolution:
                     expected_name = (const char *)arg_decl->tree_data.arr_decl_data.ids->cur;
 
                 const char *given_name = current_arg_expr->expr_data.relop_data.left->expr_data.id;
-                if (expected_name != NULL && given_name != NULL &&
-                    pascal_identifier_equals(expected_name, given_name) &&
-                    current_arg_expr->expr_data.relop_data.right != NULL)
+                if (expected_name != NULL && given_name != NULL)
                 {
-                    struct Expression *named_value = current_arg_expr->expr_data.relop_data.right;
-                    struct Expression *named_left = current_arg_expr->expr_data.relop_data.left;
-                    current_arg_expr->expr_data.relop_data.left = NULL;
-                    current_arg_expr->expr_data.relop_data.right = NULL;
-                    destroy_expr(named_left);
-                    destroy_expr(current_arg_expr);
-                    current_arg_expr = named_value;
-                    args_to_validate->cur = current_arg_expr;
+                    if (pascal_identifier_equals(expected_name, given_name) &&
+                        current_arg_expr->expr_data.relop_data.right != NULL)
+                    {
+                        struct Expression *named_value = current_arg_expr->expr_data.relop_data.right;
+                        struct Expression *named_left = current_arg_expr->expr_data.relop_data.left;
+                        current_arg_expr->expr_data.relop_data.left = NULL;
+                        current_arg_expr->expr_data.relop_data.right = NULL;
+                        destroy_expr(named_left);
+                        destroy_expr(current_arg_expr);
+                        current_arg_expr = named_value;
+                        args_to_validate->cur = current_arg_expr;
+                    }
+                    else if (semcheck_param_list_contains_name(true_args, given_name))
+                    {
+                        named_arg_mismatch = 1;
+                    }
                 }
             }
             if (arg_decl->type == TREE_ARR_DECL)
@@ -14039,6 +14105,8 @@ skip_overload_resolution:
 
             return_val += semcheck_expr_main(&arg_type,
                 symtab, current_arg_expr, max_scope_lev, arg_mutating);
+            if (named_arg_mismatch)
+                arg_type = UNKNOWN_TYPE;
             if (getenv("KGPC_DEBUG_CALL_TYPES") != NULL &&
                 id != NULL &&
                 (pascal_identifier_equals(id, "FileDateToDateTime") ||
@@ -14184,11 +14252,16 @@ skip_overload_resolution:
                         if (getenv("KGPC_DEBUG_CALL_TYPES") != NULL &&
                             id != NULL &&
                             (pascal_identifier_equals(id, "FileDateToDateTime") ||
-                             pascal_identifier_equals(id, "FileDateToUniversal")))
+                             pascal_identifier_equals(id, "FileDateToUniversal") ||
+                             (hash_return != NULL && hash_return->id != NULL &&
+                              pascal_identifier_equals(hash_return->id, "TGUIDHelper__Create"))))
                         {
                             fprintf(stderr,
-                                "[KGPC_DEBUG_CALL_TYPES] call=%s arg=%d expected=%d actual=%d\n",
-                                id, cur_arg, expected_type, arg_type);
+                                "[KGPC_DEBUG_CALL_TYPES] call=%s arg=%d expected=%d actual=%d expr_type=%d kgpc_kind=%d\n",
+                                id, cur_arg, expected_type, arg_type,
+                                current_arg_expr ? current_arg_expr->type : -1,
+                                (current_arg_expr != NULL && current_arg_expr->resolved_kgpc_type != NULL) ?
+                                    current_arg_expr->resolved_kgpc_type->kind : -1);
                         }
                         /* Check for Char -> PChar mismatch (workaround for missing @ parser issue) */
                         if (!type_compatible && expected_type == POINTER_TYPE && arg_type == CHAR_TYPE)

@@ -2630,15 +2630,70 @@ def _load_suite():
     return unittest.defaultTestLoader.loadTestsFromModule(sys.modules[__name__])
 
 
+class TimingTestResult(unittest.TextTestResult):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.timings = []
+        self._start_times = {}
+        self._status = {}
+
+    def startTest(self, test):
+        self._start_times[test] = time.perf_counter()
+        super().startTest(test)
+
+    def addSuccess(self, test):
+        self._status[test] = "OK"
+        super().addSuccess(test)
+
+    def addFailure(self, test, err):
+        self._status[test] = "FAIL"
+        super().addFailure(test, err)
+
+    def addError(self, test, err):
+        self._status[test] = "ERROR"
+        super().addError(test, err)
+
+    def addSkip(self, test, reason):
+        self._status[test] = "SKIP"
+        super().addSkip(test, reason)
+
+    def stopTest(self, test):
+        start = self._start_times.pop(test, None)
+        elapsed = time.perf_counter() - start if start else 0.0
+        self.timings.append((test.id(), elapsed, self._status.get(test, "UNKNOWN")))
+        super().stopTest(test)
+
+
 def main():
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--tap", action="store_true")
+    parser.add_argument("--timings-out", dest="timings_out")
     args, remaining = parser.parse_known_args()
+
+    tap_enabled = args.tap or os.environ.get("KGPC_TEST_PROTOCOL", "").lower() == "tap"
+    if tap_enabled and args.timings_out:
+        print("ERROR: --timings-out is not supported with TAP output.", file=sys.stderr)
+        sys.exit(2)
 
     if args.tap or os.environ.get("KGPC_TEST_PROTOCOL", "").lower() == "tap":
         suite = _load_suite()
         runner = TAPTestRunner()
         result = runner.run(suite)
+        sys.exit(0 if result.wasSuccessful() else 1)
+    if args.timings_out:
+        if remaining:
+            suite = unittest.defaultTestLoader.loadTestsFromNames(
+                remaining, sys.modules[__name__]
+            )
+        else:
+            suite = _load_suite()
+        runner = unittest.TextTestRunner(resultclass=TimingTestResult)
+        result = runner.run(suite)
+        with open(args.timings_out, "w", encoding="utf-8") as handle:
+            for test_id, elapsed, status in sorted(
+                result.timings, key=lambda x: x[1], reverse=True
+            ):
+                handle.write(f"{elapsed:8.3f}s\t{status}\t{test_id}\n")
         sys.exit(0 if result.wasSuccessful() else 1)
     print(f"DEBUG: argv={[sys.argv[0]] + remaining}")
 

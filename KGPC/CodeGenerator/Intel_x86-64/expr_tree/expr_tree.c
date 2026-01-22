@@ -409,18 +409,13 @@ static ListNode_t *load_real_operand_into_xmm(CodeGenContext *ctx,
                 source_operand = converted;
         }
 
-        if (is_single_real && operand[0] == '%')
+        if (operand[0] == '%')
         {
-            const char *reg32 = reg64_to_reg32(operand, source_buf, sizeof(source_buf));
-            if (reg32 == NULL)
-                reg32 = operand;
-            snprintf(buffer, sizeof(buffer), "\tmovd\t%s, %s\n", reg32, xmm_reg);
-            inst_list = add_inst(inst_list, buffer);
-            snprintf(buffer, sizeof(buffer), "\tcvtss2sd\t%s, %s\n", xmm_reg, xmm_reg);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", source_operand, xmm_reg);
             return add_inst(inst_list, buffer);
         }
 
-        if (is_single_real && operand[0] != '%')
+        if (is_single_real)
         {
             snprintf(buffer, sizeof(buffer), "\tmovss\t%s, %s\n", source_operand, xmm_reg);
             inst_list = add_inst(inst_list, buffer);
@@ -1958,7 +1953,12 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
                     sret_slot->offset, target_reg->bit_64);
             else if (expr_has_type_tag(expr, REAL_TYPE))
+            {
+                long long real_size = expr_effective_size_bytes(expr);
+                if (real_size == 4)
+                    inst_list = add_inst(inst_list, "\tcvtss2sd\t%xmm0, %xmm0\n");
                 snprintf(buffer, sizeof(buffer), "\tmovq\t%%xmm0, %s\n", target_reg->bit_64);
+            }
             else if (expr_uses_qword_kgpctype(expr))
                 snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", target_reg->bit_64);
             else

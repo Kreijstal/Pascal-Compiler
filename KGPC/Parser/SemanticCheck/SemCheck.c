@@ -4819,10 +4819,14 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                         if (return_type_id != NULL)
                                             free(return_type_id);
 
+                                        char *overload_mangled = MangleFunctionName(mangled, params, symtab);
+                                        if (overload_mangled == NULL)
+                                            overload_mangled = strdup(mangled);
+
                                         if (is_function_template)
-                                            PushFunctionOntoScope_Typed(symtab, mangled, mangled, proc_type);
+                                            PushFunctionOntoScope_Typed(symtab, mangled, overload_mangled, proc_type);
                                         else
-                                            PushProcedureOntoScope_Typed(symtab, mangled, mangled, proc_type);
+                                            PushProcedureOntoScope_Typed(symtab, mangled, overload_mangled, proc_type);
 
                                         if (proc_type != NULL)
                                             destroy_kgpc_type(proc_type);

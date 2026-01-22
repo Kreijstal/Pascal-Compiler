@@ -4039,14 +4039,38 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                         arg_stack->is_reference = 1;
                     if (use_sse_reg)
                     {
-                        const char *xmm_reg = alloc_sse_arg_reg(&next_sse_index);
-                        if (real_storage_size == 4)
-                            snprintf(buffer, sizeof(buffer), "\tmovss\t%s, -%d(%%rbp)\n",
-                                xmm_reg, arg_stack->offset);
+                        if (next_sse_index < kgpc_max_sse_arg_regs())
+                        {
+                            const char *xmm_reg = alloc_sse_arg_reg(&next_sse_index);
+                            if (real_storage_size == 4)
+                                snprintf(buffer, sizeof(buffer), "\tmovss\t%s, -%d(%%rbp)\n",
+                                    xmm_reg, arg_stack->offset);
+                            else
+                                snprintf(buffer, sizeof(buffer), "\tmovsd\t%s, -%d(%%rbp)\n",
+                                    xmm_reg, arg_stack->offset);
+                            inst_list = add_inst(inst_list, buffer);
+                        }
                         else
-                            snprintf(buffer, sizeof(buffer), "\tmovsd\t%s, -%d(%%rbp)\n",
-                                xmm_reg, arg_stack->offset);
-                        inst_list = add_inst(inst_list, buffer);
+                        {
+                            if (real_storage_size == 4)
+                            {
+                                snprintf(buffer, sizeof(buffer), "\tmovss\t%d(%%rbp), %%xmm0\n",
+                                    stack_arg_offset);
+                                inst_list = add_inst(inst_list, buffer);
+                                snprintf(buffer, sizeof(buffer), "\tmovss\t%%xmm0, -%d(%%rbp)\n",
+                                    arg_stack->offset);
+                            }
+                            else
+                            {
+                                snprintf(buffer, sizeof(buffer), "\tmovsd\t%d(%%rbp), %%xmm0\n",
+                                    stack_arg_offset);
+                                inst_list = add_inst(inst_list, buffer);
+                                snprintf(buffer, sizeof(buffer), "\tmovsd\t%%xmm0, -%d(%%rbp)\n",
+                                    arg_stack->offset);
+                            }
+                            inst_list = add_inst(inst_list, buffer);
+                            stack_arg_offset += CODEGEN_POINTER_SIZE_BYTES;
+                        }
                     }
                     else
                     {
