@@ -1278,7 +1278,8 @@ static int semcheck_var_decl_is_untyped(Tree_t *decl)
     struct Var *var_info = &decl->tree_data.var_decl_data;
     if (var_info->inline_record_type != NULL)
         return 0;
-    return (var_info->type == UNKNOWN_TYPE && var_info->type_id == NULL);
+    return ((var_info->type == UNKNOWN_TYPE || var_info->type == BUILTIN_ANY_TYPE) &&
+        var_info->type_id == NULL);
 }
 
 static int semcheck_mangled_suffix_matches_untyped(const char *candidate_suffix,

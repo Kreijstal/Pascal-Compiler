@@ -4718,13 +4718,18 @@ static ListNode_t *convert_param(ast_t *param_node) {
             destroy_list(ids);
             return NULL;
         }
-        var_type = UNKNOWN_TYPE;
+        /* Untyped const/var/out params should accept any type. */
+        var_type = BUILTIN_ANY_TYPE;
         type_id = NULL;
     }
     else
     {
         /* ARCHITECTURAL FIX: Pass TypeInfo to preserve array information */
         var_type = convert_type_spec(type_node, &type_id, NULL, &type_info);
+        /* Some parser paths represent untyped const params as REAL with no type_id.
+         * Treat those as untyped so overload resolution can pick the correct helper. */
+        if (is_const_param && type_id == NULL && var_type == REAL_TYPE)
+            var_type = BUILTIN_ANY_TYPE;
         /* Check for default value node after type spec */
         if (type_node->next != NULL && type_node->next->typ == PASCAL_T_DEFAULT_VALUE) {
             default_value_node = type_node->next;

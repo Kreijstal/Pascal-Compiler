@@ -7597,6 +7597,8 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     var_type = HASHVAR_FILE;
                 else if(tree->tree_data.var_decl_data.type == TEXT_TYPE)
                     var_type = HASHVAR_TEXT;
+                else if(tree->tree_data.var_decl_data.type == BUILTIN_ANY_TYPE)
+                    var_type = HASHVAR_UNTYPED;
                 else
                     var_type = HASHVAR_REAL;
                 
