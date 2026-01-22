@@ -13041,16 +13041,21 @@ method_call_resolved:
                             const char *call_elem_type_id = call_expr->array_element_type_id;
                             struct RecordType *formal_elem_record = NULL;
                             struct RecordType *call_elem_record = NULL;
-                            int owns_formal_type = 0;
-                            KgpcType *formal_kgpc = resolve_type_from_vardecl(formal_decl, symtab, &owns_formal_type);
 
-                            if (formal_kgpc != NULL && kgpc_type_is_array(formal_kgpc))
+                            /* Only call expensive resolve_type_from_vardecl if tree data is incomplete */
+                            if (formal_elem_type == UNKNOWN_TYPE)
                             {
-                                semcheck_get_array_element_info_from_type(formal_kgpc,
-                                    &formal_elem_type, &formal_elem_type_id, &formal_elem_record);
+                                int owns_formal_type = 0;
+                                KgpcType *formal_kgpc = resolve_type_from_vardecl(formal_decl, symtab, &owns_formal_type);
+
+                                if (formal_kgpc != NULL && kgpc_type_is_array(formal_kgpc))
+                                {
+                                    semcheck_get_array_element_info_from_type(formal_kgpc,
+                                        &formal_elem_type, &formal_elem_type_id, &formal_elem_record);
+                                }
+                                if (owns_formal_type && formal_kgpc != NULL)
+                                    destroy_kgpc_type(formal_kgpc);
                             }
-                            if (owns_formal_type && formal_kgpc != NULL)
-                                destroy_kgpc_type(formal_kgpc);
 
                             if (call_expr->resolved_kgpc_type != NULL &&
                                 kgpc_type_is_array(call_expr->resolved_kgpc_type))
@@ -13159,54 +13164,59 @@ method_call_resolved:
                     if (formal_type == POINTER_TYPE && call_type == POINTER_TYPE && call_expr != NULL)
                     {
                         const char *formal_type_id = NULL;
-                        int formal_owned = 0;
-                        KgpcType *formal_kgpc = resolve_type_from_vardecl(formal_decl, symtab, &formal_owned);
                         int formal_subtype = UNKNOWN_TYPE;
                         const char *formal_subtype_id = NULL;
                         struct TypeAlias *formal_alias = NULL;
                         const char *formal_elem_type_id = NULL;
+                        int formal_owned = 0;
+                        KgpcType *formal_kgpc = NULL;
 
                         if (formal_decl != NULL && formal_decl->type == TREE_VAR_DECL)
                             formal_type_id = formal_decl->tree_data.var_decl_data.type_id;
                         else if (formal_decl != NULL && formal_decl->type == TREE_ARR_DECL)
                             formal_elem_type_id = formal_decl->tree_data.arr_decl_data.type_id;
 
-                        if (formal_kgpc != NULL && kgpc_type_is_pointer(formal_kgpc))
+                        /* Try to get subtype info from tree data first before expensive resolve */
+                        if (formal_type_id != NULL)
                         {
-                            formal_subtype = kgpc_type_get_pointer_subtype_tag(formal_kgpc);
-                            if (formal_subtype == RECORD_TYPE)
+                            HashNode_t *type_node = NULL;
+                            if (FindIdent(&type_node, symtab, (char *)formal_type_id) != -1 &&
+                                type_node != NULL)
                             {
-                                KgpcType *points_to = formal_kgpc->info.points_to;
-                                if (points_to != NULL && kgpc_type_is_record(points_to))
+                                formal_alias = get_type_alias_from_node(type_node);
+                            }
+                        }
+                        if (formal_alias != NULL && formal_alias->is_pointer)
+                        {
+                            formal_subtype = formal_alias->pointer_type;
+                            formal_subtype_id = formal_alias->pointer_type_id;
+                        }
+
+                        /* Only call expensive resolve_type_from_vardecl if we couldn't get subtype from tree */
+                        if (formal_subtype == UNKNOWN_TYPE)
+                        {
+                            formal_kgpc = resolve_type_from_vardecl(formal_decl, symtab, &formal_owned);
+
+                            if (formal_kgpc != NULL && kgpc_type_is_pointer(formal_kgpc))
+                            {
+                                formal_subtype = kgpc_type_get_pointer_subtype_tag(formal_kgpc);
+                                if (formal_subtype == RECORD_TYPE)
                                 {
-                                    struct RecordType *rec = kgpc_type_get_record(points_to);
-                                    if (rec != NULL)
-                                        formal_subtype_id = rec->type_id;
+                                    KgpcType *points_to = formal_kgpc->info.points_to;
+                                    if (points_to != NULL && kgpc_type_is_record(points_to))
+                                    {
+                                        struct RecordType *rec = kgpc_type_get_record(points_to);
+                                        if (rec != NULL)
+                                            formal_subtype_id = rec->type_id;
+                                    }
                                 }
                             }
                         }
-                        if (formal_subtype == UNKNOWN_TYPE)
+                        if (formal_subtype == UNKNOWN_TYPE && formal_subtype_id != NULL)
                         {
-                            if (formal_type_id != NULL)
-                            {
-                                HashNode_t *type_node = NULL;
-                                if (FindIdent(&type_node, symtab, (char *)formal_type_id) != -1 &&
-                                    type_node != NULL)
-                                {
-                                    formal_alias = get_type_alias_from_node(type_node);
-                                }
-                            }
-                            if (formal_alias != NULL && formal_alias->is_pointer)
-                            {
-                                formal_subtype = formal_alias->pointer_type;
-                                formal_subtype_id = formal_alias->pointer_type_id;
-                            }
-                            if (formal_subtype == UNKNOWN_TYPE && formal_subtype_id != NULL)
-                            {
-                                int mapped = semcheck_map_builtin_type_name(symtab, formal_subtype_id);
-                                if (mapped != UNKNOWN_TYPE)
-                                    formal_subtype = mapped;
-                            }
+                            int mapped = semcheck_map_builtin_type_name(symtab, formal_subtype_id);
+                            if (mapped != UNKNOWN_TYPE)
+                                formal_subtype = mapped;
                         }
                         if (formal_subtype == UNKNOWN_TYPE && formal_elem_type_id != NULL)
                         {

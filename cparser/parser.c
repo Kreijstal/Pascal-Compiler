@@ -345,17 +345,18 @@ static char* create_error_context(input_t* in, int line, int col, int index) {
 
     /* Compute actual buffer line from index position, since 'line' may be
      * the original source line (with #line directives) which doesn't match
-     * the preprocessed buffer line numbers. */
-    int buffer_line = 1;
+     * the preprocessed buffer line numbers.
+     * Only do this O(n) scan if index is actually provided. */
+    int context_line = line;  /* Default to using provided line */
     if (index >= 0 && index <= length) {
+        int buffer_line = 1;
         for (int i = 0; i < index && i < length; i++) {
             if (in->buffer[i] == '\n') {
                 buffer_line++;
             }
         }
+        context_line = buffer_line;
     }
-    /* Use computed buffer_line for finding context in the buffer */
-    int context_line = buffer_line;
     if (length <= 0 && in->buffer != NULL) {
         length = (int)strlen(in->buffer);
     }
