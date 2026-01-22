@@ -508,8 +508,8 @@ static int compute_source_line(input_t* in, int pos) {
 
 ParseResult make_failure_v2(input_t* in, char* parser_name, char* message, char* unexpected) {
     ParseError* err = allocate_parse_error();
-    int computed_line = in ? compute_source_line(in, in->start) : 0;
-    err->line = computed_line;
+    /* Store raw line for now - source line is computed on-demand when error is displayed */
+    err->line = in ? in->line : 0;
     err->col = in ? in->col : 0;
     err->index = in ? in->start : -1;
     err->message = message;
@@ -530,8 +530,8 @@ ParseResult make_failure(input_t* in, char* message) {
 
 ParseResult make_failure_with_ast(input_t* in, char* message, ast_t* partial_ast) {
     ParseError* err = allocate_parse_error();
-    int computed_line = in ? compute_source_line(in, in->start) : 0;
-    err->line = computed_line;
+    /* Store raw line for now - source line is computed on-demand when error is displayed */
+    err->line = in ? in->line : 0;
     err->col = in ? in->col : 0;
     err->index = in ? in->start : -1;
     err->message = message;
@@ -589,8 +589,8 @@ ParseResult wrap_failure(input_t* in, char* message, char* parser_name, ParseRes
         err->context = cause_error->context ? strdup(cause_error->context) : NULL;
         err->committed = cause_error->committed;  // Preserve commit status
     } else {
-        int computed_line = in ? compute_source_line(in, in->start) : 0;
-        err->line = computed_line;
+        /* Store raw line for now - source line is computed on-demand when error is displayed */
+        err->line = in ? in->line : 0;
         err->col = in ? in->col : 0;
         err->index = in ? in->start : -1;
         err->context = NULL;  // Don't create context - expensive
@@ -2205,10 +2205,17 @@ static void release_extra_nodes(extra_node** extras, visited_set* visited) {
 }
 
 // Create context for an error and all its causes (if not already created)
+// Also computes source line from #line directives (deferred to display time for performance)
 void ensure_parse_error_contexts(ParseError* err, input_t* in) {
     while (err != NULL) {
-        if (err->context == NULL && in != NULL) {
-            err->context = create_error_context(in, err->line, err->col, err->index);
+        if (in != NULL) {
+            /* Compute actual source line from position and directive tracking */
+            if (err->index >= 0) {
+                err->line = compute_source_line(in, err->index);
+            }
+            if (err->context == NULL) {
+                err->context = create_error_context(in, err->line, err->col, err->index);
+            }
         }
         err = err->cause;
     }
