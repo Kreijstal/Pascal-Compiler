@@ -11332,6 +11332,11 @@ int semcheck_funccall(int *type_return,
 
                     if (method_node != NULL)
                     {
+                        if (self_record != NULL && self_record->type_id != NULL &&
+                            id != NULL && from_cparser_is_method_static(self_record->type_id, id))
+                        {
+                            expects_self = 0;
+                        }
                         if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
                         {
                             fprintf(stderr, "[SemCheck] Implicit Self injection? method_params_len=%d mangled=%s\n",
@@ -12282,6 +12287,17 @@ int semcheck_funccall(int *type_return,
                     }
                     
                     if (method_node != NULL) {
+                        int first_arg_is_type = 0;
+                        if (first_arg != NULL && first_arg->type == EXPR_VAR_ID &&
+                            first_arg->expr_data.id != NULL)
+                        {
+                            HashNode_t *first_arg_node = NULL;
+                            if (FindIdent(&first_arg_node, symtab, first_arg->expr_data.id) >= 0 &&
+                                first_arg_node != NULL && first_arg_node->hash_type == HASHTYPE_TYPE)
+                            {
+                                first_arg_is_type = 1;
+                            }
+                        }
                         if (!is_static && method_node->type != NULL)
                         {
                             ListNode_t *params = kgpc_type_get_procedure_params(method_node->type);
@@ -12299,6 +12315,8 @@ int semcheck_funccall(int *type_return,
                             if (param_name == NULL || !pascal_identifier_equals(param_name, "Self"))
                                 is_static = 1;
                         }
+                        if (!first_arg_is_type)
+                            is_static = 0;
                         /* Resolve the method name */
                         set_type_from_hashtype(type_return, method_node);
                         semcheck_expr_set_resolved_kgpc_type_shared(expr, method_node->type);
@@ -12310,7 +12328,7 @@ int semcheck_funccall(int *type_return,
                         expr->expr_data.function_call_data.mangled_id =
                             (resolved_method_name != NULL) ? strdup(resolved_method_name) : NULL;
                         
-                        if (is_static) {
+                        if (is_static && first_arg_is_type) {
                             /* For static methods, remove the first argument (the type identifier) */
                             ListNode_t *old_head = args_given;
                             expr->expr_data.function_call_data.args_expr = old_head->next;

@@ -511,8 +511,159 @@ static char *generate_anonymous_method_name(int is_function) {
     return name;
 }
 
-static void register_class_method_ex(const char *class_name, const char *method_name, 
-                                      int is_virtual, int is_override, int is_static) {
+static int is_param_modifier_name(const char *name)
+{
+    if (name == NULL)
+        return 0;
+    return strcasecmp(name, "var") == 0 ||
+        strcasecmp(name, "out") == 0 ||
+        strcasecmp(name, "const") == 0 ||
+        strcasecmp(name, "constref") == 0;
+}
+
+static int count_param_identifiers(ast_t *params_ast)
+{
+    if (params_ast == NULL)
+        return 0;
+
+    int count = 0;
+    ast_t *param = params_ast;
+    if (param->typ == PASCAL_T_PARAM_LIST)
+        param = param->child;
+
+    while (param != NULL && param->typ == PASCAL_T_PARAM)
+    {
+        ast_t *child = param->child;
+        if (child != NULL && child->sym != NULL && is_param_modifier_name(child->sym->name))
+            child = child->next;
+
+        while (child != NULL && child->typ == PASCAL_T_IDENTIFIER)
+        {
+            count++;
+            child = child->next;
+        }
+        param = param->next;
+    }
+
+    return count;
+}
+
+static const char *qualified_identifier_last_name(ast_t *node)
+{
+    const char *name = NULL;
+    if (node == NULL)
+        return NULL;
+    ast_t *cur = node->child;
+    while (cur != NULL)
+    {
+        if (cur->sym != NULL && cur->sym->name != NULL)
+            name = cur->sym->name;
+        cur = cur->next;
+    }
+    return name;
+}
+
+static const char *extract_type_name(ast_t *type_node)
+{
+    if (type_node == NULL)
+        return NULL;
+    if (type_node->typ == PASCAL_T_TYPE_SPEC && type_node->child != NULL)
+        type_node = type_node->child;
+
+    if (type_node->typ == PASCAL_T_IDENTIFIER && type_node->sym != NULL)
+        return type_node->sym->name;
+    if (type_node->typ == PASCAL_T_QUALIFIED_IDENTIFIER)
+        return qualified_identifier_last_name(type_node);
+    return NULL;
+}
+
+static char *build_param_signature(ast_t *params_ast)
+{
+    if (params_ast == NULL)
+        return NULL;
+
+    const char *types[64];
+    int count = 0;
+
+    ast_t *param = params_ast;
+    if (param->typ == PASCAL_T_PARAM_LIST)
+        param = param->child;
+
+    while (param != NULL && param->typ == PASCAL_T_PARAM)
+    {
+        ast_t *child = param->child;
+        if (child != NULL && child->sym != NULL && is_param_modifier_name(child->sym->name))
+            child = child->next;
+
+        int id_count = 0;
+        ast_t *id_cursor = child;
+        while (id_cursor != NULL && id_cursor->typ == PASCAL_T_IDENTIFIER)
+        {
+            id_count++;
+            id_cursor = id_cursor->next;
+        }
+
+        if (id_count > 0)
+        {
+            const char *type_name = extract_type_name(id_cursor);
+            if (type_name == NULL)
+                return NULL;
+            for (int i = 0; i < id_count && count < 64; i++)
+                types[count++] = type_name;
+        }
+        param = param->next;
+    }
+
+    if (count == 0)
+        return NULL;
+
+    size_t total_len = 0;
+    for (int i = 0; i < count; i++)
+        total_len += strlen(types[i]) + (i > 0 ? 1 : 0);
+
+    char *sig = (char *)malloc(total_len + 1);
+    if (sig == NULL)
+        return NULL;
+    sig[0] = '\0';
+    for (int i = 0; i < count; i++)
+    {
+        if (i > 0)
+            strcat(sig, ",");
+        strcat(sig, types[i]);
+    }
+    return sig;
+}
+
+static ast_t *find_method_params_node(ast_t *method_ast)
+{
+    if (method_ast == NULL)
+        return NULL;
+
+    for (ast_t *cursor = method_ast->child; cursor != NULL; cursor = cursor->next)
+    {
+        ast_t *node = unwrap_pascal_node(cursor);
+        if (node == NULL)
+            continue;
+        if (node->typ == PASCAL_T_PARAM_LIST || node->typ == PASCAL_T_PARAM)
+            return node;
+        if (node->typ == PASCAL_T_RETURN_TYPE ||
+            node->typ == PASCAL_T_FUNCTION_BODY ||
+            node->typ == PASCAL_T_BEGIN_BLOCK)
+            break;
+    }
+
+    return NULL;
+}
+
+static int count_method_param_identifiers(ast_t *method_ast)
+{
+    ast_t *params_node = find_method_params_node(method_ast);
+    return count_param_identifiers(params_node);
+}
+
+static void register_class_method_ex(const char *class_name, const char *method_name,
+                                      int is_virtual, int is_override, int is_static,
+                                      int param_count, const char *param_sig) {
     if (class_name == NULL || method_name == NULL)
         return;
 
@@ -525,6 +676,8 @@ static void register_class_method_ex(const char *class_name, const char *method_
     binding->is_virtual = is_virtual;
     binding->is_override = is_override;
     binding->is_static = is_static;
+    binding->param_count = param_count;
+    binding->param_sig = (param_sig != NULL) ? strdup(param_sig) : NULL;
 
     ListNode_t *node = NULL;
     if (binding->class_name != NULL && binding->method_name != NULL)
@@ -541,14 +694,17 @@ static void register_class_method_ex(const char *class_name, const char *method_
     class_method_bindings = node;
     
     if (getenv("KGPC_DEBUG_CLASS_METHODS") != NULL) {
-        fprintf(stderr, "[KGPC] Registered method %s.%s (virtual=%d, override=%d, static=%d)\n",
-            class_name, method_name, is_virtual, is_override, is_static);
+        fprintf(stderr,
+            "[KGPC] Registered method %s.%s (virtual=%d, override=%d, static=%d, params=%d, sig=%s)\n",
+            class_name, method_name, is_virtual, is_override, is_static, param_count,
+            (param_sig != NULL) ? param_sig : "<none>");
     }
 }
 
 void from_cparser_register_method_template(const char *class_name, const char *method_name,
-    int is_virtual, int is_override, int is_static) {
-    register_class_method_ex(class_name, method_name, is_virtual, is_override, is_static);
+    int is_virtual, int is_override, int is_static, int param_count, const char *param_sig) {
+    register_class_method_ex(class_name, method_name, is_virtual, is_override, is_static,
+        param_count, param_sig);
 }
 
 
@@ -569,9 +725,15 @@ static const char *find_class_for_method(const char *method_name) {
 }
 
 /* Check if a method is static (no Self parameter) */
-static int is_method_static(const char *class_name, const char *method_name) {
+static int is_method_static_with_params(const char *class_name, const char *method_name,
+    int param_count, const char *param_sig) {
     if (class_name == NULL || method_name == NULL)
         return 0;
+
+    int fallback_set = 0;
+    int fallback_static = 0;
+    int param_count_match_set = 0;
+    int param_count_match_static = 0;
 
     ListNode_t *cur = class_method_bindings;
     while (cur != NULL) {
@@ -579,10 +741,34 @@ static int is_method_static(const char *class_name, const char *method_name) {
         if (binding != NULL && binding->class_name != NULL && binding->method_name != NULL &&
             strcasecmp(binding->class_name, class_name) == 0 &&
             strcasecmp(binding->method_name, method_name) == 0)
-            return binding->is_static;
+        {
+            if (param_sig != NULL && binding->param_sig != NULL &&
+                strcasecmp(binding->param_sig, param_sig) == 0)
+                return binding->is_static;
+            if (param_sig == NULL && param_count >= 0 && binding->param_count >= 0 &&
+                binding->param_count == param_count)
+                return binding->is_static;
+            if (param_sig != NULL && !param_count_match_set &&
+                param_count >= 0 && binding->param_count >= 0 &&
+                binding->param_count == param_count)
+            {
+                param_count_match_set = 1;
+                param_count_match_static = binding->is_static;
+            }
+            if (!fallback_set) {
+                fallback_set = 1;
+                fallback_static = binding->is_static;
+            }
+        }
         cur = cur->next;
     }
-    return 0;
+    if (param_sig != NULL && param_count_match_set)
+        return param_count_match_static;
+    return fallback_set ? fallback_static : 0;
+}
+
+static int is_method_static(const char *class_name, const char *method_name) {
+    return is_method_static_with_params(class_name, method_name, -1, NULL);
 }
 
 /* Public wrapper for is_method_static */
@@ -1279,8 +1465,11 @@ static void append_subprograms_from_ast_recursive(ast_t *node, ListNode_t **subp
     if (node == NULL || node == ast_nil || subprograms == NULL || visited == NULL)
         return;
 
-    if (!is_safe_to_continue(visited, node))
+    if (!is_safe_to_continue(visited, node)) {
+        /* Avoid skipping sibling chains when a node is re-encountered. */
+        append_subprograms_from_ast_recursive(node->next, subprograms, visited);
         return;
+    }
 
     switch (node->typ)
     {
@@ -4070,8 +4259,13 @@ static void collect_class_members(ast_t *node, const char *class_name,
                     fprintf(stderr, "[KGPC] captured template %s.%s\n",
                         class_name != NULL ? class_name : "<unknown>", template->name);
 
+                int param_count = count_param_identifiers(template->params_ast);
+                char *param_sig = build_param_signature(template->params_ast);
                 register_class_method_ex(class_name, template->name,
-                    template->is_virtual, template->is_override, template->is_static);
+                    template->is_virtual, template->is_override, template->is_static,
+                    param_count, param_sig);
+                if (param_sig != NULL)
+                    free(param_sig);
 
                 if (method_builder != NULL)
                     list_builder_append(method_builder, template, LIST_METHOD_TEMPLATE);
@@ -6179,8 +6373,13 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
                 if (method_ast != NULL && method_ast->typ == PASCAL_T_METHOD_DECL) {
                     struct MethodTemplate *template = create_method_template(method_ast);
                     if (template != NULL) {
+                        int param_count = count_param_identifiers(template->params_ast);
+                        char *param_sig = build_param_signature(template->params_ast);
                         register_class_method_ex(id, template->name,
-                            template->is_virtual, template->is_override, template->is_static);
+                            template->is_virtual, template->is_override, template->is_static,
+                            param_count, param_sig);
+                        if (param_sig != NULL)
+                            free(param_sig);
                         if (getenv("KGPC_DEBUG_CLASS_METHODS") != NULL)
                             fprintf(stderr, "[KGPC] Registered record method %s.%s (static=%d)\n",
                                 id, template->name, template->is_static);
@@ -8997,21 +9196,33 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     /* Don't re-register the method here - it was already registered during class declaration */
     
     /* Check if this method was declared as static in the record/class declaration */
-    int is_static_method = is_method_static(effective_class, method_name);
+    ast_t *impl_params_node = find_method_params_node(method_node);
+    int impl_param_count = count_param_identifiers(impl_params_node);
+    char *impl_param_sig = build_param_signature(impl_params_node);
+    int is_static_method = is_method_static_with_params(effective_class, method_name,
+        impl_param_count, impl_param_sig);
     if (method_node != NULL && method_name != NULL)
     {
         struct MethodTemplate impl_template = {0};
         impl_template.name = (char *)method_name;
         annotate_method_template(&impl_template, method_node);
+        if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
+            fprintf(stderr, "[KGPC] convert_method_impl: impl directives class=%d static=%d\n",
+                impl_template.is_class_method, impl_template.is_static);
+        }
         if (impl_template.is_static || impl_template.is_class_method)
             is_static_method = 1;
     }
     if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
-        fprintf(stderr, "[KGPC] convert_method_impl: class=%s method=%s is_static=%d\n",
+        fprintf(stderr, "[KGPC] convert_method_impl: class=%s method=%s is_static=%d params=%d sig=%s\n",
                 effective_class ? effective_class : "<null>", 
                 method_name ? method_name : "<null>",
-                is_static_method);
+                is_static_method,
+                impl_param_count,
+                impl_param_sig != NULL ? impl_param_sig : "<none>");
     }
+    if (impl_param_sig != NULL)
+        free(impl_param_sig);
     
     char *proc_name = mangle_method_name(effective_class, method_name);
     if (proc_name == NULL) {

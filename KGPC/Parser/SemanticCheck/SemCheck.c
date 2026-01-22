@@ -50,6 +50,131 @@ static char *g_semcheck_source_path = NULL;
 static char *g_semcheck_source_buffer = NULL;
 static size_t g_semcheck_source_length = 0;
 
+static int semcheck_is_param_modifier_name(const char *name)
+{
+    if (name == NULL)
+        return 0;
+    return strcasecmp(name, "var") == 0 ||
+        strcasecmp(name, "out") == 0 ||
+        strcasecmp(name, "const") == 0 ||
+        strcasecmp(name, "constref") == 0;
+}
+
+static int semcheck_count_param_identifiers(ast_t *params_ast)
+{
+    if (params_ast == NULL)
+        return 0;
+
+    int count = 0;
+    ast_t *param = params_ast;
+    if (param->typ == PASCAL_T_PARAM_LIST)
+        param = param->child;
+
+    while (param != NULL && param->typ == PASCAL_T_PARAM)
+    {
+        ast_t *child = param->child;
+        if (child != NULL && child->sym != NULL &&
+            semcheck_is_param_modifier_name(child->sym->name))
+            child = child->next;
+
+        while (child != NULL && child->typ == PASCAL_T_IDENTIFIER)
+        {
+            count++;
+            child = child->next;
+        }
+        param = param->next;
+    }
+
+    return count;
+}
+
+static const char *semcheck_qualified_identifier_last_name(ast_t *node)
+{
+    const char *name = NULL;
+    if (node == NULL)
+        return NULL;
+    ast_t *cur = node->child;
+    while (cur != NULL)
+    {
+        if (cur->sym != NULL && cur->sym->name != NULL)
+            name = cur->sym->name;
+        cur = cur->next;
+    }
+    return name;
+}
+
+static const char *semcheck_extract_type_name(ast_t *type_node)
+{
+    if (type_node == NULL)
+        return NULL;
+    if (type_node->typ == PASCAL_T_TYPE_SPEC && type_node->child != NULL)
+        type_node = type_node->child;
+
+    if (type_node->typ == PASCAL_T_IDENTIFIER && type_node->sym != NULL)
+        return type_node->sym->name;
+    if (type_node->typ == PASCAL_T_QUALIFIED_IDENTIFIER)
+        return semcheck_qualified_identifier_last_name(type_node);
+    return NULL;
+}
+
+static char *semcheck_build_param_signature(ast_t *params_ast)
+{
+    if (params_ast == NULL)
+        return NULL;
+
+    const char *types[64];
+    int count = 0;
+
+    ast_t *param = params_ast;
+    if (param->typ == PASCAL_T_PARAM_LIST)
+        param = param->child;
+
+    while (param != NULL && param->typ == PASCAL_T_PARAM)
+    {
+        ast_t *child = param->child;
+        if (child != NULL && child->sym != NULL &&
+            semcheck_is_param_modifier_name(child->sym->name))
+            child = child->next;
+
+        int id_count = 0;
+        ast_t *id_cursor = child;
+        while (id_cursor != NULL && id_cursor->typ == PASCAL_T_IDENTIFIER)
+        {
+            id_count++;
+            id_cursor = id_cursor->next;
+        }
+
+        if (id_count > 0)
+        {
+            const char *type_name = semcheck_extract_type_name(id_cursor);
+            if (type_name == NULL)
+                return NULL;
+            for (int i = 0; i < id_count && count < 64; i++)
+                types[count++] = type_name;
+        }
+        param = param->next;
+    }
+
+    if (count == 0)
+        return NULL;
+
+    size_t total_len = 0;
+    for (int i = 0; i < count; i++)
+        total_len += strlen(types[i]) + (i > 0 ? 1 : 0);
+
+    char *sig = (char *)malloc(total_len + 1);
+    if (sig == NULL)
+        return NULL;
+    sig[0] = '\0';
+    for (int i = 0; i < count; i++)
+    {
+        if (i > 0)
+            strcat(sig, ",");
+        strcat(sig, types[i]);
+    }
+    return sig;
+}
+
 void semcheck_set_source_path(const char *path)
 {
     if (g_semcheck_source_path != NULL)
@@ -4684,12 +4809,18 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                     /* If not already registered, register it now */
                                     if (!already_registered)
                                     {
+                                        int param_count = semcheck_count_param_identifiers(tmpl->params_ast);
+                                        char *param_sig = semcheck_build_param_signature(tmpl->params_ast);
                                         from_cparser_register_method_template(
                                             tree->tree_data.type_decl_data.id,
                                             tmpl->name,
                                             tmpl->is_virtual,
                                             tmpl->is_override,
-                                            tmpl->is_static);
+                                            tmpl->is_static,
+                                            param_count,
+                                            param_sig);
+                                        if (param_sig != NULL)
+                                            free(param_sig);
 
                                         if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                                             fprintf(stderr, "[SemCheck] Registered method template: %s.%s (virtual=%d, override=%d, static=%d)\n",
@@ -8403,20 +8534,27 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
 
     const char *prev_owner = semcheck_get_current_method_owner();
     char *owner_copy = NULL;
-    if (subprogram->tree_data.subprogram_data.mangled_id != NULL)
+    const char *owner_source = subprogram->tree_data.subprogram_data.mangled_id;
+    if (owner_source == NULL)
+        owner_source = subprogram->tree_data.subprogram_data.id;
+    semcheck_set_current_method_owner(NULL);
+    if (owner_source != NULL)
     {
-        const char *mangled = subprogram->tree_data.subprogram_data.mangled_id;
-        const char *sep = strstr(mangled, "__");
-        if (sep != NULL && sep != mangled)
+        const char *sep = strstr(owner_source, "__");
+        if (sep != NULL && sep != owner_source)
         {
-            size_t len = (size_t)(sep - mangled);
+            size_t len = (size_t)(sep - owner_source);
             owner_copy = (char *)malloc(len + 1);
             if (owner_copy != NULL)
             {
-                memcpy(owner_copy, mangled, len);
+                memcpy(owner_copy, owner_source, len);
                 owner_copy[len] = '\0';
                 semcheck_set_current_method_owner(owner_copy);
             }
+        }
+        else
+        {
+            semcheck_set_current_method_owner(NULL);
         }
     }
 
@@ -8859,6 +8997,29 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             if (owner_record != NULL && owner_record->is_type_helper &&
                 owner_record->helper_base_type_id != NULL)
             {
+                int method_is_static = 0;
+                const char *method_source = subprogram->tree_data.subprogram_data.mangled_id;
+                if (method_source == NULL)
+                    method_source = subprogram->tree_data.subprogram_data.id;
+                if (method_source != NULL)
+                {
+                    const char *sep = strstr(method_source, "__");
+                    if (sep != NULL && sep[2] != '\0')
+                    {
+                        const char *method_name = sep + 2;
+                        size_t name_len = strcspn(method_name, "_");
+                        if (name_len > 0 && name_len < 128)
+                        {
+                            char method_buf[128];
+                            memcpy(method_buf, method_name, name_len);
+                            method_buf[name_len] = '\0';
+                            method_is_static = from_cparser_is_method_static(owner_id, method_buf);
+                        }
+                    }
+                }
+                if (method_is_static)
+                    goto skip_helper_self_injection;
+
                 KgpcType *self_type = NULL;
                 HashNode_t *type_node = semcheck_find_preferred_type_node(symtab,
                     owner_record->helper_base_type_id);
@@ -8880,6 +9041,8 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                     PushVarOntoScope_Typed(symtab, "Self", self_type);
                     destroy_kgpc_type(self_type);
                 }
+skip_helper_self_injection:
+                ;
             }
         }
     }
@@ -9035,11 +9198,9 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_subprogram %s returning at end: %d\n", subprogram->tree_data.subprogram_data.id, return_val);
 #endif
+    semcheck_set_current_method_owner(prev_owner);
     if (owner_copy != NULL)
-    {
-        semcheck_set_current_method_owner(prev_owner);
         free(owner_copy);
-    }
 
     return return_val;
 }
