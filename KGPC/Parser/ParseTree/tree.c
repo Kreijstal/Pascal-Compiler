@@ -98,9 +98,8 @@ void list_print(ListNode_t *list, FILE *f, int num_indent)
                 print_variant_branch((struct VariantBranch *)cur->cur, f, num_indent);
                 break;
             default:
-                print_indent(f, num_indent);
-                fprintf(f, "[LIST_UNSUPPORTED type=%d]\n", cur->type);
-                break;
+                fprintf(stderr, "BAD TYPE IN list_print!\n");
+                exit(1);
         }
         cur = cur->next;
     }

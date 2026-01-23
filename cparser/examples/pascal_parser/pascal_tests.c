@@ -3116,11 +3116,9 @@ void test_pascal_case_statement_with_else(void) {
     TEST_ASSERT(else_clause != NULL);
     TEST_ASSERT(else_clause->typ == PASCAL_T_ELSE);
     
-    // Check else statement (case else body is wrapped in a begin block)
+    // Check else statement
     ast_t* else_stmt = else_clause->child;
-    TEST_ASSERT(else_stmt->typ == PASCAL_T_BEGIN_BLOCK);
-    TEST_ASSERT(else_stmt->child != NULL);
-    TEST_ASSERT(else_stmt->child->typ == PASCAL_T_ASSIGNMENT);
+    TEST_ASSERT(else_stmt->typ == PASCAL_T_ASSIGNMENT);
 
     free_ast(res.value.ast);    free(input->buffer);
     free_input(input);

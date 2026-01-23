@@ -1000,10 +1000,7 @@ static ParseResult type_name_fn(input_t* in, void* args, char* parser_name) {
     const char* type_keywords[] = {
         "integer", "real", "boolean", "char", "string", "shortstring", "ansistring",
         "unicodestring", "widestring", "rawbytestring", "byte", "word", "longint",
-        "pointer", "shortint", "smallint", "longword", "cardinal", "qword",
-        "int64", "uint64", "ansichar", "widechar", "wchar", "nativeint",
-        "nativeuint", "sizeint", "ptrint", "ptruint", "single", "double",
-        "extended", "comp", "currency", NULL
+        "pointer", NULL
     };
     
     for (int i = 0; type_keywords[i] != NULL; i++) {

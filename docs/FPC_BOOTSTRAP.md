@@ -19,7 +19,7 @@ The FPC RTL cannot be fully compiled because kgpc has bugs and missing features 
 
 ## Build Command
 
-### sysutils.pp (16 errors as of 2025-01-22)
+### sysutils.pp (27 errors)
 ```bash
 ./build/KGPC/kgpc ./FPCSource/rtl/unix/sysutils.pp /tmp/sysutils.s \
   --no-stdlib \
@@ -35,13 +35,7 @@ The FPC RTL cannot be fully compiled because kgpc has bugs and missing features 
 
 ## Error Reduction with C-Vise (Flatten-Only Preprocessor)
 
-The `--flatten-only` mode expands `{$I ...}` include directives into a single file while keeping compiler directives (`{$IFDEF}`, `{$DEFINE}`, etc.) intact. This is useful for c-vise reduction because:
-
-1. **Single file**: Easier to reduce than multiple include files
-2. **Preserves conditionals**: FPC can still verify the reduced file compiles correctly
-3. **Keeps `uses` clauses**: External units are NOT inlined - you still need `-I` paths
-
-**Important**: Flattening only expands `{$I ...}` includes. The `uses` clause still references external units (sysconst, baseunix, unix, etc.) that must be resolved via `-I` paths when compiling.
+When minimizing sysutils failures, use the preprocessor's `--flatten-only` mode to expand `{$i ...}` includes into a single file while keeping compiler directives intact for FPC to evaluate. This avoids corrupting conditional branches during reduction.
 
 ### Flatten sysutils.pp
 ```bash
@@ -54,27 +48,11 @@ The `--flatten-only` mode expands `{$I ...}` include directives into a single fi
   -I./FPCSource/rtl/linux/x86_64 \
   -I./FPCSource/rtl/x86_64 \
   ./FPCSource/rtl/unix/sysutils.pp sysutils_flat.pp
-```
-
-### Compile the flattened file (still needs -I paths for units)
-```bash
-./build/KGPC/kgpc sysutils_flat.pp /tmp/sysutils.s --no-stdlib \
-  -I./FPCSource/rtl/unix \
-  -I./FPCSource/rtl/objpas \
-  -I./FPCSource/rtl/objpas/sysutils \
-  -I./FPCSource/rtl/inc \
-  -I./FPCSource/rtl/linux \
-  -I./FPCSource/rtl/linux/x86_64 \
-  -I./FPCSource/rtl/x86_64 \
-  -I./FPCSource/packages/rtl-objpas/src/inc
+cp -f sysutils_flat.pp sysutils_indexofany.pp
 ```
 
 ### Interestingness test and cvise (example)
-Create an interestingness script that:
-1. Verifies the reduced file still compiles with FPC (to avoid invalid reductions)
-2. Checks that kgpc still produces the target error
-
-Both FPC and kgpc need `-I` paths to resolve units from the `uses` clause.
+Create a small interestingness script locally (example below), then run cvise against the flattened file.
 
 ```bash
 cat > /tmp/cvise_indexofany.sh <<'EOF'
@@ -129,14 +107,15 @@ chmod +x /tmp/cvise_indexofany.sh
 cvise --timeout 7200 /tmp/cvise_indexofany.sh sysutils_indexofany.pp
 ```
 
-### Error categories (16 total as of 2025-01-22):
+### Error categories (27 total):
 | Count | Error | Root Cause |
 |-------|-------|------------|
-| 6 | TGUIDHelper.Create argument type mismatch | Type casts in type helper |
-| 4 | procedure overload not found (InitExceptions, etc.) | Forward reference issues |
-| 3 | ShortString S assignment | Type compatibility |
-| 2 | SysBeep undeclared | Forward reference support needed |
-| 1 | OnBeep assignment type mismatch | Forward reference |
+| 6 | IndexOfAny/IndexOfAnyUnQuoted overload not found | Type helper overload resolution |
+| 6 | Result type incompatible | Cascading from overload errors |
+| 5 | procedure overload not found (InitExceptions, etc.) | Forward reference issues |
+| 3 | TGUIDHelper.Create argument type mismatch | Forward reference within type helper |
+| 3 | ShortString S assignment | Cascading from earlier errors |
+| 3 | SysBeep/OnBeep undeclared | Forward reference support needed |
 | 1 | Result real type mismatch | Cascading |
 
 ## Compiles Successfully (RTL Units)
@@ -158,7 +137,7 @@ cvise --timeout 7200 /tmp/cvise_indexofany.sh sysutils_indexofany.pp
 
 ## Units with Compilation Errors
 
-- `sysutils.pp` - **16 errors** (with `--no-stdlib`, as of 2025-01-22)
+- `sysutils.pp` - **27 errors** (with `--no-stdlib`)
 - `math.pp` - Depends on sysutils
 - `cthreads.pp` - Missing ThreadingAlreadyUsed
 - `charset.pp` - Type incompatibilities

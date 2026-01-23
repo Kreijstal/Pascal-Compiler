@@ -482,9 +482,6 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
     int var_type_tag = var_decl->tree_data.var_decl_data.type;
     const char *type_id = var_decl->tree_data.var_decl_data.type_id;
 
-    if (var_type_tag == BUILTIN_ANY_TYPE && type_id == NULL)
-        return NULL;
-
     if (var_type_tag == POINTER_TYPE && type_id != NULL)
     {
         KgpcType *pointee_type = NULL;

@@ -511,159 +511,8 @@ static char *generate_anonymous_method_name(int is_function) {
     return name;
 }
 
-static int is_param_modifier_name(const char *name)
-{
-    if (name == NULL)
-        return 0;
-    return strcasecmp(name, "var") == 0 ||
-        strcasecmp(name, "out") == 0 ||
-        strcasecmp(name, "const") == 0 ||
-        strcasecmp(name, "constref") == 0;
-}
-
-static int count_param_identifiers(ast_t *params_ast)
-{
-    if (params_ast == NULL)
-        return 0;
-
-    int count = 0;
-    ast_t *param = params_ast;
-    if (param->typ == PASCAL_T_PARAM_LIST)
-        param = param->child;
-
-    while (param != NULL && param->typ == PASCAL_T_PARAM)
-    {
-        ast_t *child = param->child;
-        if (child != NULL && child->sym != NULL && is_param_modifier_name(child->sym->name))
-            child = child->next;
-
-        while (child != NULL && child->typ == PASCAL_T_IDENTIFIER)
-        {
-            count++;
-            child = child->next;
-        }
-        param = param->next;
-    }
-
-    return count;
-}
-
-static const char *qualified_identifier_last_name(ast_t *node)
-{
-    const char *name = NULL;
-    if (node == NULL)
-        return NULL;
-    ast_t *cur = node->child;
-    while (cur != NULL)
-    {
-        if (cur->sym != NULL && cur->sym->name != NULL)
-            name = cur->sym->name;
-        cur = cur->next;
-    }
-    return name;
-}
-
-static const char *extract_type_name(ast_t *type_node)
-{
-    if (type_node == NULL)
-        return NULL;
-    if (type_node->typ == PASCAL_T_TYPE_SPEC && type_node->child != NULL)
-        type_node = type_node->child;
-
-    if (type_node->typ == PASCAL_T_IDENTIFIER && type_node->sym != NULL)
-        return type_node->sym->name;
-    if (type_node->typ == PASCAL_T_QUALIFIED_IDENTIFIER)
-        return qualified_identifier_last_name(type_node);
-    return NULL;
-}
-
-static char *build_param_signature(ast_t *params_ast)
-{
-    if (params_ast == NULL)
-        return NULL;
-
-    const char *types[64];
-    int count = 0;
-
-    ast_t *param = params_ast;
-    if (param->typ == PASCAL_T_PARAM_LIST)
-        param = param->child;
-
-    while (param != NULL && param->typ == PASCAL_T_PARAM)
-    {
-        ast_t *child = param->child;
-        if (child != NULL && child->sym != NULL && is_param_modifier_name(child->sym->name))
-            child = child->next;
-
-        int id_count = 0;
-        ast_t *id_cursor = child;
-        while (id_cursor != NULL && id_cursor->typ == PASCAL_T_IDENTIFIER)
-        {
-            id_count++;
-            id_cursor = id_cursor->next;
-        }
-
-        if (id_count > 0)
-        {
-            const char *type_name = extract_type_name(id_cursor);
-            if (type_name == NULL)
-                return NULL;
-            for (int i = 0; i < id_count && count < 64; i++)
-                types[count++] = type_name;
-        }
-        param = param->next;
-    }
-
-    if (count == 0)
-        return NULL;
-
-    size_t total_len = 0;
-    for (int i = 0; i < count; i++)
-        total_len += strlen(types[i]) + (i > 0 ? 1 : 0);
-
-    char *sig = (char *)malloc(total_len + 1);
-    if (sig == NULL)
-        return NULL;
-    sig[0] = '\0';
-    for (int i = 0; i < count; i++)
-    {
-        if (i > 0)
-            strcat(sig, ",");
-        strcat(sig, types[i]);
-    }
-    return sig;
-}
-
-static ast_t *find_method_params_node(ast_t *method_ast)
-{
-    if (method_ast == NULL)
-        return NULL;
-
-    for (ast_t *cursor = method_ast->child; cursor != NULL; cursor = cursor->next)
-    {
-        ast_t *node = unwrap_pascal_node(cursor);
-        if (node == NULL)
-            continue;
-        if (node->typ == PASCAL_T_PARAM_LIST || node->typ == PASCAL_T_PARAM)
-            return node;
-        if (node->typ == PASCAL_T_RETURN_TYPE ||
-            node->typ == PASCAL_T_FUNCTION_BODY ||
-            node->typ == PASCAL_T_BEGIN_BLOCK)
-            break;
-    }
-
-    return NULL;
-}
-
-static int count_method_param_identifiers(ast_t *method_ast)
-{
-    ast_t *params_node = find_method_params_node(method_ast);
-    return count_param_identifiers(params_node);
-}
-
-static void register_class_method_ex(const char *class_name, const char *method_name,
-                                      int is_virtual, int is_override, int is_static,
-                                      int param_count, const char *param_sig) {
+static void register_class_method_ex(const char *class_name, const char *method_name, 
+                                      int is_virtual, int is_override, int is_static) {
     if (class_name == NULL || method_name == NULL)
         return;
 
@@ -676,8 +525,6 @@ static void register_class_method_ex(const char *class_name, const char *method_
     binding->is_virtual = is_virtual;
     binding->is_override = is_override;
     binding->is_static = is_static;
-    binding->param_count = param_count;
-    binding->param_sig = (param_sig != NULL) ? strdup(param_sig) : NULL;
 
     ListNode_t *node = NULL;
     if (binding->class_name != NULL && binding->method_name != NULL)
@@ -694,17 +541,14 @@ static void register_class_method_ex(const char *class_name, const char *method_
     class_method_bindings = node;
     
     if (getenv("KGPC_DEBUG_CLASS_METHODS") != NULL) {
-        fprintf(stderr,
-            "[KGPC] Registered method %s.%s (virtual=%d, override=%d, static=%d, params=%d, sig=%s)\n",
-            class_name, method_name, is_virtual, is_override, is_static, param_count,
-            (param_sig != NULL) ? param_sig : "<none>");
+        fprintf(stderr, "[KGPC] Registered method %s.%s (virtual=%d, override=%d, static=%d)\n",
+            class_name, method_name, is_virtual, is_override, is_static);
     }
 }
 
 void from_cparser_register_method_template(const char *class_name, const char *method_name,
-    int is_virtual, int is_override, int is_static, int param_count, const char *param_sig) {
-    register_class_method_ex(class_name, method_name, is_virtual, is_override, is_static,
-        param_count, param_sig);
+    int is_virtual, int is_override, int is_static) {
+    register_class_method_ex(class_name, method_name, is_virtual, is_override, is_static);
 }
 
 
@@ -725,15 +569,9 @@ static const char *find_class_for_method(const char *method_name) {
 }
 
 /* Check if a method is static (no Self parameter) */
-static int is_method_static_with_params(const char *class_name, const char *method_name,
-    int param_count, const char *param_sig) {
+static int is_method_static(const char *class_name, const char *method_name) {
     if (class_name == NULL || method_name == NULL)
         return 0;
-
-    int fallback_set = 0;
-    int fallback_static = 0;
-    int param_count_match_set = 0;
-    int param_count_match_static = 0;
 
     ListNode_t *cur = class_method_bindings;
     while (cur != NULL) {
@@ -741,34 +579,10 @@ static int is_method_static_with_params(const char *class_name, const char *meth
         if (binding != NULL && binding->class_name != NULL && binding->method_name != NULL &&
             strcasecmp(binding->class_name, class_name) == 0 &&
             strcasecmp(binding->method_name, method_name) == 0)
-        {
-            if (param_sig != NULL && binding->param_sig != NULL &&
-                strcasecmp(binding->param_sig, param_sig) == 0)
-                return binding->is_static;
-            if (param_sig == NULL && param_count >= 0 && binding->param_count >= 0 &&
-                binding->param_count == param_count)
-                return binding->is_static;
-            if (param_sig != NULL && !param_count_match_set &&
-                param_count >= 0 && binding->param_count >= 0 &&
-                binding->param_count == param_count)
-            {
-                param_count_match_set = 1;
-                param_count_match_static = binding->is_static;
-            }
-            if (!fallback_set) {
-                fallback_set = 1;
-                fallback_static = binding->is_static;
-            }
-        }
+            return binding->is_static;
         cur = cur->next;
     }
-    if (param_sig != NULL && param_count_match_set)
-        return param_count_match_static;
-    return fallback_set ? fallback_static : 0;
-}
-
-static int is_method_static(const char *class_name, const char *method_name) {
-    return is_method_static_with_params(class_name, method_name, -1, NULL);
+    return 0;
 }
 
 /* Public wrapper for is_method_static */
@@ -1465,45 +1279,18 @@ static void append_subprograms_from_ast_recursive(ast_t *node, ListNode_t **subp
     if (node == NULL || node == ast_nil || subprograms == NULL || visited == NULL)
         return;
 
-    const char *debug_name = getenv("KGPC_DEBUG_FIND_NAME");
-    if (debug_name != NULL && debug_name[0] != '\0' && node->child != NULL &&
-        node->child->typ == PASCAL_T_IDENTIFIER && node->child->sym != NULL) {
-        const char *child_name = node->child->sym->name;
-        if (child_name != NULL && strcasecmp(child_name, debug_name) == 0) {
-            fprintf(stderr, "[KGPC] found name=%s at node typ=%d line=%d\n",
-                child_name, node->typ, node->line);
-        }
-    }
-
-    if (!is_safe_to_continue(visited, node)) {
-        /* Node was re-encountered; still walk children/siblings to avoid
-         * skipping subprograms that only appear under shared wrappers. */
-        append_subprograms_from_ast_recursive(node->child, subprograms, visited);
-        append_subprograms_from_ast_recursive(node->next, subprograms, visited);
+    if (!is_safe_to_continue(visited, node))
         return;
-    }
 
     switch (node->typ)
     {
     case PASCAL_T_PROCEDURE_DECL: {
-        if (getenv("KGPC_DEBUG_FIND_SUBPROGRAM") != NULL && node->child != NULL &&
-            node->child->typ == PASCAL_T_IDENTIFIER) {
-            const char *name = node->child->sym != NULL ? node->child->sym->name : NULL;
-            if (name != NULL)
-                fprintf(stderr, "[KGPC] subprogram node procedure: %s (line=%d)\n", name, node->line);
-        }
         Tree_t *proc = convert_procedure(node);
         append_subprogram_if_unique(subprograms, proc);
         append_subprograms_from_ast_recursive(node->next, subprograms, visited);
         return;
     }
     case PASCAL_T_FUNCTION_DECL: {
-        if (getenv("KGPC_DEBUG_FIND_SUBPROGRAM") != NULL && node->child != NULL &&
-            node->child->typ == PASCAL_T_IDENTIFIER) {
-            const char *name = node->child->sym != NULL ? node->child->sym->name : NULL;
-            if (name != NULL)
-                fprintf(stderr, "[KGPC] subprogram node function: %s (line=%d)\n", name, node->line);
-        }
         Tree_t *func = convert_function(node);
         append_subprogram_if_unique(subprograms, func);
         append_subprograms_from_ast_recursive(node->next, subprograms, visited);
@@ -3353,18 +3140,7 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
         int type_tag = map_type_name(type_name, &preserved_type_id);
         
         if (type_tag != UNKNOWN_TYPE) {
-            KgpcType *type = NULL;
-            HashNode_t *type_node = NULL;
-            if (symtab != NULL && FindIdent(&type_node, symtab, type_name) != -1 &&
-                type_node != NULL && type_node->type != NULL)
-            {
-                type = type_node->type;
-            }
-            else
-            {
-                type = create_primitive_type(type_tag);
-            }
-
+            KgpcType *type = create_primitive_type(type_tag);
             /* If this is RawByteString or UnicodeString, create a type_alias to preserve the name */
             if (type != NULL && preserved_type_id != NULL &&
                 (strcasecmp(preserved_type_id, "RawByteString") == 0 ||
@@ -3606,17 +3382,7 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
                         // First check if it's a primitive type
                         int ret_tag = map_type_name(ret_type_name, NULL);
                         if (ret_tag != UNKNOWN_TYPE) {
-                            /* Prefer symtab types to preserve custom storage sizes (e.g., Single). */
-                            HashNode_t *type_node = NULL;
-                            if (symtab != NULL && FindIdent(&type_node, symtab, ret_type_name) != -1 &&
-                                type_node != NULL && type_node->type != NULL)
-                            {
-                                return_type = type_node->type;
-                            }
-                            else
-                            {
-                                return_type = create_primitive_type(ret_tag);
-                            }
+                            return_type = create_primitive_type(ret_tag);
                         } else {
                             // Check if it's a user-defined type in the symbol table
                             HashNode_t *type_node = NULL;
@@ -4304,13 +4070,8 @@ static void collect_class_members(ast_t *node, const char *class_name,
                     fprintf(stderr, "[KGPC] captured template %s.%s\n",
                         class_name != NULL ? class_name : "<unknown>", template->name);
 
-                int param_count = count_param_identifiers(template->params_ast);
-                char *param_sig = build_param_signature(template->params_ast);
                 register_class_method_ex(class_name, template->name,
-                    template->is_virtual, template->is_override, template->is_static,
-                    param_count, param_sig);
-                if (param_sig != NULL)
-                    free(param_sig);
+                    template->is_virtual, template->is_override, template->is_static);
 
                 if (method_builder != NULL)
                     list_builder_append(method_builder, template, LIST_METHOD_TEMPLATE);
@@ -4957,18 +4718,13 @@ static ListNode_t *convert_param(ast_t *param_node) {
             destroy_list(ids);
             return NULL;
         }
-        /* Untyped const/var/out params should accept any type. */
-        var_type = BUILTIN_ANY_TYPE;
+        var_type = UNKNOWN_TYPE;
         type_id = NULL;
     }
     else
     {
         /* ARCHITECTURAL FIX: Pass TypeInfo to preserve array information */
         var_type = convert_type_spec(type_node, &type_id, NULL, &type_info);
-        /* Some parser paths represent untyped const params as REAL with no type_id.
-         * Treat those as untyped so overload resolution can pick the correct helper. */
-        if (is_const_param && type_id == NULL && var_type == REAL_TYPE)
-            var_type = BUILTIN_ANY_TYPE;
         /* Check for default value node after type spec */
         if (type_node->next != NULL && type_node->next->typ == PASCAL_T_DEFAULT_VALUE) {
             default_value_node = type_node->next;
@@ -5158,8 +4914,8 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
                 }
             }
 
-            /* Absolute clauses are not initializers. */
-            if (init_node != NULL && init_node->typ == PASCAL_T_ABSOLUTE) {
+            /* Absolute clauses appear as a trailing identifier; skip as initializer. */
+            if (init_node != NULL && init_node->typ == PASCAL_T_IDENTIFIER) {
                 init_node = NULL;
             }
             
@@ -5247,8 +5003,8 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
             }
         }
 
-        /* Absolute clauses are not initializers. */
-        if (init_node != NULL && init_node->typ == PASCAL_T_ABSOLUTE) {
+        /* Absolute clauses appear as a trailing identifier; skip as initializer. */
+        if (init_node != NULL && init_node->typ == PASCAL_T_IDENTIFIER) {
             init_node = NULL;
         }
         
@@ -5362,18 +5118,17 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
                     (dbg->sym != NULL && dbg->sym->name != NULL) ? dbg->sym->name : "<null>");
             }
         }
-        while (abs_node != NULL) {
-            if (abs_node->typ == PASCAL_T_ABSOLUTE) {
-                ast_t *target = NULL;
-                for (ast_t *child = abs_node->child; child != NULL; child = child->next) {
-                    if (child->typ == PASCAL_T_IDENTIFIER)
-                        target = child;
-                }
-                if (target != NULL)
-                    absolute_target = dup_symbol(target);
-                break;
-            }
+        while (abs_node != NULL && abs_node->typ == PASCAL_T_IDENTIFIER)
             abs_node = abs_node->next;
+        if (abs_node != NULL && (abs_node->typ == PASCAL_T_TYPE_SPEC || abs_node->typ == PASCAL_T_IDENTIFIER))
+            abs_node = abs_node->next;
+        if (abs_node != NULL && abs_node->typ == PASCAL_T_NONE) {
+            ast_t *child = abs_node->child;
+            if (child != NULL && child->next != NULL)
+                abs_node = abs_node->next;
+        }
+        if (abs_node != NULL && abs_node->typ == PASCAL_T_IDENTIFIER) {
+            absolute_target = dup_symbol(abs_node);
         }
     }
     if (kgpc_debug_decl_scan_enabled() && absolute_target != NULL && ids != NULL && ids->type == LIST_STRING) {
@@ -6419,13 +6174,8 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
                 if (method_ast != NULL && method_ast->typ == PASCAL_T_METHOD_DECL) {
                     struct MethodTemplate *template = create_method_template(method_ast);
                     if (template != NULL) {
-                        int param_count = count_param_identifiers(template->params_ast);
-                        char *param_sig = build_param_signature(template->params_ast);
                         register_class_method_ex(id, template->name,
-                            template->is_virtual, template->is_override, template->is_static,
-                            param_count, param_sig);
-                        if (param_sig != NULL)
-                            free(param_sig);
+                            template->is_virtual, template->is_override, template->is_static);
                         if (getenv("KGPC_DEBUG_CLASS_METHODS") != NULL)
                             fprintf(stderr, "[KGPC] Registered record method %s.%s (static=%d)\n",
                                 id, template->name, template->is_static);
@@ -9008,33 +8758,6 @@ static struct Statement *convert_block(ast_t *block_node) {
     return mk_compoundstatement(block_node->line, list);
 }
 
-static void collect_qualified_identifiers(ast_t *node, char ***names, int *count, int *cap) {
-    if (node == NULL || names == NULL || count == NULL || cap == NULL)
-        return;
-
-    for (ast_t *cur = node; cur != NULL; cur = cur->next) {
-        if (cur->typ == PASCAL_T_IDENTIFIER && cur->sym != NULL && cur->sym->name != NULL) {
-            if (*count >= *cap) {
-                int new_cap = (*cap == 0) ? 8 : (*cap * 2);
-                char **new_names = (char **)realloc(*names, sizeof(char *) * (size_t)new_cap);
-                if (new_names == NULL)
-                    return;
-                *names = new_names;
-                *cap = new_cap;
-            }
-            (*names)[(*count)++] = strdup(cur->sym->name);
-            continue;
-        }
-        if (cur->typ == PASCAL_T_NONE && cur->child != NULL) {
-            collect_qualified_identifiers(cur->child, names, count, cap);
-            continue;
-        }
-        if (cur->typ == PASCAL_T_TYPE_PARAM_LIST) {
-            continue;
-        }
-    }
-}
-
 static Tree_t *convert_method_impl(ast_t *method_node) {
     if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
         fprintf(stderr, "[KGPC] convert_method_impl entry (method_node=%p)\n", (void*)method_node);
@@ -9191,42 +8914,52 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         return NULL;
     }
 
-    char **parts = NULL;
-    int part_count = 0;
-    int part_cap = 0;
-    collect_qualified_identifiers(qualified->child, &parts, &part_count, &part_cap);
-    if (part_count < 2) {
-        if (parts != NULL) {
-            for (int i = 0; i < part_count; ++i)
-                free(parts[i]);
-            free(parts);
+    ast_t *class_node = qualified->child;
+    if (class_node == NULL)
+        return NULL;
+    
+    // Skip over the optional type parameter list (PASCAL_T_TYPE_PARAM_LIST) if present
+    // The structure is: class_node [type_params] . method_id_node
+    ast_t *cursor = class_node->next;
+    if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
+        fprintf(stderr, "[KGPC] convert_method_impl: class_node->typ=%d\n", class_node->typ);
+        if (class_node->sym && class_node->sym->name)
+            fprintf(stderr, "[KGPC]   class_node->name=%s\n", class_node->sym->name);
+        if (cursor) {
+            fprintf(stderr, "[KGPC]   cursor->typ=%d\n", cursor->typ);
+            if (cursor->sym && cursor->sym->name)
+                fprintf(stderr, "[KGPC]   cursor->name=%s\n", cursor->sym->name);
         }
-        return NULL;
     }
+    
+    // Skip type parameter list if present
+    if (cursor != NULL && cursor->typ == PASCAL_T_TYPE_PARAM_LIST) {
+        cursor = cursor->next;
+        if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL && cursor) {
+            fprintf(stderr, "[KGPC]   after type_params cursor->typ=%d\n", cursor->typ);
+            if (cursor->sym && cursor->sym->name)
+                fprintf(stderr, "[KGPC]   after type_params cursor->name=%s\n", cursor->sym->name);
+        }
+    }
+    
+    // Skip the dot token if present (it may be wrapped)
+    while (cursor != NULL && cursor->typ != PASCAL_T_IDENTIFIER) {
+        cursor = cursor->next;
+        if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL && cursor) {
+            fprintf(stderr, "[KGPC]   skipping non-identifier cursor->typ=%d\n", cursor->typ);
+        }
+    }
+    
+    ast_t *method_id_node = cursor;
+    if (method_id_node == NULL)
+        return NULL;
 
-    char *method_name = strdup(parts[part_count - 1]);
-    size_t class_len = 0;
-    for (int i = 0; i < part_count - 1; ++i) {
-        class_len += strlen(parts[i]) + 1;
-    }
-    char *class_name = (char *)malloc(class_len + 1);
-    if (class_name == NULL || method_name == NULL) {
-        free(method_name);
+    char *class_name = dup_symbol(class_node);
+    char *method_name = dup_symbol(method_id_node);
+    if (method_name == NULL) {
         free(class_name);
-        for (int i = 0; i < part_count; ++i)
-            free(parts[i]);
-        free(parts);
         return NULL;
     }
-    class_name[0] = '\0';
-    for (int i = 0; i < part_count - 1; ++i) {
-        if (i > 0)
-            strcat(class_name, ".");
-        strcat(class_name, parts[i]);
-    }
-    for (int i = 0; i < part_count; ++i)
-        free(parts[i]);
-    free(parts);
     
     // For generic classes, strip the type parameters from the class name
     // e.g., "TFPGList<T>" -> "TFPGList"
@@ -9259,33 +8992,21 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     /* Don't re-register the method here - it was already registered during class declaration */
     
     /* Check if this method was declared as static in the record/class declaration */
-    ast_t *impl_params_node = find_method_params_node(method_node);
-    int impl_param_count = count_param_identifiers(impl_params_node);
-    char *impl_param_sig = build_param_signature(impl_params_node);
-    int is_static_method = is_method_static_with_params(effective_class, method_name,
-        impl_param_count, impl_param_sig);
+    int is_static_method = is_method_static(effective_class, method_name);
     if (method_node != NULL && method_name != NULL)
     {
         struct MethodTemplate impl_template = {0};
         impl_template.name = (char *)method_name;
         annotate_method_template(&impl_template, method_node);
-        if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
-            fprintf(stderr, "[KGPC] convert_method_impl: impl directives class=%d static=%d\n",
-                impl_template.is_class_method, impl_template.is_static);
-        }
         if (impl_template.is_static || impl_template.is_class_method)
             is_static_method = 1;
     }
     if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
-        fprintf(stderr, "[KGPC] convert_method_impl: class=%s method=%s is_static=%d params=%d sig=%s\n",
+        fprintf(stderr, "[KGPC] convert_method_impl: class=%s method=%s is_static=%d\n",
                 effective_class ? effective_class : "<null>", 
                 method_name ? method_name : "<null>",
-                is_static_method,
-                impl_param_count,
-                impl_param_sig != NULL ? impl_param_sig : "<none>");
+                is_static_method);
     }
-    if (impl_param_sig != NULL)
-        free(impl_param_sig);
     
     char *proc_name = mangle_method_name(effective_class, method_name);
     if (proc_name == NULL) {
@@ -10502,23 +10223,9 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                         break;
                     }
 
-                ast_t *node = unwrap_pascal_node(definition);
-                for (ast_t *node_cursor = node; node_cursor != NULL;
-                     node_cursor = (definition->typ == PASCAL_T_NONE) ? node_cursor->next : NULL) {
-                        const char *impl_range = getenv("KGPC_DEBUG_IMPL_RANGE");
-                        if (impl_range != NULL && impl_range[0] != '\0') {
-                            int start = 0, end = 0;
-                            if (sscanf(impl_range, "%d:%d", &start, &end) == 2 &&
-                                node_cursor->line >= start && node_cursor->line <= end) {
-                                const char *name = NULL;
-                                if (node_cursor->child != NULL && node_cursor->child->typ == PASCAL_T_IDENTIFIER &&
-                                    node_cursor->child->sym != NULL) {
-                                    name = node_cursor->child->sym->name;
-                                }
-                                fprintf(stderr, "[IMPL_RANGE] line=%d typ=%d name=%s\n",
-                                    node_cursor->line, node_cursor->typ, name != NULL ? name : "<none>");
-                            }
-                        }
+                    ast_t *node = unwrap_pascal_node(definition);
+                    for (ast_t *node_cursor = node; node_cursor != NULL;
+                         node_cursor = (definition->typ == PASCAL_T_NONE) ? node_cursor->next : NULL) {
                         if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
                             fprintf(stderr, "[KGPC] implementation section node typ=%d\n", node_cursor->typ);
                         }

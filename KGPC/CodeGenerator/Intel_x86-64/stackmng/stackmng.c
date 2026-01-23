@@ -184,11 +184,10 @@ StackNode_t *add_l_t_bytes(char *label, int size)
 
     if (size <= 0)
         size = DOUBLEWORD;
-    int alignment = (int)sizeof(void *);
-    int aligned_size = align_up(size, alignment);
+    int aligned_size = align_up(size, DOUBLEWORD);
 
     /* Allocate from x_offset to avoid overlap with later locals. */
-    cur_scope->x_offset = align_up(cur_scope->x_offset, alignment);
+    cur_scope->x_offset = align_up(cur_scope->x_offset, DOUBLEWORD);
     cur_scope->x_offset += aligned_size;
 
     int offset = cur_scope->z_offset + cur_scope->x_offset;
@@ -226,10 +225,10 @@ StackNode_t *add_l_x(char *label, int size)
     if (size <= 0)
         size = DOUBLEWORD;
 
-    int alignment = (int)sizeof(void *);
-    int aligned_size = align_up(size, alignment);
+    int aligned_size = size;
+    if (aligned_size % DOUBLEWORD != 0)
+        aligned_size = ((aligned_size + DOUBLEWORD - 1) / DOUBLEWORD) * DOUBLEWORD;
 
-    cur_scope->x_offset = align_up(cur_scope->x_offset, alignment);
     cur_scope->x_offset += aligned_size;
 
     /* Locals are placed below the shadow space */
