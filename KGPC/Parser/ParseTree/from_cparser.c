@@ -1465,8 +1465,20 @@ static void append_subprograms_from_ast_recursive(ast_t *node, ListNode_t **subp
     if (node == NULL || node == ast_nil || subprograms == NULL || visited == NULL)
         return;
 
+    const char *debug_name = getenv("KGPC_DEBUG_FIND_NAME");
+    if (debug_name != NULL && debug_name[0] != '\0' && node->child != NULL &&
+        node->child->typ == PASCAL_T_IDENTIFIER && node->child->sym != NULL) {
+        const char *child_name = node->child->sym->name;
+        if (child_name != NULL && strcasecmp(child_name, debug_name) == 0) {
+            fprintf(stderr, "[KGPC] found name=%s at node typ=%d line=%d\n",
+                child_name, node->typ, node->line);
+        }
+    }
+
     if (!is_safe_to_continue(visited, node)) {
-        /* Avoid skipping sibling chains when a node is re-encountered. */
+        /* Node was re-encountered; still walk children/siblings to avoid
+         * skipping subprograms that only appear under shared wrappers. */
+        append_subprograms_from_ast_recursive(node->child, subprograms, visited);
         append_subprograms_from_ast_recursive(node->next, subprograms, visited);
         return;
     }
@@ -1474,12 +1486,24 @@ static void append_subprograms_from_ast_recursive(ast_t *node, ListNode_t **subp
     switch (node->typ)
     {
     case PASCAL_T_PROCEDURE_DECL: {
+        if (getenv("KGPC_DEBUG_FIND_SUBPROGRAM") != NULL && node->child != NULL &&
+            node->child->typ == PASCAL_T_IDENTIFIER) {
+            const char *name = node->child->sym != NULL ? node->child->sym->name : NULL;
+            if (name != NULL)
+                fprintf(stderr, "[KGPC] subprogram node procedure: %s (line=%d)\n", name, node->line);
+        }
         Tree_t *proc = convert_procedure(node);
         append_subprogram_if_unique(subprograms, proc);
         append_subprograms_from_ast_recursive(node->next, subprograms, visited);
         return;
     }
     case PASCAL_T_FUNCTION_DECL: {
+        if (getenv("KGPC_DEBUG_FIND_SUBPROGRAM") != NULL && node->child != NULL &&
+            node->child->typ == PASCAL_T_IDENTIFIER) {
+            const char *name = node->child->sym != NULL ? node->child->sym->name : NULL;
+            if (name != NULL)
+                fprintf(stderr, "[KGPC] subprogram node function: %s (line=%d)\n", name, node->line);
+        }
         Tree_t *func = convert_function(node);
         append_subprogram_if_unique(subprograms, func);
         append_subprograms_from_ast_recursive(node->next, subprograms, visited);
@@ -5134,8 +5158,8 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
                 }
             }
 
-            /* Absolute clauses appear as a trailing identifier; skip as initializer. */
-            if (init_node != NULL && init_node->typ == PASCAL_T_IDENTIFIER) {
+            /* Absolute clauses are not initializers. */
+            if (init_node != NULL && init_node->typ == PASCAL_T_ABSOLUTE) {
                 init_node = NULL;
             }
             
@@ -5223,8 +5247,8 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
             }
         }
 
-        /* Absolute clauses appear as a trailing identifier; skip as initializer. */
-        if (init_node != NULL && init_node->typ == PASCAL_T_IDENTIFIER) {
+        /* Absolute clauses are not initializers. */
+        if (init_node != NULL && init_node->typ == PASCAL_T_ABSOLUTE) {
             init_node = NULL;
         }
         
@@ -5338,17 +5362,18 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
                     (dbg->sym != NULL && dbg->sym->name != NULL) ? dbg->sym->name : "<null>");
             }
         }
-        while (abs_node != NULL && abs_node->typ == PASCAL_T_IDENTIFIER)
+        while (abs_node != NULL) {
+            if (abs_node->typ == PASCAL_T_ABSOLUTE) {
+                ast_t *target = NULL;
+                for (ast_t *child = abs_node->child; child != NULL; child = child->next) {
+                    if (child->typ == PASCAL_T_IDENTIFIER)
+                        target = child;
+                }
+                if (target != NULL)
+                    absolute_target = dup_symbol(target);
+                break;
+            }
             abs_node = abs_node->next;
-        if (abs_node != NULL && (abs_node->typ == PASCAL_T_TYPE_SPEC || abs_node->typ == PASCAL_T_IDENTIFIER))
-            abs_node = abs_node->next;
-        if (abs_node != NULL && abs_node->typ == PASCAL_T_NONE) {
-            ast_t *child = abs_node->child;
-            if (child != NULL && child->next != NULL)
-                abs_node = abs_node->next;
-        }
-        if (abs_node != NULL && abs_node->typ == PASCAL_T_IDENTIFIER) {
-            absolute_target = dup_symbol(abs_node);
         }
     }
     if (kgpc_debug_decl_scan_enabled() && absolute_target != NULL && ids != NULL && ids->type == LIST_STRING) {
@@ -8983,6 +9008,33 @@ static struct Statement *convert_block(ast_t *block_node) {
     return mk_compoundstatement(block_node->line, list);
 }
 
+static void collect_qualified_identifiers(ast_t *node, char ***names, int *count, int *cap) {
+    if (node == NULL || names == NULL || count == NULL || cap == NULL)
+        return;
+
+    for (ast_t *cur = node; cur != NULL; cur = cur->next) {
+        if (cur->typ == PASCAL_T_IDENTIFIER && cur->sym != NULL && cur->sym->name != NULL) {
+            if (*count >= *cap) {
+                int new_cap = (*cap == 0) ? 8 : (*cap * 2);
+                char **new_names = (char **)realloc(*names, sizeof(char *) * (size_t)new_cap);
+                if (new_names == NULL)
+                    return;
+                *names = new_names;
+                *cap = new_cap;
+            }
+            (*names)[(*count)++] = strdup(cur->sym->name);
+            continue;
+        }
+        if (cur->typ == PASCAL_T_NONE && cur->child != NULL) {
+            collect_qualified_identifiers(cur->child, names, count, cap);
+            continue;
+        }
+        if (cur->typ == PASCAL_T_TYPE_PARAM_LIST) {
+            continue;
+        }
+    }
+}
+
 static Tree_t *convert_method_impl(ast_t *method_node) {
     if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
         fprintf(stderr, "[KGPC] convert_method_impl entry (method_node=%p)\n", (void*)method_node);
@@ -9139,52 +9191,42 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         return NULL;
     }
 
-    ast_t *class_node = qualified->child;
-    if (class_node == NULL)
+    char **parts = NULL;
+    int part_count = 0;
+    int part_cap = 0;
+    collect_qualified_identifiers(qualified->child, &parts, &part_count, &part_cap);
+    if (part_count < 2) {
+        if (parts != NULL) {
+            for (int i = 0; i < part_count; ++i)
+                free(parts[i]);
+            free(parts);
+        }
         return NULL;
-    
-    // Skip over the optional type parameter list (PASCAL_T_TYPE_PARAM_LIST) if present
-    // The structure is: class_node [type_params] . method_id_node
-    ast_t *cursor = class_node->next;
-    if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
-        fprintf(stderr, "[KGPC] convert_method_impl: class_node->typ=%d\n", class_node->typ);
-        if (class_node->sym && class_node->sym->name)
-            fprintf(stderr, "[KGPC]   class_node->name=%s\n", class_node->sym->name);
-        if (cursor) {
-            fprintf(stderr, "[KGPC]   cursor->typ=%d\n", cursor->typ);
-            if (cursor->sym && cursor->sym->name)
-                fprintf(stderr, "[KGPC]   cursor->name=%s\n", cursor->sym->name);
-        }
     }
-    
-    // Skip type parameter list if present
-    if (cursor != NULL && cursor->typ == PASCAL_T_TYPE_PARAM_LIST) {
-        cursor = cursor->next;
-        if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL && cursor) {
-            fprintf(stderr, "[KGPC]   after type_params cursor->typ=%d\n", cursor->typ);
-            if (cursor->sym && cursor->sym->name)
-                fprintf(stderr, "[KGPC]   after type_params cursor->name=%s\n", cursor->sym->name);
-        }
-    }
-    
-    // Skip the dot token if present (it may be wrapped)
-    while (cursor != NULL && cursor->typ != PASCAL_T_IDENTIFIER) {
-        cursor = cursor->next;
-        if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL && cursor) {
-            fprintf(stderr, "[KGPC]   skipping non-identifier cursor->typ=%d\n", cursor->typ);
-        }
-    }
-    
-    ast_t *method_id_node = cursor;
-    if (method_id_node == NULL)
-        return NULL;
 
-    char *class_name = dup_symbol(class_node);
-    char *method_name = dup_symbol(method_id_node);
-    if (method_name == NULL) {
+    char *method_name = strdup(parts[part_count - 1]);
+    size_t class_len = 0;
+    for (int i = 0; i < part_count - 1; ++i) {
+        class_len += strlen(parts[i]) + 1;
+    }
+    char *class_name = (char *)malloc(class_len + 1);
+    if (class_name == NULL || method_name == NULL) {
+        free(method_name);
         free(class_name);
+        for (int i = 0; i < part_count; ++i)
+            free(parts[i]);
+        free(parts);
         return NULL;
     }
+    class_name[0] = '\0';
+    for (int i = 0; i < part_count - 1; ++i) {
+        if (i > 0)
+            strcat(class_name, ".");
+        strcat(class_name, parts[i]);
+    }
+    for (int i = 0; i < part_count; ++i)
+        free(parts[i]);
+    free(parts);
     
     // For generic classes, strip the type parameters from the class name
     // e.g., "TFPGList<T>" -> "TFPGList"
@@ -10460,9 +10502,23 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                         break;
                     }
 
-                    ast_t *node = unwrap_pascal_node(definition);
-                    for (ast_t *node_cursor = node; node_cursor != NULL;
-                         node_cursor = (definition->typ == PASCAL_T_NONE) ? node_cursor->next : NULL) {
+                ast_t *node = unwrap_pascal_node(definition);
+                for (ast_t *node_cursor = node; node_cursor != NULL;
+                     node_cursor = (definition->typ == PASCAL_T_NONE) ? node_cursor->next : NULL) {
+                        const char *impl_range = getenv("KGPC_DEBUG_IMPL_RANGE");
+                        if (impl_range != NULL && impl_range[0] != '\0') {
+                            int start = 0, end = 0;
+                            if (sscanf(impl_range, "%d:%d", &start, &end) == 2 &&
+                                node_cursor->line >= start && node_cursor->line <= end) {
+                                const char *name = NULL;
+                                if (node_cursor->child != NULL && node_cursor->child->typ == PASCAL_T_IDENTIFIER &&
+                                    node_cursor->child->sym != NULL) {
+                                    name = node_cursor->child->sym->name;
+                                }
+                                fprintf(stderr, "[IMPL_RANGE] line=%d typ=%d name=%s\n",
+                                    node_cursor->line, node_cursor->typ, name != NULL ? name : "<none>");
+                            }
+                        }
                         if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
                             fprintf(stderr, "[KGPC] implementation section node typ=%d\n", node_cursor->typ);
                         }

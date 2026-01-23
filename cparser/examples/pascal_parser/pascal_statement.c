@@ -487,6 +487,14 @@ static ast_t* wrap_typecast_deref_lvalue(ast_t* parsed) {
     return deref_node;
 }
 
+static ast_t* wrap_case_else_block(ast_t* parsed) {
+    ast_t* block = new_ast();
+    block->typ = PASCAL_T_BEGIN_BLOCK;
+    block->child = (parsed == ast_nil) ? NULL : parsed;
+    block->next = NULL;
+    return block;
+}
+
 static ast_t* wrap_array_lvalue_suffix(ast_t* parsed) {
     ast_t* node = new_ast();
     node->typ = PASCAL_T_ARRAY_ACCESS;
@@ -758,6 +766,11 @@ void init_pascal_statement_parser(combinator_t** p) {
         NULL
     );
     combinator_t* suffixes = many(suffix_choice);
+    combinator_t* suffixes_required = seq(new_combinator(), PASCAL_T_NONE,
+        suffix_choice,
+        suffixes,
+        NULL
+    );
 
     // Simple typecast lvalue without suffixes: Integer(x) := 42
     // Uses type_name for built-in types only (safer, avoids matching function calls)
@@ -787,6 +800,28 @@ void init_pascal_statement_parser(combinator_t** p) {
         required_pointer_suffix,
         NULL
     ), wrap_typecast_deref_lvalue);
+    combinator_t* typecast_lvalue_with_suffixes = map(seq(new_combinator(), PASCAL_T_NONE,
+        typecast_base,
+        suffixes_required,
+        NULL
+    ), build_pointer_lvalue_chain);
+
+    // Unaligned pseudo-function used as lvalue (e.g., unaligned(PUint16(P)^) := 0)
+    combinator_t* unaligned_arg_list = between(
+        token(match("(")),
+        token(match(")")),
+        optional(sep_by(lazy(expr_parser), token(match(","))))
+    );
+    combinator_t* unaligned_call = seq(new_combinator(), PASCAL_T_FUNC_CALL,
+        token(keyword_ci("unaligned")),
+        unaligned_arg_list,
+        NULL
+    );
+    combinator_t* unaligned_lvalue = map(seq(new_combinator(), PASCAL_T_NONE,
+        unaligned_call,
+        suffixes,
+        NULL
+    ), build_pointer_lvalue_chain);
 
     combinator_t* simple_lvalue = map(seq(new_combinator(), PASCAL_T_NONE,
         simple_identifier,
@@ -795,8 +830,10 @@ void init_pascal_statement_parser(combinator_t** p) {
     ), build_pointer_lvalue_chain);
 
     combinator_t* lvalue = multi(new_combinator(), PASCAL_T_NONE,
+        typecast_lvalue_with_suffixes,   // Typecast with member/array/pointer suffixes
         typecast_lvalue_with_deref,  // Try typecast with deref first (PCardinal(@x)^)
         typecast_lvalue_simple,      // Then simple typecast (Integer(x))
+        unaligned_lvalue,            // Unaligned pseudo-function lvalue
         simple_lvalue,               // Finally simple identifier with optional suffixes
         NULL
     );
@@ -1122,6 +1159,7 @@ void init_pascal_statement_parser(combinator_t** p) {
     // parsed as identifiers
     combinator_t* const_expr_factor = multi(new_combinator(), PASCAL_T_NONE,
         integer(PASCAL_T_INTEGER),
+        implicit_string_concat(PASCAL_T_NONE),
         char_literal(PASCAL_T_CHAR),
         control_char_literal(PASCAL_T_CHAR),
         token(create_keyword_parser("true", PASCAL_T_BOOLEAN)),   // Boolean true
@@ -1168,6 +1206,8 @@ void init_pascal_statement_parser(combinator_t** p) {
         NULL
     );
     
+    combinator_t* case_else_body = map(try_statement_list, wrap_case_else_block);
+
     combinator_t* case_stmt = seq(new_combinator(), PASCAL_T_CASE_STMT,
         token(keyword_ci("case")),             // case keyword
         commit(seq(new_combinator(), PASCAL_T_NONE,
@@ -1176,7 +1216,7 @@ void init_pascal_statement_parser(combinator_t** p) {
             sep_end_by(case_branch, token(match(";"))), // case branches with optional trailing semicolon
             optional(seq(new_combinator(), PASCAL_T_ELSE, // optional else clause
                 token(keyword_ci("else")),         // else keyword
-                stmt_or_empty,                 // else statement
+                case_else_body,                 // else statement list
                 optional(token(match(";"))),      // optional semicolon after else block
                 NULL
             )),
