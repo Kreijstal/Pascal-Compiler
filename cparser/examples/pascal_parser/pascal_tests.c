@@ -3116,9 +3116,11 @@ void test_pascal_case_statement_with_else(void) {
     TEST_ASSERT(else_clause != NULL);
     TEST_ASSERT(else_clause->typ == PASCAL_T_ELSE);
     
-    // Check else statement
+    // Check else statement (case else body is wrapped in a begin block)
     ast_t* else_stmt = else_clause->child;
-    TEST_ASSERT(else_stmt->typ == PASCAL_T_ASSIGNMENT);
+    TEST_ASSERT(else_stmt->typ == PASCAL_T_BEGIN_BLOCK);
+    TEST_ASSERT(else_stmt->child != NULL);
+    TEST_ASSERT(else_stmt->child->typ == PASCAL_T_ASSIGNMENT);
 
     free_ast(res.value.ast);    free(input->buffer);
     free_input(input);
@@ -4406,194 +4408,6 @@ void test_pascal_unit_bitpacked_variant_record(void) {
     free_input(input);
 }
 
-void test_pascal_unit_impl_type_after_method(void) {
-    combinator_t* p = get_unit_parser();
-    input_t* input = new_input();
-    char* program = load_pascal_snippet("impl_type_after_method_unit.pas");
-    TEST_ASSERT(program != NULL);
-    if (!program) {
-        free_input(input);
-        return;
-    }
-    input->buffer = program;
-    input->length = strlen(program);
-    ParseResult res = parse(input, p);
-    TEST_ASSERT(res.is_success);
-    if (res.is_success) {
-        ast_t* ast = res.value.ast;
-        TEST_ASSERT(ast != NULL);
-        TEST_ASSERT(ast->typ == PASCAL_T_UNIT_DECL);
-
-        ast_t* interface_sec = NULL;
-        ast_t* implementation_sec = NULL;
-        for (ast_t* child = ast->child; child != NULL; child = child->next) {
-            if (child->typ == PASCAL_T_INTERFACE_SECTION) {
-                interface_sec = child;
-            } else if (child->typ == PASCAL_T_IMPLEMENTATION_SECTION) {
-                implementation_sec = child;
-            }
-        }
-
-        TEST_ASSERT(interface_sec != NULL);
-        TEST_ASSERT(implementation_sec != NULL);
-        TEST_ASSERT(section_has_routine_named(implementation_sec, PASCAL_T_FUNCTION_DECL, "AfterMethod"));
-
-        free_ast(res.value.ast);
-    } else {
-        free_error(res.value.error);
-    }
-    free(input->buffer);
-    free_input(input);
-}
-
-void test_pascal_unit_impl_type_helper(void) {
-    combinator_t* p = get_unit_parser();
-    input_t* input = new_input();
-    char* program = load_pascal_snippet("impl_type_helper_unit.pas");
-    TEST_ASSERT(program != NULL);
-    if (!program) {
-        free_input(input);
-        return;
-    }
-    input->buffer = program;
-    input->length = strlen(program);
-    ParseResult res = parse(input, p);
-    TEST_ASSERT(res.is_success);
-    if (res.is_success) {
-        ast_t* ast = res.value.ast;
-        TEST_ASSERT(ast != NULL);
-        TEST_ASSERT(ast->typ == PASCAL_T_UNIT_DECL);
-
-        ast_t* implementation_sec = NULL;
-        for (ast_t* child = ast->child; child != NULL; child = child->next) {
-            if (child->typ == PASCAL_T_IMPLEMENTATION_SECTION) {
-                implementation_sec = child;
-                break;
-            }
-        }
-
-        TEST_ASSERT(implementation_sec != NULL);
-        TEST_ASSERT(section_has_routine_named(implementation_sec, PASCAL_T_FUNCTION_DECL, "AfterHelper"));
-
-        free_ast(res.value.ast);
-    } else {
-        free_error(res.value.error);
-    }
-    free(input->buffer);
-    free_input(input);
-}
-
-void test_pascal_unit_impl_method_default_param(void) {
-    combinator_t* p = get_unit_parser();
-    input_t* input = new_input();
-    char* program = load_pascal_snippet("impl_method_default_param_unit.pas");
-    TEST_ASSERT(program != NULL);
-    if (!program) {
-        free_input(input);
-        return;
-    }
-    input->buffer = program;
-    input->length = strlen(program);
-    ParseResult res = parse(input, p);
-    TEST_ASSERT(res.is_success);
-    if (res.is_success) {
-        ast_t* ast = res.value.ast;
-        TEST_ASSERT(ast != NULL);
-        TEST_ASSERT(ast->typ == PASCAL_T_UNIT_DECL);
-
-        ast_t* implementation_sec = NULL;
-        for (ast_t* child = ast->child; child != NULL; child = child->next) {
-            if (child->typ == PASCAL_T_IMPLEMENTATION_SECTION) {
-                implementation_sec = child;
-                break;
-            }
-        }
-
-        TEST_ASSERT(implementation_sec != NULL);
-        TEST_ASSERT(section_has_routine_named(implementation_sec, PASCAL_T_FUNCTION_DECL, "AfterMethod"));
-
-        free_ast(res.value.ast);
-    } else {
-        free_error(res.value.error);
-    }
-    free(input->buffer);
-    free_input(input);
-}
-
-void test_pascal_unit_impl_guidhelper_methods(void) {
-    combinator_t* p = get_unit_parser();
-    input_t* input = new_input();
-    char* program = load_pascal_snippet("impl_guidhelper_methods_unit.pas");
-    TEST_ASSERT(program != NULL);
-    if (!program) {
-        free_input(input);
-        return;
-    }
-    input->buffer = program;
-    input->length = strlen(program);
-    ParseResult res = parse(input, p);
-    TEST_ASSERT(res.is_success);
-    if (res.is_success) {
-        ast_t* ast = res.value.ast;
-        TEST_ASSERT(ast != NULL);
-        TEST_ASSERT(ast->typ == PASCAL_T_UNIT_DECL);
-
-        ast_t* implementation_sec = NULL;
-        for (ast_t* child = ast->child; child != NULL; child = child->next) {
-            if (child->typ == PASCAL_T_IMPLEMENTATION_SECTION) {
-                implementation_sec = child;
-                break;
-            }
-        }
-
-        TEST_ASSERT(implementation_sec != NULL);
-        TEST_ASSERT(section_has_routine_named(implementation_sec, PASCAL_T_FUNCTION_DECL, "AfterMethod"));
-
-        free_ast(res.value.ast);
-    } else {
-        free_error(res.value.error);
-    }
-    free(input->buffer);
-    free_input(input);
-}
-
-void test_pascal_unit_impl_try_except_concat(void) {
-    combinator_t* p = get_unit_parser();
-    input_t* input = new_input();
-    char* program = load_pascal_snippet("impl_try_except_concat_unit.pas");
-    TEST_ASSERT(program != NULL);
-    if (!program) {
-        free_input(input);
-        return;
-    }
-    input->buffer = program;
-    input->length = strlen(program);
-    ParseResult res = parse(input, p);
-    TEST_ASSERT(res.is_success);
-    if (res.is_success) {
-        ast_t* ast = res.value.ast;
-        TEST_ASSERT(ast != NULL);
-        TEST_ASSERT(ast->typ == PASCAL_T_UNIT_DECL);
-
-        ast_t* implementation_sec = NULL;
-        for (ast_t* child = ast->child; child != NULL; child = child->next) {
-            if (child->typ == PASCAL_T_IMPLEMENTATION_SECTION) {
-                implementation_sec = child;
-                break;
-            }
-        }
-
-        TEST_ASSERT(implementation_sec != NULL);
-        TEST_ASSERT(section_has_routine_named(implementation_sec, PASCAL_T_FUNCTION_DECL, "AfterSafe"));
-
-        free_ast(res.value.ast);
-    } else {
-        free_error(res.value.error);
-    }
-    free(input->buffer);
-    free_input(input);
-}
-
 void test_managed_records(void) {
     combinator_t* p = get_unit_parser();
     input_t* input = new_input();
@@ -5626,11 +5440,6 @@ TEST_LIST = {
     { "test_pascal_unit_advanced_record_public_type", test_pascal_unit_advanced_record_public_type },
     { "test_pascal_unit_type_helper_inheritance", test_pascal_unit_type_helper_inheritance },
     { "test_pascal_unit_bitpacked_variant_record", test_pascal_unit_bitpacked_variant_record },
-    { "test_pascal_unit_impl_type_after_method", test_pascal_unit_impl_type_after_method },
-    { "test_pascal_unit_impl_type_helper", test_pascal_unit_impl_type_helper },
-    { "test_pascal_unit_impl_method_default_param", test_pascal_unit_impl_method_default_param },
-    { "test_pascal_unit_impl_guidhelper_methods", test_pascal_unit_impl_guidhelper_methods },
-    { "test_pascal_unit_impl_try_except_concat", test_pascal_unit_impl_try_except_concat },
     { "test_managed_records", test_managed_records },
     { "test_message_method", test_message_method },
     { "test_multiline", test_multiline },

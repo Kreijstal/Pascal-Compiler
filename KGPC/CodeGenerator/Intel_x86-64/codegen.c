@@ -432,6 +432,33 @@ static const char *alloc_sse_arg_reg(int *next_index)
     return reg;
 }
 
+static int codegen_real_param_storage_size(Tree_t *arg_decl,
+    HashNode_t *resolved_type_node, KgpcType *cached_arg_type)
+{
+    if (arg_decl != NULL && arg_decl->type == TREE_VAR_DECL)
+    {
+        struct TypeAlias *alias = arg_decl->tree_data.var_decl_data.inline_type_alias;
+        if (alias != NULL && alias->storage_size > 0)
+            return (int)alias->storage_size;
+    }
+
+    if (resolved_type_node != NULL && resolved_type_node->type != NULL)
+    {
+        long long size = kgpc_type_sizeof(resolved_type_node->type);
+        if (size > 0)
+            return (int)size;
+    }
+
+    if (cached_arg_type != NULL)
+    {
+        long long size = kgpc_type_sizeof(cached_arg_type);
+        if (size > 0)
+            return (int)size;
+    }
+
+    return 8;
+}
+
 /* Helper function to determine variable storage size (for stack allocation)
  * Returns size in bytes, or -1 on error */
 static inline int get_var_storage_size(HashNode_t *node)
@@ -2515,7 +2542,10 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
         lexical_depth = codegen_get_lexical_depth(ctx) + 1;
     int prev_depth = ctx->current_subprogram_lexical_depth;
     ctx->current_subprogram_lexical_depth = lexical_depth;
-    int is_class_method = (sub_id != NULL && strstr(sub_id, "__") != NULL);
+    /* A function is a class method if it has __ (ClassName__MethodName pattern) but is NOT
+     * a nested function (which would have $ in the name like Parent$Nested). */
+    int is_nested_function = (sub_id != NULL && strchr(sub_id, '$') != NULL);
+    int is_class_method = (sub_id != NULL && strstr(sub_id, "__") != NULL && !is_nested_function);
     StackNode_t *static_link = NULL;
 
     /* For static class methods, register class vars with the stack manager */
@@ -2633,6 +2663,8 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     int dynamic_array_descriptor_size = 0;
     int dynamic_array_element_size = 0;
     int dynamic_array_lower_bound = 0;
+    int prev_returns_dynamic_array = ctx->returns_dynamic_array;
+    int prev_dynamic_array_descriptor_size = ctx->dynamic_array_descriptor_size;
     long long record_return_size = 0;
 
     func = &func_tree->tree_data.subprogram_data;
@@ -2659,7 +2691,10 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
         lexical_depth = codegen_get_lexical_depth(ctx) + 1;
     int prev_depth = ctx->current_subprogram_lexical_depth;
     ctx->current_subprogram_lexical_depth = lexical_depth;
-    int is_class_method = (sub_id != NULL && strstr(sub_id, "__") != NULL);
+    /* A function is a class method if it has __ (ClassName__MethodName pattern) but is NOT
+     * a nested function (which would have $ in the name like Parent$Nested). */
+    int is_nested_function = (sub_id != NULL && strchr(sub_id, '$') != NULL);
+    int is_class_method = (sub_id != NULL && strstr(sub_id, "__") != NULL && !is_nested_function);
     StackNode_t *static_link = NULL;
 
     /* For static class methods, register class vars with the stack manager */
@@ -2924,11 +2959,88 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
         {
             int tag = kgpc_type_get_primitive_tag(return_type);
             struct TypeAlias *alias = kgpc_type_get_type_alias(return_type);
-            if (alias != NULL && alias->storage_size > 0)
+            int size_override = 0;
+            if (func_tree != NULL)
+            {
+                struct TypeAlias *inline_alias = func_tree->tree_data.subprogram_data.inline_return_type;
+                if (inline_alias != NULL && inline_alias->storage_size > 0)
+                {
+                    return_size = (int)inline_alias->storage_size;
+                    size_override = 1;
+                }
+                else if (func_tree->tree_data.subprogram_data.return_type_id != NULL && symtab != NULL)
+                {
+                    if (pascal_identifier_equals(func_tree->tree_data.subprogram_data.return_type_id, "Single"))
+                    {
+                        return_size = 4;
+                        size_override = 1;
+                    }
+                    HashNode_t *return_type_node = NULL;
+                    if (FindIdent(&return_type_node, symtab,
+                        func_tree->tree_data.subprogram_data.return_type_id) >= 0 &&
+                        return_type_node != NULL && return_type_node->type != NULL)
+                    {
+                        long long size = kgpc_type_sizeof(return_type_node->type);
+                        if (size > 0 && size <= INT_MAX)
+                        {
+                            return_size = (int)size;
+                            size_override = 1;
+                        }
+                    }
+                }
+            }
+            if (!size_override && func_node != NULL && func_node->type != NULL &&
+                func_node->type->kind == TYPE_KIND_PROCEDURE &&
+                func_node->type->info.proc_info.return_type_id != NULL && symtab != NULL)
+            {
+                if (pascal_identifier_equals(func_node->type->info.proc_info.return_type_id, "Single"))
+                {
+                    return_size = 4;
+                    size_override = 1;
+                }
+                HashNode_t *return_type_node = NULL;
+                if (FindIdent(&return_type_node, symtab,
+                    func_node->type->info.proc_info.return_type_id) >= 0 &&
+                    return_type_node != NULL && return_type_node->type != NULL)
+                {
+                    long long size = kgpc_type_sizeof(return_type_node->type);
+                    if (size > 0 && size <= INT_MAX)
+                    {
+                        return_size = (int)size;
+                        size_override = 1;
+                    }
+                }
+            }
+            if (!size_override && func != NULL && func->id != NULL && symtab != NULL)
+            {
+                ListNode_t *matches = FindAllIdents(symtab, func->id);
+                for (ListNode_t *cur = matches; cur != NULL; cur = cur->next)
+                {
+                    HashNode_t *candidate = (HashNode_t *)cur->cur;
+                    if (candidate != NULL && candidate->hash_type == HASHTYPE_FUNCTION_RETURN &&
+                        candidate->type != NULL)
+                    {
+                        long long size = kgpc_type_sizeof(candidate->type);
+                        if (size > 0 && size <= INT_MAX)
+                        {
+                            return_size = (int)size;
+                            size_override = 1;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (!size_override && return_type->size_in_bytes > 0)
+            {
+                return_size = return_type->size_in_bytes;
+                size_override = 1;
+            }
+
+            if (!size_override && alias != NULL && alias->storage_size > 0)
             {
                 return_size = (int)alias->storage_size;
             }
-            else switch (tag)
+            else if (!size_override) switch (tag)
             {
                 case LONGINT_TYPE:
                     return_size = DOUBLEWORD;  /* 32-bit FPC-compatible LongInt */
@@ -2947,6 +3059,22 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
                 default:
                     return_size = DOUBLEWORD;
                     break;
+            }
+            if (tag == REAL_TYPE)
+            {
+                if (func_node != NULL && func_node->type != NULL &&
+                    func_node->type->kind == TYPE_KIND_PROCEDURE &&
+                    func_node->type->info.proc_info.return_type_id != NULL &&
+                    pascal_identifier_equals(func_node->type->info.proc_info.return_type_id, "Single"))
+                {
+                    return_size = 4;
+                }
+                else if (func_tree != NULL &&
+                    func_tree->tree_data.subprogram_data.return_type_id != NULL &&
+                    pascal_identifier_equals(func_tree->tree_data.subprogram_data.return_type_id, "Single"))
+                {
+                    return_size = 4;
+                }
             }
         }
         else if (return_type != NULL && return_type->kind == TYPE_KIND_POINTER)
@@ -2981,6 +3109,10 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
             dynamic_array_lower_bound, 0, NULL);
     else
         return_var = add_l_x(func->id, return_size);
+
+    /* Store dynamic array return info in context for exit statement handling */
+    ctx->returns_dynamic_array = returns_dynamic_array;
+    ctx->dynamic_array_descriptor_size = dynamic_array_descriptor_size;
 
     /* Allow Delphi-style Result alias in regular functions too. */
     add_result_alias_for_return_var(return_var);
@@ -3022,7 +3154,13 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     codegen_function_locals(func->declarations, ctx, symtab);
 
     /* Recursively generate nested subprograms */
-    codegen_subprograms(func->subprograms, ctx, symtab);
+    {
+        int saved_returns_dynamic_array = ctx->returns_dynamic_array;
+        int saved_dynamic_array_descriptor_size = ctx->dynamic_array_descriptor_size;
+        codegen_subprograms(func->subprograms, ctx, symtab);
+        ctx->returns_dynamic_array = saved_returns_dynamic_array;
+        ctx->dynamic_array_descriptor_size = saved_dynamic_array_descriptor_size;
+    }
     
     inst_list = codegen_var_initializers(func->declarations, inst_list, ctx, symtab);
     inst_list = codegen_stmt(func->statement_list, inst_list, ctx, symtab);
@@ -3162,9 +3300,15 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
                 is_real_return = 1;
         }
         
-        /* Use movsd for Real types (return in xmm0), movq/movl for others (return in rax/eax) */
+        /* Use movss for Single, movsd for Double (return in xmm0), movq/movl for others. */
         if (is_real_return)
-            snprintf(buffer, 50, "\tmovsd\t-%d(%%rbp), %%xmm0\n", return_var->offset);
+        {
+            int real_size = (return_var->element_size > 0) ? return_var->element_size : return_var->size;
+            if (real_size == 4)
+                snprintf(buffer, 50, "\tmovss\t-%d(%%rbp), %%xmm0\n", return_var->offset);
+            else
+                snprintf(buffer, 50, "\tmovsd\t-%d(%%rbp), %%xmm0\n", return_var->offset);
+        }
         else if (return_var->size >= 8)
             snprintf(buffer, 50, "\tmovq\t-%d(%%rbp), %s\n", return_var->offset, RETURN_REG_64);
         else
@@ -3182,6 +3326,8 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ctx->current_subprogram_id = prev_sub_id;
     ctx->current_subprogram_mangled = prev_sub_mangled;
     ctx->current_subprogram_lexical_depth = prev_depth;
+    ctx->returns_dynamic_array = prev_returns_dynamic_array;
+    ctx->dynamic_array_descriptor_size = prev_dynamic_array_descriptor_size;
 
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
@@ -3211,6 +3357,7 @@ static void add_alias_for_return_var(StackNode_t *return_var, const char *alias_
     
     result_alias->element_size = return_var->element_size;
     result_alias->is_alias = 1;
+    result_alias->is_dynamic = return_var->is_dynamic;  /* Copy dynamic array flag */
     if (return_var->is_static && return_var->static_label != NULL)
         result_alias->static_label = strdup(return_var->static_label);
     
@@ -3498,9 +3645,17 @@ void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx, SymT
         if (uses_qword)
         {
             if (anon->return_type == REAL_TYPE)
-                snprintf(buffer, sizeof(buffer), "\tmovsd\t-%d(%%rbp), %%xmm0\n", return_var->offset);
+            {
+                int real_size = (return_var->element_size > 0) ? return_var->element_size : return_var->size;
+                if (real_size == 4)
+                    snprintf(buffer, sizeof(buffer), "\tmovss\t-%d(%%rbp), %%xmm0\n", return_var->offset);
+                else
+                    snprintf(buffer, sizeof(buffer), "\tmovsd\t-%d(%%rbp), %%xmm0\n", return_var->offset);
+            }
             else
+            {
                 snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rax\n", return_var->offset);
+            }
         }
         else
         {
@@ -3611,6 +3766,21 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     {
                         has_record_or_dynarray = 1;
                     }
+                    else
+                    {
+                        KgpcType *param_type = NULL;
+                        if (scan_type_node != NULL)
+                            param_type = scan_type_node->type;
+                        else if (scan_cached_type != NULL)
+                            param_type = scan_cached_type;
+                        if (param_type != NULL &&
+                            param_type->kind == TYPE_KIND_PRIMITIVE &&
+                            kgpc_type_get_primitive_tag(param_type) == SET_TYPE &&
+                            kgpc_type_sizeof(param_type) > 4)
+                        {
+                            has_record_or_dynarray = 1;
+                        }
+                    }
                 }
                 scan_ids = scan_ids->next;
             }
@@ -3631,6 +3801,93 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
      * and save registers to their final locations before processing starts. */
     if (has_record_or_dynarray && param_count_for_alloc > 0)
     {
+        /* Pre-allocate stack slots for non-record params so locals use final z_offset. */
+        args_scan = args;
+        while(args_scan != NULL)
+        {
+            Tree_t *scan_decl = (Tree_t *)args_scan->cur;
+            if (scan_decl->type == TREE_VAR_DECL)
+            {
+                ListNode_t *scan_ids = scan_decl->tree_data.var_decl_data.ids;
+                int scan_type = scan_decl->tree_data.var_decl_data.type;
+                KgpcType *scan_cached_type = scan_decl->tree_data.var_decl_data.cached_kgpc_type;
+                int scan_is_var = scan_decl->tree_data.var_decl_data.is_var_param;
+                HashNode_t *scan_type_node = NULL;
+
+                if (scan_type == UNKNOWN_TYPE &&
+                    scan_decl->tree_data.var_decl_data.type_id != NULL && symtab != NULL)
+                {
+                    FindIdent(&scan_type_node, symtab, scan_decl->tree_data.var_decl_data.type_id);
+                }
+
+                while(scan_ids != NULL)
+                {
+                    int needs_local_copy = 0;
+                    if (!scan_is_var)
+                    {
+                        struct RecordType *rec = NULL;
+                        if (scan_type_node != NULL)
+                            rec = get_record_type_from_node(scan_type_node);
+                        if (rec == NULL && scan_cached_type != NULL)
+                        {
+                            HashNode_t cached_node;
+                            memset(&cached_node, 0, sizeof(cached_node));
+                            cached_node.type = scan_cached_type;
+                            rec = get_record_type_from_node(&cached_node);
+                        }
+
+                        if (rec != NULL)
+                        {
+                            needs_local_copy = 1;
+                        }
+                        else if (scan_cached_type != NULL &&
+                                 scan_cached_type->kind == TYPE_KIND_ARRAY &&
+                                 kgpc_type_is_dynamic_array(scan_cached_type))
+                        {
+                            needs_local_copy = 1;
+                        }
+                        else if (scan_type_node != NULL && scan_type_node->type != NULL &&
+                                 scan_type_node->type->kind == TYPE_KIND_ARRAY &&
+                                 kgpc_type_is_dynamic_array(scan_type_node->type))
+                        {
+                            needs_local_copy = 1;
+                        }
+                        else
+                        {
+                            KgpcType *param_type = NULL;
+                            if (scan_type_node != NULL)
+                                param_type = scan_type_node->type;
+                            else if (scan_cached_type != NULL)
+                                param_type = scan_cached_type;
+                            if (param_type != NULL &&
+                                param_type->kind == TYPE_KIND_PRIMITIVE &&
+                                kgpc_type_get_primitive_tag(param_type) == SET_TYPE &&
+                                kgpc_type_sizeof(param_type) > 4)
+                            {
+                                needs_local_copy = 1;
+                            }
+                        }
+                    }
+
+                    if (!needs_local_copy && find_label((char *)scan_ids->cur) == NULL)
+                        add_q_z((char *)scan_ids->cur);
+
+                    scan_ids = scan_ids->next;
+                }
+            }
+            else if (scan_decl->type == TREE_ARR_DECL)
+            {
+                ListNode_t *scan_ids = scan_decl->tree_data.arr_decl_data.ids;
+                while(scan_ids != NULL)
+                {
+                    if (find_label((char *)scan_ids->cur) == NULL)
+                        add_q_z((char *)scan_ids->cur);
+                    scan_ids = scan_ids->next;
+                }
+            }
+            args_scan = args_scan->next;
+        }
+
         args_scan = args;
         int scan_gpr_index = arg_start_index;
         while(args_scan != NULL)
@@ -3765,7 +4022,11 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                                 param_type = resolved_type_node->type;
                             else if (cached_arg_type != NULL)
                                 param_type = cached_arg_type;
-                            if (param_type != NULL &&
+                            if (param_type != NULL && kgpc_type_is_record(param_type))
+                            {
+                                record_type_info = kgpc_type_get_record(param_type);
+                            }
+                            else if (param_type != NULL &&
                                 param_type->kind == TYPE_KIND_ARRAY &&
                                 kgpc_type_is_dynamic_array(param_type))
                             {
@@ -3777,15 +4038,41 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                         }
                     }
 
-                    if (record_type_info != NULL || is_dynarray_param)
+                    int is_char_set_param = 0;
+                    long long char_set_size = 0;
+                    if (!symbol_is_var_param)
+                    {
+                        KgpcType *param_type = NULL;
+                        if (resolved_type_node != NULL)
+                            param_type = resolved_type_node->type;
+                        else if (cached_arg_type != NULL)
+                            param_type = cached_arg_type;
+                        if (param_type != NULL &&
+                            param_type->kind == TYPE_KIND_PRIMITIVE &&
+                            kgpc_type_get_primitive_tag(param_type) == SET_TYPE)
+                        {
+                            long long size = kgpc_type_sizeof(param_type);
+                            if (size > 4)
+                            {
+                                is_char_set_param = 1;
+                                char_set_size = size;
+                            }
+                        }
+                    }
+
+                    if (record_type_info != NULL || is_dynarray_param || is_char_set_param)
                     {
                         long long record_size = 0;
                         if (is_dynarray_param)
                         {
                             record_size = codegen_dynamic_array_descriptor_bytes(dynarray_elem_size);
                         }
+                        else if (is_char_set_param)
+                        {
+                            record_size = char_set_size;
+                        }
                         else if (codegen_sizeof_type_reference(ctx, RECORD_TYPE, NULL,
-                                record_type_info, &record_size) != 0 || record_size <= 0)
+                                record_type_info, &record_size) != 0 || record_size < 0)
                         {
                             codegen_report_error(ctx,
                                 "ERROR: Unable to determine size for record parameter %s.",
@@ -3907,6 +4194,7 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     int is_var_param = symbol_is_var_param;
                     int is_array_type = 0;
                     int type_requires_qword = 0;
+                    int real_storage_size = 8;
                     
                     /* Determine if parameter is an array type via resolved type only */
                     if (resolved_type_node != NULL && resolved_type_node->type != NULL &&
@@ -3929,21 +4217,58 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     {
                         type_requires_qword = kgpc_type_uses_qword(cached_arg_type);
                     }
+
+                    if (inferred_type_tag == REAL_TYPE)
+                        real_storage_size = codegen_real_param_storage_size(arg_decl,
+                            resolved_type_node, cached_arg_type);
                     
                      int use_64bit = is_var_param || is_array_type || type_requires_qword ||
                          (inferred_type_tag == STRING_TYPE || inferred_type_tag == POINTER_TYPE ||
-                          inferred_type_tag == REAL_TYPE || type == PROCEDURE);
+                          type == PROCEDURE ||
+                          (inferred_type_tag == REAL_TYPE && real_storage_size > 4));
                     int use_sse_reg = (!is_var_param && !is_array_type &&
                         inferred_type_tag == REAL_TYPE);
-                    arg_stack = use_64bit ? add_q_z((char *)arg_ids->cur) : add_l_z((char *)arg_ids->cur);
+                    arg_stack = NULL;
+                    if (has_record_or_dynarray)
+                        arg_stack = find_label((char *)arg_ids->cur);
+                    if (arg_stack == NULL)
+                        arg_stack = use_64bit ? add_q_z((char *)arg_ids->cur) : add_l_z((char *)arg_ids->cur);
                     if (arg_stack != NULL && (symbol_is_var_param || is_array_type))
                         arg_stack->is_reference = 1;
                     if (use_sse_reg)
                     {
-                        const char *xmm_reg = alloc_sse_arg_reg(&next_sse_index);
-                        snprintf(buffer, sizeof(buffer), "\tmovsd\t%s, -%d(%%rbp)\n",
-                            xmm_reg, arg_stack->offset);
-                        inst_list = add_inst(inst_list, buffer);
+                        if (next_sse_index < kgpc_max_sse_arg_regs())
+                        {
+                            const char *xmm_reg = alloc_sse_arg_reg(&next_sse_index);
+                            if (real_storage_size == 4)
+                                snprintf(buffer, sizeof(buffer), "\tmovss\t%s, -%d(%%rbp)\n",
+                                    xmm_reg, arg_stack->offset);
+                            else
+                                snprintf(buffer, sizeof(buffer), "\tmovsd\t%s, -%d(%%rbp)\n",
+                                    xmm_reg, arg_stack->offset);
+                            inst_list = add_inst(inst_list, buffer);
+                        }
+                        else
+                        {
+                            if (real_storage_size == 4)
+                            {
+                                snprintf(buffer, sizeof(buffer), "\tmovss\t%d(%%rbp), %%xmm0\n",
+                                    stack_arg_offset);
+                                inst_list = add_inst(inst_list, buffer);
+                                snprintf(buffer, sizeof(buffer), "\tmovss\t%%xmm0, -%d(%%rbp)\n",
+                                    arg_stack->offset);
+                            }
+                            else
+                            {
+                                snprintf(buffer, sizeof(buffer), "\tmovsd\t%d(%%rbp), %%xmm0\n",
+                                    stack_arg_offset);
+                                inst_list = add_inst(inst_list, buffer);
+                                snprintf(buffer, sizeof(buffer), "\tmovsd\t%%xmm0, -%d(%%rbp)\n",
+                                    arg_stack->offset);
+                            }
+                            inst_list = add_inst(inst_list, buffer);
+                            stack_arg_offset += CODEGEN_POINTER_SIZE_BYTES;
+                        }
                     }
                     else
                     {
@@ -4026,7 +4351,11 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                 while(arg_ids != NULL)
                 {
                     arg_reg = alloc_integer_arg_reg(1, &next_gpr_index);
-                    arg_stack = add_q_z((char *)arg_ids->cur);
+                    arg_stack = NULL;
+                    if (has_record_or_dynarray)
+                        arg_stack = find_label((char *)arg_ids->cur);
+                    if (arg_stack == NULL)
+                        arg_stack = add_q_z((char *)arg_ids->cur);
                     if (arg_stack != NULL)
                         arg_stack->is_reference = 1;
                     Register_t *stack_value_reg = NULL;

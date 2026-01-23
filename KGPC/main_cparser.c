@@ -59,8 +59,14 @@ int num_args_alloced = 0;
 int line_num = 1;
 int col_num = 1;
 char *file_to_parse = NULL;
+char *preprocessed_source = NULL;
+size_t preprocessed_length = 0;
+char *preprocessed_path = NULL;
 static UnitSearchPaths g_unit_paths;
 static bool g_skip_stdlib = false;
+static int g_requires_pthread = 0;
+static int g_requires_gmp = 0;
+static int g_emit_link_args = 0;
 
 /* Ensure program-defined subprograms are emitted even if reachability misses them */
 static void mark_program_subs_used(Tree_t *program)
@@ -361,6 +367,10 @@ static void set_flags(char **optional_args, int count)
         {
             fprintf(stderr, "Parse-only mode enabled.\n\n");
             set_parse_only_flag();
+        }
+        else if (strcmp(arg, "--emit-link-args") == 0)
+        {
+            g_emit_link_args = 1;
         }
         else if (strcmp(arg, "--target-windows") == 0 || strcmp(arg, "-target-windows") == 0 || strcmp(arg, "--windows-abi") == 0)
         {
@@ -1088,6 +1098,11 @@ static void load_unit(Tree_t *program, const char *unit_name, UnitSet *visited)
     if (normalized == NULL)
         return;
 
+    if (strcmp(normalized, "cthreads") == 0)
+        g_requires_pthread = 1;
+    if (strcmp(normalized, "gmp") == 0)
+        g_requires_gmp = 1;
+
     if (!unit_set_add(visited, normalized))
         return;
 
@@ -1145,6 +1160,35 @@ static void load_units_from_list(Tree_t *program, ListNode_t *uses, UnitSet *vis
             load_unit(program, (const char *)cur->cur, visited);
         cur = cur->next;
     }
+}
+
+static void emit_link_args(void)
+{
+    if (!g_emit_link_args)
+        return;
+
+    char buffer[256];
+    size_t used = 0;
+
+    if (!target_windows_flag())
+    {
+        used += (size_t)snprintf(buffer + used, sizeof(buffer) - used, " -lm");
+    }
+
+    if (g_requires_pthread && !target_windows_flag())
+    {
+        used += (size_t)snprintf(buffer + used, sizeof(buffer) - used, " -lpthread");
+    }
+
+    if (g_requires_gmp)
+    {
+        used += (size_t)snprintf(buffer + used, sizeof(buffer) - used, " -lgmp");
+    }
+
+    if (used > 0)
+        fprintf(stderr, "KGPC_LINK_ARGS:%s\n", buffer);
+    else
+        fprintf(stderr, "KGPC_LINK_ARGS:\n");
 }
 
 int main(int argc, char **argv)
@@ -1247,6 +1291,22 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    char *saved_preprocessed_source = NULL;
+    size_t saved_preprocessed_length = 0;
+    char *saved_preprocessed_path = NULL;
+    if (preprocessed_source != NULL && preprocessed_length > 0)
+    {
+        saved_preprocessed_source = (char *)malloc(preprocessed_length + 1);
+        if (saved_preprocessed_source != NULL)
+        {
+            memcpy(saved_preprocessed_source, preprocessed_source, preprocessed_length);
+            saved_preprocessed_source[preprocessed_length] = '\0';
+            saved_preprocessed_length = preprocessed_length;
+        }
+        if (preprocessed_path != NULL)
+            saved_preprocessed_path = strdup(preprocessed_path);
+    }
+
     if (!dump_ast_to_requested_path(user_tree))
     {
         if (prelude_tree != NULL)
@@ -1262,6 +1322,10 @@ int main(int argc, char **argv)
         }
         pascal_frontend_cleanup();
         unit_search_paths_destroy(&g_unit_paths);
+        if (saved_preprocessed_source != NULL)
+            free(saved_preprocessed_source);
+        if (saved_preprocessed_path != NULL)
+            free(saved_preprocessed_path);
         return 1;
     }
 
@@ -1297,6 +1361,10 @@ int main(int argc, char **argv)
         clear_dump_ast_path();
         pascal_frontend_cleanup();
         unit_search_paths_destroy(&g_unit_paths);
+        if (saved_preprocessed_source != NULL)
+            free(saved_preprocessed_source);
+        if (saved_preprocessed_path != NULL)
+            free(saved_preprocessed_path);
         return 0;
     }
 
@@ -1404,7 +1472,27 @@ int main(int argc, char **argv)
         
         debug_check_type_presence(user_tree);
         unit_set_destroy(&visited_units);
-        
+
+        if (saved_preprocessed_source != NULL)
+        {
+            if (preprocessed_source != NULL)
+                free(preprocessed_source);
+            preprocessed_source = saved_preprocessed_source;
+            preprocessed_length = saved_preprocessed_length;
+            saved_preprocessed_source = NULL;
+            saved_preprocessed_length = 0;
+        }
+        if (saved_preprocessed_path != NULL)
+        {
+            if (preprocessed_path != NULL)
+                free(preprocessed_path);
+            preprocessed_path = saved_preprocessed_path;
+            saved_preprocessed_path = NULL;
+        }
+        file_to_parse = (char *)input_file;
+        semcheck_set_source_path(input_file);
+        semcheck_set_source_buffer(preprocessed_source, preprocessed_length);
+
         int sem_result = 0;
         double sem_start = track_time ? current_time_seconds() : 0.0;
         SymTab_t *symtab = start_semcheck(user_tree, &sem_result);
@@ -1422,6 +1510,10 @@ int main(int argc, char **argv)
             clear_dump_ast_path();
             pascal_frontend_cleanup();
             unit_search_paths_destroy(&g_unit_paths);
+            if (saved_preprocessed_source != NULL)
+                free(saved_preprocessed_source);
+            if (saved_preprocessed_path != NULL)
+                free(saved_preprocessed_path);
             return 1;
         }
         
@@ -1470,6 +1562,10 @@ int main(int argc, char **argv)
             clear_dump_ast_path();
             pascal_frontend_cleanup();
             unit_search_paths_destroy(&g_unit_paths);
+            if (saved_preprocessed_source != NULL)
+                free(saved_preprocessed_source);
+            if (saved_preprocessed_path != NULL)
+                free(saved_preprocessed_path);
             return 1;
         }
         
@@ -1571,6 +1667,26 @@ int main(int argc, char **argv)
             user_tree->tree_data.program_data.uses_units = objpas_node;
         }
     }
+
+    if (saved_preprocessed_source != NULL)
+    {
+        if (preprocessed_source != NULL)
+            free(preprocessed_source);
+        preprocessed_source = saved_preprocessed_source;
+        preprocessed_length = saved_preprocessed_length;
+        saved_preprocessed_source = NULL;
+        saved_preprocessed_length = 0;
+    }
+    if (saved_preprocessed_path != NULL)
+    {
+        if (preprocessed_path != NULL)
+            free(preprocessed_path);
+        preprocessed_path = saved_preprocessed_path;
+        saved_preprocessed_path = NULL;
+    }
+    file_to_parse = (char *)input_file;
+    semcheck_set_source_path(input_file);
+    semcheck_set_source_buffer(preprocessed_source, preprocessed_length);
     
     debug_check_type_presence(user_tree);
     user_tree->tree_data.program_data.type_declaration =
@@ -1644,6 +1760,10 @@ int main(int argc, char **argv)
             fprintf(stderr, "Code generation failed; removing incomplete output file.\n");
             remove(output_file);
             exit_code = 1;
+        }
+        else
+        {
+            emit_link_args();
         }
     }
     else

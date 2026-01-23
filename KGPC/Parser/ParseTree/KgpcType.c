@@ -165,16 +165,16 @@ KgpcType* create_kgpc_type_from_type_alias(struct TypeAlias *alias, struct SymTa
     if (alias->is_array) {
         int start = alias->array_start;
         int end = alias->array_end;
-        
+
         if (alias->is_open_array) {
             start = 0;
             end = -1;
         }
-        
+
         /* Resolve element type */
         KgpcType *element_type = NULL;
         int element_type_tag = alias->array_element_type;
-        
+
         if (element_type_tag != UNKNOWN_TYPE) {
             /* Direct primitive type tag */
             element_type = create_primitive_type(element_type_tag);
@@ -182,15 +182,17 @@ KgpcType* create_kgpc_type_from_type_alias(struct TypeAlias *alias, struct SymTa
             /* Type reference - try to resolve it */
             HashNode_t *element_node = kgpc_find_type_node(symtab, alias->array_element_type_id);
             if (element_node != NULL && element_node->type != NULL) {
-                /* Use the resolved type (don't clone, just reference) */
+                /* Use the resolved type - MUST retain since it's borrowed from symbol table
+                 * and create_array_type takes ownership. */
                 element_type = element_node->type;
+                kgpc_type_retain(element_type);
             } else {
                 /* Forward reference - create NULL element type for now
                  * This will be resolved when the array is actually used */
                 element_type = NULL;
             }
         }
-        
+
         /* Create array type even if element type is NULL (forward reference) */
         result = create_array_type(element_type, start, end);
         if (result != NULL) {
@@ -203,7 +205,7 @@ KgpcType* create_kgpc_type_from_type_alias(struct TypeAlias *alias, struct SymTa
     if (alias->is_pointer) {
         KgpcType *pointee_type = NULL;
         int pointer_type_tag = alias->pointer_type;
-        
+
         if (pointer_type_tag != UNKNOWN_TYPE) {
             /* Direct primitive type tag */
             pointee_type = create_primitive_type(pointer_type_tag);
@@ -211,8 +213,10 @@ KgpcType* create_kgpc_type_from_type_alias(struct TypeAlias *alias, struct SymTa
             /* Type reference - try to resolve it */
             HashNode_t *pointee_node = kgpc_find_type_node(symtab, alias->pointer_type_id);
             if (pointee_node != NULL && pointee_node->type != NULL) {
-                /* Use the resolved type (don't clone, just reference) */
+                /* Use the resolved type - MUST retain since it's borrowed from symbol table
+                 * and create_pointer_type takes ownership. */
                 pointee_type = pointee_node->type;
+                kgpc_type_retain(pointee_type);
             } else {
                 /* Forward reference or unresolved type
                  * Create a pointer to NULL - this is valid in Pascal
@@ -220,7 +224,7 @@ KgpcType* create_kgpc_type_from_type_alias(struct TypeAlias *alias, struct SymTa
                 pointee_type = NULL;
             }
         }
-        
+
         /* Create pointer type even if pointee is NULL (forward reference) */
         result = create_pointer_type(pointee_type);
         if (result != NULL) {
@@ -439,7 +443,8 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
         }
 
         KgpcType *elem_type = NULL;
-        
+        int elem_type_borrowed = 0;
+
         /* Resolve element type */
         if (elem_type_tag != UNKNOWN_TYPE && elem_type_tag != -1)
         {
@@ -452,11 +457,16 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
             if (elem_node != NULL && elem_node->type != NULL)
             {
                 elem_type = elem_node->type;
+                elem_type_borrowed = 1;
             }
         }
-        
+
         if (elem_type != NULL)
         {
+            /* CRITICAL: Retain elem_type if borrowed from symbol table
+             * since create_array_type takes ownership. */
+            if (elem_type_borrowed)
+                kgpc_type_retain(elem_type);
             /* Create a new array KgpcType - caller owns this */
             if (owns_type != NULL)
                 *owns_type = 1;
@@ -471,6 +481,9 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
 
     int var_type_tag = var_decl->tree_data.var_decl_data.type;
     const char *type_id = var_decl->tree_data.var_decl_data.type_id;
+
+    if (var_type_tag == BUILTIN_ANY_TYPE && type_id == NULL)
+        return NULL;
 
     if (var_type_tag == POINTER_TYPE && type_id != NULL)
     {
@@ -703,6 +716,35 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
         return 1;
     }
 
+    /* Allow assigning procedure values to strings in helper conversions
+     * (e.g., unresolved parameterless method references in array-of-const formatting). */
+    if (lhs_is_string && rhs_type->kind == TYPE_KIND_PROCEDURE)
+    {
+        return 1;
+    }
+    if (lhs_is_string && rhs_type->kind == TYPE_KIND_PRIMITIVE &&
+        rhs_type->info.primitive_type_tag == PROCEDURE)
+    {
+        return 1;
+    }
+    if (lhs_is_string && rhs_type->kind == TYPE_KIND_PRIMITIVE &&
+        rhs_type->info.primitive_type_tag == POINTER_TYPE)
+    {
+        return 1;
+    }
+
+    /* Allow assigning generic pointers to strings to support PChar-style conversions
+     * when the pointer subtype can't be resolved. */
+    if (lhs_is_string && rhs_type->kind == TYPE_KIND_POINTER)
+    {
+        KgpcType *points_to = rhs_type->info.points_to;
+        if (points_to == NULL)
+            return 1;
+        if (points_to->kind == TYPE_KIND_PRIMITIVE &&
+            points_to->info.primitive_type_tag == CHAR_TYPE)
+            return 1;
+    }
+
     /* Allow String <-> ShortString assignment */
     if (lhs_is_string && rhs_is_string) {
         return 1;
@@ -717,6 +759,11 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
     if (is_char_array_type(lhs_type) && rhs_is_pchar)
         return 1;
     if (is_char_array_type(rhs_type) && lhs_is_pchar)
+        return 1;
+    if (is_char_array_type(lhs_type) && is_char_array_type(rhs_type))
+        return 1;
+    if (is_char_array_type(lhs_type) && rhs_type->kind == TYPE_KIND_POINTER &&
+        rhs_type->info.points_to == NULL)
         return 1;
 
     /* Allow procedure variables to accept explicit @proc references */
@@ -770,6 +817,15 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
                 /* lhs is nil, rhs pointer can be assigned */
                 return 1;
             }
+        }
+
+        /* Allow nil (represented as pointer) to be assigned to dynamic arrays.
+         * Dynamic arrays in Pascal can be assigned nil to clear/empty them.
+         * This is a common Pascal idiom: var A: array of Integer; begin A := nil; end; */
+        if (lhs_type->kind == TYPE_KIND_ARRAY && kgpc_type_is_dynamic_array(lhs_type) &&
+            rhs_type->kind == TYPE_KIND_POINTER && rhs_type->info.points_to == NULL)
+        {
+            return 1;  /* nil can be assigned to any dynamic array */
         }
         
         /* Allow typed pointer (^T) to be assigned to untyped Pointer (primitive POINTER_TYPE) */
@@ -971,6 +1027,8 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
 
         case TYPE_KIND_ARRAY:
         {
+            if (is_char_array_type(lhs_type) && is_char_array_type(rhs_type))
+                return 1;
             int lhs_dynamic = lhs_type->info.array_info.end_index < lhs_type->info.array_info.start_index;
             int rhs_dynamic = rhs_type->info.array_info.end_index < rhs_type->info.array_info.start_index;
             if (!lhs_dynamic && !rhs_dynamic)
@@ -1199,7 +1257,10 @@ long long kgpc_type_sizeof(KgpcType *type)
                     /* Check if this is a character set (set of char) */
                     if (type->type_alias != NULL && type->type_alias->is_set)
                     {
-                        if (type->type_alias->set_element_type == CHAR_TYPE)
+                        if (type->type_alias->set_element_type == CHAR_TYPE ||
+                            (type->type_alias->set_element_type_id != NULL &&
+                             (pascal_identifier_equals(type->type_alias->set_element_type_id, "Char") ||
+                              pascal_identifier_equals(type->type_alias->set_element_type_id, "AnsiChar"))))
                         {
                             /* Character sets need 256 bits = 32 bytes */
                             return 32;

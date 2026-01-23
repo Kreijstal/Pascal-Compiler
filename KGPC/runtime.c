@@ -19,6 +19,8 @@ static uint64_t kgpc_rand_state = 0x9e3779b97f4a7c15ULL;
 
 /* Forward decl for optional debug flag helper */
 static int kgpc_env_flag(const char *name);
+char *kgpc_float_to_string(double value, int precision);
+static char *kgpc_apply_field_width(char *value, int64_t width);
 
 #ifdef _WIN32
 #include <windows.h>
@@ -36,6 +38,7 @@ static int kgpc_env_flag(const char *name);
 #include <sys/ioctl.h>
 #include <termios.h>
 #include <sys/select.h>
+#include <pthread.h>
 #include <sys/utsname.h>
 #include <sys/wait.h>
 #include <sys/types.h>
@@ -55,6 +58,7 @@ static int kgpc_env_flag(const char *name);
 
 int64_t kgpc_current_exception = 0;
 static __thread int kgpc_ioresult = 0;
+static int kgpc_threading_used = 0;
 
 int kgpc_ioresult_get_and_clear(void)
 {
@@ -71,6 +75,23 @@ void kgpc_ioresult_set(int value)
 int kgpc_ioresult_peek(void)
 {
     return kgpc_ioresult;
+}
+
+void kgpc_cthreads_init(void)
+{
+#ifndef _WIN32
+    (void)pthread_self();
+#endif
+}
+
+int kgpc_threading_already_used(void)
+{
+    return kgpc_threading_used;
+}
+
+int ThreadingAlreadyUsed_void(void)
+{
+    return kgpc_threading_already_used();
 }
 
 void kgpc_interlocked_exchange_add_i32(int32_t *target, int32_t value, int32_t *result)
@@ -2075,6 +2096,26 @@ void kgpc_string_assign(char **target, const char *value)
         return;
 
     char *existing = *target;
+    if (existing != NULL && value == existing)
+        return;
+
+    if (existing != NULL && value != NULL)
+    {
+        KgpcStringNode *existing_node = kgpc_string_find_allocation(existing);
+        if (existing_node != NULL)
+        {
+            const char *start = existing_node->ptr;
+            const char *end = start + existing_node->length;
+            if (value >= start && value <= end)
+            {
+                char *copy = kgpc_string_duplicate(value);
+                if (kgpc_string_release_allocation(existing))
+                    free(existing);
+                *target = copy;
+                return;
+            }
+        }
+    }
     if (kgpc_string_release_allocation(existing))
     {
         free(existing);
@@ -2351,6 +2392,44 @@ void kgpc_string_to_shortstring(char *dest, const char *src, size_t dest_size)
         memset(dest + 1 + copy_len, 0, dest_size - 1 - copy_len);
 }
 
+void kgpc_shortstring_setlength(char *target, int64_t new_length)
+{
+    if (target == NULL)
+        return;
+
+    if (new_length < 0)
+        new_length = 0;
+    if (new_length > 255)
+        new_length = 255;
+
+    unsigned char old_len = (unsigned char)target[0];
+    unsigned char new_len = (unsigned char)new_length;
+    target[0] = (char)new_len;
+
+    if (new_len > old_len)
+        memset(target + 1 + old_len, 0, (size_t)(new_len - old_len));
+}
+
+void kgpc_shortstring_setstring(char *target, const char *buffer, int64_t length)
+{
+    if (target == NULL)
+        return;
+
+    if (buffer == NULL || length <= 0)
+    {
+        target[0] = 0;
+        return;
+    }
+
+    if (length > 255)
+        length = 255;
+
+    target[0] = (char)length;
+    memcpy(target + 1, buffer, (size_t)length);
+    if (length < 255)
+        memset(target + 1 + length, 0, (size_t)(255 - length));
+}
+
 char *kgpc_shortstring_to_string(const char *value)
 {
     if (value == NULL)
@@ -2365,6 +2444,72 @@ int64_t kgpc_shortstring_length(const char *value)
     if (value == NULL)
         return 0;
     return (unsigned char)value[0];
+}
+
+void kgpc_shortstring_delete(char *target, int64_t index, int64_t count)
+{
+    if (target == NULL || index <= 0 || count <= 0)
+        return;
+
+    size_t length = (unsigned char)target[0];
+    if (length == 0)
+        return;
+    if (index > (int64_t)length)
+        return;
+
+    size_t start = (size_t)(index - 1);
+    size_t remove = (size_t)count;
+    if (remove > length - start)
+        remove = length - start;
+
+    size_t tail = length - start - remove;
+    if (tail > 0)
+        memmove(target + 1 + start, target + 1 + start + remove, tail);
+
+    size_t new_len = length - remove;
+    target[0] = (char)new_len;
+    if (remove > 0)
+        memset(target + 1 + new_len, 0, remove);
+}
+
+void kgpc_shortstring_insert(const char *value, char *target, int64_t index, int value_is_shortstring)
+{
+    if (target == NULL || value == NULL)
+        return;
+
+    const char *insert_ptr = value;
+    size_t insert_len = 0;
+    if (value_is_shortstring)
+    {
+        insert_len = (unsigned char)value[0];
+        insert_ptr = value + 1;
+    }
+    else
+    {
+        insert_len = kgpc_string_known_length(value);
+        insert_ptr = value;
+    }
+
+    if (insert_len == 0)
+        return;
+
+    size_t dest_len = (unsigned char)target[0];
+    if (index <= 0)
+        index = 1;
+    if (index > (int64_t)dest_len + 1)
+        index = (int64_t)dest_len + 1;
+
+    size_t max_insert = (dest_len < 255) ? (255 - dest_len) : 0;
+    if (insert_len > max_insert)
+        insert_len = max_insert;
+    if (insert_len == 0)
+        return;
+
+    size_t pos = (size_t)(index - 1);
+    memmove(target + 1 + pos + insert_len, target + 1 + pos, dest_len - pos);
+    memcpy(target + 1 + pos, insert_ptr, insert_len);
+
+    target[0] = (char)(dest_len + insert_len);
 }
 
 
@@ -2707,6 +2852,22 @@ void kgpc_getmem(void **target, size_t size)
     *target = memory;
 }
 
+/* AllocMem: allocates memory and zero-initializes it (like calloc) */
+void *kgpc_allocmem(size_t size)
+{
+    if (size == 0)
+        return NULL;
+
+    void *memory = calloc(1, size);
+    if (memory == NULL)
+    {
+        fprintf(stderr, "KGPC runtime: failed to allocate %zu bytes via AllocMem.\n", size);
+        exit(EXIT_FAILURE);
+    }
+
+    return memory;
+}
+
 void kgpc_freemem(void *ptr)
 {
     if (ptr != NULL)
@@ -2807,6 +2968,39 @@ char *kgpc_string_copy(const char *value, int64_t index, int64_t count)
 
     if (to_copy > 0)
         memcpy(result, value + start, to_copy);
+    result[to_copy] = '\0';
+    kgpc_string_register_allocation(result, to_copy);
+    return result;
+}
+
+/* Copy from ShortString (length byte at index 0, chars at 1..255) */
+char *kgpc_shortstring_copy(const char *value, int64_t index, int64_t count)
+{
+    if (value == NULL)
+        return kgpc_alloc_empty_string();
+
+    /* ShortString has length byte at position 0 */
+    size_t len = (unsigned char)value[0];
+    const char *chars = value + 1;  /* Actual characters start at position 1 */
+
+    if (index < 1 || index > (int64_t)len)
+        return kgpc_alloc_empty_string();
+
+    if (count < 0)
+        count = 0;
+
+    size_t start = (size_t)(index - 1);
+    size_t available = len - start;
+    size_t to_copy = (size_t)count;
+    if (to_copy > available)
+        to_copy = available;
+
+    char *result = (char *)malloc(to_copy + 1);
+    if (result == NULL)
+        return kgpc_alloc_empty_string();
+
+    if (to_copy > 0)
+        memcpy(result, chars + start, to_copy);
     result[to_copy] = '\0';
     kgpc_string_register_allocation(result, to_copy);
     return result;
@@ -3110,6 +3304,33 @@ char *kgpc_char_to_string(int64_t value)
     return result;
 }
 
+/* Alias for WriteStr compatibility */
+char *kgpc_char_to_str(int64_t value)
+{
+    return kgpc_char_to_string(value);
+}
+
+char *kgpc_bool_to_str(int64_t value)
+{
+    return kgpc_string_duplicate(value ? "TRUE" : "FALSE");
+}
+
+char *kgpc_real_to_str(double value)
+{
+    char buffer[64];
+    int written = snprintf(buffer, sizeof(buffer), "%g", value);
+    if (written < 0 || written >= (int)sizeof(buffer))
+        return kgpc_alloc_empty_string();
+
+    char *result = (char *)malloc((size_t)written + 1);
+    if (result == NULL)
+        return kgpc_alloc_empty_string();
+
+    memcpy(result, buffer, (size_t)written + 1);
+    kgpc_string_register_allocation(result, (size_t)written);
+    return result;
+}
+
 int64_t kgpc_upcase_char(int64_t value)
 {
     unsigned char ch = (unsigned char)(value & 0xFF);
@@ -3167,6 +3388,42 @@ char *kgpc_int_to_str(int64_t value)
     return result;
 }
 
+static char *kgpc_apply_field_width(char *value, int64_t width)
+{
+    if (value == NULL)
+        return NULL;
+
+    if (width == -1 || width == 0)
+        return value;
+
+    int left_align = (width < 0);
+    uint64_t abs_width = (width < 0) ? (uint64_t)(-width) : (uint64_t)width;
+    size_t len = kgpc_string_known_length(value);
+    if (abs_width <= len)
+        return value;
+
+    size_t pad = abs_width - len;
+    char *result = (char *)malloc(abs_width + 1);
+    if (result == NULL)
+        return value;
+
+    if (left_align)
+    {
+        memcpy(result, value, len);
+        memset(result + len, ' ', pad);
+    }
+    else
+    {
+        memset(result, ' ', pad);
+        memcpy(result + pad, value, len);
+    }
+    result[abs_width] = '\0';
+    kgpc_string_register_allocation(result, abs_width);
+    if (kgpc_string_release_allocation(value))
+        free(value);
+    return result;
+}
+
 void kgpc_str_int64(int64_t value, char **target)
 {
     if (target == NULL)
@@ -3180,6 +3437,121 @@ void kgpc_str_int64(int64_t value, char **target)
     if (existing != NULL && kgpc_string_release_allocation(existing))
         free(existing);
     *target = result;
+}
+
+void kgpc_str_int64_fmt(int64_t value, int64_t width, char **target)
+{
+    if (target == NULL)
+        return;
+
+    char *result = kgpc_int_to_str(value);
+    if (result == NULL)
+        return;
+
+    result = kgpc_apply_field_width(result, width);
+
+    char *existing = *target;
+    if (existing != NULL && kgpc_string_release_allocation(existing))
+        free(existing);
+    *target = result;
+}
+
+void kgpc_str_real(double value, char **target)
+{
+    if (target == NULL)
+        return;
+
+    char *result = kgpc_float_to_string(value, -1);
+    if (result == NULL)
+        return;
+
+    char *existing = *target;
+    if (existing != NULL && kgpc_string_release_allocation(existing))
+        free(existing);
+    *target = result;
+}
+
+void kgpc_str_real_fmt(double value, int64_t width, int64_t precision, char **target)
+{
+    if (target == NULL)
+        return;
+
+    char *result = kgpc_float_to_string(value, (int)precision);
+    if (result == NULL)
+        return;
+
+    result = kgpc_apply_field_width(result, width);
+
+    char *existing = *target;
+    if (existing != NULL && kgpc_string_release_allocation(existing))
+        free(existing);
+    *target = result;
+}
+
+/* Str for ShortString targets - copies result to a fixed-size Pascal ShortString array.
+ * ShortString has format: first byte = length, followed by up to 255 characters. */
+void kgpc_str_int64_shortstring(int64_t value, char *target)
+{
+    if (target == NULL)
+        return;
+
+    char *result = kgpc_int_to_str(value);
+    if (result == NULL)
+        return;
+
+    /* Copy to ShortString format */
+    kgpc_string_to_shortstring(target, result, 256);
+    free(result);
+}
+
+void kgpc_str_int64_fmt_shortstring(int64_t value, int64_t width, char *target)
+{
+    if (target == NULL)
+        return;
+
+    char *result = kgpc_int_to_str(value);
+    if (result == NULL)
+        return;
+
+    result = kgpc_apply_field_width(result, width);
+    if (result == NULL)
+        return;
+
+    /* Copy to ShortString format */
+    kgpc_string_to_shortstring(target, result, 256);
+    free(result);
+}
+
+void kgpc_str_real_shortstring(double value, char *target)
+{
+    if (target == NULL)
+        return;
+
+    char *result = kgpc_float_to_string(value, -1);
+    if (result == NULL)
+        return;
+
+    /* Copy to ShortString format */
+    kgpc_string_to_shortstring(target, result, 256);
+    free(result);
+}
+
+void kgpc_str_real_fmt_shortstring(double value, int64_t width, int64_t precision, char *target)
+{
+    if (target == NULL)
+        return;
+
+    char *result = kgpc_float_to_string(value, (int)precision);
+    if (result == NULL)
+        return;
+
+    result = kgpc_apply_field_width(result, width);
+    if (result == NULL)
+        return;
+
+    /* Copy to ShortString format */
+    kgpc_string_to_shortstring(target, result, 256);
+    free(result);
 }
 
 double kgpc_now(void)
@@ -4238,6 +4610,13 @@ int64_t kgpc_assigned(const void *ptr)
     return (ptr != NULL) ? 1 : 0;
 }
 
+int64_t kgpc_aligned(const void *ptr, int64_t alignment)
+{
+    /* Validate alignment: must be positive */
+    assert(alignment > 0);
+    return (((uintptr_t)ptr % alignment) == 0) ? 1 : 0;
+}
+
 int32_t kgpc_abs_int(int32_t value)
 {
     return (value < 0) ? -value : value;
@@ -4462,6 +4841,27 @@ long long kgpc_trunc(double value)
     return (long long)ceil(value);
 }
 
+/* Trunc for Currency type - Currency stores values scaled by 10000.
+ * The value is passed as a double (bit-pattern) because the code generator
+ * passes it via xmm0 as if it were a real argument. We reinterpret the bits
+ * as int64 and then perform the Currency-specific truncation. */
+long long kgpc_trunc_currency(double bits_as_double)
+{
+    /* Reinterpret the double bits as int64 */
+    union {
+        double d;
+        long long ll;
+    } u;
+    u.d = bits_as_double;
+    long long currency_value = u.ll;
+
+    /* Currency is stored as value * 10000, so divide by 10000 to get actual value */
+    /* Truncate towards zero */
+    if (currency_value >= 0)
+        return currency_value / 10000;
+    return -((-currency_value) / 10000);
+}
+
 long long kgpc_int(double value)
 {
     return kgpc_trunc(value);
@@ -4548,6 +4948,124 @@ void kgpc_sincos_bits(int64_t angle_bits, double *sin_out, double *cos_out)
     if (cos_out != NULL)
         *cos_out = cos(angle);
 }
+
+/* BaseUnix wrapper functions */
+#ifndef _WIN32
+int fpOpen(const char *path, int flags)
+{
+    return open(path, flags);
+}
+
+int fpOpen_i_i_i(const char *path, int flags, int mode)
+{
+    return open(path, flags, (mode_t)mode);
+}
+
+int fpClose(int fd)
+{
+    return close(fd);
+}
+
+int fpClose_i(int fd)
+{
+    return close(fd);
+}
+
+ssize_t fpRead(int fd, void *buf, size_t count)
+{
+    return read(fd, buf, count);
+}
+
+ssize_t fpWrite(int fd, const void *buf, size_t count)
+{
+    return write(fd, buf, count);
+}
+
+off_t fplSeek(int fd, off_t offset, int whence)
+{
+    return lseek(fd, offset, whence);
+}
+#else
+/* Windows implementations using POSIX-like functions from io.h */
+/* Translate Unix paths to Windows equivalents */
+static const char* translate_unix_path(const char *path)
+{
+    /* Map /dev/null to NUL */
+    if (path != NULL && strcmp(path, "/dev/null") == 0)
+        return "NUL";
+    return path;
+}
+
+/* Linux open flag constants for cross-platform translation */
+#define LINUX_O_CREAT  0x40
+#define LINUX_O_TRUNC  0x200
+
+/* Translate Unix open flags to Windows _open flags */
+static int translate_flags(int flags)
+{
+    int wflags = _O_BINARY;  /* Always use binary mode on Windows */
+    
+    /* O_RDONLY = 0, O_WRONLY = 1, O_RDWR = 2 */
+    int accmode = flags & 3;
+    if (accmode == 0)       /* O_RDONLY */
+        wflags |= _O_RDONLY;
+    else if (accmode == 1)  /* O_WRONLY */
+        wflags |= _O_WRONLY;
+    else if (accmode == 2)  /* O_RDWR */
+        wflags |= _O_RDWR;
+    
+    if (flags & LINUX_O_CREAT)
+        wflags |= _O_CREAT;
+    
+    if (flags & LINUX_O_TRUNC)
+        wflags |= _O_TRUNC;
+    
+    return wflags;
+}
+
+int fpOpen(const char *path, int flags)
+{
+    const char *wpath = translate_unix_path(path);
+    int wflags = translate_flags(flags);
+    return _open(wpath, wflags);
+}
+
+int fpOpen_i_i_i(const char *path, int flags, int mode)
+{
+    const char *wpath = translate_unix_path(path);
+    int wflags = translate_flags(flags);
+    return _open(wpath, wflags, mode);
+}
+
+int fpClose(int fd)
+{
+    return _close(fd);
+}
+
+int fpClose_i(int fd)
+{
+    return _close(fd);
+}
+
+ssize_t fpRead(int fd, void *buf, size_t count)
+{
+    /* _read takes unsigned int count on Windows, handle large counts by capping */
+    unsigned int safe_count = (count > UINT_MAX) ? UINT_MAX : (unsigned int)count;
+    return (ssize_t)_read(fd, buf, safe_count);
+}
+
+ssize_t fpWrite(int fd, const void *buf, size_t count)
+{
+    /* _write takes unsigned int count on Windows, handle large counts by capping */
+    unsigned int safe_count = (count > UINT_MAX) ? UINT_MAX : (unsigned int)count;
+    return (ssize_t)_write(fd, buf, safe_count);
+}
+
+off_t fplSeek(int fd, off_t offset, int whence)
+{
+    return (off_t)_lseeki64(fd, (__int64)offset, whence);
+}
+#endif
 
 void Halt(int64_t code)
 {

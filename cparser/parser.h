@@ -49,6 +49,9 @@ struct input_t {
    int start;
    int line;
    int col;
+   int source_line;  // Original source line (survives backtracking, updated by #line directives)
+   int source_line_base;  // Line number from last #line directive
+   int source_line_base_pos;  // Buffer position after last #line directive
    memo_table_t* memo;
 };
 
@@ -290,6 +293,7 @@ typedef struct type_dispatch_args {
     combinator_t* constructed_parser;
     combinator_t* identifier_parser;
     combinator_t* distinct_type_parser;  /* For "type <typename>" distinct type syntax */
+    combinator_t* distinct_type_range_parser;  /* For "type <range>" distinct type from subrange */
     combinator_t* procedure_parser;      /* For traditional procedure type (without "reference to") */
     combinator_t* function_parser;       /* For traditional function type (without "reference to") */
 } type_dispatch_args_t;

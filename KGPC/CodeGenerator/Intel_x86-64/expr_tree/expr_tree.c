@@ -238,6 +238,23 @@ static int expr_requires_qword(const struct Expression *expr)
     return 0;
 }
 
+/* Forward declarations */
+static const char *reg32_to_reg64(const char *reg_name, char *buffer, size_t buf_size);
+static const char *reg64_to_reg32(const char *reg_name, char *buffer, size_t buf_size);
+static int expr_is_single_real_local(const struct Expression *expr);
+
+static int expr_is_single_real_local(const struct Expression *expr)
+{
+    if (expr == NULL || !expr_has_type_tag(expr, REAL_TYPE))
+        return 0;
+
+    KgpcType *type = expr_get_kgpc_type(expr);
+    if (type == NULL)
+        return 0;
+
+    return (kgpc_type_sizeof(type) == 4);
+}
+
 static ListNode_t *emit_store_to_stack(ListNode_t *inst_list, const Register_t *reg,
     const struct Expression *expr, int type_tag, int offset)
 {
@@ -246,6 +263,8 @@ static ListNode_t *emit_store_to_stack(ListNode_t *inst_list, const Register_t *
 
     int use_qword = (expr != NULL && expr_uses_qword_kgpctype(expr)) ||
         codegen_type_uses_qword(type_tag);
+    if (type_tag == REAL_TYPE && expr_is_single_real_local(expr))
+        use_qword = 0;
     const char *reg_name = use_qword ? reg->bit_64 : reg->bit_32;
     if (reg_name == NULL)
         return inst_list;
@@ -264,6 +283,8 @@ static ListNode_t *emit_load_from_stack(ListNode_t *inst_list, const Register_t 
 
     int use_qword = (expr != NULL && expr_uses_qword_kgpctype(expr)) ||
         codegen_type_uses_qword(type_tag);
+    if (type_tag == REAL_TYPE && expr_is_single_real_local(expr))
+        use_qword = 0;
     const char *reg_name = use_qword ? reg->bit_64 : reg->bit_32;
     if (reg_name == NULL)
         return inst_list;
@@ -303,10 +324,6 @@ static long long expr_integer_constant_value(const struct Expression *expr, cons
     return 0;
 }
 
-/* Forward declarations */
-static const char *reg32_to_reg64(const char *reg_name, char *buffer, size_t buf_size);
-static const char *reg64_to_reg32(const char *reg_name, char *buffer, size_t buf_size);
-
 static ListNode_t *load_real_operand_into_xmm(CodeGenContext *ctx,
     struct Expression *operand_expr, const char *operand, const char *xmm_reg,
     ListNode_t *inst_list)
@@ -326,6 +343,25 @@ static ListNode_t *load_real_operand_into_xmm(CodeGenContext *ctx,
           expr_has_type_tag(operand_expr, CHAR_TYPE)));
 
     char buffer[192];
+    int is_single_real = 0;
+    if (operand_is_real && operand_expr != NULL)
+    {
+        KgpcType *real_type = expr_get_kgpc_type(operand_expr);
+        if (real_type == NULL && ctx != NULL && ctx->symtab != NULL &&
+            operand_expr->type == EXPR_VAR_ID && operand_expr->expr_data.id != NULL)
+        {
+            HashNode_t *node = NULL;
+            if (FindIdent(&node, ctx->symtab, operand_expr->expr_data.id) == 0 &&
+                node != NULL && node->type != NULL)
+                real_type = node->type;
+        }
+        if (real_type != NULL)
+        {
+            long long size = kgpc_type_sizeof(real_type);
+            if (size == 4)
+                is_single_real = 1;
+        }
+    }
 
     if (operand_is_real)
     {
@@ -336,10 +372,30 @@ static ListNode_t *load_real_operand_into_xmm(CodeGenContext *ctx,
 
             const char *readonly_section = codegen_readonly_section_directive();
             char rodata_buffer[192];
-            snprintf(rodata_buffer, sizeof(rodata_buffer), "%s\n%s:\n\t.quad %s\n\t.text\n",
-                readonly_section, label, operand + 1);
+            if (is_single_real)
+            {
+                union {
+                    float f;
+                    int32_t i;
+                } converter;
+                converter.f = (float)operand_expr->expr_data.r_num;
+                snprintf(rodata_buffer, sizeof(rodata_buffer), "%s\n%s:\n\t.long %d\n\t.text\n",
+                    readonly_section, label, (int)converter.i);
+            }
+            else
+            {
+                snprintf(rodata_buffer, sizeof(rodata_buffer), "%s\n%s:\n\t.quad %s\n\t.text\n",
+                    readonly_section, label, operand + 1);
+            }
             inst_list = add_inst(inst_list, rodata_buffer);
 
+            if (is_single_real)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovss\t%s(%%rip), %s\n", label, xmm_reg);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tcvtss2sd\t%s, %s\n", xmm_reg, xmm_reg);
+                return add_inst(inst_list, buffer);
+            }
             snprintf(buffer, sizeof(buffer), "\tmovsd\t%s(%%rip), %s\n", label, xmm_reg);
             return add_inst(inst_list, buffer);
         }
@@ -351,6 +407,20 @@ static ListNode_t *load_real_operand_into_xmm(CodeGenContext *ctx,
             const char *converted = reg32_to_reg64(operand, source_buf, sizeof(source_buf));
             if (converted != NULL)
                 source_operand = converted;
+        }
+
+        if (operand[0] == '%')
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", source_operand, xmm_reg);
+            return add_inst(inst_list, buffer);
+        }
+
+        if (is_single_real)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovss\t%s, %s\n", source_operand, xmm_reg);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tcvtss2sd\t%s, %s\n", xmm_reg, xmm_reg);
+            return add_inst(inst_list, buffer);
         }
 
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", source_operand, xmm_reg);
@@ -1226,14 +1296,35 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         if (expr->expr_data.function_call_data.is_call_info_valid)
         {
             func_type = expr->expr_data.function_call_data.call_kgpc_type;
+            if (func_type == NULL && getenv("KGPC_DEBUG_CODEGEN") != NULL) {
+                fprintf(stderr, "[CodeGen] expr_tree: is_call_info_valid=1 but call_kgpc_type is NULL for id='%s'\n",
+                    expr->expr_data.function_call_data.id ? expr->expr_data.function_call_data.id : "(null)");
+            }
         }
-        else if (ctx != NULL && ctx->symtab != NULL &&
-            expr->expr_data.function_call_data.id != NULL)
+        else if (ctx != NULL && ctx->symtab != NULL)
         {
-            if (FindIdent(&func_node, ctx->symtab,
+            if (getenv("KGPC_DEBUG_CODEGEN") != NULL) {
+                fprintf(stderr, "[CodeGen] expr_tree: is_call_info_valid=0 for id='%s', doing symbol lookup\n",
+                    expr->expr_data.function_call_data.id ? expr->expr_data.function_call_data.id : "(null)");
+            }
+            /* First try lookup by id (short name like "Foo") */
+            if (expr->expr_data.function_call_data.id != NULL &&
+                FindIdent(&func_node, ctx->symtab,
                     expr->expr_data.function_call_data.id) >= 0 && func_node != NULL)
             {
                 func_type = func_node->type;
+            }
+            /* If not found, try the mangled name (e.g., "TDoubleHelper__Foo_r_i") */
+            else if (expr->expr_data.function_call_data.mangled_id != NULL &&
+                FindIdent(&func_node, ctx->symtab,
+                    expr->expr_data.function_call_data.mangled_id) >= 0 && func_node != NULL)
+            {
+                func_type = func_node->type;
+            }
+            if (func_type == NULL && getenv("KGPC_DEBUG_CODEGEN") != NULL) {
+                fprintf(stderr, "[CodeGen] expr_tree: func_type lookup FAILED for id='%s' mangled='%s'\n",
+                    expr->expr_data.function_call_data.id ? expr->expr_data.function_call_data.id : "(null)",
+                    expr->expr_data.function_call_data.mangled_id ? expr->expr_data.function_call_data.mangled_id : "(null)");
             }
         }
         
@@ -1862,7 +1953,12 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
                     sret_slot->offset, target_reg->bit_64);
             else if (expr_has_type_tag(expr, REAL_TYPE))
+            {
+                long long real_size = expr_effective_size_bytes(expr);
+                if (real_size == 4)
+                    inst_list = add_inst(inst_list, "\tcvtss2sd\t%xmm0, %xmm0\n");
                 snprintf(buffer, sizeof(buffer), "\tmovq\t%%xmm0, %s\n", target_reg->bit_64);
+            }
             else if (expr_uses_qword_kgpctype(expr))
                 snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", target_reg->bit_64);
             else
@@ -2094,6 +2190,16 @@ cleanup_constructor:
             if (!should_deref)
                 return inst_list;
 
+            if (expr_type == REAL_TYPE && expr_is_single_real_local(expr))
+            {
+                char mem_operand[64];
+                snprintf(mem_operand, sizeof(mem_operand), "(%s)", target_reg->bit_64);
+                inst_list = load_real_operand_into_xmm(ctx, expr, mem_operand, "%xmm0", inst_list);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%%xmm0, %s\n", target_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                return inst_list;
+            }
+
             char load_value[80];
             switch (expr_type)
             {
@@ -2138,6 +2244,14 @@ cleanup_constructor:
                 return add_inst(inst_list, buffer);
             }
         }
+    }
+
+    if (expr_has_type_tag(expr, REAL_TYPE) && expr_is_single_real_local(expr) &&
+        buf_leaf[0] != '$')
+    {
+        inst_list = load_real_operand_into_xmm(ctx, expr, buf_leaf, "%xmm0", inst_list);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%%xmm0, %s\n", target_reg->bit_64);
+        return add_inst(inst_list, buffer);
     }
 
     /* Use expr_requires_qword to check both type tag and storage_size.
@@ -2825,9 +2939,21 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
             {
                 const int use_qword_op = codegen_type_uses_qword(expr->resolved_type);
                 const char arith_suffix = use_qword_op ? 'q' : 'l';
+                char left32_buf[16];
+                char right32_buf[16];
+                const char *left_op = left;
+                const char *right_op = right;
+                if (arith_suffix == 'l')
+                {
+                    left_op = reg_to_reg32(left, left32_buf, sizeof(left32_buf));
+                    if (right != NULL && right[0] == '$')
+                        right_op = right;
+                    else
+                        right_op = reg_to_reg32(right, right32_buf, sizeof(right32_buf));
+                }
                 if (type == OR)
                 {
-                    snprintf(buffer, sizeof(buffer), "\tor%c\t%s, %s\n", arith_suffix, right, left);
+                    snprintf(buffer, sizeof(buffer), "\tor%c\t%s, %s\n", arith_suffix, right_op, left_op);
                     inst_list = add_inst(inst_list, buffer);
                     break;
                 }
@@ -2840,14 +2966,14 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                      * special case lets us use INC instead of ADD to save an instruction byte.
                      */
                     if(strcmp(right, "$1") == 0)
-                        snprintf(buffer, sizeof(buffer), "\tinc%c\t%s\n", arith_suffix, left);
+                        snprintf(buffer, sizeof(buffer), "\tinc%c\t%s\n", arith_suffix, left_op);
                     else
-                        snprintf(buffer, sizeof(buffer), "\tadd%c\t%s, %s\n", arith_suffix, right, left);
+                        snprintf(buffer, sizeof(buffer), "\tadd%c\t%s, %s\n", arith_suffix, right_op, left_op);
                     inst_list = add_inst(inst_list, buffer);
                     break;
                 }
                 case MINUS:
-                    snprintf(buffer, sizeof(buffer), "\tsub%c\t%s, %s\n", arith_suffix, right, left);
+                    snprintf(buffer, sizeof(buffer), "\tsub%c\t%s, %s\n", arith_suffix, right_op, left_op);
                     inst_list = add_inst(inst_list, buffer);
                     break;
                 default:

@@ -20,10 +20,12 @@ static int g_user_include_path_count = 0;
 
 static char *g_user_defines[MAX_USER_DEFINES];
 static int g_user_define_count = 0;
+static char *g_last_parse_path = NULL;
 
 /* Flag set when {$MODE objfpc} is detected in the current parse.
  * Used to automatically inject ObjPas unit dependency. */
 static bool g_objfpc_mode_detected = false;
+static bool g_default_shortstring = false;
 
 /* Check if source buffer contains {$MODE objfpc} directive */
 static bool detect_objfpc_mode(const char *buffer, size_t length)
@@ -82,6 +84,50 @@ static bool detect_objfpc_mode(const char *buffer, size_t length)
     return false;
 }
 
+static int detect_shortstring_default(const char *buffer, size_t length, bool *out_shortstring)
+{
+    if (buffer == NULL || length == 0 || out_shortstring == NULL)
+        return 0;
+
+    const char *pos = buffer;
+    const char *end = buffer + length;
+    int found = 0;
+    bool value = false;
+
+    while (pos < end)
+    {
+        if (*pos == '{' && (pos + 1) < end && pos[1] == '$')
+        {
+            const char *dir_start = pos + 2;
+            const char *dir_end = dir_start;
+            while (dir_end < end && *dir_end != '}')
+                dir_end++;
+
+            for (const char *cur = dir_start; cur < dir_end; ++cur)
+            {
+                if (*cur == 'H' || *cur == 'h')
+                {
+                    const char *next = cur + 1;
+                    while (next < dir_end && isspace((unsigned char)*next))
+                        next++;
+                    if (next < dir_end && (*next == '+' || *next == '-'))
+                    {
+                        value = (*next == '-');
+                        found = 1;
+                    }
+                }
+            }
+
+            pos = dir_end;
+        }
+        pos++;
+    }
+
+    if (found)
+        *out_shortstring = value;
+    return found;
+}
+
 /* Getter for objfpc mode flag - used by main_cparser.c to inject ObjPas */
 bool pascal_frontend_is_objfpc_mode(void)
 {
@@ -92,6 +138,12 @@ bool pascal_frontend_is_objfpc_mode(void)
 void pascal_frontend_reset_objfpc_mode(void)
 {
     g_objfpc_mode_detected = false;
+    g_default_shortstring = false;
+}
+
+bool pascal_frontend_default_shortstring(void)
+{
+    return g_default_shortstring;
 }
 
 void pascal_frontend_add_include_path(const char *path)
@@ -130,6 +182,11 @@ const char * const *pascal_frontend_get_include_paths(int *count)
     if (count != NULL)
         *count = g_user_include_path_count;
     return (const char * const *)g_user_include_paths;
+}
+
+const char *pascal_frontend_current_path(void)
+{
+    return g_last_parse_path;
 }
 
 #include "ParseTree/from_cparser.h"
@@ -195,6 +252,37 @@ static char *read_file(const char *path, size_t *out_len)
         *out_len = (size_t)len;
 
     return buffer;
+}
+
+static void set_preprocessed_context(const char *buffer, size_t length, const char *path)
+{
+    if (preprocessed_source != NULL)
+    {
+        free(preprocessed_source);
+        preprocessed_source = NULL;
+    }
+    if (preprocessed_path != NULL)
+    {
+        free(preprocessed_path);
+        preprocessed_path = NULL;
+    }
+    preprocessed_length = 0;
+
+    if (buffer == NULL || length == 0)
+        return;
+
+    preprocessed_source = (char *)malloc(length + 1);
+    if (preprocessed_source == NULL)
+        return;
+
+    memcpy(preprocessed_source, buffer, length);
+    preprocessed_source[length] = '\0';
+    preprocessed_length = length;
+
+    if (path != NULL)
+        preprocessed_path = strdup(path);
+    if (path != NULL)
+        file_to_parse = (char *)path;
 }
 
 static const char *skip_utf8_bom(const char *cursor, const char *end)
@@ -403,6 +491,22 @@ void pascal_frontend_cleanup(void)
         generic_registry_cleanup();
         generic_registry_ready = false;
     }
+    if (g_last_parse_path != NULL)
+    {
+        free(g_last_parse_path);
+        g_last_parse_path = NULL;
+    }
+    if (preprocessed_source != NULL)
+    {
+        free(preprocessed_source);
+        preprocessed_source = NULL;
+    }
+    if (preprocessed_path != NULL)
+    {
+        free(preprocessed_path);
+        preprocessed_path = NULL;
+    }
+    preprocessed_length = 0;
 }
 
 bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tree, ParseError **error_out)
@@ -412,10 +516,22 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
 
     ensure_generic_registry();
 
+    if (g_last_parse_path != NULL)
+    {
+        free(g_last_parse_path);
+        g_last_parse_path = NULL;
+    }
+    if (path != NULL)
+        g_last_parse_path = strdup(path);
+
     size_t length = 0;
     char *buffer = read_file(path, &length);
     if (buffer == NULL)
         return false;
+
+    /* Detect {$H+/-} directive on original source BEFORE preprocessing,
+     * since the preprocessor strips directive comments. */
+    detect_shortstring_default(buffer, length, &g_default_shortstring);
 
     PascalPreprocessor *preprocessor = pascal_preprocessor_create();
     if (preprocessor == NULL)
@@ -621,16 +737,24 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
     free(buffer);
     buffer = preprocessed_buffer;
     length = preprocessed_length;
+    set_preprocessed_context(buffer, length, path);
 
     /* Detect {$MODE objfpc} in the preprocessed source.
-     * If found, set flag so ObjPas unit can be auto-imported. */
+     * If found, set flag so ObjPas unit can be auto-imported.
+     * Note: {$H+/-} detection moved to before preprocessing since that directive
+     * gets stripped during preprocessing. */
     if (detect_objfpc_mode(buffer, length))
         g_objfpc_mode_detected = true;
 
     const char *dump_path = getenv("KGPC_DUMP_PREPROCESSED");
     if (dump_path != NULL && dump_path[0] != '\0')
     {
-        FILE *dump = fopen(dump_path, "w");
+        /* Append file name to dump path to distinguish multiple parses */
+        char dump_full[512];
+        const char *basename = strrchr(path, '/');
+        basename = basename ? basename + 1 : path;
+        snprintf(dump_full, sizeof(dump_full), "%s_%s", dump_path, basename);
+        FILE *dump = fopen(dump_full, "w");
         if (dump != NULL)
         {
             fwrite(buffer, 1, length, dump);
