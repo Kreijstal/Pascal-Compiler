@@ -361,6 +361,9 @@ int num_args_alloced = 0;
 int line_num = 1;
 int col_num = 1;
 char *file_to_parse = NULL;
+char *preprocessed_source = NULL;
+size_t preprocessed_length = 0;
+char *preprocessed_path = NULL;
 #include "Parser/ParsePascal.h"
 #include "CodeGenerator/Intel_x86-64/codegen.h"
 

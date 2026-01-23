@@ -239,6 +239,17 @@ All workflows are triggered on pull requests and pushes to any branch.
 2. Add expected output file with `.expected` extension
 3. Test runner will automatically discover and run new tests
 
+## Test-Driven Development (TDD) Rules
+
+This project follows strict TDD methodology:
+
+1. **NEVER remove `.expected` files for failing tests** - Failing tests are intentional and must remain failing until the bug is fixed
+2. **Write the test first** - Create both the `.p` test file AND the `.expected` file before attempting to fix the bug
+3. **Validate with FPC first** - Every test must pass with Free Pascal Compiler (FPC) before being added. FPC is our golden implementation
+4. **Tests should fail initially** - When adding a regression test for a bug, the test MUST fail with KGPC (while passing with FPC)
+5. **Fix the compiler, not the test** - When a test fails, fix the preprocessor/parser/semantic-checker/codegen, NOT the test
+6. **Do NOT use xfail** - Tests should either pass or fail naturally, never be marked as expected failures
+
 ### Debugging
 
 - Use `stacktrace.c` for stack trace functionality

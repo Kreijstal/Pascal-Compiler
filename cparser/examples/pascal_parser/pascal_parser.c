@@ -8,9 +8,83 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#ifndef _WIN32
+#include <strings.h>
+#else
+#ifndef strncasecmp
+#define strncasecmp _strnicmp
+#endif
+#endif
 
 // --- Forward Declarations ---
 extern ast_t* ast_nil;  // From parser.c
+
+/* Check if comment starts with #line directive and parse it.
+ * Format: {#line <number> "<filename>"}
+ * Returns true if directive was found and processed. */
+static bool try_parse_line_directive(input_t *in) {
+    int pos = in->start;
+    int length = in->length;
+    const char *buffer = in->buffer;
+
+    /* Must start with {#line */
+    if (pos + 6 >= length) return false;
+    if (buffer[pos] != '{') return false;
+    if (buffer[pos + 1] != '#') return false;
+    if (strncasecmp(&buffer[pos + 2], "line", 4) != 0) return false;
+    if (!isspace((unsigned char)buffer[pos + 6])) return false;
+
+    /* Parse: {#line <number> "<filename>"} */
+    pos += 6;
+
+    /* Skip whitespace */
+    while (pos < length && isspace((unsigned char)buffer[pos]) && buffer[pos] != '}') {
+        pos++;
+    }
+
+    /* Parse line number */
+    int line_num = 0;
+    while (pos < length && isdigit((unsigned char)buffer[pos])) {
+        line_num = line_num * 10 + (buffer[pos] - '0');
+        pos++;
+    }
+
+    if (line_num == 0) return false; /* No valid line number */
+
+    /* Skip whitespace */
+    while (pos < length && isspace((unsigned char)buffer[pos]) && buffer[pos] != '}') {
+        pos++;
+    }
+
+    /* Optional: parse filename (skip for now, just use line number) */
+    /* Find closing } */
+    while (pos < length && buffer[pos] != '}') {
+        pos++;
+    }
+
+    if (pos >= length || buffer[pos] != '}') return false;
+
+    /* Consume the directive (including trailing newline if present) */
+    in->start = pos + 1;  /* past the closing } */
+
+    /* Skip the newline after the directive - the NEXT line is line_num */
+    if (in->start < length && buffer[in->start] == '\n') {
+        in->start++;
+    } else if (in->start < length && buffer[in->start] == '\r') {
+        in->start++;
+        if (in->start < length && buffer[in->start] == '\n') {
+            in->start++;
+        }
+    }
+
+    /* Update base values for computing source line from position */
+    in->source_line_base = line_num;
+    in->source_line_base_pos = in->start;
+    in->line = line_num;  /* Also update line for backwards compatibility */
+    in->col = 1;
+
+    return true;
+}
 
 // --- Helper Functions ---
 static bool consume_pascal_layout(input_t* in) {
@@ -27,6 +101,12 @@ static bool consume_pascal_layout(input_t* in) {
     }
 
     if (c == '{') {
+        /* Check for #line directive first */
+        if (try_parse_line_directive(in)) {
+            return true;  /* Directive consumed, continue layout consumption */
+        }
+
+        /* Normal comment handling */
         int depth = 0;
         read1(in); // consume '{'
         depth = 1;
@@ -274,6 +354,7 @@ const char* pascal_tag_to_string(tag_t tag) {
         case PASCAL_T_COMPILER_DIRECTIVE: return "COMPILER_DIRECTIVE";
         case PASCAL_T_EXTERNAL_NAME: return "EXTERNAL_NAME";
         case PASCAL_T_PUBLIC_NAME: return "PUBLIC_NAME";
+        case PASCAL_T_ABSOLUTE: return "ABSOLUTE";
         case PASCAL_T_COMMENT: return "COMMENT";
         case PASCAL_T_TYPE_SECTION: return "TYPE_SECTION";
         case PASCAL_T_TYPE_DECL: return "TYPE_DECL";

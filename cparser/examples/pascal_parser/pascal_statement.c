@@ -14,6 +14,9 @@
 #define strncasecmp _strnicmp
 #endif
 
+// Forward declaration
+static ast_t* build_pointer_lvalue_chain(ast_t* parsed);
+
 static bool peek_label_statement(input_t* in) {
     if (in == NULL || in->buffer == NULL) {
         return false;
@@ -388,23 +391,11 @@ static ParseResult statement_dispatch_fn(input_t* in, void* args, char* parser_n
             return make_failure_v2(in, parser_name, strdup("Reserved keyword cannot start a statement here"), NULL);
         }
 
-        if (dispatch->assignment_parser != NULL) {
-            if (peek_assignment_operator(in)) {
-                return parse(in, dispatch->assignment_parser);
-            }
-            InputState assign_state;
-            save_input_state(in, &assign_state);
-            ParseResult assign_res = parse(in, dispatch->assignment_parser);
-            if (assign_res.is_success) {
-                return assign_res;
-            }
-            if (assign_res.value.error != NULL && assign_res.value.error->committed) {
-                return assign_res;
-            }
-            if (assign_res.value.error != NULL) {
-                free_error(assign_res.value.error);
-            }
-            restore_input_state(in, &assign_state);
+        // NOTE: Do NOT use speculative assignment parsing here (trying assignment even without `:=`).
+        // This was attempted in commit fe74623 but caused FPC RTL regressions where constructs like
+        // strlen(@array[0]) in bunxsysc.inc would be parsed incorrectly.
+        if (dispatch->assignment_parser != NULL && peek_assignment_operator(in)) {
+            return parse(in, dispatch->assignment_parser);
         }
 
         if (dispatch->expr_parser != NULL) {
@@ -461,6 +452,47 @@ static ast_t* wrap_pointer_lvalue_suffix(ast_t* parsed) {
     node->child = NULL;
     node->next = NULL;
     return node;
+}
+
+// Wrap a typecast followed by "^" into a dereference node with the typecast as child.
+// This handles lvalues like PCardinal(P)^ := value;
+static ast_t* wrap_typecast_deref_lvalue(ast_t* parsed) {
+    if (parsed == NULL || parsed == ast_nil)
+        return parsed;
+
+    // parsed is a flat list: typecast_node -> deref_node (from ^) -> optional suffixes
+    ast_t* typecast_node = parsed;
+    ast_t* deref_node = typecast_node->next;
+
+    if (deref_node == NULL || deref_node == ast_nil)
+        return parsed;  // No deref, shouldn't happen but be safe
+
+    // Detach typecast from the chain
+    typecast_node->next = NULL;
+
+    // Get any additional suffixes after the deref
+    ast_t* additional_suffixes = deref_node->next;
+    deref_node->next = NULL;
+
+    // Set the typecast as child of the deref
+    deref_node->child = typecast_node;
+
+    // Now chain any additional suffixes by passing through build_pointer_lvalue_chain
+    if (additional_suffixes != NULL && additional_suffixes != ast_nil) {
+        // Reconnect: deref_node -> additional_suffixes
+        deref_node->next = additional_suffixes;
+        return build_pointer_lvalue_chain(deref_node);
+    }
+
+    return deref_node;
+}
+
+static ast_t* wrap_case_else_block(ast_t* parsed) {
+    ast_t* block = new_ast();
+    block->typ = PASCAL_T_BEGIN_BLOCK;
+    block->child = (parsed == ast_nil) ? NULL : parsed;
+    block->next = NULL;
+    return block;
 }
 
 static ast_t* wrap_array_lvalue_suffix(ast_t* parsed) {
@@ -734,21 +766,59 @@ void init_pascal_statement_parser(combinator_t** p) {
         NULL
     );
     combinator_t* suffixes = many(suffix_choice);
-
-    combinator_t* lvalue_type_name = multi(new_combinator(), PASCAL_T_NONE,
-        token(type_name(PASCAL_T_IDENTIFIER)),
-        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
+    combinator_t* suffixes_required = seq(new_combinator(), PASCAL_T_NONE,
+        suffix_choice,
+        suffixes,
         NULL
     );
 
-    combinator_t* typecast_base = seq(new_combinator(), PASCAL_T_TYPECAST,
-        lvalue_type_name,
+    // Simple typecast lvalue without suffixes: Integer(x) := 42
+    // Uses type_name for built-in types only (safer, avoids matching function calls)
+    combinator_t* typecast_lvalue_simple = seq(new_combinator(), PASCAL_T_TYPECAST,
+        token(type_name(PASCAL_T_IDENTIFIER)),
         between(token(match("(")), token(match(")")), lazy(expr_parser)),
         NULL
     );
 
-    combinator_t* typecast_lvalue = map(seq(new_combinator(), PASCAL_T_NONE,
+    // Typecast lvalue with required pointer suffix: PCardinal(@x)^ := 42
+    // This requires at least one suffix starting with '^' to be a valid lvalue.
+    // Uses cident to allow any type name (including user-defined pointer types).
+    // The required '^' suffix ensures function calls like strlen(@x) don't match.
+    combinator_t* typecast_base = seq(new_combinator(), PASCAL_T_TYPECAST,
+        token(cident(PASCAL_T_IDENTIFIER)),
+        between(token(match("(")), token(match(")")), lazy(expr_parser)),
+        NULL
+    );
+    // Require pointer suffix followed by optional additional suffixes
+    combinator_t* required_pointer_suffix = seq(new_combinator(), PASCAL_T_NONE,
+        pointer_suffix,
+        suffixes,
+        NULL
+    );
+    combinator_t* typecast_lvalue_with_deref = map(seq(new_combinator(), PASCAL_T_NONE,
         typecast_base,
+        required_pointer_suffix,
+        NULL
+    ), wrap_typecast_deref_lvalue);
+    combinator_t* typecast_lvalue_with_suffixes = map(seq(new_combinator(), PASCAL_T_NONE,
+        typecast_base,
+        suffixes_required,
+        NULL
+    ), build_pointer_lvalue_chain);
+
+    // Unaligned pseudo-function used as lvalue (e.g., unaligned(PUint16(P)^) := 0)
+    combinator_t* unaligned_arg_list = between(
+        token(match("(")),
+        token(match(")")),
+        optional(sep_by(lazy(expr_parser), token(match(","))))
+    );
+    combinator_t* unaligned_call = seq(new_combinator(), PASCAL_T_FUNC_CALL,
+        token(keyword_ci("unaligned")),
+        unaligned_arg_list,
+        NULL
+    );
+    combinator_t* unaligned_lvalue = map(seq(new_combinator(), PASCAL_T_NONE,
+        unaligned_call,
         suffixes,
         NULL
     ), build_pointer_lvalue_chain);
@@ -760,8 +830,11 @@ void init_pascal_statement_parser(combinator_t** p) {
     ), build_pointer_lvalue_chain);
 
     combinator_t* lvalue = multi(new_combinator(), PASCAL_T_NONE,
-        typecast_lvalue,
-        simple_lvalue,
+        typecast_lvalue_with_suffixes,   // Typecast with member/array/pointer suffixes
+        typecast_lvalue_with_deref,  // Try typecast with deref first (PCardinal(@x)^)
+        typecast_lvalue_simple,      // Then simple typecast (Integer(x))
+        unaligned_lvalue,            // Unaligned pseudo-function lvalue
+        simple_lvalue,               // Finally simple identifier with optional suffixes
         NULL
     );
 
@@ -1086,6 +1159,7 @@ void init_pascal_statement_parser(combinator_t** p) {
     // parsed as identifiers
     combinator_t* const_expr_factor = multi(new_combinator(), PASCAL_T_NONE,
         integer(PASCAL_T_INTEGER),
+        implicit_string_concat(PASCAL_T_NONE),
         char_literal(PASCAL_T_CHAR),
         control_char_literal(PASCAL_T_CHAR),
         token(create_keyword_parser("true", PASCAL_T_BOOLEAN)),   // Boolean true
@@ -1132,6 +1206,8 @@ void init_pascal_statement_parser(combinator_t** p) {
         NULL
     );
     
+    combinator_t* case_else_body = map(try_statement_list, wrap_case_else_block);
+
     combinator_t* case_stmt = seq(new_combinator(), PASCAL_T_CASE_STMT,
         token(keyword_ci("case")),             // case keyword
         commit(seq(new_combinator(), PASCAL_T_NONE,
@@ -1140,7 +1216,7 @@ void init_pascal_statement_parser(combinator_t** p) {
             sep_end_by(case_branch, token(match(";"))), // case branches with optional trailing semicolon
             optional(seq(new_combinator(), PASCAL_T_ELSE, // optional else clause
                 token(keyword_ci("else")),         // else keyword
-                stmt_or_empty,                 // else statement
+                case_else_body,                 // else statement list
                 optional(token(match(";"))),      // optional semicolon after else block
                 NULL
             )),

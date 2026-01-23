@@ -21,6 +21,7 @@ struct PascalPreprocessor {
     size_t define_count;
     size_t define_capacity;
     bool macro_enabled;  // Track {$macro on/off} state
+    bool flatten_only;   // Expand includes only; keep all directives and branches
     char **include_paths;
     size_t include_path_count;
     size_t include_path_capacity;
@@ -59,6 +60,7 @@ static bool string_builder_append_char(StringBuilder *sb, char c);
 static bool string_builder_append_string(StringBuilder *sb, const char *str);
 static void string_builder_free(StringBuilder *sb);
 static bool ensure_capacity(void **buffer, size_t element_size, size_t *capacity, size_t needed);
+static bool emit_line_directive(StringBuilder *sb, int line, const char *filename);
 static char *my_strdup(const char *s) {
     if (!s) return NULL;
     size_t len = strlen(s);
@@ -135,6 +137,7 @@ PascalPreprocessor *pascal_preprocessor_create(void) {
     pp->define_count = 0;
     pp->define_capacity = 0;
     pp->macro_enabled = false;  // Macros are off by default
+    pp->flatten_only = false;
     pp->include_paths = NULL;
     pp->include_path_count = 0;
     pp->include_path_capacity = 0;
@@ -198,6 +201,16 @@ bool pascal_preprocessor_add_include_path(PascalPreprocessor *pp, const char *pa
     
     pp->include_paths[pp->include_path_count++] = path_copy;
     return true;
+}
+
+void pascal_preprocessor_set_flatten_only(PascalPreprocessor *pp, bool flatten_only) {
+    if (!pp) {
+        return;
+    }
+    pp->flatten_only = flatten_only;
+    if (flatten_only) {
+        pp->macro_enabled = false;
+    }
 }
 
 char *pascal_preprocess_buffer(PascalPreprocessor *pp,
@@ -334,7 +347,7 @@ static bool preprocess_buffer_internal(PascalPreprocessor *pp,
 
     for (size_t i = 0; i < length; ++i) {
         // Check for line skipping at start of line
-        if ((i == 0 || input[i-1] == '\n') && current_branch_active(conditions)) {
+        if ((i == 0 || input[i-1] == '\n') && !pp->flatten_only && current_branch_active(conditions)) {
              if (skip_block_mode) {
                  // Check if line is "end;"
                  size_t j = i;
@@ -447,9 +460,9 @@ static bool preprocess_buffer_internal(PascalPreprocessor *pp,
             }
         }
 
-        if (current_branch_active(conditions)) {
+        if (pp->flatten_only || current_branch_active(conditions)) {
             // Try macro expansion if we're not in a comment or string
-            if (!in_comment && !in_string && pp->macro_enabled) {
+            if (!pp->flatten_only && !in_comment && !in_string && pp->macro_enabled) {
                 size_t identifier_len = 0;
                 const char *macro_value = try_expand_macro(pp, input, length, i, &identifier_len);
                 
@@ -551,6 +564,167 @@ static bool handle_directive(PascalPreprocessor *pp,
         handled = true;
         // {$I+} / {$I-} toggles I/O-checking; the compiler currently does not
         // distinguish the modes, so treat it as a no-op directive.
+    } else if (pp->flatten_only) {
+        size_t directive_end = paren_style ? end + 1 : end;
+        bool is_include = (strcmp(keyword, "I") == 0 || strcmp(keyword, "INCLUDE") == 0);
+        if (is_include) {
+            handled = true;
+
+            char *path_token = NULL;
+            const char *rest_cursor = rest;
+            if (*rest_cursor == '\'' || *rest_cursor == '"') {
+                char quote = *rest_cursor++;
+                const char *path_start = rest_cursor;
+                while (*rest_cursor && *rest_cursor != quote) {
+                    ++rest_cursor;
+                }
+                path_token = duplicate_range(path_start, rest_cursor);
+            } else {
+                const char *path_start = rest_cursor;
+                while (*rest_cursor && !isspace((unsigned char)*rest_cursor)) {
+                    ++rest_cursor;
+                }
+                path_token = duplicate_range(path_start, rest_cursor);
+            }
+            if (!path_token || path_token[0] == '\0') {
+                bool err = set_error(error_message, "empty include directive in '%s'", filename ? filename : "<buffer>");
+                free(keyword);
+                free(content);
+                free(path_token);
+                return err;
+            }
+
+            // Handle special FPC include macros like %DATE%, %TIME%, %FPCVERSION%, etc.
+            if (path_token[0] == '%' && path_token[strlen(path_token) - 1] == '%') {
+                char special_value[64] = "";
+                bool is_special = false;
+
+                if (strcmp(path_token, "%DATE%") == 0) {
+                    time_t now = time(NULL);
+                    struct tm *tm_info = localtime(&now);
+                    snprintf(special_value, sizeof(special_value), "'%04d/%02d/%02d'",
+                             tm_info->tm_year + 1900, tm_info->tm_mon + 1, tm_info->tm_mday);
+                    is_special = true;
+                } else if (strcmp(path_token, "%TIME%") == 0) {
+                    time_t now = time(NULL);
+                    struct tm *tm_info = localtime(&now);
+                    snprintf(special_value, sizeof(special_value), "'%02d:%02d:%02d'",
+                             tm_info->tm_hour, tm_info->tm_min, tm_info->tm_sec);
+                    is_special = true;
+                } else if (strcmp(path_token, "%FPCVERSION%") == 0) {
+                    snprintf(special_value, sizeof(special_value), "'3.2.2'");
+                    is_special = true;
+                } else if (strcmp(path_token, "%FPCTARGET%") == 0) {
+                    snprintf(special_value, sizeof(special_value), "'x86_64-linux'");
+                    is_special = true;
+                } else if (strcmp(path_token, "%FPCTARGETOS%") == 0) {
+                    snprintf(special_value, sizeof(special_value), "'linux'");
+                    is_special = true;
+                } else if (strcmp(path_token, "%FPCTARGETCPU%") == 0) {
+                    snprintf(special_value, sizeof(special_value), "'x86_64'");
+                    is_special = true;
+                } else if (strcmp(path_token, "%FILE%") == 0) {
+                    const char *base = filename ? filename : "<unknown>";
+                    snprintf(special_value, sizeof(special_value), "'%s'", base);
+                    is_special = true;
+                } else if (strcmp(path_token, "%LINE%") == 0) {
+                    snprintf(special_value, sizeof(special_value), "0");
+                    is_special = true;
+                } else if (strcmp(path_token, "%LINENUM%") == 0) {
+                    snprintf(special_value, sizeof(special_value), "0");
+                    is_special = true;
+                }
+
+                if (is_special) {
+                    size_t val_len = strlen(special_value);
+                    for (size_t i = 0; i < val_len; ++i) {
+                        if (!string_builder_append_char(output, special_value[i])) {
+                            free(path_token);
+                            free(keyword);
+                            free(content);
+                            return set_error(error_message, "out of memory");
+                        }
+                    }
+                    free(path_token);
+                    free(keyword);
+                    free(content);
+                    *index = directive_end;
+                    return true;
+                }
+            }
+
+            char *resolved_path = NULL;
+            if (!resolve_include_path(pp, filename, path_token, &resolved_path)) {
+                bool err = set_error(error_message, "unable to resolve include '%s' in '%s'", path_token, filename ? filename : "<buffer>");
+                free(keyword);
+                free(content);
+                free(path_token);
+                return err;
+            }
+
+            char *include_buffer = NULL;
+            size_t include_length = 0;
+            if (!read_file_contents(resolved_path, &include_buffer, &include_length, error_message)) {
+                bool retried = false;
+                if (strchr(path_token, '.') == NULL) {
+                    size_t base_len = strlen(path_token);
+                    char *with_inc = malloc(base_len + 5);
+                    if (with_inc) {
+                        memcpy(with_inc, path_token, base_len);
+                        memcpy(with_inc + base_len, ".inc", 5);
+                        char *resolved2 = NULL;
+                        if (resolve_include_path(pp, filename, with_inc, &resolved2)) {
+                            if (error_message && *error_message) {
+                                free(*error_message);
+                                *error_message = NULL;
+                            }
+                            retried = read_file_contents(resolved2, &include_buffer, &include_length, error_message);
+                            free(resolved2);
+                        }
+                        free(with_inc);
+                    }
+                }
+                if (!retried) {
+                    free(keyword);
+                    free(content);
+                    free(path_token);
+                    free(resolved_path);
+                    free(include_buffer);
+                    return false;
+                }
+            }
+
+            /* Emit line directive entering the included file */
+            emit_line_directive(output, 1, resolved_path);
+
+            bool ok = preprocess_buffer_internal(pp, resolved_path, include_buffer, include_length, conditions, output, depth + 1, error_message);
+
+            /* Emit line directive returning to parent file */
+            if (ok) {
+                emit_line_directive(output, current_line + 1, filename);
+            }
+
+            free(include_buffer);
+            free(resolved_path);
+            free(path_token);
+            free(keyword);
+            free(content);
+            *index = directive_end;
+            return ok;
+        }
+
+        handled = true;
+        for (size_t i = start; i <= directive_end; ++i) {
+            if (!string_builder_append_char(output, input[i])) {
+                free(keyword);
+                free(content);
+                return set_error(error_message, "out of memory");
+            }
+        }
+        free(keyword);
+        free(content);
+        *index = directive_end;
+        return true;
     } else if (strcmp(keyword, "I") == 0 || strcmp(keyword, "INCLUDE") == 0) {
         handled = true;
         if (!branch_active) {
@@ -687,7 +861,16 @@ static bool handle_directive(PascalPreprocessor *pp,
                 }
             }
 
+            /* Emit line directive entering the included file */
+            emit_line_directive(output, 1, resolved_path);
+
             bool ok = preprocess_buffer_internal(pp, resolved_path, include_buffer, include_length, conditions, output, depth + 1, error_message);
+
+            /* Emit line directive returning to parent file */
+            if (ok) {
+                emit_line_directive(output, current_line + 1, filename);
+            }
+
             free(include_buffer);
             free(resolved_path);
             if (!ok) {
@@ -1127,6 +1310,33 @@ static bool string_builder_append_string(StringBuilder *sb, const char *str) {
         ++str;
     }
     return true;
+}
+
+/* Emit a #line directive to track source file positions across include boundaries.
+ * Format: {#line <line_number> "<filename>"}
+ * The parser will recognize this and reset its line counter accordingly. */
+static bool emit_line_directive(StringBuilder *sb, int line, const char *filename) {
+    if (filename == NULL) {
+        return true;
+    }
+    char directive[512];
+    /* Escape backslashes in filename for Windows paths */
+    char escaped_filename[256];
+    size_t j = 0;
+    for (size_t i = 0; filename[i] && j < sizeof(escaped_filename) - 1; i++) {
+        if (filename[i] == '\\') {
+            if (j < sizeof(escaped_filename) - 2) {
+                escaped_filename[j++] = '\\';
+                escaped_filename[j++] = '\\';
+            }
+        } else {
+            escaped_filename[j++] = filename[i];
+        }
+    }
+    escaped_filename[j] = '\0';
+
+    snprintf(directive, sizeof(directive), "\n{#line %d \"%s\"}\n", line, escaped_filename);
+    return string_builder_append_string(sb, directive);
 }
 
 static void string_builder_free(StringBuilder *sb) {

@@ -264,3 +264,71 @@ void print_source_context(const char *file_path, int error_line, int error_col, 
 
     fclose(fp);
 }
+
+int print_source_context_from_buffer(const char *buffer, size_t length,
+                                     int error_line, int error_col,
+                                     int num_context_lines)
+{
+    if (buffer == NULL || length == 0 || error_line <= 0)
+        return 0;
+
+    if (num_context_lines < 0)
+        num_context_lines = 2;
+    if (error_col < 0)
+        error_col = 0;
+
+    int current_line = 1;
+    int start_line = error_line - num_context_lines;
+    int end_line = error_line + num_context_lines;
+    if (start_line < 1)
+        start_line = 1;
+
+    size_t idx = 0;
+    while (current_line < start_line && idx < length)
+    {
+        if (buffer[idx] == '\n')
+            ++current_line;
+        ++idx;
+    }
+
+    if (current_line < start_line)
+        return 0;
+
+    int printed_any = 0;
+    while (current_line <= end_line && idx < length)
+    {
+        size_t line_start = idx;
+        while (idx < length && buffer[idx] != '\n')
+            ++idx;
+        size_t line_len = idx - line_start;
+
+        char *line_buf = (char *)malloc(line_len + 1);
+        if (line_buf == NULL)
+            return printed_any;
+        memcpy(line_buf, buffer + line_start, line_len);
+        line_buf[line_len] = '\0';
+
+        if (current_line == error_line)
+        {
+            fprintf(stderr, "  > %4d | %s\n", current_line, line_buf);
+            fprintf(stderr, "         | ");
+            int col_to_print = error_col > 0 ? error_col : 1;
+            for (int i = 1; i < col_to_print; ++i)
+                fputc(' ', stderr);
+            fprintf(stderr, "^\n");
+        }
+        else
+        {
+            fprintf(stderr, "    %4d | %s\n", current_line, line_buf);
+        }
+
+        free(line_buf);
+        printed_any = 1;
+
+        if (idx < length && buffer[idx] == '\n')
+            ++idx;
+        ++current_line;
+    }
+
+    return printed_any;
+}

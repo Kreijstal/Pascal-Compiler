@@ -16,9 +16,7 @@ type
   QWord = Int64;
   UInt64 = QWord;
 
-  Single = Real;
-  Double = Real;
-  Extended = Real;
+  { Single, Double, Extended are now builtin types with correct sizes }
 
   NativeInt = Int64;
   NativeUInt = QWord;

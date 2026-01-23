@@ -22,6 +22,8 @@ typedef struct {
     int is_virtual;
     int is_override;
     int is_static;   /* 1 if method is static (no Self parameter) */
+    int param_count; /* Number of explicit parameters (excludes implicit Self), -1 if unknown */
+    char *param_sig; /* Comma-separated parameter type names, or NULL if unknown */
 } ClassMethodBinding;
 
 /* Convert an AST type specification to a KgpcType object.
@@ -66,7 +68,7 @@ ListNode_t *from_cparser_convert_params_ast(ast_t *params_ast);
  * This is used by the semantic checker to ensure method templates are findable.
  */
 void from_cparser_register_method_template(const char *class_name, const char *method_name,
-    int is_virtual, int is_override, int is_static);
+    int is_virtual, int is_override, int is_static, int param_count, const char *param_sig);
 
 /* Find all class names that have a method with the given name.
  * Returns a list of class names (caller must free each string and the list).

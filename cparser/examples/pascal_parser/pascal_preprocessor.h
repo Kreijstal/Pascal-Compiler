@@ -16,6 +16,7 @@ bool pascal_preprocessor_is_defined(const PascalPreprocessor *pp, const char *sy
 
 /* Add a directory to search for include files */
 bool pascal_preprocessor_add_include_path(PascalPreprocessor *pp, const char *path);
+void pascal_preprocessor_set_flatten_only(PascalPreprocessor *pp, bool flatten_only);
 
 char *pascal_preprocess_buffer(PascalPreprocessor *pp,
                                const char *filename,

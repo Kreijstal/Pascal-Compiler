@@ -180,6 +180,11 @@ typedef struct {
     const char *current_subprogram_mangled;
     ListNode_t *static_link_procs;
 
+    /* Flag indicating current function returns a dynamic array.
+     * When true, exit statements must call kgpc_dynarray_clone_descriptor. */
+    int returns_dynamic_array;
+    int dynamic_array_descriptor_size;
+
     /* Cached static link traversal for the current expression. */
     Register_t *static_link_reg;
     int static_link_reg_level;

@@ -98,8 +98,9 @@ void list_print(ListNode_t *list, FILE *f, int num_indent)
                 print_variant_branch((struct VariantBranch *)cur->cur, f, num_indent);
                 break;
             default:
-                fprintf(stderr, "BAD TYPE IN list_print!\n");
-                exit(1);
+                print_indent(f, num_indent);
+                fprintf(f, "[LIST_UNSUPPORTED type=%d]\n", cur->type);
+                break;
         }
         cur = cur->next;
     }
@@ -1684,6 +1685,7 @@ void destroy_record_type(struct RecordType *record_type)
     }
     free(record_type->parent_class_name);
     free(record_type->helper_base_type_id);
+    free(record_type->helper_parent_id);
     free(record_type->type_id);
     
     /* Free methods list */
@@ -1731,6 +1733,8 @@ struct RecordType *clone_record_type(const struct RecordType *record_type)
     clone->is_type_helper = record_type->is_type_helper;
     clone->helper_base_type_id = record_type->helper_base_type_id ?
         strdup(record_type->helper_base_type_id) : NULL;
+    clone->helper_parent_id = record_type->helper_parent_id ?
+        strdup(record_type->helper_parent_id) : NULL;
     clone->type_id = record_type->type_id ? strdup(record_type->type_id) : NULL;
     clone->has_cached_size = record_type->has_cached_size;
     clone->cached_size = record_type->cached_size;
@@ -2110,6 +2114,8 @@ Tree_t *mk_typealiasdecl(int line_num, char *id, int is_array, int actual_type, 
     alias->is_set = 0;
     alias->set_element_type = UNKNOWN_TYPE;
     alias->set_element_type_id = NULL;
+    alias->is_enum_set = 0;
+    alias->inline_enum_values = NULL;
     alias->is_enum = 0;
     alias->enum_literals = NULL;
     alias->is_file = 0;
@@ -2960,6 +2966,11 @@ static void clear_type_alias_fields(struct TypeAlias *alias)
     {
         free(alias->set_element_type_id);
         alias->set_element_type_id = NULL;
+    }
+    if (alias->inline_enum_values != NULL)
+    {
+        destroy_list(alias->inline_enum_values);
+        alias->inline_enum_values = NULL;
     }
     if (alias->enum_literals != NULL)
     {

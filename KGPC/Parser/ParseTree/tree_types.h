@@ -45,6 +45,8 @@ struct TypeAlias
     int is_set;
     int set_element_type;
     char *set_element_type_id;
+    int is_enum_set;           /* Set with inline anonymous enum as element type */
+    ListNode_t *inline_enum_values; /* Enum values for inline enum in set type */
     int is_enum;
     ListNode_t *enum_literals;
     int is_file;
@@ -143,7 +145,8 @@ struct RecordType
     ListNode_t *method_templates; /* Template methods captured from declarations */
     int is_class;             /* 1 if this record represents a class */
     int is_type_helper;       /* 1 if this record represents a type helper */
-    char *helper_base_type_id; /* Base type name for helpers */
+    char *helper_base_type_id; /* Base type name for helpers (the "for X" part) */
+    char *helper_parent_id;   /* Parent helper type name (for inheritance like "type helper(Parent) for X") */
     char *type_id;            /* Canonical type name if available */
     int has_cached_size;      /* 1 if cached_size has been computed */
     long long cached_size;    /* Cached byte size for kgpc_type_sizeof */
