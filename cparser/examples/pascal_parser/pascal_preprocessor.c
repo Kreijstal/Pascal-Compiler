@@ -55,10 +55,12 @@ static int ascii_tolower(int c);
 static int ascii_strncasecmp(const char *a, const char *b, size_t n);
 static bool set_error(char **error_message, const char *fmt, ...);
 static const char *try_expand_macro(PascalPreprocessor *pp, const char *input, size_t length, size_t pos, size_t *out_identifier_len);
+static char *expand_macro_value_once(PascalPreprocessor *pp, const char *value);
 static void string_builder_init(StringBuilder *sb);
 static bool string_builder_append_char(StringBuilder *sb, char c);
 static bool string_builder_append_string(StringBuilder *sb, const char *str);
 static void string_builder_free(StringBuilder *sb);
+static char *string_builder_finalize(StringBuilder *sb);
 static bool ensure_capacity(void **buffer, size_t element_size, size_t *capacity, size_t needed);
 static bool emit_line_directive(StringBuilder *sb, int line, const char *filename);
 static char *my_strdup(const char *s) {
@@ -467,8 +469,15 @@ static bool preprocess_buffer_internal(PascalPreprocessor *pp,
                 const char *macro_value = try_expand_macro(pp, input, length, i, &identifier_len);
                 
                 if (macro_value) {
-                    // Output the macro value instead of the identifier
-                    if (!string_builder_append_string(output, macro_value)) {
+                    // Output the macro value instead of the identifier (single-pass expansion)
+                    char *expanded_value = expand_macro_value_once(pp, macro_value);
+                    if (expanded_value) {
+                        if (!string_builder_append_string(output, expanded_value)) {
+                            free(expanded_value);
+                            return set_error(error_message, "out of memory");
+                        }
+                        free(expanded_value);
+                    } else {
                         return set_error(error_message, "out of memory");
                     }
                     // Skip the identifier in the input
@@ -1346,6 +1355,14 @@ static void string_builder_free(StringBuilder *sb) {
     sb->capacity = 0;
 }
 
+static char *string_builder_finalize(StringBuilder *sb) {
+    char *data = sb->data;
+    sb->data = NULL;
+    sb->length = 0;
+    sb->capacity = 0;
+    return data;
+}
+
 static bool ensure_capacity(void **buffer, size_t element_size, size_t *capacity, size_t needed) {
     if (*capacity >= needed) {
         return true;
@@ -1488,6 +1505,64 @@ static const char *try_expand_macro(PascalPreprocessor *pp, const char *input, s
     }
     
     return NULL;
+}
+
+static char *expand_macro_value_once(PascalPreprocessor *pp, const char *value) {
+    if (!pp || !value) {
+        return NULL;
+    }
+    if (!pp->macro_enabled) {
+        return strdup(value);
+    }
+
+    StringBuilder output;
+    string_builder_init(&output);
+
+    bool in_string = false;
+    char string_delim = '\0';
+    size_t length = strlen(value);
+
+    for (size_t i = 0; i < length; ++i) {
+        char c = value[i];
+        if (in_string) {
+            if (c == string_delim) {
+                if (string_delim == '\'' && i + 1 < length && value[i + 1] == '\'') {
+                    if (!string_builder_append_char(&output, c)) {
+                        string_builder_free(&output);
+                        return NULL;
+                    }
+                    ++i;
+                    c = value[i];
+                } else {
+                    in_string = false;
+                    string_delim = '\0';
+                }
+            }
+        } else if (c == '\'' || c == '"') {
+            in_string = true;
+            string_delim = c;
+        }
+
+        if (!in_string) {
+            size_t identifier_len = 0;
+            const char *macro_value = try_expand_macro(pp, value, length, i, &identifier_len);
+            if (macro_value) {
+                if (!string_builder_append_string(&output, macro_value)) {
+                    string_builder_free(&output);
+                    return NULL;
+                }
+                i += identifier_len - 1;
+                continue;
+            }
+        }
+
+        if (!string_builder_append_char(&output, c)) {
+            string_builder_free(&output);
+            return NULL;
+        }
+    }
+
+    return string_builder_finalize(&output);
 }
 
 static bool define_symbol(PascalPreprocessor *pp, const char *symbol) {
