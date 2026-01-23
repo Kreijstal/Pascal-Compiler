@@ -1,12 +1,13 @@
-unit impl_guidhelper_methods_unit;
-
-interface
+{$mode delphi}
+{ Test: Complex record helper with const default parameter }
+{ Verifies parser handles const enum value as default param }
+program impl_guidhelper_methods;
 
 type
   TEndian = (Little, Big);
   TBytes = array of Byte;
   TGUID = record
-    D1: LongInt;
+    D1: LongWord;
     D2: Word;
     D3: Word;
     D4: array[0..7] of Byte;
@@ -21,35 +22,36 @@ type
     function ToString(SkipBrackets: Boolean = False): string;
   end;
 
-implementation
-
 function TGUIDHelper.ToByteArray(DataEndian: TEndian = CPUEndian): TBytes;
-
 begin
   SetLength(Result, 16);
-  if DataEndian<>CPUEndian then
-    begin
+  if DataEndian <> CPUEndian then
+  begin
     PCardinal(@Result[0])^ := D1;
     PWord(@Result[4])^ := D2;
     PWord(@Result[6])^ := D3;
     Move(D4, Result[8], 8);
-    end
+  end
   else
     Move(D1, Result[0], SizeOf(Self));
-
 end;
 
-Function TGUIDHelper.ToString(SkipBrackets : Boolean = False): string;
-
+function TGUIDHelper.ToString(SkipBrackets: Boolean = False): string;
 begin
-  Result:= '';
-  If SkipBrackets then
-    Result:=Copy(Result,2,Length(Result)-2);
+  Result := '{GUID}';
+  if SkipBrackets then
+    Result := Copy(Result, 2, Length(Result) - 2);
 end;
 
-function AfterMethod: Integer;
+var
+  G: TGUID;
+  B: TBytes;
 begin
-  Result := 0;
-end;
-
+  G.D1 := $12345678;
+  G.D2 := $ABCD;
+  G.D3 := $EF01;
+  WriteLn(G.ToString);
+  WriteLn(G.ToString(True));
+  B := G.ToByteArray;
+  WriteLn(Length(B));
 end.

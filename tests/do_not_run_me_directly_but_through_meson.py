@@ -1720,14 +1720,10 @@ class TestCompiler(unittest.TestCase):
         expected_eof = expected_read
         self.assertEqual(result_eof.stdout, expected_eof)
 
-    def test_keyboard_arrow_sequences_match_fpc(self):
-        """Crt ReadKey should map arrow keys the same way FPC does on a TTY."""
+    def test_keyboard_arrow_sequences_output(self):
+        """Crt ReadKey should map arrow keys to the expected output on a TTY."""
         if not HAS_PTY:
             self.skipTest("PTY not available on this platform")
-
-        fpc_path = shutil.which("fpc")
-        if not fpc_path:
-            self.skipTest("fpc compiler not available for comparison")
 
         source = os.path.join(TEST_CASES_DIR, "keyboard_arrow.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "keyboard_arrow.s")
@@ -1735,14 +1731,6 @@ class TestCompiler(unittest.TestCase):
 
         run_compiler(source, asm_file)
         self.compile_executable(asm_file, exe_file)
-
-        fpc_exe = os.path.join(TEST_OUTPUT_DIR, "keyboard_arrow_fpc")
-        subprocess.run(
-            [fpc_path, "-O2", f"-o{fpc_exe}", source],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
 
         # Up arrow, newline, Ctrl+C to complete all four reads.
         input_data = "\x1b[A\n\x03"
@@ -1754,16 +1742,8 @@ class TestCompiler(unittest.TestCase):
             timeout=EXEC_TIMEOUT,
             check=True,
         )
-        fpc_run = run_executable_with_valgrind(
-            [fpc_exe],
-            input=input_data,
-            capture_output=True,
-            text=True,
-            timeout=EXEC_TIMEOUT,
-            check=True,
-        )
-
-        self.assertEqual(kgpc_run.stdout, fpc_run.stdout)
+        expected_output = "\x1b[H\x1b[m\x1b[H\x1b[2J0\n72\n10\n3\n"
+        self.assertEqual(kgpc_run.stdout, expected_output)
 
     def test_run_executable_with_valgrind_pty_crlf_and_echo(self):
         """PTY path should normalize CRLF, merge stderr, and avoid input echo."""
@@ -2650,15 +2630,70 @@ def _load_suite():
     return unittest.defaultTestLoader.loadTestsFromModule(sys.modules[__name__])
 
 
+class TimingTestResult(unittest.TextTestResult):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.timings = []
+        self._start_times = {}
+        self._status = {}
+
+    def startTest(self, test):
+        self._start_times[test] = time.perf_counter()
+        super().startTest(test)
+
+    def addSuccess(self, test):
+        self._status[test] = "OK"
+        super().addSuccess(test)
+
+    def addFailure(self, test, err):
+        self._status[test] = "FAIL"
+        super().addFailure(test, err)
+
+    def addError(self, test, err):
+        self._status[test] = "ERROR"
+        super().addError(test, err)
+
+    def addSkip(self, test, reason):
+        self._status[test] = "SKIP"
+        super().addSkip(test, reason)
+
+    def stopTest(self, test):
+        start = self._start_times.pop(test, None)
+        elapsed = time.perf_counter() - start if start else 0.0
+        self.timings.append((test.id(), elapsed, self._status.get(test, "UNKNOWN")))
+        super().stopTest(test)
+
+
 def main():
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--tap", action="store_true")
+    parser.add_argument("--timings-out", dest="timings_out")
     args, remaining = parser.parse_known_args()
+
+    tap_enabled = args.tap or os.environ.get("KGPC_TEST_PROTOCOL", "").lower() == "tap"
+    if tap_enabled and args.timings_out:
+        print("ERROR: --timings-out is not supported with TAP output.", file=sys.stderr)
+        sys.exit(2)
 
     if args.tap or os.environ.get("KGPC_TEST_PROTOCOL", "").lower() == "tap":
         suite = _load_suite()
         runner = TAPTestRunner()
         result = runner.run(suite)
+        sys.exit(0 if result.wasSuccessful() else 1)
+    if args.timings_out:
+        if remaining:
+            suite = unittest.defaultTestLoader.loadTestsFromNames(
+                remaining, sys.modules[__name__]
+            )
+        else:
+            suite = _load_suite()
+        runner = unittest.TextTestRunner(resultclass=TimingTestResult)
+        result = runner.run(suite)
+        with open(args.timings_out, "w", encoding="utf-8") as handle:
+            for test_id, elapsed, status in sorted(
+                result.timings, key=lambda x: x[1], reverse=True
+            ):
+                handle.write(f"{elapsed:8.3f}s\t{status}\t{test_id}\n")
         sys.exit(0 if result.wasSuccessful() else 1)
     print(f"DEBUG: argv={[sys.argv[0]] + remaining}")
 

@@ -11,6 +11,7 @@ static void print_usage(const char *prog_name)
     fprintf(stderr, "  Preprocesses Pascal source file\n");
     fprintf(stderr, "  If output file is not specified, writes to stdout\n");
     fprintf(stderr, "  Options:\n");
+    fprintf(stderr, "    --flatten-only Expand includes but keep directives/branches intact\n");
     fprintf(stderr, "    -D<symbol>    Define a preprocessor symbol\n");
     fprintf(stderr, "    -U<symbol>    Undefine a preprocessor symbol\n");
     fprintf(stderr, "    -I<path>      Add include search path\n");
@@ -54,12 +55,17 @@ int main(int argc, char **argv)
     PascalPreprocessor *preprocessor = NULL;
     char *source = NULL;
     char *preprocessed = NULL;
+    bool flatten_only = false;
     int exit_code = 1;
 
     /* Parse arguments */
     for (int i = 1; i < argc; i++)
     {
-        if (argv[i][0] == '-')
+        if (strcmp(argv[i], "--flatten-only") == 0)
+        {
+            flatten_only = true;
+        }
+        else if (argv[i][0] == '-')
         {
             if (argv[i][1] == 'D')
             {
@@ -112,6 +118,8 @@ int main(int argc, char **argv)
         fprintf(stderr, "Error: Could not create preprocessor\n");
         return 1;
     }
+
+    pascal_preprocessor_set_flatten_only(preprocessor, flatten_only);
 
     /* Define default symbols (matching FPC 3.2.2 for x86_64 Linux) */
     pascal_preprocessor_define(preprocessor, "FPC");

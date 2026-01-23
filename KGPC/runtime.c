@@ -2096,6 +2096,26 @@ void kgpc_string_assign(char **target, const char *value)
         return;
 
     char *existing = *target;
+    if (existing != NULL && value == existing)
+        return;
+
+    if (existing != NULL && value != NULL)
+    {
+        KgpcStringNode *existing_node = kgpc_string_find_allocation(existing);
+        if (existing_node != NULL)
+        {
+            const char *start = existing_node->ptr;
+            const char *end = start + existing_node->length;
+            if (value >= start && value <= end)
+            {
+                char *copy = kgpc_string_duplicate(value);
+                if (kgpc_string_release_allocation(existing))
+                    free(existing);
+                *target = copy;
+                return;
+            }
+        }
+    }
     if (kgpc_string_release_allocation(existing))
     {
         free(existing);
@@ -2372,6 +2392,44 @@ void kgpc_string_to_shortstring(char *dest, const char *src, size_t dest_size)
         memset(dest + 1 + copy_len, 0, dest_size - 1 - copy_len);
 }
 
+void kgpc_shortstring_setlength(char *target, int64_t new_length)
+{
+    if (target == NULL)
+        return;
+
+    if (new_length < 0)
+        new_length = 0;
+    if (new_length > 255)
+        new_length = 255;
+
+    unsigned char old_len = (unsigned char)target[0];
+    unsigned char new_len = (unsigned char)new_length;
+    target[0] = (char)new_len;
+
+    if (new_len > old_len)
+        memset(target + 1 + old_len, 0, (size_t)(new_len - old_len));
+}
+
+void kgpc_shortstring_setstring(char *target, const char *buffer, int64_t length)
+{
+    if (target == NULL)
+        return;
+
+    if (buffer == NULL || length <= 0)
+    {
+        target[0] = 0;
+        return;
+    }
+
+    if (length > 255)
+        length = 255;
+
+    target[0] = (char)length;
+    memcpy(target + 1, buffer, (size_t)length);
+    if (length < 255)
+        memset(target + 1 + length, 0, (size_t)(255 - length));
+}
+
 char *kgpc_shortstring_to_string(const char *value)
 {
     if (value == NULL)
@@ -2386,6 +2444,72 @@ int64_t kgpc_shortstring_length(const char *value)
     if (value == NULL)
         return 0;
     return (unsigned char)value[0];
+}
+
+void kgpc_shortstring_delete(char *target, int64_t index, int64_t count)
+{
+    if (target == NULL || index <= 0 || count <= 0)
+        return;
+
+    size_t length = (unsigned char)target[0];
+    if (length == 0)
+        return;
+    if (index > (int64_t)length)
+        return;
+
+    size_t start = (size_t)(index - 1);
+    size_t remove = (size_t)count;
+    if (remove > length - start)
+        remove = length - start;
+
+    size_t tail = length - start - remove;
+    if (tail > 0)
+        memmove(target + 1 + start, target + 1 + start + remove, tail);
+
+    size_t new_len = length - remove;
+    target[0] = (char)new_len;
+    if (remove > 0)
+        memset(target + 1 + new_len, 0, remove);
+}
+
+void kgpc_shortstring_insert(const char *value, char *target, int64_t index, int value_is_shortstring)
+{
+    if (target == NULL || value == NULL)
+        return;
+
+    const char *insert_ptr = value;
+    size_t insert_len = 0;
+    if (value_is_shortstring)
+    {
+        insert_len = (unsigned char)value[0];
+        insert_ptr = value + 1;
+    }
+    else
+    {
+        insert_len = kgpc_string_known_length(value);
+        insert_ptr = value;
+    }
+
+    if (insert_len == 0)
+        return;
+
+    size_t dest_len = (unsigned char)target[0];
+    if (index <= 0)
+        index = 1;
+    if (index > (int64_t)dest_len + 1)
+        index = (int64_t)dest_len + 1;
+
+    size_t max_insert = (dest_len < 255) ? (255 - dest_len) : 0;
+    if (insert_len > max_insert)
+        insert_len = max_insert;
+    if (insert_len == 0)
+        return;
+
+    size_t pos = (size_t)(index - 1);
+    memmove(target + 1 + pos + insert_len, target + 1 + pos, dest_len - pos);
+    memcpy(target + 1 + pos, insert_ptr, insert_len);
+
+    target[0] = (char)(dest_len + insert_len);
 }
 
 
@@ -3362,6 +3486,72 @@ void kgpc_str_real_fmt(double value, int64_t width, int64_t precision, char **ta
     if (existing != NULL && kgpc_string_release_allocation(existing))
         free(existing);
     *target = result;
+}
+
+/* Str for ShortString targets - copies result to a fixed-size Pascal ShortString array.
+ * ShortString has format: first byte = length, followed by up to 255 characters. */
+void kgpc_str_int64_shortstring(int64_t value, char *target)
+{
+    if (target == NULL)
+        return;
+
+    char *result = kgpc_int_to_str(value);
+    if (result == NULL)
+        return;
+
+    /* Copy to ShortString format */
+    kgpc_string_to_shortstring(target, result, 256);
+    free(result);
+}
+
+void kgpc_str_int64_fmt_shortstring(int64_t value, int64_t width, char *target)
+{
+    if (target == NULL)
+        return;
+
+    char *result = kgpc_int_to_str(value);
+    if (result == NULL)
+        return;
+
+    result = kgpc_apply_field_width(result, width);
+    if (result == NULL)
+        return;
+
+    /* Copy to ShortString format */
+    kgpc_string_to_shortstring(target, result, 256);
+    free(result);
+}
+
+void kgpc_str_real_shortstring(double value, char *target)
+{
+    if (target == NULL)
+        return;
+
+    char *result = kgpc_float_to_string(value, -1);
+    if (result == NULL)
+        return;
+
+    /* Copy to ShortString format */
+    kgpc_string_to_shortstring(target, result, 256);
+    free(result);
+}
+
+void kgpc_str_real_fmt_shortstring(double value, int64_t width, int64_t precision, char *target)
+{
+    if (target == NULL)
+        return;
+
+    char *result = kgpc_float_to_string(value, (int)precision);
+    if (result == NULL)
+        return;
+
+    result = kgpc_apply_field_width(result, width);
+    if (result == NULL)
+        return;
+
+    /* Copy to ShortString format */
+    kgpc_string_to_shortstring(target, result, 256);
+    free(result);
 }
 
 double kgpc_now(void)

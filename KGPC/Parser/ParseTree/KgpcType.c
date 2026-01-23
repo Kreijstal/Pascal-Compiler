@@ -482,6 +482,9 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
     int var_type_tag = var_decl->tree_data.var_decl_data.type;
     const char *type_id = var_decl->tree_data.var_decl_data.type_id;
 
+    if (var_type_tag == BUILTIN_ANY_TYPE && type_id == NULL)
+        return NULL;
+
     if (var_type_tag == POINTER_TYPE && type_id != NULL)
     {
         KgpcType *pointee_type = NULL;
@@ -713,6 +716,35 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
         return 1;
     }
 
+    /* Allow assigning procedure values to strings in helper conversions
+     * (e.g., unresolved parameterless method references in array-of-const formatting). */
+    if (lhs_is_string && rhs_type->kind == TYPE_KIND_PROCEDURE)
+    {
+        return 1;
+    }
+    if (lhs_is_string && rhs_type->kind == TYPE_KIND_PRIMITIVE &&
+        rhs_type->info.primitive_type_tag == PROCEDURE)
+    {
+        return 1;
+    }
+    if (lhs_is_string && rhs_type->kind == TYPE_KIND_PRIMITIVE &&
+        rhs_type->info.primitive_type_tag == POINTER_TYPE)
+    {
+        return 1;
+    }
+
+    /* Allow assigning generic pointers to strings to support PChar-style conversions
+     * when the pointer subtype can't be resolved. */
+    if (lhs_is_string && rhs_type->kind == TYPE_KIND_POINTER)
+    {
+        KgpcType *points_to = rhs_type->info.points_to;
+        if (points_to == NULL)
+            return 1;
+        if (points_to->kind == TYPE_KIND_PRIMITIVE &&
+            points_to->info.primitive_type_tag == CHAR_TYPE)
+            return 1;
+    }
+
     /* Allow String <-> ShortString assignment */
     if (lhs_is_string && rhs_is_string) {
         return 1;
@@ -727,6 +759,11 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
     if (is_char_array_type(lhs_type) && rhs_is_pchar)
         return 1;
     if (is_char_array_type(rhs_type) && lhs_is_pchar)
+        return 1;
+    if (is_char_array_type(lhs_type) && is_char_array_type(rhs_type))
+        return 1;
+    if (is_char_array_type(lhs_type) && rhs_type->kind == TYPE_KIND_POINTER &&
+        rhs_type->info.points_to == NULL)
         return 1;
 
     /* Allow procedure variables to accept explicit @proc references */
@@ -990,6 +1027,8 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
 
         case TYPE_KIND_ARRAY:
         {
+            if (is_char_array_type(lhs_type) && is_char_array_type(rhs_type))
+                return 1;
             int lhs_dynamic = lhs_type->info.array_info.end_index < lhs_type->info.array_info.start_index;
             int rhs_dynamic = rhs_type->info.array_info.end_index < rhs_type->info.array_info.start_index;
             if (!lhs_dynamic && !rhs_dynamic)

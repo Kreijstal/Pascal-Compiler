@@ -116,6 +116,7 @@ typedef struct ArgInfo
     Register_t *reg;
     StackNode_t *spill;
     struct Expression *expr;
+    int spill_is_single;
     int expected_type;
     int expected_real_size;
     int is_pointer_like;
@@ -133,6 +134,7 @@ static void arginfo_register_spill_handler(Register_t *reg, StackNode_t *spill_s
         return;
     info->reg = NULL;
     info->spill = spill_slot;
+    info->spill_is_single = 0;
 }
 
 static void arginfo_assign_register(ArgInfo *info, Register_t *reg, struct Expression *expr)
@@ -2238,6 +2240,32 @@ static ListNode_t *codegen_expr_tree_value(struct Expression *expr, ListNode_t *
     }
 
     return inst_list;
+}
+
+static int codegen_dynarray_descriptor_size(const struct Expression *expr)
+{
+    const int base_size = 4 * DOUBLEWORD;
+    if (expr == NULL)
+        return base_size;
+
+    if (expr->type == EXPR_VAR_ID)
+    {
+        int scope_depth = 0;
+        StackNode_t *node = find_label_with_depth(expr->expr_data.id, &scope_depth);
+        if (node != NULL && node->is_dynamic && node->size > 0)
+            return node->size;
+    }
+
+    if (expr->array_element_size > 0)
+    {
+        int descriptor_size = base_size;
+        int needed = expr->array_element_size * 2;
+        if (descriptor_size < needed)
+            descriptor_size = needed;
+        return descriptor_size;
+    }
+
+    return base_size;
 }
 
 static ListNode_t *codegen_expr_via_tree(struct Expression *expr, ListNode_t *inst_list, CodeGenContext *ctx)
@@ -4401,6 +4429,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             arg_infos[arg_num].is_pointer_like = is_pointer_like;
             arg_infos[arg_num].assigned_class = ARG_CLASS_INT;
             arg_infos[arg_num].assigned_index = -1;
+            arg_infos[arg_num].spill_is_single = 0;
         }
         if (arg_infos != NULL && expected_type == REAL_TYPE)
             arg_infos[arg_num].expected_real_size =
@@ -4822,11 +4851,69 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             Register_t *addr_reg = NULL;
             if (!codegen_expr_is_addressable(arg_expr))
             {
-                codegen_report_error(ctx,
-                    "ERROR: Unsupported expression type for dynamic array argument.");
-                return inst_list;
+                int descriptor_size = codegen_dynarray_descriptor_size(arg_expr);
+                StackNode_t *temp_slot = codegen_alloc_temp_bytes("dynarray_arg", descriptor_size);
+                if (temp_slot == NULL)
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Unable to allocate temporary storage for dynamic array argument.");
+                    return inst_list;
+                }
+
+                Register_t *value_reg = NULL;
+                inst_list = codegen_expr_with_result(arg_expr, inst_list, ctx, &value_reg);
+                if (codegen_had_error(ctx) || value_reg == NULL)
+                {
+                    if (value_reg != NULL)
+                        free_reg(get_reg_stack(), value_reg);
+                    return inst_list;
+                }
+
+                addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                if (addr_reg == NULL)
+                {
+                    free_reg(get_reg_stack(), value_reg);
+                    codegen_report_error(ctx,
+                        "ERROR: Unable to allocate register for dynamic array argument address.");
+                    return inst_list;
+                }
+
+                snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                    temp_slot->offset, addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+
+                if (codegen_target_is_windows())
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%r8d\n", descriptor_size);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+                else
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", value_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%edx\n", descriptor_size);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+
+                inst_list = codegen_vect_reg(inst_list, 0);
+                inst_list = add_inst(inst_list, "\tcall\tkgpc_dynarray_assign_from_temp\n");
+                free_arg_regs();
+                free_reg(get_reg_stack(), value_reg);
+                /* Reload address because the call may clobber caller-saved regs. */
+                snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                    temp_slot->offset, addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
             }
-            inst_list = codegen_address_for_expr(arg_expr, inst_list, ctx, &addr_reg);
+            else
+            {
+                inst_list = codegen_address_for_expr(arg_expr, inst_list, ctx, &addr_reg);
+            }
             if (codegen_had_error(ctx) || addr_reg == NULL)
                 return inst_list;
 
@@ -4857,12 +4944,14 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             }
 
             long long record_size = 0;
-            if (codegen_get_record_size(ctx, arg_expr, &record_size) != 0 || record_size <= 0)
+            if (codegen_get_record_size(ctx, arg_expr, &record_size) != 0 || record_size < 0)
             {
                 codegen_report_error(ctx,
                     "ERROR: Unable to determine record size for argument.");
                 return inst_list;
             }
+            if (record_size == 0)
+                record_size = 1;
 
             if (record_size > INT_MAX)
             {
@@ -5236,8 +5325,35 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                         strcmp(arg_infos[j].reg->bit_64, check_reg) == 0)
                     {
                         StackNode_t *spill = add_l_t("arg_spill");
-                        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
-                            arg_infos[j].reg->bit_64, spill->offset);
+                        int spill_single = 0;
+                        if (arg_infos[j].assigned_class == ARG_CLASS_SSE &&
+                            arg_infos[j].expected_type == REAL_TYPE)
+                        {
+                            if (arg_infos[j].expected_real_size == 4)
+                                spill_single = 1;
+                            else if (arg_infos[j].expr != NULL &&
+                                codegen_expr_real_storage_size(arg_infos[j].expr, ctx) == 4)
+                                spill_single = 1;
+                        }
+                        if (spill_single)
+                        {
+                            snprintf(buffer, sizeof(buffer), "\tmovss\t%s, -%d(%%rbp)\n",
+                                arg_infos[j].reg->bit_64, spill->offset);
+                            arg_infos[j].spill_is_single = 1;
+                        }
+                        else if (arg_infos[j].assigned_class == ARG_CLASS_SSE &&
+                            arg_infos[j].expected_type == REAL_TYPE)
+                        {
+                            snprintf(buffer, sizeof(buffer), "\tmovsd\t%s, -%d(%%rbp)\n",
+                                arg_infos[j].reg->bit_64, spill->offset);
+                            arg_infos[j].spill_is_single = 0;
+                        }
+                        else
+                        {
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                                arg_infos[j].reg->bit_64, spill->offset);
+                            arg_infos[j].spill_is_single = 0;
+                        }
                         inst_list = add_inst(inst_list, buffer);
                         free_reg(get_reg_stack(), arg_infos[j].reg);
                         arg_infos[j].reg = NULL;
@@ -5256,11 +5372,16 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             {
                 if (stored_reg->bit_64 != NULL &&
                     strncmp(stored_reg->bit_64, "%xmm", 4) == 0)
-                    snprintf(buffer, sizeof(buffer), "\tmovapd\t%s, %%xmm0\n", stored_reg->bit_64);
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovss\t%s, %%xmm0\n", stored_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                }
                 else
+                {
                     snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm0\n", stored_reg->bit_64);
-                inst_list = add_inst(inst_list, buffer);
-                inst_list = add_inst(inst_list, "\tcvtsd2ss\t%xmm0, %xmm0\n");
+                    inst_list = add_inst(inst_list, buffer);
+                    inst_list = add_inst(inst_list, "\tcvtsd2ss\t%xmm0, %xmm0\n");
+                }
                 if (pass_on_stack)
                 {
                     char stack_dest[64];
@@ -5298,13 +5419,28 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         else if (arg_infos != NULL && arg_infos[i].spill != NULL)
         {
             Register_t *temp_reg = NULL;
-            if (expected_type == REAL_TYPE && expected_real_size == 4 &&
-                arg_infos[i].assigned_class == ARG_CLASS_SSE)
+            if (expected_type == REAL_TYPE &&
+                arg_infos[i].assigned_class == ARG_CLASS_SSE &&
+                (expected_real_size == 4 || arg_infos[i].spill_is_single))
             {
-                snprintf(buffer, sizeof(buffer), "\tmovsd\t-%d(%%rbp), %%xmm0\n",
-                    arg_infos[i].spill->offset);
-                inst_list = add_inst(inst_list, buffer);
-                inst_list = add_inst(inst_list, "\tcvtsd2ss\t%xmm0, %xmm0\n");
+                if (arg_infos[i].spill_is_single)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovss\t-%d(%%rbp), %%xmm0\n",
+                        arg_infos[i].spill->offset);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+                else
+                {
+                    temp_reg = get_free_reg(get_reg_stack(), &inst_list);
+                    if (temp_reg == NULL)
+                        return inst_list;
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                        arg_infos[i].spill->offset, temp_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm0\n", temp_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    inst_list = add_inst(inst_list, "\tcvtsd2ss\t%xmm0, %xmm0\n");
+                }
                 if (pass_on_stack)
                 {
                     char stack_dest[64];
@@ -5316,6 +5452,8 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                     snprintf(buffer, sizeof(buffer), "\tmovss\t%%xmm0, %s\n", arg_reg_char);
                 }
                 inst_list = add_inst(inst_list, buffer);
+                if (temp_reg != NULL)
+                    free_reg(get_reg_stack(), temp_reg);
                 continue;
             }
             if (needs_int_to_long && arg_infos[i].assigned_class == ARG_CLASS_INT)
