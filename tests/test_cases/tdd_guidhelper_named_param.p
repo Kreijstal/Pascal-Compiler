@@ -1,6 +1,6 @@
 {$mode delphi}
 {$modeswitch typehelpers}
-{ TDD: helper overload resolution with named parameter }
+{ TDD: helper overload resolution with default parameters }
 program tdd_guidhelper_named_param;
 
 type

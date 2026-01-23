@@ -6009,11 +6009,12 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         if(var != NULL)
         {
             int use_qword = codegen_type_uses_qword(var_type);
+            int actual_size = (var->element_size > 0) ? var->element_size : var->size;
             /* Override for Single type (4-byte float): check actual storage size */
-            int is_single_target = is_single_float_type(var_type, var->size) && !var->is_reference;
+            int is_single_target = is_single_float_type(var_type, actual_size) && !var->is_reference;
             if (is_single_target)
                 use_qword = 0;
-            if (!var->is_reference && var->size >= 8)
+            if (!var->is_reference && actual_size >= 8)
                 use_qword = 1;
             
             /* For Single targets with real source, convert double to single precision.

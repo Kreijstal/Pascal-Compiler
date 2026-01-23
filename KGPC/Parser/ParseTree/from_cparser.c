@@ -3329,7 +3329,18 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
         int type_tag = map_type_name(type_name, &preserved_type_id);
         
         if (type_tag != UNKNOWN_TYPE) {
-            KgpcType *type = create_primitive_type(type_tag);
+            KgpcType *type = NULL;
+            HashNode_t *type_node = NULL;
+            if (symtab != NULL && FindIdent(&type_node, symtab, type_name) != -1 &&
+                type_node != NULL && type_node->type != NULL)
+            {
+                type = type_node->type;
+            }
+            else
+            {
+                type = create_primitive_type(type_tag);
+            }
+
             /* If this is RawByteString or UnicodeString, create a type_alias to preserve the name */
             if (type != NULL && preserved_type_id != NULL &&
                 (strcasecmp(preserved_type_id, "RawByteString") == 0 ||
@@ -3571,7 +3582,17 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
                         // First check if it's a primitive type
                         int ret_tag = map_type_name(ret_type_name, NULL);
                         if (ret_tag != UNKNOWN_TYPE) {
-                            return_type = create_primitive_type(ret_tag);
+                            /* Prefer symtab types to preserve custom storage sizes (e.g., Single). */
+                            HashNode_t *type_node = NULL;
+                            if (symtab != NULL && FindIdent(&type_node, symtab, ret_type_name) != -1 &&
+                                type_node != NULL && type_node->type != NULL)
+                            {
+                                return_type = type_node->type;
+                            }
+                            else
+                            {
+                                return_type = create_primitive_type(ret_tag);
+                            }
                         } else {
                             // Check if it's a user-defined type in the symbol table
                             HashNode_t *type_node = NULL;

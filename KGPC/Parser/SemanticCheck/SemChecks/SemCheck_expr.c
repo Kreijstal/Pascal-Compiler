@@ -12298,7 +12298,8 @@ int semcheck_funccall(int *type_return,
                                 first_arg_is_type = 1;
                             }
                         }
-                        if (!is_static && method_node->type != NULL)
+                        if (!is_static && method_node->type != NULL &&
+                            record_info != NULL && !record_info->is_type_helper)
                         {
                             ListNode_t *params = kgpc_type_get_procedure_params(method_node->type);
                             const char *param_name = NULL;
@@ -12406,7 +12407,8 @@ int semcheck_funccall(int *type_return,
                         HashNode_t *method_node = semcheck_find_class_method(symtab, record_info, method_name, &actual_method_owner);
                         if (method_node != NULL)
                         {
-                            if (!is_static && method_node->type != NULL)
+                            if (!is_static && method_node->type != NULL &&
+                                record_info != NULL && !record_info->is_type_helper)
                             {
                                 ListNode_t *params = kgpc_type_get_procedure_params(method_node->type);
                                 const char *param_name = NULL;

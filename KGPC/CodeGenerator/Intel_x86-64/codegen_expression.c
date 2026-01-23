@@ -5325,9 +5325,17 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                         strcmp(arg_infos[j].reg->bit_64, check_reg) == 0)
                     {
                         StackNode_t *spill = add_l_t("arg_spill");
+                        int spill_single = 0;
                         if (arg_infos[j].assigned_class == ARG_CLASS_SSE &&
-                            arg_infos[j].expected_type == REAL_TYPE &&
-                            arg_infos[j].expected_real_size == 4)
+                            arg_infos[j].expected_type == REAL_TYPE)
+                        {
+                            if (arg_infos[j].expected_real_size == 4)
+                                spill_single = 1;
+                            else if (arg_infos[j].expr != NULL &&
+                                codegen_expr_real_storage_size(arg_infos[j].expr, ctx) == 4)
+                                spill_single = 1;
+                        }
+                        if (spill_single)
                         {
                             snprintf(buffer, sizeof(buffer), "\tmovss\t%s, -%d(%%rbp)\n",
                                 arg_infos[j].reg->bit_64, spill->offset);
@@ -5411,8 +5419,9 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         else if (arg_infos != NULL && arg_infos[i].spill != NULL)
         {
             Register_t *temp_reg = NULL;
-            if (expected_type == REAL_TYPE && expected_real_size == 4 &&
-                arg_infos[i].assigned_class == ARG_CLASS_SSE)
+            if (expected_type == REAL_TYPE &&
+                arg_infos[i].assigned_class == ARG_CLASS_SSE &&
+                (expected_real_size == 4 || arg_infos[i].spill_is_single))
             {
                 if (arg_infos[i].spill_is_single)
                 {

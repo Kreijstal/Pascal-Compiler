@@ -1583,7 +1583,21 @@ static KgpcType *build_function_return_type(Tree_t *subprogram, SymTab_t *symtab
             else
             {
                 subprogram->tree_data.subprogram_data.return_type = builtin_type;
-                builtin_return = create_primitive_type(builtin_type);
+                if (builtin_type == REAL_TYPE && type_id != NULL)
+                {
+                    if (pascal_identifier_equals(type_id, "Single"))
+                        builtin_return = create_primitive_type_with_size(REAL_TYPE, 4);
+                    else if (pascal_identifier_equals(type_id, "Double") ||
+                             pascal_identifier_equals(type_id, "Extended") ||
+                             pascal_identifier_equals(type_id, "Real"))
+                        builtin_return = create_primitive_type_with_size(REAL_TYPE, 8);
+                    else
+                        builtin_return = create_primitive_type(builtin_type);
+                }
+                else
+                {
+                    builtin_return = create_primitive_type(builtin_type);
+                }
             }
         }
     }
