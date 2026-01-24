@@ -1300,10 +1300,22 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
     {
         struct Expression *inner = expr->expr_data.typecast_data.expr;
         int target_type = expr->expr_data.typecast_data.target_type;
+        /* For record/file/text types, get the address of the inner expression.
+         * For class types (POINTER_TYPE pointing to a class record), we need to
+         * evaluate the inner expression to get the object pointer VALUE, which
+         * IS the "address" of the class instance. Don't use codegen_address_for_expr
+         * since that would give us the address of the variable holding the pointer. */
         if (inner != NULL &&
             (target_type == RECORD_TYPE || target_type == FILE_TYPE || target_type == TEXT_TYPE))
         {
             inst_list = codegen_address_for_expr(inner, inst_list, ctx, out_reg);
+            goto cleanup;
+        }
+        else if (inner != NULL && target_type == POINTER_TYPE)
+        {
+            /* For class casts, the "address" is actually the object pointer VALUE.
+             * Evaluate the inner expression to get the pointer. */
+            inst_list = codegen_evaluate_expr(inner, inst_list, ctx, out_reg);
             goto cleanup;
         }
     }

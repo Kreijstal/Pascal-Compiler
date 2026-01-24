@@ -2516,8 +2516,10 @@ ListNode_t *codegen_record_field_address(struct Expression *expr, ListNode_t *in
 
     /* For class types that are NOT parameters, addr_reg points to the variable holding the pointer.
      * We need to load the pointer value to get the address of the instance.
-     * Parameters are already pointers, so we don't need the extra dereference. */
-    if (is_class_field && !is_parameter && !is_class_type_ref)
+     * Parameters are already pointers, so we don't need the extra dereference.
+     * Typecast expressions also already return the object pointer value, not the address. */
+    int is_typecast_expr = (record_expr->type == EXPR_TYPECAST);
+    if (is_class_field && !is_parameter && !is_class_type_ref && !is_typecast_expr)
     {
         char buffer[64];
         snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", addr_reg->bit_64, addr_reg->bit_64);
