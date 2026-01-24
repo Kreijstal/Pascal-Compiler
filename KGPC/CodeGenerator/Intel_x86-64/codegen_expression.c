@@ -1213,7 +1213,8 @@ int expr_is_char_set_ctx(const struct Expression *expr, CodeGenContext *ctx)
     if (expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL)
     {
         HashNode_t *node = NULL;
-        if (FindIdent(&node, ctx->symtab, expr->expr_data.id) >= 0 && node != NULL)
+        int found = FindIdent(&node, ctx->symtab, expr->expr_data.id);
+        if (found >= 0 && node != NULL)
         {
             if (node->type != NULL)
             {
@@ -3822,7 +3823,8 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
         if (right_expr != NULL && right_expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL)
         {
             HashNode_t *node = NULL;
-            if (FindIdent(&node, ctx->symtab, right_expr->expr_data.id) >= 0 && node != NULL &&
+            int found = FindIdent(&node, ctx->symtab, right_expr->expr_data.id);
+            if (found >= 0 && node != NULL &&
                 node->hash_type == HASHTYPE_CONST && node->const_set_value != NULL &&
                 node->const_set_size > 0)
             {

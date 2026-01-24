@@ -975,7 +975,8 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
             if (ctx->symtab != NULL)
             {
                 HashNode_t *const_node = NULL;
-                if (FindIdent(&const_node, ctx->symtab, expr->expr_data.id) >= 0 &&
+                int found = FindIdent(&const_node, ctx->symtab, expr->expr_data.id);
+                if (found >= 0 &&
                     const_node != NULL && const_node->hash_type == HASHTYPE_CONST &&
                     const_node->const_set_value != NULL && const_node->const_set_size > 0)
                 {
