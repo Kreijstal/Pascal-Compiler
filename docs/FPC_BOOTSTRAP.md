@@ -16,10 +16,21 @@ The FPC RTL cannot be fully compiled because kgpc has bugs and missing features 
 
 3. **Overload Resolution**
    - Some procedure overloads not matched (InitInternational, InitExceptions, etc.)
+   - Pipe functions (IOPipe, FlushPipe, ClosePipe, PCloseText) not finding overloads
+
+4. **String/Array Type Compatibility**
+   - ShortString/array[0..255] of char assignment errors
+   - strlen ambiguous call errors
+
+5. **Other Issues**
+   - DoCapSizeInt type mismatch errors
+   - GetTickCount result type mismatch (pointer vs procedure)
+   - LowerCase function missing return statement
+   - fpsignal assignment type mismatch
 
 ## Build Command
 
-### sysutils.pp (27 errors)
+### sysutils.pp (38 errors as of 2025-01-24)
 ```bash
 ./build/KGPC/kgpc ./FPCSource/rtl/unix/sysutils.pp /tmp/sysutils.s \
   --no-stdlib \
@@ -107,16 +118,23 @@ chmod +x /tmp/cvise_indexofany.sh
 cvise --timeout 7200 /tmp/cvise_indexofany.sh sysutils_indexofany.pp
 ```
 
-### Error categories (27 total):
+### Error categories (38 total as of 2025-01-24):
 | Count | Error | Root Cause |
 |-------|-------|------------|
-| 6 | IndexOfAny/IndexOfAnyUnQuoted overload not found | Type helper overload resolution |
-| 6 | Result type incompatible | Cascading from overload errors |
-| 5 | procedure overload not found (InitExceptions, etc.) | Forward reference issues |
-| 3 | TGUIDHelper.Create argument type mismatch | Forward reference within type helper |
+| 6 | DoCapSizeInt type mismatch | Function call type mismatch |
+| 6 | Pipe functions overload not found | Overload resolution issues |
+| 5 | PCloseText overload not found | Forward reference/overload issues |
+| 4 | incompatible types in assignment | Type compatibility issues |
 | 3 | ShortString S assignment | Cascading from earlier errors |
-| 3 | SysBeep/OnBeep undeclared | Forward reference support needed |
+| 3 | procedure overload not found (InitExceptions, etc.) | Forward reference issues |
+| 2 | SysBeep/OnBeep undeclared | Forward reference support needed |
+| 2 | GetTickCount result type mismatch | pointer vs procedure |
+| 2 | strlen ambiguous call | Overload resolution |
+| 1 | LowerCase no return statement | Missing return |
+| 1 | fpsignal type mismatch | Type compatibility |
 | 1 | Result real type mismatch | Cascading |
+| 1 | Result char/string mismatch | Type compatibility |
+| 1 | expression char/^char mismatch | Type compatibility |
 
 ## Compiles Successfully (RTL Units)
 
@@ -137,7 +155,7 @@ cvise --timeout 7200 /tmp/cvise_indexofany.sh sysutils_indexofany.pp
 
 ## Units with Compilation Errors
 
-- `sysutils.pp` - **27 errors** (with `--no-stdlib`)
+- `sysutils.pp` - **38 errors** (with `--no-stdlib`, as of 2025-01-24)
 - `math.pp` - Depends on sysutils
 - `cthreads.pp` - Missing ThreadingAlreadyUsed
 - `charset.pp` - Type incompatibilities
@@ -148,3 +166,9 @@ cvise --timeout 7200 /tmp/cvise_indexofany.sh sysutils_indexofany.pp
 - `ports.pp` - x86-specific, not x86_64
 - `cmem.pp` - Needs system unit types
 - `si_uc.pp` - Missing si_uc.inc for x86_64
+
+## Recent Fixes (2025-01-24)
+
+1. **Buffer overflow in MangleNameFromTypeList** - Fixed buffer size from 4 to 6 chars per suffix
+2. **Absolute variable aliasing** - Added PASCAL_T_ABSOLUTE_CLAUSE type and fixed AST handling
+3. **ABSOLUTE_CLAUSE expression errors** - Fixed var declaration conversion to skip absolute clause nodes

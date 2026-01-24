@@ -4885,6 +4885,17 @@ static ast_t *absolute_clause_target(ast_t *node) {
     return child;
 }
 
+/* Check if a node should be skipped as an initializer.
+ * This handles:
+ * - PASCAL_T_ABSOLUTE_CLAUSE: absolute variable aliasing (e.g., "X: Integer absolute Y")
+ * - PASCAL_T_IDENTIFIER: trailing identifiers that aren't initializers (legacy case)
+ */
+static int is_node_to_skip_as_initializer(ast_t *node) {
+    if (node == NULL)
+        return 0;
+    return (node->typ == PASCAL_T_IDENTIFIER || node->typ == PASCAL_T_ABSOLUTE_CLAUSE);
+}
+
 static Tree_t *convert_var_decl(ast_t *decl_node) {
     ast_t *cur = decl_node->child;
     ast_t *first_non_identifier = cur;
@@ -4959,8 +4970,8 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
                 }
             }
 
-            /* Absolute clauses appear as PASCAL_T_ABSOLUTE_CLAUSE; skip as initializer. */
-            if (init_node != NULL && (init_node->typ == PASCAL_T_IDENTIFIER || init_node->typ == PASCAL_T_ABSOLUTE_CLAUSE)) {
+            /* Skip nodes that should not be treated as initializers */
+            if (is_node_to_skip_as_initializer(init_node)) {
                 init_node = NULL;
             }
             
@@ -5052,8 +5063,8 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
             }
         }
 
-        /* Absolute clauses appear as PASCAL_T_ABSOLUTE_CLAUSE; skip as initializer. */
-        if (init_node != NULL && (init_node->typ == PASCAL_T_IDENTIFIER || init_node->typ == PASCAL_T_ABSOLUTE_CLAUSE)) {
+        /* Skip nodes that should not be treated as initializers */
+        if (is_node_to_skip_as_initializer(init_node)) {
             init_node = NULL;
         }
         
