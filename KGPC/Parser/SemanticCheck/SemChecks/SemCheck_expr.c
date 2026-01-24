@@ -1723,6 +1723,43 @@ static struct RecordType *semcheck_record_type_from_decl(Tree_t *decl, SymTab_t 
     return NULL;
 }
 
+/* Helper function to resolve primitive type from type name */
+static int primitive_type_from_type_id(const char *type_id)
+{
+    if (type_id == NULL)
+        return UNKNOWN_TYPE;
+    if (pascal_identifier_equals(type_id, "Byte") || pascal_identifier_equals(type_id, "ShortInt") ||
+        pascal_identifier_equals(type_id, "Word") || pascal_identifier_equals(type_id, "SmallInt") ||
+        pascal_identifier_equals(type_id, "Integer") || pascal_identifier_equals(type_id, "LongInt") ||
+        pascal_identifier_equals(type_id, "Cardinal") || pascal_identifier_equals(type_id, "DWord") ||
+        pascal_identifier_equals(type_id, "LongWord"))
+        return LONGINT_TYPE;
+    if (pascal_identifier_equals(type_id, "Int64") || pascal_identifier_equals(type_id, "QWord") ||
+        pascal_identifier_equals(type_id, "SizeInt") || pascal_identifier_equals(type_id, "PtrInt") ||
+        pascal_identifier_equals(type_id, "SizeUInt") || pascal_identifier_equals(type_id, "PtrUInt") ||
+        pascal_identifier_equals(type_id, "NativeInt") || pascal_identifier_equals(type_id, "NativeUInt"))
+        return INT64_TYPE;
+    if (pascal_identifier_equals(type_id, "Boolean") || pascal_identifier_equals(type_id, "Bool") ||
+        pascal_identifier_equals(type_id, "ByteBool") || pascal_identifier_equals(type_id, "WordBool") ||
+        pascal_identifier_equals(type_id, "LongBool"))
+        return BOOL;
+    if (pascal_identifier_equals(type_id, "Char") || pascal_identifier_equals(type_id, "AnsiChar") ||
+        pascal_identifier_equals(type_id, "WideChar"))
+        return CHAR_TYPE;
+    if (pascal_identifier_equals(type_id, "String") || pascal_identifier_equals(type_id, "AnsiString") ||
+        pascal_identifier_equals(type_id, "ShortString") || pascal_identifier_equals(type_id, "RawByteString") ||
+        pascal_identifier_equals(type_id, "UnicodeString") || pascal_identifier_equals(type_id, "UTF8String") ||
+        pascal_identifier_equals(type_id, "WideString"))
+        return STRING_TYPE;
+    if (pascal_identifier_equals(type_id, "Real") || pascal_identifier_equals(type_id, "Double") ||
+        pascal_identifier_equals(type_id, "Extended") || pascal_identifier_equals(type_id, "Single") ||
+        pascal_identifier_equals(type_id, "Currency") || pascal_identifier_equals(type_id, "Comp"))
+        return REAL_TYPE;
+    if (pascal_identifier_equals(type_id, "Pointer") || pascal_identifier_equals(type_id, "CodePointer"))
+        return POINTER_TYPE;
+    return UNKNOWN_TYPE;
+}
+
 static KgpcType *semcheck_field_expected_kgpc_type(SymTab_t *symtab, struct RecordField *field)
 {
     if (symtab == NULL || field == NULL)
@@ -1770,6 +1807,7 @@ static KgpcType *semcheck_field_expected_kgpc_type(SymTab_t *symtab, struct Reco
         type_node = semcheck_find_preferred_type_node(symtab, field->type_id);
         if (type_node != NULL)
         {
+            KgpcType *result_type = NULL;
             if (type_node->type != NULL)
             {
                 /* For array types, try to resolve deferred element types */
@@ -1781,15 +1819,44 @@ static KgpcType *semcheck_field_expected_kgpc_type(SymTab_t *symtab, struct Reco
                     kgpc_type_get_array_element_type_resolved(type_node->type, symtab);
                 }
                 kgpc_type_retain(type_node->type);
-                return type_node->type;
+                result_type = type_node->type;
             }
             else
             {
                 struct TypeAlias *alias = hashnode_get_type_alias(type_node);
                 if (alias != NULL)
-                    return create_kgpc_type_from_type_alias(alias, symtab);
+                    result_type = create_kgpc_type_from_type_alias(alias, symtab);
             }
+            
+            /* If field->type is POINTER_TYPE, the type_id represents the pointed-to type,
+             * so we need to wrap the resolved type in a pointer type */
+            if (result_type != NULL && field->type == POINTER_TYPE)
+            {
+                KgpcType *pointer_type = create_pointer_type(result_type);
+                destroy_kgpc_type(result_type);
+                return pointer_type;
+            }
+            return result_type;
         }
+        
+        /* If type_id lookup failed but field->type is POINTER_TYPE, try to resolve the pointed-to type */
+        if (field->type == POINTER_TYPE)
+        {
+            /* Look up the pointed-to type by type_id */
+            KgpcType *pointed_to = NULL;
+            int prim = primitive_type_from_type_id(field->type_id);
+            if (prim != UNKNOWN_TYPE)
+                pointed_to = create_primitive_type(prim);
+            if (pointed_to != NULL)
+                return create_pointer_type(pointed_to);
+        }
+    }
+
+    /* Handle inline pointer types where type_id is NULL but type is POINTER_TYPE */
+    if (field->type == POINTER_TYPE && field->type_id == NULL)
+    {
+        /* Generic pointer with no specific target type */
+        return create_pointer_type(NULL);
     }
 
     if (field->type != UNKNOWN_TYPE)
@@ -7493,10 +7560,18 @@ FIELD_RESOLVED:
 
     if (field_desc->type_id != NULL)
     {
-        int resolved_type = field_type;
-        if (resolve_type_identifier(&resolved_type, symtab, field_desc->type_id, expr->line_num) != 0)
-            ++error_count;
-        field_type = resolved_type;
+        /* When field_desc->type is POINTER_TYPE, the type_id represents the pointed-to type,
+         * not the field type itself. In this case, we should NOT resolve the type_id as
+         * the field type - the field is a pointer and remains a pointer. */
+        int is_inline_pointer_field = (field_desc->type == POINTER_TYPE);
+        
+        if (!is_inline_pointer_field)
+        {
+            int resolved_type = field_type;
+            if (resolve_type_identifier(&resolved_type, symtab, field_desc->type_id, expr->line_num) != 0)
+                ++error_count;
+            field_type = resolved_type;
+        }
 
         HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, field_desc->type_id);
         if (type_node == NULL)
@@ -7554,19 +7629,40 @@ FIELD_RESOLVED:
         const char *pointer_subtype_id = NULL;
         if (field_desc->type_id != NULL)
         {
-            HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, field_desc->type_id);
-            if (type_node == NULL)
-                type_node = semcheck_find_type_node_with_kgpc_type(symtab, field_desc->type_id);
-            if (type_node != NULL)
+            /* Check if this is an inline pointer (field_desc->type == POINTER_TYPE means type_id 
+             * is the pointed-to type directly) vs a named pointer type */
+            if (field_desc->type == POINTER_TYPE)
             {
-                struct TypeAlias *alias = get_type_alias_from_node(type_node);
-                if (alias != NULL && alias->is_pointer)
+                /* Inline pointer: type_id IS the pointed-to type */
+                pointer_subtype_id = field_desc->type_id;
+                /* Try to resolve the pointed-to type's primitive tag */
+                int prim = primitive_type_from_type_id(field_desc->type_id);
+                if (prim != UNKNOWN_TYPE)
+                    pointer_subtype = prim;
+                else
                 {
-                    pointer_subtype = alias->pointer_type;
-                    pointer_subtype_id = alias->pointer_type_id;
+                    HashNode_t *target_node = semcheck_find_preferred_type_node(symtab, field_desc->type_id);
+                    if (target_node != NULL && target_node->type != NULL)
+                        pointer_subtype = kgpc_type_get_primitive_tag(target_node->type);
                 }
-                if (pointer_subtype == UNKNOWN_TYPE && type_node->type != NULL)
-                    pointer_subtype = kgpc_type_get_pointer_subtype_tag(type_node->type);
+            }
+            else
+            {
+                /* Named pointer type: look up the type alias to find what it points to */
+                HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, field_desc->type_id);
+                if (type_node == NULL)
+                    type_node = semcheck_find_type_node_with_kgpc_type(symtab, field_desc->type_id);
+                if (type_node != NULL)
+                {
+                    struct TypeAlias *alias = get_type_alias_from_node(type_node);
+                    if (alias != NULL && alias->is_pointer)
+                    {
+                        pointer_subtype = alias->pointer_type;
+                        pointer_subtype_id = alias->pointer_type_id;
+                    }
+                    if (pointer_subtype == UNKNOWN_TYPE && type_node->type != NULL)
+                        pointer_subtype = kgpc_type_get_pointer_subtype_tag(type_node->type);
+                }
             }
         }
         semcheck_set_pointer_info(expr, pointer_subtype, pointer_subtype_id);
@@ -8081,7 +8177,29 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                                     /* Found the field, resolve its type */
                                     KgpcType *field_type = NULL;
                                     
-                                    if (field->type_id != NULL)
+                                    /* Check for inline pointer type first (e.g., bufptr: ^Byte) */
+                                    if (field->type == POINTER_TYPE && field->type_id != NULL)
+                                    {
+                                        /* This is an inline pointer - type_id is the pointed-to type */
+                                        KgpcType *pointed_to = NULL;
+                                        HashNode_t *type_node =
+                                            semcheck_find_preferred_type_node(symtab, field->type_id);
+                                        if (type_node != NULL && type_node->type != NULL)
+                                        {
+                                            kgpc_type_retain(type_node->type);
+                                            pointed_to = type_node->type;
+                                        }
+                                        else
+                                        {
+                                            int prim = primitive_type_from_type_id(field->type_id);
+                                            if (prim != UNKNOWN_TYPE)
+                                                pointed_to = create_primitive_type(prim);
+                                        }
+                                        if (owns_type != NULL)
+                                            *owns_type = 1;
+                                        field_type = create_pointer_type(pointed_to);
+                                    }
+                                    else if (field->type_id != NULL)
                                     {
                                         /* User-defined type - look up in symbol table */
                                         HashNode_t *type_node =
@@ -8132,6 +8250,13 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                                                 kgpc_type_retain(element_type);
                                             field_type = create_array_type(element_type, field->array_start, field->array_end);
                                         }
+                                    }
+                                    else if (field->type == POINTER_TYPE)
+                                    {
+                                        /* Pointer type without type_id (generic pointer) */
+                                        if (owns_type != NULL)
+                                            *owns_type = 1;
+                                        field_type = create_pointer_type(NULL);
                                     }
                                     else
                                     {
