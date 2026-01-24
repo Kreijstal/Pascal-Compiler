@@ -8320,13 +8320,17 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
         case EXPR_TYPECAST:
         {
             const char *target_id = expr->expr_data.typecast_data.target_type_id;
+            if (getenv("KGPC_DEBUG_TYPECAST") != NULL)
+                fprintf(stderr, "[DEBUG] EXPR_TYPECAST: target_id=%s\n", target_id ? target_id : "<null>");
             if (target_id != NULL)
             {
                 HashNode_t *type_node = NULL;
                 if (FindIdent(&type_node, symtab, (char *)target_id) >= 0 &&
-                    type_node != NULL && type_node->type != NULL &&
-                    type_node->type->kind == TYPE_KIND_PROCEDURE)
+                    type_node != NULL && type_node->type != NULL)
                 {
+                    if (getenv("KGPC_DEBUG_TYPECAST") != NULL)
+                        fprintf(stderr, "[DEBUG] EXPR_TYPECAST: returning type kind=%d\n", type_node->type->kind);
+                    /* Return the type directly - handles PROCEDURE, RECORD, and other types */
                     if (owns_type != NULL)
                         *owns_type = 0;
                     return type_node->type;
