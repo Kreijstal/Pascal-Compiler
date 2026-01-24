@@ -1007,7 +1007,7 @@ static StackNode_t *codegen_alloc_record_temp(long long size)
 
     char label[32];
     snprintf(label, sizeof(label), "record_arg_%lu", codegen_next_record_temp_id());
-    return add_l_x(label, (int)size);
+    return add_l_t_bytes(label, (int)size);
 }
 
 

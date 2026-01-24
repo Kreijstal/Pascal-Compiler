@@ -1424,7 +1424,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 sret_size = kgpc_type_sizeof(return_type);
             if (sret_size <= 0 || sret_size > INT_MAX)
                 sret_size = CODEGEN_POINTER_SIZE_BYTES;
-            sret_slot = add_l_x("__record_return_tmp__", (int)sret_size);
+            sret_slot = add_l_t_bytes("__record_return_tmp__", (int)sret_size);
         }
         
         /* For constructors, allocate memory for the instance */
