@@ -366,7 +366,6 @@ const char* pascal_tag_to_string(tag_t tag) {
         case PASCAL_T_COMPILER_DIRECTIVE: return "COMPILER_DIRECTIVE";
         case PASCAL_T_EXTERNAL_NAME: return "EXTERNAL_NAME";
         case PASCAL_T_PUBLIC_NAME: return "PUBLIC_NAME";
-        case PASCAL_T_ABSOLUTE_CLAUSE: return "ABSOLUTE_CLAUSE";
         case PASCAL_T_COMMENT: return "COMMENT";
         case PASCAL_T_TYPE_SECTION: return "TYPE_SECTION";
         case PASCAL_T_TYPE_DECL: return "TYPE_DECL";

@@ -1262,13 +1262,6 @@ static inline void mark_hashnode_unit_info(HashNode_t *node, int defined_in_unit
 
 static Tree_t *g_semcheck_current_subprogram = NULL;
 
-const char *semcheck_get_current_subprogram_id(void)
-{
-    if (g_semcheck_current_subprogram == NULL)
-        return NULL;
-    return g_semcheck_current_subprogram->tree_data.subprogram_data.id;
-}
-
 void semcheck_mark_static_link_needed(int scope_level, HashNode_t *node)
 {
     if (scope_level <= 0)

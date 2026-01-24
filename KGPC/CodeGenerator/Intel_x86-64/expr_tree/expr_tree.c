@@ -1424,7 +1424,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 sret_size = kgpc_type_sizeof(return_type);
             if (sret_size <= 0 || sret_size > INT_MAX)
                 sret_size = CODEGEN_POINTER_SIZE_BYTES;
-            sret_slot = add_l_t_bytes("__record_return_tmp__", (int)sret_size);
+            sret_slot = add_l_x("__record_return_tmp__", (int)sret_size);
         }
         
         /* For constructors, allocate memory for the instance */
@@ -2569,34 +2569,6 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                         } converter;
                         converter.d = node->const_real_value;
                         snprintf(buffer, buf_len, "$%lld", (long long)converter.i);
-                    }
-                    /* Check if this is a set constant that fits in 8 bytes */
-                    else if (node->const_set_value != NULL && node->const_set_size > 0 &&
-                             node->const_set_size <= (int)sizeof(long long))
-                    {
-                        /* Small set constant - use const_int_value */
-                        snprintf(buffer, buf_len, "$%lld", node->const_int_value);
-                    }
-                    /* Check if this is a character set (32 bytes) - needs special handling */
-                    else if (node->const_set_value != NULL && node->const_set_size > (int)sizeof(long long))
-                    {
-                        /* Large set constant (e.g., character set of 32 bytes).
-                         * This cannot be represented as an immediate value.
-                         * We need to emit the set in rodata and return its address. */
-                        inst_list = codegen_emit_const_set_rodata(node, inst_list, ctx);
-                        if (node->const_set_label != NULL)
-                        {
-                            snprintf(buffer, buf_len, "%s(%%rip)", node->const_set_label);
-                        }
-                        else
-                        {
-                            /* Error: failed to emit set constant to rodata.
-                             * This indicates a bug in codegen_emit_const_set_rodata. */
-                            codegen_report_error(ctx,
-                                "ERROR: Failed to emit large set constant '%s' to rodata.",
-                                expr->expr_data.id ? expr->expr_data.id : "(unknown)");
-                            snprintf(buffer, buf_len, "$0");
-                        }
                     }
                     else
                     {

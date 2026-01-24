@@ -265,29 +265,6 @@ void print_source_context(const char *file_path, int error_line, int error_col, 
     fclose(fp);
 }
 
-/* Helper to check if a line is a {#line N "file"} directive and extract the line number.
- * Returns the new line number if it's a directive, or -1 if not. */
-static int parse_line_directive(const char *line, size_t len)
-{
-    if (len < 8) return -1;  /* Minimum: {#line 1} */
-    if (line[0] != '{' || line[1] != '#') return -1;
-    if (len < 7 || strncasecmp(line + 2, "line", 4) != 0) return -1;
-    
-    size_t pos = 6;
-    /* Skip whitespace */
-    while (pos < len && (line[pos] == ' ' || line[pos] == '\t'))
-        ++pos;
-    
-    /* Parse line number */
-    int line_num = 0;
-    while (pos < len && line[pos] >= '0' && line[pos] <= '9') {
-        line_num = line_num * 10 + (line[pos] - '0');
-        ++pos;
-    }
-    
-    return line_num > 0 ? line_num : -1;
-}
-
 int print_source_context_from_buffer(const char *buffer, size_t length,
                                      int error_line, int error_col,
                                      int num_context_lines)
@@ -307,29 +284,11 @@ int print_source_context_from_buffer(const char *buffer, size_t length,
         start_line = 1;
 
     size_t idx = 0;
-    
-    /* First pass: find the position where current_line matches start_line,
-     * respecting {#line} directives that adjust the line number */
     while (current_line < start_line && idx < length)
     {
-        /* Check for {#line N} directive at start of line */
-        size_t line_start = idx;
-        while (idx < length && buffer[idx] != '\n')
-            ++idx;
-        size_t line_len = idx - line_start;
-        
-        int directive_line = parse_line_directive(buffer + line_start, line_len);
-        if (directive_line >= 0) {
-            /* This is a line directive - the NEXT line will be directive_line */
-            if (idx < length && buffer[idx] == '\n')
-                ++idx;
-            current_line = directive_line;
-            continue;
-        }
-        
-        if (idx < length && buffer[idx] == '\n')
-            ++idx;
-        ++current_line;
+        if (buffer[idx] == '\n')
+            ++current_line;
+        ++idx;
     }
 
     if (current_line < start_line)
@@ -342,16 +301,6 @@ int print_source_context_from_buffer(const char *buffer, size_t length,
         while (idx < length && buffer[idx] != '\n')
             ++idx;
         size_t line_len = idx - line_start;
-        
-        /* Check for {#line N} directive */
-        int directive_line = parse_line_directive(buffer + line_start, line_len);
-        if (directive_line >= 0) {
-            /* Skip the directive line, don't print it */
-            if (idx < length && buffer[idx] == '\n')
-                ++idx;
-            current_line = directive_line;
-            continue;
-        }
 
         char *line_buf = (char *)malloc(line_len + 1);
         if (line_buf == NULL)

@@ -1772,6 +1772,14 @@ static KgpcType *semcheck_field_expected_kgpc_type(SymTab_t *symtab, struct Reco
         {
             if (type_node->type != NULL)
             {
+                /* For array types, try to resolve deferred element types */
+                if (type_node->type->kind == TYPE_KIND_ARRAY &&
+                    type_node->type->info.array_info.element_type == NULL &&
+                    type_node->type->info.array_info.element_type_id != NULL)
+                {
+                    /* Use the resolved version which will update the type in place */
+                    kgpc_type_get_array_element_type_resolved(type_node->type, symtab);
+                }
                 kgpc_type_retain(type_node->type);
                 return type_node->type;
             }
@@ -7520,7 +7528,8 @@ FIELD_RESOLVED:
             field_type = RECORD_TYPE;
     }
 
-    if (field_type == UNKNOWN_TYPE && field_record == NULL)
+    /* If we have an array_alias, the field type IS known (it's an array) - don't error */
+    if (field_type == UNKNOWN_TYPE && field_record == NULL && array_alias == NULL)
     {
         semcheck_error_with_context("Error on line %d, unable to resolve type for field %s.\n\n",
             expr->line_num, field_id);
@@ -7607,35 +7616,12 @@ static int semcheck_addressof(int *type_return,
     if (inner->type == EXPR_VAR_ID && inner->expr_data.id != NULL)
     {
         HashNode_t *inner_symbol = NULL;
-        int found = FindIdent(&inner_symbol, symtab, inner->expr_data.id);
-        if (found >= 0 &&
+        if (FindIdent(&inner_symbol, symtab, inner->expr_data.id) == 0 &&
             inner_symbol != NULL &&
             (inner_symbol->hash_type == HASHTYPE_FUNCTION || inner_symbol->hash_type == HASHTYPE_PROCEDURE))
         {
             inner_type = PROCEDURE;
             treated_as_proc_ref = 1;
-        }
-    }
-    /* Also check if inner is already a FUNCTION_CALL with no args - this can happen
-     * when the parser sees a function identifier and auto-converts it to a call.
-     * In the @FunctionName case, we don't want to resolve overloads - we want the address. */
-    else if (inner->type == EXPR_FUNCTION_CALL && 
-             inner->expr_data.function_call_data.args_expr == NULL)
-    {
-        const char *func_id = inner->expr_data.function_call_data.id;
-        if (func_id != NULL)
-        {
-            HashNode_t *inner_symbol = NULL;
-            int found = FindIdent(&inner_symbol, symtab, (char *)func_id);
-            if (found >= 0 &&
-                inner_symbol != NULL &&
-                (inner_symbol->hash_type == HASHTYPE_FUNCTION || inner_symbol->hash_type == HASHTYPE_PROCEDURE))
-            {
-                /* This is @FunctionName where FunctionName was auto-converted to a call.
-                 * Skip overload resolution - we just want the function's address. */
-                inner_type = PROCEDURE;
-                treated_as_proc_ref = 1;
-            }
         }
     }
 
@@ -7645,8 +7631,8 @@ static int semcheck_addressof(int *type_return,
     /* Special case: If the inner expression was auto-converted from a function identifier
      * to a function call (because we're in NO_MUTATE mode), we need to reverse that
      * since we're taking the address of the function, not calling it. */
-    int converted_to_proc_addr = treated_as_proc_ref;  /* Already converted if we treated it as proc ref */
-    if (!converted_to_proc_addr && inner->type == EXPR_FUNCTION_CALL && 
+    int converted_to_proc_addr = 0;  /* Track if we successfully convert to procedure address */
+    if (inner->type == EXPR_FUNCTION_CALL && 
         inner->expr_data.function_call_data.args_expr == NULL)
     {
         const char *func_id = inner->expr_data.function_call_data.id;
@@ -8320,17 +8306,13 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
         case EXPR_TYPECAST:
         {
             const char *target_id = expr->expr_data.typecast_data.target_type_id;
-            if (getenv("KGPC_DEBUG_TYPECAST") != NULL)
-                fprintf(stderr, "[DEBUG] EXPR_TYPECAST: target_id=%s\n", target_id ? target_id : "<null>");
             if (target_id != NULL)
             {
                 HashNode_t *type_node = NULL;
                 if (FindIdent(&type_node, symtab, (char *)target_id) >= 0 &&
-                    type_node != NULL && type_node->type != NULL)
+                    type_node != NULL && type_node->type != NULL &&
+                    type_node->type->kind == TYPE_KIND_PROCEDURE)
                 {
-                    if (getenv("KGPC_DEBUG_TYPECAST") != NULL)
-                        fprintf(stderr, "[DEBUG] EXPR_TYPECAST: returning type kind=%d\n", type_node->type->kind);
-                    /* Return the type directly - handles PROCEDURE, RECORD, and other types */
                     if (owns_type != NULL)
                         *owns_type = 0;
                     return type_node->type;
@@ -12531,6 +12513,18 @@ int semcheck_funccall(int *type_return,
                         expr->expr_data.function_call_data.mangled_id =
                             (resolved_method_name != NULL) ? strdup(resolved_method_name) : NULL;
                         
+                        if (is_static) {
+                            /* For static methods, remove the first argument (the type identifier) */
+                            ListNode_t *old_head = args_given;
+                            expr->expr_data.function_call_data.args_expr = old_head->next;
+                            old_head->next = NULL;  /* Detach to prevent dangling reference */
+                            args_given = expr->expr_data.function_call_data.args_expr;
+
+                            if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                                fprintf(stderr, "[SemCheck] semcheck_funccall: Removed type arg for static method call\n");
+                            }
+                        }
+
                         /* Prefer all overloads of the resolved method for scoring. */
                         char *mangled_method_name = NULL;
                         if (effective_record->type_id != NULL && method_name != NULL)
@@ -12546,41 +12540,6 @@ int semcheck_funccall(int *type_return,
                         ListNode_t *method_candidates = NULL;
                         if (mangled_method_name != NULL)
                             method_candidates = FindAllIdents(symtab, mangled_method_name);
-
-                        /* Check if ANY overload has Self as first param (instance method).
-                         * If there are mixed static/instance overloads, don't remove type arg
-                         * until after overload resolution picks the right one. */
-                        int any_has_self = 0;
-                        ListNode_t *cand_cur = method_candidates;
-                        while (cand_cur != NULL && !any_has_self) {
-                            HashNode_t *cand = (HashNode_t *)cand_cur->cur;
-                            if (cand != NULL && cand->type != NULL) {
-                                ListNode_t *cand_params = kgpc_type_get_procedure_params(cand->type);
-                                if (cand_params != NULL) {
-                                    Tree_t *first_param = (Tree_t *)cand_params->cur;
-                                    if (first_param != NULL && first_param->type == TREE_VAR_DECL &&
-                                        first_param->tree_data.var_decl_data.ids != NULL) {
-                                        const char *first_id = (const char *)first_param->tree_data.var_decl_data.ids->cur;
-                                        if (first_id != NULL && pascal_identifier_equals(first_id, "Self"))
-                                            any_has_self = 1;
-                                    }
-                                }
-                            }
-                            cand_cur = cand_cur->next;
-                        }
-
-                        /* Only remove type arg if ALL overloads are static (none have Self param) */
-                        if (!any_has_self && is_static) {
-                            /* For static methods, remove the first argument (the type identifier) */
-                            ListNode_t *old_head = args_given;
-                            expr->expr_data.function_call_data.args_expr = old_head->next;
-                            old_head->next = NULL;  /* Detach to prevent dangling reference */
-                            args_given = expr->expr_data.function_call_data.args_expr;
-
-                            if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
-                                fprintf(stderr, "[SemCheck] semcheck_funccall: Removed type arg for static method call\n");
-                            }
-                        }
 
                         if (mangled_name != NULL)
                             free(mangled_name);
@@ -12641,6 +12600,13 @@ int semcheck_funccall(int *type_return,
                             expr->expr_data.function_call_data.mangled_id =
                                 (resolved_method_name != NULL) ? strdup(resolved_method_name) : NULL;
 
+                            if (is_static) {
+                                ListNode_t *old_head = args_given;
+                                expr->expr_data.function_call_data.args_expr = old_head->next;
+                                old_head->next = NULL;
+                                args_given = expr->expr_data.function_call_data.args_expr;
+                            }
+
                             /* Use actual_method_owner for mangled name (for inherited methods from parent helpers) */
                             struct RecordType *record_for_mangling = (actual_method_owner != NULL) ? actual_method_owner : record_info;
                             char *mangled_method_name = NULL;
@@ -12657,36 +12623,6 @@ int semcheck_funccall(int *type_return,
                             ListNode_t *method_candidates = NULL;
                             if (mangled_method_name != NULL)
                                 method_candidates = FindAllIdents(symtab, mangled_method_name);
-
-                            /* Check if ANY overload has Self as first param (instance method).
-                             * If there are mixed static/instance overloads, don't remove type arg
-                             * until after overload resolution picks the right one. */
-                            int any_has_self = 0;
-                            ListNode_t *cand_cur = method_candidates;
-                            while (cand_cur != NULL && !any_has_self) {
-                                HashNode_t *cand = (HashNode_t *)cand_cur->cur;
-                                if (cand != NULL && cand->type != NULL) {
-                                    ListNode_t *cand_params = kgpc_type_get_procedure_params(cand->type);
-                                    if (cand_params != NULL) {
-                                        Tree_t *first_param = (Tree_t *)cand_params->cur;
-                                        if (first_param != NULL && first_param->type == TREE_VAR_DECL &&
-                                            first_param->tree_data.var_decl_data.ids != NULL) {
-                                            const char *first_id = (const char *)first_param->tree_data.var_decl_data.ids->cur;
-                                            if (first_id != NULL && pascal_identifier_equals(first_id, "Self"))
-                                                any_has_self = 1;
-                                        }
-                                    }
-                                }
-                                cand_cur = cand_cur->next;
-                            }
-
-                            /* Only remove type arg if ALL overloads are static (none have Self param) */
-                            if (!any_has_self && is_static) {
-                                ListNode_t *old_head = args_given;
-                                expr->expr_data.function_call_data.args_expr = old_head->next;
-                                old_head->next = NULL;
-                                args_given = expr->expr_data.function_call_data.args_expr;
-                            }
 
                             if (mangled_name != NULL)
                                 free(mangled_name);
@@ -12764,20 +12700,6 @@ int semcheck_funccall(int *type_return,
                 }
             }
         }
-
-        /* If still unresolved and the first arg is a type identifier, resolve it as a type name. */
-        if (record_info == NULL && first_arg->type == EXPR_VAR_ID &&
-            first_arg->expr_data.id != NULL)
-        {
-            HashNode_t *type_node = semcheck_find_preferred_type_node(symtab,
-                first_arg->expr_data.id);
-            if (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
-            {
-                record_info = get_record_type_from_node(type_node);
-                if (owner_type == NULL && type_node->type != NULL)
-                    owner_type = type_node->type;
-            }
-        }
         
         if (record_info != NULL && record_info->type_id != NULL) {
             struct RecordType *method_owner = record_info;
@@ -12809,49 +12731,6 @@ int semcheck_funccall(int *type_return,
 
                 free(candidate_name);
                 method_owner = semcheck_lookup_parent_record(symtab, method_owner);
-            }
-
-            /* If no candidates on the record, retry via any helper for this base type. */
-            if (method_candidates == NULL && record_info != NULL &&
-                !record_type_is_class(record_info) && record_info->type_id != NULL)
-            {
-                struct RecordType *helper_record = semcheck_lookup_type_helper(symtab,
-                    UNKNOWN_TYPE, record_info->type_id);
-                struct RecordType *actual_method_owner = NULL;
-                if (helper_record != NULL)
-                {
-                    HashNode_t *method_node = semcheck_find_class_method(symtab,
-                        helper_record, id, &actual_method_owner);
-                    struct RecordType *owner_for_mangle =
-                        (actual_method_owner != NULL) ? actual_method_owner : helper_record;
-                    if (method_node != NULL && owner_for_mangle != NULL &&
-                        owner_for_mangle->type_id != NULL)
-                    {
-                        size_t class_len = strlen(owner_for_mangle->type_id);
-                        size_t method_len = strlen(id);
-                        char *candidate_name = (char *)malloc(class_len + 2 + method_len + 1);
-                        if (candidate_name != NULL)
-                        {
-                            snprintf(candidate_name, class_len + 2 + method_len + 1,
-                                "%s__%s", owner_for_mangle->type_id, id);
-                            ListNode_t *candidates = FindAllIdents(symtab, candidate_name);
-                            if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
-                                fprintf(stderr, "[SemCheck] semcheck_funccall: Looking for '%s' found %d candidates\n",
-                                    candidate_name, ListLength(candidates));
-                            }
-                            if (candidates != NULL)
-                            {
-                                method_candidates = candidates;
-                                mangled_method_name = candidate_name;
-                                method_owner = owner_for_mangle;
-                            }
-                            else
-                            {
-                                free(candidate_name);
-                            }
-                        }
-                    }
-                }
             }
 
             if (method_candidates != NULL && mangled_method_name != NULL) {
@@ -14056,7 +13935,8 @@ overload_scoring_done:
     {
         if (id != NULL && pascal_identifier_equals(id, "AllocMem"))
             return semcheck_builtin_allocmem(type_return, symtab, expr, max_scope_lev);
-        if (getenv("KGPC_DEBUG_OVERLOAD") != NULL)
+        if (getenv("KGPC_DEBUG_CREATE_OVERLOAD") != NULL &&
+            id != NULL && strncasecmp(id, "Create", 6) == 0)
         {
             fprintf(stderr, "[SemCheck] no overload match for %s at line %d\n", id, expr->line_num);
             if (args_given != NULL)

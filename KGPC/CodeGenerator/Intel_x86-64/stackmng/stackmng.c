@@ -119,14 +119,6 @@ static inline int align_up(int value, int alignment)
     return value + (alignment - remainder);
 }
 
-static inline int stack_slot_alignment(void)
-{
-    int alignment = (int)sizeof(void *);
-    if (alignment < DOUBLEWORD)
-        alignment = DOUBLEWORD;
-    return alignment;
-}
-
 /* Adds temporary storage to t */
 StackNode_t *add_l_t(char *label)
 {
@@ -145,12 +137,22 @@ StackNode_t *add_l_t(char *label)
 
     cur_scope = global_stackmng->cur_scope;
 
-    int alignment = stack_slot_alignment();
-    cur_scope->t_offset = align_up(cur_scope->t_offset, alignment);
-    cur_scope->t_offset = align_up(cur_scope->t_offset, temp_size);
-    cur_scope->t_offset += temp_size;
+    /*
+     * IMPORTANT: Avoid overlapping locals (x) and temporaries (t).
+     *
+     * Historically, temporaries were allocated in a separate t_offset region with
+     * offsets computed as (x_offset + t_offset). If codegen later adds more locals
+     * (x) after some temporaries have already been allocated, those new locals can
+     * overlap the earlier temporaries and corrupt values.
+     *
+     * To guarantee uniqueness regardless of allocation order, we allocate temporary
+     * storage from the same monotonically-growing x_offset pool, while still
+     * tracking the node in the t list for lookups like find_in_temp().
+     */
+    cur_scope->x_offset = align_up(cur_scope->x_offset, temp_size);
+    cur_scope->x_offset += temp_size;
 
-    offset = cur_scope->z_offset + cur_scope->x_offset + cur_scope->t_offset;
+    offset = cur_scope->z_offset + cur_scope->x_offset;
 
     new_node = init_stack_node(offset, label, temp_size);
 
@@ -182,13 +184,13 @@ StackNode_t *add_l_t_bytes(char *label, int size)
 
     if (size <= 0)
         size = DOUBLEWORD;
-    int alignment = stack_slot_alignment();
-    int aligned_size = align_up(size, alignment);
+    int aligned_size = align_up(size, DOUBLEWORD);
 
-    cur_scope->t_offset = align_up(cur_scope->t_offset, alignment);
-    cur_scope->t_offset += aligned_size;
+    /* Allocate from x_offset to avoid overlap with later locals. */
+    cur_scope->x_offset = align_up(cur_scope->x_offset, DOUBLEWORD);
+    cur_scope->x_offset += aligned_size;
 
-    int offset = cur_scope->z_offset + cur_scope->x_offset + cur_scope->t_offset;
+    int offset = cur_scope->z_offset + cur_scope->x_offset;
 
     new_node = init_stack_node(offset, label, aligned_size);
     new_node->element_size = size;
@@ -223,10 +225,10 @@ StackNode_t *add_l_x(char *label, int size)
     if (size <= 0)
         size = DOUBLEWORD;
 
-    int alignment = stack_slot_alignment();
-    int aligned_size = align_up(size, alignment);
+    int aligned_size = size;
+    if (aligned_size % DOUBLEWORD != 0)
+        aligned_size = ((aligned_size + DOUBLEWORD - 1) / DOUBLEWORD) * DOUBLEWORD;
 
-    cur_scope->x_offset = align_up(cur_scope->x_offset, alignment);
     cur_scope->x_offset += aligned_size;
 
     /* Locals are placed below the shadow space */
