@@ -4959,8 +4959,8 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
                 }
             }
 
-            /* Absolute clauses appear as a trailing identifier; skip as initializer. */
-            if (init_node != NULL && init_node->typ == PASCAL_T_IDENTIFIER) {
+            /* Absolute clauses appear as PASCAL_T_ABSOLUTE_CLAUSE; skip as initializer. */
+            if (init_node != NULL && (init_node->typ == PASCAL_T_IDENTIFIER || init_node->typ == PASCAL_T_ABSOLUTE_CLAUSE)) {
                 init_node = NULL;
             }
             
@@ -5052,8 +5052,8 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
             }
         }
 
-        /* Absolute clauses appear as a trailing identifier; skip as initializer. */
-        if (init_node != NULL && init_node->typ == PASCAL_T_IDENTIFIER) {
+        /* Absolute clauses appear as PASCAL_T_ABSOLUTE_CLAUSE; skip as initializer. */
+        if (init_node != NULL && (init_node->typ == PASCAL_T_IDENTIFIER || init_node->typ == PASCAL_T_ABSOLUTE_CLAUSE)) {
             init_node = NULL;
         }
         
