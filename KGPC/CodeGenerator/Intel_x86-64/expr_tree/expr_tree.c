@@ -2582,8 +2582,7 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                     {
                         /* Large set constant (e.g., character set of 32 bytes).
                          * This cannot be represented as an immediate value.
-                         * We need to emit the set in rodata and return its address.
-                         * For now, use the const_set_label if available or emit it. */
+                         * We need to emit the set in rodata and return its address. */
                         inst_list = codegen_emit_const_set_rodata(node, inst_list, ctx);
                         if (node->const_set_label != NULL)
                         {
@@ -2591,7 +2590,11 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                         }
                         else
                         {
-                            /* Fallback: use 0 (this should not happen) */
+                            /* Error: failed to emit set constant to rodata.
+                             * This indicates a bug in codegen_emit_const_set_rodata. */
+                            codegen_report_error(ctx,
+                                "ERROR: Failed to emit large set constant '%s' to rodata.",
+                                expr->expr_data.id ? expr->expr_data.id : "(unknown)");
                             snprintf(buffer, buf_len, "$0");
                         }
                     }
