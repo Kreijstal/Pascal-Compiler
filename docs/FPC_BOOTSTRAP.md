@@ -4,6 +4,13 @@
 
 The FPC RTL cannot be fully compiled because kgpc has bugs and missing features that need to be fixed.
 
+## Prerequisites
+
+Clone the FPC source code:
+```bash
+git clone https://github.com/fpc/FPCSource
+```
+
 ## Build Command
 
 ### sysutils.pp (24 errors)

@@ -7607,12 +7607,35 @@ static int semcheck_addressof(int *type_return,
     if (inner->type == EXPR_VAR_ID && inner->expr_data.id != NULL)
     {
         HashNode_t *inner_symbol = NULL;
-        if (FindIdent(&inner_symbol, symtab, inner->expr_data.id) == 0 &&
+        int found = FindIdent(&inner_symbol, symtab, inner->expr_data.id);
+        if (found >= 0 &&
             inner_symbol != NULL &&
             (inner_symbol->hash_type == HASHTYPE_FUNCTION || inner_symbol->hash_type == HASHTYPE_PROCEDURE))
         {
             inner_type = PROCEDURE;
             treated_as_proc_ref = 1;
+        }
+    }
+    /* Also check if inner is already a FUNCTION_CALL with no args - this can happen
+     * when the parser sees a function identifier and auto-converts it to a call.
+     * In the @FunctionName case, we don't want to resolve overloads - we want the address. */
+    else if (inner->type == EXPR_FUNCTION_CALL && 
+             inner->expr_data.function_call_data.args_expr == NULL)
+    {
+        const char *func_id = inner->expr_data.function_call_data.id;
+        if (func_id != NULL)
+        {
+            HashNode_t *inner_symbol = NULL;
+            int found = FindIdent(&inner_symbol, symtab, (char *)func_id);
+            if (found >= 0 &&
+                inner_symbol != NULL &&
+                (inner_symbol->hash_type == HASHTYPE_FUNCTION || inner_symbol->hash_type == HASHTYPE_PROCEDURE))
+            {
+                /* This is @FunctionName where FunctionName was auto-converted to a call.
+                 * Skip overload resolution - we just want the function's address. */
+                inner_type = PROCEDURE;
+                treated_as_proc_ref = 1;
+            }
         }
     }
 
@@ -7622,8 +7645,8 @@ static int semcheck_addressof(int *type_return,
     /* Special case: If the inner expression was auto-converted from a function identifier
      * to a function call (because we're in NO_MUTATE mode), we need to reverse that
      * since we're taking the address of the function, not calling it. */
-    int converted_to_proc_addr = 0;  /* Track if we successfully convert to procedure address */
-    if (inner->type == EXPR_FUNCTION_CALL && 
+    int converted_to_proc_addr = treated_as_proc_ref;  /* Already converted if we treated it as proc ref */
+    if (!converted_to_proc_addr && inner->type == EXPR_FUNCTION_CALL && 
         inner->expr_data.function_call_data.args_expr == NULL)
     {
         const char *func_id = inner->expr_data.function_call_data.id;
@@ -14029,8 +14052,7 @@ overload_scoring_done:
     {
         if (id != NULL && pascal_identifier_equals(id, "AllocMem"))
             return semcheck_builtin_allocmem(type_return, symtab, expr, max_scope_lev);
-        if (getenv("KGPC_DEBUG_CREATE_OVERLOAD") != NULL &&
-            id != NULL && strncasecmp(id, "Create", 6) == 0)
+        if (getenv("KGPC_DEBUG_OVERLOAD") != NULL)
         {
             fprintf(stderr, "[SemCheck] no overload match for %s at line %d\n", id, expr->line_num);
             if (args_given != NULL)
