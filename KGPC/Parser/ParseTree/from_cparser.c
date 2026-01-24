@@ -4875,16 +4875,14 @@ static bool is_var_hint_clause(ast_t *node) {
 }
 
 static ast_t *absolute_clause_target(ast_t *node) {
-    if (node == NULL || node->typ != PASCAL_T_NONE)
+    if (node == NULL || node->typ != PASCAL_T_ABSOLUTE_CLAUSE)
         return NULL;
+    /* The PASCAL_T_ABSOLUTE_CLAUSE node contains the target identifier as its child
+     * (the "absolute" keyword itself is consumed by keyword_ci and not in the AST) */
     ast_t *child = node->child;
-    if (child == NULL || child->typ != PASCAL_T_IDENTIFIER || child->sym == NULL)
+    if (child == NULL || child->typ != PASCAL_T_IDENTIFIER)
         return NULL;
-    if (child->sym->name == NULL || strcasecmp(child->sym->name, "absolute") != 0)
-        return NULL;
-    if (child->next == NULL || child->next->typ != PASCAL_T_IDENTIFIER)
-        return NULL;
-    return child->next;
+    return child;
 }
 
 static Tree_t *convert_var_decl(ast_t *decl_node) {

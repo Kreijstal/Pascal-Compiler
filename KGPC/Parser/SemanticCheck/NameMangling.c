@@ -287,11 +287,11 @@ static char* MangleNameFromTypeList(const char* original_name, ListNode_t* type_
         return mangled_name;
     }
 
-    // Calculate length
+    // Calculate length - max suffix is "_ai64" (5 chars), use 6 for safety
     size_t total_len = strlen(original_name);
     ListNode_t* cur = type_list;
     while (cur != NULL) {
-        total_len += 4; // Max length of a type suffix, e.g., "_i" or "_r" plus some buffer
+        total_len += 6; // Max length of a type suffix (e.g., "_ai64" is 5 chars)
         cur = cur->next;
     }
     total_len += 1; // Null terminator
