@@ -2954,10 +2954,15 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     }
     
     int return_size = DOUBLEWORD;
+    /* Check for Single type (4 bytes) return by checking return_type_id */
+    int is_single_return = (func->return_type_id != NULL && 
+                           pascal_identifier_equals(func->return_type_id, "Single"));
     if (returns_dynamic_array)
         return_size = dynamic_array_descriptor_size;
     else if (has_record_return)
         return_size = (int)record_return_size;
+    else if (is_single_return)
+        return_size = 4;  /* Single is 4 bytes */
     else if (func_node != NULL && func_node->type != NULL &&
              func_node->type->kind == TYPE_KIND_PROCEDURE)
     {
@@ -2970,6 +2975,12 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
             if (alias != NULL && alias->storage_size > 0)
             {
                 return_size = (int)alias->storage_size;
+            }
+            /* Check for Single type (4 bytes) by type_id */
+            else if (alias != NULL && alias->target_type_id != NULL &&
+                     pascal_identifier_equals(alias->target_type_id, "Single"))
+            {
+                return_size = 4;  /* Single is 4 bytes */
             }
             else switch (tag)
             {
@@ -3215,8 +3226,12 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
                 is_real_return = 1;
         }
         
-        /* Use movsd for Real types (return in xmm0), movq/movl for others (return in rax/eax) */
-        if (is_real_return)
+        /* Use movss for Single (4-byte), movsd for Double/Real (8-byte), return in xmm0.
+         * Check element_size which stores the unaligned size, not size which may be padded. */
+        long long unaligned_return_size = return_var->element_size > 0 ? return_var->element_size : return_var->size;
+        if (is_real_return && unaligned_return_size <= 4)
+            snprintf(buffer, 50, "\tmovss\t-%d(%%rbp), %%xmm0\n", return_var->offset);
+        else if (is_real_return)
             snprintf(buffer, 50, "\tmovsd\t-%d(%%rbp), %%xmm0\n", return_var->offset);
         else if (return_var->size >= 8)
             snprintf(buffer, 50, "\tmovq\t-%d(%%rbp), %s\n", return_var->offset, RETURN_REG_64);
@@ -3553,7 +3568,11 @@ void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx, SymT
                          anon->return_type == INT64_TYPE);
         if (uses_qword)
         {
-            if (anon->return_type == REAL_TYPE)
+            /* Check element_size which stores the unaligned size */
+            long long unaligned_return_size = return_var->element_size > 0 ? return_var->element_size : return_var->size;
+            if (anon->return_type == REAL_TYPE && unaligned_return_size <= 4)
+                snprintf(buffer, sizeof(buffer), "\tmovss\t-%d(%%rbp), %%xmm0\n", return_var->offset);
+            else if (anon->return_type == REAL_TYPE)
                 snprintf(buffer, sizeof(buffer), "\tmovsd\t-%d(%%rbp), %%xmm0\n", return_var->offset);
             else
                 snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rax\n", return_var->offset);

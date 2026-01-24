@@ -3123,7 +3123,11 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                         if (return_size == 0 && return_var->size >= 8)
                             use_qword = 1;
 
-                        if (return_is_real)
+                        /* Check element_size for unaligned Single type (4 bytes) */
+                        long long unaligned_return_size = return_var->element_size > 0 ? return_var->element_size : return_var->size;
+                        if (return_is_real && unaligned_return_size <= 4)
+                            snprintf(buffer, sizeof(buffer), "\tmovss\t-%d(%%rbp), %%xmm0\n", return_var->offset);
+                        else if (return_is_real)
                             snprintf(buffer, sizeof(buffer), "\tmovsd\t-%d(%%rbp), %%xmm0\n", return_var->offset);
                         else if (use_qword)
                             snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rax\n", return_var->offset);
@@ -6010,8 +6014,10 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         if(var != NULL)
         {
             int use_qword = codegen_type_uses_qword(var_type);
-            /* Override for Single type (4-byte float): check actual storage size */
-            int is_single_target = is_single_float_type(var_type, var->size) && !var->is_reference;
+            /* Override for Single type (4-byte float): check actual storage size
+             * Use element_size which stores the unaligned size, not size which may be padded */
+            long long unaligned_size = var->element_size > 0 ? var->element_size : var->size;
+            int is_single_target = is_single_float_type(var_type, unaligned_size) && !var->is_reference;
             if (is_single_target)
                 use_qword = 0;
             if (!var->is_reference && var->size >= 8)
