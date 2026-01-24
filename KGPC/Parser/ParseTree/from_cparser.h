@@ -19,7 +19,6 @@ struct SymTab;
 typedef struct {
     char *class_name;
     char *method_name;
-    char *signature;
     int is_virtual;
     int is_override;
     int is_static;   /* 1 if method is static (no Self parameter) */
@@ -42,8 +41,6 @@ void get_class_methods(const char *class_name, ListNode_t **methods_out, int *co
  * Returns 1 if static, 0 otherwise.
  */
 int from_cparser_is_method_static(const char *class_name, const char *method_name);
-int from_cparser_method_has_static(const char *class_name, const char *method_name);
-int from_cparser_method_has_instance(const char *class_name, const char *method_name);
 
 /* Check if a method is virtual (needs VMT dispatch).
  * Returns 1 if virtual or override, 0 otherwise.
@@ -69,7 +66,7 @@ ListNode_t *from_cparser_convert_params_ast(ast_t *params_ast);
  * This is used by the semantic checker to ensure method templates are findable.
  */
 void from_cparser_register_method_template(const char *class_name, const char *method_name,
-    int is_virtual, int is_override, int is_static, ast_t *params_ast);
+    int is_virtual, int is_override, int is_static);
 
 /* Find all class names that have a method with the given name.
  * Returns a list of class names (caller must free each string and the list).

@@ -1261,24 +1261,6 @@ static inline void mark_hashnode_unit_info(HashNode_t *node, int defined_in_unit
 }
 
 static Tree_t *g_semcheck_current_subprogram = NULL;
-static KgpcType *build_function_return_type(Tree_t *subprogram, SymTab_t *symtab,
-    int *error_count, int allow_undefined);
-
-const char *semcheck_get_current_subprogram_id(void)
-{
-    if (g_semcheck_current_subprogram == NULL)
-        return NULL;
-    return g_semcheck_current_subprogram->tree_data.subprogram_data.id;
-}
-
-KgpcType *semcheck_get_current_subprogram_return_type(SymTab_t *symtab)
-{
-    if (g_semcheck_current_subprogram == NULL || symtab == NULL)
-        return NULL;
-
-    int errors = 0;
-    return build_function_return_type(g_semcheck_current_subprogram, symtab, &errors, 1);
-}
 
 void semcheck_mark_static_link_needed(int scope_level, HashNode_t *node)
 {
@@ -4867,8 +4849,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                             tmpl->name,
                                             tmpl->is_virtual,
                                             tmpl->is_override,
-                                            tmpl->is_static,
-                                            tmpl->params_ast);
+                                            tmpl->is_static);
 
                                         if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                                             fprintf(stderr, "[SemCheck] Registered method template: %s.%s (virtual=%d, override=%d, static=%d)\n",

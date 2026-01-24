@@ -1034,7 +1034,15 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
             goto cleanup;
         }
         
-        int treat_as_reference = var_node->is_reference ? 1 : 0;
+        HashNode_t *symbol = NULL;
+        int treat_as_reference = 0;
+        if (ctx->symtab != NULL)
+        {
+            if (FindIdent(&symbol, ctx->symtab, expr->expr_data.id) >= 0 && symbol != NULL)
+                treat_as_reference = symbol->is_var_parameter;
+        }
+        if (var_node->is_reference)
+            treat_as_reference = 1;
 
         /* Try normal allocation first, then spill if needed */
         Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
