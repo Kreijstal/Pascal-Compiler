@@ -172,3 +172,4 @@ cvise --timeout 7200 /tmp/cvise_indexofany.sh sysutils_indexofany.pp
 1. **Buffer overflow in MangleNameFromTypeList** - Fixed buffer size from 4 to 6 chars per suffix
 2. **Absolute variable aliasing** - Added PASCAL_T_ABSOLUTE_CLAUSE type and fixed AST handling
 3. **ABSOLUTE_CLAUSE expression errors** - Fixed var declaration conversion to skip absolute clause nodes
+4. **Local set constant codegen for character sets** - Fixed 32-byte character sets in function-local constants generating `$0` instead of actual set value. Root cause: `const_int_value` only valid for sets ≤8 bytes. Fix: emit large sets to `.rodata` section and use label reference.
