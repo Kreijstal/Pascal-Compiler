@@ -107,16 +107,25 @@ chmod +x /tmp/cvise_indexofany.sh
 cvise --timeout 7200 /tmp/cvise_indexofany.sh sysutils_indexofany.pp
 ```
 
-### Error categories (27 total):
+### Error categories (36 total):
 | Count | Error | Root Cause |
 |-------|-------|------------|
-| 6 | IndexOfAny/IndexOfAnyUnQuoted overload not found | Type helper overload resolution |
-| 6 | Result type incompatible | Cascading from overload errors |
-| 5 | procedure overload not found (InitExceptions, etc.) | Forward reference issues |
-| 3 | TGUIDHelper.Create argument type mismatch | Forward reference within type helper |
-| 3 | ShortString S assignment | Cascading from earlier errors |
+| 6 | IOPipe/FlushPipe/ClosePipe/PCloseText overload not found | Overload resolution issues |
+| 6 | DoCapSizeInt argument type mismatch | Type inference |
+| 3 | ShortString S assignment | Array assignment compatibility |
 | 3 | SysBeep/OnBeep undeclared | Forward reference support needed |
-| 1 | Result real type mismatch | Cascading |
+| 3 | InitExceptions/InitInternational/etc. overload not found | Overload resolution |
+| 3 | FreeDriveStr/FreeTerminateProcs/DoneExceptions overload not found | Overload resolution |
+| 2 | strlen ambiguity | Overload resolution |
+| 2 | Result pointer-to-procedure mismatch | Function reference handling |
+| 2 | Result type incompatible (char/string, real) | Type inference |
+| 1 | LowerCase no return statement | Control flow analysis |
+
+### Fixed issues:
+- ✅ Inline pointer type fields in records (e.g., `bufptr: ^Byte`) - fixed
+- ✅ Buffer overflow in MangleNameFromTypeList - fixed
+- ✅ Absolute variable aliasing - fixed
+- ✅ baseunix.pp regression from commit fe74623 - fixed
 
 ## Compiles Successfully (RTL Units)
 
@@ -137,7 +146,7 @@ cvise --timeout 7200 /tmp/cvise_indexofany.sh sysutils_indexofany.pp
 
 ## Units with Compilation Errors
 
-- `sysutils.pp` - **27 errors** (with `--no-stdlib`)
+- `sysutils.pp` - **36 errors** (with `--no-stdlib`)
 - `math.pp` - Depends on sysutils
 - `cthreads.pp` - Missing ThreadingAlreadyUsed
 - `charset.pp` - Type incompatibilities

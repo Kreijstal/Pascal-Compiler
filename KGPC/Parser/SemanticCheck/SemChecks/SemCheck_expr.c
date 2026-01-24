@@ -1832,8 +1832,8 @@ static KgpcType *semcheck_field_expected_kgpc_type(SymTab_t *symtab, struct Reco
              * so we need to wrap the resolved type in a pointer type */
             if (result_type != NULL && field->type == POINTER_TYPE)
             {
+                /* create_pointer_type takes ownership of result_type, so don't destroy it */
                 KgpcType *pointer_type = create_pointer_type(result_type);
-                destroy_kgpc_type(result_type);
                 return pointer_type;
             }
             return result_type;
