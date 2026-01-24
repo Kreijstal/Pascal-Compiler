@@ -1120,6 +1120,8 @@ long long expr_effective_size_bytes(const struct Expression *expr)
         case SET_TYPE:
         case ENUM_TYPE:
             return 4;
+        case INT64_TYPE:
+            return 8;
         case FILE_TYPE:
             return 368;
         case TEXT_TYPE:
@@ -1591,6 +1593,8 @@ static long long codegen_sizeof_type_tag(int type_tag)
         case SET_TYPE:
         case ENUM_TYPE:
             return 4;
+        case INT64_TYPE:
+            return 8;
         case LONGINT_TYPE:
             return 4;  // Match FPC's 32-bit LongInt
         case REAL_TYPE:
@@ -2483,15 +2487,6 @@ ListNode_t *codegen_record_field_address(struct Expression *expr, ListNode_t *in
         StackNode_t *var_node = find_label(record_expr->expr_data.id);
         if (var_node != NULL && var_node->is_reference)
             is_parameter = 1;
-        
-        /* Also check symbol table */
-        if (!is_parameter && ctx->symtab != NULL)
-        {
-            HashNode_t *symbol = NULL;
-            if (FindIdent(&symbol, ctx->symtab, record_expr->expr_data.id) >= 0 && 
-                symbol != NULL && symbol->is_var_parameter)
-                is_parameter = 1;
-        }
     }
 
     Register_t *addr_reg = NULL;
@@ -3412,6 +3407,28 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
     if (codegen_had_error(ctx) || index_reg == NULL)
         return inst_list;
 
+    /* Preserve the computed index if the base expression will invoke a call. */
+    int spill_index_for_call = (array_expr->type == EXPR_FUNCTION_CALL);
+    int index_is_qword = expression_uses_qword(index_expr);
+    StackNode_t *index_spill = NULL;
+    if (spill_index_for_call)
+    {
+        index_spill = add_l_t("array_index_spill");
+        if (index_spill != NULL)
+        {
+            char spill_buf[64];
+            if (index_is_qword)
+                snprintf(spill_buf, sizeof(spill_buf), "\tmovq\t%s, -%d(%%rbp)\n",
+                    index_reg->bit_64, index_spill->offset);
+            else
+                snprintf(spill_buf, sizeof(spill_buf), "\tmovl\t%s, -%d(%%rbp)\n",
+                    index_reg->bit_32, index_spill->offset);
+            inst_list = add_inst(inst_list, spill_buf);
+            free_reg(get_reg_stack(), index_reg);
+            index_reg = NULL;
+        }
+    }
+
     Register_t *base_reg = NULL;
     if (base_is_string || base_is_pointer)
     {
@@ -3430,6 +3447,26 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
             free_reg(get_reg_stack(), index_reg);
             return inst_list;
         }
+    }
+
+    if (spill_index_for_call && index_spill != NULL)
+    {
+        index_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (index_reg == NULL)
+            index_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+        if (index_reg == NULL)
+        {
+            free_reg(get_reg_stack(), base_reg);
+            return inst_list;
+        }
+        char reload_buf[64];
+        if (index_is_qword)
+            snprintf(reload_buf, sizeof(reload_buf), "\tmovq\t-%d(%%rbp), %s\n",
+                index_spill->offset, index_reg->bit_64);
+        else
+            snprintf(reload_buf, sizeof(reload_buf), "\tmovl\t-%d(%%rbp), %s\n",
+                index_spill->offset, index_reg->bit_32);
+        inst_list = add_inst(inst_list, reload_buf);
     }
 
     char buffer[128];

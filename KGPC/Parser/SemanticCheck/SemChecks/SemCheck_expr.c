@@ -10403,10 +10403,30 @@ int semcheck_varid(int *type_return,
                 ++return_val;
             }
         }
+        int name_is_result = 0;
+        if (mutating != NO_MUTATE && id != NULL)
+        {
+            const char *current_id = semcheck_get_current_subprogram_id();
+            if (current_id != NULL)
+            {
+                if (pascal_identifier_equals(id, current_id))
+                    name_is_result = 1;
+                else
+                {
+                    const char *sep = strstr(current_id, "__");
+                    if (sep != NULL && sep[2] != '\0' &&
+                        pascal_identifier_equals(id, sep + 2))
+                    {
+                        name_is_result = 1;
+                    }
+                }
+            }
+        }
         int is_function_result = (mutating != NO_MUTATE &&
-            hash_return->hash_type == HASHTYPE_FUNCTION);
+            (hash_return->hash_type == HASHTYPE_FUNCTION || name_is_result));
 
         KgpcType *effective_type = hash_return->type;
+        KgpcType *fallback_return_type = NULL;
         int node_is_array = 0;
         if (is_function_result)
         {
@@ -10416,6 +10436,12 @@ int semcheck_varid(int *type_return,
                 KgpcType *ret_type = kgpc_type_get_return_type(hash_return->type);
                 if (ret_type != NULL)
                     effective_type = ret_type;
+            }
+            if (effective_type == hash_return->type && name_is_result)
+            {
+                fallback_return_type = semcheck_get_current_subprogram_return_type(symtab);
+                if (fallback_return_type != NULL)
+                    effective_type = fallback_return_type;
             }
         }
         else
@@ -10464,6 +10490,8 @@ int semcheck_varid(int *type_return,
         else
             semcheck_clear_array_info(expr);
         semcheck_expr_set_resolved_kgpc_type_shared(expr, effective_type);
+        if (fallback_return_type != NULL)
+            destroy_kgpc_type(fallback_return_type);
 
         if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
             fprintf(stderr, "[SemCheck] semcheck_varid: expr=%p, id=%s, type_return=%d\n", (void*)expr, id, *type_return);
@@ -12568,6 +12596,17 @@ int semcheck_funccall(int *type_return,
         struct Expression *first_arg = (struct Expression *)args_given->cur;
         int first_arg_type_tag;
         semcheck_expr_main(&first_arg_type_tag, symtab, first_arg, max_scope_lev, NO_MUTATE);
+        int owner_is_type = 0;
+        if (first_arg != NULL && first_arg->type == EXPR_VAR_ID &&
+            first_arg->expr_data.id != NULL)
+        {
+            HashNode_t *owner_node = NULL;
+            if (FindIdent(&owner_node, symtab, first_arg->expr_data.id) >= 0 &&
+                owner_node != NULL && owner_node->hash_type == HASHTYPE_TYPE)
+            {
+                owner_is_type = 1;
+            }
+        }
         
         if (first_arg->resolved_kgpc_type != NULL) {
             KgpcType *owner_type = first_arg->resolved_kgpc_type;
@@ -12587,14 +12626,16 @@ int semcheck_funccall(int *type_return,
                     method_name += 2;
                 if (method_name != NULL &&
                     (strncasecmp(method_name, "Create", 6) == 0 ||
-                     strcasecmp(method_name, "Destroy") == 0))
+                     strcasecmp(method_name, "Destroy") == 0) &&
+                    record_type_is_class(record_info))
                 {
                     /* Defer constructor/destructor handling to the specialized path below. */
                 }
                 else
                 {
-                    /* Check if this is a static method */
-                    int is_static = from_cparser_is_method_static(record_info->type_id, method_name);
+                    int has_static = from_cparser_method_has_static(record_info->type_id, method_name);
+                    int has_instance = from_cparser_method_has_instance(record_info->type_id, method_name);
+                    int is_static = owner_is_type ? has_static : (has_static && !has_instance);
                 
                 if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                     fprintf(stderr, "[SemCheck] semcheck_funccall: __method call type=%s method=%s is_static=%d\n",
@@ -12617,7 +12658,9 @@ int semcheck_funccall(int *type_return,
                             if (method_node != NULL)
                             {
                                 effective_record = helper_record;
-                                is_static = from_cparser_is_method_static(helper_record->type_id, method_name);
+                                has_static = from_cparser_method_has_static(helper_record->type_id, method_name);
+                                has_instance = from_cparser_method_has_instance(helper_record->type_id, method_name);
+                                is_static = owner_is_type ? has_static : (has_static && !has_instance);
                                 if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                                     fprintf(stderr, "[SemCheck] semcheck_funccall: Found method %s via record helper %s\n",
                                         method_name, helper_record->type_id);
@@ -12703,13 +12746,16 @@ int semcheck_funccall(int *type_return,
                         method_name += 2;
                     if (method_name != NULL &&
                         (strncasecmp(method_name, "Create", 6) == 0 ||
-                         strcasecmp(method_name, "Destroy") == 0))
+                         strcasecmp(method_name, "Destroy") == 0) &&
+                        record_type_is_class(record_info))
                     {
                         /* Defer constructor/destructor handling to the specialized path below. */
                     }
                     else
                     {
-                        int is_static = from_cparser_is_method_static(record_info->type_id, method_name);
+                        int has_static = from_cparser_method_has_static(record_info->type_id, method_name);
+                        int has_instance = from_cparser_method_has_instance(record_info->type_id, method_name);
+                        int is_static = owner_is_type ? has_static : (has_static && !has_instance);
                         /* Use owner_out to get the actual owner where the method was found (may be parent helper) */
                         struct RecordType *actual_method_owner = NULL;
                         HashNode_t *method_node = semcheck_find_class_method(symtab, record_info, method_name, &actual_method_owner);
@@ -12769,6 +12815,89 @@ int semcheck_funccall(int *type_return,
                             hash_return = method_node;
                             goto method_call_resolved;
                         }
+                    }
+                }
+            }
+        }
+        else
+        {
+            const char *type_name = get_expr_type_name(first_arg, symtab);
+            struct RecordType *helper_record = semcheck_lookup_type_helper(symtab,
+                first_arg_type_tag, type_name);
+            if (helper_record != NULL && helper_record->type_id != NULL)
+            {
+                struct RecordType *record_info = helper_record;
+                const char *method_name = id;
+                if (method_name != NULL && strncmp(method_name, "__", 2) == 0)
+                    method_name += 2;
+                if (method_name != NULL &&
+                    (strncasecmp(method_name, "Create", 6) == 0 ||
+                     strcasecmp(method_name, "Destroy") == 0) &&
+                    record_type_is_class(record_info))
+                {
+                    /* Defer constructor/destructor handling to the specialized path below. */
+                }
+                else
+                {
+                    int has_static = from_cparser_method_has_static(record_info->type_id, method_name);
+                    int has_instance = from_cparser_method_has_instance(record_info->type_id, method_name);
+                    int is_static = owner_is_type ? has_static : (has_static && !has_instance);
+                    struct RecordType *actual_method_owner = NULL;
+                    HashNode_t *method_node = semcheck_find_class_method(symtab, record_info, method_name, &actual_method_owner);
+                    if (method_node != NULL)
+                    {
+                        set_type_from_hashtype(type_return, method_node);
+                        semcheck_expr_set_resolved_kgpc_type_shared(expr, method_node->type);
+                        expr->expr_data.function_call_data.resolved_func = method_node;
+                        const char *resolved_method_name = (method_node->mangled_id != NULL) ?
+                            method_node->mangled_id : method_node->id;
+                        if (expr->expr_data.function_call_data.mangled_id != NULL)
+                            free(expr->expr_data.function_call_data.mangled_id);
+                        expr->expr_data.function_call_data.mangled_id =
+                            (resolved_method_name != NULL) ? strdup(resolved_method_name) : NULL;
+
+                        if (is_static) {
+                            ListNode_t *old_head = args_given;
+                            expr->expr_data.function_call_data.args_expr = old_head->next;
+                            old_head->next = NULL;
+                            args_given = expr->expr_data.function_call_data.args_expr;
+                        }
+
+                        struct RecordType *record_for_mangling = (actual_method_owner != NULL) ? actual_method_owner : record_info;
+                        char *mangled_method_name = NULL;
+                        if (record_for_mangling->type_id != NULL && method_name != NULL)
+                        {
+                            size_t class_len = strlen(record_for_mangling->type_id);
+                            size_t method_len = strlen(method_name);
+                            mangled_method_name = (char *)malloc(class_len + 2 + method_len + 1);
+                            if (mangled_method_name != NULL)
+                                snprintf(mangled_method_name, class_len + 2 + method_len + 1,
+                                    "%s__%s", record_for_mangling->type_id, method_name);
+                        }
+
+                        ListNode_t *method_candidates = NULL;
+                        if (mangled_method_name != NULL)
+                            method_candidates = FindAllIdents(symtab, mangled_method_name);
+
+                        if (mangled_name != NULL)
+                            free(mangled_name);
+                        mangled_name = (mangled_method_name != NULL) ? strdup(mangled_method_name)
+                                                                    : (resolved_method_name != NULL ? strdup(resolved_method_name) : NULL);
+
+                        if (method_candidates != NULL)
+                        {
+                            overload_candidates = method_candidates;
+                        }
+                        else
+                        {
+                            overload_candidates = CreateListNode(method_node, LIST_UNSPECIFIED);
+                        }
+
+                        if (mangled_method_name != NULL)
+                            free(mangled_method_name);
+
+                        hash_return = method_node;
+                        goto method_call_resolved;
                     }
                 }
             }

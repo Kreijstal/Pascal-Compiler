@@ -9,6 +9,8 @@
 #include "../ParseTree/tree.h"
 #include "SymTab/SymTab.h"
 
+typedef struct KgpcType KgpcType;
+
 /* The main function for checking a tree */
 /* Return values:
     0       -> Check successful
@@ -27,6 +29,8 @@ void semantic_error(int line_num, int col_num, const char *format, ...);
 void semcheck_error_with_context(const char *format, ...);
 void semcheck_set_source_path(const char *path);
 void semcheck_set_source_buffer(const char *buffer, size_t length);
+const char *semcheck_get_current_subprogram_id(void);
+KgpcType *semcheck_get_current_subprogram_return_type(SymTab_t *symtab);
 
 HashNode_t *semcheck_find_type_node_with_kgpc_type(SymTab_t *symtab, const char *type_id);
 int semcheck_is_unit_name(const char *name);
