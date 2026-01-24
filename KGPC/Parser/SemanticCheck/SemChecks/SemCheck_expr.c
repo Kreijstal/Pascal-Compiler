@@ -12504,18 +12504,6 @@ int semcheck_funccall(int *type_return,
                         expr->expr_data.function_call_data.mangled_id =
                             (resolved_method_name != NULL) ? strdup(resolved_method_name) : NULL;
                         
-                        if (is_static) {
-                            /* For static methods, remove the first argument (the type identifier) */
-                            ListNode_t *old_head = args_given;
-                            expr->expr_data.function_call_data.args_expr = old_head->next;
-                            old_head->next = NULL;  /* Detach to prevent dangling reference */
-                            args_given = expr->expr_data.function_call_data.args_expr;
-
-                            if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
-                                fprintf(stderr, "[SemCheck] semcheck_funccall: Removed type arg for static method call\n");
-                            }
-                        }
-
                         /* Prefer all overloads of the resolved method for scoring. */
                         char *mangled_method_name = NULL;
                         if (effective_record->type_id != NULL && method_name != NULL)
@@ -12531,6 +12519,41 @@ int semcheck_funccall(int *type_return,
                         ListNode_t *method_candidates = NULL;
                         if (mangled_method_name != NULL)
                             method_candidates = FindAllIdents(symtab, mangled_method_name);
+
+                        /* Check if ANY overload has Self as first param (instance method).
+                         * If there are mixed static/instance overloads, don't remove type arg
+                         * until after overload resolution picks the right one. */
+                        int any_has_self = 0;
+                        ListNode_t *cand_cur = method_candidates;
+                        while (cand_cur != NULL && !any_has_self) {
+                            HashNode_t *cand = (HashNode_t *)cand_cur->cur;
+                            if (cand != NULL && cand->type != NULL) {
+                                ListNode_t *cand_params = kgpc_type_get_procedure_params(cand->type);
+                                if (cand_params != NULL) {
+                                    Tree_t *first_param = (Tree_t *)cand_params->cur;
+                                    if (first_param != NULL && first_param->type == TREE_VAR_DECL &&
+                                        first_param->tree_data.var_decl_data.ids != NULL) {
+                                        const char *first_id = (const char *)first_param->tree_data.var_decl_data.ids->cur;
+                                        if (first_id != NULL && pascal_identifier_equals(first_id, "Self"))
+                                            any_has_self = 1;
+                                    }
+                                }
+                            }
+                            cand_cur = cand_cur->next;
+                        }
+
+                        /* Only remove type arg if ALL overloads are static (none have Self param) */
+                        if (!any_has_self && is_static) {
+                            /* For static methods, remove the first argument (the type identifier) */
+                            ListNode_t *old_head = args_given;
+                            expr->expr_data.function_call_data.args_expr = old_head->next;
+                            old_head->next = NULL;  /* Detach to prevent dangling reference */
+                            args_given = expr->expr_data.function_call_data.args_expr;
+
+                            if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                                fprintf(stderr, "[SemCheck] semcheck_funccall: Removed type arg for static method call\n");
+                            }
+                        }
 
                         if (mangled_name != NULL)
                             free(mangled_name);
@@ -12591,13 +12614,6 @@ int semcheck_funccall(int *type_return,
                             expr->expr_data.function_call_data.mangled_id =
                                 (resolved_method_name != NULL) ? strdup(resolved_method_name) : NULL;
 
-                            if (is_static) {
-                                ListNode_t *old_head = args_given;
-                                expr->expr_data.function_call_data.args_expr = old_head->next;
-                                old_head->next = NULL;
-                                args_given = expr->expr_data.function_call_data.args_expr;
-                            }
-
                             /* Use actual_method_owner for mangled name (for inherited methods from parent helpers) */
                             struct RecordType *record_for_mangling = (actual_method_owner != NULL) ? actual_method_owner : record_info;
                             char *mangled_method_name = NULL;
@@ -12614,6 +12630,36 @@ int semcheck_funccall(int *type_return,
                             ListNode_t *method_candidates = NULL;
                             if (mangled_method_name != NULL)
                                 method_candidates = FindAllIdents(symtab, mangled_method_name);
+
+                            /* Check if ANY overload has Self as first param (instance method).
+                             * If there are mixed static/instance overloads, don't remove type arg
+                             * until after overload resolution picks the right one. */
+                            int any_has_self = 0;
+                            ListNode_t *cand_cur = method_candidates;
+                            while (cand_cur != NULL && !any_has_self) {
+                                HashNode_t *cand = (HashNode_t *)cand_cur->cur;
+                                if (cand != NULL && cand->type != NULL) {
+                                    ListNode_t *cand_params = kgpc_type_get_procedure_params(cand->type);
+                                    if (cand_params != NULL) {
+                                        Tree_t *first_param = (Tree_t *)cand_params->cur;
+                                        if (first_param != NULL && first_param->type == TREE_VAR_DECL &&
+                                            first_param->tree_data.var_decl_data.ids != NULL) {
+                                            const char *first_id = (const char *)first_param->tree_data.var_decl_data.ids->cur;
+                                            if (first_id != NULL && pascal_identifier_equals(first_id, "Self"))
+                                                any_has_self = 1;
+                                        }
+                                    }
+                                }
+                                cand_cur = cand_cur->next;
+                            }
+
+                            /* Only remove type arg if ALL overloads are static (none have Self param) */
+                            if (!any_has_self && is_static) {
+                                ListNode_t *old_head = args_given;
+                                expr->expr_data.function_call_data.args_expr = old_head->next;
+                                old_head->next = NULL;
+                                args_given = expr->expr_data.function_call_data.args_expr;
+                            }
 
                             if (mangled_name != NULL)
                                 free(mangled_name);
