@@ -147,6 +147,110 @@ static bool peek_assignment_operator(input_t* in) {
     return false;
 }
 
+typedef struct {
+    combinator_t **stmt_parser;
+} case_stmt_list_args;
+
+static bool case_branch_should_stop(input_t* in) {
+    pascal_word_slice_t slice;
+    if (pascal_peek_word(in, &slice)) {
+        if (pascal_word_equals_ci(&slice, "else") ||
+            pascal_word_equals_ci(&slice, "end")) {
+            return true;
+        }
+    }
+    if (peek_label_statement(in)) {
+        return true;
+    }
+    return false;
+}
+
+static ParseResult case_branch_stmt_list_fn(input_t* in, void* args, char* parser_name) {
+    case_stmt_list_args* clargs = (case_stmt_list_args*)args;
+    if (clargs == NULL || clargs->stmt_parser == NULL || *clargs->stmt_parser == NULL) {
+        return make_failure_v2(in, parser_name, strdup("Invalid case branch parser state"), NULL);
+    }
+
+    InputState state;
+    save_input_state(in, &state);
+
+    ast_t* first = NULL;
+    ast_t* last = NULL;
+    int stmt_count = 0;
+
+    while (!case_branch_should_stop(in)) {
+        ParseResult stmt_res = parse(in, *clargs->stmt_parser);
+        if (!stmt_res.is_success) {
+            if (stmt_res.value.error != NULL) {
+                free_error(stmt_res.value.error);
+            }
+            if (stmt_count == 0) {
+                restore_input_state(in, &state);
+                return make_failure_v2(in, parser_name, strdup("Expected statement in case branch"), NULL);
+            }
+            break;
+        }
+
+        ast_t* stmt_ast = stmt_res.value.ast;
+        if (stmt_ast == ast_nil) {
+            stmt_ast = NULL;
+        }
+        if (stmt_ast != NULL) {
+            if (first == NULL) {
+                first = stmt_ast;
+            } else if (last != NULL) {
+                last->next = stmt_ast;
+            }
+            last = stmt_ast;
+            stmt_count++;
+        }
+
+        InputState semi_state;
+        save_input_state(in, &semi_state);
+        combinator_t* semi = token(match(";"));
+        ParseResult semi_res = parse(in, semi);
+        free_combinator(semi);
+        if (!semi_res.is_success) {
+            if (semi_res.value.error != NULL) {
+                free_error(semi_res.value.error);
+            }
+            break;
+        }
+        free_ast(semi_res.value.ast);
+
+        if (case_branch_should_stop(in)) {
+            restore_input_state(in, &semi_state);
+            break;
+        }
+    }
+
+    if (stmt_count == 0) {
+        return make_success(ast_nil);
+    }
+
+    if (stmt_count == 1) {
+        return make_success(first);
+    }
+
+    ast_t* block = new_ast();
+    block->typ = PASCAL_T_BEGIN_BLOCK;
+    block->child = first;
+    block->next = NULL;
+    block->line = first != NULL ? first->line : in->line;
+    block->col = first != NULL ? first->col : in->col;
+    return make_success(block);
+}
+
+static combinator_t* case_branch_stmt_list(combinator_t** stmt_parser) {
+    case_stmt_list_args* args = (case_stmt_list_args*)safe_malloc(sizeof(case_stmt_list_args));
+    args->stmt_parser = stmt_parser;
+    combinator_t* comb = new_combinator();
+    comb->fn = case_branch_stmt_list_fn;
+    comb->args = args;
+    comb->name = strdup("case_branch_stmt_list");
+    return comb;
+}
+
 static bool next_non_layout_is_comma(input_t* in) {
     if (in == NULL || in->buffer == NULL)
         return false;
@@ -758,6 +862,11 @@ void init_pascal_statement_parser(combinator_t** p) {
         NULL
     );
     combinator_t* suffixes = many(suffix_choice);
+    combinator_t* required_suffixes = seq(new_combinator(), PASCAL_T_NONE,
+        suffix_choice,
+        suffixes,
+        NULL
+    );
 
     // Simple typecast lvalue without suffixes: Integer(x) := 42
     // Uses type_name for built-in types only (safer, avoids matching function calls)
@@ -788,6 +897,13 @@ void init_pascal_statement_parser(combinator_t** p) {
         NULL
     ), wrap_typecast_deref_lvalue);
 
+    // Typecast lvalue with member/array/pointer suffix: TFoo(obj).Field := 1
+    combinator_t* typecast_lvalue_with_suffixes = map(seq(new_combinator(), PASCAL_T_NONE,
+        typecast_base,
+        required_suffixes,
+        NULL
+    ), build_pointer_lvalue_chain);
+
     combinator_t* simple_lvalue = map(seq(new_combinator(), PASCAL_T_NONE,
         simple_identifier,
         suffixes,
@@ -796,6 +912,7 @@ void init_pascal_statement_parser(combinator_t** p) {
 
     combinator_t* lvalue = multi(new_combinator(), PASCAL_T_NONE,
         typecast_lvalue_with_deref,  // Try typecast with deref first (PCardinal(@x)^)
+        typecast_lvalue_with_suffixes, // Then typecast with field/array/pointer access
         typecast_lvalue_simple,      // Then simple typecast (Integer(x))
         simple_lvalue,               // Finally simple identifier with optional suffixes
         NULL
@@ -1161,10 +1278,11 @@ void init_pascal_statement_parser(combinator_t** p) {
         NULL
     );
     
+    combinator_t* case_branch_body = case_branch_stmt_list(stmt_parser);
     combinator_t* case_branch = seq(new_combinator(), PASCAL_T_CASE_BRANCH,
         case_label_list,                       // case labels
         token(match(":")),                     // colon
-        stmt_or_empty,                     // statement
+        case_branch_body,                      // statement or statement list
         NULL
     );
     
@@ -1176,7 +1294,7 @@ void init_pascal_statement_parser(combinator_t** p) {
             sep_end_by(case_branch, token(match(";"))), // case branches with optional trailing semicolon
             optional(seq(new_combinator(), PASCAL_T_ELSE, // optional else clause
                 token(keyword_ci("else")),         // else keyword
-                stmt_or_empty,                 // else statement
+                case_branch_body,                  // else statement or list
                 optional(token(match(";"))),      // optional semicolon after else block
                 NULL
             )),

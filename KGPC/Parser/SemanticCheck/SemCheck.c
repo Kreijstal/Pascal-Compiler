@@ -1607,6 +1607,52 @@ static int resolve_scoped_enum_literal(SymTab_t *symtab, const char *type_name,
     const char *literal_name, long long *out_value);
 static char *build_qualified_identifier_from_expr(struct Expression *expr);
 
+static int expression_is_set_const_expr(SymTab_t *symtab, struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+
+    if (expr->type == EXPR_SET)
+        return 1;
+
+    if (expr->type == EXPR_VAR_ID && expr->expr_data.id != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindIdent(&node, symtab, expr->expr_data.id) != -1 &&
+            node != NULL && node->const_set_value != NULL)
+            return 1;
+    }
+
+    if (expr->type == EXPR_RECORD_ACCESS &&
+        expr->expr_data.record_access_data.field_id != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindIdent(&node, symtab, expr->expr_data.record_access_data.field_id) != -1 &&
+            node != NULL && node->const_set_value != NULL)
+            return 1;
+    }
+
+    if (expr->type == EXPR_ADDOP)
+    {
+        int op = expr->expr_data.addop_data.addop_type;
+        if ((op == PLUS || op == MINUS) &&
+            expression_is_set_const_expr(symtab, expr->expr_data.addop_data.left_expr) &&
+            expression_is_set_const_expr(symtab, expr->expr_data.addop_data.right_term))
+            return 1;
+    }
+
+    if (expr->type == EXPR_MULOP)
+    {
+        int op = expr->expr_data.mulop_data.mulop_type;
+        if ((op == STAR || op == AND) &&
+            expression_is_set_const_expr(symtab, expr->expr_data.mulop_data.left_term) &&
+            expression_is_set_const_expr(symtab, expr->expr_data.mulop_data.right_factor))
+            return 1;
+    }
+
+    return 0;
+}
+
 /* Evaluate a set literal into a byte array (supports up to 0..255) */
 static int evaluate_set_const_bytes(SymTab_t *symtab, struct Expression *expr,
     unsigned char *out_bytes, size_t out_bytes_size, size_t *out_size,
@@ -1616,6 +1662,120 @@ static int evaluate_set_const_bytes(SymTab_t *symtab, struct Expression *expr,
         return 1;
 
     memset(out_bytes, 0, out_bytes_size);
+
+    if (expr->type == EXPR_VAR_ID && expr->expr_data.id != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindIdent(&node, symtab, expr->expr_data.id) != -1 &&
+            node != NULL && node->const_set_value != NULL)
+        {
+            size_t size = (size_t)node->const_set_size;
+            if (size > out_bytes_size)
+                return 1;
+            memcpy(out_bytes, node->const_set_value, size);
+            if (out_size != NULL)
+                *out_size = size;
+            if (out_mask != NULL && size <= sizeof(long long))
+            {
+                long long mask = 0;
+                for (size_t i = 0; i < size; ++i)
+                    mask |= ((long long)out_bytes[i]) << (i * 8);
+                *out_mask = mask;
+            }
+            if (is_char_set != NULL)
+                *is_char_set = (size > 4);
+            return 0;
+        }
+        return 1;
+    }
+
+    if (expr->type == EXPR_RECORD_ACCESS &&
+        expr->expr_data.record_access_data.field_id != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindIdent(&node, symtab, expr->expr_data.record_access_data.field_id) != -1 &&
+            node != NULL && node->const_set_value != NULL)
+        {
+            size_t size = (size_t)node->const_set_size;
+            if (size > out_bytes_size)
+                return 1;
+            memcpy(out_bytes, node->const_set_value, size);
+            if (out_size != NULL)
+                *out_size = size;
+            if (out_mask != NULL && size <= sizeof(long long))
+            {
+                long long mask = 0;
+                for (size_t i = 0; i < size; ++i)
+                    mask |= ((long long)out_bytes[i]) << (i * 8);
+                *out_mask = mask;
+            }
+            if (is_char_set != NULL)
+                *is_char_set = (size > 4);
+            return 0;
+        }
+        return 1;
+    }
+
+    if (expr->type == EXPR_ADDOP || expr->type == EXPR_MULOP)
+    {
+        unsigned char left_bytes[32];
+        unsigned char right_bytes[32];
+        size_t left_size = 0;
+        size_t right_size = 0;
+        int left_char = 0;
+        int right_char = 0;
+        int op = (expr->type == EXPR_ADDOP) ?
+            expr->expr_data.addop_data.addop_type :
+            expr->expr_data.mulop_data.mulop_type;
+        struct Expression *left_expr = (expr->type == EXPR_ADDOP) ?
+            expr->expr_data.addop_data.left_expr :
+            expr->expr_data.mulop_data.left_term;
+        struct Expression *right_expr = (expr->type == EXPR_ADDOP) ?
+            expr->expr_data.addop_data.right_term :
+            expr->expr_data.mulop_data.right_factor;
+
+        if (evaluate_set_const_bytes(symtab, left_expr, left_bytes, sizeof(left_bytes),
+                &left_size, NULL, &left_char) != 0)
+            return 1;
+        if (evaluate_set_const_bytes(symtab, right_expr, right_bytes, sizeof(right_bytes),
+                &right_size, NULL, &right_char) != 0)
+            return 1;
+
+        size_t used = (left_size > right_size) ? left_size : right_size;
+        if (used == 0)
+            used = 4;
+
+        for (size_t i = 0; i < used; ++i)
+        {
+            unsigned char l = (i < left_size) ? left_bytes[i] : 0;
+            unsigned char r = (i < right_size) ? right_bytes[i] : 0;
+            if (expr->type == EXPR_ADDOP && op == PLUS)
+                out_bytes[i] = (unsigned char)(l | r);
+            else if (expr->type == EXPR_ADDOP && op == MINUS)
+                out_bytes[i] = (unsigned char)(l & (unsigned char)(~r));
+            else if (expr->type == EXPR_MULOP && (op == STAR || op == AND))
+                out_bytes[i] = (unsigned char)(l & r);
+            else
+                return 1;
+        }
+
+        if (out_size != NULL)
+            *out_size = used;
+        if (out_mask != NULL && used <= sizeof(long long))
+        {
+            long long mask = 0;
+            for (size_t i = 0; i < used; ++i)
+                mask |= ((long long)out_bytes[i]) << (i * 8);
+            *out_mask = mask;
+        }
+        if (is_char_set != NULL)
+            *is_char_set = (left_char || right_char || used > 4);
+        return 0;
+    }
+
+    if (expr->type != EXPR_SET)
+        return 1;
+
     size_t used = 0;
     long long mask = 0;
     long long max_value = 0;
@@ -5549,7 +5709,7 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                 }
             }
         }
-        else if (value_expr != NULL && value_expr->type == EXPR_SET)
+        else if (value_expr != NULL && expression_is_set_const_expr(symtab, value_expr))
         {
             /* Evaluate as set constant (supports char sets up to 0..255) */
             unsigned char set_bytes[32];
@@ -7579,6 +7739,12 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     /* For type inference, use INTEGER as placeholder - will be replaced later */
                     var_type = HASHVAR_INTEGER;  /* Placeholder */
                 }
+                else if (tree->tree_data.var_decl_data.type == UNKNOWN_TYPE &&
+                    tree->tree_data.var_decl_data.type_id == NULL &&
+                    tree->tree_data.var_decl_data.is_untyped_param)
+                {
+                    var_type = HASHVAR_UNTYPED;
+                }
                 else if(tree->tree_data.var_decl_data.type == INT_TYPE)
                     var_type = HASHVAR_INTEGER;
                 else if(tree->tree_data.var_decl_data.type == LONGINT_TYPE)
@@ -8165,7 +8331,7 @@ next_identifier:
                                 if (evaluate_real_const_expr(symtab, init_expr, &real_value) == 0)
                                     var_node->const_real_value = real_value;
                             }
-                            else if (init_expr->type == EXPR_SET)
+                            else if (expression_is_set_const_expr(symtab, init_expr))
                             {
                                 unsigned char set_bytes[32];
                                 size_t set_size = 0;

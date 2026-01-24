@@ -1765,6 +1765,20 @@ static int map_type_name(const char *name, char **type_id_out) {
             *type_id_out = strdup("int64");
         return INT64_TYPE;
     }
+    if (strcasecmp(name, "nativeint") == 0 ||
+        strcasecmp(name, "sizeint") == 0 ||
+        strcasecmp(name, "ptrint") == 0) {
+        if (type_id_out != NULL)
+            *type_id_out = strdup(name);
+        return INT64_TYPE;
+    }
+    if (strcasecmp(name, "nativeuint") == 0 ||
+        strcasecmp(name, "sizeuint") == 0 ||
+        strcasecmp(name, "ptruint") == 0) {
+        if (type_id_out != NULL)
+            *type_id_out = strdup(name);
+        return INT64_TYPE;
+    }
     if (strcasecmp(name, "real") == 0) {
         if (type_id_out != NULL)
             *type_id_out = strdup("real");
@@ -4804,6 +4818,8 @@ static ListNode_t *convert_param(ast_t *param_node) {
         {
             param_decl = mk_vardecl(param_node->line, id_node, var_type, type_id_copy,
                 is_var_param, 0, default_init, NULL, inline_alias, NULL);
+            if (param_decl != NULL && (type_node == NULL || type_node->typ != PASCAL_T_TYPE_SPEC))
+                param_decl->tree_data.var_decl_data.is_untyped_param = 1;
         }
         
         list_builder_append(&result_builder, param_decl, LIST_TREE);
@@ -4842,6 +4858,33 @@ ListNode_t *from_cparser_convert_params_ast(ast_t *params_ast)
         cursor = cursor->child;
 
     return convert_param_list(&cursor);
+}
+
+static bool is_var_hint_clause(ast_t *node) {
+    if (node == NULL || node->typ != PASCAL_T_NONE)
+        return false;
+    ast_t *child = node->child;
+    if (child == NULL || child->typ != PASCAL_T_IDENTIFIER || child->sym == NULL)
+        return false;
+    const char *name = child->sym->name;
+    if (name == NULL)
+        return false;
+    return strcasecmp(name, "deprecated") == 0
+        || strcasecmp(name, "platform") == 0
+        || strcasecmp(name, "library") == 0;
+}
+
+static ast_t *absolute_clause_target(ast_t *node) {
+    if (node == NULL || node->typ != PASCAL_T_NONE)
+        return NULL;
+    ast_t *child = node->child;
+    if (child == NULL || child->typ != PASCAL_T_IDENTIFIER || child->sym == NULL)
+        return NULL;
+    if (child->sym->name == NULL || strcasecmp(child->sym->name, "absolute") != 0)
+        return NULL;
+    if (child->next == NULL || child->next->typ != PASCAL_T_IDENTIFIER)
+        return NULL;
+    return child->next;
 }
 
 static Tree_t *convert_var_decl(ast_t *decl_node) {
@@ -4905,12 +4948,16 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
             /* Handle optional initializer wrapper: optional(seq(...)) creates PASCAL_T_NONE node */
             ast_t *init_node = cur;
             if (init_node->typ == PASCAL_T_NONE && init_node->child != NULL) {
+                if (absolute_clause_target(init_node) != NULL || is_var_hint_clause(init_node)) {
+                    init_node = NULL;
+                } else {
                 /* The wrapper contains "=" token followed by the expression.
                  * Skip to find the actual expression node (not the "=" token) */
                 ast_t *child = init_node->child;
                 if (child != NULL && child->next != NULL) {
                     /* Skip the first child (the "=" token) and use the second */
                     init_node = child->next;
+                }
                 }
             }
 
@@ -4994,12 +5041,16 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
         /* Handle optional initializer wrapper: optional(seq(...)) creates PASCAL_T_NONE node */
         ast_t *init_node = cur;
         if (init_node->typ == PASCAL_T_NONE && init_node->child != NULL) {
+            if (absolute_clause_target(init_node) != NULL || is_var_hint_clause(init_node)) {
+                init_node = NULL;
+            } else {
             /* The wrapper contains "=" token followed by the expression.
              * Skip to find the actual expression node (not the "=" token) */
             ast_t *child = init_node->child;
             if (child != NULL && child->next != NULL) {
                 /* Skip the first child (the "=" token) and use the second */
                 init_node = child->next;
+            }
             }
         }
 
@@ -5118,17 +5169,13 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
                     (dbg->sym != NULL && dbg->sym->name != NULL) ? dbg->sym->name : "<null>");
             }
         }
-        while (abs_node != NULL && abs_node->typ == PASCAL_T_IDENTIFIER)
+        while (abs_node != NULL) {
+            ast_t *target = absolute_clause_target(abs_node);
+            if (target != NULL) {
+                absolute_target = dup_symbol(target);
+                break;
+            }
             abs_node = abs_node->next;
-        if (abs_node != NULL && (abs_node->typ == PASCAL_T_TYPE_SPEC || abs_node->typ == PASCAL_T_IDENTIFIER))
-            abs_node = abs_node->next;
-        if (abs_node != NULL && abs_node->typ == PASCAL_T_NONE) {
-            ast_t *child = abs_node->child;
-            if (child != NULL && child->next != NULL)
-                abs_node = abs_node->next;
-        }
-        if (abs_node != NULL && abs_node->typ == PASCAL_T_IDENTIFIER) {
-            absolute_target = dup_symbol(abs_node);
         }
     }
     if (kgpc_debug_decl_scan_enabled() && absolute_target != NULL && ids != NULL && ids->type == LIST_STRING) {
@@ -6184,6 +6231,27 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
                 }
             }
             field_cur = field_cur->next;
+        }
+
+        if (record_type->is_type_helper && record_type->method_templates != NULL && id != NULL)
+        {
+            ListNode_t *tmpl_cur = record_type->method_templates;
+            while (tmpl_cur != NULL)
+            {
+                if (tmpl_cur->type == LIST_METHOD_TEMPLATE)
+                {
+                    struct MethodTemplate *template = (struct MethodTemplate *)tmpl_cur->cur;
+                    if (template != NULL)
+                    {
+                        register_class_method_ex(id, template->name,
+                            template->is_virtual, template->is_override, template->is_static);
+                        if (getenv("KGPC_DEBUG_CLASS_METHODS") != NULL)
+                            fprintf(stderr, "[KGPC] Registered helper method %s.%s (static=%d)\n",
+                                id, template->name, template->is_static);
+                    }
+                }
+                tmpl_cur = tmpl_cur->next;
+            }
         }
         
         /* Direct record/class type declaration */

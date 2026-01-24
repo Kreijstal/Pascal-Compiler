@@ -154,6 +154,18 @@ static bool consume_pascal_layout(input_t* in) {
         return true;
     }
 
+    if (c == '/' && (pos + 1) < in->length && buffer[pos + 1] == '/') {
+        /* Line comment: skip until end of line */
+        read1(in); // '/'
+        read1(in); // '/'
+        while (in->start < in->length) {
+            char ch = read1(in);
+            if (ch == '\n')
+                break;
+        }
+        return true;
+    }
+
     return false;
 }
 

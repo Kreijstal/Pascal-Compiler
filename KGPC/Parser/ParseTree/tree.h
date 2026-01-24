@@ -120,6 +120,7 @@ typedef struct Tree
             int type; /* Int, or real */
             char *type_id;
             int is_var_param;
+            int is_untyped_param;
             int inferred_type;
             struct Statement *initializer;
             int is_typed_const;

@@ -97,6 +97,35 @@ void list_print(ListNode_t *list, FILE *f, int num_indent)
             case LIST_VARIANT_BRANCH:
                 print_variant_branch((struct VariantBranch *)cur->cur, f, num_indent);
                 break;
+            case LIST_CASE_BRANCH: {
+                struct CaseBranch *branch = (struct CaseBranch *)cur->cur;
+                print_indent(f, num_indent);
+                fprintf(f, "[CASE_BRANCH]\n");
+                if (branch != NULL) {
+                    if (branch->labels != NULL) {
+                        print_indent(f, num_indent + 1);
+                        fprintf(f, "[LABELS]:\n");
+                        list_print(branch->labels, f, num_indent + 2);
+                    }
+                    if (branch->stmt != NULL) {
+                        print_indent(f, num_indent + 1);
+                        fprintf(f, "[STMT]:\n");
+                        stmt_print(branch->stmt, f, num_indent + 2);
+                    }
+                }
+                break;
+            }
+            case LIST_METHOD_TEMPLATE: {
+                struct MethodTemplate *method = (struct MethodTemplate *)cur->cur;
+                print_indent(f, num_indent);
+                fprintf(f, "[METHOD_TEMPLATE:%s]\n",
+                    method != NULL && method->name != NULL ? method->name : "<unnamed>");
+                break;
+            }
+            case LIST_UNSPECIFIED:
+                print_indent(f, num_indent);
+                fprintf(f, "[UNSPECIFIED_LIST_ENTRY]\n");
+                break;
             default:
                 fprintf(stderr, "BAD TYPE IN list_print!\n");
                 exit(1);
@@ -837,14 +866,22 @@ void stmt_print(struct Statement *stmt, FILE *f, int num_indent)
                 expr_print(stmt->stmt_data.inherited_data.call_expr, f, num_indent + 1);
             break;
 
-          default:
-            fprintf(stderr, "BAD TYPE IN stmt_print!\n");
-            exit(1);
+        default:
+          fprintf(stderr, "BAD TYPE IN stmt_print! type=%d\n", stmt->type);
+          print_indent(f, num_indent);
+          fprintf(f, "[STMT:unknown type=%d]\n", stmt->type);
+          return;
     }
 }
 
 void expr_print(struct Expression *expr, FILE *f, int num_indent)
 {
+    if (expr == NULL)
+    {
+        print_indent(f, num_indent);
+        fprintf(f, "[EXPR:null]\n");
+        return;
+    }
     print_indent(f, num_indent);
     switch(expr->type)
     {
@@ -1055,8 +1092,10 @@ void expr_print(struct Expression *expr, FILE *f, int num_indent)
           break;
 
         default:
-          fprintf(stderr, "BAD TYPE IN expr_print!\n");
-          exit(1);
+          fprintf(stderr, "BAD TYPE IN expr_print! type=%d\n", expr->type);
+          print_indent(f, num_indent);
+          fprintf(f, "[EXPR:unknown type=%d]\n", expr->type);
+          return;
     }
 }
 
@@ -2067,6 +2106,7 @@ Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type, char *type_id,
     new_tree->tree_data.var_decl_data.type = type;
     new_tree->tree_data.var_decl_data.type_id = type_id;
     new_tree->tree_data.var_decl_data.is_var_param = is_var_param;
+    new_tree->tree_data.var_decl_data.is_untyped_param = 0;
     new_tree->tree_data.var_decl_data.inferred_type = inferred_type;
     new_tree->tree_data.var_decl_data.initializer = initializer;
     new_tree->tree_data.var_decl_data.is_typed_const = 0;
