@@ -1927,7 +1927,6 @@ static ListNode_t *codegen_assign_static_array(struct Expression *dest_expr,
      * because the function call can clobber any caller-saved register. */
     int src_has_function_call = (src_expr->type == EXPR_FUNCTION_CALL) ||
         expr_returns_sret(src_expr);
-    int src_returns_sret = expr_returns_sret(src_expr);
     StackNode_t *dest_spill_slot = NULL;
     char buffer[128];
 
@@ -1938,67 +1937,6 @@ static ListNode_t *codegen_assign_static_array(struct Expression *dest_expr,
     {
         if (dest_reg != NULL)
             free_reg(get_reg_stack(), dest_reg);
-        return inst_list;
-    }
-
-    /* For function calls returning via sret, pass destination directly to function.
-     * The function will write the result directly to the destination buffer. */
-    if (src_returns_sret && src_expr->type == EXPR_FUNCTION_CALL)
-    {
-        /* Save destination address to stack */
-        dest_spill_slot = add_l_x("__sret_dest__", CODEGEN_POINTER_SIZE_BYTES);
-        if (dest_spill_slot == NULL)
-        {
-            codegen_report_error(ctx,
-                "ERROR: Unable to allocate stack slot for sret destination.");
-            free_reg(get_reg_stack(), dest_reg);
-            return inst_list;
-        }
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
-            dest_reg->bit_64, dest_spill_slot->offset);
-        inst_list = add_inst(inst_list, buffer);
-        free_reg(get_reg_stack(), dest_reg);
-
-        /* Get function type for argument passing */
-        struct KgpcType *func_type = NULL;
-        if (src_expr->expr_data.function_call_data.is_call_info_valid)
-            func_type = src_expr->expr_data.function_call_data.call_kgpc_type;
-        if (func_type == NULL && ctx != NULL && ctx->symtab != NULL &&
-            src_expr->expr_data.function_call_data.id != NULL)
-        {
-            HashNode_t *func_node = NULL;
-            if (FindIdent(&func_node, ctx->symtab,
-                    src_expr->expr_data.function_call_data.id) >= 0 && func_node != NULL)
-            {
-                func_type = func_node->type;
-            }
-        }
-
-        /* Pass function arguments (skip sret slot, index starts at 1) */
-        inst_list = codegen_pass_arguments(
-            src_expr->expr_data.function_call_data.args_expr, inst_list, ctx,
-            func_type, src_expr->expr_data.function_call_data.id, 1);
-
-        /* Load destination into sret register (first argument register) */
-        const char *ret_ptr_reg = current_arg_reg64(0);
-        if (ret_ptr_reg == NULL)
-        {
-            codegen_report_error(ctx,
-                "ERROR: Unable to determine register for sret pointer.");
-            return inst_list;
-        }
-        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-            dest_spill_slot->offset, ret_ptr_reg);
-        inst_list = add_inst(inst_list, buffer);
-
-        /* Call the function */
-        snprintf(buffer, sizeof(buffer), "\tcall\t%s\n",
-            src_expr->expr_data.function_call_data.mangled_id);
-        inst_list = add_inst(inst_list, buffer);
-        inst_list = codegen_cleanup_call_stack(inst_list, ctx);
-        codegen_release_function_call_mangled_id(src_expr);
-
-        /* Function wrote directly to destination, no copy needed */
         return inst_list;
     }
 
