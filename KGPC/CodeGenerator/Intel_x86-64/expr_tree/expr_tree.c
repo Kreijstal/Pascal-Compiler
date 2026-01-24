@@ -2570,6 +2570,31 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                         converter.d = node->const_real_value;
                         snprintf(buffer, buf_len, "$%lld", (long long)converter.i);
                     }
+                    /* Check if this is a set constant that fits in 8 bytes */
+                    else if (node->const_set_value != NULL && node->const_set_size > 0 &&
+                             node->const_set_size <= (int)sizeof(long long))
+                    {
+                        /* Small set constant - use const_int_value */
+                        snprintf(buffer, buf_len, "$%lld", node->const_int_value);
+                    }
+                    /* Check if this is a character set (32 bytes) - needs special handling */
+                    else if (node->const_set_value != NULL && node->const_set_size > (int)sizeof(long long))
+                    {
+                        /* Large set constant (e.g., character set of 32 bytes).
+                         * This cannot be represented as an immediate value.
+                         * We need to emit the set in rodata and return its address. */
+                        inst_list = codegen_emit_const_set_rodata(node, inst_list, ctx);
+                        if (node->const_set_label != NULL)
+                        {
+                            snprintf(buffer, buf_len, "%s(%%rip)", node->const_set_label);
+                        }
+                        else
+                        {
+                            /* This should not happen - emit error and use 0 */
+                            fprintf(stderr, "ERROR: Failed to emit set constant to rodata\n");
+                            snprintf(buffer, buf_len, "$0");
+                        }
+                    }
                     else
                     {
                         /* Integer constant */
