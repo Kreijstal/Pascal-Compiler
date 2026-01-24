@@ -4034,7 +4034,44 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                           (inferred_type_tag == REAL_TYPE && real_storage_size > 4));
                     int use_sse_reg = (!is_var_param && !is_array_type &&
                         inferred_type_tag == REAL_TYPE);
-                    arg_stack = use_64bit ? add_q_z((char *)arg_ids->cur) : add_l_z((char *)arg_ids->cur);
+                    
+                    /* Check if we have a presaved slot from pre-pass.
+                     * If so, use it as the final storage location to avoid allocating
+                     * a duplicate slot, which would cause z_offset to grow and overlap
+                     * with x-allocated record parameter copies. */
+                    char presaved_check_name[64];
+                    snprintf(presaved_check_name, sizeof(presaved_check_name), "__presaved_%s__", (char *)arg_ids->cur);
+                    StackNode_t *presaved_as_final = find_label(presaved_check_name);
+                    if (presaved_as_final != NULL)
+                    {
+                        /* Reuse the presaved slot as the parameter's final storage.
+                         * The data is already there from the pre-pass save.
+                         * Also register the slot under the parameter's actual name
+                         * so find_label("Prefix") works in the function body. */
+                        arg_stack = presaved_as_final;
+                        
+                        /* Create an alias node with the parameter's actual name */
+                        StackNode_t *alias_node = init_stack_node(arg_stack->offset, (char *)arg_ids->cur, arg_stack->size);
+                        if (alias_node != NULL)
+                        {
+                            alias_node->is_reference = arg_stack->is_reference;
+                            alias_node->element_size = arg_stack->element_size;
+                            /* Add to z list so it can be found by find_label */
+                            StackScope_t *cur_scope = get_cur_scope();
+                            if (cur_scope != NULL)
+                            {
+                                if (cur_scope->z == NULL)
+                                    cur_scope->z = CreateListNode(alias_node, LIST_UNSPECIFIED);
+                                else
+                                    cur_scope->z = PushListNodeBack(cur_scope->z,
+                                        CreateListNode(alias_node, LIST_UNSPECIFIED));
+                            }
+                        }
+                    }
+                    else
+                    {
+                        arg_stack = use_64bit ? add_q_z((char *)arg_ids->cur) : add_l_z((char *)arg_ids->cur);
+                    }
                     if (arg_stack != NULL && (symbol_is_var_param || is_array_type))
                         arg_stack->is_reference = 1;
                     if (use_sse_reg)
