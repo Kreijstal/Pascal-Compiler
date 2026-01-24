@@ -573,16 +573,25 @@ static int is_method_static(const char *class_name, const char *method_name) {
     if (class_name == NULL || method_name == NULL)
         return 0;
 
+    int has_static = 0;
+    int has_instance = 0;
     ListNode_t *cur = class_method_bindings;
     while (cur != NULL) {
         ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
         if (binding != NULL && binding->class_name != NULL && binding->method_name != NULL &&
             strcasecmp(binding->class_name, class_name) == 0 &&
             strcasecmp(binding->method_name, method_name) == 0)
-            return binding->is_static;
+        {
+            if (binding->is_static)
+                has_static = 1;
+            else
+                has_instance = 1;
+        }
         cur = cur->next;
     }
-    return 0;
+    if (has_instance)
+        return 0;
+    return has_static;
 }
 
 /* Public wrapper for is_method_static */

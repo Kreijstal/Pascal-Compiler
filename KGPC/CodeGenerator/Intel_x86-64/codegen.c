@@ -63,6 +63,14 @@ static int codegen_self_param_is_class(Tree_t *arg_decl, SymTab_t *symtab)
     return 0;
 }
 
+typedef struct RecordParamWork {
+    const char *id;
+    int size;
+    int stack_arg_offset;
+    int has_stack_arg;
+    const char *arg_reg;
+} RecordParamWork;
+
 /* Escape a string for use in assembly .string directive */
 void escape_string(char *dest, const char *src, size_t dest_size)
 {
@@ -3594,6 +3602,7 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
      * System V: 16(%rbp) is the first stack arg (after saved rbp + return addr).
      * Windows x64: 48(%rbp) is the first stack arg (after saved rbp + return addr + 32-byte shadow space). */
     int stack_arg_offset = codegen_target_is_windows() ? 48 : 16;
+    ListNode_t *record_param_queue = NULL;
 
     assert(ctx != NULL);
 
@@ -3894,101 +3903,38 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                             return inst_list;
                         }
 
-                        StackNode_t *record_slot = add_l_x((char *)arg_ids->cur, (int)record_size);
-                        if (record_slot == NULL)
+                        RecordParamWork *work = (RecordParamWork *)malloc(sizeof(RecordParamWork));
+                        if (work == NULL)
                         {
-                            codegen_report_error(ctx,
-                                "ERROR: Failed to allocate storage for record parameter %s.",
-                                (char *)arg_ids->cur);
+                            codegen_report_error(ctx, "ERROR: Unable to allocate record param work.");
                             return inst_list;
                         }
 
-                        arg_reg = alloc_integer_arg_reg(1, &next_gpr_index);
-                        Register_t *stack_value_reg = NULL;
-                        
-                        /* Load parameter from presaved slot that was saved in pre-pass */
-                        char presaved_name[64];
-                        snprintf(presaved_name, sizeof(presaved_name), "__presaved_%s__", (char *)arg_ids->cur);
-                        StackNode_t *presaved_slot = find_label(presaved_name);
-                        
-                        const char *record_src_reg = NULL;
-                        Register_t *loaded_param_reg = NULL;
-                        
-                        if (presaved_slot != NULL)
+                        work->id = (const char *)arg_ids->cur;
+                        work->size = (int)record_size;
+                        work->stack_arg_offset = 0;
+                        work->has_stack_arg = 0;
+                        work->arg_reg = alloc_integer_arg_reg(1, &next_gpr_index);
+
+                        if (work->arg_reg == NULL)
                         {
-                            /* Load from presaved slot */
-                            loaded_param_reg = get_free_reg(get_reg_stack(), &inst_list);
-                            if (loaded_param_reg != NULL)
-                            {
-                                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-                                    presaved_slot->offset, loaded_param_reg->bit_64);
-                                inst_list = add_inst(inst_list, buffer);
-                                record_src_reg = loaded_param_reg->bit_64;
-                            }
-                        }
-                        else if (arg_reg != NULL)
-                        {
-                            /* Fallback to register (shouldn't happen if pre-pass worked) */
-                            record_src_reg = arg_reg;
-                        }
-                        
-                        if (record_src_reg == NULL)
-                        {
-                            stack_value_reg = get_free_reg(get_reg_stack(), &inst_list);
-                            if (stack_value_reg == NULL)
-                            {
-                                codegen_report_error(ctx,
-                                    "ERROR: Unable to allocate register for record parameter %s.",
-                                    (char *)arg_ids->cur);
-                                return inst_list;
-                            }
-                            snprintf(buffer, sizeof(buffer), "\tmovq\t%d(%%rbp), %s\n",
-                                stack_arg_offset, stack_value_reg->bit_64);
-                            inst_list = add_inst(inst_list, buffer);
+                            work->stack_arg_offset = stack_arg_offset;
+                            work->has_stack_arg = 1;
                             stack_arg_offset += CODEGEN_POINTER_SIZE_BYTES;
-                            record_src_reg = stack_value_reg->bit_64;
                         }
 
-                        Register_t *size_reg = get_free_reg(get_reg_stack(), &inst_list);
-                        if (size_reg == NULL)
-                            size_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
-                        if (size_reg == NULL)
+                        ListNode_t *work_node = CreateListNode(work, LIST_UNSPECIFIED);
+                        if (work_node == NULL)
                         {
-                            codegen_report_error(ctx,
-                                "ERROR: Unable to allocate register for record parameter size.");
+                            free(work);
+                            codegen_report_error(ctx, "ERROR: Unable to enqueue record param.");
                             return inst_list;
                         }
 
-                        snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n", record_size, size_reg->bit_64);
-                        inst_list = add_inst(inst_list, buffer);
-
-                        if (codegen_target_is_windows())
-                        {
-                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", record_src_reg);
-                            inst_list = add_inst(inst_list, buffer);
-                            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %%rcx\n", record_slot->offset);
-                            inst_list = add_inst(inst_list, buffer);
-                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r8\n", size_reg->bit_64);
-                            inst_list = add_inst(inst_list, buffer);
-                        }
+                        if (record_param_queue == NULL)
+                            record_param_queue = work_node;
                         else
-                        {
-                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", record_src_reg);
-                            inst_list = add_inst(inst_list, buffer);
-                            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %%rdi\n", record_slot->offset);
-                            inst_list = add_inst(inst_list, buffer);
-                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", size_reg->bit_64);
-                            inst_list = add_inst(inst_list, buffer);
-                        }
-
-                        inst_list = codegen_vect_reg(inst_list, 0);
-                        inst_list = add_inst(inst_list, "\tcall\tkgpc_move\n");
-                        free_arg_regs();
-                        free_reg(get_reg_stack(), size_reg);
-                        if (stack_value_reg != NULL)
-                            free_reg(get_reg_stack(), stack_value_reg);
-                        if (loaded_param_reg != NULL)
-                            free_reg(get_reg_stack(), loaded_param_reg);
+                            record_param_queue = PushListNodeBack(record_param_queue, work_node);
 
                         arg_ids = arg_ids->next;
                         continue;
@@ -4187,6 +4133,132 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
         }
         args = args->next;
     }
+
+    if (record_param_queue != NULL)
+    {
+        ListNode_t *rec_node = record_param_queue;
+        while (rec_node != NULL)
+        {
+            RecordParamWork *work = (RecordParamWork *)rec_node->cur;
+            StackNode_t *record_slot = add_l_x((char *)work->id, work->size);
+            if (record_slot == NULL)
+            {
+                codegen_report_error(ctx,
+                    "ERROR: Failed to allocate storage for record parameter %s.",
+                    work->id != NULL ? work->id : "(null)");
+                free(work);
+                rec_node = rec_node->next;
+                continue;
+            }
+
+            Register_t *stack_value_reg = NULL;
+            char presaved_name[64];
+            snprintf(presaved_name, sizeof(presaved_name), "__presaved_%s__", work->id);
+            StackNode_t *presaved_slot = find_label(presaved_name);
+            const char *record_src_reg = NULL;
+            Register_t *loaded_param_reg = NULL;
+
+            if (presaved_slot != NULL)
+            {
+                loaded_param_reg = get_free_reg(get_reg_stack(), &inst_list);
+                if (loaded_param_reg != NULL)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                        presaved_slot->offset, loaded_param_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    record_src_reg = loaded_param_reg->bit_64;
+                }
+            }
+            else if (work->arg_reg != NULL)
+            {
+                record_src_reg = work->arg_reg;
+            }
+
+            if (record_src_reg == NULL)
+            {
+                if (!work->has_stack_arg)
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Unable to locate record parameter %s.",
+                        work->id != NULL ? work->id : "(null)");
+                    if (loaded_param_reg != NULL)
+                        free_reg(get_reg_stack(), loaded_param_reg);
+                    free(work);
+                    rec_node = rec_node->next;
+                    continue;
+                }
+
+                stack_value_reg = get_free_reg(get_reg_stack(), &inst_list);
+                if (stack_value_reg == NULL)
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Unable to allocate register for record parameter %s.",
+                        work->id != NULL ? work->id : "(null)");
+                    if (loaded_param_reg != NULL)
+                        free_reg(get_reg_stack(), loaded_param_reg);
+                    free(work);
+                    rec_node = rec_node->next;
+                    continue;
+                }
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%d(%%rbp), %s\n",
+                    work->stack_arg_offset, stack_value_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                record_src_reg = stack_value_reg->bit_64;
+            }
+
+            Register_t *size_reg = get_free_reg(get_reg_stack(), &inst_list);
+            if (size_reg == NULL)
+                size_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+            if (size_reg == NULL)
+            {
+                codegen_report_error(ctx,
+                    "ERROR: Unable to allocate register for record parameter size.");
+                if (stack_value_reg != NULL)
+                    free_reg(get_reg_stack(), stack_value_reg);
+                if (loaded_param_reg != NULL)
+                    free_reg(get_reg_stack(), loaded_param_reg);
+                free(work);
+                rec_node = rec_node->next;
+                continue;
+            }
+
+            snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %s\n", work->size, size_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+
+            if (codegen_target_is_windows())
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", record_src_reg);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %%rcx\n", record_slot->offset);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r8\n", size_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", record_src_reg);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %%rdi\n", record_slot->offset);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", size_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+
+            inst_list = codegen_vect_reg(inst_list, 0);
+            inst_list = add_inst(inst_list, "\tcall\tkgpc_move\n");
+            free_arg_regs();
+            free_reg(get_reg_stack(), size_reg);
+            if (stack_value_reg != NULL)
+                free_reg(get_reg_stack(), stack_value_reg);
+            if (loaded_param_reg != NULL)
+                free_reg(get_reg_stack(), loaded_param_reg);
+
+            free(work);
+            rec_node = rec_node->next;
+        }
+        DestroyList(record_param_queue);
+    }
+
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
@@ -4263,7 +4335,7 @@ static ListNode_t *codegen_store_class_typeinfo(ListNode_t *inst_list,
         }
         inst_list = add_inst(inst_list, buffer);
     }
-    
+
     return inst_list;
 }
 

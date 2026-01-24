@@ -1592,6 +1592,8 @@ static long long codegen_sizeof_type_tag(int type_tag)
         case SET_TYPE:
         case ENUM_TYPE:
             return 4;
+        case INT64_TYPE:
+            return 8;
         case LONGINT_TYPE:
             return 4;  // Match FPC's 32-bit LongInt
         case REAL_TYPE:
@@ -2522,8 +2524,12 @@ ListNode_t *codegen_record_field_address(struct Expression *expr, ListNode_t *in
 
     /* For class types that are NOT parameters, addr_reg points to the variable holding the pointer.
      * We need to load the pointer value to get the address of the instance.
-     * Parameters are already pointers, so we don't need the extra dereference. */
-    if (is_class_field && !is_parameter && !is_class_type_ref)
+     * Parameters are already pointers, so we don't need the extra dereference.
+     * Non-var expressions (casts, function calls) already yield the pointer value. */
+    int needs_class_deref = (is_class_field && !is_parameter && !is_class_type_ref);
+    if (needs_class_deref && record_expr->type != EXPR_VAR_ID)
+        needs_class_deref = 0;
+    if (needs_class_deref)
     {
         char buffer[64];
         snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", addr_reg->bit_64, addr_reg->bit_64);
@@ -3381,6 +3387,71 @@ static int codegen_get_indexable_element_size(struct Expression *array_expr,
 }
 
 
+static int expr_contains_function_call(const struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+
+    switch (expr->type)
+    {
+        case EXPR_FUNCTION_CALL:
+        case EXPR_ANONYMOUS_FUNCTION:
+        case EXPR_ANONYMOUS_PROCEDURE:
+            return 1;
+        case EXPR_TYPECAST:
+            return expr_contains_function_call(expr->expr_data.typecast_data.expr);
+        case EXPR_AS:
+            return expr_contains_function_call(expr->expr_data.as_data.expr);
+        case EXPR_SIGN_TERM:
+            return expr_contains_function_call(expr->expr_data.sign_term);
+        case EXPR_RECORD_ACCESS:
+            return expr_contains_function_call(expr->expr_data.record_access_data.record_expr);
+        case EXPR_ARRAY_ACCESS:
+            return expr_contains_function_call(expr->expr_data.array_access_data.array_expr) ||
+                expr_contains_function_call(expr->expr_data.array_access_data.index_expr);
+        case EXPR_POINTER_DEREF:
+            return expr_contains_function_call(expr->expr_data.pointer_deref_data.pointer_expr);
+        case EXPR_ADDR:
+            return expr_contains_function_call(expr->expr_data.addr_data.expr);
+        case EXPR_RELOP:
+            return expr_contains_function_call(expr->expr_data.relop_data.left) ||
+                expr_contains_function_call(expr->expr_data.relop_data.right);
+        case EXPR_ADDOP:
+            return expr_contains_function_call(expr->expr_data.addop_data.left_expr) ||
+                expr_contains_function_call(expr->expr_data.addop_data.right_term);
+        case EXPR_MULOP:
+            return expr_contains_function_call(expr->expr_data.mulop_data.left_term) ||
+                expr_contains_function_call(expr->expr_data.mulop_data.right_factor);
+        case EXPR_RECORD_CONSTRUCTOR:
+        {
+            ListNode_t *cur = expr->expr_data.record_constructor_data.fields;
+            while (cur != NULL)
+            {
+                struct RecordConstructorField *field = (struct RecordConstructorField *)cur->cur;
+                if (field != NULL && field->value != NULL &&
+                    expr_contains_function_call(field->value))
+                    return 1;
+                cur = cur->next;
+            }
+            return 0;
+        }
+        case EXPR_ARRAY_LITERAL:
+        {
+            ListNode_t *cur = expr->expr_data.array_literal_data.elements;
+            while (cur != NULL)
+            {
+                struct Expression *elem = (struct Expression *)cur->cur;
+                if (expr_contains_function_call(elem))
+                    return 1;
+                cur = cur->next;
+            }
+            return 0;
+        }
+        default:
+            return 0;
+    }
+}
+
 ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *inst_list, CodeGenContext *ctx, Register_t **out_reg)
 {
     assert(expr != NULL);
@@ -3413,6 +3484,19 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
     if (codegen_had_error(ctx) || index_reg == NULL)
         return inst_list;
 
+    StackNode_t *index_spill_slot = NULL;
+    if (expr_contains_function_call(array_expr))
+    {
+        index_spill_slot = add_l_t("array_index_spill");
+        if (index_spill_slot != NULL)
+        {
+            char spill_buf[128];
+            snprintf(spill_buf, sizeof(spill_buf), "\tmovl\t%s, -%d(%%rbp)\n",
+                index_reg->bit_32, index_spill_slot->offset);
+            inst_list = add_inst(inst_list, spill_buf);
+        }
+    }
+
     Register_t *base_reg = NULL;
     if (base_is_string || base_is_pointer)
     {
@@ -3431,6 +3515,14 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
             free_reg(get_reg_stack(), index_reg);
             return inst_list;
         }
+    }
+
+    if (index_spill_slot != NULL)
+    {
+        char reload_buf[128];
+        snprintf(reload_buf, sizeof(reload_buf), "\tmovl\t-%d(%%rbp), %s\n",
+            index_spill_slot->offset, index_reg->bit_32);
+        inst_list = add_inst(inst_list, reload_buf);
     }
 
     char buffer[128];
@@ -3549,7 +3641,6 @@ ListNode_t *codegen_array_access(struct Expression *expr, ListNode_t *inst_list,
     free_reg(get_reg_stack(), addr_reg);
     return inst_list;
 }
-
 
 static int invert_relop_type(int relop_kind)
 {

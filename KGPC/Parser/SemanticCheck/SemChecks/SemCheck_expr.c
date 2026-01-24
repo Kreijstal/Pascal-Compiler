@@ -12737,6 +12737,20 @@ int semcheck_funccall(int *type_return,
                 }
             }
         }
+
+        /* If still unresolved and the first arg is a type identifier, resolve it as a type name. */
+        if (record_info == NULL && first_arg->type == EXPR_VAR_ID &&
+            first_arg->expr_data.id != NULL)
+        {
+            HashNode_t *type_node = semcheck_find_preferred_type_node(symtab,
+                first_arg->expr_data.id);
+            if (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+            {
+                record_info = get_record_type_from_node(type_node);
+                if (owner_type == NULL && type_node->type != NULL)
+                    owner_type = type_node->type;
+            }
+        }
         
         if (record_info != NULL && record_info->type_id != NULL) {
             struct RecordType *method_owner = record_info;
@@ -12768,6 +12782,49 @@ int semcheck_funccall(int *type_return,
 
                 free(candidate_name);
                 method_owner = semcheck_lookup_parent_record(symtab, method_owner);
+            }
+
+            /* If no candidates on the record, retry via any helper for this base type. */
+            if (method_candidates == NULL && record_info != NULL &&
+                !record_type_is_class(record_info) && record_info->type_id != NULL)
+            {
+                struct RecordType *helper_record = semcheck_lookup_type_helper(symtab,
+                    UNKNOWN_TYPE, record_info->type_id);
+                struct RecordType *actual_method_owner = NULL;
+                if (helper_record != NULL)
+                {
+                    HashNode_t *method_node = semcheck_find_class_method(symtab,
+                        helper_record, id, &actual_method_owner);
+                    struct RecordType *owner_for_mangle =
+                        (actual_method_owner != NULL) ? actual_method_owner : helper_record;
+                    if (method_node != NULL && owner_for_mangle != NULL &&
+                        owner_for_mangle->type_id != NULL)
+                    {
+                        size_t class_len = strlen(owner_for_mangle->type_id);
+                        size_t method_len = strlen(id);
+                        char *candidate_name = (char *)malloc(class_len + 2 + method_len + 1);
+                        if (candidate_name != NULL)
+                        {
+                            snprintf(candidate_name, class_len + 2 + method_len + 1,
+                                "%s__%s", owner_for_mangle->type_id, id);
+                            ListNode_t *candidates = FindAllIdents(symtab, candidate_name);
+                            if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                                fprintf(stderr, "[SemCheck] semcheck_funccall: Looking for '%s' found %d candidates\n",
+                                    candidate_name, ListLength(candidates));
+                            }
+                            if (candidates != NULL)
+                            {
+                                method_candidates = candidates;
+                                mangled_method_name = candidate_name;
+                                method_owner = owner_for_mangle;
+                            }
+                            else
+                            {
+                                free(candidate_name);
+                            }
+                        }
+                    }
+                }
             }
 
             if (method_candidates != NULL && mangled_method_name != NULL) {
