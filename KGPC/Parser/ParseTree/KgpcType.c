@@ -1406,6 +1406,9 @@ KgpcType* kgpc_type_get_array_element_type_resolved(KgpcType *type, SymTab_t *sy
             /* Found the element type - update the array type and return it */
             type->info.array_info.element_type = element_node->type;
             kgpc_type_retain(element_node->type);
+            /* Free element_type_id since resolution is complete */
+            free(type->info.array_info.element_type_id);
+            type->info.array_info.element_type_id = NULL;
             return type->info.array_info.element_type;
         }
     }
