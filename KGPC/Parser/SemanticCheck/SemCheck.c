@@ -4221,6 +4221,10 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
                 strdup(original_field->array_element_type_id) : NULL;
             cloned_field->array_is_open = original_field->array_is_open;
             cloned_field->is_hidden = original_field->is_hidden;
+            cloned_field->is_pointer = original_field->is_pointer;
+            cloned_field->pointer_type = original_field->pointer_type;
+            cloned_field->pointer_type_id = original_field->pointer_type_id ?
+                strdup(original_field->pointer_type_id) : NULL;
             
             /* Create list node for cloned field */
             ListNode_t *new_node = (ListNode_t *)malloc(sizeof(ListNode_t));

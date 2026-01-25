@@ -1761,6 +1761,33 @@ static KgpcType *semcheck_field_expected_kgpc_type(SymTab_t *symtab, struct Reco
         return create_array_type(element_type, field->array_start, field->array_end);
     }
 
+    /* Handle inline pointer fields like bufptr: ^Char */
+    if (field->is_pointer)
+    {
+        KgpcType *pointee_type = NULL;
+        if (field->pointer_type_id != NULL)
+        {
+            HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, field->pointer_type_id);
+            if (type_node != NULL)
+            {
+                if (type_node->type != NULL)
+                {
+                    kgpc_type_retain(type_node->type);
+                    pointee_type = type_node->type;
+                }
+                else
+                {
+                    struct TypeAlias *alias = hashnode_get_type_alias(type_node);
+                    if (alias != NULL)
+                        pointee_type = create_kgpc_type_from_type_alias(alias, symtab);
+                }
+            }
+        }
+        if (pointee_type == NULL && field->pointer_type != UNKNOWN_TYPE)
+            pointee_type = create_primitive_type(field->pointer_type);
+        return create_pointer_type(pointee_type);
+    }
+
     if (field->nested_record != NULL)
         return create_record_type(field->nested_record);
 
@@ -7422,6 +7449,19 @@ FIELD_RESOLVED:
     struct RecordType *field_record = field_desc->nested_record;
     if (field_record != NULL)
         field_type = RECORD_TYPE;
+    /* Handle inline pointer fields like bufptr: ^Char */
+    if (field_desc->is_pointer)
+        field_type = POINTER_TYPE;
+    if (getenv("KGPC_DEBUG_POINTER_FIELD") != NULL && field_id != NULL)
+    {
+        fprintf(stderr,
+            "[KGPC_DEBUG_POINTER_FIELD] field=%s type=%d is_pointer=%d pointer_type=%d pointer_type_id=%s\n",
+            field_id,
+            field_desc->type,
+            field_desc->is_pointer,
+            field_desc->pointer_type,
+            field_desc->pointer_type_id ? field_desc->pointer_type_id : "<null>");
+    }
     if (getenv("KGPC_DEBUG_RECORD_FIELD") != NULL &&
         field_id != NULL &&
         (pascal_identifier_equals(field_id, "st_ctime") ||
@@ -8146,6 +8186,28 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                                                 kgpc_type_retain(element_type);
                                             field_type = create_array_type(element_type, field->array_start, field->array_end);
                                         }
+                                    }
+                                    else if (field->is_pointer)
+                                    {
+                                        /* Inline pointer field like ^Char */
+                                        KgpcType *pointee_type = NULL;
+                                        if (field->pointer_type_id != NULL)
+                                        {
+                                            HashNode_t *pointee_node =
+                                                semcheck_find_preferred_type_node(symtab, field->pointer_type_id);
+                                            if (pointee_node != NULL && pointee_node->type != NULL)
+                                            {
+                                                kgpc_type_retain(pointee_node->type);
+                                                pointee_type = pointee_node->type;
+                                            }
+                                        }
+                                        if (pointee_type == NULL && field->pointer_type != UNKNOWN_TYPE)
+                                        {
+                                            pointee_type = create_primitive_type(field->pointer_type);
+                                        }
+                                        if (owns_type != NULL)
+                                            *owns_type = 1;
+                                        field_type = create_pointer_type(pointee_type);
                                     }
                                     else
                                     {

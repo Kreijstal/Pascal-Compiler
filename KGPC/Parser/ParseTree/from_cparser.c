@@ -3575,6 +3575,13 @@ static ListNode_t *convert_class_field_decl(ast_t *field_decl_node) {
             field_desc->array_is_open = field_info.is_open_array;
             field_info.element_type_id = NULL;  /* Ownership transferred */
             field_desc->is_hidden = 0;
+            /* Copy pointer type info for inline pointer fields like ^Char */
+            field_desc->is_pointer = field_info.is_pointer;
+            field_desc->pointer_type = field_info.pointer_type;
+            if (field_info.pointer_type_id != NULL)
+                field_desc->pointer_type_id = strdup(field_info.pointer_type_id);
+            else
+                field_desc->pointer_type_id = NULL;
             list_builder_append(&result, field_desc, LIST_RECORD_FIELD);
         } else {
             if (field_name != NULL)
@@ -4311,6 +4318,13 @@ static ListNode_t *convert_field_decl(ast_t *field_decl_node) {
             field_desc->array_element_type_id = field_info.element_type_id;
             field_desc->array_is_open = field_info.is_open_array;
             field_info.element_type_id = NULL;
+            /* Copy pointer type info for inline pointer fields like ^Char */
+            field_desc->is_pointer = field_info.is_pointer;
+            field_desc->pointer_type = field_info.pointer_type;
+            if (field_info.pointer_type_id != NULL)
+                field_desc->pointer_type_id = strdup(field_info.pointer_type_id);
+            else
+                field_desc->pointer_type_id = NULL;
             list_builder_append(&result_builder, field_desc, LIST_RECORD_FIELD);
         } else {
             if (field_name != NULL)
