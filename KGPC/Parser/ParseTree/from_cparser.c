@@ -8163,7 +8163,11 @@ static struct Statement *convert_assignment(ast_t *assign_node) {
 
     struct Expression *left = convert_expression(lhs);
     struct Expression *right = convert_expression(rhs);
-    return mk_varassign(assign_node->line, assign_node->col, left, right);
+    struct Statement *stmt = mk_varassign(assign_node->line, assign_node->col, left, right);
+    if (stmt != NULL) {
+        stmt->source_index = assign_node->index;
+    }
+    return stmt;
 }
 
 static struct Statement *convert_proc_call(ast_t *call_node, bool implicit_identifier) {
@@ -8219,6 +8223,9 @@ static struct Statement *convert_proc_call(ast_t *call_node, bool implicit_ident
 
     ListNode_t *args = convert_expression_list(args_start);
     struct Statement *call = mk_procedurecall(call_node->line, id, args);
+    if (call != NULL) {
+        call->source_index = call_node->index;
+    }
     return call;
 }
 

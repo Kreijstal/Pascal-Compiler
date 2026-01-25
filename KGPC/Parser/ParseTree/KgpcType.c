@@ -395,15 +395,37 @@ void destroy_kgpc_type(KgpcType *type) {
 
 // --- Utility Implementations ---
 
+/* ShortString bounds constants - Pascal ShortString is array[0..255] of Char */
+#define SHORTSTRING_START_INDEX 0
+#define SHORTSTRING_END_INDEX 255
+
 /* Helper function to check if a KgpcType is a char array (shortstring representation) */
 static int is_char_array_type(KgpcType *type) {
     if (type == NULL || type->kind != TYPE_KIND_ARRAY)
         return 0;
-    if (type->info.array_info.element_type == NULL)
+    if (type->info.array_info.element_type == NULL) {
+        /* Check if this is a ShortString-like array (bounds 0..255) with NULL element_type */
+        if (type->info.array_info.start_index == SHORTSTRING_START_INDEX && 
+            type->info.array_info.end_index == SHORTSTRING_END_INDEX) {
+            /* Treat arrays with 0..255 bounds and NULL element_type as char arrays */
+            return 1;
+        }
         return 0;
+    }
     if (type->info.array_info.element_type->kind != TYPE_KIND_PRIMITIVE)
         return 0;
-    return type->info.array_info.element_type->info.primitive_type_tag == CHAR_TYPE;
+    int tag = type->info.array_info.element_type->info.primitive_type_tag;
+    /* Accept CHAR_TYPE for regular char arrays */
+    if (tag == CHAR_TYPE)
+        return 1;
+    /* Also accept STRING_TYPE and SHORTSTRING_TYPE for ShortString compatibility */
+    /* ShortString is often represented as array[0..255] of String internally */
+    if ((tag == STRING_TYPE || tag == SHORTSTRING_TYPE) &&
+        type->info.array_info.start_index == SHORTSTRING_START_INDEX && 
+        type->info.array_info.end_index == SHORTSTRING_END_INDEX) {
+        return 1;
+    }
+    return 0;
 }
 
 /* Helper function to check numeric type compatibility */
@@ -1064,10 +1086,23 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
                 return 0;
             }
             
-            return are_types_compatible_for_assignment(
+            /* Check element type compatibility */
+            int elem_compatible = are_types_compatible_for_assignment(
                 lhs_type->info.array_info.element_type,
                 rhs_type->info.array_info.element_type,
                 symtab);
+            if (elem_compatible)
+                return 1;
+            
+            /* Fallback: If element types have same string representation, treat as compatible */
+            /* This handles cases where types are structurally identical but represented differently */
+            const char *lhs_elem_str = kgpc_type_to_string(lhs_type->info.array_info.element_type);
+            const char *rhs_elem_str = kgpc_type_to_string(rhs_type->info.array_info.element_type);
+            if (lhs_elem_str != NULL && rhs_elem_str != NULL && 
+                strcasecmp(lhs_elem_str, rhs_elem_str) == 0)
+                return 1;
+            
+            return 0;
         }
 
         case TYPE_KIND_RECORD:

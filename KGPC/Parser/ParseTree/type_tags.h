@@ -26,6 +26,12 @@
 #define FILE_TYPE           32
 #define SHORTSTRING_TYPE    37
 
+/* Additional integer types for FPC compatibility */
+#define BYTE_TYPE           39  /* 8-bit unsigned integer (Byte) */
+#define WORD_TYPE           40  /* 16-bit unsigned integer (Word) */
+#define LONGWORD_TYPE       41  /* 32-bit unsigned integer (LongWord/DWord/Cardinal) */
+#define QWORD_TYPE          42  /* 64-bit unsigned integer (QWord) */
+
 /* Legacy token constants reused by the semantic analyser and code generator */
 #define BOOL                6
 #define PROCEDURE           7
@@ -80,7 +86,8 @@
 static inline int is_ordinal_type(int type_tag)
 {
     return (type_tag == INT_TYPE || type_tag == LONGINT_TYPE || type_tag == INT64_TYPE ||
-            type_tag == ENUM_TYPE || type_tag == CHAR_TYPE || type_tag == BOOL);
+            type_tag == BYTE_TYPE || type_tag == WORD_TYPE || type_tag == LONGWORD_TYPE ||
+            type_tag == QWORD_TYPE || type_tag == ENUM_TYPE || type_tag == CHAR_TYPE || type_tag == BOOL);
 }
 
 /**
@@ -92,7 +99,9 @@ static inline int is_ordinal_type(int type_tag)
  */
 static inline int is_integer_type(int type_tag)
 {
-    return (type_tag == INT_TYPE || type_tag == LONGINT_TYPE || type_tag == INT64_TYPE);
+    return (type_tag == INT_TYPE || type_tag == LONGINT_TYPE || type_tag == INT64_TYPE ||
+            type_tag == BYTE_TYPE || type_tag == WORD_TYPE || type_tag == LONGWORD_TYPE ||
+            type_tag == QWORD_TYPE);
 }
 
 /**
