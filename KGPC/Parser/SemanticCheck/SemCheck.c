@@ -6922,7 +6922,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         ListNode_t *param_c = semcheck_create_builtin_param("c", CHAR_TYPE);
         ListNode_t *param_l = semcheck_create_builtin_param("l", LONGINT_TYPE);
         ListNode_t *params = ConcatList(param_c, param_l);
-        KgpcType *return_type = kgpc_type_from_var_type(HASHVAR_STRING);
+        KgpcType *return_type = create_primitive_type(STRING_TYPE);
         KgpcType *func_type = create_procedure_type(params, return_type);
         if (func_type != NULL)
         {
@@ -6939,7 +6939,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         ListNode_t *param_val = semcheck_create_builtin_param("Val", INT64_TYPE);
         ListNode_t *param_cnt = semcheck_create_builtin_param("cnt", BYTE_TYPE);
         ListNode_t *params = ConcatList(param_val, param_cnt);
-        KgpcType *return_type = kgpc_type_from_var_type(HASHVAR_SHORTSTRING);
+        KgpcType *return_type = create_primitive_type(SHORTSTRING_TYPE);
         KgpcType *func_type = create_procedure_type(params, return_type);
         if (func_type != NULL)
         {
