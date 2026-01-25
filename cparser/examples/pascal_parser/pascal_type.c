@@ -384,8 +384,9 @@ static ast_t* build_class_ast(ast_t* ast) {
 }
 
 static ast_t* map_const_type_keyword(ast_t* ast) {
+    /* keyword_ci returns ast_nil on success, so we need to create a proper identifier node */
     if (ast == NULL || ast == ast_nil) {
-        return ast;
+        ast = new_ast();
     }
     ast->typ = PASCAL_T_IDENTIFIER;
     ast->sym = sym_lookup("const");
