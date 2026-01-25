@@ -285,7 +285,17 @@ static ParseResult keyword_dispatch_fn(input_t* in, void* args, char* parser_nam
                     parser_name != NULL ? parser_name : "<unknown>");
                 free(matched);
             }
-            return parse(in, entry->parser);
+            ParseResult res = parse(in, entry->parser);
+            if (!res.is_success && getenv("KGPC_DEBUG_DISPATCH_FAIL") != NULL) {
+                int line = res.value.error ? res.value.error->line : (in ? in->line : 0);
+                int col = res.value.error ? res.value.error->col : (in ? in->col : 0);
+                const char *msg = (res.value.error && res.value.error->message) ? res.value.error->message : "unknown error";
+                fprintf(stderr, "[KGPC] keyword_dispatch failed '%s' in %s at %d:%d: %s\n",
+                    entry->keyword,
+                    parser_name != NULL ? parser_name : "<unknown>",
+                    line, col, msg);
+            }
+            return res;
         }
     }
     if (dispatch->fallback_parser != NULL) {
@@ -2067,7 +2077,7 @@ void init_pascal_unit_parser(combinator_t** p) {
         token(cident(PASCAL_T_IDENTIFIER)),
         optional(param_list),
         token(match(":")),
-        token(cident(PASCAL_T_RETURN_TYPE)),
+        token(pascal_qualified_identifier(PASCAL_T_RETURN_TYPE)),
         token(match(";")),
         headeronly_directive,                        // forward/external/[internproc:...] directive
         many(multi(new_combinator(), PASCAL_T_NONE, routine_directive, bracket_directive_required, NULL)),
@@ -2113,7 +2123,7 @@ void init_pascal_unit_parser(combinator_t** p) {
         token(cident(PASCAL_T_IDENTIFIER)),
         param_list,
         token(match(":")),
-        token(cident(PASCAL_T_RETURN_TYPE)),
+        token(pascal_qualified_identifier(PASCAL_T_RETURN_TYPE)),
         interface_header_tail,
         NULL);
 
@@ -2123,13 +2133,13 @@ void init_pascal_unit_parser(combinator_t** p) {
     combinator_t* operator_result = multi(new_combinator(), PASCAL_T_NONE,
         seq(new_combinator(), PASCAL_T_NONE,
             token(match(":")),
-            token(cident(PASCAL_T_RETURN_TYPE)),
+            token(pascal_qualified_identifier(PASCAL_T_RETURN_TYPE)),
             NULL
         ),
         seq(new_combinator(), PASCAL_T_NONE,
             token(cident(PASCAL_T_IDENTIFIER)),
             token(match(":")),
-            token(cident(PASCAL_T_RETURN_TYPE)),
+            token(pascal_qualified_identifier(PASCAL_T_RETURN_TYPE)),
             NULL
         ),
         NULL
@@ -2171,7 +2181,7 @@ void init_pascal_unit_parser(combinator_t** p) {
         generic_type_params,
         param_list,
         token(match(":")),
-        token(cident(PASCAL_T_RETURN_TYPE)),
+        token(pascal_qualified_identifier(PASCAL_T_RETURN_TYPE)),
         interface_header_tail,
         NULL
     );
@@ -2222,7 +2232,7 @@ void init_pascal_unit_parser(combinator_t** p) {
     // Return type for functions: : type
     combinator_t* return_type = seq(new_combinator(), PASCAL_T_RETURN_TYPE,
         token(match(":")),                           // colon
-        token(cident(PASCAL_T_IDENTIFIER)),          // return type
+        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)), // return type (allow unit-qualified)
         NULL
     );
 
@@ -2482,10 +2492,15 @@ void init_pascal_unit_parser(combinator_t** p) {
         NULL
     );
 
-    combinator_t* implementation_fallback = optional(seq(new_combinator(), PASCAL_T_NONE,
-        until(implementation_end_marker, PASCAL_T_NONE),
-        NULL
-    ));
+    combinator_t* implementation_fallback = NULL;
+    if (getenv("KGPC_STRICT_IMPL") != NULL) {
+        implementation_fallback = succeed(ast_nil);
+    } else {
+        implementation_fallback = optional(seq(new_combinator(), PASCAL_T_NONE,
+            until(implementation_end_marker, PASCAL_T_NONE),
+            NULL
+        ));
+    }
 
     combinator_t* implementation_section = seq(new_combinator(), PASCAL_T_IMPLEMENTATION_SECTION,
         token(keyword_ci("implementation")),
@@ -2558,7 +2573,7 @@ void init_pascal_procedure_parser(combinator_t** p) {
     // Return type: : type (for functions)
     combinator_t* return_type = seq(new_combinator(), PASCAL_T_RETURN_TYPE,
         token(match(":")),                       // colon
-        token(cident(PASCAL_T_IDENTIFIER)),      // return type (simplified)
+        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)), // return type (allow unit-qualified)
         NULL
     );
 
@@ -3407,7 +3422,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         token(cident(PASCAL_T_IDENTIFIER)),          // function name
         optional(create_simple_param_list()),         // optional parameter list
         token(match(":")),                           // colon before return type
-        token(cident(PASCAL_T_RETURN_TYPE)),         // return type
+        token(pascal_qualified_identifier(PASCAL_T_RETURN_TYPE)), // return type (allow unit-qualified)
         token(match(";")),                           // semicolon after signature
         routine_directive,                           // forward/external/assembler directive with arguments
         many(routine_directive),                     // additional directives (overload, etc.)

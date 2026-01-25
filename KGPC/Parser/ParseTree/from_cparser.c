@@ -10372,6 +10372,14 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                         break;
                     }
 
+                    if (getenv("KGPC_DEBUG_IMPL_NONE") != NULL &&
+                        definition->typ == PASCAL_T_NONE &&
+                        definition->child == NULL &&
+                        definition->sym != NULL &&
+                        definition->sym->name != NULL) {
+                        fprintf(stderr, "[KGPC] impl NONE at line=%d: %.120s\n",
+                            definition->line, definition->sym->name);
+                    }
                     ast_t *node = unwrap_pascal_node(definition);
                     for (ast_t *node_cursor = node; node_cursor != NULL;
                          node_cursor = (definition->typ == PASCAL_T_NONE) ? node_cursor->next : NULL) {
