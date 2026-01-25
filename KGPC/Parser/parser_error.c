@@ -538,7 +538,13 @@ int print_source_context_at_offset(const char *buffer, size_t length,
 
     /* Print context lines */
     size_t idx = (size_t)context_start;
-    int line_num = actual_error_line - lines_back;
+    /* After backing up past 'lines_back' newlines and skipping the final newline,
+     * we're at the start of the line (lines_back - 1) lines before error_line,
+     * because each newline marks the end of a line, not the beginning.
+     * Example: if error_line=9 and we crossed 2 newlines, we're at start of line 8
+     * (not line 7), because: line 9 -> cross \n -> line 8 -> cross \n -> at start of line 8
+     * The line 531 skip puts us at start of the line AFTER the newline we landed on. */
+    int line_num = actual_error_line - lines_back + 1;
     if (line_num < 1) line_num = 1;
 
     while (line_num <= end_line && idx < length) {
