@@ -9166,10 +9166,11 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             }
             else
             {
+                /* FPC treats this as a warning, not an error - function result may be uninitialized */
                 fprintf(stderr,
-                    "Error in function %s: no return statement declared in function body!\n\n",
+                    "Warning in function %s: function result does not seem to be set\n\n",
                     subprogram->tree_data.subprogram_data.id);
-                ++return_val;
+                /* Note: Not incrementing return_val - this is a warning, not an error */
             }
         }
     }

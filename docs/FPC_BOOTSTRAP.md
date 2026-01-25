@@ -113,7 +113,7 @@ chmod +x /tmp/cvise_indexofany.sh
 cvise --timeout 7200 /tmp/cvise_indexofany.sh sysutils_indexofany.pp
 ```
 
-### Error categories (24 total):
+### Error categories (23 errors + 1 warning):
 | Count | Error | Root Cause |
 |-------|-------|------------|
 | 6 | DoCapSizeInt type mismatch | PtrInt vs SizeInt type compatibility |
@@ -124,13 +124,12 @@ cvise --timeout 7200 /tmp/cvise_indexofany.sh sysutils_indexofany.pp
 | 2 | strlen ambiguous call | Overload resolution |
 | 2 | FreeDriveStr/FreeTerminateProcs/DoneExceptions overload not found | Forward reference issues |
 | 2 | Result type incompatibility | primitive(38) vs real, char vs string |
-| 1 | LowerCase no return statement | FPC source bug: `{ELSE}` without `$` is treated as comment |
 | 1 | Result pointer vs procedure | Type compatibility issues |
 
-**Note**: The "LowerCase no return statement" error is caused by a bug in FPC source (sysutils/sysstr.inc line 159) where `{ELSE}` is used instead of `{$ELSE}`. This causes the else branch to be treated as a comment, resulting in no return statement when UNICODERTL is undefined.
+**Note**: The "LowerCase" function result warning is caused by FPC source (sysutils/sysstr.inc) using `{ELSE}` instead of `{$ELSE}`. This is now treated as a warning (matching FPC's behavior) rather than an error.
 
 ## Units with Compilation Errors
 
 - `baseunix.pp` - **0 errors** ✓
-- `sysutils.pp` - **24 errors** (with `--no-stdlib`)
+- `sysutils.pp` - **23 errors, 1 warning** (with `--no-stdlib`)
 - `math.pp` - Depends on sysutils
