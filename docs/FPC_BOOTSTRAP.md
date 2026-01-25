@@ -4,22 +4,16 @@
 
 The FPC RTL cannot be fully compiled because kgpc has bugs and missing features that need to be fixed.
 
-## Known Issues to Fix
+## Prerequisites
 
-1. **Type Helper Issues**
-   - IndexOfAny/IndexOfAnyUnQuoted overload resolution in type helpers
-   - TGUIDHelper.Create type mismatch with type casts
-
-2. **Forward References**
-   - SysBeep used before declaration (forward reference support needed)
-   - Some procedure overloads not found due to forward reference issues
-
-3. **Overload Resolution**
-   - Some procedure overloads not matched (InitInternational, InitExceptions, etc.)
+Clone the FPC source code:
+```bash
+git clone https://github.com/fpc/FPCSource
+```
 
 ## Build Command
 
-### sysutils.pp (27 errors)
+### sysutils.pp (24 errors)
 ```bash
 ./build/KGPC/kgpc ./FPCSource/rtl/unix/sysutils.pp /tmp/sysutils.s \
   --no-stdlib \
@@ -107,53 +101,21 @@ chmod +x /tmp/cvise_indexofany.sh
 cvise --timeout 7200 /tmp/cvise_indexofany.sh sysutils_indexofany.pp
 ```
 
-### Error categories (36 total):
+### Error categories (24 total):
 | Count | Error | Root Cause |
 |-------|-------|------------|
-| 6 | IOPipe/FlushPipe/ClosePipe/PCloseText overload not found | Overload resolution issues |
-| 6 | DoCapSizeInt argument type mismatch | Type inference |
-| 3 | ShortString S assignment | Array assignment compatibility |
-| 3 | SysBeep/OnBeep undeclared | Forward reference support needed |
-| 3 | InitExceptions/InitInternational/etc. overload not found | Overload resolution |
-| 3 | FreeDriveStr/FreeTerminateProcs/DoneExceptions overload not found | Overload resolution |
-| 2 | strlen ambiguity | Overload resolution |
-| 2 | Result pointer-to-procedure mismatch | Function reference handling |
-| 2 | Result type incompatible (char/string, real) | Type inference |
-| 1 | LowerCase no return statement | Control flow analysis |
-
-### Fixed issues:
-- ✅ Inline pointer type fields in records (e.g., `bufptr: ^Byte`) - fixed
-- ✅ Buffer overflow in MangleNameFromTypeList - fixed
-- ✅ Absolute variable aliasing - fixed
-- ✅ baseunix.pp regression from commit fe74623 - fixed
-
-## Compiles Successfully (RTL Units)
-
-- `system.pp` - Core system unit
-- `linux.pp` - Linux unit
-- `unix.pp` - Unix unit
-- `baseunix.pp` - Base Unix functions
-- `objpas.pp` - Object Pascal RTL
-- `strings.pp` - String handling
-- `ctypes.pp` - C types
-- `sysconst.pp` - System constants
-- `types.pp` - Type helpers
-- `cpu.pp` - CPU types (x86_64)
-- `errors.pp` - Unix errors
-- `rtlconsts.pp` - RTL constants
-- `dl.pp` - Dynamic loading
-- `fpintres.pp`, `si_prc.pp`, `si_c.pp`, `si_g.pp`, `si_dll.pp` - Startup units
+| 6 | DoCapSizeInt type mismatch | Function call type mismatch |
+| 6 | Pipe functions overload not found | Overload resolution issues |
+| 6 | PCloseText overload not found | Forward reference/overload issues |
+| 2 | InitExceptions/InitInternational overload not found | Forward reference issues |
+| 2 | SysBeep/OnBeep undeclared | Forward reference support needed |
+| 2 | GetTickCount result type mismatch | pointer vs procedure |
+| 2 | strlen ambiguous call | Overload resolution |
+| 1 | fpsignal type mismatch | Type compatibility |
+| 1 | LowerCase no return statement | Missing return |
+| 1 | incompatible types in assignment | Type compatibility issues |
 
 ## Units with Compilation Errors
 
-- `sysutils.pp` - **36 errors** (with `--no-stdlib`)
+- `sysutils.pp` - **24 errors** (with `--no-stdlib`)
 - `math.pp` - Depends on sysutils
-- `cthreads.pp` - Missing ThreadingAlreadyUsed
-- `charset.pp` - Type incompatibilities
-- `unixcp.pp` - Missing CP_* constants
-- `intrinsics.pp` - Missing fpc_in_cpu_first
-- `character.pas` - Needs unicodedata unit
-- `getopts.pp` - Missing argv from system
-- `ports.pp` - x86-specific, not x86_64
-- `cmem.pp` - Needs system unit types
-- `si_uc.pp` - Missing si_uc.inc for x86_64

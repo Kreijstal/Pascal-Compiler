@@ -1424,7 +1424,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 sret_size = kgpc_type_sizeof(return_type);
             if (sret_size <= 0 || sret_size > INT_MAX)
                 sret_size = CODEGEN_POINTER_SIZE_BYTES;
-            sret_slot = add_l_x("__record_return_tmp__", (int)sret_size);
+            sret_slot = add_l_t_bytes("__record_return_tmp__", (int)sret_size);
         }
         
         /* For constructors, allocate memory for the instance */
@@ -2590,8 +2590,11 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                         }
                         else
                         {
-                            /* This should not happen - emit error and use 0 */
-                            fprintf(stderr, "ERROR: Failed to emit set constant to rodata\n");
+                            /* Error: failed to emit set constant to rodata.
+                             * This indicates a bug in codegen_emit_const_set_rodata. */
+                            codegen_report_error(ctx,
+                                "ERROR: Failed to emit large set constant '%s' to rodata.",
+                                expr->expr_data.id ? expr->expr_data.id : "(unknown)");
                             snprintf(buffer, buf_len, "$0");
                         }
                     }

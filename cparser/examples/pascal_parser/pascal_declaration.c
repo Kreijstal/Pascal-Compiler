@@ -1746,7 +1746,7 @@ void init_pascal_unit_parser(combinator_t** p) {
     init_pascal_expression_parser(var_expr_parser, NULL);
 
     // Support optional 'absolute <identifier>' clause
-    combinator_t* absolute_clause = optional(seq(new_combinator(), PASCAL_T_NONE,
+    combinator_t* absolute_clause = optional(seq(new_combinator(), PASCAL_T_ABSOLUTE_CLAUSE,
         token(keyword_ci("absolute")),
         token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
         NULL
@@ -2870,7 +2870,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     init_pascal_expression_parser(program_expr_parser, NULL);
 
     // Support optional 'absolute <identifier>' clause
-    combinator_t* absolute_clause = optional(seq(new_combinator(), PASCAL_T_NONE,
+    combinator_t* absolute_clause = optional(seq(new_combinator(), PASCAL_T_ABSOLUTE_CLAUSE,
         token(keyword_ci("absolute")),
         token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
         NULL

@@ -573,16 +573,25 @@ static int is_method_static(const char *class_name, const char *method_name) {
     if (class_name == NULL || method_name == NULL)
         return 0;
 
+    int has_static = 0;
+    int has_instance = 0;
     ListNode_t *cur = class_method_bindings;
     while (cur != NULL) {
         ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
         if (binding != NULL && binding->class_name != NULL && binding->method_name != NULL &&
             strcasecmp(binding->class_name, class_name) == 0 &&
             strcasecmp(binding->method_name, method_name) == 0)
-            return binding->is_static;
+        {
+            if (binding->is_static)
+                has_static = 1;
+            else
+                has_instance = 1;
+        }
         cur = cur->next;
     }
-    return 0;
+    if (has_instance)
+        return 0;
+    return has_static;
 }
 
 /* Public wrapper for is_method_static */
@@ -4875,16 +4884,25 @@ static bool is_var_hint_clause(ast_t *node) {
 }
 
 static ast_t *absolute_clause_target(ast_t *node) {
-    if (node == NULL || node->typ != PASCAL_T_NONE)
+    if (node == NULL || node->typ != PASCAL_T_ABSOLUTE_CLAUSE)
         return NULL;
+    /* The PASCAL_T_ABSOLUTE_CLAUSE node contains the target identifier as its child
+     * (the "absolute" keyword itself is consumed by keyword_ci and not in the AST) */
     ast_t *child = node->child;
-    if (child == NULL || child->typ != PASCAL_T_IDENTIFIER || child->sym == NULL)
+    if (child == NULL || child->typ != PASCAL_T_IDENTIFIER)
         return NULL;
-    if (child->sym->name == NULL || strcasecmp(child->sym->name, "absolute") != 0)
-        return NULL;
-    if (child->next == NULL || child->next->typ != PASCAL_T_IDENTIFIER)
-        return NULL;
-    return child->next;
+    return child;
+}
+
+/* Check if a node should be skipped as an initializer.
+ * This handles:
+ * - PASCAL_T_ABSOLUTE_CLAUSE: absolute variable aliasing (e.g., "X: Integer absolute Y")
+ * - PASCAL_T_IDENTIFIER: trailing identifiers that aren't initializers (legacy case)
+ */
+static int is_node_to_skip_as_initializer(ast_t *node) {
+    if (node == NULL)
+        return 0;
+    return (node->typ == PASCAL_T_IDENTIFIER || node->typ == PASCAL_T_ABSOLUTE_CLAUSE);
 }
 
 static Tree_t *convert_var_decl(ast_t *decl_node) {
@@ -4961,8 +4979,8 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
                 }
             }
 
-            /* Absolute clauses appear as a trailing identifier; skip as initializer. */
-            if (init_node != NULL && init_node->typ == PASCAL_T_IDENTIFIER) {
+            /* Skip nodes that should not be treated as initializers */
+            if (is_node_to_skip_as_initializer(init_node)) {
                 init_node = NULL;
             }
             
@@ -5054,8 +5072,8 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
             }
         }
 
-        /* Absolute clauses appear as a trailing identifier; skip as initializer. */
-        if (init_node != NULL && init_node->typ == PASCAL_T_IDENTIFIER) {
+        /* Skip nodes that should not be treated as initializers */
+        if (is_node_to_skip_as_initializer(init_node)) {
             init_node = NULL;
         }
         

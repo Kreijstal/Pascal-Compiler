@@ -53,8 +53,7 @@ typedef struct {
     KgpcType *element_type;
     int start_index;
     int end_index;
-    // Deferred resolution: store element type ID if element_type is NULL
-    char *element_type_id;
+    // Can be extended with more dimension info if needed.
 } ArrayTypeInfo;
 
 typedef struct {
@@ -149,11 +148,6 @@ int kgpc_type_get_primitive_tag(KgpcType *type);
 /* Get the element type of an array.
  * Returns NULL if not an array type. */
 KgpcType* kgpc_type_get_array_element_type(KgpcType *type);
-
-/* Get the element type of an array, resolving deferred types if needed.
- * If the element_type is NULL but element_type_id is set, tries to resolve it.
- * Returns NULL if not an array or if resolution fails. */
-KgpcType* kgpc_type_get_array_element_type_resolved(KgpcType *type, struct SymTab *symtab);
 
 /* Get formal parameters from a procedure/function type.
  * Returns NULL if not a procedure type. */

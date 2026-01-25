@@ -265,57 +265,27 @@ void print_source_context(const char *file_path, int error_line, int error_col, 
     fclose(fp);
 }
 
-/* Helper function to parse {#line N "file"} directive and extract the line number.
- * Returns 1 if a valid line directive was found, 0 otherwise.
- * If found, *out_line is set to the line number from the directive. */
-static int parse_line_directive(const char *line_buf, size_t line_len, int *out_line)
+/* Helper to check if a line is a {#line N "file"} directive and extract the line number.
+ * Returns the new line number if it's a directive, or -1 if not. */
+static int parse_line_directive(const char *line, size_t len)
 {
-    if (line_buf == NULL || line_len < 8 || out_line == NULL)
-        return 0;
+    if (len < 8) return -1;  /* Minimum: {#line 1} */
+    if (line[0] != '{' || line[1] != '#') return -1;
+    if (len < 7 || strncasecmp(line + 2, "line", 4) != 0) return -1;
     
-    /* Skip leading whitespace */
-    size_t pos = 0;
-    while (pos < line_len && (line_buf[pos] == ' ' || line_buf[pos] == '\t'))
+    size_t pos = 6;
+    /* Skip whitespace */
+    while (pos < len && (line[pos] == ' ' || line[pos] == '\t'))
         ++pos;
     
-    /* Check for {#line */
-    if (pos + 6 > line_len)
-        return 0;
-    if (line_buf[pos] != '{' || line_buf[pos+1] != '#')
-        return 0;
-    pos += 2;
-    
-    /* Skip optional whitespace after {# */
-    while (pos < line_len && (line_buf[pos] == ' ' || line_buf[pos] == '\t'))
-        ++pos;
-    
-    /* Check for "line" keyword (case insensitive) */
-    if (pos + 4 > line_len)
-        return 0;
-    if ((line_buf[pos] != 'l' && line_buf[pos] != 'L') ||
-        (line_buf[pos+1] != 'i' && line_buf[pos+1] != 'I') ||
-        (line_buf[pos+2] != 'n' && line_buf[pos+2] != 'N') ||
-        (line_buf[pos+3] != 'e' && line_buf[pos+3] != 'E'))
-        return 0;
-    pos += 4;
-    
-    /* Skip whitespace after "line" */
-    while (pos < line_len && (line_buf[pos] == ' ' || line_buf[pos] == '\t'))
-        ++pos;
-    
-    /* Parse the line number */
-    if (pos >= line_len || !isdigit((unsigned char)line_buf[pos]))
-        return 0;
-    
+    /* Parse line number */
     int line_num = 0;
-    while (pos < line_len && isdigit((unsigned char)line_buf[pos]))
-    {
-        line_num = line_num * 10 + (line_buf[pos] - '0');
+    while (pos < len && line[pos] >= '0' && line[pos] <= '9') {
+        line_num = line_num * 10 + (line[pos] - '0');
         ++pos;
     }
     
-    *out_line = line_num;
-    return 1;
+    return line_num > 0 ? line_num : -1;
 }
 
 int print_source_context_from_buffer(const char *buffer, size_t length,
@@ -330,124 +300,86 @@ int print_source_context_from_buffer(const char *buffer, size_t length,
     if (error_col < 0)
         error_col = 0;
 
-    /* First pass: scan the buffer to find the physical line that corresponds
-     * to the logical error_line, respecting {#line N} directives */
-    int logical_line = 1;      /* Logical line number (from #line directives) */
-    int physical_line = 1;     /* Actual line number in the buffer */
+    int current_line = 1;
+    int start_line = error_line - num_context_lines;
+    int end_line = error_line + num_context_lines;
+    if (start_line < 1)
+        start_line = 1;
+
     size_t idx = 0;
     
-    /* Track where the error line starts in the buffer */
-    size_t error_physical_line = 0;
-    int found_error_line = 0;
-    
-    /* We need to collect context lines, so we'll store line info */
-    typedef struct {
-        size_t start;
-        size_t len;
-        int logical_num;
-        int is_directive;  /* 1 if this line is a #line directive */
-    } LineInfo;
-    
-    /* Allocate space for line info - estimate max lines */
-    size_t max_lines = 1000;
-    LineInfo *lines = (LineInfo *)calloc(max_lines, sizeof(LineInfo));
-    if (lines == NULL)
+    /* First pass: find the position where current_line matches start_line,
+     * respecting {#line} directives that adjust the line number */
+    while (current_line < start_line && idx < length)
+    {
+        /* Check for {#line N} directive at start of line */
+        size_t line_start = idx;
+        while (idx < length && buffer[idx] != '\n')
+            ++idx;
+        size_t line_len = idx - line_start;
+        
+        int directive_line = parse_line_directive(buffer + line_start, line_len);
+        if (directive_line >= 0) {
+            /* This is a line directive - the NEXT line will be directive_line */
+            if (idx < length && buffer[idx] == '\n')
+                ++idx;
+            current_line = directive_line;
+            continue;
+        }
+        
+        if (idx < length && buffer[idx] == '\n')
+            ++idx;
+        ++current_line;
+    }
+
+    if (current_line < start_line)
         return 0;
-    
-    size_t line_count = 0;
-    
-    while (idx < length)
+
+    int printed_any = 0;
+    while (current_line <= end_line && idx < length)
     {
         size_t line_start = idx;
         while (idx < length && buffer[idx] != '\n')
             ++idx;
         size_t line_len = idx - line_start;
         
-        /* Check if this line is a {#line N} directive */
-        int directive_line = 0;
-        int is_directive = parse_line_directive(buffer + line_start, line_len, &directive_line);
-        
-        if (is_directive)
-        {
-            /* Update logical line number for the NEXT line */
-            logical_line = directive_line;
-        }
-        
-        /* Store line info */
-        if (line_count < max_lines)
-        {
-            lines[line_count].start = line_start;
-            lines[line_count].len = line_len;
-            lines[line_count].logical_num = is_directive ? -1 : logical_line;
-            lines[line_count].is_directive = is_directive;
-            ++line_count;
-        }
-        
-        /* Check if this is the error line */
-        if (!is_directive && logical_line == error_line && !found_error_line)
-        {
-            error_physical_line = line_count - 1;
-            found_error_line = 1;
-        }
-        
-        if (!is_directive)
-            ++logical_line;
-        
-        if (idx < length && buffer[idx] == '\n')
-            ++idx;
-        ++physical_line;
-    }
-    
-    if (!found_error_line)
-    {
-        free(lines);
-        return 0;
-    }
-    
-    /* Determine the range of physical lines to print */
-    int start_physical = (int)error_physical_line - num_context_lines;
-    int end_physical = (int)error_physical_line + num_context_lines;
-    if (start_physical < 0)
-        start_physical = 0;
-    if (end_physical >= (int)line_count)
-        end_physical = (int)line_count - 1;
-    
-    int printed_any = 0;
-    for (int i = start_physical; i <= end_physical; ++i)
-    {
-        /* Skip #line directives in output */
-        if (lines[i].is_directive)
+        /* Check for {#line N} directive */
+        int directive_line = parse_line_directive(buffer + line_start, line_len);
+        if (directive_line >= 0) {
+            /* Skip the directive line, don't print it */
+            if (idx < length && buffer[idx] == '\n')
+                ++idx;
+            current_line = directive_line;
             continue;
-        
-        char *line_buf = (char *)malloc(lines[i].len + 1);
-        if (line_buf == NULL)
-        {
-            free(lines);
-            return printed_any;
         }
-        memcpy(line_buf, buffer + lines[i].start, lines[i].len);
-        line_buf[lines[i].len] = '\0';
-        
-        int display_line = lines[i].logical_num;
-        
-        if ((size_t)i == error_physical_line)
+
+        char *line_buf = (char *)malloc(line_len + 1);
+        if (line_buf == NULL)
+            return printed_any;
+        memcpy(line_buf, buffer + line_start, line_len);
+        line_buf[line_len] = '\0';
+
+        if (current_line == error_line)
         {
-            fprintf(stderr, "  > %4d | %s\n", display_line, line_buf);
+            fprintf(stderr, "  > %4d | %s\n", current_line, line_buf);
             fprintf(stderr, "         | ");
             int col_to_print = error_col > 0 ? error_col : 1;
-            for (int j = 1; j < col_to_print; ++j)
+            for (int i = 1; i < col_to_print; ++i)
                 fputc(' ', stderr);
             fprintf(stderr, "^\n");
         }
         else
         {
-            fprintf(stderr, "    %4d | %s\n", display_line, line_buf);
+            fprintf(stderr, "    %4d | %s\n", current_line, line_buf);
         }
-        
+
         free(line_buf);
         printed_any = 1;
+
+        if (idx < length && buffer[idx] == '\n')
+            ++idx;
+        ++current_line;
     }
-    
-    free(lines);
+
     return printed_any;
 }
