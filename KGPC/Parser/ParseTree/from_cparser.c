@@ -1195,17 +1195,7 @@ static void rewrite_method_impl_ast(ast_t *method_ast, struct RecordType *record
     if (method_ast == NULL || record == NULL)
         return;
 
-    ast_t *cur = method_ast->child;
-    while (cur != NULL) {
-        ast_t *unwrapped = unwrap_pascal_node(cur);
-        if (unwrapped != NULL && unwrapped->sym != NULL && unwrapped->sym->name != NULL &&
-            strcasecmp(unwrapped->sym->name, "class") == 0) {
-            cur = cur->next;
-            continue;
-        }
-        break;
-    }
-    ast_t *qualified = unwrap_pascal_node(cur);
+    ast_t *qualified = unwrap_pascal_node(method_ast->child);
     if (qualified != NULL && qualified->typ == PASCAL_T_QUALIFIED_IDENTIFIER)
     {
         ast_t *class_node = qualified->child;
@@ -8926,15 +8916,6 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         return NULL;
 
     ast_t *cur = method_node->child;
-    while (cur != NULL) {
-        ast_t *unwrapped = unwrap_pascal_node(cur);
-        if (unwrapped != NULL && unwrapped->sym != NULL && unwrapped->sym->name != NULL &&
-            strcasecmp(unwrapped->sym->name, "class") == 0) {
-            cur = cur->next;
-            continue;
-        }
-        break;
-    }
     ast_t *qualified = unwrap_pascal_node(cur);
 
     if (getenv("KGPC_DEBUG_OPERATOR") != NULL) {
