@@ -1951,10 +1951,22 @@ int kgpc_type_conversion_rank(KgpcType *from, KgpcType *to)
         return 3;  /* Integer to pointer conversion is worse than integer-to-integer */
     }
     
+    /* Handle integer-to-POINTER_TYPE (untyped Pointer) conversions */
+    if (to->kind == TYPE_KIND_PRIMITIVE && to->info.primitive_type_tag == POINTER_TYPE &&
+        from->kind == TYPE_KIND_PRIMITIVE && is_integer_type(from->info.primitive_type_tag)) {
+        return 3;  /* Integer to untyped Pointer conversion */
+    }
+    
     /* Handle pointer-to-integer conversions */
     if (from->kind == TYPE_KIND_POINTER && to->kind == TYPE_KIND_PRIMITIVE &&
         is_integer_type(to->info.primitive_type_tag)) {
         return 3;  /* Pointer to integer conversion is worse than integer-to-integer */
+    }
+    
+    /* Handle POINTER_TYPE (untyped Pointer) to integer conversions */
+    if (from->kind == TYPE_KIND_PRIMITIVE && from->info.primitive_type_tag == POINTER_TYPE &&
+        to->kind == TYPE_KIND_PRIMITIVE && is_integer_type(to->info.primitive_type_tag)) {
+        return 3;  /* Untyped Pointer to integer conversion */
     }
 
     if (from->kind == TYPE_KIND_PRIMITIVE && to->kind == TYPE_KIND_PRIMITIVE)
