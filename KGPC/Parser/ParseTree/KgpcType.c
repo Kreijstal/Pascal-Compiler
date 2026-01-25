@@ -395,13 +395,18 @@ void destroy_kgpc_type(KgpcType *type) {
 
 // --- Utility Implementations ---
 
+/* ShortString bounds constants - Pascal ShortString is array[0..255] of Char */
+#define SHORTSTRING_START_INDEX 0
+#define SHORTSTRING_END_INDEX 255
+
 /* Helper function to check if a KgpcType is a char array (shortstring representation) */
 static int is_char_array_type(KgpcType *type) {
     if (type == NULL || type->kind != TYPE_KIND_ARRAY)
         return 0;
     if (type->info.array_info.element_type == NULL) {
         /* Check if this is a ShortString-like array (bounds 0..255) with NULL element_type */
-        if (type->info.array_info.start_index == 0 && type->info.array_info.end_index == 255) {
+        if (type->info.array_info.start_index == SHORTSTRING_START_INDEX && 
+            type->info.array_info.end_index == SHORTSTRING_END_INDEX) {
             /* Treat arrays with 0..255 bounds and NULL element_type as char arrays */
             return 1;
         }
@@ -416,8 +421,8 @@ static int is_char_array_type(KgpcType *type) {
     /* Also accept STRING_TYPE and SHORTSTRING_TYPE for ShortString compatibility */
     /* ShortString is often represented as array[0..255] of String internally */
     if ((tag == STRING_TYPE || tag == SHORTSTRING_TYPE) &&
-        type->info.array_info.start_index == 0 && 
-        type->info.array_info.end_index == 255) {
+        type->info.array_info.start_index == SHORTSTRING_START_INDEX && 
+        type->info.array_info.end_index == SHORTSTRING_END_INDEX) {
         return 1;
     }
     return 0;
