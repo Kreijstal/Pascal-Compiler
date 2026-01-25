@@ -128,6 +128,18 @@ cvise --timeout 7200 /tmp/cvise_indexofany.sh sysutils_indexofany.pp
 
 **Note**: The "LowerCase" function result warning is caused by FPC source (sysutils/sysstr.inc) using `{ELSE}` instead of `{$ELSE}`. This is now treated as a warning (matching FPC's behavior) rather than an error.
 
+### Error Message Improvements (ba7dcf7)
+
+Error context now shows the source file name from `{#line}` directives:
+```
+Error on line 250, incompatible types in assignment for S ...
+  In ./FPCSource/rtl/objpas/sysutils/sysstrh.inc:
+     248 | ...
+  >  250 | Function ByteType(...
+```
+
+**Known issue**: Some error messages show wrong locations because multiple include files have overlapping logical line numbers. The AST stores line numbers but not filenames at the node level.
+
 ## Units with Compilation Errors
 
 - `baseunix.pp` - **0 errors** ✓
