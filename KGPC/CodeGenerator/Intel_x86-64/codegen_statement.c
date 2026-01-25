@@ -1309,6 +1309,9 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
     {
         struct Expression *inner = expr->expr_data.typecast_data.expr;
         int target_type = expr->expr_data.typecast_data.target_type;
+        /* Also check expr->resolved_type in case target_type was not set during parsing */
+        if (target_type == UNKNOWN_TYPE && expr->resolved_type != UNKNOWN_TYPE)
+            target_type = expr->resolved_type;
         if (inner != NULL &&
             (target_type == RECORD_TYPE || target_type == FILE_TYPE || target_type == TEXT_TYPE))
         {

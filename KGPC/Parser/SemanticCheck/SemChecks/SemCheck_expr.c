@@ -7604,6 +7604,7 @@ FIELD_RESOLVED:
     }
 
     expr->record_type = (field_type == RECORD_TYPE) ? field_record : NULL;
+    expr->resolved_type = field_type;
     *type_return = field_type;
     if (getenv("KGPC_DEBUG_RECORD_FIELD") != NULL &&
         field_id != NULL &&
@@ -8130,7 +8131,7 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                             }
                             if (field != NULL)
                             {
-                                if (field->name != NULL && strcmp(field->name, field_name) == 0)
+                                if (field->name != NULL && pascal_identifier_equals(field->name, field_name))
                                 {
                                     /* Found the field, resolve its type */
                                     KgpcType *field_type = NULL;
