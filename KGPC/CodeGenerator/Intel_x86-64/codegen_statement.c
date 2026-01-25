@@ -975,7 +975,8 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
             if (ctx->symtab != NULL)
             {
                 HashNode_t *const_node = NULL;
-                if (FindIdent(&const_node, ctx->symtab, expr->expr_data.id) >= 0 &&
+                int found = FindIdent(&const_node, ctx->symtab, expr->expr_data.id);
+                if (found >= 0 &&
                     const_node != NULL && const_node->hash_type == HASHTYPE_CONST &&
                     const_node->const_set_value != NULL && const_node->const_set_size > 0)
                 {
@@ -1308,6 +1309,9 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
     {
         struct Expression *inner = expr->expr_data.typecast_data.expr;
         int target_type = expr->expr_data.typecast_data.target_type;
+        /* Also check expr->resolved_type in case target_type was not set during parsing */
+        if (target_type == UNKNOWN_TYPE && expr->resolved_type != UNKNOWN_TYPE)
+            target_type = expr->resolved_type;
         if (inner != NULL &&
             (target_type == RECORD_TYPE || target_type == FILE_TYPE || target_type == TEXT_TYPE))
         {
@@ -1652,13 +1656,14 @@ static int codegen_expr_is_shortstring_array(const struct Expression *expr)
         if (alias != NULL && alias->is_shortstring)
             return 1;
     }
+    /* Also check by type bounds: string[N] is char array with bounds 0..N */
     if (expr->is_array_expr &&
         expr->array_element_type == CHAR_TYPE &&
-        expr_get_array_lower_bound(expr) == 0 &&
-        expr_get_array_upper_bound(expr) == 255)
+        expr_get_array_lower_bound(expr) == 0)
     {
-        if (expr->resolved_kgpc_type == NULL ||
-            kgpc_type_get_type_alias(expr->resolved_kgpc_type) == NULL)
+        /* Any char array starting at 0 and sized up to 256 is treated as shortstring */
+        int upper = expr_get_array_upper_bound(expr);
+        if (upper >= 0 && upper <= 255)
             return 1;
     }
     return 0;
@@ -3122,7 +3127,11 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                         if (return_size == 0 && return_var->size >= 8)
                             use_qword = 1;
 
-                        if (return_is_real)
+                        /* Check element_size for unaligned Single type (4 bytes) */
+                        long long unaligned_return_size = return_var->element_size > 0 ? return_var->element_size : return_var->size;
+                        if (return_is_real && unaligned_return_size <= 4)
+                            snprintf(buffer, sizeof(buffer), "\tmovss\t-%d(%%rbp), %%xmm0\n", return_var->offset);
+                        else if (return_is_real)
                             snprintf(buffer, sizeof(buffer), "\tmovsd\t-%d(%%rbp), %%xmm0\n", return_var->offset);
                         else if (use_qword)
                             snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rax\n", return_var->offset);
@@ -6009,8 +6018,10 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         if(var != NULL)
         {
             int use_qword = codegen_type_uses_qword(var_type);
-            /* Override for Single type (4-byte float): check actual storage size */
-            int is_single_target = is_single_float_type(var_type, var->size) && !var->is_reference;
+            /* Override for Single type (4-byte float): check actual storage size
+             * Use element_size which stores the unaligned size, not size which may be padded */
+            long long unaligned_size = var->element_size > 0 ? var->element_size : var->size;
+            int is_single_target = is_single_float_type(var_type, unaligned_size) && !var->is_reference;
             if (is_single_target)
                 use_qword = 0;
             if (!var->is_reference && var->size >= 8)

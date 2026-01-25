@@ -4,22 +4,28 @@
 
 The FPC RTL cannot be fully compiled because kgpc has bugs and missing features that need to be fixed.
 
-## Known Issues to Fix
+## Prerequisites
 
-1. **Type Helper Issues**
-   - IndexOfAny/IndexOfAnyUnQuoted overload resolution in type helpers
-   - TGUIDHelper.Create type mismatch with type casts
+Clone the FPC source code:
+```bash
+git clone https://github.com/fpc/FPCSource
+```
 
-2. **Forward References**
-   - SysBeep used before declaration (forward reference support needed)
-   - Some procedure overloads not found due to forward reference issues
+## Build Commands
 
-3. **Overload Resolution**
-   - Some procedure overloads not matched (InitInternational, InitExceptions, etc.)
+### baseunix.pp (0 errors) ✓
+```bash
+./build/KGPC/kgpc ./FPCSource/rtl/unix/baseunix.pp /tmp/baseunix.s \
+  --no-stdlib \
+  -I./FPCSource/rtl/unix \
+  -I./FPCSource/rtl/objpas \
+  -I./FPCSource/rtl/inc \
+  -I./FPCSource/rtl/linux \
+  -I./FPCSource/rtl/linux/x86_64 \
+  -I./FPCSource/rtl/x86_64
+```
 
-## Build Command
-
-### sysutils.pp (27 errors)
+### sysutils.pp (24 errors)
 ```bash
 ./build/KGPC/kgpc ./FPCSource/rtl/unix/sysutils.pp /tmp/sysutils.s \
   --no-stdlib \
@@ -107,44 +113,35 @@ chmod +x /tmp/cvise_indexofany.sh
 cvise --timeout 7200 /tmp/cvise_indexofany.sh sysutils_indexofany.pp
 ```
 
-### Error categories (27 total):
+### Error categories (23 errors + 1 warning):
 | Count | Error | Root Cause |
 |-------|-------|------------|
-| 6 | IndexOfAny/IndexOfAnyUnQuoted overload not found | Type helper overload resolution |
-| 6 | Result type incompatible | Cascading from overload errors |
-| 5 | procedure overload not found (InitExceptions, etc.) | Forward reference issues |
-| 3 | TGUIDHelper.Create argument type mismatch | Forward reference within type helper |
-| 3 | ShortString S assignment | Cascading from earlier errors |
-| 3 | SysBeep/OnBeep undeclared | Forward reference support needed |
-| 1 | Result real type mismatch | Cascading |
+| 6 | DoCapSizeInt type mismatch | PtrInt vs SizeInt type compatibility |
+| 3 | ShortString S assignment errors | array[0..255] of char type compatibility |
+| 2 | InitExceptions/InitInternational overload not found | Forward reference issues |
+| 2 | SysBeep/OnBeep undeclared | Forward reference support needed |
+| 2 | Result pointer vs procedure mismatch | pointer vs procedure types |
+| 2 | strlen ambiguous call | Overload resolution |
+| 2 | FreeDriveStr/FreeTerminateProcs/DoneExceptions overload not found | Forward reference issues |
+| 2 | Result type incompatibility | primitive(38) vs real, char vs string |
+| 1 | Result pointer vs procedure | Type compatibility issues |
 
-## Compiles Successfully (RTL Units)
+**Note**: The "LowerCase" function result warning is caused by FPC source (sysutils/sysstr.inc) using `{ELSE}` instead of `{$ELSE}`. This is now treated as a warning (matching FPC's behavior) rather than an error.
 
-- `system.pp` - Core system unit
-- `linux.pp` - Linux unit
-- `unix.pp` - Unix unit
-- `baseunix.pp` - Base Unix functions
-- `objpas.pp` - Object Pascal RTL
-- `strings.pp` - String handling
-- `ctypes.pp` - C types
-- `sysconst.pp` - System constants
-- `types.pp` - Type helpers
-- `cpu.pp` - CPU types (x86_64)
-- `errors.pp` - Unix errors
-- `rtlconsts.pp` - RTL constants
-- `dl.pp` - Dynamic loading
-- `fpintres.pp`, `si_prc.pp`, `si_c.pp`, `si_g.pp`, `si_dll.pp` - Startup units
+### Error Message Improvements (ba7dcf7)
+
+Error context now shows the source file name from `{#line}` directives:
+```
+Error on line 250, incompatible types in assignment for S ...
+  In ./FPCSource/rtl/objpas/sysutils/sysstrh.inc:
+     248 | ...
+  >  250 | Function ByteType(...
+```
+
+**Known issue**: Some error messages show wrong locations because multiple include files have overlapping logical line numbers. The AST stores line numbers but not filenames at the node level.
 
 ## Units with Compilation Errors
 
-- `sysutils.pp` - **27 errors** (with `--no-stdlib`)
+- `baseunix.pp` - **0 errors** ✓
+- `sysutils.pp` - **23 errors, 1 warning** (with `--no-stdlib`)
 - `math.pp` - Depends on sysutils
-- `cthreads.pp` - Missing ThreadingAlreadyUsed
-- `charset.pp` - Type incompatibilities
-- `unixcp.pp` - Missing CP_* constants
-- `intrinsics.pp` - Missing fpc_in_cpu_first
-- `character.pas` - Needs unicodedata unit
-- `getopts.pp` - Missing argv from system
-- `ports.pp` - x86-specific, not x86_64
-- `cmem.pp` - Needs system unit types
-- `si_uc.pp` - Missing si_uc.inc for x86_64

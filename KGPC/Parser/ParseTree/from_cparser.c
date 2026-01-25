@@ -478,6 +478,14 @@ void from_cparser_disable_pending_specializations(void) {
 
 static ast_t *unwrap_pascal_node(ast_t *node);
 static struct Expression *convert_expression(ast_t *expr_node);
+
+/* Helper to copy source index from AST node to Expression for accurate error context */
+static inline struct Expression *set_expr_source_index(struct Expression *expr, ast_t *node) {
+    if (expr != NULL && node != NULL) {
+        expr->source_index = node->index;
+    }
+    return expr;
+}
 static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                              struct RecordType **record_out, TypeInfo *type_info);
 static int extract_constant_int(struct Expression *expr, long long *out_value);
@@ -573,16 +581,25 @@ static int is_method_static(const char *class_name, const char *method_name) {
     if (class_name == NULL || method_name == NULL)
         return 0;
 
+    int has_static = 0;
+    int has_instance = 0;
     ListNode_t *cur = class_method_bindings;
     while (cur != NULL) {
         ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
         if (binding != NULL && binding->class_name != NULL && binding->method_name != NULL &&
             strcasecmp(binding->class_name, class_name) == 0 &&
             strcasecmp(binding->method_name, method_name) == 0)
-            return binding->is_static;
+        {
+            if (binding->is_static)
+                has_static = 1;
+            else
+                has_instance = 1;
+        }
         cur = cur->next;
     }
-    return 0;
+    if (has_instance)
+        return 0;
+    return has_static;
 }
 
 /* Public wrapper for is_method_static */
@@ -3566,6 +3583,13 @@ static ListNode_t *convert_class_field_decl(ast_t *field_decl_node) {
             field_desc->array_is_open = field_info.is_open_array;
             field_info.element_type_id = NULL;  /* Ownership transferred */
             field_desc->is_hidden = 0;
+            /* Copy pointer type info for inline pointer fields like ^Char */
+            field_desc->is_pointer = field_info.is_pointer;
+            field_desc->pointer_type = field_info.pointer_type;
+            if (field_info.pointer_type_id != NULL)
+                field_desc->pointer_type_id = strdup(field_info.pointer_type_id);
+            else
+                field_desc->pointer_type_id = NULL;
             list_builder_append(&result, field_desc, LIST_RECORD_FIELD);
         } else {
             if (field_name != NULL)
@@ -4302,6 +4326,13 @@ static ListNode_t *convert_field_decl(ast_t *field_decl_node) {
             field_desc->array_element_type_id = field_info.element_type_id;
             field_desc->array_is_open = field_info.is_open_array;
             field_info.element_type_id = NULL;
+            /* Copy pointer type info for inline pointer fields like ^Char */
+            field_desc->is_pointer = field_info.is_pointer;
+            field_desc->pointer_type = field_info.pointer_type;
+            if (field_info.pointer_type_id != NULL)
+                field_desc->pointer_type_id = strdup(field_info.pointer_type_id);
+            else
+                field_desc->pointer_type_id = NULL;
             list_builder_append(&result_builder, field_desc, LIST_RECORD_FIELD);
         } else {
             if (field_name != NULL)
@@ -4875,16 +4906,25 @@ static bool is_var_hint_clause(ast_t *node) {
 }
 
 static ast_t *absolute_clause_target(ast_t *node) {
-    if (node == NULL || node->typ != PASCAL_T_NONE)
+    if (node == NULL || node->typ != PASCAL_T_ABSOLUTE_CLAUSE)
         return NULL;
+    /* The PASCAL_T_ABSOLUTE_CLAUSE node contains the target identifier as its child
+     * (the "absolute" keyword itself is consumed by keyword_ci and not in the AST) */
     ast_t *child = node->child;
-    if (child == NULL || child->typ != PASCAL_T_IDENTIFIER || child->sym == NULL)
+    if (child == NULL || child->typ != PASCAL_T_IDENTIFIER)
         return NULL;
-    if (child->sym->name == NULL || strcasecmp(child->sym->name, "absolute") != 0)
-        return NULL;
-    if (child->next == NULL || child->next->typ != PASCAL_T_IDENTIFIER)
-        return NULL;
-    return child->next;
+    return child;
+}
+
+/* Check if a node should be skipped as an initializer.
+ * This handles:
+ * - PASCAL_T_ABSOLUTE_CLAUSE: absolute variable aliasing (e.g., "X: Integer absolute Y")
+ * - PASCAL_T_IDENTIFIER: trailing identifiers that aren't initializers (legacy case)
+ */
+static int is_node_to_skip_as_initializer(ast_t *node) {
+    if (node == NULL)
+        return 0;
+    return (node->typ == PASCAL_T_IDENTIFIER || node->typ == PASCAL_T_ABSOLUTE_CLAUSE);
 }
 
 static Tree_t *convert_var_decl(ast_t *decl_node) {
@@ -4961,8 +5001,8 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
                 }
             }
 
-            /* Absolute clauses appear as a trailing identifier; skip as initializer. */
-            if (init_node != NULL && init_node->typ == PASCAL_T_IDENTIFIER) {
+            /* Skip nodes that should not be treated as initializers */
+            if (is_node_to_skip_as_initializer(init_node)) {
                 init_node = NULL;
             }
             
@@ -5054,8 +5094,8 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
             }
         }
 
-        /* Absolute clauses appear as a trailing identifier; skip as initializer. */
-        if (init_node != NULL && init_node->typ == PASCAL_T_IDENTIFIER) {
+        /* Skip nodes that should not be treated as initializers */
+        if (is_node_to_skip_as_initializer(init_node)) {
             init_node = NULL;
         }
         
@@ -7292,8 +7332,9 @@ static const char *tag_name(tag_t tag) {
 }
 
 static struct Expression *convert_expression(ast_t *expr_node) {
+    ast_t *original_node = expr_node;  /* Save for source_index */
     expr_node = unwrap_pascal_node(expr_node);
-    
+
     if (getenv("KGPC_DEBUG_BODY") != NULL) {
         fprintf(stderr, "[KGPC] convert_expression: typ=%d line=%d\n", expr_node->typ, expr_node->line);
         if (expr_node->next != NULL) {
@@ -7304,6 +7345,7 @@ static struct Expression *convert_expression(ast_t *expr_node) {
     if (expr_node == NULL || expr_node == ast_nil)
         return NULL;
 
+    struct Expression *result = NULL;
     switch (expr_node->typ) {
     case PASCAL_T_INTEGER:
     case PASCAL_T_REAL:
@@ -7316,9 +7358,11 @@ static struct Expression *convert_expression(ast_t *expr_node) {
     case PASCAL_T_ARRAY_ACCESS:
     case PASCAL_T_SET:
     case PASCAL_T_NIL:
-        return convert_factor(expr_node);
+        result = convert_factor(expr_node);
+        return set_expr_source_index(result, original_node);
     case PASCAL_T_MEMBER_ACCESS:
-        return convert_member_access(expr_node);
+        result = convert_member_access(expr_node);
+        return set_expr_source_index(result, original_node);
     case PASCAL_T_ADD:
     case PASCAL_T_SUB:
     case PASCAL_T_MUL:
@@ -7339,15 +7383,20 @@ static struct Expression *convert_expression(ast_t *expr_node) {
     case PASCAL_T_SHR:
     case PASCAL_T_ROL:
     case PASCAL_T_ROR:
-        return convert_binary_expr(expr_node, expr_node->typ);
+        result = convert_binary_expr(expr_node, expr_node->typ);
+        return set_expr_source_index(result, original_node);
     case PASCAL_T_SET_UNION:
-        return convert_binary_expr(expr_node, PASCAL_T_ADD);
+        result = convert_binary_expr(expr_node, PASCAL_T_ADD);
+        return set_expr_source_index(result, original_node);
     case PASCAL_T_SET_INTERSECT:
-        return convert_binary_expr(expr_node, PASCAL_T_MUL);
+        result = convert_binary_expr(expr_node, PASCAL_T_MUL);
+        return set_expr_source_index(result, original_node);
     case PASCAL_T_SET_DIFF:
-        return convert_binary_expr(expr_node, PASCAL_T_SUB);
+        result = convert_binary_expr(expr_node, PASCAL_T_SUB);
+        return set_expr_source_index(result, original_node);
     case PASCAL_T_SET_SYM_DIFF:
-        return convert_binary_expr(expr_node, PASCAL_T_XOR);
+        result = convert_binary_expr(expr_node, PASCAL_T_XOR);
+        return set_expr_source_index(result, original_node);
     case PASCAL_T_IS:
     {
         ast_t *value_node = expr_node->child;
@@ -7376,7 +7425,8 @@ static struct Expression *convert_expression(ast_t *expr_node) {
             if (inline_record != NULL)
                 destroy_record_type(inline_record);
         }
-        return mk_is(expr_node->line, value_expr, target_type, target_type_id);
+        result = mk_is(expr_node->line, value_expr, target_type, target_type_id);
+        return set_expr_source_index(result, original_node);
     }
     case PASCAL_T_AS:
     {
@@ -7395,13 +7445,16 @@ static struct Expression *convert_expression(ast_t *expr_node) {
             if (inline_record != NULL)
                 destroy_record_type(inline_record);
         }
-        return mk_as(expr_node->line, value_expr, target_type, target_type_id);
+        result = mk_as(expr_node->line, value_expr, target_type, target_type_id);
+        return set_expr_source_index(result, original_node);
     }
     case PASCAL_T_NEG:
     case PASCAL_T_POS:
-        return convert_unary_expr(expr_node);
+        result = convert_unary_expr(expr_node);
+        return set_expr_source_index(result, original_node);
     case PASCAL_T_NOT:
-        return mk_relop(expr_node->line, NOT, convert_expression(expr_node->child), NULL);
+        result = mk_relop(expr_node->line, NOT, convert_expression(expr_node->child), NULL);
+        return set_expr_source_index(result, original_node);
     case PASCAL_T_TUPLE:
     {
         ListNode_t *elements = NULL;

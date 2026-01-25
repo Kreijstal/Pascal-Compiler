@@ -86,6 +86,9 @@ struct RecordField
     char *array_element_type_id;
     int array_is_open;
     int is_hidden;
+    int is_pointer;
+    int pointer_type;
+    char *pointer_type_id;
 };
 
 struct ClassProperty
@@ -380,6 +383,7 @@ struct Expression
 {
     int line_num;
     int col_num;
+    int source_index;  /* Byte offset in preprocessed buffer for accurate error context (-1 if unknown) */
     struct RecordType *record_type; /* MOVED HERE */
     enum ExprType type;
     union expr_data

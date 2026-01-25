@@ -344,6 +344,8 @@ static bool preprocess_buffer_internal(PascalPreprocessor *pp,
     bool in_line_comment = false;
 
     int current_line = 1;
+    int last_emitted_line = 0;  /* Track last line we emitted content for */
+    bool need_line_directive = true;  /* Need to emit line directive for first content */
 
     bool skip_block_mode = false;
 
@@ -463,6 +465,21 @@ static bool preprocess_buffer_internal(PascalPreprocessor *pp,
         }
 
         if (pp->flatten_only || current_branch_active(conditions)) {
+            /* Emit line directive at start of included file, or when there's a gap in line numbers */
+            bool should_emit_directive = false;
+            if (need_line_directive && filename != NULL && depth > 0) {
+                /* At start of line (or first character), emit directive */
+                if (i == 0 || input[i-1] == '\n' || last_emitted_line == 0) {
+                    should_emit_directive = true;
+                }
+            }
+            if (should_emit_directive) {
+                if (!emit_line_directive(output, current_line, filename)) {
+                    return set_error(error_message, "out of memory");
+                }
+                need_line_directive = false;
+            }
+            
             // Try macro expansion if we're not in a comment or string
             if (!pp->flatten_only && !in_comment && !in_string && pp->macro_enabled) {
                 size_t identifier_len = 0;
@@ -482,6 +499,7 @@ static bool preprocess_buffer_internal(PascalPreprocessor *pp,
                     }
                     // Skip the identifier in the input
                     i += identifier_len - 1;  // -1 because loop will increment i
+                    last_emitted_line = current_line;
                     continue;
                 }
             }
@@ -489,6 +507,10 @@ static bool preprocess_buffer_internal(PascalPreprocessor *pp,
             if (!string_builder_append_char(output, c)) {
                 return set_error(error_message, "out of memory");
             }
+            last_emitted_line = current_line;
+        } else {
+            /* Content is being skipped - mark that we need a line directive when we resume */
+            need_line_directive = true;
         }
         
         // Track line numbers for ALL newlines
@@ -703,8 +725,9 @@ static bool handle_directive(PascalPreprocessor *pp,
                 }
             }
 
-            /* Emit line directive entering the included file */
-            emit_line_directive(output, 1, resolved_path);
+            /* Line directives are emitted dynamically when content is output,
+             * so we don't emit {#line 1} here - the first emitted content will
+             * trigger a line directive with the correct line number */
 
             bool ok = preprocess_buffer_internal(pp, resolved_path, include_buffer, include_length, conditions, output, depth + 1, error_message);
 
@@ -870,8 +893,9 @@ static bool handle_directive(PascalPreprocessor *pp,
                 }
             }
 
-            /* Emit line directive entering the included file */
-            emit_line_directive(output, 1, resolved_path);
+            /* Line directives are emitted dynamically when content is output,
+             * so we don't emit {#line 1} here - the first emitted content will
+             * trigger a line directive with the correct line number */
 
             bool ok = preprocess_buffer_internal(pp, resolved_path, include_buffer, include_length, conditions, output, depth + 1, error_message);
 

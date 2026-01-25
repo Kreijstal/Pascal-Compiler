@@ -497,8 +497,8 @@ static ListNode_t *semcheck_create_builtin_param_var(const char *name, int type_
 /* Adds built-in functions */
 void semcheck_add_builtins(SymTab_t *symtab);
 
-/* Helper function to print semantic error with source code context */
-void semantic_error(int line_num, int col_num, const char *format, ...)
+/* Internal helper to print context using either offset or line-based search */
+static void print_error_context(int line_num, int col_num, int source_index)
 {
     const char *file_path = (file_to_parse != NULL && *file_to_parse != '\0')
                                 ? file_to_parse
@@ -509,18 +509,6 @@ void semantic_error(int line_num, int col_num, const char *format, ...)
     size_t context_len = preprocessed_length;
     if (context_len == 0 && preprocessed_source != NULL)
         context_len = strlen(preprocessed_source);
-
-    fprintf(stderr, "Error on line %d", line_num);
-    if (col_num > 0) {
-        fprintf(stderr, ", column %d", col_num);
-    }
-    fprintf(stderr, ": ");
-
-    va_list args;
-    va_start(args, format);
-    vfprintf(stderr, format, args);
-    va_end(args);
-    fprintf(stderr, "\n");
 
     if (line_num > 0) {
         const char *context_buf = preprocessed_source;
@@ -533,14 +521,16 @@ void semantic_error(int line_num, int col_num, const char *format, ...)
         if (getenv("KGPC_DEBUG_SEM_CONTEXT") != NULL)
         {
             fprintf(stderr,
-                "[SemCheck] context file=%s pre_len=%zu buf_len=%zu line=%d col=%d\n",
+                "[SemCheck] context file=%s pre_len=%zu buf_len=%zu line=%d col=%d offset=%d\n",
                 file_path != NULL ? file_path : "<null>",
                 context_len,
                 context_buf_len,
                 line_num,
-                col_num);
+                col_num,
+                source_index);
         }
-        int printed = print_source_context_from_buffer(context_buf, context_buf_len, line_num, col_num, 2);
+        /* Use offset-based context if available, otherwise fall back to line-based */
+        int printed = print_source_context_at_offset(context_buf, context_buf_len, source_index, line_num, col_num, 2);
         if (!printed)
             printed = semcheck_print_context_from_file(file_path, line_num, col_num, 2);
         if (!printed && file_path != NULL)
@@ -548,6 +538,42 @@ void semantic_error(int line_num, int col_num, const char *format, ...)
     }
 
     fprintf(stderr, "\n");
+}
+
+/* Helper function to print semantic error with source code context */
+void semantic_error(int line_num, int col_num, const char *format, ...)
+{
+    fprintf(stderr, "Error on line %d", line_num);
+    if (col_num > 0) {
+        fprintf(stderr, ", column %d", col_num);
+    }
+    fprintf(stderr, ": ");
+
+    va_list args;
+    va_start(args, format);
+    vfprintf(stderr, format, args);
+    va_end(args);
+    fprintf(stderr, "\n");
+
+    print_error_context(line_num, col_num, -1);  /* -1 = no offset, use line-based search */
+}
+
+/* Helper function to print semantic error with accurate source context using byte offset */
+void semantic_error_at(int line_num, int col_num, int source_index, const char *format, ...)
+{
+    fprintf(stderr, "Error on line %d", line_num);
+    if (col_num > 0) {
+        fprintf(stderr, ", column %d", col_num);
+    }
+    fprintf(stderr, ": ");
+
+    va_list args;
+    va_start(args, format);
+    vfprintf(stderr, format, args);
+    va_end(args);
+    fprintf(stderr, "\n");
+
+    print_error_context(line_num, col_num, source_index);
 }
 
 /* Helper for legacy error prints that already include "Error on line %d". */
@@ -1261,6 +1287,13 @@ static inline void mark_hashnode_unit_info(HashNode_t *node, int defined_in_unit
 }
 
 static Tree_t *g_semcheck_current_subprogram = NULL;
+
+const char *semcheck_get_current_subprogram_id(void)
+{
+    if (g_semcheck_current_subprogram == NULL)
+        return NULL;
+    return g_semcheck_current_subprogram->tree_data.subprogram_data.id;
+}
 
 void semcheck_mark_static_link_needed(int scope_level, HashNode_t *node)
 {
@@ -4214,6 +4247,10 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
                 strdup(original_field->array_element_type_id) : NULL;
             cloned_field->array_is_open = original_field->array_is_open;
             cloned_field->is_hidden = original_field->is_hidden;
+            cloned_field->is_pointer = original_field->is_pointer;
+            cloned_field->pointer_type = original_field->pointer_type;
+            cloned_field->pointer_type_id = original_field->pointer_type_id ?
+                strdup(original_field->pointer_type_id) : NULL;
             
             /* Create list node for cloned field */
             ListNode_t *new_node = (ListNode_t *)malloc(sizeof(ListNode_t));
@@ -6879,6 +6916,121 @@ void semcheck_add_builtins(SymTab_t *symtab)
         }
     }
 
+    /* StringOfChar: function StringOfChar(c: Char; l: SizeInt): string */
+    {
+        const char *func_name = "StringOfChar";
+        ListNode_t *param_c = semcheck_create_builtin_param("c", CHAR_TYPE);
+        ListNode_t *param_l = semcheck_create_builtin_param("l", LONGINT_TYPE);
+        ListNode_t *params = ConcatList(param_c, param_l);
+        KgpcType *return_type = kgpc_type_from_var_type(HASHVAR_STRING);
+        KgpcType *func_type = create_procedure_type(params, return_type);
+        if (func_type != NULL)
+        {
+            AddBuiltinFunction_Typed(symtab, strdup(func_name), func_type);
+            destroy_kgpc_type(func_type);
+        }
+        if (params != NULL)
+            DestroyList(params);
+    }
+
+    /* BinStr: function BinStr(Val: int64; cnt: byte): shortstring */
+    {
+        const char *func_name = "BinStr";
+        ListNode_t *param_val = semcheck_create_builtin_param("Val", INT64_TYPE);
+        ListNode_t *param_cnt = semcheck_create_builtin_param("cnt", BYTE_TYPE);
+        ListNode_t *params = ConcatList(param_val, param_cnt);
+        KgpcType *return_type = kgpc_type_from_var_type(HASHVAR_SHORTSTRING);
+        KgpcType *func_type = create_procedure_type(params, return_type);
+        if (func_type != NULL)
+        {
+            AddBuiltinFunction_Typed(symtab, strdup(func_name), func_type);
+            destroy_kgpc_type(func_type);
+        }
+        if (params != NULL)
+            DestroyList(params);
+    }
+
+    /* PopCnt: function PopCnt(AValue: QWord): Byte - counts set bits */
+    {
+        const char *func_name = "PopCnt";
+        /* Overloads for different integer sizes */
+        ListNode_t *param_byte = semcheck_create_builtin_param("AValue", BYTE_TYPE);
+        KgpcType *popcnt_byte = create_procedure_type(param_byte, create_primitive_type(BYTE_TYPE));
+        if (popcnt_byte != NULL)
+        {
+            AddBuiltinFunction_Typed(symtab, strdup(func_name), popcnt_byte);
+            destroy_kgpc_type(popcnt_byte);
+        }
+        if (param_byte != NULL)
+            DestroyList(param_byte);
+
+        ListNode_t *param_word = semcheck_create_builtin_param("AValue", WORD_TYPE);
+        KgpcType *popcnt_word = create_procedure_type(param_word, create_primitive_type(BYTE_TYPE));
+        if (popcnt_word != NULL)
+        {
+            AddBuiltinFunction_Typed(symtab, strdup(func_name), popcnt_word);
+            destroy_kgpc_type(popcnt_word);
+        }
+        if (param_word != NULL)
+            DestroyList(param_word);
+
+        ListNode_t *param_dword = semcheck_create_builtin_param("AValue", LONGWORD_TYPE);
+        KgpcType *popcnt_dword = create_procedure_type(param_dword, create_primitive_type(BYTE_TYPE));
+        if (popcnt_dword != NULL)
+        {
+            AddBuiltinFunction_Typed(symtab, strdup(func_name), popcnt_dword);
+            destroy_kgpc_type(popcnt_dword);
+        }
+        if (param_dword != NULL)
+            DestroyList(param_dword);
+
+        ListNode_t *param_qword = semcheck_create_builtin_param("AValue", QWORD_TYPE);
+        KgpcType *popcnt_qword = create_procedure_type(param_qword, create_primitive_type(BYTE_TYPE));
+        if (popcnt_qword != NULL)
+        {
+            AddBuiltinFunction_Typed(symtab, strdup(func_name), popcnt_qword);
+            destroy_kgpc_type(popcnt_qword);
+        }
+        if (param_qword != NULL)
+            DestroyList(param_qword);
+    }
+
+    /* IndexChar: function IndexChar(const buf; len: SizeInt; b: Char): SizeInt */
+    {
+        const char *func_name = "IndexChar";
+        ListNode_t *param_buf = semcheck_create_builtin_param("buf", POINTER_TYPE);
+        ListNode_t *param_len = semcheck_create_builtin_param("len", LONGINT_TYPE);
+        ListNode_t *param_b = semcheck_create_builtin_param("b", CHAR_TYPE);
+        ListNode_t *params = ConcatList(ConcatList(param_buf, param_len), param_b);
+        KgpcType *return_type = create_primitive_type(LONGINT_TYPE);
+        KgpcType *func_type = create_procedure_type(params, return_type);
+        if (func_type != NULL)
+        {
+            AddBuiltinFunction_Typed(symtab, strdup(func_name), func_type);
+            destroy_kgpc_type(func_type);
+        }
+        if (params != NULL)
+            DestroyList(params);
+    }
+
+    /* CompareByte: function CompareByte(const buf1, buf2; len: SizeInt): SizeInt */
+    {
+        const char *func_name = "CompareByte";
+        ListNode_t *param_buf1 = semcheck_create_builtin_param("buf1", POINTER_TYPE);
+        ListNode_t *param_buf2 = semcheck_create_builtin_param("buf2", POINTER_TYPE);
+        ListNode_t *param_len = semcheck_create_builtin_param("len", LONGINT_TYPE);
+        ListNode_t *params = ConcatList(ConcatList(param_buf1, param_buf2), param_len);
+        KgpcType *return_type = create_primitive_type(LONGINT_TYPE);
+        KgpcType *func_type = create_procedure_type(params, return_type);
+        if (func_type != NULL)
+        {
+            AddBuiltinFunction_Typed(symtab, strdup(func_name), func_type);
+            destroy_kgpc_type(func_type);
+        }
+        if (params != NULL)
+            DestroyList(params);
+    }
+
     /* Builtins are now in system.p */
 }
 
@@ -9155,10 +9307,11 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             }
             else
             {
+                /* FPC treats this as a warning, not an error - function result may be uninitialized */
                 fprintf(stderr,
-                    "Error in function %s: no return statement declared in function body!\n\n",
+                    "Warning in function %s: function result does not seem to be set\n\n",
                     subprogram->tree_data.subprogram_data.id);
-                ++return_val;
+                /* Note: Not incrementing return_val - this is a warning, not an error */
             }
         }
     }

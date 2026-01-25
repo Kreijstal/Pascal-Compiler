@@ -358,6 +358,8 @@ static void destroy_record_field(struct RecordField *field)
         free(field->type_id);
     if (field->array_element_type_id != NULL)
         free(field->array_element_type_id);
+    if (field->pointer_type_id != NULL)
+        free(field->pointer_type_id);
     destroy_record_type(field->nested_record);
     free(field);
 }
@@ -1816,6 +1818,10 @@ static struct RecordField *clone_record_field(const struct RecordField *field)
         strdup(field->array_element_type_id) : NULL;
     clone->array_is_open = field->array_is_open;
     clone->is_hidden = field->is_hidden;
+    clone->is_pointer = field->is_pointer;
+    clone->pointer_type = field->pointer_type;
+    clone->pointer_type_id = field->pointer_type_id != NULL ?
+        strdup(field->pointer_type_id) : NULL;
     return clone;
 }
 
@@ -2577,6 +2583,7 @@ static void init_expression(struct Expression *expr, int line_num, enum ExprType
     assert(expr != NULL);
     expr->line_num = line_num;
     expr->col_num = 0;  /* Initialize to 0 - not tracked for expressions yet */
+    expr->source_index = -1;  /* -1 indicates unknown byte offset */
     expr->type = type;
     expr->field_width = NULL;
     expr->field_precision = NULL;
