@@ -7483,6 +7483,24 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     tree->tree_data.var_decl_data.cached_kgpc_type = create_primitive_type(builtin_tag);
                 }
             }
+            /* AUDIT: Log when KgpcType is missing for a type_id */
+            if (getenv("KGPC_AUDIT_TYPES") != NULL && tree->tree_data.var_decl_data.type_id != NULL)
+            {
+                const char *var_name = (ids_head && ids_head->cur) ? (char*)ids_head->cur : "<unknown>";
+                const char *type_id = tree->tree_data.var_decl_data.type_id;
+                KgpcType *kgpc = tree->tree_data.var_decl_data.cached_kgpc_type;
+                if (kgpc == NULL)
+                {
+                    fprintf(stderr, "[TYPE_AUDIT] MISSING: var=%s type_id=%s resolved_node=%p\n",
+                        var_name, type_id, (void*)resolved_type);
+                }
+                else if (kgpc->kind == TYPE_KIND_PRIMITIVE && kgpc->info.primitive_type_tag == POINTER_TYPE)
+                {
+                    /* Pointer type but no points_to info - this is a problem */
+                    fprintf(stderr, "[TYPE_AUDIT] INCOMPLETE_PTR: var=%s type_id=%s kind=PRIMITIVE tag=POINTER (should be TYPE_KIND_POINTER)\n",
+                        var_name, type_id);
+                }
+            }
         }
         int skip_initializer = 0;
         while(ids != NULL)

@@ -13448,6 +13448,31 @@ method_call_resolved:
                         }
                         semcheck_expr_main(&call_type, symtab, call_expr, max_scope_lev, NO_MUTATE);
 
+                        /* AUDIT: Log type resolution for overload scoring */
+                        if (getenv("KGPC_AUDIT_TYPES") != NULL)
+                        {
+                            const char *formal_type_id = NULL;
+                            const char *formal_name = NULL;
+                            if (formal_decl != NULL && formal_decl->type == TREE_VAR_DECL) {
+                                formal_type_id = formal_decl->tree_data.var_decl_data.type_id;
+                                if (formal_decl->tree_data.var_decl_data.ids != NULL)
+                                    formal_name = (const char *)formal_decl->tree_data.var_decl_data.ids->cur;
+                            }
+                            KgpcType *call_kgpc = call_expr ? call_expr->resolved_kgpc_type : NULL;
+                            fprintf(stderr, "[TYPE_AUDIT] OVERLOAD: func=%s param=%s formal_type=%d formal_type_id=%s call_type=%d call_kgpc=%p",
+                                id ? id : "<unknown>",
+                                formal_name ? formal_name : "<unknown>",
+                                formal_type,
+                                formal_type_id ? formal_type_id : "<null>",
+                                call_type,
+                                (void*)call_kgpc);
+                            if (call_kgpc != NULL)
+                                fprintf(stderr, " call_kgpc_kind=%d", call_kgpc->kind);
+                            if (formal_type == POINTER_TYPE || call_type == POINTER_TYPE)
+                                fprintf(stderr, " [POINTER]");
+                            fprintf(stderr, "\n");
+                        }
+
                         /* Check element types for array variables passed to open array parameters */
                         if (formal_decl != NULL && formal_decl->type == TREE_ARR_DECL &&
                             call_expr != NULL && call_expr->is_array_expr)
@@ -13724,6 +13749,28 @@ method_call_resolved:
                                 if (mapped != UNKNOWN_TYPE)
                                     call_subtype = mapped;
                             }
+                        }
+
+                        /* AUDIT: Log pointer subtype comparison */
+                        if (getenv("KGPC_AUDIT_TYPES") != NULL)
+                        {
+                            fprintf(stderr, "[TYPE_AUDIT] PTR_CMP: func=%s formal_type_id=%s formal_subtype=%d formal_subtype_id=%s "
+                                "call_subtype=%d call_subtype_id=%s formal_kgpc=%p call_kgpc=%p\n",
+                                id ? id : "<unknown>",
+                                formal_type_id ? formal_type_id : "<null>",
+                                formal_subtype,
+                                formal_subtype_id ? formal_subtype_id : "<null>",
+                                call_subtype,
+                                call_subtype_id ? call_subtype_id : "<null>",
+                                (void*)formal_kgpc,
+                                (void*)(call_expr ? call_expr->resolved_kgpc_type : NULL));
+                            if (formal_kgpc != NULL && kgpc_type_is_pointer(formal_kgpc))
+                                fprintf(stderr, "  formal_kgpc: kind=POINTER points_to=%p\n",
+                                    (void*)formal_kgpc->info.points_to);
+                            if (call_expr && call_expr->resolved_kgpc_type != NULL &&
+                                kgpc_type_is_pointer(call_expr->resolved_kgpc_type))
+                                fprintf(stderr, "  call_kgpc: kind=POINTER points_to=%p\n",
+                                    (void*)call_expr->resolved_kgpc_type->info.points_to);
                         }
 
                         if (formal_subtype != UNKNOWN_TYPE && call_subtype != UNKNOWN_TYPE)
