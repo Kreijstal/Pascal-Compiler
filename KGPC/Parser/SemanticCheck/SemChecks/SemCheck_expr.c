@@ -10129,7 +10129,7 @@ int semcheck_varid(int *type_return,
             }
             else
             {
-                semantic_error(expr->line_num, expr->col_num, "undeclared identifier \"%s\"", id);
+                semantic_error_at(expr->line_num, expr->col_num, expr->source_index, "undeclared identifier \"%s\"", id);
                 ++return_val;
             }
 

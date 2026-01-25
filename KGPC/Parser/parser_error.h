@@ -16,4 +16,12 @@ int print_source_context_from_buffer(const char *buffer, size_t length,
                                      int error_line, int error_col,
                                      int num_context_lines);
 
+/* Print source context using byte offset for accurate positioning.
+ * This avoids ambiguity when multiple files have the same line number.
+ * source_offset: byte offset in buffer (-1 to fall back to line-based search)
+ */
+int print_source_context_at_offset(const char *buffer, size_t length,
+                                   int source_offset, int error_line, int error_col,
+                                   int num_context_lines);
+
 #endif

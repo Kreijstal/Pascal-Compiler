@@ -478,6 +478,14 @@ void from_cparser_disable_pending_specializations(void) {
 
 static ast_t *unwrap_pascal_node(ast_t *node);
 static struct Expression *convert_expression(ast_t *expr_node);
+
+/* Helper to copy source index from AST node to Expression for accurate error context */
+static inline struct Expression *set_expr_source_index(struct Expression *expr, ast_t *node) {
+    if (expr != NULL && node != NULL) {
+        expr->source_index = node->index;
+    }
+    return expr;
+}
 static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                              struct RecordType **record_out, TypeInfo *type_info);
 static int extract_constant_int(struct Expression *expr, long long *out_value);
@@ -7324,8 +7332,9 @@ static const char *tag_name(tag_t tag) {
 }
 
 static struct Expression *convert_expression(ast_t *expr_node) {
+    ast_t *original_node = expr_node;  /* Save for source_index */
     expr_node = unwrap_pascal_node(expr_node);
-    
+
     if (getenv("KGPC_DEBUG_BODY") != NULL) {
         fprintf(stderr, "[KGPC] convert_expression: typ=%d line=%d\n", expr_node->typ, expr_node->line);
         if (expr_node->next != NULL) {
@@ -7336,6 +7345,7 @@ static struct Expression *convert_expression(ast_t *expr_node) {
     if (expr_node == NULL || expr_node == ast_nil)
         return NULL;
 
+    struct Expression *result = NULL;
     switch (expr_node->typ) {
     case PASCAL_T_INTEGER:
     case PASCAL_T_REAL:
@@ -7348,9 +7358,11 @@ static struct Expression *convert_expression(ast_t *expr_node) {
     case PASCAL_T_ARRAY_ACCESS:
     case PASCAL_T_SET:
     case PASCAL_T_NIL:
-        return convert_factor(expr_node);
+        result = convert_factor(expr_node);
+        return set_expr_source_index(result, original_node);
     case PASCAL_T_MEMBER_ACCESS:
-        return convert_member_access(expr_node);
+        result = convert_member_access(expr_node);
+        return set_expr_source_index(result, original_node);
     case PASCAL_T_ADD:
     case PASCAL_T_SUB:
     case PASCAL_T_MUL:
@@ -7371,15 +7383,20 @@ static struct Expression *convert_expression(ast_t *expr_node) {
     case PASCAL_T_SHR:
     case PASCAL_T_ROL:
     case PASCAL_T_ROR:
-        return convert_binary_expr(expr_node, expr_node->typ);
+        result = convert_binary_expr(expr_node, expr_node->typ);
+        return set_expr_source_index(result, original_node);
     case PASCAL_T_SET_UNION:
-        return convert_binary_expr(expr_node, PASCAL_T_ADD);
+        result = convert_binary_expr(expr_node, PASCAL_T_ADD);
+        return set_expr_source_index(result, original_node);
     case PASCAL_T_SET_INTERSECT:
-        return convert_binary_expr(expr_node, PASCAL_T_MUL);
+        result = convert_binary_expr(expr_node, PASCAL_T_MUL);
+        return set_expr_source_index(result, original_node);
     case PASCAL_T_SET_DIFF:
-        return convert_binary_expr(expr_node, PASCAL_T_SUB);
+        result = convert_binary_expr(expr_node, PASCAL_T_SUB);
+        return set_expr_source_index(result, original_node);
     case PASCAL_T_SET_SYM_DIFF:
-        return convert_binary_expr(expr_node, PASCAL_T_XOR);
+        result = convert_binary_expr(expr_node, PASCAL_T_XOR);
+        return set_expr_source_index(result, original_node);
     case PASCAL_T_IS:
     {
         ast_t *value_node = expr_node->child;
@@ -7408,7 +7425,8 @@ static struct Expression *convert_expression(ast_t *expr_node) {
             if (inline_record != NULL)
                 destroy_record_type(inline_record);
         }
-        return mk_is(expr_node->line, value_expr, target_type, target_type_id);
+        result = mk_is(expr_node->line, value_expr, target_type, target_type_id);
+        return set_expr_source_index(result, original_node);
     }
     case PASCAL_T_AS:
     {
@@ -7427,13 +7445,16 @@ static struct Expression *convert_expression(ast_t *expr_node) {
             if (inline_record != NULL)
                 destroy_record_type(inline_record);
         }
-        return mk_as(expr_node->line, value_expr, target_type, target_type_id);
+        result = mk_as(expr_node->line, value_expr, target_type, target_type_id);
+        return set_expr_source_index(result, original_node);
     }
     case PASCAL_T_NEG:
     case PASCAL_T_POS:
-        return convert_unary_expr(expr_node);
+        result = convert_unary_expr(expr_node);
+        return set_expr_source_index(result, original_node);
     case PASCAL_T_NOT:
-        return mk_relop(expr_node->line, NOT, convert_expression(expr_node->child), NULL);
+        result = mk_relop(expr_node->line, NOT, convert_expression(expr_node->child), NULL);
+        return set_expr_source_index(result, original_node);
     case PASCAL_T_TUPLE:
     {
         ListNode_t *elements = NULL;

@@ -24,6 +24,7 @@ SymTab_t *start_semcheck(Tree_t *parse_tree, int *sem_result);
  * ...: arguments for format string
  */
 void semantic_error(int line_num, int col_num, const char *format, ...);
+void semantic_error_at(int line_num, int col_num, int source_index, const char *format, ...);
 void semcheck_error_with_context(const char *format, ...);
 void semcheck_set_source_path(const char *path);
 void semcheck_set_source_buffer(const char *buffer, size_t length);

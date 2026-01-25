@@ -647,6 +647,7 @@ ast_t * new_ast() {
     ast->sym = NULL;
     ast->line = 0;
     ast->col = 0;
+    ast->index = -1;  /* -1 indicates unknown position */
     g_parser_stats.ast_nodes_created++;
     return ast;
 }
@@ -656,6 +657,7 @@ void set_ast_position(ast_t* ast, input_t* in) {
     if (ast != NULL && in != NULL) {
         ast->line = in->line;
         ast->col = in->col;
+        ast->index = in->start;  /* Store byte offset for accurate error context */
     }
 }
 
@@ -666,6 +668,7 @@ ast_t* ast1(tag_t typ, ast_t* a1) {
     if (a1 != NULL) {
         ast->line = a1->line;
         ast->col = a1->col;
+        ast->index = a1->index;
     }
     return ast;
 }
@@ -678,6 +681,7 @@ ast_t* copy_ast(ast_t* orig) {
     new->typ = orig->typ;
     new->line = orig->line;
     new->col = orig->col;
+    new->index = orig->index;
     new->sym = orig->sym ? sym_lookup(orig->sym->name) : NULL;
     new->child = copy_ast(orig->child);
     new->next = copy_ast(orig->next);
@@ -691,6 +695,7 @@ ast_t* ast2(tag_t typ, ast_t* a1, ast_t* a2) {
     if (a1 != NULL) {
         ast->line = a1->line;
         ast->col = a1->col;
+        ast->index = a1->index;
     }
     return ast;
 }
