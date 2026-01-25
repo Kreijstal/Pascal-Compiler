@@ -2228,6 +2228,7 @@ void init_pascal_unit_parser(combinator_t** p) {
 
     // Constructor implementation (with required body)
     combinator_t* constructor_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
+        optional(token(keyword_ci("class"))),        // optional class modifier
         token(keyword_ci("constructor")),            // constructor keyword
         method_name_with_class,                      // ClassName.MethodName
         optional(param_list),                        // optional parameter list
@@ -2241,6 +2242,7 @@ void init_pascal_unit_parser(combinator_t** p) {
 
     // Destructor implementation (with required body)
     combinator_t* destructor_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
+        optional(token(keyword_ci("class"))),        // optional class modifier
         token(keyword_ci("destructor")),             // destructor keyword
         method_name_with_class,                      // ClassName.MethodName
         optional(param_list),                        // optional parameter list
@@ -2420,29 +2422,35 @@ void init_pascal_unit_parser(combinator_t** p) {
     );
     set_combinator_name(function_definitions, "function_definition_choice");
 
-    keyword_dispatch_args_t* implementation_dispatch_args = create_keyword_dispatch(11);
+    keyword_dispatch_args_t* implementation_dispatch_args = create_keyword_dispatch(12);
     size_t implementation_entry_index = 0;
-    register_keyword_entry(implementation_dispatch_args, 11, &implementation_entry_index, "uses", uses_section);
-    register_keyword_entry(implementation_dispatch_args, 11, &implementation_entry_index, "const", const_section);
-    register_keyword_entry(implementation_dispatch_args, 11, &implementation_entry_index, "resourcestring", resourcestring_section);
-    register_keyword_entry(implementation_dispatch_args, 11, &implementation_entry_index, "type", type_section);
-    register_keyword_entry(implementation_dispatch_args, 11, &implementation_entry_index, "threadvar", threadvar_section);
-    register_keyword_entry(implementation_dispatch_args, 11, &implementation_entry_index, "var", var_section);
-    register_keyword_entry(implementation_dispatch_args, 11, &implementation_entry_index, "constructor", constructor_impl);
-    register_keyword_entry(implementation_dispatch_args, 11, &implementation_entry_index, "destructor", destructor_impl);
-    register_keyword_entry(implementation_dispatch_args, 11, &implementation_entry_index, "procedure", procedure_definitions);
-    register_keyword_entry(implementation_dispatch_args, 11, &implementation_entry_index, "function", function_definitions);
-    register_keyword_entry(implementation_dispatch_args, 11, &implementation_entry_index, "operator", class_operator_impl);
-    implementation_dispatch_args->entry_count = implementation_entry_index;
-    static const char* implementation_skip_tokens[] = {"class"};
-    implementation_dispatch_args->skip_keywords = implementation_skip_tokens;
-    implementation_dispatch_args->skip_keyword_count = 1;
+    register_keyword_entry(implementation_dispatch_args, 12, &implementation_entry_index, "uses", uses_section);
+    register_keyword_entry(implementation_dispatch_args, 12, &implementation_entry_index, "const", const_section);
+    register_keyword_entry(implementation_dispatch_args, 12, &implementation_entry_index, "resourcestring", resourcestring_section);
+    register_keyword_entry(implementation_dispatch_args, 12, &implementation_entry_index, "type", type_section);
+    register_keyword_entry(implementation_dispatch_args, 12, &implementation_entry_index, "threadvar", threadvar_section);
+    register_keyword_entry(implementation_dispatch_args, 12, &implementation_entry_index, "var", var_section);
+    register_keyword_entry(implementation_dispatch_args, 12, &implementation_entry_index, "constructor", constructor_impl);
+    register_keyword_entry(implementation_dispatch_args, 12, &implementation_entry_index, "destructor", destructor_impl);
+    register_keyword_entry(implementation_dispatch_args, 12, &implementation_entry_index, "procedure", procedure_definitions);
+    register_keyword_entry(implementation_dispatch_args, 12, &implementation_entry_index, "function", function_definitions);
+    register_keyword_entry(implementation_dispatch_args, 12, &implementation_entry_index, "operator", class_operator_impl);
 
     combinator_t* implementation_definition = new_combinator();
     implementation_definition->type = COMB_KEYWORD_DISPATCH;
     implementation_definition->fn = keyword_dispatch_fn;
     implementation_definition->args = implementation_dispatch_args;
     set_combinator_name(implementation_definition, "implementation_definition_dispatch");
+
+    combinator_t** implementation_definition_ref = (combinator_t**)safe_malloc(sizeof(combinator_t*));
+    *implementation_definition_ref = implementation_definition;
+    combinator_t* class_prefixed_definition = seq(new_combinator(), PASCAL_T_NONE,
+        token(keyword_ci("class")),
+        lazy(implementation_definition_ref),
+        NULL
+    );
+    register_keyword_entry(implementation_dispatch_args, 12, &implementation_entry_index, "class", class_prefixed_definition);
+    implementation_dispatch_args->entry_count = implementation_entry_index;
 
     combinator_t* implementation_definitions = many(implementation_definition);
     set_combinator_name(implementation_definitions, "implementation_definitions");
@@ -2704,6 +2712,7 @@ void init_pascal_method_implementation_parser(combinator_t** p) {
 
     // Constructor implementation: constructor ClassName.MethodName[(params)]; body
     combinator_t* constructor_impl = seq(new_combinator(), PASCAL_T_CONSTRUCTOR_DECL,
+        optional(token(keyword_ci("class"))),    // optional class modifier
         token(keyword_ci("constructor")),        // constructor keyword
         method_name_with_class,                  // ClassName.MethodName
         create_simple_param_list(),              // optional parameter list
@@ -2715,6 +2724,7 @@ void init_pascal_method_implementation_parser(combinator_t** p) {
 
     // Destructor implementation: destructor ClassName.MethodName[(params)]; body
     combinator_t* destructor_impl = seq(new_combinator(), PASCAL_T_DESTRUCTOR_DECL,
+        optional(token(keyword_ci("class"))),    // optional class modifier
         token(keyword_ci("destructor")),         // destructor keyword
         method_name_with_class,                  // ClassName.MethodName
         create_simple_param_list(),              // optional parameter list
