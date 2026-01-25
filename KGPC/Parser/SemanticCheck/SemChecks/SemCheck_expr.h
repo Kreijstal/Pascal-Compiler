@@ -31,6 +31,8 @@ int semcheck_expr_func(int *type_return,
 int semcheck_expr_main(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
 
+int resolve_param_type(Tree_t *decl, SymTab_t *symtab);
+
 /* Helper function to resolve KgpcType from an expression
  * This bridges the legacy type system to the new KgpcType system.
  * Returns NULL if type cannot be resolved.

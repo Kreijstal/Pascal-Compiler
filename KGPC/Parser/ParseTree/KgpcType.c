@@ -1849,6 +1849,135 @@ int kgpc_type_equals_tag(KgpcType *type, int type_tag)
     return (legacy_tag == type_tag);
 }
 
+int kgpc_type_equals(KgpcType *a, KgpcType *b)
+{
+    if (a == b)
+        return 1;
+    if (a == NULL || b == NULL)
+        return 0;
+    if (a->kind != b->kind)
+        return 0;
+
+    switch (a->kind)
+    {
+        case TYPE_KIND_PRIMITIVE:
+            return a->info.primitive_type_tag == b->info.primitive_type_tag;
+        case TYPE_KIND_POINTER:
+            return kgpc_type_equals(a->info.points_to, b->info.points_to);
+        case TYPE_KIND_ARRAY:
+            if (a->info.array_info.start_index != b->info.array_info.start_index ||
+                a->info.array_info.end_index != b->info.array_info.end_index)
+                return 0;
+            if (a->info.array_info.element_type != NULL &&
+                b->info.array_info.element_type != NULL)
+            {
+                return kgpc_type_equals(a->info.array_info.element_type,
+                    b->info.array_info.element_type);
+            }
+            if (a->info.array_info.element_type_id != NULL ||
+                b->info.array_info.element_type_id != NULL)
+            {
+                if (a->info.array_info.element_type_id == NULL ||
+                    b->info.array_info.element_type_id == NULL)
+                    return 0;
+                return strcasecmp(a->info.array_info.element_type_id,
+                    b->info.array_info.element_type_id) == 0;
+            }
+            return 0;
+        case TYPE_KIND_RECORD:
+            return a->info.record_info == b->info.record_info;
+        case TYPE_KIND_PROCEDURE:
+            return a->info.proc_info.definition == b->info.proc_info.definition;
+        case TYPE_KIND_ARRAY_OF_CONST:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+int kgpc_type_pointers_compatible(KgpcType *ptr_a, KgpcType *ptr_b)
+{
+    if (ptr_a == NULL || ptr_b == NULL)
+        return 0;
+    if (ptr_a->kind != TYPE_KIND_POINTER || ptr_b->kind != TYPE_KIND_POINTER)
+        return 0;
+    if (ptr_a->info.points_to == NULL || ptr_b->info.points_to == NULL)
+        return 1;
+    return kgpc_type_equals(ptr_a->info.points_to, ptr_b->info.points_to);
+}
+
+int kgpc_type_conversion_rank(KgpcType *from, KgpcType *to)
+{
+    if (from == NULL || to == NULL)
+        return -1;
+    if (kgpc_type_equals(from, to))
+        return 0;
+
+    if (to->kind == TYPE_KIND_ARRAY_OF_CONST)
+        return 1;
+
+    if (from->kind == TYPE_KIND_POINTER && to->kind == TYPE_KIND_POINTER)
+    {
+        if (!kgpc_type_pointers_compatible(from, to))
+            return -1;
+        if (from->info.points_to != NULL && to->info.points_to != NULL &&
+            kgpc_type_equals(from->info.points_to, to->info.points_to))
+            return 0;
+        return 1;
+    }
+
+    if (from->kind == TYPE_KIND_POINTER && to->kind == TYPE_KIND_PRIMITIVE &&
+        to->info.primitive_type_tag == POINTER_TYPE)
+        return 1;
+    if (to->kind == TYPE_KIND_POINTER && from->kind == TYPE_KIND_PRIMITIVE &&
+        from->info.primitive_type_tag == POINTER_TYPE)
+        return 1;
+
+    if (from->kind == TYPE_KIND_PRIMITIVE && to->kind == TYPE_KIND_PRIMITIVE)
+    {
+        int from_tag = from->info.primitive_type_tag;
+        int to_tag = to->info.primitive_type_tag;
+
+        if (is_integer_type(from_tag) && is_integer_type(to_tag))
+        {
+            long long from_size = kgpc_type_sizeof(from);
+            long long to_size = kgpc_type_sizeof(to);
+            if (from_size > 0 && to_size > 0)
+            {
+                if (to_size > from_size)
+                    return 2;
+                if (to_size < from_size)
+                    return 3;
+                return 1;
+            }
+            return 1;
+        }
+        if (is_integer_type(from_tag) && to_tag == REAL_TYPE)
+            return 2;
+        if (from_tag == CHAR_TYPE && is_string_type(to_tag))
+            return 1;
+        if (is_string_type(from_tag) && is_string_type(to_tag))
+            return 1;
+        if (from_tag == ENUM_TYPE && is_integer_type(to_tag))
+            return 1;
+        if (is_integer_type(from_tag) && to_tag == ENUM_TYPE)
+            return 1;
+    }
+
+    if (from->kind == TYPE_KIND_ARRAY && to->kind == TYPE_KIND_ARRAY)
+    {
+        KgpcType *from_elem = from->info.array_info.element_type;
+        KgpcType *to_elem = to->info.array_info.element_type;
+        if (from_elem != NULL && to_elem != NULL)
+            return kgpc_type_conversion_rank(from_elem, to_elem);
+    }
+
+    if (from->kind == TYPE_KIND_PROCEDURE && to->kind == TYPE_KIND_PROCEDURE)
+        return 1;
+
+    return -1;
+}
+
 KgpcType* kgpc_type_build_function_return(struct TypeAlias *inline_alias,
                                         HashNode_t *resolved_type_node,
                                         int primitive_tag,

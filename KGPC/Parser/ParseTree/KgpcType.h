@@ -220,6 +220,16 @@ int kgpc_type_is_signed(KgpcType *type);
  * Returns 1 if the type matches the tag, 0 otherwise. */
 int kgpc_type_equals_tag(KgpcType *type, int type_tag);
 
+/* Compare two KgpcType instances for identity. */
+int kgpc_type_equals(KgpcType *a, KgpcType *b);
+
+/* Determine conversion rank from 'from' to 'to'.
+ * Returns -1 if incompatible. */
+int kgpc_type_conversion_rank(KgpcType *from, KgpcType *to);
+
+/* Check if two pointer types are compatible. */
+int kgpc_type_pointers_compatible(KgpcType *ptr_a, KgpcType *ptr_b);
+
 /* Build the function return type from inline alias/type-id/primitive specification.
  * This consolidates the logic used by semantic checking for both forward declarations
  * and full definitions. */

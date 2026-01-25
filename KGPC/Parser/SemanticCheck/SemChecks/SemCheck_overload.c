@@ -1,0 +1,766 @@
+/*
+    Overload resolution extracted from SemCheck_expr.c
+*/
+
+#include <stdlib.h>
+#include <string.h>
+#include <assert.h>
+#include <stdio.h>
+
+#include "SemCheck_overload.h"
+#include "../HashTable/HashTable.h"
+#include "../SemCheck.h"
+#include "../../ParseTree/type_tags.h"
+#include "../../ParseTree/tree.h"
+#include "../../../identifier_utils.h"
+
+int semcheck_candidate_is_builtin(SymTab_t *symtab, HashNode_t *node)
+{
+    if (symtab == NULL || node == NULL || node->id == NULL)
+        return 0;
+
+    ListNode_t *matches = FindAllIdentsInTable(symtab->builtins, node->id);
+    int is_builtin = 0;
+    for (ListNode_t *cur = matches; cur != NULL; cur = cur->next)
+    {
+        if (cur->cur == node)
+        {
+            is_builtin = 1;
+            break;
+        }
+    }
+    if (matches != NULL)
+        DestroyList(matches);
+    return is_builtin;
+}
+
+static const char *semcheck_get_param_type_id(Tree_t *decl)
+{
+    if (decl == NULL)
+        return NULL;
+    if (decl->type == TREE_VAR_DECL)
+        return decl->tree_data.var_decl_data.type_id;
+    if (decl->type == TREE_ARR_DECL)
+        return decl->tree_data.arr_decl_data.type_id;
+    return NULL;
+}
+
+static int semcheck_get_pointer_param_subtype(Tree_t *decl, SymTab_t *symtab)
+{
+    int owns_type = 0;
+    int subtype = UNKNOWN_TYPE;
+    KgpcType *kgpc_type = resolve_type_from_vardecl(decl, symtab, &owns_type);
+    if (kgpc_type != NULL && kgpc_type_is_pointer(kgpc_type))
+        subtype = kgpc_type_get_pointer_subtype_tag(kgpc_type);
+    if (owns_type && kgpc_type != NULL)
+        destroy_kgpc_type(kgpc_type);
+    return subtype;
+}
+
+static int semcheck_candidates_share_signature(SymTab_t *symtab, HashNode_t *a, HashNode_t *b)
+{
+    if (a == NULL || b == NULL || a->type == NULL || b->type == NULL)
+        return 0;
+
+    ListNode_t *args_a = kgpc_type_get_procedure_params(a->type);
+    ListNode_t *args_b = kgpc_type_get_procedure_params(b->type);
+    if (ListLength(args_a) != ListLength(args_b))
+        return 0;
+
+    while (args_a != NULL && args_b != NULL)
+    {
+        Tree_t *decl_a = (Tree_t *)args_a->cur;
+        Tree_t *decl_b = (Tree_t *)args_b->cur;
+        int type_a = resolve_param_type(decl_a, symtab);
+        int type_b = resolve_param_type(decl_b, symtab);
+        if (type_a != type_b)
+            return 0;
+        if (type_a == POINTER_TYPE)
+        {
+            const char *id_a = semcheck_get_param_type_id(decl_a);
+            const char *id_b = semcheck_get_param_type_id(decl_b);
+            if (id_a != NULL || id_b != NULL)
+            {
+                if (id_a == NULL || id_b == NULL ||
+                    !pascal_identifier_equals(id_a, id_b))
+                    return 0;
+            }
+            else
+            {
+                int sub_a = semcheck_get_pointer_param_subtype(decl_a, symtab);
+                int sub_b = semcheck_get_pointer_param_subtype(decl_b, symtab);
+                if (sub_a != UNKNOWN_TYPE && sub_b != UNKNOWN_TYPE && sub_a != sub_b)
+                    return 0;
+                if (sub_a == UNKNOWN_TYPE || sub_b == UNKNOWN_TYPE)
+                    return 0;
+            }
+        }
+        args_a = args_a->next;
+        args_b = args_b->next;
+    }
+
+    return 1;
+}
+
+/* Helper to check if a parameter has a default value */
+static int param_has_default_value(Tree_t *decl)
+{
+    if (decl == NULL)
+        return 0;
+
+    if (decl->type == TREE_VAR_DECL)
+    {
+        /* Default value is stored in the initializer field */
+        return decl->tree_data.var_decl_data.initializer != NULL;
+    }
+    else if (decl->type == TREE_ARR_DECL)
+    {
+        return decl->tree_data.arr_decl_data.initializer != NULL;
+    }
+
+    return 0;
+}
+
+/* Helper to get the default value expression from a parameter */
+static struct Expression *get_param_default_value(Tree_t *decl)
+{
+    if (decl == NULL)
+        return NULL;
+
+    struct Statement *init = NULL;
+
+    if (decl->type == TREE_VAR_DECL)
+    {
+        init = decl->tree_data.var_decl_data.initializer;
+    }
+    else if (decl->type == TREE_ARR_DECL)
+    {
+        init = decl->tree_data.arr_decl_data.initializer;
+    }
+
+    /* The default value is stored as a STMT_VAR_ASSIGN with NULL var, containing the expression */
+    if (init != NULL && init->type == STMT_VAR_ASSIGN)
+    {
+        return init->stmt_data.var_assign_data.expr;
+    }
+
+    return NULL;
+}
+
+/* Helper to count required parameters (those without defaults) */
+static int count_param_decl_ids(Tree_t *param_decl)
+{
+    if (param_decl == NULL)
+        return 0;
+    if (param_decl->type == TREE_VAR_DECL &&
+        param_decl->tree_data.var_decl_data.ids != NULL)
+        return ListLength(param_decl->tree_data.var_decl_data.ids);
+    if (param_decl->type == TREE_ARR_DECL &&
+        param_decl->tree_data.arr_decl_data.ids != NULL)
+        return ListLength(param_decl->tree_data.arr_decl_data.ids);
+    return 0;
+}
+
+int semcheck_count_total_params(ListNode_t *params)
+{
+    int total = 0;
+    for (ListNode_t *cur = params; cur != NULL; cur = cur->next)
+    {
+        Tree_t *param_decl = (Tree_t *)cur->cur;
+        total += count_param_decl_ids(param_decl);
+    }
+    return total;
+}
+
+int semcheck_count_required_params(ListNode_t *params)
+{
+    int required = 0;
+    ListNode_t *cur = params;
+
+    /* Once we see a parameter with a default, all following must also have defaults */
+    while (cur != NULL)
+    {
+        Tree_t *param_decl = (Tree_t *)cur->cur;
+        int has_default = param_has_default_value(param_decl);
+        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+            const char *param_id = "?";
+            if (param_decl && param_decl->type == TREE_VAR_DECL && param_decl->tree_data.var_decl_data.ids)
+                param_id = (char *)param_decl->tree_data.var_decl_data.ids->cur;
+            fprintf(stderr, "[SemCheck] count_required_params: param=%s has_default=%d\n", param_id, has_default);
+        }
+        if (!has_default)
+            required += count_param_decl_ids(param_decl);
+        else
+            break;  /* All remaining params have defaults */
+        cur = cur->next;
+    }
+
+    return required;
+}
+
+int semcheck_method_accepts_arg_count(ListNode_t *params, int arg_count, int *expects_self_out)
+{
+    int expects_self = 0;
+    int total_params = semcheck_count_total_params(params);
+    int required_params = semcheck_count_required_params(params);
+
+    if (params != NULL)
+    {
+        Tree_t *first_param = (Tree_t *)params->cur;
+        if (first_param != NULL && first_param->type == TREE_VAR_DECL &&
+            first_param->tree_data.var_decl_data.ids != NULL)
+        {
+            const char *first_id = (const char *)first_param->tree_data.var_decl_data.ids->cur;
+            if (first_id != NULL && pascal_identifier_equals(first_id, "Self"))
+                expects_self = 1;
+        }
+    }
+
+    if (expects_self)
+    {
+        int self_count = 0;
+        if (params != NULL)
+        {
+            Tree_t *first_param = (Tree_t *)params->cur;
+            self_count = count_param_decl_ids(first_param);
+        }
+        if (required_params >= self_count)
+            required_params -= self_count;
+        if (total_params >= self_count)
+            total_params -= self_count;
+    }
+
+    if (expects_self_out != NULL)
+        *expects_self_out = expects_self;
+
+    return (arg_count >= required_params && arg_count <= total_params);
+}
+
+int semcheck_append_default_args(ListNode_t **args_head, ListNode_t *formal_params, int line_num)
+{
+    if (args_head == NULL)
+        return 0;
+
+    ListNode_t *formal = formal_params;
+    ListNode_t *actual = *args_head;
+    ListNode_t *tail = *args_head;
+
+    while (tail != NULL && tail->next != NULL)
+        tail = tail->next;
+
+    while (formal != NULL && actual != NULL)
+    {
+        formal = formal->next;
+        actual = actual->next;
+    }
+
+    while (formal != NULL)
+    {
+        Tree_t *param_decl = (Tree_t *)formal->cur;
+        if (!param_has_default_value(param_decl))
+            break;
+
+        struct Expression *default_expr = get_param_default_value(param_decl);
+        if (default_expr == NULL)
+        {
+            semcheck_error_with_context("Error on line %d, missing default value expression.\n", line_num);
+            return 1;
+        }
+
+        struct Expression *default_clone = clone_expression(default_expr);
+        if (default_clone == NULL)
+        {
+            semcheck_error_with_context("Error on line %d, failed to clone default argument expression.\n", line_num);
+            return 1;
+        }
+
+        ListNode_t *node = CreateListNode(default_clone, LIST_EXPR);
+        if (node == NULL)
+        {
+            destroy_expr(default_clone);
+            semcheck_error_with_context("Error on line %d, failed to allocate default argument node.\n", line_num);
+            return 1;
+        }
+
+        if (*args_head == NULL)
+        {
+            *args_head = node;
+            tail = node;
+        }
+        else
+        {
+            tail->next = node;
+            tail = node;
+        }
+
+        formal = formal->next;
+    }
+
+    return 0;
+}
+
+int semcheck_named_arg_type_compatible(Tree_t *formal_decl,
+    struct Expression *rhs_expr,
+    int rhs_type,
+    SymTab_t *symtab)
+{
+    int expected_type = resolve_param_type(formal_decl, symtab);
+
+    if (expected_type == UNKNOWN_TYPE || rhs_type == UNKNOWN_TYPE)
+        return 1;
+    if (expected_type == rhs_type)
+        return 1;
+    if (is_integer_type(expected_type) && is_integer_type(rhs_type))
+        return 1;
+    if (expected_type == REAL_TYPE && is_integer_type(rhs_type))
+        return 1;
+    if (is_string_type(expected_type) &&
+        (is_string_type(rhs_type) || rhs_type == CHAR_TYPE))
+        return 1;
+    if (expected_type == ENUM_TYPE && rhs_type == ENUM_TYPE)
+        return 1;
+    if ((expected_type == POINTER_TYPE || expected_type == PROCEDURE) &&
+        (rhs_type == POINTER_TYPE || rhs_type == PROCEDURE))
+        return 1;
+
+    if (rhs_expr != NULL && rhs_expr->resolved_kgpc_type != NULL)
+    {
+        int owns_expected = 0;
+        KgpcType *expected_kgpc = resolve_type_from_vardecl(formal_decl, symtab, &owns_expected);
+        if (expected_kgpc != NULL)
+        {
+            if (are_types_compatible_for_assignment(expected_kgpc, rhs_expr->resolved_kgpc_type, symtab))
+            {
+                if (owns_expected)
+                    destroy_kgpc_type(expected_kgpc);
+                return 1;
+            }
+            if (owns_expected)
+                destroy_kgpc_type(expected_kgpc);
+        }
+    }
+
+    return 0;
+}
+
+int semcheck_param_list_contains_name(ListNode_t *params, const char *name)
+{
+    if (params == NULL || name == NULL)
+        return 0;
+
+    for (ListNode_t *cur = params; cur != NULL; cur = cur->next)
+    {
+        Tree_t *decl = (Tree_t *)cur->cur;
+        const char *param_name = NULL;
+        if (decl != NULL && decl->type == TREE_VAR_DECL &&
+            decl->tree_data.var_decl_data.ids != NULL)
+        {
+            param_name = (const char *)decl->tree_data.var_decl_data.ids->cur;
+        }
+        else if (decl != NULL && decl->type == TREE_ARR_DECL &&
+            decl->tree_data.arr_decl_data.ids != NULL)
+        {
+            param_name = (const char *)decl->tree_data.arr_decl_data.ids->cur;
+        }
+
+        if (param_name != NULL && pascal_identifier_equals(param_name, name))
+            return 1;
+    }
+    return 0;
+}
+
+static int semcheck_infer_literal_elem_type(struct Expression *expr)
+{
+    struct Expression *elem_expr = NULL;
+    if (expr == NULL)
+        return UNKNOWN_TYPE;
+
+    if (expr->type == EXPR_SET)
+    {
+        struct SetElement *set_elem = NULL;
+        if (expr->expr_data.set_data.elements != NULL)
+            set_elem = (struct SetElement *)expr->expr_data.set_data.elements->cur;
+        if (set_elem != NULL)
+            elem_expr = set_elem->lower;
+    }
+    else if (expr->type == EXPR_ARRAY_LITERAL)
+    {
+        if (expr->expr_data.array_literal_data.elements != NULL)
+            elem_expr = (struct Expression *)expr->expr_data.array_literal_data.elements->cur;
+    }
+
+    if (elem_expr == NULL)
+        return UNKNOWN_TYPE;
+
+    if (elem_expr->type == EXPR_INUM)
+        return INT_TYPE;
+    if (elem_expr->type == EXPR_CHAR_CODE)
+        return CHAR_TYPE;
+    if (elem_expr->type == EXPR_STRING)
+    {
+        if (elem_expr->expr_data.string != NULL &&
+            strlen(elem_expr->expr_data.string) == 1)
+            return CHAR_TYPE;
+        return STRING_TYPE;
+    }
+    if (elem_expr->type == EXPR_BOOL)
+        return BOOL;
+    if (elem_expr->type == EXPR_RNUM)
+        return REAL_TYPE;
+
+    return UNKNOWN_TYPE;
+}
+
+static int semcheck_resolve_arg_kgpc_type(struct Expression *arg_expr,
+    SymTab_t *symtab,
+    int max_scope_lev,
+    int *owns_type_out,
+    KgpcType **arg_type_out)
+{
+    if (owns_type_out != NULL)
+        *owns_type_out = 0;
+    if (arg_type_out != NULL)
+        *arg_type_out = NULL;
+    if (arg_expr == NULL)
+        return UNKNOWN_TYPE;
+
+    int arg_tag = UNKNOWN_TYPE;
+    semcheck_expr_main(&arg_tag, symtab, arg_expr, max_scope_lev, NO_MUTATE);
+
+    KgpcType *arg_type = arg_expr->resolved_kgpc_type;
+    if (arg_type != NULL && arg_tag != UNKNOWN_TYPE)
+    {
+        int keep = 0;
+        if (arg_type->kind == TYPE_KIND_PRIMITIVE &&
+            arg_type->info.primitive_type_tag == arg_tag)
+            keep = 1;
+        else if (arg_tag == POINTER_TYPE && arg_type->kind == TYPE_KIND_POINTER)
+            keep = 1;
+        else if (arg_tag == RECORD_TYPE && arg_type->kind == TYPE_KIND_RECORD)
+            keep = 1;
+        else if (arg_tag == PROCEDURE && arg_type->kind == TYPE_KIND_PROCEDURE)
+            keep = 1;
+        else if (arg_type->kind == TYPE_KIND_ARRAY)
+        {
+            KgpcType *elem = arg_type->info.array_info.element_type;
+            if (elem != NULL && elem->kind == TYPE_KIND_PRIMITIVE &&
+                elem->info.primitive_type_tag == arg_tag)
+                keep = 1;
+            else if (arg_tag == ARRAY_OF_CONST_TYPE &&
+                kgpc_type_is_array_of_const(arg_type))
+                keep = 1;
+        }
+        if (!keep)
+            arg_type = NULL;
+    }
+    if (arg_type == NULL)
+    {
+        switch (arg_tag)
+        {
+            case INT_TYPE:
+            case LONGINT_TYPE:
+            case INT64_TYPE:
+            case REAL_TYPE:
+            case STRING_TYPE:
+            case SHORTSTRING_TYPE:
+            case CHAR_TYPE:
+            case BOOL:
+            case ENUM_TYPE:
+            case SET_TYPE:
+            case POINTER_TYPE:
+            case FILE_TYPE:
+            case TEXT_TYPE:
+            case BYTE_TYPE:
+            case WORD_TYPE:
+            case LONGWORD_TYPE:
+            case QWORD_TYPE:
+            case PROCEDURE:
+                arg_type = create_primitive_type(arg_tag);
+                break;
+            default:
+                break;
+        }
+        if (arg_type != NULL && owns_type_out != NULL)
+            *owns_type_out = 1;
+    }
+    if (arg_type_out != NULL)
+        *arg_type_out = arg_type;
+    return arg_tag;
+}
+
+int semcheck_resolve_overload(HashNode_t **best_match_out,
+    int *best_rank_out,
+    int *num_best_out,
+    ListNode_t *overload_candidates,
+    ListNode_t *args_given,
+    SymTab_t *symtab,
+    struct Expression *call_expr,
+    int max_scope_lev,
+    int prefer_non_builtin)
+{
+    if (best_match_out != NULL)
+        *best_match_out = NULL;
+    if (best_rank_out != NULL)
+        *best_rank_out = 0;
+    if (num_best_out != NULL)
+        *num_best_out = 0;
+
+    if (overload_candidates == NULL)
+        return 1;
+
+    HashNode_t *best_match = NULL;
+    int best_rank = 0;
+    int best_exact = -1;
+    int num_best = 0;
+
+    for (ListNode_t *cur = overload_candidates; cur != NULL; cur = cur->next)
+    {
+        HashNode_t *candidate = (HashNode_t *)cur->cur;
+        if (candidate == NULL ||
+            (candidate->hash_type != HASHTYPE_FUNCTION &&
+             candidate->hash_type != HASHTYPE_PROCEDURE) ||
+            candidate->type == NULL)
+            continue;
+        if (prefer_non_builtin && semcheck_candidate_is_builtin(symtab, candidate))
+            continue;
+
+        ListNode_t *candidate_args = kgpc_type_get_procedure_params(candidate->type);
+        int total_params = semcheck_count_total_params(candidate_args);
+        int required_params = semcheck_count_required_params(candidate_args);
+        int given_count = ListLength(args_given);
+
+        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+            fprintf(stderr, "[SemCheck] semcheck_resolve_overload: candidate %s args=%d required=%d given=%d\n",
+                candidate->id, total_params, required_params, given_count);
+        }
+
+        if (!((given_count >= required_params && given_count <= total_params) ||
+            (total_params == 0 && given_count > 0 &&
+             candidate->type != NULL &&
+             candidate->type->info.proc_info.definition == NULL)))
+            continue;
+
+        int total_rank = 0;
+        int exact_matches = 0;
+        int candidate_valid = 1;
+        ListNode_t *formal_args = candidate_args;
+        ListNode_t *call_args = args_given;
+
+        while (formal_args != NULL && call_args != NULL)
+        {
+            Tree_t *formal_decl = (Tree_t *)formal_args->cur;
+            struct Expression *arg_expr = (struct Expression *)call_args->cur;
+
+            if (arg_expr != NULL && arg_expr->type == EXPR_RELOP &&
+                arg_expr->expr_data.relop_data.type == EQ &&
+                arg_expr->expr_data.relop_data.left != NULL &&
+                arg_expr->expr_data.relop_data.left->type == EXPR_VAR_ID &&
+                arg_expr->expr_data.relop_data.right != NULL)
+            {
+                const char *formal_name = NULL;
+                if (formal_decl != NULL && formal_decl->type == TREE_VAR_DECL &&
+                    formal_decl->tree_data.var_decl_data.ids != NULL)
+                    formal_name = (const char *)formal_decl->tree_data.var_decl_data.ids->cur;
+                else if (formal_decl != NULL && formal_decl->type == TREE_ARR_DECL &&
+                    formal_decl->tree_data.arr_decl_data.ids != NULL)
+                    formal_name = (const char *)formal_decl->tree_data.arr_decl_data.ids->cur;
+
+                const char *given_name = arg_expr->expr_data.relop_data.left->expr_data.id;
+                if (formal_name != NULL && given_name != NULL)
+                {
+                    if (pascal_identifier_equals(formal_name, given_name))
+                    {
+                        struct Expression *rhs_expr = arg_expr->expr_data.relop_data.right;
+                        int rhs_type = UNKNOWN_TYPE;
+                        semcheck_expr_main(&rhs_type, symtab, rhs_expr, max_scope_lev, NO_MUTATE);
+                        if (semcheck_named_arg_type_compatible(formal_decl, rhs_expr, rhs_type, symtab))
+                            arg_expr = rhs_expr;
+                    }
+                    else if (semcheck_param_list_contains_name(candidate_args, given_name))
+                    {
+                        candidate_valid = 0;
+                        break;
+                    }
+                }
+            }
+
+            if (formal_decl != NULL && formal_decl->type == TREE_ARR_DECL &&
+                arg_expr != NULL && (arg_expr->type == EXPR_SET || arg_expr->type == EXPR_ARRAY_LITERAL))
+            {
+                int owns_formal = 0;
+                KgpcType *formal_kgpc = resolve_type_from_vardecl(formal_decl, symtab, &owns_formal);
+                if (formal_kgpc != NULL && formal_kgpc->kind == TYPE_KIND_ARRAY_OF_CONST)
+                {
+                    total_rank += 1;
+                }
+                else if (formal_kgpc != NULL && formal_kgpc->kind == TYPE_KIND_ARRAY)
+                {
+                    KgpcType *formal_elem = kgpc_type_get_array_element_type_resolved(formal_kgpc, symtab);
+                    int literal_elem_tag = semcheck_infer_literal_elem_type(arg_expr);
+                    if (literal_elem_tag != UNKNOWN_TYPE && formal_elem != NULL)
+                    {
+                        KgpcType *literal_elem = create_primitive_type(literal_elem_tag);
+                        int rank = kgpc_type_conversion_rank(literal_elem, formal_elem);
+                        destroy_kgpc_type(literal_elem);
+                        if (rank < 0)
+                        {
+                            candidate_valid = 0;
+                            if (owns_formal && formal_kgpc != NULL)
+                                destroy_kgpc_type(formal_kgpc);
+                            break;
+                        }
+                        total_rank += rank;
+                        if (rank == 0)
+                            exact_matches++;
+                    }
+                    else
+                    {
+                        total_rank += 1;
+                    }
+                }
+                else
+                {
+                    total_rank += 1;
+                }
+
+                if (owns_formal && formal_kgpc != NULL)
+                    destroy_kgpc_type(formal_kgpc);
+            }
+            else
+            {
+                if (semcheck_prepare_array_literal_argument(formal_decl, arg_expr,
+                        symtab, max_scope_lev, call_expr->line_num) != 0)
+                {
+                    if (best_match_out != NULL)
+                        *best_match_out = NULL;
+                    return 3;
+                }
+                if (semcheck_prepare_record_constructor_argument(formal_decl, arg_expr,
+                        symtab, max_scope_lev, call_expr->line_num) != 0)
+                {
+                    if (best_match_out != NULL)
+                        *best_match_out = NULL;
+                    return 3;
+                }
+
+                int owns_formal = 0;
+                int owns_arg = 0;
+                KgpcType *formal_kgpc = resolve_type_from_vardecl(formal_decl, symtab, &owns_formal);
+                KgpcType *arg_kgpc = NULL;
+                int arg_tag = semcheck_resolve_arg_kgpc_type(arg_expr, symtab, max_scope_lev, &owns_arg, &arg_kgpc);
+
+                if (formal_kgpc == NULL)
+                {
+                    int formal_tag = resolve_param_type(formal_decl, symtab);
+                    switch (formal_tag)
+                    {
+                        case INT_TYPE:
+                        case LONGINT_TYPE:
+                        case INT64_TYPE:
+                        case REAL_TYPE:
+                        case STRING_TYPE:
+                        case SHORTSTRING_TYPE:
+                        case CHAR_TYPE:
+                        case BOOL:
+                        case ENUM_TYPE:
+                        case SET_TYPE:
+                        case POINTER_TYPE:
+                        case FILE_TYPE:
+                        case TEXT_TYPE:
+                        case BYTE_TYPE:
+                        case WORD_TYPE:
+                        case LONGWORD_TYPE:
+                        case QWORD_TYPE:
+                        case PROCEDURE:
+                            formal_kgpc = create_primitive_type(formal_tag);
+                            owns_formal = 1;
+                            break;
+                        default:
+                            break;
+                    }
+                }
+
+                if (formal_kgpc == NULL)
+                {
+                    total_rank += 1;
+                }
+                else
+                {
+                    int rank = -1;
+                    if (arg_kgpc != NULL)
+                        rank = kgpc_type_conversion_rank(arg_kgpc, formal_kgpc);
+                    if (rank < 0 && arg_kgpc != NULL &&
+                        are_types_compatible_for_assignment(formal_kgpc, arg_kgpc, symtab))
+                        rank = 1;
+                    if (rank < 0 && arg_tag != UNKNOWN_TYPE)
+                    {
+                        if (is_integer_type(arg_tag) && is_integer_type(resolve_param_type(formal_decl, symtab)))
+                            rank = 1;
+                        if (resolve_param_type(formal_decl, symtab) == REAL_TYPE && is_integer_type(arg_tag))
+                            rank = 2;
+                        if (is_string_type(resolve_param_type(formal_decl, symtab)) && arg_tag == CHAR_TYPE)
+                            rank = 1;
+                    }
+                    if (rank < 0)
+                        candidate_valid = 0;
+                    else
+                    {
+                        total_rank += rank;
+                        if (rank == 0)
+                            exact_matches++;
+                    }
+                }
+
+                if (owns_formal && formal_kgpc != NULL)
+                    destroy_kgpc_type(formal_kgpc);
+                if (owns_arg && arg_kgpc != NULL)
+                    destroy_kgpc_type(arg_kgpc);
+
+                if (!candidate_valid)
+                    break;
+            }
+
+            formal_args = formal_args->next;
+            call_args = call_args->next;
+        }
+
+        if (!candidate_valid)
+            continue;
+
+        int missing_args = total_params - given_count;
+        if (missing_args > 0)
+            total_rank += missing_args;
+
+        if (num_best == 0 ||
+            exact_matches > best_exact ||
+            (exact_matches == best_exact && total_rank < best_rank))
+        {
+            best_match = candidate;
+            best_rank = total_rank;
+            best_exact = exact_matches;
+            num_best = 1;
+        }
+        else if (exact_matches == best_exact && total_rank == best_rank)
+        {
+            int is_duplicate = 0;
+            if (best_match != NULL &&
+                semcheck_candidates_share_signature(symtab, best_match, candidate))
+                is_duplicate = 1;
+            if (!is_duplicate)
+                num_best++;
+        }
+    }
+
+    if (best_match_out != NULL)
+        *best_match_out = best_match;
+    if (best_rank_out != NULL)
+        *best_rank_out = best_rank;
+    if (num_best_out != NULL)
+        *num_best_out = num_best;
+
+    if (num_best == 1)
+        return 0;
+    if (num_best == 0)
+        return 1;
+    return 2;
+}
