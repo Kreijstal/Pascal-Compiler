@@ -462,7 +462,7 @@ combinator_t* class_type(tag_t tag) {
 
     // Method declarations (simplified - just headers for now)
     combinator_t* constructor_decl = seq(new_combinator(), PASCAL_T_CONSTRUCTOR_DECL,
-        optional(token(keyword_ci("class"))),  // Support class constructor
+        optional(token(create_keyword_parser("class", PASCAL_T_NONE))),  // Support class constructor
         token(keyword_ci("constructor")),
         token(cident(PASCAL_T_IDENTIFIER)),
         create_pascal_param_parser(),
@@ -472,7 +472,7 @@ combinator_t* class_type(tag_t tag) {
     );
 
     combinator_t* destructor_decl = seq(new_combinator(), PASCAL_T_DESTRUCTOR_DECL,
-        optional(token(keyword_ci("class"))),  // Support class destructor
+        optional(token(create_keyword_parser("class", PASCAL_T_NONE))),  // Support class destructor
         token(keyword_ci("destructor")),
         token(cident(PASCAL_T_IDENTIFIER)),
         create_pascal_param_parser(),
@@ -483,7 +483,7 @@ combinator_t* class_type(tag_t tag) {
 
     combinator_t* procedure_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
         optional(token(keyword_ci("generic"))),
-        optional(token(keyword_ci("class"))),
+        optional(token(create_keyword_parser("class", PASCAL_T_NONE))),
         token(keyword_ci("procedure")),
         token(cident(PASCAL_T_IDENTIFIER)),
         create_method_type_param_list(),  // Optional type parameters for generic methods
@@ -495,7 +495,7 @@ combinator_t* class_type(tag_t tag) {
 
     combinator_t* function_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
         optional(token(keyword_ci("generic"))),
-        optional(token(keyword_ci("class"))),
+        optional(token(create_keyword_parser("class", PASCAL_T_NONE))),
         token(keyword_ci("function")),
         token(cident(PASCAL_T_IDENTIFIER)),
         create_method_type_param_list(),  // Optional type parameters for generic methods
@@ -509,7 +509,7 @@ combinator_t* class_type(tag_t tag) {
 
     // Class operator declaration: operator Name/Symbol(params): ReturnType; [override];
     combinator_t* class_operator_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
-        optional(token(keyword_ci("class"))),
+        optional(token(create_keyword_parser("class", PASCAL_T_NONE))),
         token(keyword_ci("operator")),
         token(operator_name(PASCAL_T_IDENTIFIER)),
         create_pascal_param_parser(),
@@ -532,7 +532,7 @@ combinator_t* class_type(tag_t tag) {
     ));
 
     combinator_t* property_decl = seq(new_combinator(), PASCAL_T_PROPERTY_DECL,
-        optional(token(keyword_ci("class"))),  // Support class properties
+        optional(token(create_keyword_parser("class", PASCAL_T_NONE))),  // Support class properties
         token(keyword_ci("property")),
         token(cident(PASCAL_T_IDENTIFIER)), // property name
         property_indexer,
@@ -640,7 +640,7 @@ combinator_t* class_type(tag_t tag) {
 
     // Nested method declarations inside nested classes
     combinator_t* nested_proc_decl = seq(new_combinator(), PASCAL_T_NONE,
-        optional(token(keyword_ci("class"))),
+        optional(token(create_keyword_parser("class", PASCAL_T_NONE))),
         token(keyword_ci("procedure")),
         token(cident(PASCAL_T_IDENTIFIER)),
         create_pascal_param_parser(),
@@ -650,7 +650,7 @@ combinator_t* class_type(tag_t tag) {
     );
 
     combinator_t* nested_func_decl = seq(new_combinator(), PASCAL_T_NONE,
-        optional(token(keyword_ci("class"))),
+        optional(token(create_keyword_parser("class", PASCAL_T_NONE))),
         token(keyword_ci("function")),
         token(cident(PASCAL_T_IDENTIFIER)),
         create_pascal_param_parser(),
@@ -662,7 +662,7 @@ combinator_t* class_type(tag_t tag) {
     );
 
     combinator_t* nested_constructor_decl = seq(new_combinator(), PASCAL_T_NONE,
-        optional(token(keyword_ci("class"))),
+        optional(token(create_keyword_parser("class", PASCAL_T_NONE))),
         token(keyword_ci("constructor")),
         token(cident(PASCAL_T_IDENTIFIER)),
         create_pascal_param_parser(),
@@ -672,7 +672,7 @@ combinator_t* class_type(tag_t tag) {
     );
 
     combinator_t* nested_destructor_decl = seq(new_combinator(), PASCAL_T_NONE,
-        optional(token(keyword_ci("class"))),
+        optional(token(create_keyword_parser("class", PASCAL_T_NONE))),
         token(keyword_ci("destructor")),
         token(cident(PASCAL_T_IDENTIFIER)),
         create_pascal_param_parser(),
@@ -1528,7 +1528,7 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
         // Create a parser for class operator declarations in records
         combinator_t* record_method_directives_for_operator = create_record_method_directives();
         combinator_t* record_operator_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
-            optional(token(keyword_ci("class"))),
+            optional(token(create_keyword_parser("class", PASCAL_T_NONE))),
             token(keyword_ci("operator")),
             token(operator_name(PASCAL_T_IDENTIFIER)),
             create_pascal_param_parser(),
@@ -1600,7 +1600,7 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
 
     // Simple procedure header inside a record (with optional class prefix and method directives)
     combinator_t* adv_proc_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
-        optional(token(keyword_ci("class"))),
+        optional(token(create_keyword_parser("class", PASCAL_T_NONE))),
         token(keyword_ci("procedure")),
         token(cident(PASCAL_T_IDENTIFIER)),
         create_pascal_param_parser(),
@@ -1611,7 +1611,7 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
 
     // Simple function header inside a record (with optional class prefix and method directives)
     combinator_t* adv_func_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
-        optional(token(keyword_ci("class"))),
+        optional(token(create_keyword_parser("class", PASCAL_T_NONE))),
         token(keyword_ci("function")),
         token(cident(PASCAL_T_IDENTIFIER)),
         create_pascal_param_parser(),
@@ -1625,7 +1625,7 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
     // Class operator header inside a record (with optional class prefix and method directives)
     combinator_t* record_method_directives_for_operator_member = create_record_method_directives();
     combinator_t* adv_operator_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
-        optional(token(keyword_ci("class"))),
+        optional(token(create_keyword_parser("class", PASCAL_T_NONE))),
         token(keyword_ci("operator")),
         token(operator_name(PASCAL_T_IDENTIFIER)),
         create_pascal_param_parser(),
@@ -1638,7 +1638,7 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
 
     // Simple property declaration inside a record (e.g., property Current: T read GetCurrent;)
     combinator_t* adv_property_decl = seq(new_combinator(), PASCAL_T_PROPERTY_DECL,
-        optional(token(keyword_ci("class"))),
+        optional(token(create_keyword_parser("class", PASCAL_T_NONE))),
         token(keyword_ci("property")),
         token(cident(PASCAL_T_IDENTIFIER)),
         token(match(":")),
@@ -1659,7 +1659,7 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
 
     // Constructor/destructor headers inside a record (with optional class prefix and method directives)
     combinator_t* adv_ctor_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
-        optional(token(keyword_ci("class"))),
+        optional(token(create_keyword_parser("class", PASCAL_T_NONE))),
         token(keyword_ci("constructor")),
         token(cident(PASCAL_T_IDENTIFIER)),
         create_pascal_param_parser(),
@@ -1669,7 +1669,7 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
     );
 
     combinator_t* adv_dtor_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
-        optional(token(keyword_ci("class"))),
+        optional(token(create_keyword_parser("class", PASCAL_T_NONE))),
         token(keyword_ci("destructor")),
         token(cident(PASCAL_T_IDENTIFIER)),
         create_pascal_param_parser(),

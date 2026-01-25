@@ -5850,7 +5850,20 @@ static int semcheck_typecast(int *type_return,
                     else if (points_to->kind == TYPE_KIND_PRIMITIVE)
                     {
                         int subtype = kgpc_type_get_primitive_tag(points_to);
-                        semcheck_set_pointer_info(expr, subtype, NULL);
+                        const char *subtype_id = NULL;
+                        if (resolved_ptr->type_alias != NULL &&
+                            resolved_ptr->type_alias->pointer_type_id != NULL)
+                        {
+                            subtype_id = resolved_ptr->type_alias->pointer_type_id;
+                        }
+                        else if (expr->expr_data.typecast_data.target_type_id != NULL &&
+                                 (expr->expr_data.typecast_data.target_type_id[0] == 'P' ||
+                                  expr->expr_data.typecast_data.target_type_id[0] == 'p') &&
+                                 expr->expr_data.typecast_data.target_type_id[1] != '\0')
+                        {
+                            subtype_id = expr->expr_data.typecast_data.target_type_id + 1;
+                        }
+                        semcheck_set_pointer_info(expr, subtype, subtype_id);
                     }
                 }
             }
@@ -10741,6 +10754,10 @@ static int semcheck_named_arg_type_compatible(Tree_t *formal_decl,
     SymTab_t *symtab)
 {
     int expected_type = resolve_param_type(formal_decl, symtab);
+    int owns_expected = 0;
+    KgpcType *expected_kgpc = NULL;
+    KgpcType *rhs_kgpc = NULL;
+    int rhs_owned = 0;
 
     if (expected_type == UNKNOWN_TYPE || rhs_type == UNKNOWN_TYPE)
         return 1;
@@ -10761,20 +10778,44 @@ static int semcheck_named_arg_type_compatible(Tree_t *formal_decl,
 
     if (rhs_expr != NULL && rhs_expr->resolved_kgpc_type != NULL)
     {
-        int owns_expected = 0;
-        KgpcType *expected_kgpc = resolve_type_from_vardecl(formal_decl, symtab, &owns_expected);
+        expected_kgpc = resolve_type_from_vardecl(formal_decl, symtab, &owns_expected);
         if (expected_kgpc != NULL)
         {
             if (are_types_compatible_for_assignment(expected_kgpc, rhs_expr->resolved_kgpc_type, symtab))
             {
-                if (owns_expected)
+                if (owns_expected && expected_kgpc != NULL)
                     destroy_kgpc_type(expected_kgpc);
                 return 1;
             }
-            if (owns_expected)
+            if (owns_expected && expected_kgpc != NULL)
                 destroy_kgpc_type(expected_kgpc);
         }
     }
+
+    /* Fallback: build KgpcType for primitive rhs when resolved_kgpc_type is missing. */
+    expected_kgpc = resolve_type_from_vardecl(formal_decl, symtab, &owns_expected);
+    if (rhs_expr != NULL)
+        rhs_kgpc = rhs_expr->resolved_kgpc_type;
+    if (rhs_kgpc == NULL && rhs_type != UNKNOWN_TYPE)
+    {
+        rhs_kgpc = create_primitive_type(rhs_type);
+        rhs_owned = 1;
+    }
+    if (expected_kgpc != NULL && rhs_kgpc != NULL)
+    {
+        if (are_types_compatible_for_assignment(expected_kgpc, rhs_kgpc, symtab))
+        {
+            if (owns_expected && expected_kgpc != NULL)
+                destroy_kgpc_type(expected_kgpc);
+            if (rhs_owned && rhs_kgpc != NULL)
+                destroy_kgpc_type(rhs_kgpc);
+            return 1;
+        }
+    }
+    if (owns_expected && expected_kgpc != NULL)
+        destroy_kgpc_type(expected_kgpc);
+    if (rhs_owned && rhs_kgpc != NULL)
+        destroy_kgpc_type(rhs_kgpc);
 
     return 0;
 }
@@ -14676,6 +14717,31 @@ skip_overload_resolution:
                         }
                         if (owns_expected && expected_kgpc != NULL)
                             destroy_kgpc_type(expected_kgpc);
+                    }
+
+                    /* General fallback: use KgpcType compatibility for aliases and complex types. */
+                    if (!type_compatible)
+                    {
+                        int owns_expected = 0;
+                        int owns_arg = 0;
+                        KgpcType *expected_kgpc = resolve_type_from_vardecl(arg_decl, symtab, &owns_expected);
+                        KgpcType *arg_kgpc = NULL;
+                        if (current_arg_expr != NULL)
+                            arg_kgpc = current_arg_expr->resolved_kgpc_type;
+                        if (arg_kgpc == NULL && arg_type != UNKNOWN_TYPE)
+                        {
+                            arg_kgpc = create_primitive_type(arg_type);
+                            owns_arg = 1;
+                        }
+                        if (expected_kgpc != NULL && arg_kgpc != NULL)
+                        {
+                            if (are_types_compatible_for_assignment(expected_kgpc, arg_kgpc, symtab))
+                                type_compatible = 1;
+                        }
+                        if (owns_expected && expected_kgpc != NULL)
+                            destroy_kgpc_type(expected_kgpc);
+                        if (owns_arg && arg_kgpc != NULL)
+                            destroy_kgpc_type(arg_kgpc);
                     }
 
                     if (!type_compatible && arg_type == UNKNOWN_TYPE &&

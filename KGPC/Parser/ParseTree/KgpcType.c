@@ -762,6 +762,17 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
         return 1;
     }
 
+    /* Allow procedure values to be assigned to untyped Pointer (common in callback tables). */
+    if (lhs_type->kind == TYPE_KIND_PRIMITIVE &&
+        lhs_type->info.primitive_type_tag == POINTER_TYPE)
+    {
+        if (rhs_type->kind == TYPE_KIND_PROCEDURE)
+            return 1;
+        if (rhs_type->kind == TYPE_KIND_PRIMITIVE &&
+            rhs_type->info.primitive_type_tag == PROCEDURE)
+            return 1;
+    }
+
     /* Allow assigning generic pointers to strings to support PChar-style conversions
      * when the pointer subtype can't be resolved. */
     if (lhs_is_string && rhs_type->kind == TYPE_KIND_POINTER)
@@ -1052,6 +1063,19 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
                 }
             }
             
+            /* Avoid treating PChar and PWideChar as compatible when their element sizes differ. */
+            if (lhs_type->info.points_to != NULL && rhs_type->info.points_to != NULL &&
+                lhs_type->info.points_to->kind == TYPE_KIND_PRIMITIVE &&
+                rhs_type->info.points_to->kind == TYPE_KIND_PRIMITIVE &&
+                lhs_type->info.points_to->info.primitive_type_tag == CHAR_TYPE &&
+                rhs_type->info.points_to->info.primitive_type_tag == CHAR_TYPE)
+            {
+                long long lhs_size = kgpc_type_sizeof(lhs_type->info.points_to);
+                long long rhs_size = kgpc_type_sizeof(rhs_type->info.points_to);
+                if (lhs_size > 0 && rhs_size > 0 && lhs_size != rhs_size)
+                    return 0;
+            }
+
             return are_types_compatible_for_assignment(
                 lhs_type->info.points_to,
                 rhs_type->info.points_to,
