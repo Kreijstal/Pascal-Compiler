@@ -7520,7 +7520,7 @@ FIELD_RESOLVED:
             field_type = RECORD_TYPE;
     }
 
-    if (field_type == UNKNOWN_TYPE && field_record == NULL)
+    if (field_type == UNKNOWN_TYPE && field_record == NULL && array_alias == NULL)
     {
         semcheck_error_with_context("Error on line %d, unable to resolve type for field %s.\n\n",
             expr->line_num, field_id);

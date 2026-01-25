@@ -120,6 +120,7 @@ KgpcType* create_array_type(KgpcType *element_type, int start_index, int end_ind
     type->info.array_info.element_type = element_type; // Takes ownership
     type->info.array_info.start_index = start_index;
     type->info.array_info.end_index = end_index;
+    type->info.array_info.element_type_id = NULL; // Initialize deferred resolution field
     type->ref_count = 1;
     return type;
 }
@@ -174,6 +175,7 @@ KgpcType* create_kgpc_type_from_type_alias(struct TypeAlias *alias, struct SymTa
         /* Resolve element type */
         KgpcType *element_type = NULL;
         int element_type_tag = alias->array_element_type;
+        const char *deferred_element_id = NULL;
 
         if (element_type_tag != UNKNOWN_TYPE) {
             /* Direct primitive type tag */
@@ -187,9 +189,9 @@ KgpcType* create_kgpc_type_from_type_alias(struct TypeAlias *alias, struct SymTa
                 element_type = element_node->type;
                 kgpc_type_retain(element_type);
             } else {
-                /* Forward reference - create NULL element type for now
-                 * This will be resolved when the array is actually used */
+                /* Forward reference - store element_type_id for deferred resolution */
                 element_type = NULL;
+                deferred_element_id = alias->array_element_type_id;
             }
         }
 
@@ -197,6 +199,10 @@ KgpcType* create_kgpc_type_from_type_alias(struct TypeAlias *alias, struct SymTa
         result = create_array_type(element_type, start, end);
         if (result != NULL) {
             kgpc_type_set_type_alias(result, alias);
+            /* Store element type ID for deferred resolution if element_type is NULL */
+            if (element_type == NULL && deferred_element_id != NULL) {
+                result->info.array_info.element_type_id = strdup(deferred_element_id);
+            }
         }
         return result;
     }
@@ -361,6 +367,10 @@ void destroy_kgpc_type(KgpcType *type) {
             break;
         case TYPE_KIND_ARRAY:
             destroy_kgpc_type(type->info.array_info.element_type);
+            if (type->info.array_info.element_type_id != NULL) {
+                free(type->info.array_info.element_type_id);
+                type->info.array_info.element_type_id = NULL;
+            }
             break;
         case TYPE_KIND_ARRAY_OF_CONST:
             break;
@@ -763,11 +773,14 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
         rhs_type->info.points_to == NULL)
         return 1;
 
-    /* Allow procedure variables to accept explicit @proc references */
+    /* Allow procedure variables to accept explicit @proc references or NIL */
     if (lhs_type->kind == TYPE_KIND_PROCEDURE && rhs_type->kind == TYPE_KIND_POINTER)
     {
         KgpcType *rhs_proc = rhs_type->info.points_to;
-        if (rhs_proc != NULL && rhs_proc->kind == TYPE_KIND_PROCEDURE)
+        /* NIL can be assigned to any procedure type */
+        if (rhs_proc == NULL)
+            return 1;
+        if (rhs_proc->kind == TYPE_KIND_PROCEDURE)
             return are_types_compatible_for_assignment(lhs_type, rhs_proc, symtab);
         return 0;
     }
@@ -1375,6 +1388,29 @@ KgpcType* kgpc_type_get_array_element_type(KgpcType *type)
     if (type == NULL || type->kind != TYPE_KIND_ARRAY)
         return NULL;
     return type->info.array_info.element_type;
+}
+
+KgpcType* kgpc_type_get_array_element_type_resolved(KgpcType *type, SymTab_t *symtab)
+{
+    if (type == NULL || type->kind != TYPE_KIND_ARRAY)
+        return NULL;
+    
+    /* If element_type is already resolved, return it */
+    if (type->info.array_info.element_type != NULL)
+        return type->info.array_info.element_type;
+    
+    /* Try deferred resolution using element_type_id */
+    if (type->info.array_info.element_type_id != NULL && symtab != NULL) {
+        HashNode_t *element_node = kgpc_find_type_node(symtab, type->info.array_info.element_type_id);
+        if (element_node != NULL && element_node->type != NULL) {
+            /* Found the element type - update the array type and return it */
+            type->info.array_info.element_type = element_node->type;
+            kgpc_type_retain(element_node->type);
+            return type->info.array_info.element_type;
+        }
+    }
+    
+    return NULL;
 }
 
 ListNode_t* kgpc_type_get_procedure_params(KgpcType *type)
