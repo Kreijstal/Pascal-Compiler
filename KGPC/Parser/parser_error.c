@@ -267,8 +267,12 @@ void print_source_context(const char *file_path, int error_line, int error_col, 
 
 /* Helper to check if a line is a {#line N "file"} directive and extract the line number.
  * Returns the new line number if it's a directive, or -1 if not. */
-static int parse_line_directive(const char *line, size_t len)
+/* Parse {#line N "filename"} directive and extract line number and optional filename */
+static int parse_line_directive_with_file(const char *line, size_t len, char *filename_out, size_t filename_size)
 {
+    if (filename_out != NULL && filename_size > 0)
+        filename_out[0] = '\0';
+        
     if (len < 8) return -1;  /* Minimum: {#line 1} */
     if (line[0] != '{' || line[1] != '#') return -1;
     if (len < 7 || strncasecmp(line + 2, "line", 4) != 0) return -1;
@@ -285,7 +289,29 @@ static int parse_line_directive(const char *line, size_t len)
         ++pos;
     }
     
+    /* Skip whitespace before optional filename */
+    while (pos < len && (line[pos] == ' ' || line[pos] == '\t'))
+        ++pos;
+    
+    /* Parse optional filename in quotes */
+    if (pos < len && line[pos] == '"' && filename_out != NULL && filename_size > 0) {
+        ++pos;  /* Skip opening quote */
+        size_t fname_start = pos;
+        while (pos < len && line[pos] != '"')
+            ++pos;
+        size_t fname_len = pos - fname_start;
+        if (fname_len > 0 && fname_len < filename_size) {
+            memcpy(filename_out, line + fname_start, fname_len);
+            filename_out[fname_len] = '\0';
+        }
+    }
+    
     return line_num > 0 ? line_num : -1;
+}
+
+static int parse_line_directive(const char *line, size_t len)
+{
+    return parse_line_directive_with_file(line, len, NULL, 0);
 }
 
 int print_source_context_from_buffer(const char *buffer, size_t length,
@@ -307,23 +333,28 @@ int print_source_context_from_buffer(const char *buffer, size_t length,
         start_line = 1;
 
     size_t idx = 0;
+    char current_file[512] = "";  /* Track current source file from {#line} directives */
+    char error_file[512] = "";    /* File name for the error line */
     
     /* First pass: find the position where current_line matches start_line,
      * respecting {#line} directives that adjust the line number */
     while (current_line < start_line && idx < length)
     {
-        /* Check for {#line N} directive at start of line */
+        /* Check for {#line N "file"} directive at start of line */
         size_t line_start = idx;
         while (idx < length && buffer[idx] != '\n')
             ++idx;
         size_t line_len = idx - line_start;
         
-        int directive_line = parse_line_directive(buffer + line_start, line_len);
+        char directive_file[512] = "";
+        int directive_line = parse_line_directive_with_file(buffer + line_start, line_len, directive_file, sizeof(directive_file));
         if (directive_line >= 0) {
             /* This is a line directive - the NEXT line will be directive_line */
             if (idx < length && buffer[idx] == '\n')
                 ++idx;
             current_line = directive_line;
+            if (directive_file[0] != '\0')
+                strncpy(current_file, directive_file, sizeof(current_file) - 1);
             continue;
         }
         
@@ -336,6 +367,8 @@ int print_source_context_from_buffer(const char *buffer, size_t length,
         return 0;
 
     int printed_any = 0;
+    int printed_file_header = 0;
+    
     while (current_line <= end_line && idx < length)
     {
         size_t line_start = idx;
@@ -343,14 +376,27 @@ int print_source_context_from_buffer(const char *buffer, size_t length,
             ++idx;
         size_t line_len = idx - line_start;
         
-        /* Check for {#line N} directive */
-        int directive_line = parse_line_directive(buffer + line_start, line_len);
+        /* Check for {#line N "file"} directive */
+        char directive_file[512] = "";
+        int directive_line = parse_line_directive_with_file(buffer + line_start, line_len, directive_file, sizeof(directive_file));
         if (directive_line >= 0) {
             /* Skip the directive line, don't print it */
             if (idx < length && buffer[idx] == '\n')
                 ++idx;
             current_line = directive_line;
+            if (directive_file[0] != '\0')
+                strncpy(current_file, directive_file, sizeof(current_file) - 1);
             continue;
+        }
+
+        /* Remember the file for the error line */
+        if (current_line == error_line && current_file[0] != '\0')
+            strncpy(error_file, current_file, sizeof(error_file) - 1);
+
+        /* Print file header if we have a file name and haven't printed it yet */
+        if (!printed_file_header && current_file[0] != '\0') {
+            fprintf(stderr, "  In %s:\n", current_file);
+            printed_file_header = 1;
         }
 
         char *line_buf = (char *)malloc(line_len + 1);
