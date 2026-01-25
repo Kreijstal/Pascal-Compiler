@@ -353,8 +353,10 @@ int print_source_context_from_buffer(const char *buffer, size_t length,
             if (idx < length && buffer[idx] == '\n')
                 ++idx;
             current_line = directive_line;
-            if (directive_file[0] != '\0')
+            if (directive_file[0] != '\0') {
                 strncpy(current_file, directive_file, sizeof(current_file) - 1);
+                current_file[sizeof(current_file) - 1] = '\0';
+            }
             continue;
         }
         
@@ -384,14 +386,18 @@ int print_source_context_from_buffer(const char *buffer, size_t length,
             if (idx < length && buffer[idx] == '\n')
                 ++idx;
             current_line = directive_line;
-            if (directive_file[0] != '\0')
+            if (directive_file[0] != '\0') {
                 strncpy(current_file, directive_file, sizeof(current_file) - 1);
+                current_file[sizeof(current_file) - 1] = '\0';
+            }
             continue;
         }
 
         /* Remember the file for the error line */
-        if (current_line == error_line && current_file[0] != '\0')
+        if (current_line == error_line && current_file[0] != '\0') {
             strncpy(error_file, current_file, sizeof(error_file) - 1);
+            error_file[sizeof(error_file) - 1] = '\0';
+        }
 
         /* Print file header if we have a file name and haven't printed it yet */
         if (!printed_file_header && current_file[0] != '\0') {
