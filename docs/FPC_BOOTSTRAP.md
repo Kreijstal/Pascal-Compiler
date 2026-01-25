@@ -11,9 +11,21 @@ Clone the FPC source code:
 git clone https://github.com/fpc/FPCSource
 ```
 
-## Build Command
+## Build Commands
 
-### sysutils.pp (24 errors)
+### baseunix.pp (0 errors) ✓
+```bash
+./build/KGPC/kgpc ./FPCSource/rtl/unix/baseunix.pp /tmp/baseunix.s \
+  --no-stdlib \
+  -I./FPCSource/rtl/unix \
+  -I./FPCSource/rtl/objpas \
+  -I./FPCSource/rtl/inc \
+  -I./FPCSource/rtl/linux \
+  -I./FPCSource/rtl/linux/x86_64 \
+  -I./FPCSource/rtl/x86_64
+```
+
+### sysutils.pp (25 errors)
 ```bash
 ./build/KGPC/kgpc ./FPCSource/rtl/unix/sysutils.pp /tmp/sysutils.s \
   --no-stdlib \
@@ -101,7 +113,7 @@ chmod +x /tmp/cvise_indexofany.sh
 cvise --timeout 7200 /tmp/cvise_indexofany.sh sysutils_indexofany.pp
 ```
 
-### Error categories (24 total):
+### Error categories (25 total):
 | Count | Error | Root Cause |
 |-------|-------|------------|
 | 6 | DoCapSizeInt type mismatch | Function call type mismatch |
@@ -111,11 +123,11 @@ cvise --timeout 7200 /tmp/cvise_indexofany.sh sysutils_indexofany.pp
 | 2 | SysBeep/OnBeep undeclared | Forward reference support needed |
 | 2 | GetTickCount result type mismatch | pointer vs procedure |
 | 2 | strlen ambiguous call | Overload resolution |
-| 1 | fpsignal type mismatch | Type compatibility |
 | 1 | LowerCase no return statement | Missing return |
 | 1 | incompatible types in assignment | Type compatibility issues |
 
 ## Units with Compilation Errors
 
-- `sysutils.pp` - **24 errors** (with `--no-stdlib`)
+- `baseunix.pp` - **0 errors** ✓
+- `sysutils.pp` - **25 errors** (with `--no-stdlib`)
 - `math.pp` - Depends on sysutils
