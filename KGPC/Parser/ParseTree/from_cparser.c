@@ -3884,7 +3884,28 @@ static void annotate_method_template(struct MethodTemplate *method_template, ast
         return;
 
     method_template->kind = METHOD_TEMPLATE_UNKNOWN;
+    
+    /* First pass: check ALL children for "class" keyword before the method name.
+     * The parser places optional(token(keyword_ci("class"))) before the function keyword,
+     * so we need to scan all children to find it. */
     ast_t *cursor = method_ast->child;
+    while (cursor != NULL)
+    {
+        ast_t *node = unwrap_pascal_node(cursor);
+        if (node == NULL)
+            node = cursor;
+        const char *sym_name = (node->sym != NULL) ? node->sym->name : NULL;
+        
+        /* Check for "class" keyword in any child node */
+        if (sym_name != NULL && strcasecmp(sym_name, "class") == 0) {
+            method_template->is_class_method = 1;
+            method_template->is_static = 1;
+        }
+        cursor = cursor->next;
+    }
+    
+    /* Second pass: process all other attributes */
+    cursor = method_ast->child;
     while (cursor != NULL)
     {
         ast_t *node = unwrap_pascal_node(cursor);
