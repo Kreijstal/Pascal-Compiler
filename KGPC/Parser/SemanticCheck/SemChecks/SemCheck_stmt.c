@@ -3033,9 +3033,8 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             const char *lhs_name = "<expression>";
             if (var != NULL && var->type == EXPR_VAR_ID)
                 lhs_name = var->expr_data.id;
-            semcheck_error_with_context(
-                "Error on line %d, incompatible types in assignment for %s (lhs: %s, rhs: %s)!\n\n",
-                stmt->line_num,
+            semantic_error_at(stmt->line_num, stmt->col_num, stmt->source_index,
+                "incompatible types in assignment for %s (lhs: %s, rhs: %s)!",
                 lhs_name,
                 kgpc_type_to_string(lhs_kgpctype),
                 kgpc_type_to_string(rhs_kgpctype));

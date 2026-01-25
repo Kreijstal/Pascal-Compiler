@@ -2251,6 +2251,7 @@ struct Statement *mk_varassign(int line_num, int col_num, struct Expression *var
 
     new_stmt->line_num = line_num;
     new_stmt->col_num = col_num;
+    new_stmt->source_index = -1;
     new_stmt->type = STMT_VAR_ASSIGN;
     new_stmt->stmt_data.var_assign_data.var = var;
     new_stmt->stmt_data.var_assign_data.expr = expr;
@@ -2265,6 +2266,7 @@ struct Statement *mk_label(int line_num, char *label, struct Statement *stmt)
 
     new_stmt->line_num = line_num;
     new_stmt->col_num = 0;
+    new_stmt->source_index = -1;
     new_stmt->type = STMT_LABEL;
     new_stmt->stmt_data.label_data.label = label;
     new_stmt->stmt_data.label_data.stmt = stmt;
@@ -2279,6 +2281,7 @@ struct Statement *mk_goto(int line_num, char *label)
 
     new_stmt->line_num = line_num;
     new_stmt->col_num = 0;
+    new_stmt->source_index = -1;
     new_stmt->type = STMT_GOTO;
     new_stmt->stmt_data.goto_data.label = label;
 
@@ -2292,6 +2295,7 @@ struct Statement *mk_break(int line_num)
 
     new_stmt->line_num = line_num;
     new_stmt->col_num = 0;
+    new_stmt->source_index = -1;
     new_stmt->type = STMT_BREAK;
     memset(&new_stmt->stmt_data, 0, sizeof(new_stmt->stmt_data));
 
@@ -2305,6 +2309,7 @@ struct Statement *mk_continue(int line_num)
 
     new_stmt->line_num = line_num;
     new_stmt->col_num = 0;
+    new_stmt->source_index = -1;
     new_stmt->type = STMT_CONTINUE;
     memset(&new_stmt->stmt_data, 0, sizeof(new_stmt->stmt_data));
 
@@ -2324,6 +2329,7 @@ struct Statement *mk_exit_with_value(int line_num, struct Expression *return_exp
 
     new_stmt->line_num = line_num;
     new_stmt->col_num = 0;
+    new_stmt->source_index = -1;
     new_stmt->type = STMT_EXIT;
     memset(&new_stmt->stmt_data, 0, sizeof(new_stmt->stmt_data));
     new_stmt->stmt_data.exit_data.return_expr = return_expr;
@@ -2339,6 +2345,7 @@ struct Statement *mk_procedurecall(int line_num, char *id, ListNode_t *expr_args
 
     new_stmt->line_num = line_num;
     new_stmt->col_num = 0;
+    new_stmt->source_index = -1;
     new_stmt->type = STMT_PROCEDURE_CALL;
     new_stmt->stmt_data.procedure_call_data.id = id;
     new_stmt->stmt_data.procedure_call_data.mangled_id = NULL;
@@ -2362,6 +2369,7 @@ struct Statement *mk_compoundstatement(int line_num, ListNode_t *compound_statem
 
     new_stmt->line_num = line_num;
     new_stmt->col_num = 0;
+    new_stmt->source_index = -1;
     new_stmt->type = STMT_COMPOUND_STATEMENT;
     new_stmt->stmt_data.compound_statement = compound_statement;
 
@@ -2377,6 +2385,7 @@ struct Statement *mk_ifthen(int line_num, struct Expression *eval_relop, struct 
 
     new_stmt->line_num = line_num;
     new_stmt->col_num = 0;
+    new_stmt->source_index = -1;
     new_stmt->type = STMT_IF_THEN;
     new_stmt->stmt_data.if_then_data.relop_expr = eval_relop;
     new_stmt->stmt_data.if_then_data.if_stmt = if_stmt;
@@ -2394,6 +2403,7 @@ struct Statement *mk_while(int line_num, struct Expression *eval_relop,
 
     new_stmt->line_num = line_num;
     new_stmt->col_num = 0;
+    new_stmt->source_index = -1;
     new_stmt->type = STMT_WHILE;
     new_stmt->stmt_data.while_data.relop_expr = eval_relop;
     new_stmt->stmt_data.while_data.while_stmt = while_stmt;
@@ -2409,6 +2419,7 @@ struct Statement *mk_repeat(int line_num, ListNode_t *body_list,
 
     new_stmt->line_num = line_num;
     new_stmt->col_num = 0;
+    new_stmt->source_index = -1;
     new_stmt->type = STMT_REPEAT;
     new_stmt->stmt_data.repeat_data.body_list = body_list;
     new_stmt->stmt_data.repeat_data.until_expr = until_expr;
@@ -2425,6 +2436,7 @@ struct Statement *mk_forassign(int line_num, struct Statement *for_assign, struc
 
    new_stmt->line_num = line_num;
     new_stmt->col_num = 0;
+   new_stmt->source_index = -1;
    new_stmt->type = STMT_FOR;
    new_stmt->stmt_data.for_data.for_assign_type = STMT_FOR_ASSIGN_VAR;
 
@@ -2446,6 +2458,7 @@ struct Statement *mk_forvar(int line_num, struct Expression *for_var, struct Exp
 
   new_stmt->line_num = line_num;
     new_stmt->col_num = 0;
+  new_stmt->source_index = -1;
   new_stmt->type = STMT_FOR;
   new_stmt->stmt_data.for_data.for_assign_type = STMT_FOR_VAR;
 
@@ -2467,6 +2480,7 @@ struct Statement *mk_for_in(int line_num, struct Expression *loop_var, struct Ex
 
     new_stmt->line_num = line_num;
     new_stmt->col_num = 0;
+    new_stmt->source_index = -1;
     new_stmt->type = STMT_FOR_IN;
     new_stmt->stmt_data.for_in_data.loop_var = loop_var;
     new_stmt->stmt_data.for_in_data.collection = collection;
@@ -2483,6 +2497,7 @@ struct Statement *mk_asmblock(int line_num, char *code)
 
     new_stmt->line_num = line_num;
     new_stmt->col_num = 0;
+    new_stmt->source_index = -1;
     new_stmt->type = STMT_ASM_BLOCK;
     new_stmt->stmt_data.asm_block_data.code = code;
 
@@ -2497,6 +2512,7 @@ struct Statement *mk_case(int line_num, struct Expression *selector, ListNode_t 
 
     new_stmt->line_num = line_num;
     new_stmt->col_num = 0;
+    new_stmt->source_index = -1;
     new_stmt->type = STMT_CASE;
     new_stmt->stmt_data.case_data.selector_expr = selector;
     new_stmt->stmt_data.case_data.branches = branches;
@@ -2512,6 +2528,7 @@ struct Statement *mk_with(int line_num, struct Expression *context, struct State
 
     new_stmt->line_num = line_num;
     new_stmt->col_num = 0;
+    new_stmt->source_index = -1;
     new_stmt->type = STMT_WITH;
     new_stmt->stmt_data.with_data.context_expr = context;
     new_stmt->stmt_data.with_data.body_stmt = body;
@@ -2526,6 +2543,7 @@ struct Statement *mk_tryfinally(int line_num, ListNode_t *try_stmts, ListNode_t 
 
     new_stmt->line_num = line_num;
     new_stmt->col_num = 0;
+    new_stmt->source_index = -1;
     new_stmt->type = STMT_TRY_FINALLY;
     new_stmt->stmt_data.try_finally_data.try_statements = try_stmts;
     new_stmt->stmt_data.try_finally_data.finally_statements = finally_stmts;
@@ -2541,6 +2559,7 @@ struct Statement *mk_tryexcept(int line_num, ListNode_t *try_stmts, ListNode_t *
 
     new_stmt->line_num = line_num;
     new_stmt->col_num = 0;
+    new_stmt->source_index = -1;
     new_stmt->type = STMT_TRY_EXCEPT;
     new_stmt->stmt_data.try_except_data.try_statements = try_stmts;
     new_stmt->stmt_data.try_except_data.except_statements = except_stmts;
@@ -2558,6 +2577,7 @@ struct Statement *mk_raise(int line_num, struct Expression *expr)
 
     new_stmt->line_num = line_num;
     new_stmt->col_num = 0;
+    new_stmt->source_index = -1;
     new_stmt->type = STMT_RAISE;
     new_stmt->stmt_data.raise_data.exception_expr = expr;
 
@@ -2571,6 +2591,7 @@ struct Statement *mk_inherited(int line_num, struct Expression *expr)
 
     new_stmt->line_num = line_num;
     new_stmt->col_num = 0;
+    new_stmt->source_index = -1;
     new_stmt->type = STMT_INHERITED;
     new_stmt->stmt_data.inherited_data.call_expr = expr;
 
