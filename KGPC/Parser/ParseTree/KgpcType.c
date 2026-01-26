@@ -1945,6 +1945,18 @@ int kgpc_type_conversion_rank(KgpcType *from, KgpcType *to)
         return 3;  /* Untyped Pointer to integer conversion */
     }
 
+    /* Handle string-to-pointer conversions (e.g., string literal to PAnsiChar) */
+    if (to->kind == TYPE_KIND_POINTER && from->kind == TYPE_KIND_PRIMITIVE &&
+        is_string_type(from->info.primitive_type_tag)) {
+        /* String to pointer conversion (e.g., 'text' to PAnsiChar) */
+        /* Check if pointer points to char type */
+        if (to->info.points_to != NULL &&
+            to->info.points_to->kind == TYPE_KIND_PRIMITIVE &&
+            to->info.points_to->info.primitive_type_tag == CHAR_TYPE) {
+            return 2;  /* String to PChar conversion is worse than string-to-string */
+        }
+    }
+
     if (from->kind == TYPE_KIND_PRIMITIVE && to->kind == TYPE_KIND_PRIMITIVE)
     {
         int from_tag = from->info.primitive_type_tag;
