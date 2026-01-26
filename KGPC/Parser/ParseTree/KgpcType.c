@@ -1945,6 +1945,30 @@ int kgpc_type_conversion_rank(KgpcType *from, KgpcType *to)
         return 3;  /* Untyped Pointer to integer conversion */
     }
 
+    /* Handle string-to-pointer conversions (e.g., string literal to PAnsiChar) */
+    if (to->kind == TYPE_KIND_POINTER && from->kind == TYPE_KIND_PRIMITIVE &&
+        is_string_type(from->info.primitive_type_tag)) {
+        /* String to pointer conversion (e.g., 'text' to PAnsiChar) */
+        /* Check if pointer points to char type */
+        if (to->info.points_to != NULL &&
+            to->info.points_to->kind == TYPE_KIND_PRIMITIVE &&
+            to->info.points_to->info.primitive_type_tag == CHAR_TYPE) {
+            return 2;  /* String to PChar conversion is worse than string-to-string */
+        }
+    }
+    
+    /* Handle integer-to-pointer conversions (e.g., integer to Pointer) */
+    if (to->kind == TYPE_KIND_POINTER && from->kind == TYPE_KIND_PRIMITIVE &&
+        is_integer_type(from->info.primitive_type_tag)) {
+        return 3;  /* Integer to pointer conversion is worse than integer-to-integer */
+    }
+    
+    /* Handle pointer-to-integer conversions */
+    if (from->kind == TYPE_KIND_POINTER && to->kind == TYPE_KIND_PRIMITIVE &&
+        is_integer_type(to->info.primitive_type_tag)) {
+        return 3;  /* Pointer to integer conversion is worse than integer-to-integer */
+    }
+
     if (from->kind == TYPE_KIND_PRIMITIVE && to->kind == TYPE_KIND_PRIMITIVE)
     {
         int from_tag = from->info.primitive_type_tag;
@@ -1968,8 +1992,11 @@ int kgpc_type_conversion_rank(KgpcType *from, KgpcType *to)
             return 2;
         if (from_tag == CHAR_TYPE && is_string_type(to_tag))
             return 1;
-        if (is_string_type(from_tag) && is_string_type(to_tag))
-            return 1;
+        if (is_string_type(from_tag) && is_string_type(to_tag)) {
+            if (from_tag == to_tag)
+                return 0;  // Same string type is exact match
+            return 1;       // Different string types
+        }
         if (from_tag == ENUM_TYPE && is_integer_type(to_tag))
             return 1;
         if (is_integer_type(from_tag) && to_tag == ENUM_TYPE)
