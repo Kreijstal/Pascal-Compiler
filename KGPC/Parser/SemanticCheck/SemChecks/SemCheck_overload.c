@@ -602,6 +602,15 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                         KgpcType *literal_elem = create_primitive_type(literal_elem_tag);
                         int rank = kgpc_type_conversion_rank(literal_elem, formal_elem);
                         destroy_kgpc_type(literal_elem);
+                        /* Fallback: char literal can be converted to ShortString (array of char) */
+                        if (rank < 0 && literal_elem_tag == CHAR_TYPE &&
+                            formal_elem->kind == TYPE_KIND_ARRAY &&
+                            formal_elem->info.array_info.element_type != NULL &&
+                            formal_elem->info.array_info.element_type->kind == TYPE_KIND_PRIMITIVE &&
+                            formal_elem->info.array_info.element_type->info.primitive_type_tag == CHAR_TYPE)
+                        {
+                            rank = 1;  /* char-to-shortstring conversion */
+                        }
                         if (rank < 0)
                         {
                             candidate_valid = 0;
@@ -609,6 +618,11 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                                 destroy_kgpc_type(formal_kgpc);
                             break;
                         }
+                        /* Add penalty when EXPR_SET is passed to array parameter.
+                         * When there's both a 'set of X' and 'array of X' overload,
+                         * set syntax ['a','b'] should prefer the set overload. */
+                        if (arg_expr->type == EXPR_SET)
+                            rank += 1;
                         total_rank += rank;
                         if (rank == 0)
                             exact_matches++;
@@ -648,6 +662,11 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                 KgpcType *formal_kgpc = resolve_type_from_vardecl(formal_decl, symtab, &owns_formal);
                 KgpcType *arg_kgpc = NULL;
                 int arg_tag = semcheck_resolve_arg_kgpc_type(arg_expr, symtab, max_scope_lev, &owns_arg, &arg_kgpc);
+
+                /* Check if this is a VAR parameter - VAR params require exact type match */
+                int is_var_param = 0;
+                if (formal_decl != NULL && formal_decl->type == TREE_VAR_DECL)
+                    is_var_param = formal_decl->tree_data.var_decl_data.is_var_param;
 
                 if (formal_kgpc == NULL)
                 {
@@ -700,6 +719,30 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                             rank = 2;
                         if (is_string_type(resolve_param_type(formal_decl, symtab)) && arg_tag == CHAR_TYPE)
                             rank = 1;
+                    }
+                    /* VAR parameters: prefer exact type match over same-size-but-different-type.
+                     * - Exact match (same type tag): rank stays as-is
+                     * - Same size, different type: add penalty to prefer exact match
+                     * - Different size: reject (incompatible for by-reference) */
+                    if (is_var_param && arg_kgpc != NULL && formal_kgpc != NULL &&
+                        arg_kgpc->kind == TYPE_KIND_PRIMITIVE && formal_kgpc->kind == TYPE_KIND_PRIMITIVE &&
+                        is_integer_type(arg_kgpc->info.primitive_type_tag) &&
+                        is_integer_type(formal_kgpc->info.primitive_type_tag) &&
+                        arg_kgpc->info.primitive_type_tag != formal_kgpc->info.primitive_type_tag)
+                    {
+                        long long arg_size = kgpc_type_sizeof(arg_kgpc);
+                        long long formal_size = kgpc_type_sizeof(formal_kgpc);
+                        if (arg_size != formal_size)
+                        {
+                            /* Different sizes: reject (e.g., LongInt variable to var x: Byte) */
+                            rank = -1;
+                        }
+                        else
+                        {
+                            /* Same size, different type: add penalty to prefer exact match
+                             * (e.g., LongInt variable to var x: Integer is worse than exact match) */
+                            rank += 2;
+                        }
                     }
                     if (rank < 0)
                         candidate_valid = 0;
