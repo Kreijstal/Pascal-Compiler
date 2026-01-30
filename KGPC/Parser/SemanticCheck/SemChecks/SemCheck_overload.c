@@ -644,6 +644,7 @@ static MatchQuality semcheck_make_quality(MatchQualityKind kind)
     q.exact_pointer_subtype = 0;
     q.exact_array_elem = 0;
     q.int_promo_rank = 0;
+    q.char_promo_rank = 0;
     return q;
 }
 
@@ -930,6 +931,10 @@ static int compare_single_quality(const MatchQuality *a, const MatchQuality *b)
     if (a->int_promo_rank < b->int_promo_rank)
         return -1;
     if (a->int_promo_rank > b->int_promo_rank)
+        return 1;
+    if (a->char_promo_rank < b->char_promo_rank)
+        return -1;
+    if (a->char_promo_rank > b->char_promo_rank)
         return 1;
     return 0;
 }
@@ -1324,6 +1329,15 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                     {
                         quality.int_promo_rank = semcheck_integer_promotion_rank(
                             arg_tag, arg_kgpc, formal_tag, formal_kgpc, is_integer_literal);
+                    }
+                    /* For char types, prefer smaller formal type (AnsiChar over WideChar) */
+                    if (arg_tag == CHAR_TYPE && formal_tag == CHAR_TYPE)
+                    {
+                        long long formal_size = formal_kgpc != NULL ? kgpc_type_sizeof(formal_kgpc) : 1;
+                        if (formal_size <= 1)
+                            quality.char_promo_rank = 0;  /* AnsiChar: best */
+                        else
+                            quality.char_promo_rank = 1;  /* WideChar: worse */
                     }
                     if (arg_expr != NULL)
                     {
