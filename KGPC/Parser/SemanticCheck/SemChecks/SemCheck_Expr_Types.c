@@ -1884,3 +1884,387 @@ FIELD_RESOLVED:
     }
     return error_count;
 }
+
+int semcheck_try_reinterpret_as_typecast(int *type_return,
+    SymTab_t *symtab, struct Expression *expr, int max_scope_lev)
+{
+    assert(type_return != NULL);
+    assert(symtab != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_FUNCTION_CALL);
+
+    const char *id = expr->expr_data.function_call_data.id;
+    if (id == NULL)
+        return 0;
+    if (pascal_identifier_equals(id, "Create"))
+        return 0;
+
+    /* Only reinterpret as a typecast when there is exactly one argument. */
+    int arg_count = 0;
+    for (ListNode_t *cur = expr->expr_data.function_call_data.args_expr;
+         cur != NULL; cur = cur->next)
+    {
+        arg_count++;
+        if (arg_count > 1)
+            return 0;
+    }
+
+    /* If a method with this name exists on Self, don't reinterpret as a typecast. */
+    HashNode_t *self_node = NULL;
+    if (FindIdent(&self_node, symtab, "Self") == 0 && self_node != NULL)
+    {
+        struct RecordType *self_record = get_record_type_from_node(self_node);
+        if (self_record != NULL)
+        {
+            if (semcheck_find_class_method(symtab, self_record, id, NULL) != NULL)
+                return 0;
+        }
+    }
+    char *id_copy = strdup(id);
+    if (id_copy == NULL)
+        return 0;
+
+    /* Only proceed if the callee resolves to a type identifier or a known builtin type */
+    HashNode_t *type_node = semcheck_find_type_node_with_kgpc_type(symtab, id);
+    int target_type = UNKNOWN_TYPE;
+    if (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+        set_type_from_hashtype(&target_type, type_node);
+    if (target_type == UNKNOWN_TYPE && type_node != NULL && type_node->type != NULL &&
+        kgpc_type_is_record(type_node->type))
+    {
+        target_type = RECORD_TYPE;
+    }
+    if (type_node == NULL)
+        FindIdent(&type_node, symtab, (char *)id);
+    if (target_type == UNKNOWN_TYPE && type_node != NULL && type_node->type != NULL &&
+        kgpc_type_is_record(type_node->type))
+    {
+        target_type = RECORD_TYPE;
+    }
+    if (target_type == UNKNOWN_TYPE)
+        target_type = semcheck_map_builtin_type_name(symtab, id);
+
+    int is_type_identifier =
+        (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE) ||
+        (type_node != NULL && type_node->type != NULL && kgpc_type_is_record(type_node->type)) ||
+        (target_type != UNKNOWN_TYPE);
+    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+    {
+        fprintf(stderr, "[SemCheck] try_typecast id=%s type_node=%p hash_type=%d target_type=%d\n",
+            id, (void *)type_node, type_node != NULL ? type_node->hash_type : -1, target_type);
+    }
+    if (!is_type_identifier)
+    {
+        free(id_copy);
+        return 0;
+    }
+
+    /* Require exactly one argument for a typecast */
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+    {
+        fprintf(stderr, "[SemCheck] try_typecast id=%s args=%d\n",
+            id, args != NULL ? ListLength(args) : 0);
+    }
+    if (args == NULL || args->next != NULL)
+    {
+        semcheck_error_with_context("Error on line %d, typecast to %s expects exactly one argument.\n",
+            expr->line_num, id);
+        *type_return = UNKNOWN_TYPE;
+        free(id_copy);
+        return 1;
+    }
+
+    struct Expression *inner_expr = (struct Expression *)args->cur;
+
+    /* Clean up function-call-specific fields without freeing the inner expression */
+    if (expr->expr_data.function_call_data.id != NULL)
+    {
+        free(expr->expr_data.function_call_data.id);
+        expr->expr_data.function_call_data.id = NULL;
+    }
+    if (expr->expr_data.function_call_data.mangled_id != NULL)
+    {
+        free(expr->expr_data.function_call_data.mangled_id);
+        expr->expr_data.function_call_data.mangled_id = NULL;
+    }
+    if (expr->expr_data.function_call_data.call_kgpc_type != NULL)
+    {
+        destroy_kgpc_type(expr->expr_data.function_call_data.call_kgpc_type);
+        expr->expr_data.function_call_data.call_kgpc_type = NULL;
+    }
+
+    /* Manually free the argument list nodes but keep the expression alive */
+    ListNode_t *to_free = args;
+    while (to_free != NULL)
+    {
+        ListNode_t *next = to_free->next;
+        to_free->cur = NULL;
+        free(to_free);
+        to_free = next;
+    }
+    expr->expr_data.function_call_data.args_expr = NULL;
+
+    /* Reinterpret as a typecast expression */
+    expr->type = EXPR_TYPECAST;
+    expr->expr_data.typecast_data.target_type = target_type;
+    expr->expr_data.typecast_data.target_type_id = id_copy;
+    expr->expr_data.typecast_data.expr = inner_expr;
+
+    return semcheck_typecast(type_return, symtab, expr, max_scope_lev, NO_MUTATE);
+}
+
+int semcheck_reinterpret_typecast_as_call(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev)
+{
+    if (expr == NULL || expr->expr_data.typecast_data.target_type_id == NULL)
+        return 1;
+
+    HashNode_t *func_node = NULL;
+    if (FindIdent(&func_node, symtab, expr->expr_data.typecast_data.target_type_id) == -1 ||
+        func_node == NULL)
+        return 1;
+
+    if (func_node->hash_type != HASHTYPE_FUNCTION &&
+        func_node->hash_type != HASHTYPE_PROCEDURE &&
+        func_node->hash_type != HASHTYPE_BUILTIN_PROCEDURE)
+        return 1;
+
+    struct Expression *arg_expr = expr->expr_data.typecast_data.expr;
+    expr->expr_data.typecast_data.expr = NULL;
+
+    char *call_id = expr->expr_data.typecast_data.target_type_id;
+    expr->expr_data.typecast_data.target_type_id = NULL;
+
+    expr->type = EXPR_FUNCTION_CALL;
+    memset(&expr->expr_data.function_call_data, 0, sizeof(expr->expr_data.function_call_data));
+    expr->expr_data.function_call_data.id = call_id;
+    if (arg_expr != NULL)
+        expr->expr_data.function_call_data.args_expr = CreateListNode(arg_expr, LIST_EXPR);
+
+    return semcheck_expr_main(type_return, symtab, expr, max_scope_lev, NO_MUTATE);
+}
+
+
+int semcheck_addressof(int *type_return,
+    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating)
+{
+    (void)mutating;
+
+    assert(type_return != NULL);
+    assert(symtab != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_ADDR);
+
+    semcheck_clear_pointer_info(expr);
+
+    struct Expression *inner = expr->expr_data.addr_data.expr;
+    if (inner == NULL)
+    {
+        semcheck_error_with_context("Error on line %d, address-of operator requires an operand.\\n\\n",
+            expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    int error_count = 0;
+    int inner_type = UNKNOWN_TYPE;
+    int treated_as_proc_ref = 0;
+
+    /* If operand is a bare function/procedure identifier, don't auto-convert to a call */
+    if (inner->type == EXPR_VAR_ID && inner->expr_data.id != NULL)
+    {
+        HashNode_t *inner_symbol = NULL;
+        int found = FindIdent(&inner_symbol, symtab, inner->expr_data.id);
+        if (found >= 0 &&
+            inner_symbol != NULL &&
+            (inner_symbol->hash_type == HASHTYPE_FUNCTION || inner_symbol->hash_type == HASHTYPE_PROCEDURE))
+        {
+            inner_type = PROCEDURE;
+            treated_as_proc_ref = 1;
+        }
+    }
+    /* Also check if inner is already a FUNCTION_CALL with no args - this can happen
+     * when the parser sees a function identifier and auto-converts it to a call.
+     * In the @FunctionName case, we don't want to resolve overloads - we want the address. */
+    else if (inner->type == EXPR_FUNCTION_CALL && 
+             inner->expr_data.function_call_data.args_expr == NULL)
+    {
+        const char *func_id = inner->expr_data.function_call_data.id;
+        if (func_id != NULL)
+        {
+            HashNode_t *inner_symbol = NULL;
+            int found = FindIdent(&inner_symbol, symtab, (char *)func_id);
+            if (found >= 0 &&
+                inner_symbol != NULL &&
+                (inner_symbol->hash_type == HASHTYPE_FUNCTION || inner_symbol->hash_type == HASHTYPE_PROCEDURE))
+            {
+                /* This is @FunctionName where FunctionName was auto-converted to a call.
+                 * Skip overload resolution - we just want the function's address. */
+                inner_type = PROCEDURE;
+                treated_as_proc_ref = 1;
+            }
+        }
+    }
+
+    if (!treated_as_proc_ref)
+        semcheck_expr_main(&inner_type, symtab, inner, max_scope_lev, NO_MUTATE);
+
+    /* Special case: If the inner expression was auto-converted from a function identifier
+     * to a function call (because we're in NO_MUTATE mode), we need to reverse that
+     * since we're taking the address of the function, not calling it. */
+    int converted_to_proc_addr = treated_as_proc_ref;  /* Already converted if we treated it as proc ref */
+    if (!converted_to_proc_addr && inner->type == EXPR_FUNCTION_CALL && 
+        inner->expr_data.function_call_data.args_expr == NULL)
+    {
+        const char *func_id = inner->expr_data.function_call_data.id;
+        if (func_id != NULL)
+        {
+            HashNode_t *func_symbol = NULL;
+            if (FindIdent(&func_symbol, symtab, (char *)func_id) >= 0 &&
+                func_symbol != NULL && 
+                (func_symbol->hash_type == HASHTYPE_FUNCTION || func_symbol->hash_type == HASHTYPE_PROCEDURE))
+            {
+                /* This was auto-converted - treat it as a procedure reference instead */
+                inner_type = PROCEDURE;
+                converted_to_proc_addr = 1;
+                /* We'll handle this below in the PROCEDURE case */
+            }
+        }
+    }
+
+    if (inner_type == UNKNOWN_TYPE)
+    {
+        *type_return = UNKNOWN_TYPE;
+        return error_count;
+    }
+
+    const char *type_id = NULL;
+    if (inner_type == POINTER_TYPE && inner->pointer_subtype_id != NULL)
+        type_id = inner->pointer_subtype_id;
+
+    struct RecordType *record_info = NULL;
+    if (inner_type == RECORD_TYPE)
+        record_info = inner->record_type;
+    else if (inner_type == POINTER_TYPE && inner->record_type != NULL)
+        record_info = inner->record_type;
+
+    semcheck_set_pointer_info(expr, inner_type, type_id);
+    expr->record_type = record_info;
+    *type_return = POINTER_TYPE;
+    
+    /* Create a proper KgpcType for the address-of expression */
+    KgpcType *pointed_to_type = NULL;
+    
+    /* Convert inner_type to KgpcType */
+    if (inner_type == INT_TYPE) {
+        pointed_to_type = create_primitive_type(INT_TYPE);
+    } else if (inner_type == LONGINT_TYPE) {
+        pointed_to_type = create_primitive_type(LONGINT_TYPE);
+    } else if (inner_type == REAL_TYPE) {
+        pointed_to_type = create_primitive_type(REAL_TYPE);
+    } else if (inner_type == CHAR_TYPE) {
+        pointed_to_type = create_primitive_type(CHAR_TYPE);
+    } else if (inner_type == STRING_TYPE) {
+        pointed_to_type = create_primitive_type(STRING_TYPE);
+    } else if (inner_type == RECORD_TYPE && record_info != NULL) {
+        pointed_to_type = create_record_type(record_info);
+    } else if (inner_type == POINTER_TYPE) {
+        /* For pointer types, get the resolved KgpcType of the inner expression */
+        if (inner->resolved_kgpc_type != NULL) {
+            pointed_to_type = inner->resolved_kgpc_type;
+            kgpc_type_retain(pointed_to_type);  /* We're taking a reference */
+        } else {
+            /* Fallback: create untyped pointer */
+            pointed_to_type = NULL;
+        }
+    } else if (inner_type == PROCEDURE) {
+        int proc_type_owned = 0;
+        KgpcType *proc_type = NULL;
+        
+        /* For procedures/functions, we need the actual procedural type, not the return type.
+         * semcheck_resolve_expression_kgpc_type returns the return type for functions,
+         * so we look up the symbol directly instead. */
+        const char *proc_id = NULL;
+        if (inner->type == EXPR_VAR_ID)
+        {
+            proc_id = inner->expr_data.id;
+        }
+        else if (inner->type == EXPR_FUNCTION_CALL && inner->expr_data.function_call_data.args_expr == NULL)
+        {
+            proc_id = inner->expr_data.function_call_data.id;
+        }
+        
+        if (proc_id != NULL)
+        {
+            HashNode_t *proc_symbol = NULL;
+            if (FindIdent(&proc_symbol, symtab, (char *)proc_id) >= 0 &&
+                proc_symbol != NULL && 
+                (proc_symbol->hash_type == HASHTYPE_PROCEDURE || proc_symbol->hash_type == HASHTYPE_FUNCTION) &&
+                proc_symbol->type != NULL && proc_symbol->type->kind == TYPE_KIND_PROCEDURE)
+            {
+                /* Use the procedure type from the symbol */
+                proc_type = proc_symbol->type;
+                proc_type_owned = 0; /* Shared reference */
+            }
+        }
+        
+        if (proc_type != NULL)
+        {
+            if (!proc_type_owned)
+                kgpc_type_retain(proc_type);
+            pointed_to_type = proc_type;
+        }
+
+        /* Handle both EXPR_VAR_ID (for procedures) and EXPR_FUNCTION_CALL (for functions that were auto-converted) */
+        if (inner->type == EXPR_VAR_ID)
+        {
+            HashNode_t *proc_symbol = NULL;
+            if (FindIdent(&proc_symbol, symtab, inner->expr_data.id) >= 0 &&
+                proc_symbol != NULL && 
+                (proc_symbol->hash_type == HASHTYPE_PROCEDURE || proc_symbol->hash_type == HASHTYPE_FUNCTION))
+            {
+                expr->expr_data.addr_data.expr = NULL;
+                destroy_expr(inner);
+                expr->type = EXPR_ADDR_OF_PROC;
+                expr->expr_data.addr_of_proc_data.procedure_symbol = proc_symbol;
+            }
+        }
+        else if (inner->type == EXPR_FUNCTION_CALL && inner->expr_data.function_call_data.args_expr == NULL)
+        {
+            /* This was auto-converted from a function identifier - get the original symbol */
+            const char *func_id = inner->expr_data.function_call_data.id;
+            if (func_id != NULL)
+            {
+                HashNode_t *proc_symbol = NULL;
+                if (FindIdent(&proc_symbol, symtab, (char *)func_id) >= 0 &&
+                    proc_symbol != NULL && 
+                    (proc_symbol->hash_type == HASHTYPE_FUNCTION || proc_symbol->hash_type == HASHTYPE_PROCEDURE))
+                {
+                    expr->expr_data.addr_data.expr = NULL;
+                    destroy_expr(inner);
+                    expr->type = EXPR_ADDR_OF_PROC;
+                    expr->expr_data.addr_of_proc_data.procedure_symbol = proc_symbol;
+                }
+            }
+        }
+    }
+    /* For other types, we could add more conversions here */
+    
+    /* Create the pointer type */
+    if (pointed_to_type != NULL) {
+        if (expr->resolved_kgpc_type != NULL) {
+            destroy_kgpc_type(expr->resolved_kgpc_type);
+        }
+        expr->resolved_kgpc_type = create_pointer_type(pointed_to_type);
+    }
+    
+    /* If we successfully converted to a procedure address, don't count inner expression errors.
+     * Those errors were from trying to call the function with no arguments, which is not what we want. */
+    if (converted_to_proc_addr && expr->type == EXPR_ADDR_OF_PROC)
+    {
+        return 0;  /* Success - ignore inner errors */
+    }
+    
+    return error_count;
+}

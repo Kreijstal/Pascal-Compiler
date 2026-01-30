@@ -2345,6 +2345,7 @@ method_call_resolved:
     if (mangled_name != NULL && overload_candidates != NULL)
     {
         ListNode_t *cur = overload_candidates;
+        int mangled_matches = 0;
         while (cur != NULL)
         {
             HashNode_t *candidate = (HashNode_t *)cur->cur;
@@ -2354,9 +2355,15 @@ method_call_resolved:
                 best_match = candidate;
                 best_score = 0;
                 num_best_matches = 1;
-                break;
+                mangled_matches++;
             }
             cur = cur->next;
+        }
+        if (mangled_matches > 1)
+        {
+            /* Defer to overload resolution to apply tie-breakers (e.g., alias vs builtin). */
+            best_match = NULL;
+            num_best_matches = 0;
         }
     }
 
@@ -3288,4 +3295,62 @@ funccall_cleanup:
     if (mangled_name != NULL)
         free(mangled_name);
     return final_status;
+}
+
+int semcheck_try_indexed_property_getter(int *type_return,
+    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating)
+{
+    if (type_return == NULL || symtab == NULL || expr == NULL)
+        return -1;
+    if (mutating != NO_MUTATE)
+        return -1;
+    if (expr->type != EXPR_ARRAY_ACCESS)
+        return -1;
+
+    struct Expression *array_expr = expr->expr_data.array_access_data.array_expr;
+    struct Expression *index_expr = expr->expr_data.array_access_data.index_expr;
+    if (array_expr == NULL)
+        return -1;
+
+    const char *base_id = NULL;
+    if (array_expr->type == EXPR_VAR_ID)
+        base_id = array_expr->expr_data.id;
+    else if (array_expr->type == EXPR_FUNCTION_CALL &&
+             array_expr->expr_data.function_call_data.args_expr == NULL)
+        base_id = array_expr->expr_data.function_call_data.id;
+
+    if (base_id == NULL || index_expr == NULL)
+        return -1;
+
+    size_t id_len = strlen(base_id);
+    char *getter_id = (char *)malloc(id_len + 4);
+    if (getter_id == NULL)
+        return -1;
+    snprintf(getter_id, id_len + 4, "Get%s", base_id);
+
+    HashNode_t *getter_node = NULL;
+    int getter_found = (FindIdent(&getter_node, symtab, getter_id) == 0);
+    if (!getter_found || getter_node == NULL || getter_node->hash_type != HASHTYPE_FUNCTION)
+    {
+        free(getter_id);
+        return -1;
+    }
+
+    ListNode_t *args = CreateListNode(index_expr, LIST_EXPR);
+    if (args == NULL)
+    {
+        free(getter_id);
+        return -1;
+    }
+
+    expr->type = EXPR_FUNCTION_CALL;
+    memset(&expr->expr_data.function_call_data, 0, sizeof(expr->expr_data.function_call_data));
+    expr->expr_data.function_call_data.id = getter_id;
+    expr->expr_data.function_call_data.args_expr = args;
+    expr->expr_data.function_call_data.mangled_id = NULL;
+    semcheck_reset_function_call_cache(expr);
+
+    destroy_expr(array_expr);
+
+    return semcheck_funccall(type_return, symtab, expr, max_scope_lev, mutating);
 }

@@ -10,6 +10,26 @@
 
 #include "SemCheck_Expr_Internal.h"
 
+static const char *g_semcheck_current_method_owner = NULL;
+
+void semcheck_set_current_method_owner(const char *owner_id)
+{
+    g_semcheck_current_method_owner = owner_id;
+}
+
+const char *semcheck_get_current_method_owner(void)
+{
+    return g_semcheck_current_method_owner;
+}
+
+/* With statement context stack */
+WithContextEntry *with_context_stack = NULL;
+size_t with_context_count = 0;
+size_t with_context_capacity = 0;
+
+/* Type helper registry */
+ListNode_t *type_helper_entries = NULL;
+
 /*===========================================================================
  * Type Helper Registry Functions
  *===========================================================================*/

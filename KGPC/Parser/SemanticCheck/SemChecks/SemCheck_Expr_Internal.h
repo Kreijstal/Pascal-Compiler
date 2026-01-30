@@ -60,7 +60,7 @@ typedef struct TypeHelperEntry {
 } TypeHelperEntry;
 
 /*===========================================================================
- * Shared State (extern declarations - defined in SemCheck_expr.c)
+ * Shared State (extern declarations - defined in SemCheck_Context.c)
  *===========================================================================*/
 
 /* With statement context stack */
@@ -243,6 +243,26 @@ struct RecordType *semcheck_lookup_record_type(SymTab_t *symtab, const char *typ
 /* Lookup parent record in class hierarchy */
 struct RecordType *semcheck_lookup_parent_record(SymTab_t *symtab,
     struct RecordType *record_info);
+
+/* Find property in class hierarchy */
+struct ClassProperty *semcheck_find_class_property(SymTab_t *symtab,
+    struct RecordType *record_info, const char *property_name,
+    struct RecordType **owner_out);
+
+/* Find field in class hierarchy */
+struct RecordField *semcheck_find_class_field(SymTab_t *symtab,
+    struct RecordType *record_info, const char *field_name,
+    struct RecordType **owner_out);
+
+/* Find field in class hierarchy (including hidden fields) */
+struct RecordField *semcheck_find_class_field_including_hidden(SymTab_t *symtab,
+    struct RecordType *record_info, const char *field_name,
+    struct RecordType **owner_out);
+
+/* Find method in class hierarchy */
+HashNode_t *semcheck_find_class_method(SymTab_t *symtab,
+    struct RecordType *record_info, const char *method_name,
+    struct RecordType **owner_out);
 
 /* Get type name from expression (for operator overloading) */
 const char *get_expr_type_name(struct Expression *expr, SymTab_t *symtab);

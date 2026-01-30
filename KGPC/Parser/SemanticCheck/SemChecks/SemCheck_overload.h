@@ -7,6 +7,13 @@
 
 #include "SemCheck_expr.h"
 
+typedef enum {
+    MATCH_EXACT = 0,
+    MATCH_PROMOTION,
+    MATCH_CONVERSION,
+    MATCH_INCOMPATIBLE
+} MatchQuality;
+
 int semcheck_param_list_contains_name(ListNode_t *params, const char *name);
 int semcheck_named_arg_type_compatible(Tree_t *formal_decl,
     struct Expression *rhs_expr, int rhs_type, SymTab_t *symtab);
