@@ -15,15 +15,15 @@ typedef enum {
 } MatchQualityKind;
 
 /*
- * MatchQuality uses a tuple (kind, distance) for proper conversion ordering.
- * - kind: The quality category (exact, promotion, conversion, incompatible)
- * - distance: Ordering within the same category (e.g., integer size difference)
- *
- * Comparison: First by kind, then by distance. Lower values are better.
+ * MatchQuality uses tiers with deterministic tie-breaker flags.
+ * No penalty-based scoring is used; ties are resolved by explicit rules.
  */
 typedef struct {
     MatchQualityKind kind;
-    int distance;  /* Additional ordering metric within same kind (0 = best) */
+    int exact_type_id;
+    int exact_pointer_subtype;
+    int exact_array_elem;
+    int int_promo_rank;
 } MatchQuality;
 
 int semcheck_param_list_contains_name(ListNode_t *params, const char *name);
