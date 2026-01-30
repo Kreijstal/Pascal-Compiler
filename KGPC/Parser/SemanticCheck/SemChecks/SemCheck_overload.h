@@ -12,6 +12,18 @@ typedef enum {
     MATCH_PROMOTION,
     MATCH_CONVERSION,
     MATCH_INCOMPATIBLE
+} MatchQualityKind;
+
+/*
+ * MatchQuality uses a tuple (kind, distance) for proper conversion ordering.
+ * - kind: The quality category (exact, promotion, conversion, incompatible)
+ * - distance: Ordering within the same category (e.g., integer size difference)
+ *
+ * Comparison: First by kind, then by distance. Lower values are better.
+ */
+typedef struct {
+    MatchQualityKind kind;
+    int distance;  /* Additional ordering metric within same kind (0 = best) */
 } MatchQuality;
 
 int semcheck_param_list_contains_name(ListNode_t *params, const char *name);
@@ -33,5 +45,8 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
     struct Expression *call_expr,
     int max_scope_lev,
     int prefer_non_builtin);
+
+/* Check if two function candidates have equivalent signatures (same types for all params) */
+int semcheck_candidates_share_signature(SymTab_t *symtab, HashNode_t *a, HashNode_t *b);
 
 #endif

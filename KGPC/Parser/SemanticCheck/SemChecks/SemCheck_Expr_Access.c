@@ -2346,18 +2346,41 @@ method_call_resolved:
     {
         ListNode_t *cur = overload_candidates;
         int mangled_matches = 0;
+        HashNode_t *first_match = NULL;
         while (cur != NULL)
         {
             HashNode_t *candidate = (HashNode_t *)cur->cur;
             if (candidate != NULL && candidate->mangled_id != NULL &&
                 strcmp(candidate->mangled_id, mangled_name) == 0)
             {
+                if (first_match == NULL)
+                    first_match = candidate;
                 best_match = candidate;
                 best_score = 0;
                 num_best_matches = 1;
                 mangled_matches++;
             }
             cur = cur->next;
+        }
+        /* When mangled_matches == 1 but there are other candidates with equivalent signatures,
+         * we need to go through full resolution to properly handle declaration order.
+         * Check if other candidates share equivalent signature with the match. */
+        if (mangled_matches == 1 && first_match != NULL && ListLength(overload_candidates) > 1)
+        {
+            for (ListNode_t *check = overload_candidates; check != NULL; check = check->next)
+            {
+                HashNode_t *other = (HashNode_t *)check->cur;
+                if (other != first_match && other != NULL &&
+                    (other->hash_type == HASHTYPE_FUNCTION || other->hash_type == HASHTYPE_PROCEDURE) &&
+                    semcheck_candidates_share_signature(symtab, first_match, other))
+                {
+                    /* There's another candidate with equivalent signature - defer to full resolution */
+                    best_match = NULL;
+                    num_best_matches = 0;
+                    mangled_matches = 0;
+                    break;
+                }
+            }
         }
         if (mangled_matches > 1)
         {
