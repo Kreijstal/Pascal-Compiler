@@ -47,6 +47,8 @@ static const char *semcheck_get_param_type_id(Tree_t *decl)
     return NULL;
 }
 
+static int semcheck_string_kind_from_type_id(const char *type_id);
+
 static int semcheck_array_elem_legacy_tag(KgpcType *type)
 {
     if (type == NULL)
@@ -130,7 +132,20 @@ int semcheck_candidates_share_signature(SymTab_t *symtab, HashNode_t *a, HashNod
                 if (owns_b && kg_b != NULL)
                     destroy_kgpc_type(kg_b);
                 if (!eq)
+                {
+                    if (id_a != NULL && id_b != NULL)
+                    {
+                        int kind_a = semcheck_string_kind_from_type_id(id_a);
+                        int kind_b = semcheck_string_kind_from_type_id(id_b);
+                        if (kind_a != 0 && kind_a == kind_b)
+                        {
+                            args_a = args_a->next;
+                            args_b = args_b->next;
+                            continue;
+                        }
+                    }
                     return 0;
+                }
             }
             else
             {
@@ -143,7 +158,20 @@ int semcheck_candidates_share_signature(SymTab_t *symtab, HashNode_t *a, HashNod
                 {
                     if (id_a == NULL || id_b == NULL ||
                         !pascal_identifier_equals(id_a, id_b))
+                    {
+                        if (id_a != NULL && id_b != NULL)
+                        {
+                            int kind_a = semcheck_string_kind_from_type_id(id_a);
+                            int kind_b = semcheck_string_kind_from_type_id(id_b);
+                            if (kind_a != 0 && kind_a == kind_b)
+                            {
+                                args_a = args_a->next;
+                                args_b = args_b->next;
+                                continue;
+                            }
+                        }
                         return 0;
+                    }
                 }
                 else
                 {
@@ -511,7 +539,12 @@ static int semcheck_resolve_arg_kgpc_type(struct Expression *arg_expr,
     if (arg_type != NULL && arg_tag != UNKNOWN_TYPE)
     {
         int keep = 0;
-        if (arg_type->kind == TYPE_KIND_PRIMITIVE &&
+        if (arg_tag == POINTER_TYPE)
+        {
+            if (arg_type->kind == TYPE_KIND_POINTER)
+                keep = 1;
+        }
+        else if (arg_type->kind == TYPE_KIND_PRIMITIVE &&
             arg_type->info.primitive_type_tag == arg_tag)
             keep = 1;
         else if (arg_tag == POINTER_TYPE && arg_type->kind == TYPE_KIND_POINTER)
@@ -547,7 +580,6 @@ static int semcheck_resolve_arg_kgpc_type(struct Expression *arg_expr,
             case BOOL:
             case ENUM_TYPE:
             case SET_TYPE:
-            case POINTER_TYPE:
             case FILE_TYPE:
             case TEXT_TYPE:
             case BYTE_TYPE:
@@ -557,6 +589,27 @@ static int semcheck_resolve_arg_kgpc_type(struct Expression *arg_expr,
             case PROCEDURE:
                 arg_type = create_primitive_type(arg_tag);
                 break;
+            case POINTER_TYPE:
+                if (arg_expr != NULL && arg_expr->pointer_subtype_id != NULL)
+                {
+                    HashNode_t *type_node = NULL;
+                    if (FindIdent(&type_node, symtab, arg_expr->pointer_subtype_id) == 0 &&
+                        type_node != NULL && type_node->type != NULL)
+                    {
+                        kgpc_type_retain(type_node->type);
+                        arg_type = create_pointer_type(type_node->type);
+                    }
+                }
+                if (arg_type == NULL && arg_expr != NULL &&
+                    arg_expr->pointer_subtype != UNKNOWN_TYPE)
+                {
+                    KgpcType *points_to = create_primitive_type(arg_expr->pointer_subtype);
+                    if (points_to != NULL)
+                        arg_type = create_pointer_type(points_to);
+                }
+                if (arg_type == NULL)
+                    arg_type = create_pointer_type(NULL);
+                break;
             default:
                 break;
         }
@@ -565,6 +618,20 @@ static int semcheck_resolve_arg_kgpc_type(struct Expression *arg_expr,
     }
     if (arg_type_out != NULL)
         *arg_type_out = arg_type;
+    if ((arg_tag == INT_TYPE || arg_tag == LONGINT_TYPE || arg_tag == INT64_TYPE) &&
+        arg_type != NULL && arg_type->type_alias != NULL)
+    {
+        const char *alias_name = arg_type->type_alias->alias_name != NULL
+            ? arg_type->type_alias->alias_name
+            : arg_type->type_alias->target_type_id;
+        if (alias_name != NULL)
+        {
+            int mapped = semcheck_map_builtin_type_name(symtab, alias_name);
+            if (mapped == BYTE_TYPE || mapped == WORD_TYPE ||
+                mapped == LONGWORD_TYPE || mapped == QWORD_TYPE)
+                arg_tag = mapped;
+        }
+    }
     return arg_tag;
 }
 
@@ -676,7 +743,13 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
 
 static const char *semcheck_get_expr_decl_type_id(struct Expression *expr, SymTab_t *symtab)
 {
-    if (expr == NULL || expr->type != EXPR_VAR_ID || symtab == NULL)
+    if (expr == NULL || symtab == NULL)
+        return NULL;
+
+    if (expr->array_element_type_id != NULL)
+        return expr->array_element_type_id;
+
+    if (expr->type != EXPR_VAR_ID)
         return NULL;
 
     HashNode_t *node = NULL;
@@ -690,9 +763,137 @@ static const char *semcheck_get_expr_decl_type_id(struct Expression *expr, SymTa
     return NULL;
 }
 
+static int semcheck_string_kind_from_type_id(const char *type_id)
+{
+    if (type_id == NULL)
+        return 0;
+
+    const char *id = type_id;
+    if (id[0] == 'P' || id[0] == 'p')
+        id = id + 1;
+
+    if (pascal_identifier_equals(id, "WideChar") ||
+        pascal_identifier_equals(id, "UnicodeChar") ||
+        pascal_identifier_equals(id, "WideString") ||
+        pascal_identifier_equals(id, "UnicodeString"))
+        return 2;
+
+    if (pascal_identifier_equals(id, "Char") ||
+        pascal_identifier_equals(id, "AnsiChar") ||
+        pascal_identifier_equals(id, "String") ||
+        pascal_identifier_equals(id, "AnsiString") ||
+        pascal_identifier_equals(id, "RawByteString"))
+        return 1;
+
+    return 0;
+}
+
+static const char *semcheck_numeric_type_canonical_id(const char *type_id)
+{
+    if (type_id == NULL)
+        return NULL;
+
+    const char *id = semcheck_base_type_name(type_id);
+
+    if (pascal_identifier_equals(id, "Byte") || pascal_identifier_equals(id, "UInt8"))
+        return "UInt8";
+    if (pascal_identifier_equals(id, "ShortInt") || pascal_identifier_equals(id, "Int8"))
+        return "Int8";
+    if (pascal_identifier_equals(id, "Word") || pascal_identifier_equals(id, "UInt16"))
+        return "UInt16";
+    if (pascal_identifier_equals(id, "SmallInt") || pascal_identifier_equals(id, "Int16"))
+        return "Int16";
+    if (pascal_identifier_equals(id, "LongWord") || pascal_identifier_equals(id, "Cardinal") ||
+        pascal_identifier_equals(id, "DWord") || pascal_identifier_equals(id, "UInt32"))
+        return "UInt32";
+    if (pascal_identifier_equals(id, "Integer") || pascal_identifier_equals(id, "LongInt") ||
+        pascal_identifier_equals(id, "Int32"))
+        return "Int32";
+    if (pascal_identifier_equals(id, "Int64"))
+        return "Int64";
+    if (pascal_identifier_equals(id, "QWord") || pascal_identifier_equals(id, "UInt64"))
+        return "UInt64";
+
+    return NULL;
+}
+
 static int semcheck_integer_promotion_rank(int actual_tag, KgpcType *actual_kgpc,
     int formal_tag, KgpcType *formal_kgpc, int is_integer_literal)
 {
+    long long actual_size = -1;
+    long long formal_size = -1;
+    int actual_unsigned = (actual_tag == BYTE_TYPE || actual_tag == WORD_TYPE ||
+        actual_tag == LONGWORD_TYPE || actual_tag == QWORD_TYPE);
+    int formal_unsigned = (formal_tag == BYTE_TYPE || formal_tag == WORD_TYPE ||
+        formal_tag == LONGWORD_TYPE || formal_tag == QWORD_TYPE);
+
+    if (actual_kgpc != NULL)
+        actual_size = kgpc_type_sizeof(actual_kgpc);
+    if (formal_kgpc != NULL)
+        formal_size = kgpc_type_sizeof(formal_kgpc);
+
+    if (actual_size <= 0)
+    {
+        switch (actual_tag)
+        {
+            case BYTE_TYPE: actual_size = 1; break;
+            case WORD_TYPE: actual_size = 2; break;
+            case INT_TYPE:
+            case LONGINT_TYPE:
+            case LONGWORD_TYPE: actual_size = 4; break;
+            case INT64_TYPE:
+            case QWORD_TYPE: actual_size = 8; break;
+            default: actual_size = -1; break;
+        }
+    }
+
+    if (formal_size <= 0)
+    {
+        switch (formal_tag)
+        {
+            case BYTE_TYPE: formal_size = 1; break;
+            case WORD_TYPE: formal_size = 2; break;
+            case INT_TYPE:
+            case LONGINT_TYPE:
+            case LONGWORD_TYPE: formal_size = 4; break;
+            case INT64_TYPE:
+            case QWORD_TYPE: formal_size = 8; break;
+            default: formal_size = -1; break;
+        }
+    }
+
+    if (actual_size > 0 && formal_size > 0)
+    {
+        int actual_rank = -1;
+        int formal_rank = -1;
+        if (actual_size == 1) actual_rank = 0;
+        else if (actual_size == 2) actual_rank = 1;
+        else if (actual_size == 4) actual_rank = 2;
+        else if (actual_size == 8) actual_rank = 3;
+
+        if (formal_size == 1) formal_rank = 0;
+        else if (formal_size == 2) formal_rank = 1;
+        else if (formal_size == 4) formal_rank = 2;
+        else if (formal_size == 8) formal_rank = 3;
+
+        if (formal_size == actual_size)
+        {
+            if (actual_unsigned == formal_unsigned)
+                return 0;
+            return is_integer_literal ? 0 : 1;
+        }
+        if (formal_size > actual_size && actual_rank != -1 && formal_rank != -1)
+            return 1 + (formal_rank - actual_rank);
+        if (formal_size > actual_size)
+            return 2;
+        if (actual_rank != -1 && formal_rank != -1)
+            return 10 + (actual_rank - formal_rank);
+        return 3;
+    }
+
+    if (actual_tag == formal_tag)
+        return 0;
+
     if (is_integer_literal)
     {
         switch (formal_tag)
@@ -707,25 +908,7 @@ static int semcheck_integer_promotion_rank(int actual_tag, KgpcType *actual_kgpc
         }
     }
 
-    if (actual_tag == formal_tag)
-        return 0;
-
-    /* Deterministic ordering for non-literal integer promotions by type tag. */
-    switch (formal_tag)
-    {
-        case INT_TYPE:
-        case LONGINT_TYPE:
-            return 0;
-        case INT64_TYPE:
-            return 1;
-        case BYTE_TYPE:
-        case WORD_TYPE:
-        case LONGWORD_TYPE:
-        case QWORD_TYPE:
-            return 2;
-        default:
-            return 1;
-    }
+    return 1;
 }
 
 /*
@@ -1034,6 +1217,14 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                     if (formal_id != NULL && arg_decl_id != NULL &&
                         pascal_identifier_equals(formal_id, arg_decl_id))
                         quality.exact_type_id = 1;
+                    if (!quality.exact_type_id && formal_id != NULL && arg_decl_id != NULL)
+                    {
+                        const char *formal_num = semcheck_numeric_type_canonical_id(formal_id);
+                        const char *arg_num = semcheck_numeric_type_canonical_id(arg_decl_id);
+                        if (formal_num != NULL && arg_num != NULL &&
+                            pascal_identifier_equals(formal_num, arg_num))
+                            quality.exact_type_id = 1;
+                    }
                 }
 
                 qualities[arg_index++] = quality;
@@ -1129,8 +1320,7 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                     }
                     quality = semcheck_classify_match(arg_tag, arg_kgpc, formal_tag, formal_kgpc,
                         is_var_param, symtab, is_integer_literal);
-                    if (quality.kind == MATCH_PROMOTION &&
-                        is_integer_type(arg_tag) && is_integer_type(formal_tag))
+                    if (is_integer_type(arg_tag) && is_integer_type(formal_tag))
                     {
                         quality.int_promo_rank = semcheck_integer_promotion_rank(
                             arg_tag, arg_kgpc, formal_tag, formal_kgpc, is_integer_literal);
@@ -1139,9 +1329,32 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                     {
                         const char *formal_id = semcheck_get_param_type_id(formal_decl);
                         const char *arg_decl_id = semcheck_get_expr_decl_type_id(arg_expr, symtab);
-                        if (formal_id != NULL && arg_decl_id != NULL &&
-                            pascal_identifier_equals(formal_id, arg_decl_id))
+                        const char *arg_type_id = arg_decl_id;
+                        if (arg_type_id == NULL && arg_kgpc != NULL && arg_kgpc->type_alias != NULL)
+                        {
+                            arg_type_id = arg_kgpc->type_alias->alias_name != NULL
+                                ? arg_kgpc->type_alias->alias_name
+                                : arg_kgpc->type_alias->target_type_id;
+                        }
+                        if (formal_id != NULL && arg_type_id != NULL &&
+                            pascal_identifier_equals(formal_id, arg_type_id))
                             quality.exact_type_id = 1;
+                        if (!quality.exact_type_id && formal_id != NULL && arg_type_id != NULL)
+                        {
+                            const char *formal_num = semcheck_numeric_type_canonical_id(formal_id);
+                            const char *arg_num = semcheck_numeric_type_canonical_id(arg_type_id);
+                            if (formal_num != NULL && arg_num != NULL &&
+                                pascal_identifier_equals(formal_num, arg_num))
+                                quality.exact_type_id = 1;
+                        }
+                        if (formal_id != NULL && arg_type_id != NULL &&
+                            formal_tag == POINTER_TYPE && arg_tag == STRING_TYPE)
+                        {
+                            int formal_kind = semcheck_string_kind_from_type_id(formal_id);
+                            int arg_kind = semcheck_string_kind_from_type_id(arg_type_id);
+                            if (formal_kind != 0 && formal_kind == arg_kind)
+                                quality.exact_pointer_subtype = 1;
+                        }
                     }
                 }
 

@@ -3368,6 +3368,7 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
         
         /* For functions, get return type */
         KgpcType *return_type = NULL;
+        char *return_type_id = NULL;
         if (is_function) {
             #ifdef DEBUG_KGPC_TYPE_CREATION
             fprintf(stderr, "DEBUG: Looking for return type, cursor=%p, cursor->typ=%d, cursor->sym=%s, cursor->child=%p\n",
@@ -3407,6 +3408,11 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
                 #endif
                 if (cursor->typ == PASCAL_T_TYPE_SPEC) {
                     return_type = convert_type_spec_to_kgpctype(cursor, symtab);
+                    if (return_type_id == NULL && cursor->child != NULL &&
+                        cursor->child->sym != NULL && cursor->child->sym->name != NULL)
+                    {
+                        return_type_id = strdup(cursor->child->sym->name);
+                    }
                 } else if (cursor->typ == PASCAL_T_IDENTIFIER) {
                     char *ret_type_name = dup_symbol(cursor);
                     if (ret_type_name != NULL) {
@@ -3422,6 +3428,8 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
                                 return_type = type_node->type;
                             }
                         }
+                        if (return_type_id == NULL)
+                            return_type_id = strdup(ret_type_name);
                         free(ret_type_name);
                     }
                 }
@@ -3433,7 +3441,12 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
             #endif
         }
         
-        return create_procedure_type(params, return_type);
+        KgpcType *proc_type = create_procedure_type(params, return_type);
+        if (proc_type != NULL && return_type_id != NULL)
+            proc_type->info.proc_info.return_type_id = return_type_id;
+        else if (return_type_id != NULL)
+            free(return_type_id);
+        return proc_type;
     }
 
     /* Handle reference to types (wraps procedure/function types) */

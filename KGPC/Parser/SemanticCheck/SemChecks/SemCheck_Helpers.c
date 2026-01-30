@@ -277,7 +277,7 @@ void semcheck_set_array_info_from_hashnode(struct Expression *expr, SymTab_t *sy
     set_type_from_hashtype(&expr->array_element_type, node);
     if (node->type != NULL && kgpc_type_is_array(node->type))
     {
-        KgpcType *elem_type = kgpc_type_get_array_element_type(node->type);
+        KgpcType *elem_type = kgpc_type_get_array_element_type_resolved(node->type, symtab);
         if (elem_type != NULL)
         {
             expr->array_element_type = kgpc_type_get_legacy_tag(elem_type);
@@ -286,6 +286,18 @@ void semcheck_set_array_info_from_hashnode(struct Expression *expr, SymTab_t *sy
                 elem_type->type_alias->target_type_id != NULL)
             {
                 expr->array_element_type_id = strdup(elem_type->type_alias->target_type_id);
+            }
+            if (expr->array_element_type_id == NULL &&
+                elem_type->kind == TYPE_KIND_POINTER &&
+                elem_type->info.points_to != NULL &&
+                elem_type->info.points_to->kind == TYPE_KIND_PRIMITIVE &&
+                elem_type->info.points_to->info.primitive_type_tag == CHAR_TYPE)
+            {
+                long long char_size = kgpc_type_sizeof(elem_type->info.points_to);
+                if (char_size == 2)
+                    expr->array_element_type_id = strdup("PWideChar");
+                else
+                    expr->array_element_type_id = strdup("PAnsiChar");
             }
             if (elem_type->kind == TYPE_KIND_RECORD)
             {
@@ -297,6 +309,10 @@ void semcheck_set_array_info_from_hashnode(struct Expression *expr, SymTab_t *sy
                     expr->array_element_type_id = strdup(expr->array_element_record_type->type_id);
                 }
             }
+        }
+        else if (node->type->info.array_info.element_type_id != NULL)
+        {
+            expr->array_element_type_id = strdup(node->type->info.array_info.element_type_id);
         }
     }
 

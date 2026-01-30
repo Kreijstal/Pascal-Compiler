@@ -85,8 +85,17 @@ int semcheck_map_builtin_type_name(SymTab_t *symtab, const char *id)
         return POINTER_TYPE;
     if (pascal_identifier_equals(id, "CodePointer"))
         return POINTER_TYPE;
-    if (pascal_identifier_equals(id, "Byte") || pascal_identifier_equals(id, "Word"))
-        return INT_TYPE;
+    if (pascal_identifier_equals(id, "Byte"))
+        return BYTE_TYPE;
+    if (pascal_identifier_equals(id, "Word"))
+        return WORD_TYPE;
+    if (pascal_identifier_equals(id, "LongWord") ||
+        pascal_identifier_equals(id, "Cardinal") ||
+        pascal_identifier_equals(id, "DWord"))
+        return LONGWORD_TYPE;
+    if (pascal_identifier_equals(id, "QWord") ||
+        pascal_identifier_equals(id, "UInt64"))
+        return QWORD_TYPE;
 
     return UNKNOWN_TYPE;
 }
@@ -172,6 +181,35 @@ int set_type_from_hashtype(int *type, HashNode_t *hash_node)
     /* Try KgpcType first if available */
     if (hash_node->type != NULL)
     {
+        if (hash_node->type->type_alias != NULL)
+        {
+            int base = hash_node->type->type_alias->base_type;
+            if (base == STRING_TYPE || base == SHORTSTRING_TYPE)
+            {
+                *type = base;
+                return 0;
+            }
+            if (hash_node->type->type_alias->is_set)
+            {
+                *type = SET_TYPE;
+                return 0;
+            }
+            if (hash_node->type->type_alias->is_enum)
+            {
+                *type = ENUM_TYPE;
+                return 0;
+            }
+            if (hash_node->type->type_alias->is_pointer)
+            {
+                *type = POINTER_TYPE;
+                return 0;
+            }
+            if (hash_node->type->type_alias->is_file)
+            {
+                *type = FILE_TYPE;
+                return 0;
+            }
+        }
         if (hash_node->type->kind == TYPE_KIND_PRIMITIVE)
         {
             *type = kgpc_type_get_primitive_tag(hash_node->type);

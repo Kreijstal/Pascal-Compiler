@@ -962,6 +962,145 @@ int semcheck_mulop(int *type_return,
 }
 
 /** VAR_ID **/
+static struct RecordType *semcheck_resolve_helper_self_record(SymTab_t *symtab,
+    HashNode_t *self_node, struct RecordType *helper_self_record)
+{
+    struct RecordType *self_record = helper_self_record;
+    if (self_record == NULL && self_node != NULL)
+    {
+        int self_type_tag = UNKNOWN_TYPE;
+        const char *self_type_name = NULL;
+        set_type_from_hashtype(&self_type_tag, self_node);
+        if (self_node->type != NULL &&
+            self_node->type->type_alias != NULL &&
+            self_node->type->type_alias->target_type_id != NULL)
+        {
+            self_type_name = self_node->type->type_alias->target_type_id;
+        }
+        if (self_type_name == NULL && self_node->type != NULL)
+        {
+            KgpcType *pointed = kgpc_type_is_pointer(self_node->type) ?
+                self_node->type->info.points_to : NULL;
+            if (pointed != NULL && pointed->type_alias != NULL &&
+                pointed->type_alias->target_type_id != NULL)
+            {
+                self_type_name = pointed->type_alias->target_type_id;
+            }
+        }
+        struct RecordType *helper_record = semcheck_lookup_type_helper(symtab,
+            self_type_tag, self_type_name);
+        if (helper_record != NULL)
+        {
+            self_record = helper_record;
+            if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                fprintf(stderr, "[SemCheck] varid fallback: Using type helper %s for Self\n",
+                    helper_record->type_id ? helper_record->type_id : "(null)");
+            }
+        }
+        if (self_record == NULL)
+            self_record = helper_self_record;
+    }
+    return self_record;
+}
+
+static int semcheck_try_helper_member(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev, int mutating,
+    HashNode_t *self_node, struct RecordType *self_record, const char *id)
+{
+    if (symtab == NULL || expr == NULL || id == NULL || self_record == NULL)
+        return -1;
+
+    HashNode_t *method_node = semcheck_find_class_method(symtab, self_record, id, NULL);
+    if (method_node != NULL)
+    {
+        expr->type = EXPR_FUNCTION_CALL;
+        memset(&expr->expr_data.function_call_data, 0,
+            sizeof(expr->expr_data.function_call_data));
+        expr->expr_data.function_call_data.id = strdup(id);
+        expr->expr_data.function_call_data.args_expr = NULL;
+        expr->expr_data.function_call_data.mangled_id = NULL;
+        semcheck_reset_function_call_cache(expr);
+        return semcheck_funccall(type_return, symtab, expr, max_scope_lev, mutating);
+    }
+
+    struct RecordType *property_owner = NULL;
+    struct ClassProperty *property = semcheck_find_class_property(symtab,
+        self_record, id, &property_owner);
+    if (property != NULL)
+    {
+        char *self_str = strdup("Self");
+        if (self_str != NULL)
+        {
+            struct Expression *self_expr = mk_varid(expr->line_num, self_str);
+            if (self_expr != NULL)
+            {
+                self_expr->record_type = self_record;
+                if (self_node != NULL && self_node->type != NULL)
+                {
+                    self_expr->resolved_kgpc_type = self_node->type;
+                    kgpc_type_retain(self_node->type);
+                }
+
+                char *saved_id = expr->expr_data.id;
+                expr->expr_data.id = NULL;
+
+                expr->type = EXPR_RECORD_ACCESS;
+                memset(&expr->expr_data.record_access_data, 0,
+                    sizeof(expr->expr_data.record_access_data));
+
+                expr->expr_data.record_access_data.record_expr = self_expr;
+                expr->expr_data.record_access_data.field_id = saved_id;
+
+                return semcheck_recordaccess(type_return, symtab, expr,
+                    max_scope_lev, mutating);
+            }
+        }
+    }
+
+    struct RecordType *field_owner = NULL;
+    struct RecordField *field_desc = semcheck_find_class_field(symtab,
+        self_record, id, &field_owner);
+    if (field_desc != NULL)
+    {
+        char *self_str = strdup("Self");
+        if (self_str != NULL)
+        {
+            struct Expression *self_expr = mk_varid(expr->line_num, self_str);
+            if (self_expr != NULL)
+            {
+                self_expr->record_type = self_record;
+                if (self_node != NULL && self_node->type != NULL)
+                {
+                    self_expr->resolved_kgpc_type = self_node->type;
+                    kgpc_type_retain(self_node->type);
+                }
+
+                char *saved_id = expr->expr_data.id;
+                expr->expr_data.id = NULL;
+
+                expr->type = EXPR_RECORD_ACCESS;
+                memset(&expr->expr_data.record_access_data, 0,
+                    sizeof(expr->expr_data.record_access_data));
+
+                expr->expr_data.record_access_data.record_expr = self_expr;
+                expr->expr_data.record_access_data.field_id = saved_id;
+
+                long long field_offset = 0;
+                if (resolve_record_field(symtab, self_record, id,
+                    NULL, &field_offset, 0, 1) == 0)
+                {
+                    expr->expr_data.record_access_data.field_offset = field_offset;
+                }
+
+                return semcheck_recordaccess(type_return, symtab, expr,
+                    max_scope_lev, mutating);
+            }
+        }
+    }
+
+    return -1;
+}
+
 int semcheck_varid(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating)
 {
@@ -1074,39 +1213,25 @@ int semcheck_varid(int *type_return,
         helper_self_record = get_record_type_from_node(helper_self_node);
         if (helper_self_record == NULL)
         {
-            int self_type_tag = UNKNOWN_TYPE;
-            const char *self_type_name = NULL;
-            set_type_from_hashtype(&self_type_tag, helper_self_node);
-            if (helper_self_node->type != NULL &&
-                helper_self_node->type->type_alias != NULL &&
-                helper_self_node->type->type_alias->target_type_id != NULL)
-            {
-                self_type_name = helper_self_node->type->type_alias->target_type_id;
-            }
-            if (self_type_name == NULL && helper_self_node->type != NULL)
-            {
-                KgpcType *pointed = kgpc_type_is_pointer(helper_self_node->type) ?
-                    helper_self_node->type->info.points_to : NULL;
-                if (pointed != NULL && pointed->type_alias != NULL &&
-                    pointed->type_alias->target_type_id != NULL)
-                {
-                    self_type_name = pointed->type_alias->target_type_id;
-                }
-            }
-            helper_self_record = semcheck_lookup_type_helper(symtab, self_type_tag, self_type_name);
-            if (helper_self_record == NULL)
-            {
-                const char *current_owner = semcheck_get_current_method_owner();
-                if (current_owner != NULL)
-                {
-                    struct RecordType *owner_record = semcheck_lookup_record_type(symtab, current_owner);
-                    if (owner_record != NULL && owner_record->is_type_helper)
-                        helper_self_record = owner_record;
-                }
-            }
+            helper_self_record = semcheck_resolve_helper_self_record(symtab,
+                helper_self_node, helper_self_record);
         }
         if (helper_self_record != NULL && helper_self_record->is_type_helper)
             helper_context = 1;
+    }
+
+    if (scope_return > 0 && id != NULL && helper_self_node != NULL)
+    {
+        struct RecordType *self_record = helper_self_record;
+        if (self_record == NULL)
+        {
+            self_record = semcheck_resolve_helper_self_record(symtab,
+                helper_self_node, helper_self_record);
+        }
+        int helper_result = semcheck_try_helper_member(type_return, symtab, expr,
+            max_scope_lev, mutating, helper_self_node, self_record, id);
+        if (helper_result >= 0)
+            return helper_result;
     }
 
     if (scope_return == -1)
@@ -1149,146 +1274,12 @@ int semcheck_varid(int *type_return,
                 HashNode_t *self_node = helper_self_node;
                 if (self_node != NULL)
                 {
-                    struct RecordType *self_record = helper_self_record;
-                    
-                    /* For type helpers, Self might not have a direct record type.
-                     * Instead, we need to look up the type helper for Self's type. */
-                    if (self_record == NULL)
-                    {
-                        int self_type_tag = UNKNOWN_TYPE;
-                        const char *self_type_name = NULL;
-                        set_type_from_hashtype(&self_type_tag, self_node);
-                        if (self_node->type != NULL &&
-                            self_node->type->type_alias != NULL &&
-                            self_node->type->type_alias->target_type_id != NULL)
-                        {
-                            self_type_name = self_node->type->type_alias->target_type_id;
-                        }
-                        if (self_type_name == NULL && self_node->type != NULL)
-                        {
-                            /* For pointer types, get the pointed-to type name */
-                            KgpcType *pointed = kgpc_type_is_pointer(self_node->type) ?
-                                self_node->type->info.points_to : NULL;
-                            if (pointed != NULL && pointed->type_alias != NULL &&
-                                pointed->type_alias->target_type_id != NULL)
-                            {
-                                self_type_name = pointed->type_alias->target_type_id;
-                            }
-                        }
-                        struct RecordType *helper_record = semcheck_lookup_type_helper(symtab,
-                            self_type_tag, self_type_name);
-                        if (helper_record != NULL)
-                        {
-                            self_record = helper_record;
-                            if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
-                                fprintf(stderr, "[SemCheck] varid fallback: Using type helper %s for Self\n",
-                                    helper_record->type_id ? helper_record->type_id : "(null)");
-                            }
-                        }
-                        if (self_record == NULL)
-                            self_record = helper_self_record;
-                    }
-                    
-                    if (self_record != NULL)
-                    {
-                        /* First check if it's a method */
-                        HashNode_t *method_node = semcheck_find_class_method(symtab, self_record, id, NULL);
-                        if (method_node != NULL)
-                        {
-                            expr->type = EXPR_FUNCTION_CALL;
-                            memset(&expr->expr_data.function_call_data, 0,
-                                sizeof(expr->expr_data.function_call_data));
-                            expr->expr_data.function_call_data.id = strdup(id);
-                            expr->expr_data.function_call_data.args_expr = NULL;
-                            expr->expr_data.function_call_data.mangled_id = NULL;
-                            semcheck_reset_function_call_cache(expr);
-                            return semcheck_funccall(type_return, symtab, expr, max_scope_lev, mutating);
-                        }
-                        
-                        /* Then check if it's an instance field - convert to Self.fieldname */
-                        struct RecordType *property_owner = NULL;
-                        struct ClassProperty *property = semcheck_find_class_property(symtab,
-                            self_record, id, &property_owner);
-                        if (property != NULL)
-                        {
-                            /* Convert to Self.property so semcheck_recordaccess can resolve accessors. */
-                            char *self_str = strdup("Self");
-                            if (self_str != NULL)
-                            {
-                                struct Expression *self_expr = mk_varid(expr->line_num, self_str);
-                                if (self_expr != NULL)
-                                {
-                                    self_expr->record_type = self_record;
-                                    if (self_node->type != NULL)
-                                    {
-                                        self_expr->resolved_kgpc_type = self_node->type;
-                                        kgpc_type_retain(self_node->type);
-                                    }
-
-                                    char *saved_id = expr->expr_data.id;
-                                    expr->expr_data.id = NULL;
-
-                                    expr->type = EXPR_RECORD_ACCESS;
-                                    memset(&expr->expr_data.record_access_data, 0,
-                                        sizeof(expr->expr_data.record_access_data));
-
-                                    expr->expr_data.record_access_data.record_expr = self_expr;
-                                    expr->expr_data.record_access_data.field_id = saved_id;
-
-                                    return semcheck_recordaccess(type_return, symtab, expr,
-                                        max_scope_lev, mutating);
-                                }
-                            }
-                        }
-
-                        struct RecordType *field_owner = NULL;
-                        struct RecordField *field_desc = semcheck_find_class_field(symtab, 
-                            self_record, id, &field_owner);
-                        if (field_desc != NULL)
-                        {
-                            /* First create the Self expression to ensure memory allocation succeeds */
-                            char *self_str = strdup("Self");
-                            if (self_str != NULL)
-                            {
-                                struct Expression *self_expr = mk_varid(expr->line_num, self_str);
-                                /* mk_varid takes ownership of self_str, so don't free it separately */
-                                if (self_expr != NULL)
-                                {
-                                    self_expr->record_type = self_record;
-                                    if (self_node->type != NULL)
-                                    {
-                                        self_expr->resolved_kgpc_type = self_node->type;
-                                        kgpc_type_retain(self_node->type);
-                                    }
-                                    
-                                    /* Convert EXPR_VAR_ID to EXPR_RECORD_ACCESS for Self.field */
-                                    char *saved_id = expr->expr_data.id;
-                                    expr->expr_data.id = NULL;
-                                    
-                                    expr->type = EXPR_RECORD_ACCESS;
-                                    memset(&expr->expr_data.record_access_data, 0,
-                                        sizeof(expr->expr_data.record_access_data));
-                                    
-                                    expr->expr_data.record_access_data.record_expr = self_expr;
-                                    expr->expr_data.record_access_data.field_id = saved_id;
-                                    
-                                    /* Resolve field offset and type */
-                                    long long field_offset = 0;
-                                    if (resolve_record_field(symtab, self_record, id, 
-                                        NULL, &field_offset, 0, 1) == 0)
-                                    {
-                                        expr->expr_data.record_access_data.field_offset = field_offset;
-                                    }
-                                    
-                                    /* Now process this as a record access */
-                                    return semcheck_recordaccess(type_return, symtab, expr,
-                                        max_scope_lev, mutating);
-                                }
-                                /* If mk_varid fails, it takes ownership of self_str, so we don't free */
-                            }
-                            /* If we reach here, memory allocation failed - fall through to error handling */
-                        }
-                    }
+                    struct RecordType *self_record = semcheck_resolve_helper_self_record(symtab,
+                        self_node, helper_self_record);
+                    int helper_result = semcheck_try_helper_member(type_return, symtab, expr,
+                        max_scope_lev, mutating, self_node, self_record, id);
+                    if (helper_result >= 0)
+                        return helper_result;
                     
                     /* Type helper string builtins: In type helpers for strings, 
                      * bare 'Length' should resolve to Length(Self).
@@ -1680,6 +1671,17 @@ int semcheck_varid(int *type_return,
                 {
                     set_type_from_hashtype(&subtype, target_node);
                 }
+            }
+
+            if (subtype == UNKNOWN_TYPE && type_id == NULL && alias != NULL &&
+                alias->alias_name != NULL &&
+                (alias->alias_name[0] == 'P' || alias->alias_name[0] == 'p') &&
+                alias->alias_name[1] != '\0')
+            {
+                type_id = alias->alias_name + 1;
+                subtype = semcheck_map_builtin_type_name(symtab, type_id);
+                if (subtype == UNKNOWN_TYPE)
+                    subtype = POINTER_TYPE;
             }
             
             semcheck_set_pointer_info(expr, subtype, type_id);

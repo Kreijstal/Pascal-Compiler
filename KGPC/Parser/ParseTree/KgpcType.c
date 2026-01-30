@@ -150,6 +150,19 @@ KgpcType* create_record_type(struct RecordType *record_info) {
 KgpcType* create_kgpc_type_from_type_alias(struct TypeAlias *alias, struct SymTab *symtab) {
     if (alias == NULL) return NULL;
     
+    KgpcType *result = NULL;
+
+    /* Treat WideChar/UnicodeChar aliases as 2-byte CHAR_TYPE, even if declared as Word. */
+    if (alias->alias_name != NULL &&
+        (pascal_identifier_equals(alias->alias_name, "WideChar") ||
+         pascal_identifier_equals(alias->alias_name, "UnicodeChar")))
+    {
+        result = create_primitive_type_with_size(CHAR_TYPE, 2);
+        if (result != NULL)
+            kgpc_type_set_type_alias(result, alias);
+        return result;
+    }
+
     /* If alias already has a KgpcType (enums, sets), use it */
     if (alias->kgpc_type != NULL) {
         /* If the KgpcType doesn't have type_alias set, set it now.
@@ -159,8 +172,6 @@ KgpcType* create_kgpc_type_from_type_alias(struct TypeAlias *alias, struct SymTa
         }
         return alias->kgpc_type;
     }
-    
-    KgpcType *result = NULL;
     
     /* Handle array type aliases: type TIntArray = array[1..10] of Integer */
     if (alias->is_array) {
@@ -435,16 +446,15 @@ static int types_numeric_compatible(int lhs, int rhs) {
         return 1;
 
     /* All integer types are compatible with each other */
-    if ((lhs == INT_TYPE || lhs == LONGINT_TYPE || lhs == INT64_TYPE) &&
-        (rhs == INT_TYPE || rhs == LONGINT_TYPE || rhs == INT64_TYPE))
+    if (is_integer_type(lhs) && is_integer_type(rhs))
         return 1;
 
     /* Real can accept any integer type */
-    if (lhs == REAL_TYPE && (rhs == INT_TYPE || rhs == LONGINT_TYPE || rhs == INT64_TYPE))
+    if (lhs == REAL_TYPE && is_integer_type(rhs))
         return 1;
 
     /* Integer can accept char (for compatibility) */
-    if ((lhs == INT_TYPE || lhs == LONGINT_TYPE || lhs == INT64_TYPE) && rhs == CHAR_TYPE)
+    if (is_integer_type(lhs) && rhs == CHAR_TYPE)
         return 1;
 
     return 0;

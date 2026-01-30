@@ -2078,7 +2078,9 @@ int semcheck_addressof(int *type_return,
         int found = FindIdent(&inner_symbol, symtab, inner->expr_data.id);
         if (found >= 0 &&
             inner_symbol != NULL &&
-            (inner_symbol->hash_type == HASHTYPE_FUNCTION || inner_symbol->hash_type == HASHTYPE_PROCEDURE))
+            (inner_symbol->hash_type == HASHTYPE_FUNCTION ||
+             inner_symbol->hash_type == HASHTYPE_PROCEDURE ||
+             inner_symbol->hash_type == HASHTYPE_BUILTIN_PROCEDURE))
         {
             inner_type = PROCEDURE;
             treated_as_proc_ref = 1;
@@ -2097,7 +2099,9 @@ int semcheck_addressof(int *type_return,
             int found = FindIdent(&inner_symbol, symtab, (char *)func_id);
             if (found >= 0 &&
                 inner_symbol != NULL &&
-                (inner_symbol->hash_type == HASHTYPE_FUNCTION || inner_symbol->hash_type == HASHTYPE_PROCEDURE))
+                (inner_symbol->hash_type == HASHTYPE_FUNCTION ||
+                 inner_symbol->hash_type == HASHTYPE_PROCEDURE ||
+                 inner_symbol->hash_type == HASHTYPE_BUILTIN_PROCEDURE))
             {
                 /* This is @FunctionName where FunctionName was auto-converted to a call.
                  * Skip overload resolution - we just want the function's address. */
@@ -2123,7 +2127,9 @@ int semcheck_addressof(int *type_return,
             HashNode_t *func_symbol = NULL;
             if (FindIdent(&func_symbol, symtab, (char *)func_id) >= 0 &&
                 func_symbol != NULL && 
-                (func_symbol->hash_type == HASHTYPE_FUNCTION || func_symbol->hash_type == HASHTYPE_PROCEDURE))
+                (func_symbol->hash_type == HASHTYPE_FUNCTION ||
+                 func_symbol->hash_type == HASHTYPE_PROCEDURE ||
+                 func_symbol->hash_type == HASHTYPE_BUILTIN_PROCEDURE))
             {
                 /* This was auto-converted - treat it as a procedure reference instead */
                 inner_type = PROCEDURE;

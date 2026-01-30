@@ -1033,7 +1033,9 @@ static int try_resolve_builtin_procedure(SymTab_t *symtab,
 
     /* Prefer user-defined/prologue procedures over builtins when available. */
     HashNode_t *existing = NULL;
-    if (FindIdent(&existing, symtab, proc_id) != -1 && existing != NULL &&
+    int force_builtin = pascal_identifier_equals(expected_name, "Assign");
+    if (!force_builtin &&
+        FindIdent(&existing, symtab, proc_id) != -1 && existing != NULL &&
         existing->hash_type != HASHTYPE_BUILTIN_PROCEDURE)
     {
         return 0;
@@ -2967,6 +2969,13 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             expr->resolved_kgpc_type = create_primitive_type(INT64_TYPE);
             goto assignment_types_ok;
         }
+        if (semcheck_is_currency_kgpc_type(lhs_kgpctype) &&
+            rhs_kgpctype->kind == TYPE_KIND_PRIMITIVE &&
+            rhs_kgpctype->info.primitive_type_tag == REAL_TYPE)
+        {
+            /* Allow real-to-currency assignment for non-literals; runtime handles conversion. */
+            goto assignment_types_ok;
+        }
 
         if (kgpc_type_is_array(lhs_kgpctype) && kgpc_type_is_array(rhs_kgpctype))
         {
@@ -4332,6 +4341,7 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
         {
             HashNode_t *candidate = (HashNode_t *)cur->cur;
             if ((candidate->hash_type == HASHTYPE_PROCEDURE ||
+                 candidate->hash_type == HASHTYPE_BUILTIN_PROCEDURE ||
                  candidate->hash_type == HASHTYPE_FUNCTION) &&
                 candidate->id != NULL && pascal_identifier_equals(candidate->id, proc_id))
             {
@@ -4629,6 +4639,7 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
             stmt->stmt_data.procedure_call_data.mangled_id = NULL;
         if (stmt->stmt_data.procedure_call_data.mangled_id == NULL &&
             (resolved_proc->hash_type == HASHTYPE_PROCEDURE ||
+             resolved_proc->hash_type == HASHTYPE_BUILTIN_PROCEDURE ||
              resolved_proc->hash_type == HASHTYPE_FUNCTION) &&
             resolved_proc->id != NULL)
         {

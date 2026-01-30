@@ -65,11 +65,18 @@ type
   { Code page types - for FPC bootstrap compatibility }
   TSystemCodePage = Word;
 
-  { Low-level I/O compatibility types }
-  THandle = LongInt;
-  HRESULT = LongInt;  { Windows COM result type }
-  CodePointer = Pointer;
-  
+  { String comparison options (SysUtils compatibility) }
+  TCompareOption = (coIgnoreCase);
+  TCompareOptions = set of TCompareOption;
+
+  { Standard code page identifiers (SysUtils compatibility) }
+  TStandardCodePageEnum = (
+    scpAnsi,
+    scpConsoleInput,
+    scpConsoleOutput,
+    scpFileSystemSingleByte
+  );
+
   { String types - for FPC bootstrap compatibility }
   AnsiString = String;
   UnicodeString = String;
@@ -86,6 +93,68 @@ type
   TextBuf = array[0..255] of AnsiChar;
   TTextBuf = TextBuf;
 
+  { Unicode/Ansi string manager hook types (FPC compatibility) }
+  TWide2AnsiMoveProc = procedure(source: PWideChar; var dest: RawByteString; cp: TSystemCodePage; len: SizeInt);
+  TAnsi2WideMoveProc = procedure(source: PAnsiChar; cp: TSystemCodePage; var dest: WideString; len: SizeInt);
+  TUpperWideStringProc = function(const S: WideString): WideString;
+  TLowerWideStringProc = function(const S: WideString): WideString;
+  TCompareWideStringProc = function(const s1, s2: WideString; Options: TCompareOptions): PtrInt;
+  TCharLengthPCharProc = function(const Str: PAnsiChar): PtrInt;
+  TCodePointLengthProc = function(const Str: PAnsiChar; MaxLookAead: PtrInt): PtrInt;
+  TUpperAnsiStringProc = function(const s: AnsiString): AnsiString;
+  TLowerAnsiStringProc = function(const s: AnsiString): AnsiString;
+  TCompareStrAnsiStringProc = function(const S1, S2: AnsiString): PtrInt;
+  TCompareTextAnsiStringProc = function(const S1, S2: AnsiString): PtrInt;
+  TStrCompAnsiStringProc = function(S1, S2: PAnsiChar): PtrInt;
+  TStrICompAnsiStringProc = function(S1, S2: PAnsiChar): PtrInt;
+  TStrLCompAnsiStringProc = function(S1, S2: PAnsiChar; MaxLen: PtrUInt): PtrInt;
+  TStrLICompAnsiStringProc = function(S1, S2: PAnsiChar; MaxLen: PtrUInt): PtrInt;
+  TStrLowerAnsiStringProc = function(Str: PAnsiChar): PAnsiChar;
+  TStrUpperAnsiStringProc = function(Str: PAnsiChar): PAnsiChar;
+  TThreadInitProc = procedure;
+  TThreadFiniProc = procedure;
+  TUnicode2AnsiMoveProc = procedure(source: PUnicodeChar; var dest: RawByteString; cp: TSystemCodePage; len: SizeInt);
+  TAnsi2UnicodeMoveProc = procedure(source: PAnsiChar; cp: TSystemCodePage; var dest: UnicodeString; len: SizeInt);
+  TUpperUnicodeStringProc = function(const S: UnicodeString): UnicodeString;
+  TLowerUnicodeStringProc = function(const S: UnicodeString): UnicodeString;
+  TCompareUnicodeStringProc = function(const s1, s2: UnicodeString; Options: TCompareOptions): PtrInt;
+  TGetStandardCodePageProc = function(const stdcp: TStandardCodePageEnum): TSystemCodePage;
+
+  { Unicode/Ansi string manager hooks (FPC compatibility) }
+  TUnicodeStringManager = record
+    Wide2AnsiMoveProc: TWide2AnsiMoveProc;
+    Ansi2WideMoveProc: TAnsi2WideMoveProc;
+    UpperWideStringProc: TUpperWideStringProc;
+    LowerWideStringProc: TLowerWideStringProc;
+    CompareWideStringProc: TCompareWideStringProc;
+    CharLengthPCharProc: TCharLengthPCharProc;
+    CodePointLengthProc: TCodePointLengthProc;
+    UpperAnsiStringProc: TUpperAnsiStringProc;
+    LowerAnsiStringProc: TLowerAnsiStringProc;
+    CompareStrAnsiStringProc: TCompareStrAnsiStringProc;
+    CompareTextAnsiStringProc: TCompareTextAnsiStringProc;
+    StrCompAnsiStringProc: TStrCompAnsiStringProc;
+    StrICompAnsiStringProc: TStrICompAnsiStringProc;
+    StrLCompAnsiStringProc: TStrLCompAnsiStringProc;
+    StrLICompAnsiStringProc: TStrLICompAnsiStringProc;
+    StrLowerAnsiStringProc: TStrLowerAnsiStringProc;
+    StrUpperAnsiStringProc: TStrUpperAnsiStringProc;
+    ThreadInitProc: TThreadInitProc;
+    ThreadFiniProc: TThreadFiniProc;
+    Unicode2AnsiMoveProc: TUnicode2AnsiMoveProc;
+    Ansi2UnicodeMoveProc: TAnsi2UnicodeMoveProc;
+    UpperUnicodeStringProc: TUpperUnicodeStringProc;
+    LowerUnicodeStringProc: TLowerUnicodeStringProc;
+    CompareUnicodeStringProc: TCompareUnicodeStringProc;
+    GetStandardCodePageProc: TGetStandardCodePageProc;
+  end;
+
+  { Low-level I/O compatibility types }
+  THandle = LongInt;
+  HRESULT = LongInt;  { Windows COM result type }
+  CodePointer = Pointer;
+  
+  { String types - for FPC bootstrap compatibility }
   { Root class for ObjPas compatibility }
   TObject = class
   public
@@ -162,7 +231,7 @@ type
     - Memory management for string/array variants  
     - COM interoperability (OleVariant)
     This stub only provides the type name for parsing purposes. }
-  Variant = Pointer;
+  Variant = String;
   PVariant = ^Variant;
 
 const
@@ -282,11 +351,16 @@ var
   IsLibrary: Boolean = False;
   InOutRes: Word;
   FirstDotAtFileNameStartIsExtension: Boolean;
+  WideStringManager: TUnicodeStringManager;
+  DefaultTextLineBreakStyle: TTextLineBreakStyle;
   DefaultSystemCodePage: TSystemCodePage;
   DefaultUnicodeCodePage: TSystemCodePage;
   DefaultFileSystemCodePage: TSystemCodePage;
   DefaultRTLFileSystemCodePage: TSystemCodePage;
   UTF8CompareLocale: TSystemCodePage;
+  StdInputHandle: THandle;
+  StdOutputHandle: THandle;
+  StdErrorHandle: THandle;
 
 { ============================================================================
   Compiler Intrinsic Functions
@@ -399,6 +473,38 @@ end;
 function pred(i: longint): longint;
 begin
     pred := i - 1;
+end;
+
+function IndexByte(const buf; len: SizeInt; b: byte): SizeInt;
+var
+    p: PByte;
+    i: SizeInt;
+begin
+    p := PByte(@buf);
+    i := 0;
+    if len < 0 then
+    begin
+        while p^ <> b do
+        begin
+            Inc(p);
+            Inc(i);
+        end;
+        IndexByte := i;
+        Exit;
+    end;
+
+    while i < len do
+    begin
+        if p^ = b then
+        begin
+            IndexByte := i;
+            Exit;
+        end;
+        Inc(p);
+        Inc(i);
+    end;
+
+    IndexByte := -1;
 end;
 
 procedure interlocked_exchange_add_i32_impl(var target: longint; value: longint; var result: longint);

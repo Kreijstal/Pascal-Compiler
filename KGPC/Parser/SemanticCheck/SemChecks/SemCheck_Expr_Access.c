@@ -185,6 +185,18 @@ int semcheck_arrayaccess(int *type_return,
                 }
             }
 
+            if (pointer_subtype == UNKNOWN_TYPE && array_expr->resolved_kgpc_type != NULL &&
+                kgpc_type_is_array(array_expr->resolved_kgpc_type))
+            {
+                KgpcType *elem_type = kgpc_type_get_array_element_type(array_expr->resolved_kgpc_type);
+                if (elem_type != NULL && elem_type->kind == TYPE_KIND_POINTER)
+                {
+                    int mapped = kgpc_type_get_pointer_subtype_tag(elem_type);
+                    if (mapped != UNKNOWN_TYPE)
+                        pointer_subtype = mapped;
+                }
+            }
+
             semcheck_set_pointer_info(expr, pointer_subtype, pointer_subtype_id);
             if (pointer_subtype == RECORD_TYPE)
                 expr->record_type = pointer_record;
@@ -278,26 +290,102 @@ int semcheck_funccall(int *type_return,
     id = expr->expr_data.function_call_data.id;
     if (expr->expr_data.function_call_data.is_procedural_var_call) {
         if (type_return != NULL)
-            *type_return = expr->resolved_type;
+        {
+            KgpcType *call_type = expr->expr_data.function_call_data.call_kgpc_type;
+            KgpcType *ret_type = NULL;
+            if (call_type != NULL && call_type->kind == TYPE_KIND_PROCEDURE)
+            {
+                ret_type = kgpc_type_get_return_type(call_type);
+                if (ret_type == NULL && call_type->info.proc_info.return_type_id != NULL)
+                {
+                    HashNode_t *ret_node = semcheck_find_preferred_type_node(symtab,
+                        call_type->info.proc_info.return_type_id);
+                    if (ret_node != NULL && ret_node->type != NULL)
+                        ret_type = ret_node->type;
+                }
+            }
+
+            if (ret_type != NULL && ret_type->kind == TYPE_KIND_PRIMITIVE)
+            {
+                *type_return = kgpc_type_get_primitive_tag(ret_type);
+                expr->resolved_type = *type_return;
+            }
+            else if (ret_type != NULL && ret_type->kind == TYPE_KIND_RECORD)
+            {
+                *type_return = RECORD_TYPE;
+                expr->resolved_type = RECORD_TYPE;
+                expr->record_type = kgpc_type_get_record(ret_type);
+            }
+            else if (ret_type != NULL && ret_type->kind == TYPE_KIND_POINTER)
+            {
+                *type_return = POINTER_TYPE;
+                expr->resolved_type = POINTER_TYPE;
+            }
+            else if (expr->resolved_type != UNKNOWN_TYPE)
+            {
+                *type_return = expr->resolved_type;
+            }
+            else
+            {
+                *type_return = PROCEDURE;
+                expr->resolved_type = PROCEDURE;
+            }
+        }
         return 0;
     }
+    args_given = expr->expr_data.function_call_data.args_expr;
     if (id != NULL)
     {
         const char *dot = strrchr(id, '.');
         if (dot != NULL && dot[1] != '\0')
         {
+            size_t prefix_len = (size_t)(dot - id);
+            char *prefix = (char *)malloc(prefix_len + 1);
             char *unqualified = strdup(dot + 1);
-            if (unqualified == NULL)
+            if (prefix == NULL || unqualified == NULL)
             {
-                semcheck_error_with_context("Error on line %d: failed to allocate memory for unit-qualified call '%s'.\n",
+                if (prefix != NULL)
+                    free(prefix);
+                if (unqualified != NULL)
+                    free(unqualified);
+                semcheck_error_with_context("Error on line %d: failed to allocate memory for qualified call '%s'.\n",
                     expr->line_num, id);
                 *type_return = UNKNOWN_TYPE;
                 return 1;
             }
-            free(expr->expr_data.function_call_data.id);
-            expr->expr_data.function_call_data.id = unqualified;
-            id = unqualified;
-            was_unit_qualified = 1;
+            memcpy(prefix, id, prefix_len);
+            prefix[prefix_len] = '\0';
+
+            int prefix_is_unit = semcheck_is_unit_name(prefix);
+            HashNode_t *prefix_node = NULL;
+            int prefix_found = (FindIdent(&prefix_node, symtab, prefix) == 0 && prefix_node != NULL);
+
+            if (!prefix_is_unit && prefix_found)
+            {
+                /* Treat qualified identifier as a member/procedural field call. */
+                struct Expression *receiver_expr = mk_varid(expr->line_num, strdup(prefix));
+                if (receiver_expr != NULL)
+                {
+                    ListNode_t *recv_node = CreateListNode(receiver_expr, LIST_EXPR);
+                    recv_node->next = args_given;
+                    args_given = recv_node;
+                    expr->expr_data.function_call_data.args_expr = args_given;
+                    expr->expr_data.function_call_data.is_method_call_placeholder = 1;
+                }
+                free(expr->expr_data.function_call_data.id);
+                expr->expr_data.function_call_data.id = unqualified;
+                id = unqualified;
+            }
+            else
+            {
+                /* Unit-qualified call; strip the unit prefix. */
+                free(expr->expr_data.function_call_data.id);
+                expr->expr_data.function_call_data.id = unqualified;
+                id = unqualified;
+                was_unit_qualified = 1;
+            }
+
+            free(prefix);
         }
     }
     if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
@@ -869,7 +957,7 @@ int semcheck_funccall(int *type_return,
                 if (field_desc->type_id != NULL)
                 {
                     HashNode_t *type_node = NULL;
-                    if (FindIdent(&type_node, symtab, field_desc->type_id) == 0 &&
+                    if (FindIdent(&type_node, symtab, field_desc->type_id) != -1 &&
                         type_node != NULL && type_node->type != NULL &&
                         type_node->type->kind == TYPE_KIND_PROCEDURE)
                     {
@@ -960,6 +1048,13 @@ int semcheck_funccall(int *type_return,
                         expr->expr_data.function_call_data.is_call_info_valid = 1;
 
                         KgpcType *ret_type = kgpc_type_get_return_type(proc_type);
+                        if (ret_type == NULL && proc_type->info.proc_info.return_type_id != NULL)
+                        {
+                            HashNode_t *ret_node =
+                                semcheck_find_preferred_type_node(symtab, proc_type->info.proc_info.return_type_id);
+                            if (ret_node != NULL && ret_node->type != NULL)
+                                ret_type = ret_node->type;
+                        }
                         if (ret_type != NULL && ret_type->kind == TYPE_KIND_PRIMITIVE)
                         {
                             *type_return = kgpc_type_get_primitive_tag(ret_type);

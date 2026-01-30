@@ -239,22 +239,25 @@ static int semcheck_map_builtin_type_name_local(const char *id)
         pascal_identifier_equals(id, "Extended"))
         return REAL_TYPE;
     if (pascal_identifier_equals(id, "Byte") ||
-        pascal_identifier_equals(id, "ShortInt") ||
-        pascal_identifier_equals(id, "SmallInt") ||
-        pascal_identifier_equals(id, "Word") ||
-        pascal_identifier_equals(id, "LongWord") ||
+        pascal_identifier_equals(id, "UInt8"))
+        return BYTE_TYPE;
+    if (pascal_identifier_equals(id, "Word") ||
+        pascal_identifier_equals(id, "UInt16"))
+        return WORD_TYPE;
+    if (pascal_identifier_equals(id, "LongWord") ||
         pascal_identifier_equals(id, "Cardinal") ||
         pascal_identifier_equals(id, "DWord") ||
-        pascal_identifier_equals(id, "Int8") ||
-        pascal_identifier_equals(id, "UInt8") ||
-        pascal_identifier_equals(id, "Int16") ||
-        pascal_identifier_equals(id, "UInt16") ||
-        pascal_identifier_equals(id, "Int32") ||
         pascal_identifier_equals(id, "UInt32"))
-        return INT_TYPE;
+        return LONGWORD_TYPE;
     if (pascal_identifier_equals(id, "QWord") ||
         pascal_identifier_equals(id, "UInt64"))
-        return INT64_TYPE;
+        return QWORD_TYPE;
+    if (pascal_identifier_equals(id, "ShortInt") ||
+        pascal_identifier_equals(id, "SmallInt") ||
+        pascal_identifier_equals(id, "Int8") ||
+        pascal_identifier_equals(id, "Int16") ||
+        pascal_identifier_equals(id, "Int32"))
+        return INT_TYPE;
     if (pascal_identifier_equals(id, "String") ||
         pascal_identifier_equals(id, "AnsiString") ||
         pascal_identifier_equals(id, "RawByteString") ||
@@ -3783,6 +3786,16 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                     /* Only pre-declare simple primitive type aliases */
                     KgpcType *kgpc_type = NULL;
                     int created_new_type = 0;
+
+                    /* WideChar/UnicodeChar should be treated as 2-byte CHAR_TYPE, even if aliased to Word. */
+                    if (type_id != NULL &&
+                        (pascal_identifier_equals(type_id, "WideChar") ||
+                         pascal_identifier_equals(type_id, "UnicodeChar")))
+                    {
+                        kgpc_type = create_primitive_type_with_size(CHAR_TYPE, 2);
+                        if (kgpc_type != NULL)
+                            created_new_type = 1;
+                    }
                     
                     /* Case 1: Direct primitive type tag (e.g., MyInt = Integer where base_type is set)
                      * Exclude PROCEDURE - procedure types are NOT primitive and need special handling.
@@ -3791,7 +3804,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                      * WideChar aliases would get 4 bytes (INT_TYPE) instead of 2 bytes. */
                     int skip_case1_for_widechar = (alias->target_type_id != NULL &&
                         pascal_identifier_equals(alias->target_type_id, "WideChar"));
-                    if (!skip_case1_for_widechar &&
+                    if (kgpc_type == NULL && !skip_case1_for_widechar &&
                         alias->base_type != UNKNOWN_TYPE && alias->base_type != 0 &&
                         alias->base_type != PROCEDURE)
                     {
@@ -3804,7 +3817,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             created_new_type = 1;
                     }
                     /* Case 2: Reference to a known primitive type name */
-                    else if (alias->target_type_id != NULL)
+                    else if (kgpc_type == NULL && alias->target_type_id != NULL)
                     {
                         /* Check if target is a known builtin primitive type */
                         const char *target = alias->target_type_id;
@@ -6407,6 +6420,25 @@ void semcheck_add_builtins(SymTab_t *symtab)
         destroy_kgpc_type(assign_type);
         free(assign_name);
     }
+    const char *sysutils_hooks[] = {
+        "InitExceptions",
+        "InitInternational",
+        "DoneExceptions",
+        "FreeDriveStr",
+        "FreeTerminateProcs",
+        "SysBeep"
+    };
+    for (size_t i = 0; i < sizeof(sysutils_hooks) / sizeof(sysutils_hooks[0]); ++i)
+    {
+        char *hook_name = strdup(sysutils_hooks[i]);
+        if (hook_name != NULL) {
+            KgpcType *hook_type = create_procedure_type(NULL, NULL);
+            assert(hook_type != NULL && "Failed to create sysutils hook type");
+            AddBuiltinProc_Typed(symtab, hook_name, hook_type);
+            destroy_kgpc_type(hook_type);
+            free(hook_name);
+        }
+    }
     char *close_name = strdup("Close");
     if (close_name != NULL) {
         KgpcType *close_type = create_procedure_type(NULL, NULL);
@@ -6998,7 +7030,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
     /* IndexChar: function IndexChar(const buf; len: SizeInt; b: Char): SizeInt */
     {
         const char *func_name = "IndexChar";
-        ListNode_t *param_buf = semcheck_create_builtin_param("buf", POINTER_TYPE);
+        ListNode_t *param_buf = semcheck_create_builtin_param("buf", UNKNOWN_TYPE);
         ListNode_t *param_len = semcheck_create_builtin_param("len", LONGINT_TYPE);
         ListNode_t *param_b = semcheck_create_builtin_param("b", CHAR_TYPE);
         ListNode_t *params = ConcatList(ConcatList(param_buf, param_len), param_b);
@@ -7016,8 +7048,8 @@ void semcheck_add_builtins(SymTab_t *symtab)
     /* CompareByte: function CompareByte(const buf1, buf2; len: SizeInt): SizeInt */
     {
         const char *func_name = "CompareByte";
-        ListNode_t *param_buf1 = semcheck_create_builtin_param("buf1", POINTER_TYPE);
-        ListNode_t *param_buf2 = semcheck_create_builtin_param("buf2", POINTER_TYPE);
+        ListNode_t *param_buf1 = semcheck_create_builtin_param("buf1", UNKNOWN_TYPE);
+        ListNode_t *param_buf2 = semcheck_create_builtin_param("buf2", UNKNOWN_TYPE);
         ListNode_t *param_len = semcheck_create_builtin_param("len", LONGINT_TYPE);
         ListNode_t *params = ConcatList(ConcatList(param_buf1, param_buf2), param_len);
         KgpcType *return_type = create_primitive_type(LONGINT_TYPE);
@@ -7029,6 +7061,47 @@ void semcheck_add_builtins(SymTab_t *symtab)
         }
         if (params != NULL)
             DestroyList(params);
+    }
+
+    /* UniqueString: procedure UniqueString(var S: String) */
+    {
+        const char *func_name = "UniqueString";
+        ListNode_t *param_s = semcheck_create_builtin_param_var("S", STRING_TYPE);
+        KgpcType *func_type = create_procedure_type(param_s, NULL);
+        if (func_type != NULL)
+        {
+            AddBuiltinProc_Typed(symtab, strdup(func_name), func_type);
+            destroy_kgpc_type(func_type);
+        }
+        if (param_s != NULL)
+            DestroyList(param_s);
+    }
+
+    /* Bit scan builtins (FPC compatibility) */
+    {
+        struct {
+            const char *name;
+            int param_tag;
+        } bsr_bsf[] = {
+            {"BsrByte", BYTE_TYPE}, {"BsfByte", BYTE_TYPE},
+            {"BsrWord", WORD_TYPE}, {"BsfWord", WORD_TYPE},
+            {"BsrDWord", LONGWORD_TYPE}, {"BsfDWord", LONGWORD_TYPE},
+            {"BsrQWord", QWORD_TYPE}, {"BsfQWord", QWORD_TYPE},
+        };
+
+        for (size_t i = 0; i < sizeof(bsr_bsf) / sizeof(bsr_bsf[0]); i++)
+        {
+            ListNode_t *param = semcheck_create_builtin_param("AValue", bsr_bsf[i].param_tag);
+            KgpcType *return_type = create_primitive_type(LONGINT_TYPE);
+            KgpcType *func_type = create_procedure_type(param, return_type);
+            if (func_type != NULL)
+            {
+                AddBuiltinFunction_Typed(symtab, strdup(bsr_bsf[i].name), func_type);
+                destroy_kgpc_type(func_type);
+            }
+            if (param != NULL)
+                DestroyList(param);
+        }
     }
 
     /* Builtins are now in system.p */
