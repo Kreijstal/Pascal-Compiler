@@ -4510,6 +4510,19 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             }
         }
 
+        /* Windows runtime expects text/file parameters to be passed by reference.
+         * When formal parameter metadata is missing, infer by ref semantics from the
+         * argument/expected type to avoid passing the file record by value. */
+        if (!is_var_param)
+        {
+            int arg_type_tag = expr_get_type_tag(arg_expr);
+            if (expected_type == FILE_TYPE || expected_type == TEXT_TYPE ||
+                arg_type_tag == FILE_TYPE || arg_type_tag == TEXT_TYPE)
+            {
+                is_var_param = 1;
+            }
+        }
+
         /* NOTE: treat_self_by_value is excluded because when passing Self by value
          * (for type helpers on primitive types), we pass the actual value, not a pointer.
          * The appropriate register class (SSE for floats, INT for integers) should be used. */

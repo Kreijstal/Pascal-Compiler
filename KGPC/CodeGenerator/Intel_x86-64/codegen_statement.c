@@ -1066,16 +1066,10 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
 
         if (static_label != NULL)
         {
-            if (treat_as_reference)
-            {
-                snprintf(buffer, sizeof(buffer), "\tmovq\t%s(%%rip), %s\n",
-                    static_label, addr_reg->bit_64);
-            }
-            else
-            {
-                snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
-                    static_label, addr_reg->bit_64);
-            }
+            /* Static/global variables live at a fixed address; even when used for
+             * var parameters we need the address, not the first qword of storage. */
+            snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                static_label, addr_reg->bit_64);
             inst_list = add_inst(inst_list, buffer);
             *out_reg = addr_reg;
             goto cleanup;
