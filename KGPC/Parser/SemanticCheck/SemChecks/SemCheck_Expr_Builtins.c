@@ -32,7 +32,7 @@ int semcheck_builtin_chr(int *type_return, SymTab_t *symtab,
 
     struct Expression *arg_expr = (struct Expression *)args->cur;
     int arg_type = UNKNOWN_TYPE;
-    int error_count = semcheck_expr_main(&arg_type, symtab, arg_expr,
+    int error_count = semcheck_expr_legacy_tag(&arg_type, symtab, arg_expr,
         max_scope_lev, NO_MUTATE);
     if (error_count == 0 && arg_type != INT_TYPE && arg_type != LONGINT_TYPE)
     {
@@ -59,7 +59,7 @@ int semcheck_builtin_chr(int *type_return, SymTab_t *symtab,
 
         semcheck_reset_function_call_cache(expr);
         *type_return = CHAR_TYPE;
-        expr->resolved_type = CHAR_TYPE;
+        semcheck_expr_set_resolved_type(expr, CHAR_TYPE);
         return 0;
     }
 
@@ -86,7 +86,7 @@ int semcheck_builtin_ord(int *type_return, SymTab_t *symtab,
 
     struct Expression *arg_expr = (struct Expression *)args->cur;
     int arg_type = UNKNOWN_TYPE;
-    int error_count = semcheck_expr_main(&arg_type, symtab, arg_expr,
+    int error_count = semcheck_expr_legacy_tag(&arg_type, symtab, arg_expr,
         max_scope_lev, NO_MUTATE);
     if (error_count != 0)
     {
@@ -133,7 +133,7 @@ int semcheck_builtin_ord(int *type_return, SymTab_t *symtab,
 
             expr->type = EXPR_INUM;
             expr->expr_data.i_num = ordinal_value;
-            expr->resolved_type = LONGINT_TYPE;
+            semcheck_expr_set_resolved_type(expr, LONGINT_TYPE);
             *type_return = LONGINT_TYPE;
             return 0;
         }
@@ -163,7 +163,7 @@ int semcheck_builtin_ord(int *type_return, SymTab_t *symtab,
 
             expr->type = EXPR_INUM;
             expr->expr_data.i_num = ordinal_value;
-            expr->resolved_type = LONGINT_TYPE;
+            semcheck_expr_set_resolved_type(expr, LONGINT_TYPE);
             *type_return = LONGINT_TYPE;
             return 0;
         }
@@ -203,7 +203,7 @@ int semcheck_builtin_ord(int *type_return, SymTab_t *symtab,
 
         semcheck_reset_function_call_cache(expr);
         *type_return = LONGINT_TYPE;
-        expr->resolved_type = LONGINT_TYPE;
+        semcheck_expr_set_resolved_type(expr, LONGINT_TYPE);
         return 0;
     }
 
@@ -271,7 +271,7 @@ int semcheck_builtin_length(int *type_return, SymTab_t *symtab,
 
     struct Expression *arg_expr = (struct Expression *)args->cur;
     int arg_type = UNKNOWN_TYPE;
-    int error_count = semcheck_expr_main(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
+    int error_count = semcheck_expr_legacy_tag(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
 
 
     int is_dynamic_array = (arg_expr != NULL && arg_expr->is_array_expr && arg_expr->array_is_dynamic);
@@ -307,7 +307,7 @@ int semcheck_builtin_length(int *type_return, SymTab_t *symtab,
         semcheck_reset_function_call_cache(expr);
         expr->type = EXPR_INUM;
         expr->expr_data.i_num = length;
-        expr->resolved_type = LONGINT_TYPE;
+        semcheck_expr_set_resolved_type(expr, LONGINT_TYPE);
         *type_return = LONGINT_TYPE;
         return 0;
     }
@@ -347,7 +347,7 @@ int semcheck_builtin_length(int *type_return, SymTab_t *symtab,
         semcheck_reset_function_call_cache(expr);
         expr->type = EXPR_INUM;
         expr->expr_data.i_num = length_value;
-        expr->resolved_type = LONGINT_TYPE;
+        semcheck_expr_set_resolved_type(expr, LONGINT_TYPE);
         *type_return = LONGINT_TYPE;
         return 0;
     }
@@ -383,7 +383,7 @@ int semcheck_builtin_length(int *type_return, SymTab_t *symtab,
             return 1;
         }
         semcheck_reset_function_call_cache(expr);
-        expr->resolved_type = LONGINT_TYPE;
+        semcheck_expr_set_resolved_type(expr, LONGINT_TYPE);
         *type_return = LONGINT_TYPE;
         return 0;
     }
@@ -419,7 +419,7 @@ int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
 
     int error_count = 0;
     int source_type = UNKNOWN_TYPE;
-    error_count += semcheck_expr_main(&source_type, symtab, source_expr, max_scope_lev, NO_MUTATE);
+    error_count += semcheck_expr_legacy_tag(&source_type, symtab, source_expr, max_scope_lev, NO_MUTATE);
 
     /* Check for ShortString (array[0..N] of char) like Length does */
     int is_shortstring = 0;
@@ -438,7 +438,7 @@ int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
     }
 
     int index_type = UNKNOWN_TYPE;
-    error_count += semcheck_expr_main(&index_type, symtab, index_expr, max_scope_lev, NO_MUTATE);
+    error_count += semcheck_expr_legacy_tag(&index_type, symtab, index_expr, max_scope_lev, NO_MUTATE);
     if (error_count == 0 && !is_integer_type(index_type))
     {
         semcheck_error_with_context("Error on line %d, Copy index must be an integer.\n", expr->line_num);
@@ -449,7 +449,7 @@ int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
     {
         count_expr = (struct Expression *)args->next->next->cur;
         int count_type = UNKNOWN_TYPE;
-        error_count += semcheck_expr_main(&count_type, symtab, count_expr, max_scope_lev, NO_MUTATE);
+        error_count += semcheck_expr_legacy_tag(&count_type, symtab, count_expr, max_scope_lev, NO_MUTATE);
         if (error_count == 0 && !is_integer_type(count_type))
         {
             semcheck_error_with_context("Error on line %d, Copy count must be an integer.\n", expr->line_num);
@@ -462,7 +462,7 @@ int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
            Using INT_MAX as runtime clips to available length. */
         count_expr = mk_inum(expr->line_num, (long long)INT_MAX);
         assert(count_expr != NULL);
-        count_expr->resolved_type = LONGINT_TYPE;
+        semcheck_expr_set_resolved_type(count_expr, LONGINT_TYPE);
         ListNode_t *count_node = CreateListNode(count_expr, LIST_EXPR);
         assert(count_node != NULL);
         args->next->next = count_node;
@@ -485,7 +485,7 @@ int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
             return 1;
         }
         semcheck_reset_function_call_cache(expr);
-        expr->resolved_type = STRING_TYPE;
+        semcheck_expr_set_resolved_type(expr, STRING_TYPE);
         *type_return = STRING_TYPE;
         return 0;
     }
@@ -515,7 +515,7 @@ int semcheck_builtin_pos(int *type_return, SymTab_t *symtab,
     struct Expression *value_expr = (struct Expression *)args->next->cur;
 
     int substr_type = UNKNOWN_TYPE;
-    error_count += semcheck_expr_main(&substr_type, symtab, substr_expr, max_scope_lev, NO_MUTATE);
+    error_count += semcheck_expr_legacy_tag(&substr_type, symtab, substr_expr, max_scope_lev, NO_MUTATE);
     
     /* Check if substr is a string type, char, or shortstring (array of char) */
     int is_valid_substr = is_string_type(substr_type) || substr_type == CHAR_TYPE ||
@@ -528,7 +528,7 @@ int semcheck_builtin_pos(int *type_return, SymTab_t *symtab,
     }
 
     int value_type = UNKNOWN_TYPE;
-    error_count += semcheck_expr_main(&value_type, symtab, value_expr, max_scope_lev, NO_MUTATE);
+    error_count += semcheck_expr_legacy_tag(&value_type, symtab, value_expr, max_scope_lev, NO_MUTATE);
     
     /* Check if value is a string type OR a shortstring (array of char) */
     int is_valid_value = is_string_type(value_type) ||
@@ -555,7 +555,7 @@ int semcheck_builtin_pos(int *type_return, SymTab_t *symtab,
             return 1;
         }
         semcheck_reset_function_call_cache(expr);
-        expr->resolved_type = LONGINT_TYPE;
+        semcheck_expr_set_resolved_type(expr, LONGINT_TYPE);
         *type_return = LONGINT_TYPE;
         return 0;
     }
@@ -584,7 +584,7 @@ int semcheck_builtin_strpas(int *type_return, SymTab_t *symtab,
     int error_count = 0;
     int arg_type = UNKNOWN_TYPE;
     struct Expression *arg_expr = (struct Expression *)args->cur;
-    error_count += semcheck_expr_main(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
+    error_count += semcheck_expr_legacy_tag(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
 
     /* FPC accepts both PChar/PAnsiChar (string-like) pointers */
     if (error_count == 0 &&
@@ -610,7 +610,7 @@ int semcheck_builtin_strpas(int *type_return, SymTab_t *symtab,
             return 1;
         }
         semcheck_reset_function_call_cache(expr);
-        expr->resolved_type = STRING_TYPE;
+        semcheck_expr_set_resolved_type(expr, STRING_TYPE);
         *type_return = STRING_TYPE;
         return 0;
     }
@@ -645,7 +645,7 @@ int semcheck_builtin_eof(int *type_return, SymTab_t *symtab,
             check_expr = file_expr->expr_data.addr_data.expr;
         }
         int file_type = UNKNOWN_TYPE;
-        error_count += semcheck_expr_main(&file_type, symtab, check_expr, max_scope_lev, NO_MUTATE);
+        error_count += semcheck_expr_legacy_tag(&file_type, symtab, check_expr, max_scope_lev, NO_MUTATE);
         if (file_type != TEXT_TYPE)
         {
             semcheck_error_with_context("Error on line %d, EOF expects a text file argument.\n", expr->line_num);
@@ -681,7 +681,7 @@ int semcheck_builtin_eof(int *type_return, SymTab_t *symtab,
             return 1;
         }
         semcheck_reset_function_call_cache(expr);
-        expr->resolved_type = BOOL;
+        semcheck_expr_set_resolved_type(expr, BOOL);
         *type_return = BOOL;
         return 0;
     }
@@ -716,7 +716,7 @@ int semcheck_builtin_eoln(int *type_return, SymTab_t *symtab,
             check_expr = file_expr->expr_data.addr_data.expr;
         }
         int file_type = UNKNOWN_TYPE;
-        error_count += semcheck_expr_main(&file_type, symtab, check_expr, max_scope_lev, NO_MUTATE);
+        error_count += semcheck_expr_legacy_tag(&file_type, symtab, check_expr, max_scope_lev, NO_MUTATE);
         if (file_type != TEXT_TYPE)
         {
             semcheck_error_with_context("Error on line %d, EOLN expects a text file argument.\n", expr->line_num);
@@ -757,7 +757,7 @@ int semcheck_builtin_eoln(int *type_return, SymTab_t *symtab,
     }
 
     semcheck_reset_function_call_cache(expr);
-    expr->resolved_type = BOOL;
+    semcheck_expr_set_resolved_type(expr, BOOL);
     *type_return = BOOL;
     return 0;
 }
@@ -796,7 +796,7 @@ void semcheck_replace_call_with_integer_literal(struct Expression *expr, long lo
 
     expr->type = EXPR_INUM;
     expr->expr_data.i_num = value;
-    expr->resolved_type = LONGINT_TYPE;
+    semcheck_expr_set_resolved_type(expr, LONGINT_TYPE);
 }
 
 int semcheck_prepare_dynarray_high_call(int *type_return, SymTab_t *symtab,
@@ -810,7 +810,7 @@ int semcheck_prepare_dynarray_high_call(int *type_return, SymTab_t *symtab,
     expr->expr_data.function_call_data.args_expr = NULL;
 
     struct Expression *lower_expr = mk_inum(expr->line_num, array_expr->array_lower_bound);
-    lower_expr->resolved_type = LONGINT_TYPE;
+    semcheck_expr_set_resolved_type(lower_expr, LONGINT_TYPE);
 
     ListNode_t *new_args = CreateListNode(array_expr, LIST_EXPR);
     new_args = PushListNodeBack(new_args, CreateListNode(lower_expr, LIST_EXPR));
@@ -830,12 +830,12 @@ int semcheck_prepare_dynarray_high_call(int *type_return, SymTab_t *symtab,
 
     int error_count = 0;
     int arg_type = UNKNOWN_TYPE;
-    error_count += semcheck_expr_main(&arg_type, symtab, array_expr, max_scope_lev, NO_MUTATE);
+    error_count += semcheck_expr_legacy_tag(&arg_type, symtab, array_expr, max_scope_lev, NO_MUTATE);
     arg_type = UNKNOWN_TYPE;
-    error_count += semcheck_expr_main(&arg_type, symtab, lower_expr, max_scope_lev, NO_MUTATE);
+    error_count += semcheck_expr_legacy_tag(&arg_type, symtab, lower_expr, max_scope_lev, NO_MUTATE);
 
     /* Mark as fully resolved internal runtime call */
-    expr->resolved_type = LONGINT_TYPE;
+    semcheck_expr_set_resolved_type(expr, LONGINT_TYPE);
     expr->expr_data.function_call_data.is_call_info_valid = 1;
     expr->expr_data.function_call_data.call_hash_type = HASHTYPE_FUNCTION;
     
@@ -861,7 +861,7 @@ int semcheck_builtin_assigned(int *type_return, SymTab_t *symtab,
     }
 
     int arg_type = UNKNOWN_TYPE;
-    int error_count = semcheck_expr_main(&arg_type, symtab,
+    int error_count = semcheck_expr_legacy_tag(&arg_type, symtab,
         (struct Expression *)args->cur, max_scope_lev, NO_MUTATE);
 
     if (error_count == 0 && arg_type != POINTER_TYPE && arg_type != PROCEDURE)
@@ -885,7 +885,7 @@ int semcheck_builtin_assigned(int *type_return, SymTab_t *symtab,
             return 1;
         }
         semcheck_reset_function_call_cache(expr);
-        expr->resolved_type = BOOL;
+        semcheck_expr_set_resolved_type(expr, BOOL);
         *type_return = BOOL;
         return 0;
     }
@@ -912,7 +912,7 @@ int semcheck_builtin_abs(int *type_return, SymTab_t *symtab,
 
     struct Expression *arg_expr = (struct Expression *)args->cur;
     int arg_type = UNKNOWN_TYPE;
-    int error_count = semcheck_expr_main(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
+    int error_count = semcheck_expr_legacy_tag(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
 
     const char *mangled_name = NULL;
     int result_type = UNKNOWN_TYPE;
@@ -960,7 +960,7 @@ int semcheck_builtin_abs(int *type_return, SymTab_t *symtab,
             return 1;
         }
         semcheck_reset_function_call_cache(expr);
-        expr->resolved_type = result_type;
+        semcheck_expr_set_resolved_type(expr, result_type);
         if (expr->resolved_kgpc_type != NULL)
         {
             destroy_kgpc_type(expr->resolved_kgpc_type);
@@ -995,7 +995,7 @@ int semcheck_builtin_unary_real(int *type_return, SymTab_t *symtab,
 
     struct Expression *arg_expr = (struct Expression *)args->cur;
     int arg_type = UNKNOWN_TYPE;
-    int error_count = semcheck_expr_main(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
+    int error_count = semcheck_expr_legacy_tag(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
 
     if (error_count == 0 && arg_type != REAL_TYPE &&
         arg_type != INT_TYPE && arg_type != LONGINT_TYPE && arg_type != INT64_TYPE)
@@ -1021,7 +1021,7 @@ int semcheck_builtin_unary_real(int *type_return, SymTab_t *symtab,
             return 1;
         }
         semcheck_reset_function_call_cache(expr);
-        expr->resolved_type = result_type;
+        semcheck_expr_set_resolved_type(expr, result_type);
         *type_return = result_type;
         return 0;
     }
@@ -1050,7 +1050,7 @@ int semcheck_builtin_trunc(int *type_return, SymTab_t *symtab,
 
     struct Expression *arg_expr = (struct Expression *)args->cur;
     int arg_type = UNKNOWN_TYPE;
-    int error_count = semcheck_expr_main(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
+    int error_count = semcheck_expr_legacy_tag(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
 
     if (error_count == 0 && arg_type != REAL_TYPE &&
         arg_type != INT_TYPE && arg_type != LONGINT_TYPE && arg_type != INT64_TYPE)
@@ -1084,7 +1084,7 @@ int semcheck_builtin_trunc(int *type_return, SymTab_t *symtab,
             return 1;
         }
         semcheck_reset_function_call_cache(expr);
-        expr->resolved_type = LONGINT_TYPE;
+        semcheck_expr_set_resolved_type(expr, LONGINT_TYPE);
         *type_return = LONGINT_TYPE;
         return 0;
     }
@@ -1116,8 +1116,8 @@ int semcheck_builtin_arctan2(int *type_return, SymTab_t *symtab,
     int x_type = UNKNOWN_TYPE;
     int error_count = 0;
 
-    error_count += semcheck_expr_main(&y_type, symtab, y_expr, max_scope_lev, NO_MUTATE);
-    error_count += semcheck_expr_main(&x_type, symtab, x_expr, max_scope_lev, NO_MUTATE);
+    error_count += semcheck_expr_legacy_tag(&y_type, symtab, y_expr, max_scope_lev, NO_MUTATE);
+    error_count += semcheck_expr_legacy_tag(&x_type, symtab, x_expr, max_scope_lev, NO_MUTATE);
 
     if (y_type != REAL_TYPE && y_type != INT_TYPE && y_type != LONGINT_TYPE)
     {
@@ -1157,7 +1157,7 @@ int semcheck_builtin_arctan2(int *type_return, SymTab_t *symtab,
         destroy_kgpc_type(expr->resolved_kgpc_type);
         expr->resolved_kgpc_type = NULL;
     }
-    expr->resolved_type = REAL_TYPE;
+    semcheck_expr_set_resolved_type(expr, REAL_TYPE);
     expr->resolved_kgpc_type = create_primitive_type(REAL_TYPE);
     *type_return = REAL_TYPE;
     return 0;
@@ -1186,8 +1186,8 @@ int semcheck_builtin_hypot(int *type_return, SymTab_t *symtab,
     int y_type = UNKNOWN_TYPE;
     int error_count = 0;
 
-    error_count += semcheck_expr_main(&x_type, symtab, x_expr, max_scope_lev, NO_MUTATE);
-    error_count += semcheck_expr_main(&y_type, symtab, y_expr, max_scope_lev, NO_MUTATE);
+    error_count += semcheck_expr_legacy_tag(&x_type, symtab, x_expr, max_scope_lev, NO_MUTATE);
+    error_count += semcheck_expr_legacy_tag(&y_type, symtab, y_expr, max_scope_lev, NO_MUTATE);
 
     if (x_type != REAL_TYPE && x_type != INT_TYPE && x_type != LONGINT_TYPE)
     {
@@ -1227,7 +1227,7 @@ int semcheck_builtin_hypot(int *type_return, SymTab_t *symtab,
         destroy_kgpc_type(expr->resolved_kgpc_type);
         expr->resolved_kgpc_type = NULL;
     }
-    expr->resolved_type = REAL_TYPE;
+    semcheck_expr_set_resolved_type(expr, REAL_TYPE);
     expr->resolved_kgpc_type = create_primitive_type(REAL_TYPE);
     *type_return = REAL_TYPE;
     return 0;
@@ -1256,8 +1256,8 @@ int semcheck_builtin_logn(int *type_return, SymTab_t *symtab,
     int value_type = UNKNOWN_TYPE;
     int error_count = 0;
 
-    error_count += semcheck_expr_main(&base_type, symtab, base_expr, max_scope_lev, NO_MUTATE);
-    error_count += semcheck_expr_main(&value_type, symtab, value_expr, max_scope_lev, NO_MUTATE);
+    error_count += semcheck_expr_legacy_tag(&base_type, symtab, base_expr, max_scope_lev, NO_MUTATE);
+    error_count += semcheck_expr_legacy_tag(&value_type, symtab, value_expr, max_scope_lev, NO_MUTATE);
 
     if (base_type != REAL_TYPE && base_type != INT_TYPE && base_type != LONGINT_TYPE)
     {
@@ -1297,7 +1297,7 @@ int semcheck_builtin_logn(int *type_return, SymTab_t *symtab,
         destroy_kgpc_type(expr->resolved_kgpc_type);
         expr->resolved_kgpc_type = NULL;
     }
-    expr->resolved_type = REAL_TYPE;
+    semcheck_expr_set_resolved_type(expr, REAL_TYPE);
     expr->resolved_kgpc_type = create_primitive_type(REAL_TYPE);
     *type_return = REAL_TYPE;
     return 0;
@@ -1323,7 +1323,7 @@ int semcheck_builtin_upcase(int *type_return, SymTab_t *symtab,
 
     struct Expression *arg_expr = (struct Expression *)args->cur;
     int arg_type = UNKNOWN_TYPE;
-    int error_count = semcheck_expr_main(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
+    int error_count = semcheck_expr_legacy_tag(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
 
     if (error_count == 0 && arg_type != CHAR_TYPE)
     {
@@ -1365,7 +1365,7 @@ int semcheck_builtin_upcase(int *type_return, SymTab_t *symtab,
          * the string overload. With call_kgpc_type=NULL (from reset) and
          * is_call_info_valid=1, no formal parameter info will be used. */
         expr->expr_data.function_call_data.is_call_info_valid = 1;
-        expr->resolved_type = CHAR_TYPE;
+        semcheck_expr_set_resolved_type(expr, CHAR_TYPE);
         expr->resolved_kgpc_type = create_primitive_type(CHAR_TYPE);
         *type_return = CHAR_TYPE;
         return 0;
@@ -1394,7 +1394,7 @@ int semcheck_builtin_predsucc(int *type_return, SymTab_t *symtab,
 
     struct Expression *arg_expr = (struct Expression *)args->cur;
     int arg_type = UNKNOWN_TYPE;
-    int error_count = semcheck_expr_main(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
+    int error_count = semcheck_expr_legacy_tag(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
     if (error_count == 0 &&
         arg_type != INT_TYPE && arg_type != LONGINT_TYPE && arg_type != INT64_TYPE)
     {
@@ -1438,7 +1438,7 @@ int semcheck_builtin_predsucc(int *type_return, SymTab_t *symtab,
     expr->expr_data.addop_data.right_term = rhs;
     semcheck_reset_function_call_cache(expr);
 
-    return semcheck_expr_main(type_return, symtab, expr, max_scope_lev, NO_MUTATE);
+    return semcheck_expr_legacy_tag(type_return, symtab, expr, max_scope_lev, NO_MUTATE);
 }
 
 int semcheck_builtin_odd(int *type_return, SymTab_t *symtab,
@@ -1460,7 +1460,7 @@ int semcheck_builtin_odd(int *type_return, SymTab_t *symtab,
 
     struct Expression *arg_expr = (struct Expression *)args->cur;
     int arg_type = UNKNOWN_TYPE;
-    int error_count = semcheck_expr_main(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
+    int error_count = semcheck_expr_legacy_tag(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
 
     if (error_count == 0 && arg_type != INT_TYPE && arg_type != LONGINT_TYPE)
     {
@@ -1484,7 +1484,7 @@ int semcheck_builtin_odd(int *type_return, SymTab_t *symtab,
             return 1;
         }
         semcheck_reset_function_call_cache(expr);
-        expr->resolved_type = BOOL;
+        semcheck_expr_set_resolved_type(expr, BOOL);
         *type_return = BOOL;
         return 0;
     }
@@ -1512,7 +1512,7 @@ int semcheck_builtin_sqr(int *type_return, SymTab_t *symtab,
 
     struct Expression *arg_expr = (struct Expression *)args->cur;
     int arg_type = UNKNOWN_TYPE;
-    int error_count = semcheck_expr_main(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
+    int error_count = semcheck_expr_legacy_tag(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
 
     const char *mangled_name = NULL;
     int result_type = UNKNOWN_TYPE;
@@ -1557,7 +1557,7 @@ int semcheck_builtin_sqr(int *type_return, SymTab_t *symtab,
             return 1;
         }
         semcheck_reset_function_call_cache(expr);
-        expr->resolved_type = result_type;
+        semcheck_expr_set_resolved_type(expr, result_type);
         *type_return = result_type;
         return 0;
     }
@@ -1611,7 +1611,7 @@ int semcheck_builtin_default(int *type_return, SymTab_t *symtab,
     int error_count = 0;
     if (target_type == UNKNOWN_TYPE)
     {
-        error_count = semcheck_expr_main(&target_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
+        error_count = semcheck_expr_legacy_tag(&target_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
         if (error_count != 0)
         {
             *type_return = UNKNOWN_TYPE;
@@ -1628,7 +1628,7 @@ int semcheck_builtin_default(int *type_return, SymTab_t *symtab,
     }
 
     if (target_type == UNKNOWN_TYPE && target_kgpc_type != NULL)
-        target_type = kgpc_type_get_legacy_tag(target_kgpc_type);
+        target_type = semcheck_tag_from_kgpc(target_kgpc_type);
 
     if (target_type == UNKNOWN_TYPE)
     {
@@ -1665,7 +1665,7 @@ int semcheck_builtin_default(int *type_return, SymTab_t *symtab,
     if (target_type == RECORD_TYPE)
     {
         expr->is_default_initializer = 1;
-        expr->resolved_type = target_type;
+        semcheck_expr_set_resolved_type(expr, target_type);
         expr->record_type = record_type;
         if (expr->resolved_kgpc_type != NULL)
             destroy_kgpc_type(expr->resolved_kgpc_type);
@@ -1693,48 +1693,48 @@ int semcheck_builtin_default(int *type_return, SymTab_t *symtab,
         case LONGINT_TYPE:
             expr->type = EXPR_INUM;
             expr->expr_data.i_num = 0;
-            expr->resolved_type = target_type;
+            semcheck_expr_set_resolved_type(expr, target_type);
             expr->resolved_kgpc_type = create_primitive_type(target_type);
             *type_return = target_type;
             return 0;
         case REAL_TYPE:
             expr->type = EXPR_RNUM;
             expr->expr_data.r_num = 0.0f;
-            expr->resolved_type = REAL_TYPE;
+            semcheck_expr_set_resolved_type(expr, REAL_TYPE);
             expr->resolved_kgpc_type = create_primitive_type(REAL_TYPE);
             *type_return = REAL_TYPE;
             return 0;
         case BOOL:
             expr->type = EXPR_BOOL;
             expr->expr_data.bool_value = 0;
-            expr->resolved_type = BOOL;
+            semcheck_expr_set_resolved_type(expr, BOOL);
             expr->resolved_kgpc_type = create_primitive_type(BOOL);
             *type_return = BOOL;
             return 0;
         case CHAR_TYPE:
             expr->type = EXPR_CHAR_CODE;
             expr->expr_data.char_code = 0;
-            expr->resolved_type = CHAR_TYPE;
+            semcheck_expr_set_resolved_type(expr, CHAR_TYPE);
             expr->resolved_kgpc_type = create_primitive_type(CHAR_TYPE);
             *type_return = CHAR_TYPE;
             return 0;
         case STRING_TYPE:
             expr->type = EXPR_STRING;
             expr->expr_data.string = strdup("");
-            expr->resolved_type = STRING_TYPE;
+            semcheck_expr_set_resolved_type(expr, STRING_TYPE);
             expr->resolved_kgpc_type = create_primitive_type(STRING_TYPE);
             *type_return = STRING_TYPE;
             return 0;
         case POINTER_TYPE:
             expr->type = EXPR_NIL;
-            expr->resolved_type = POINTER_TYPE;
+            semcheck_expr_set_resolved_type(expr, POINTER_TYPE);
             expr->resolved_kgpc_type = create_primitive_type(POINTER_TYPE);
             *type_return = POINTER_TYPE;
             return 0;
         case ENUM_TYPE:
             expr->type = EXPR_INUM;
             expr->expr_data.i_num = 0;
-            expr->resolved_type = ENUM_TYPE;
+            semcheck_expr_set_resolved_type(expr, ENUM_TYPE);
             expr->resolved_kgpc_type = create_primitive_type(ENUM_TYPE);
             *type_return = ENUM_TYPE;
             return 0;
@@ -1909,7 +1909,7 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
             if (have_bounds)
             {
                 semcheck_replace_call_with_integer_literal(expr, is_high ? high : low);
-                expr->resolved_type = result_type;
+                semcheck_expr_set_resolved_type(expr, result_type);
                 *type_return = result_type;
                 return 0;
             }
@@ -1917,7 +1917,7 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
     }
 
     int arg_type = UNKNOWN_TYPE;
-    int error_count = semcheck_expr_main(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
+    int error_count = semcheck_expr_legacy_tag(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
     if (error_count != 0)
     {
         *type_return = UNKNOWN_TYPE;
@@ -1986,21 +1986,21 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
     if (arg_type == INT_TYPE)
     {
         semcheck_replace_call_with_integer_literal(expr, is_high ? 2147483647LL : -2147483648LL);
-        expr->resolved_type = INT_TYPE;
+        semcheck_expr_set_resolved_type(expr, INT_TYPE);
         *type_return = INT_TYPE;
         return 0;
     }
     if (arg_type == LONGINT_TYPE)
     {
         semcheck_replace_call_with_integer_literal(expr, is_high ? 2147483647LL : -2147483648LL);
-        expr->resolved_type = LONGINT_TYPE;
+        semcheck_expr_set_resolved_type(expr, LONGINT_TYPE);
         *type_return = LONGINT_TYPE;
         return 0;
     }
     if (arg_type == INT64_TYPE)
     {
         semcheck_replace_call_with_integer_literal(expr, is_high ? 9223372036854775807LL : (-9223372036854775807LL - 1));
-        expr->resolved_type = INT64_TYPE;
+        semcheck_expr_set_resolved_type(expr, INT64_TYPE);
         *type_return = INT64_TYPE;
         return 0;
     }
@@ -2010,7 +2010,7 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
         expr->expr_data.function_call_data.args_expr = NULL;
         expr->type = EXPR_BOOL;
         expr->expr_data.bool_value = is_high ? 1 : 0;
-        expr->resolved_type = BOOL;
+        semcheck_expr_set_resolved_type(expr, BOOL);
         *type_return = BOOL;
         return 0;
     }
@@ -2020,7 +2020,7 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
         expr->expr_data.function_call_data.args_expr = NULL;
         expr->type = EXPR_CHAR_CODE;
         expr->expr_data.char_code = (unsigned int)(is_high ? 255 : 0);
-        expr->resolved_type = CHAR_TYPE;
+        semcheck_expr_set_resolved_type(expr, CHAR_TYPE);
         *type_return = CHAR_TYPE;
         return 0;
     }
@@ -2137,7 +2137,7 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
                 if (node->hash_type != HASHTYPE_TYPE && node->hash_type != HASHTYPE_ARRAY)
                 {
                     int dummy_type = UNKNOWN_TYPE;
-                    error_count += semcheck_expr_main(&dummy_type, symtab, arg,
+                    error_count += semcheck_expr_legacy_tag(&dummy_type, symtab, arg,
                         max_scope_lev, NO_MUTATE);
                 }
 
@@ -2195,7 +2195,7 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
     else
     {
         int arg_type = UNKNOWN_TYPE;
-        error_count += semcheck_expr_main(&arg_type, symtab, arg, max_scope_lev, NO_MUTATE);
+        error_count += semcheck_expr_legacy_tag(&arg_type, symtab, arg, max_scope_lev, NO_MUTATE);
         if (error_count == 0)
             error_count += sizeof_from_type_ref(symtab, arg_type, NULL, &computed_size,
                 0, expr->line_num);
@@ -2230,7 +2230,7 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
 
         expr->type = EXPR_INUM;
         expr->expr_data.i_num = computed_size;
-        expr->resolved_type = LONGINT_TYPE;
+        semcheck_expr_set_resolved_type(expr, LONGINT_TYPE);
         *type_return = LONGINT_TYPE;
         return 0;
     }
@@ -2273,7 +2273,7 @@ int semcheck_builtin_random(int *type_return, SymTab_t *symtab,
             expr->resolved_kgpc_type = NULL;
         }
         expr->resolved_kgpc_type = create_primitive_type(REAL_TYPE);
-        expr->resolved_type = REAL_TYPE;
+        semcheck_expr_set_resolved_type(expr, REAL_TYPE);
         *type_return = REAL_TYPE;
         return 0;
     }
@@ -2288,7 +2288,7 @@ int semcheck_builtin_random(int *type_return, SymTab_t *symtab,
 
     struct Expression *upper_expr = (struct Expression *)args->cur;
     int upper_type = UNKNOWN_TYPE;
-    int error_count = semcheck_expr_main(&upper_type, symtab, upper_expr, max_scope_lev, NO_MUTATE);
+    int error_count = semcheck_expr_legacy_tag(&upper_type, symtab, upper_expr, max_scope_lev, NO_MUTATE);
     int is_real_upper = (upper_type == REAL_TYPE);
     if (!is_real_upper && upper_type != INT_TYPE && upper_type != LONGINT_TYPE)
     {
@@ -2320,19 +2320,13 @@ int semcheck_builtin_random(int *type_return, SymTab_t *symtab,
     }
 
     if (is_real_upper)
-        expr->resolved_type = REAL_TYPE;
+        semcheck_expr_set_resolved_type(expr, REAL_TYPE);
     else if (upper_type == LONGINT_TYPE)
-        expr->resolved_type = LONGINT_TYPE;
+        semcheck_expr_set_resolved_type(expr, LONGINT_TYPE);
     else
-        expr->resolved_type = INT_TYPE;
+        semcheck_expr_set_resolved_type(expr, INT_TYPE);
     semcheck_reset_function_call_cache(expr);
-    if (expr->resolved_kgpc_type != NULL)
-    {
-        destroy_kgpc_type(expr->resolved_kgpc_type);
-        expr->resolved_kgpc_type = NULL;
-    }
-    expr->resolved_kgpc_type = create_primitive_type(expr->resolved_type);
-    *type_return = expr->resolved_type;
+    *type_return = semcheck_tag_from_kgpc(expr->resolved_kgpc_type);
     return 0;
 }
 
@@ -2359,8 +2353,8 @@ int semcheck_builtin_randomrange(int *type_return, SymTab_t *symtab,
     int high_type = UNKNOWN_TYPE;
     int error_count = 0;
 
-    error_count += semcheck_expr_main(&low_type, symtab, low_expr, max_scope_lev, NO_MUTATE);
-    error_count += semcheck_expr_main(&high_type, symtab, high_expr, max_scope_lev, NO_MUTATE);
+    error_count += semcheck_expr_legacy_tag(&low_type, symtab, low_expr, max_scope_lev, NO_MUTATE);
+    error_count += semcheck_expr_legacy_tag(&high_type, symtab, high_expr, max_scope_lev, NO_MUTATE);
 
     if (low_type != INT_TYPE && low_type != LONGINT_TYPE)
     {
@@ -2403,7 +2397,7 @@ int semcheck_builtin_randomrange(int *type_return, SymTab_t *symtab,
 
     int result_type = (low_type == LONGINT_TYPE || high_type == LONGINT_TYPE)
         ? LONGINT_TYPE : INT_TYPE;
-    expr->resolved_type = result_type;
+    semcheck_expr_set_resolved_type(expr, result_type);
     expr->resolved_kgpc_type = create_primitive_type(result_type);
     *type_return = result_type;
     return 0;
@@ -2432,8 +2426,8 @@ int semcheck_builtin_power(int *type_return, SymTab_t *symtab,
     int exp_type = UNKNOWN_TYPE;
     int error_count = 0;
 
-    error_count += semcheck_expr_main(&base_type, symtab, base_expr, max_scope_lev, NO_MUTATE);
-    error_count += semcheck_expr_main(&exp_type, symtab, exp_expr, max_scope_lev, NO_MUTATE);
+    error_count += semcheck_expr_legacy_tag(&base_type, symtab, base_expr, max_scope_lev, NO_MUTATE);
+    error_count += semcheck_expr_legacy_tag(&exp_type, symtab, exp_expr, max_scope_lev, NO_MUTATE);
 
     if (base_type != REAL_TYPE && base_type != INT_TYPE && base_type != LONGINT_TYPE)
     {
@@ -2472,7 +2466,7 @@ int semcheck_builtin_power(int *type_return, SymTab_t *symtab,
         destroy_kgpc_type(expr->resolved_kgpc_type);
         expr->resolved_kgpc_type = NULL;
     }
-    expr->resolved_type = REAL_TYPE;
+    semcheck_expr_set_resolved_type(expr, REAL_TYPE);
     expr->resolved_kgpc_type = create_primitive_type(REAL_TYPE);
     *type_return = REAL_TYPE;
     return 0;
@@ -2515,7 +2509,7 @@ int semcheck_builtin_randseed(int *type_return, SymTab_t *symtab,
         destroy_kgpc_type(expr->resolved_kgpc_type);
         expr->resolved_kgpc_type = NULL;
     }
-    expr->resolved_type = LONGINT_TYPE;
+    semcheck_expr_set_resolved_type(expr, LONGINT_TYPE);
     expr->resolved_kgpc_type = create_primitive_type(LONGINT_TYPE);
     *type_return = LONGINT_TYPE;
     return 0;
@@ -2542,7 +2536,7 @@ int semcheck_builtin_aligned(int *type_return, SymTab_t *symtab,
     /* First argument: pointer */
     struct Expression *ptr_arg = (struct Expression *)args->cur;
     int ptr_type = UNKNOWN_TYPE;
-    int error_count = semcheck_expr_main(&ptr_type, symtab, ptr_arg, max_scope_lev, NO_MUTATE);
+    int error_count = semcheck_expr_legacy_tag(&ptr_type, symtab, ptr_arg, max_scope_lev, NO_MUTATE);
     if (error_count == 0 && ptr_type != POINTER_TYPE)
     {
         semcheck_error_with_context("Error on line %d, Aligned first argument must be a pointer.\n",
@@ -2553,7 +2547,7 @@ int semcheck_builtin_aligned(int *type_return, SymTab_t *symtab,
     /* Second argument: alignment (integer) */
     struct Expression *align_arg = (struct Expression *)args->next->cur;
     int align_type = UNKNOWN_TYPE;
-    error_count += semcheck_expr_main(&align_type, symtab, align_arg, max_scope_lev, NO_MUTATE);
+    error_count += semcheck_expr_legacy_tag(&align_type, symtab, align_arg, max_scope_lev, NO_MUTATE);
     if (error_count == 0 && !is_integer_type(align_type))
     {
         semcheck_error_with_context("Error on line %d, Aligned second argument must be an integer.\n",
@@ -2581,7 +2575,7 @@ int semcheck_builtin_aligned(int *type_return, SymTab_t *symtab,
             destroy_kgpc_type(expr->resolved_kgpc_type);
             expr->resolved_kgpc_type = NULL;
         }
-        expr->resolved_type = BOOL;
+        semcheck_expr_set_resolved_type(expr, BOOL);
         expr->resolved_kgpc_type = create_primitive_type(BOOL);
         *type_return = BOOL;
         return 0;
@@ -2610,7 +2604,7 @@ int semcheck_builtin_allocmem(int *type_return, SymTab_t *symtab,
 
     struct Expression *size_expr = (struct Expression *)args->cur;
     int size_type = UNKNOWN_TYPE;
-    int error_count = semcheck_expr_main(&size_type, symtab, size_expr, max_scope_lev, NO_MUTATE);
+    int error_count = semcheck_expr_legacy_tag(&size_type, symtab, size_expr, max_scope_lev, NO_MUTATE);
     if (error_count != 0)
     {
         *type_return = UNKNOWN_TYPE;
@@ -2638,7 +2632,7 @@ int semcheck_builtin_allocmem(int *type_return, SymTab_t *symtab,
         *type_return = UNKNOWN_TYPE;
         return 1;
     }
-    expr->resolved_type = POINTER_TYPE;
+    semcheck_expr_set_resolved_type(expr, POINTER_TYPE);
     expr->expr_data.function_call_data.is_call_info_valid = 1;
     *type_return = POINTER_TYPE;
     return 0;

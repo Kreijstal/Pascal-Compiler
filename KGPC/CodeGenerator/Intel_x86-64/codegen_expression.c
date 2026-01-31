@@ -25,6 +25,27 @@
 #include "../../identifier_utils.h"
 #include "../../format_arg.h"
 
+static int codegen_tag_from_kgpc(const KgpcType *type)
+{
+    if (type == NULL)
+        return UNKNOWN_TYPE;
+    if (type->kind == TYPE_KIND_PRIMITIVE)
+        return type->info.primitive_type_tag;
+    if (kgpc_type_is_array_of_const((KgpcType *)type))
+        return ARRAY_OF_CONST_TYPE;
+    if (kgpc_type_is_array((KgpcType *)type) &&
+        type->type_alias != NULL &&
+        type->type_alias->is_shortstring)
+        return SHORTSTRING_TYPE;
+    if (kgpc_type_is_record((KgpcType *)type))
+        return RECORD_TYPE;
+    if (kgpc_type_is_pointer((KgpcType *)type))
+        return POINTER_TYPE;
+    if (kgpc_type_is_procedure((KgpcType *)type))
+        return PROCEDURE;
+    return UNKNOWN_TYPE;
+}
+
 #define CODEGEN_POINTER_SIZE_BYTES 8
 #define CODEGEN_SIZEOF_RECURSION_LIMIT 32
 
@@ -46,8 +67,6 @@ static int codegen_expr_is_shortstring_array_local(const struct Expression *expr
 {
     if (expr == NULL)
         return 0;
-    if (expr->resolved_type == SHORTSTRING_TYPE)
-        return 1;
     if (expr->resolved_kgpc_type != NULL)
     {
         struct TypeAlias *alias = kgpc_type_get_type_alias(expr->resolved_kgpc_type);
@@ -305,7 +324,7 @@ static int codegen_param_expected_type(Tree_t *decl, SymTab_t *symtab)
         FindIdent(&type_node, symtab, type_id) >= 0 && type_node != NULL &&
         type_node->type != NULL)
     {
-        int resolved = kgpc_type_get_legacy_tag(type_node->type);
+        int resolved = codegen_tag_from_kgpc(type_node->type);
         if (resolved != UNKNOWN_TYPE)
             return resolved;
     }
@@ -1045,45 +1064,73 @@ KgpcType* expr_get_kgpc_type(const struct Expression *expr)
     if (expr == NULL)
         return NULL;
 
-    static KgpcType *primitive_cache[256];
-    
-    /* Prefer KgpcType if available */
     if (expr->resolved_kgpc_type != NULL)
         return expr->resolved_kgpc_type;
-    
-    /* For legacy compatibility, create KgpcType from resolved_type tag.
-     * resolved_type is a type tag (INT_TYPE, REAL_TYPE, etc.), not VarType.
-     * For simple types, we can create a primitive KgpcType. */
-    int type_tag = expr->resolved_type;
-    
-    /* Handle primitive types */
-    switch (type_tag) {
-        case INT_TYPE:
-        case LONGINT_TYPE:
-        case REAL_TYPE:
-        case CHAR_TYPE:
-        case BOOL:
-        case STRING_TYPE:
-        case SET_TYPE:
-        case ENUM_TYPE:
-        case FILE_TYPE:
-        case TEXT_TYPE:
-            if (type_tag >= 0 && type_tag < (int)(sizeof(primitive_cache) / sizeof(primitive_cache[0])))
+
+    static KgpcType *primitive_cache[256];
+    int tag = UNKNOWN_TYPE;
+
+    switch (expr->type)
+    {
+        case EXPR_INUM:
+            tag = INT_TYPE;
+            break;
+        case EXPR_RNUM:
+            tag = REAL_TYPE;
+            break;
+        case EXPR_STRING:
+            tag = STRING_TYPE;
+            break;
+        case EXPR_CHAR_CODE:
+            tag = CHAR_TYPE;
+            break;
+        case EXPR_BOOL:
+            tag = BOOL;
+            break;
+        case EXPR_NIL:
+            return create_pointer_type(NULL);
+        case EXPR_RECORD_CONSTRUCTOR:
+            if (expr->record_type != NULL)
+                return create_record_type(expr->record_type);
+            return NULL;
+        case EXPR_ARRAY_LITERAL:
+        {
+            if (expr->array_element_type == ARRAY_OF_CONST_TYPE)
+                return create_array_of_const_type();
+            if (expr->array_element_type != UNKNOWN_TYPE)
             {
-                if (primitive_cache[type_tag] == NULL)
-                    primitive_cache[type_tag] = create_primitive_type(type_tag);
-                return primitive_cache[type_tag];
+                KgpcType *elem_type = NULL;
+                if (expr->array_element_type == RECORD_TYPE && expr->array_element_record_type != NULL)
+                    elem_type = create_record_type(expr->array_element_record_type);
+                else
+                    elem_type = create_primitive_type(expr->array_element_type);
+
+                if (elem_type != NULL)
+                {
+                    int end_index = expr->array_upper_bound;
+                    if (end_index < expr->array_lower_bound)
+                        end_index = expr->array_lower_bound - 1;
+                    return create_array_type(elem_type, expr->array_lower_bound, end_index);
+                }
             }
             return NULL;
-        
-        case POINTER_TYPE:
-        case RECORD_TYPE:
-        case PROCEDURE:
-        case UNKNOWN_TYPE:
+        }
         default:
-            /* Complex types or unknown - can't create KgpcType */
-            return NULL;
+            break;
     }
+
+    if (tag != UNKNOWN_TYPE)
+    {
+        if (tag >= 0 && tag < (int)(sizeof(primitive_cache) / sizeof(primitive_cache[0])))
+        {
+            if (primitive_cache[tag] == NULL)
+                primitive_cache[tag] = create_primitive_type(tag);
+            return primitive_cache[tag];
+        }
+        return create_primitive_type(tag);
+    }
+
+    return NULL;
 }
 
 long long expr_effective_size_bytes(const struct Expression *expr)
@@ -1149,14 +1196,24 @@ int expr_get_type_tag(const struct Expression *expr)
     if (expr->type == EXPR_MULOP &&
         expr->expr_data.mulop_data.mulop_type == SLASH)
         return REAL_TYPE;
-    
-    /* Prefer KgpcType if available */
-    if (expr->resolved_kgpc_type != NULL)
+
+    if (expr->is_array_expr && expr->array_element_type != UNKNOWN_TYPE)
     {
-        int tag = kgpc_type_get_legacy_tag(expr->resolved_kgpc_type);
+        if (expr->array_element_type == CHAR_TYPE &&
+            expr_get_array_lower_bound(expr) == 0 &&
+            expr_get_array_upper_bound(expr) == 255)
+            return SHORTSTRING_TYPE;
+        return expr->array_element_type;
+    }
+
+    /* Prefer KgpcType if available */
+    KgpcType *type = expr_get_kgpc_type(expr);
+    if (type != NULL)
+    {
+        int tag = codegen_tag_from_kgpc(type);
         if (tag != UNKNOWN_TYPE)
             return tag;
-        switch (expr->resolved_kgpc_type->kind)
+        switch (type->kind)
         {
             case TYPE_KIND_POINTER:
                 return POINTER_TYPE;
@@ -1171,8 +1228,7 @@ int expr_get_type_tag(const struct Expression *expr)
         }
     }
     
-    /* Fall back to legacy field */
-    return expr->resolved_type;
+    return UNKNOWN_TYPE;
 }
 
 /* Helper to get array lower bound from expression, preferring resolved_kgpc_type */
@@ -1262,7 +1318,7 @@ int expr_is_char_set_ctx(const struct Expression *expr, CodeGenContext *ctx)
             struct SetElement *element = (struct SetElement *)node->cur;
             if (element->lower != NULL)
             {
-                int elem_type = element->lower->resolved_type;
+                int elem_type = expr_get_type_tag(element->lower);
                 /* Character sets can have CHAR_TYPE or STRING_TYPE (single char) elements */
                 if (elem_type == CHAR_TYPE)
                     return 1;
@@ -1327,7 +1383,7 @@ static int expr_is_signed_kgpctype(const struct Expression *expr)
         return kgpc_type_is_signed(type);
     
     /* Ultimate fallback for legacy compatibility */
-    return codegen_type_is_signed(expr->resolved_type);
+    return codegen_type_is_signed(expr_get_type_tag(expr));
 }
 
 /* Check if expression uses qword, working with KgpcType */
@@ -1339,9 +1395,8 @@ int expr_uses_qword_kgpctype(const struct Expression *expr)
     KgpcType *type = expr_get_kgpc_type(expr);
     if (type != NULL)
         return kgpc_type_uses_qword(type);
-    
-    /* Ultimate fallback for legacy compatibility */
-    return codegen_type_uses_qword(expr->resolved_type);
+
+    return 0;
 }
 
 /* Check if expression has a specific type tag, working with KgpcType */
@@ -1353,9 +1408,8 @@ int expr_has_type_tag(const struct Expression *expr, int type_tag)
     KgpcType *type = expr_get_kgpc_type(expr);
     if (type != NULL)
         return kgpc_type_equals_tag(type, type_tag);
-    
-    /* Ultimate fallback for legacy compatibility */
-    return (expr->resolved_type == type_tag);
+
+    return 0;
 }
 
 static int expr_is_char_pointer(const struct Expression *expr)
@@ -1363,12 +1417,9 @@ static int expr_is_char_pointer(const struct Expression *expr)
     if (expr == NULL)
         return 0;
 
-    if (expr->resolved_type != POINTER_TYPE)
-    {
-        KgpcType *type = expr_get_kgpc_type(expr);
-        if (type == NULL || !kgpc_type_is_pointer(type))
-            return 0;
-    }
+    KgpcType *type = expr_get_kgpc_type(expr);
+    if (type == NULL || !kgpc_type_is_pointer(type))
+        return 0;
 
     if (expr->pointer_subtype == CHAR_TYPE)
         return 1;
@@ -1380,7 +1431,6 @@ static int expr_is_char_pointer(const struct Expression *expr)
             return 1;
     }
 
-    KgpcType *type = expr_get_kgpc_type(expr);
     if (type != NULL && kgpc_type_is_pointer(type))
     {
         KgpcType *pointee = type->info.points_to;
@@ -1997,8 +2047,29 @@ int codegen_get_record_size(CodeGenContext *ctx, struct Expression *expr,
     if (expr == NULL || size_out == NULL)
         return 1;
 
+    if (getenv("KGPC_DEBUG_RECORD_SIZE") != NULL)
+    {
+        KgpcType *dbg_type = expr_get_kgpc_type(expr);
+        fprintf(stderr,
+            "[KGPC_DEBUG_RECORD_SIZE] expr_type=%d resolved_tag=%d record_type=%p kgpc=%s\n",
+            expr->type, codegen_tag_from_kgpc(dbg_type), (void *)expr->record_type,
+            dbg_type != NULL ? kgpc_type_to_string(dbg_type) : "<null>");
+        if (expr->type == EXPR_VAR_ID && expr->expr_data.id != NULL)
+            fprintf(stderr, "[KGPC_DEBUG_RECORD_SIZE]   id=%s\n", expr->expr_data.id);
+    }
+
     if (expr->record_type != NULL)
         return codegen_sizeof_record(ctx, expr->record_type, size_out, 0);
+
+    KgpcType *expr_type = expr_get_kgpc_type(expr);
+    if (expr_type != NULL)
+    {
+        if (kgpc_type_is_record(expr_type))
+            return codegen_sizeof_record(ctx, expr_type->info.record_info, size_out, 0);
+        if (kgpc_type_is_pointer(expr_type) && expr_type->info.points_to != NULL &&
+            kgpc_type_is_record(expr_type->info.points_to))
+            return codegen_sizeof_record(ctx, expr_type->info.points_to->info.record_info, size_out, 0);
+    }
 
     if (expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL)
     {
@@ -3374,9 +3445,9 @@ static int codegen_get_indexable_element_size(struct Expression *array_expr,
             if (getenv("KGPC_DEBUG_ARRAY_ACCESS") != NULL)
             {
                 fprintf(stderr,
-                    "[KGPC_DEBUG_ARRAY_ACCESS] elem size fail: expr_type=%d resolved_type=%d array_elem_type=%d elem_id=%s is_array=%d dyn=%d\n",
+                    "[KGPC_DEBUG_ARRAY_ACCESS] elem size fail: expr_type=%d tag=%d array_elem_type=%d elem_id=%s is_array=%d dyn=%d\n",
                     array_expr->type,
-                    array_expr->resolved_type,
+                    expr_get_type_tag(array_expr),
                     array_expr->array_element_type,
                     array_expr->array_element_type_id ? array_expr->array_element_type_id : "<null>",
                     array_expr->is_array_expr,

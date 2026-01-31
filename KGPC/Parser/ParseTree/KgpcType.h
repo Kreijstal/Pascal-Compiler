@@ -201,13 +201,6 @@ struct TypeAlias* kgpc_type_get_type_alias(KgpcType *type);
  * The TypeAlias is owned by the AST, not by KgpcType. */
 void kgpc_type_set_type_alias(KgpcType *type, struct TypeAlias *alias);
 
-/* Get the legacy type tag from a KgpcType for compatibility with codegen.
- * This is a migration helper that allows code to work with both old and new type systems.
- * Returns a type tag (INT_TYPE, REAL_TYPE, etc.) for primitives, or specialized tags
- * like RECORD_TYPE, POINTER_TYPE, PROCEDURE for complex types.
- * Returns UNKNOWN_TYPE if the type cannot be mapped. */
-int kgpc_type_get_legacy_tag(KgpcType *type);
-
 /* Check if a KgpcType represents a pointer type.
  * Returns 1 if it's a pointer, 0 otherwise. */
 int kgpc_type_is_pointer(KgpcType *type);

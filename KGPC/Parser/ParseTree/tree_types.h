@@ -556,8 +556,6 @@ struct Expression
     } expr_data;
     struct Expression *field_width;
     struct Expression *field_precision;
-    int resolved_type;
-    
     /* NEW: Unified type system - resolved KgpcType for this expression */
     struct KgpcType *resolved_kgpc_type;
     

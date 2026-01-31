@@ -533,7 +533,7 @@ static int semcheck_resolve_arg_kgpc_type(struct Expression *arg_expr,
         return UNKNOWN_TYPE;
 
     int arg_tag = UNKNOWN_TYPE;
-    semcheck_expr_main(&arg_tag, symtab, arg_expr, max_scope_lev, NO_MUTATE);
+    semcheck_expr_legacy_tag(&arg_tag, symtab, arg_expr, max_scope_lev, NO_MUTATE);
 
     KgpcType *arg_type = arg_expr->resolved_kgpc_type;
     if (arg_type != NULL && arg_tag != UNKNOWN_TYPE)
@@ -888,7 +888,15 @@ static int semcheck_integer_promotion_rank(int actual_tag, KgpcType *actual_kgpc
         if (formal_size > actual_size)
             return 2;
         if (actual_rank != -1 && formal_rank != -1)
-            return 10 + (actual_rank - formal_rank);
+        {
+            int base = 10 + (actual_rank - formal_rank);
+            if (actual_size > formal_size && formal_size == 4)
+            {
+                if (formal_tag == LONGINT_TYPE)
+                    base -= 1;
+            }
+            return base;
+        }
         return 3;
     }
 
@@ -1066,7 +1074,7 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                     {
                         struct Expression *rhs_expr = arg_expr->expr_data.relop_data.right;
                         int rhs_type = UNKNOWN_TYPE;
-                        semcheck_expr_main(&rhs_type, symtab, rhs_expr, max_scope_lev, NO_MUTATE);
+                        semcheck_expr_legacy_tag(&rhs_type, symtab, rhs_expr, max_scope_lev, NO_MUTATE);
                         if (semcheck_named_arg_type_compatible(formal_decl, rhs_expr, rhs_type, symtab))
                             arg_expr = rhs_expr;
                     }
@@ -1325,6 +1333,41 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                     }
                     quality = semcheck_classify_match(arg_tag, arg_kgpc, formal_tag, formal_kgpc,
                         is_var_param, symtab, is_integer_literal);
+
+                    if (arg_expr != NULL && arg_expr->type == EXPR_STRING &&
+                        arg_expr->expr_data.string != NULL &&
+                        strlen(arg_expr->expr_data.string) != 1)
+                    {
+                        const char *formal_id = semcheck_get_param_type_id(formal_decl);
+                        if (formal_id != NULL && pascal_identifier_equals(formal_id, "ShortString"))
+                        {
+                            quality.kind = MATCH_EXACT;
+                            quality.exact_type_id = 1;
+                        }
+                        else if (formal_id != NULL &&
+                            (pascal_identifier_equals(formal_id, "UnicodeString") ||
+                             pascal_identifier_equals(formal_id, "RawByteString") ||
+                             pascal_identifier_equals(formal_id, "WideString") ||
+                             pascal_identifier_equals(formal_id, "AnsiString") ||
+                             pascal_identifier_equals(formal_id, "String")))
+                        {
+                            if (quality.kind == MATCH_EXACT)
+                                quality.kind = MATCH_PROMOTION;
+                        }
+                        else if (formal_id == NULL)
+                        {
+                            if (formal_tag == SHORTSTRING_TYPE)
+                            {
+                                quality.kind = MATCH_EXACT;
+                            }
+                            else if (formal_tag == STRING_TYPE)
+                            {
+                                if (quality.kind == MATCH_EXACT)
+                                    quality.kind = MATCH_PROMOTION;
+                            }
+                        }
+                    }
+
                     if (is_integer_type(arg_tag) && is_integer_type(formal_tag))
                     {
                         quality.int_promo_rank = semcheck_integer_promotion_rank(

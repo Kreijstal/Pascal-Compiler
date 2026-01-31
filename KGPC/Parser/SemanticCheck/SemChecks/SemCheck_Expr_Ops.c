@@ -31,9 +31,9 @@ int semcheck_relop(int *type_return,
     expr1 = expr->expr_data.relop_data.left;
     expr2 = expr->expr_data.relop_data.right;
 
-    return_val += semcheck_expr_main(&type_first, symtab, expr1, max_scope_lev, mutating);
+    return_val += semcheck_expr_legacy_tag(&type_first, symtab, expr1, max_scope_lev, mutating);
     if(expr2 != NULL)
-        return_val += semcheck_expr_main(&type_second, symtab, expr2, max_scope_lev, mutating);
+        return_val += semcheck_expr_legacy_tag(&type_second, symtab, expr2, max_scope_lev, mutating);
 
     /* Verifying types */
 
@@ -84,7 +84,7 @@ int semcheck_relop(int *type_return,
                     strlen(expr1->expr_data.string) == 1)
                 {
                     type_first = CHAR_TYPE;
-                    expr1->resolved_type = CHAR_TYPE;
+                    semcheck_expr_set_resolved_type(expr1, CHAR_TYPE);
                 }
 
                 if (type_second != SET_TYPE)
@@ -388,7 +388,7 @@ int semcheck_signterm(int *type_return,
     return_val = 0;
     sign_expr = expr->expr_data.sign_term;
 
-    return_val += semcheck_expr_main(type_return, symtab, sign_expr, max_scope_lev, mutating);
+    return_val += semcheck_expr_legacy_tag(type_return, symtab, sign_expr, max_scope_lev, mutating);
 
     /* Checking types */
     if(!is_type_ir(type_return))
@@ -416,8 +416,8 @@ int semcheck_addop(int *type_return,
     expr1 = expr->expr_data.addop_data.left_expr;
     expr2 = expr->expr_data.addop_data.right_term;
 
-    return_val += semcheck_expr_main(&type_first, symtab, expr1, max_scope_lev, mutating);
-    return_val += semcheck_expr_main(&type_second, symtab, expr2, max_scope_lev, mutating);
+    return_val += semcheck_expr_legacy_tag(&type_first, symtab, expr1, max_scope_lev, mutating);
+    return_val += semcheck_expr_legacy_tag(&type_second, symtab, expr2, max_scope_lev, mutating);
 
     int op_type = expr->expr_data.addop_data.addop_type;
     if (op_type == OR)
@@ -568,7 +568,7 @@ int semcheck_addop(int *type_return,
         {
             /* Result is an integer (element count difference) */
             *type_return = LONGINT_TYPE;
-            expr->resolved_type = LONGINT_TYPE;
+            semcheck_expr_set_resolved_type(expr, LONGINT_TYPE);
             /* Mark this expression as a pointer difference operation */
             expr->is_pointer_diff = 1;
             /* Store pointer element size from left operand for codegen */
@@ -624,7 +624,7 @@ int semcheck_addop(int *type_return,
                             KgpcType *return_type = kgpc_type_get_return_type(operator_node->type);
                             if (return_type != NULL)
                             {
-                                *type_return = kgpc_type_get_legacy_tag(return_type);
+                                *type_return = semcheck_tag_from_kgpc(return_type);
                                 
                                 /* Transform expression from ADDOP to FUNCTION_CALL */
                                 /* Save the operands before we overwrite the union */
@@ -742,8 +742,8 @@ int semcheck_mulop(int *type_return,
     expr1 = expr->expr_data.mulop_data.left_term;
     expr2 = expr->expr_data.mulop_data.right_factor;
 
-    return_val += semcheck_expr_main(&type_first, symtab, expr1, max_scope_lev, mutating);
-    return_val += semcheck_expr_main(&type_second, symtab, expr2, max_scope_lev, mutating);
+    return_val += semcheck_expr_legacy_tag(&type_first, symtab, expr1, max_scope_lev, mutating);
+    return_val += semcheck_expr_legacy_tag(&type_second, symtab, expr2, max_scope_lev, mutating);
 
     int op_type = expr->expr_data.mulop_data.mulop_type;
     
@@ -853,7 +853,7 @@ int semcheck_mulop(int *type_return,
                             KgpcType *return_type = kgpc_type_get_return_type(operator_node->type);
                             if (return_type != NULL)
                             {
-                                *type_return = kgpc_type_get_legacy_tag(return_type);
+                                *type_return = semcheck_tag_from_kgpc(return_type);
                                 
                                 /* Transform expression from MULOP to FUNCTION_CALL */
                                 /* Save the operands before we overwrite the union */
@@ -1562,6 +1562,16 @@ int semcheck_varid(int *type_return,
             /* Keep as EXPR_VAR_ID so it can be used as a procedure value */
             set_hash_meta(hash_return, mutating);
             set_type_from_hashtype(type_return, hash_return);
+            if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+            {
+                fprintf(stderr,
+                    "[SemCheck] semcheck_varid: proc value id=%s type=%p kind=%d\n",
+                    id ? id : "<null>",
+                    (void*)hash_return->type,
+                    hash_return->type != NULL ? hash_return->type->kind : -1);
+            }
+            if (hash_return->type != NULL)
+                semcheck_expr_set_resolved_kgpc_type_shared(expr, hash_return->type);
             return 0;
         }
         

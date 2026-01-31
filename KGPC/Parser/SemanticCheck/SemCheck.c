@@ -615,12 +615,71 @@ static int semcheck_line_from_source_offset(const char *buffer, size_t length, i
     return current_line_at_offset;
 }
 
+static int g_semcheck_error_line = 0;
+static int g_semcheck_error_col = 0;
+static int g_semcheck_error_source_index = -1;
+
+void semcheck_set_error_context(int line_num, int col_num, int source_index)
+{
+    g_semcheck_error_line = line_num;
+    g_semcheck_error_col = col_num;
+    g_semcheck_error_source_index = source_index;
+}
+
+void semcheck_clear_error_context(void)
+{
+    g_semcheck_error_line = 0;
+    g_semcheck_error_col = 0;
+    g_semcheck_error_source_index = -1;
+}
+
+int semcheck_tag_from_kgpc(const KgpcType *type)
+{
+    if (type == NULL)
+        return UNKNOWN_TYPE;
+    if (type->kind == TYPE_KIND_PRIMITIVE)
+        return type->info.primitive_type_tag;
+    if (kgpc_type_is_array_of_const((KgpcType *)type))
+        return ARRAY_OF_CONST_TYPE;
+    if (kgpc_type_is_array((KgpcType *)type) &&
+        type->type_alias != NULL &&
+        type->type_alias->is_shortstring)
+        return SHORTSTRING_TYPE;
+    if (kgpc_type_is_record((KgpcType *)type))
+        return RECORD_TYPE;
+    if (kgpc_type_is_pointer((KgpcType *)type))
+        return POINTER_TYPE;
+    if (kgpc_type_is_procedure((KgpcType *)type))
+        return PROCEDURE;
+    return UNKNOWN_TYPE;
+}
+
 /* Helper function to print semantic error with source code context */
 void semantic_error(int line_num, int col_num, const char *format, ...)
 {
-    fprintf(stderr, "Error on line %d", line_num);
-    if (col_num > 0) {
-        fprintf(stderr, ", column %d", col_num);
+    int effective_line = line_num;
+    int effective_col = col_num;
+    int effective_source_index = g_semcheck_error_source_index;
+
+    if (effective_source_index >= 0)
+    {
+        const char *context_buf = preprocessed_source;
+        size_t context_buf_len = preprocessed_length;
+        if (context_buf == NULL || context_buf_len == 0)
+        {
+            context_buf = g_semcheck_source_buffer;
+            context_buf_len = g_semcheck_source_length;
+        }
+        int computed_line = semcheck_line_from_source_offset(context_buf, context_buf_len, effective_source_index);
+        if (computed_line > 0)
+            effective_line = computed_line;
+        if (effective_col <= 0 && g_semcheck_error_col > 0)
+            effective_col = g_semcheck_error_col;
+    }
+
+    fprintf(stderr, "Error on line %d", effective_line);
+    if (effective_col > 0) {
+        fprintf(stderr, ", column %d", effective_col);
     }
     fprintf(stderr, ": ");
 
@@ -630,7 +689,7 @@ void semantic_error(int line_num, int col_num, const char *format, ...)
     va_end(args);
     fprintf(stderr, "\n");
 
-    print_error_context(line_num, col_num, -1);  /* -1 = no offset, use line-based search */
+    print_error_context(effective_line, effective_col, effective_source_index);
 }
 
 /* Helper function to print semantic error with accurate source context using byte offset */
@@ -678,9 +737,38 @@ void semcheck_error_with_context_at(int line_num, int col_num, int source_index,
     if (context_len == 0 && preprocessed_source != NULL)
         context_len = strlen(preprocessed_source);
 
+    int effective_line = line_num;
+    int effective_col = col_num;
+    if (source_index >= 0)
+    {
+        const char *context_buf = preprocessed_source;
+        size_t context_buf_len = context_len;
+        if (context_buf == NULL || context_buf_len == 0)
+        {
+            context_buf = g_semcheck_source_buffer;
+            context_buf_len = g_semcheck_source_length;
+        }
+        int computed_line = semcheck_line_from_source_offset(context_buf, context_buf_len, source_index);
+        if (computed_line > 0)
+            effective_line = computed_line;
+        if (effective_col <= 0 && g_semcheck_error_col > 0)
+            effective_col = g_semcheck_error_col;
+    }
+
     va_list args;
     va_start(args, format);
-    vfprintf(stderr, format, args);
+    if (format != NULL && strncmp(format, "Error on line %d", 16) == 0)
+    {
+        int original_line = va_arg(args, int);
+        (void)original_line;
+        fprintf(stderr, "Error on line %d", effective_line);
+        const char *rest = format + 16;
+        vfprintf(stderr, rest, args);
+    }
+    else
+    {
+        vfprintf(stderr, format, args);
+    }
     va_end(args);
 
     size_t len = format ? strlen(format) : 0;
@@ -688,7 +776,7 @@ void semcheck_error_with_context_at(int line_num, int col_num, int source_index,
         fprintf(stderr, "\n");
     }
 
-    if (line_num > 0) {
+    if (effective_line > 0) {
         const char *context_buf = preprocessed_source;
         size_t context_buf_len = context_len;
         if (context_buf == NULL || context_buf_len == 0)
@@ -703,15 +791,16 @@ void semcheck_error_with_context_at(int line_num, int col_num, int source_index,
                 file_path != NULL ? file_path : "<null>",
                 context_len,
                 context_buf_len,
-                line_num,
-                col_num,
+                effective_line,
+                effective_col,
                 source_index);
         }
-        int printed = print_source_context_at_offset(context_buf, context_buf_len, source_index, line_num, col_num, 2);
+        int printed = print_source_context_at_offset(context_buf, context_buf_len,
+            source_index, effective_line, effective_col, 2);
         if (!printed)
-            printed = semcheck_print_context_from_file(file_path, line_num, col_num, 2);
+            printed = semcheck_print_context_from_file(file_path, effective_line, effective_col, 2);
         if (!printed && file_path != NULL)
-            print_source_context(file_path, line_num, col_num, 2);
+            print_source_context(file_path, effective_line, effective_col, 2);
     }
 
     fprintf(stderr, "\n");
@@ -730,6 +819,9 @@ void semcheck_error_with_context(const char *format, ...)
     if (context_len == 0 && preprocessed_source != NULL)
         context_len = strlen(preprocessed_source);
     int line_num = 0;
+    int effective_line = 0;
+    int effective_col = 0;
+    int effective_source_index = g_semcheck_error_source_index;
 
     va_list args;
     va_start(args, format);
@@ -739,7 +831,37 @@ void semcheck_error_with_context(const char *format, ...)
     line_num = va_arg(args_copy, int);
     va_end(args_copy);
 
-    vfprintf(stderr, format, args);
+    if (effective_source_index >= 0)
+    {
+        const char *context_buf = preprocessed_source;
+        size_t context_buf_len = preprocessed_length;
+        if (context_buf == NULL || context_buf_len == 0)
+        {
+            context_buf = g_semcheck_source_buffer;
+            context_buf_len = g_semcheck_source_length;
+        }
+        int computed_line = semcheck_line_from_source_offset(context_buf, context_buf_len, effective_source_index);
+        if (computed_line > 0)
+            effective_line = computed_line;
+        if (g_semcheck_error_col > 0)
+            effective_col = g_semcheck_error_col;
+    }
+    if (effective_line <= 0)
+        effective_line = line_num;
+
+    /* If the format starts with "Error on line %d", rewrite that part to use the effective line. */
+    if (format != NULL && strncmp(format, "Error on line %d", 16) == 0)
+    {
+        int original_line = va_arg(args, int);
+        (void)original_line;
+        fprintf(stderr, "Error on line %d", effective_line);
+        const char *rest = format + 16;
+        vfprintf(stderr, rest, args);
+    }
+    else
+    {
+        vfprintf(stderr, format, args);
+    }
     va_end(args);
 
     size_t len = format ? strlen(format) : 0;
@@ -747,7 +869,7 @@ void semcheck_error_with_context(const char *format, ...)
         fprintf(stderr, "\n");
     }
 
-    if (line_num > 0) {
+    if (effective_line > 0) {
         const char *context_buf = preprocessed_source;
         size_t context_buf_len = context_len;
         if (context_buf == NULL || context_buf_len == 0)
@@ -762,14 +884,15 @@ void semcheck_error_with_context(const char *format, ...)
                 file_path != NULL ? file_path : "<null>",
                 context_len,
                 context_buf_len,
-                line_num,
-                0);
+                effective_line,
+                effective_col);
         }
-        int printed = print_source_context_from_buffer(context_buf, context_buf_len, line_num, 0, 2);
+        int printed = print_source_context_at_offset(context_buf, context_buf_len,
+            effective_source_index, effective_line, effective_col, 2);
         if (!printed)
-            printed = semcheck_print_context_from_file(file_path, line_num, 0, 2);
+            printed = semcheck_print_context_from_file(file_path, effective_line, effective_col, 2);
         if (!printed && file_path != NULL)
-            print_source_context(file_path, line_num, 0, 2);
+            print_source_context(file_path, effective_line, effective_col, 2);
     }
 
     fprintf(stderr, "\n");
@@ -3323,7 +3446,7 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                 HashNode_t *type_node = NULL;
                 if (FindIdent(&type_node, symtab, id) >= 0 && type_node != NULL && type_node->type != NULL)
                 {
-                    int legacy_tag = kgpc_type_get_legacy_tag(type_node->type);
+                    int legacy_tag = semcheck_tag_from_kgpc(type_node->type);
                     if (legacy_tag == UNKNOWN_TYPE && type_node->type->type_alias != NULL)
                         legacy_tag = type_node->type->type_alias->base_type;
                     if (legacy_tag != UNKNOWN_TYPE)
@@ -6036,8 +6159,8 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
             /* Run semantic check on the value expression to resolve types properly.
              * This is important for scoped enum literals like TEndian.Little
              * which need to have their resolved_kgpc_type set. */
-            int expr_type = UNKNOWN_TYPE;
-            semcheck_expr_main(&expr_type, symtab, value_expr, INT_MAX, NO_MUTATE);
+            KgpcType *expr_type = NULL;
+            semcheck_expr_main(symtab, value_expr, INT_MAX, NO_MUTATE, &expr_type);
             
             if (evaluate_const_expr(symtab, value_expr, &value) != 0)
             {
@@ -6062,7 +6185,9 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                 /* If the const expression is an explicit typecast, prefer that as the const's type. */
                 if (value_expr != NULL && value_expr->type == EXPR_TYPECAST)
                 {
-                    int target_tag = value_expr->resolved_type;
+                    int target_tag = (value_expr->resolved_kgpc_type != NULL)
+                        ? semcheck_tag_from_kgpc(value_expr->resolved_kgpc_type)
+                        : UNKNOWN_TYPE;
                     if (target_tag == UNKNOWN_TYPE &&
                         value_expr->expr_data.typecast_data.target_type_id != NULL)
                     {
@@ -8664,7 +8789,7 @@ next_identifier:
                             }
                         }
 
-                        int expr_type = UNKNOWN_TYPE;
+                        KgpcType *expr_type = NULL;
                         if (init_expr->type == EXPR_RECORD_CONSTRUCTOR && init_expr->record_type == NULL)
                         {
                             struct RecordType *record_type = NULL;
@@ -8684,7 +8809,7 @@ next_identifier:
                             }
                             init_expr->record_type = record_type;
                         }
-                        return_val += semcheck_expr_main(&expr_type, symtab, init_expr, INT_MAX, NO_MUTATE);
+                        return_val += semcheck_expr_main(symtab, init_expr, INT_MAX, NO_MUTATE, &expr_type);
 
                         if (tree->tree_data.var_decl_data.is_typed_const && var_node != NULL &&
                             init_expr->type != EXPR_ADDR && init_expr->type != EXPR_ADDR_OF_PROC &&
@@ -8740,7 +8865,8 @@ next_identifier:
                             }
                         }
 
-                    if (expr_type == UNKNOWN_TYPE)
+                    int expr_tag = expr_type != NULL ? semcheck_tag_from_kgpc(expr_type) : UNKNOWN_TYPE;
+                    if (expr_tag == UNKNOWN_TYPE)
                     {
                         if (!is_default_param)
                         {
@@ -8751,14 +8877,14 @@ next_identifier:
                     else
                     {
                         enum VarType inferred_var_type = HASHVAR_UNTYPED;
-                        int normalized_type = expr_type;
+                        int normalized_type = expr_tag;
 
-                        switch(expr_type)
+                        switch(expr_tag)
                         {
                             case INT_TYPE:
                             case LONGINT_TYPE:
                                 inferred_var_type = HASHVAR_INTEGER;
-                                normalized_type = (expr_type == LONGINT_TYPE) ? LONGINT_TYPE : INT_TYPE;
+                                normalized_type = (expr_tag == LONGINT_TYPE) ? LONGINT_TYPE : INT_TYPE;
                                 break;
                             case INT64_TYPE:
                                 inferred_var_type = HASHVAR_INT64;
@@ -8856,7 +8982,7 @@ next_identifier:
                                 }
                             }
 
-                            if (!compatible && current_var_type == HASHVAR_PCHAR && expr_type == CHAR_TYPE)
+                            if (!compatible && current_var_type == HASHVAR_PCHAR && expr_tag == CHAR_TYPE)
                             {
                                 compatible = 1;
                             }
@@ -8866,13 +8992,13 @@ next_identifier:
                              * be pointer types. This enables patterns like: var my_ptr: PChar = nil; */
                             if (!compatible)
                             {
-                                int inferred_is_pointer = (inferred_var_type == HASHVAR_POINTER || expr_type == POINTER_TYPE);
+                                int inferred_is_pointer = (inferred_var_type == HASHVAR_POINTER || expr_tag == POINTER_TYPE);
                                 int current_is_pointer = (current_var_type == HASHVAR_POINTER);
                                 int current_is_proc = (current_var_type == HASHVAR_PROCEDURE);
                                 if (var_node->type != NULL)
                                 {
                                     current_is_pointer |= kgpc_type_is_pointer(var_node->type);
-                                    if (kgpc_type_get_legacy_tag(var_node->type) == POINTER_TYPE)
+                                    if (semcheck_tag_from_kgpc(var_node->type) == POINTER_TYPE)
                                         current_is_pointer = 1;
                                     if (var_node->type->kind == TYPE_KIND_PROCEDURE)
                                         current_is_proc = 1;
@@ -8887,7 +9013,7 @@ next_identifier:
                                     compatible = 1;
                             }
 
-                            if (!compatible && current_var_type == HASHVAR_RECORD && expr_type == STRING_TYPE)
+                            if (!compatible && current_var_type == HASHVAR_RECORD && expr_tag == STRING_TYPE)
                             {
                                 const char *record_id = NULL;
                                 if (var_node->type != NULL)

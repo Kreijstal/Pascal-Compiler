@@ -1801,39 +1801,6 @@ void kgpc_type_set_type_alias(KgpcType *type, struct TypeAlias *alias)
     }
 }
 
-/* Get the legacy type tag from a KgpcType */
-int kgpc_type_get_legacy_tag(KgpcType *type)
-{
-    if (type == NULL)
-        return UNKNOWN_TYPE;
-    
-    switch (type->kind) {
-        case TYPE_KIND_PRIMITIVE:
-            return type->info.primitive_type_tag;
-        
-        case TYPE_KIND_POINTER:
-            return POINTER_TYPE;
-        
-        case TYPE_KIND_ARRAY:
-            /* Arrays don't have a single legacy type tag in the old system.
-             * They were identified by the is_array_expr flag on expressions.
-             * Return UNKNOWN_TYPE to indicate this is an array type that needs
-             * special handling via KgpcType helpers like kgpc_type_is_array(). */
-            return UNKNOWN_TYPE;
-        
-        case TYPE_KIND_RECORD:
-            return RECORD_TYPE;
-        case TYPE_KIND_ARRAY_OF_CONST:
-            return ARRAY_OF_CONST_TYPE;
-        
-        case TYPE_KIND_PROCEDURE:
-            return PROCEDURE;
-        
-        default:
-            return UNKNOWN_TYPE;
-    }
-}
-
 /* For pointer types, get the type tag of what it points to */
 int kgpc_type_get_pointer_subtype_tag(KgpcType *type)
 {
@@ -1844,8 +1811,21 @@ int kgpc_type_get_pointer_subtype_tag(KgpcType *type)
     if (points_to == NULL)
         return UNKNOWN_TYPE;
     
-    /* Recursively get the type tag of what we point to */
-    return kgpc_type_get_legacy_tag(points_to);
+    if (points_to->kind == TYPE_KIND_PRIMITIVE)
+        return points_to->info.primitive_type_tag;
+    if (points_to->kind == TYPE_KIND_RECORD)
+        return RECORD_TYPE;
+    if (points_to->kind == TYPE_KIND_POINTER)
+        return POINTER_TYPE;
+    if (points_to->kind == TYPE_KIND_PROCEDURE)
+        return PROCEDURE;
+    if (points_to->kind == TYPE_KIND_ARRAY_OF_CONST)
+        return ARRAY_OF_CONST_TYPE;
+    if (points_to->kind == TYPE_KIND_ARRAY &&
+        points_to->type_alias != NULL &&
+        points_to->type_alias->is_shortstring)
+        return SHORTSTRING_TYPE;
+    return UNKNOWN_TYPE;
 }
 
 /* Check if a KgpcType requires qword (64-bit) operations */
@@ -1915,10 +1895,22 @@ int kgpc_type_equals_tag(KgpcType *type, int type_tag)
 {
     if (type == NULL)
         return (type_tag == UNKNOWN_TYPE);
-    
-    /* For primitives, pointers, records, and procedures, use legacy tag comparison */
-    int legacy_tag = kgpc_type_get_legacy_tag(type);
-    return (legacy_tag == type_tag);
+
+    if (type->kind == TYPE_KIND_PRIMITIVE)
+        return (type->info.primitive_type_tag == type_tag);
+    if (type->kind == TYPE_KIND_POINTER)
+        return (type_tag == POINTER_TYPE);
+    if (type->kind == TYPE_KIND_RECORD)
+        return (type_tag == RECORD_TYPE);
+    if (type->kind == TYPE_KIND_PROCEDURE)
+        return (type_tag == PROCEDURE);
+    if (type->kind == TYPE_KIND_ARRAY_OF_CONST)
+        return (type_tag == ARRAY_OF_CONST_TYPE);
+    if (type->kind == TYPE_KIND_ARRAY &&
+        type->type_alias != NULL &&
+        type->type_alias->is_shortstring)
+        return (type_tag == SHORTSTRING_TYPE);
+    return 0;
 }
 
 int kgpc_type_equals(KgpcType *a, KgpcType *b)

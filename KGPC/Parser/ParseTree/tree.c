@@ -2608,7 +2608,6 @@ static void init_expression(struct Expression *expr, int line_num, enum ExprType
     expr->type = type;
     expr->field_width = NULL;
     expr->field_precision = NULL;
-    expr->resolved_type = UNKNOWN_TYPE;
     expr->resolved_kgpc_type = NULL;
     expr->is_default_initializer = 0;
     expr->pointer_subtype = UNKNOWN_TYPE;

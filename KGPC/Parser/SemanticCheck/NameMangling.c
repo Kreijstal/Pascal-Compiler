@@ -7,6 +7,7 @@
 #include "../List/List.h"
 #include "../ParseTree/type_tags.h"
 #include "SemChecks/SemCheck_expr.h"
+#include "SemCheck.h"
 #include "SymTab/SymTab.h"
 #include "../ParseTree/KgpcType.h"
 
@@ -376,10 +377,10 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
         }
         else
         {
-            int type;
-            semcheck_expr_main(&type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
-
-            resolved_type = ConvertParserTypeToVarType(type);
+            KgpcType *arg_type = NULL;
+            semcheck_expr_main(symtab, arg_expr, max_scope_lev, NO_MUTATE, &arg_type);
+            int type_tag = arg_type != NULL ? semcheck_tag_from_kgpc(arg_type) : UNKNOWN_TYPE;
+            resolved_type = ConvertParserTypeToVarType(type_tag);
             if (arg_expr != NULL && arg_expr->resolved_kgpc_type != NULL)
             {
                 KgpcType *kgpc_type = arg_expr->resolved_kgpc_type;
@@ -411,7 +412,7 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
                 /* Check type_alias for STRING_TYPE to distinguish between
                  * RawByteString and UnicodeString. With the fix in commit 868406b,
                  * type_alias is now owned by KgpcType and should be valid. */
-                else if (type == STRING_TYPE && kgpc_type->type_alias != NULL)
+                else if (type_tag == STRING_TYPE && kgpc_type->type_alias != NULL)
                 {
                     struct TypeAlias *alias = kgpc_type->type_alias;
                     if (alias->alias_name != NULL)

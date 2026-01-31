@@ -29,7 +29,6 @@ struct Expression *clone_expression(const struct Expression *expr)
 
     clone->line_num = expr->line_num;
     clone->type = expr->type;
-    clone->resolved_type = expr->resolved_type;
     clone->pointer_subtype = expr->pointer_subtype;
     clone->record_type = expr->record_type;
     
@@ -304,10 +303,9 @@ struct Expression *clone_expression(const struct Expression *expr)
 }
 
 /* Semantic check on a normal expression */
-int semcheck_expr(int *type_return,
-    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating)
+int semcheck_expr(SymTab_t *symtab, struct Expression *expr,
+    int max_scope_lev, int mutating, KgpcType **out_type)
 {
-    assert(type_return != NULL);
     if (expr == NULL)
         return 0;
 
@@ -318,69 +316,14 @@ int semcheck_expr(int *type_return,
         }
     }
 
-    return semcheck_expr_main(type_return, symtab, expr, max_scope_lev, mutating);
+    return semcheck_expr_main(symtab, expr, max_scope_lev, mutating, out_type);
 }
 
 /* Semantic check on a function expression (no side effects allowed) */
-int semcheck_expr_func(int *type_return,
-    SymTab_t *symtab, struct Expression *expr, int mutating)
+int semcheck_expr_func(SymTab_t *symtab, struct Expression *expr,
+    int mutating, KgpcType **out_type)
 {
-    assert(type_return != NULL);
-    return semcheck_expr_main(type_return, symtab, expr, 0, mutating);
-}
-
-KgpcType* semcheck_expr_main_kgpc(SymTab_t *symtab, struct Expression *expr,
-    int max_scope_lev, int mutating, int *owns_type)
-{
-    if (owns_type != NULL)
-        *owns_type = 0;
-
-    if (expr != NULL && expr->resolved_kgpc_type != NULL)
-    {
-        if (owns_type != NULL)
-            *owns_type = 0;
-        return expr->resolved_kgpc_type;
-    }
-
-    if (expr != NULL && expr->type == EXPR_ARRAY_LITERAL)
-    {
-        if (expr->array_element_type != UNKNOWN_TYPE)
-        {
-            KgpcType *element_type = create_primitive_type(expr->array_element_type);
-            int end_index = expr->array_upper_bound;
-            if (end_index < expr->array_lower_bound)
-                end_index = expr->array_lower_bound - 1;
-            if (owns_type != NULL)
-                *owns_type = 1;
-            return create_array_type(element_type, expr->array_lower_bound, end_index);
-        }
-    }
-
-    int type_tag = UNKNOWN_TYPE;
-    int result = semcheck_expr_main(&type_tag, symtab, expr, max_scope_lev, mutating);
-    if (result != 0 || type_tag == UNKNOWN_TYPE)
-        return NULL;
-
-    if (expr != NULL && expr->resolved_kgpc_type != NULL)
-    {
-        if (owns_type != NULL)
-            *owns_type = 0;
-        return expr->resolved_kgpc_type;
-    }
-
-    if (owns_type != NULL)
-        *owns_type = 1;
-
-    if (type_tag == PROCEDURE)
-        return NULL;
-    if (type_tag == RECORD_TYPE && expr != NULL && expr->record_type != NULL)
-        return create_record_type(expr->record_type);
-    if (type_tag == ARRAY_OF_CONST_TYPE)
-        return create_array_of_const_type();
-    if (type_tag == POINTER_TYPE)
-        return create_pointer_type(NULL);
-
-    return create_primitive_type(type_tag);
+    return semcheck_expr_main(symtab, expr, 0, mutating, out_type);
 }
 
 /* Phase 3 Step 3: Resolve KgpcType from an expression
@@ -814,11 +757,11 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
     }
     
     /* For all other cases or if direct resolution failed, use semcheck_expr_main
-     * to get the type tag, then convert to KgpcType */
-    int type_tag = UNKNOWN_TYPE;
-    int result = semcheck_expr_main(&type_tag, symtab, expr, max_scope_lev, mutating);
-    
-    if (result != 0 || type_tag == UNKNOWN_TYPE)
+     * to populate resolved_kgpc_type. */
+    KgpcType *resolved = NULL;
+    int result = semcheck_expr_main(symtab, expr, max_scope_lev, mutating, &resolved);
+
+    if (result != 0 || resolved == NULL)
         return NULL;
 
     /* Check if semcheck_expr_main populated resolved_kgpc_type */
@@ -829,17 +772,17 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
         return expr->resolved_kgpc_type;
     }
     
-    /* Create a KgpcType from the type tag - caller owns this */
     if (owns_type != NULL)
-        *owns_type = 1;
-    
-    return create_primitive_type(type_tag);
+        *owns_type = 0;
+    return resolved;
 }
 
 /* Main semantic checking */
-int semcheck_expr_main(int *type_return,
-    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating)
+int semcheck_expr_main(SymTab_t *symtab, struct Expression *expr,
+    int max_scope_lev, int mutating, KgpcType **out_type)
 {
+    int type_tag = UNKNOWN_TYPE;
+    int *type_return = &type_tag;
     if (expr != NULL && expr->type == EXPR_VAR_ID && getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
         fprintf(stderr, "[SemCheck] semcheck_expr_main: Checking identifier: %s\n", expr->expr_data.id);
         HashNode_t *ident_node = NULL;
@@ -854,6 +797,8 @@ int semcheck_expr_main(int *type_return,
     if (expr == NULL)
         return 0;
 
+    semcheck_set_error_context(expr->line_num, expr->col_num, expr->source_index);
+
     if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
         fprintf(stderr, "[SemCheck] semcheck_expr_main: expr type=%d\n", expr->type);
         if (expr->type == EXPR_VAR_ID) {
@@ -867,14 +812,17 @@ int semcheck_expr_main(int *type_return,
     assert(type_return != NULL);
 
     return_val = 0;
-    /* Don't reset resolved_type if already set during a previous evaluation.
+    /* Don't reset resolved_kgpc_type if already set during a previous evaluation.
      * This preserves the type from procedural variable calls which may be
      * re-evaluated during name mangling. */
     int was_already_resolved = (expr->type == EXPR_FUNCTION_CALL &&
                                 expr->expr_data.function_call_data.is_procedural_var_call &&
-                                expr->resolved_type != UNKNOWN_TYPE);
-    if (!was_already_resolved)
-        expr->resolved_type = UNKNOWN_TYPE;
+                                expr->resolved_kgpc_type != NULL);
+    if (!was_already_resolved && expr->resolved_kgpc_type != NULL)
+    {
+        destroy_kgpc_type(expr->resolved_kgpc_type);
+        expr->resolved_kgpc_type = NULL;
+    }
     switch(expr->type)
     {
         case EXPR_RELOP:
@@ -914,7 +862,6 @@ int semcheck_expr_main(int *type_return,
         case EXPR_ADDR_OF_PROC:
         {
             *type_return = POINTER_TYPE;
-            expr->resolved_type = POINTER_TYPE;
             if (expr->resolved_kgpc_type == NULL)
             {
                 KgpcType *proc_type = NULL;
@@ -949,9 +896,8 @@ int semcheck_expr_main(int *type_return,
 
         /*** BASE CASES ***/
         case EXPR_INUM:
-            if (expr->resolved_type == ENUM_TYPE ||
-                (expr->resolved_kgpc_type != NULL &&
-                 kgpc_type_get_primitive_tag(expr->resolved_kgpc_type) == ENUM_TYPE))
+            if (expr->resolved_kgpc_type != NULL &&
+                kgpc_type_get_primitive_tag(expr->resolved_kgpc_type) == ENUM_TYPE)
             {
                 *type_return = ENUM_TYPE;
                 break;
@@ -1003,7 +949,6 @@ int semcheck_expr_main(int *type_return,
                 destroy_kgpc_type(expr->resolved_kgpc_type);
             }
             expr->resolved_kgpc_type = create_pointer_type(NULL);
-            expr->resolved_type = POINTER_TYPE;
             break;
         case EXPR_SET:
             *type_return = SET_TYPE;
@@ -1032,9 +977,9 @@ int semcheck_expr_main(int *type_return,
             }
             expr->is_array_expr = 1;
             expr->array_is_dynamic = 1;
-            expr->resolved_type = POINTER_TYPE;
+            semcheck_expr_set_resolved_type(expr, POINTER_TYPE);
             *type_return = POINTER_TYPE;
-            return 0;
+            break;
         }
 
         case EXPR_RECORD_CONSTRUCTOR:
@@ -1056,9 +1001,10 @@ int semcheck_expr_main(int *type_return,
                     return rc_err;
                 }
             }
-            expr->resolved_type = RECORD_TYPE;
             *type_return = RECORD_TYPE;
-            return 0;
+            if (expr->resolved_kgpc_type == NULL && expr->record_type != NULL)
+                semcheck_expr_set_resolved_type(expr, RECORD_TYPE);
+            break;
         }
 
         case EXPR_ANONYMOUS_FUNCTION:
@@ -1200,37 +1146,9 @@ int semcheck_expr_main(int *type_return,
             break;
     }
 
-    expr->resolved_type = *type_return;
-    if (expr->resolved_kgpc_type == NULL && expr->resolved_type != UNKNOWN_TYPE)
-    {
-        if (expr->resolved_type == RECORD_TYPE && expr->record_type != NULL)
-        {
-            expr->resolved_kgpc_type = create_record_type(expr->record_type);
-        }
-        else if (expr->resolved_type == ARRAY_OF_CONST_TYPE)
-        {
-            expr->resolved_kgpc_type = create_array_of_const_type();
-        }
-        else if (expr->resolved_type == POINTER_TYPE)
-        {
-            KgpcType *points_to = NULL;
-            if (expr->pointer_subtype_id != NULL)
-            {
-                HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, expr->pointer_subtype_id);
-                if (type_node != NULL && type_node->type != NULL)
-                {
-                    kgpc_type_retain(type_node->type);
-                    points_to = type_node->type;
-                }
-            }
-            if (points_to == NULL && expr->pointer_subtype != UNKNOWN_TYPE)
-                points_to = create_primitive_type(expr->pointer_subtype);
-            expr->resolved_kgpc_type = create_pointer_type(points_to);
-        }
-        else
-        {
-            expr->resolved_kgpc_type = create_primitive_type(expr->resolved_type);
-        }
-    }
+    if (expr->resolved_kgpc_type == NULL && *type_return != UNKNOWN_TYPE)
+        semcheck_expr_set_resolved_type(expr, *type_return);
+    if (out_type != NULL)
+        *out_type = expr->resolved_kgpc_type;
     return return_val;
 }

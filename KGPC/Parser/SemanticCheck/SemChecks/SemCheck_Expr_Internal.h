@@ -75,6 +75,16 @@ extern ListNode_t *type_helper_entries;
  * Core Type Checking Functions
  *===========================================================================*/
 
+static inline int semcheck_expr_legacy_tag(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev, int mutating)
+{
+    KgpcType *resolved = NULL;
+    int result = semcheck_expr_main(symtab, expr, max_scope_lev, mutating, &resolved);
+    if (type_return != NULL)
+        *type_return = semcheck_tag_from_kgpc(resolved);
+    return result;
+}
+
 /* Verifies a type is an INT_TYPE or REAL_TYPE */
 int is_type_ir(int *type);
 

@@ -79,7 +79,7 @@ int semcheck_convert_set_literal_to_array_literal(struct Expression *expr)
     }
     expr->array_element_size = 0;
     expr->array_element_record_type = NULL;
-    expr->resolved_type = UNKNOWN_TYPE;
+    semcheck_expr_set_resolved_type(expr, UNKNOWN_TYPE);
     return 0;
 }
 
@@ -96,7 +96,7 @@ int semcheck_typecheck_array_literal(struct Expression *expr, SymTab_t *symtab,
         {
             struct Expression *element_expr = (struct Expression *)cur_elem->cur;
             int element_type = UNKNOWN_TYPE;
-            semcheck_expr_main(&element_type, symtab, element_expr, max_scope_lev, NO_MUTATE);
+            semcheck_expr_legacy_tag(&element_type, symtab, element_expr, max_scope_lev, NO_MUTATE);
             cur_elem = cur_elem->next;
         }
         expr->array_element_type = ARRAY_OF_CONST_TYPE;
@@ -123,7 +123,7 @@ int semcheck_typecheck_array_literal(struct Expression *expr, SymTab_t *symtab,
         }
 
         int element_type = UNKNOWN_TYPE;
-        error_count += semcheck_expr_main(&element_type, symtab, element_expr,
+        error_count += semcheck_expr_legacy_tag(&element_type, symtab, element_expr,
             max_scope_lev, NO_MUTATE);
 
         if (error_count == 0 && expected_type != UNKNOWN_TYPE &&
@@ -236,7 +236,7 @@ int semcheck_prepare_array_literal_argument(Tree_t *formal_decl, struct Expressi
         {
             struct Expression *element_expr = (struct Expression *)cur_elem->cur;
             int element_type = UNKNOWN_TYPE;
-            semcheck_expr_main(&element_type, symtab, element_expr,
+            semcheck_expr_legacy_tag(&element_type, symtab, element_expr,
                 max_scope_lev, NO_MUTATE);
             cur_elem = cur_elem->next;
         }
@@ -431,12 +431,12 @@ int semcheck_typecheck_record_constructor(struct Expression *expr, SymTab_t *sym
     {
         semcheck_error_with_context("Error on line %d, unable to infer record type for constructor.\n",
             line_num);
-        expr->resolved_type = UNKNOWN_TYPE;
+        semcheck_expr_set_resolved_type(expr, UNKNOWN_TYPE);
         return 1;
     }
 
     expr->record_type = record_type;
-    expr->resolved_type = RECORD_TYPE;
+    semcheck_expr_set_resolved_type(expr, RECORD_TYPE);
     if (expr->resolved_kgpc_type != NULL)
         destroy_kgpc_type(expr->resolved_kgpc_type);
     expr->resolved_kgpc_type = create_record_type(record_type);
@@ -600,7 +600,7 @@ int semcheck_typecheck_record_constructor(struct Expression *expr, SymTab_t *sym
         }
 
         int value_type = UNKNOWN_TYPE;
-        error_count += semcheck_expr_main(&value_type, symtab, field->value, max_scope_lev, NO_MUTATE);
+        error_count += semcheck_expr_legacy_tag(&value_type, symtab, field->value, max_scope_lev, NO_MUTATE);
 
         int expected_owned = 1;
         KgpcType *expected_type = semcheck_field_expected_kgpc_type(symtab, field_desc);
@@ -664,4 +664,3 @@ int semcheck_prepare_record_constructor_argument(Tree_t *formal_decl, struct Exp
     return semcheck_typecheck_record_constructor(arg_expr, symtab, max_scope_lev,
         record_type, line_num);
 }
-

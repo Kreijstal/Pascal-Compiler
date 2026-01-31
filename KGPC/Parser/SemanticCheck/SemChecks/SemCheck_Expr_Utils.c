@@ -31,8 +31,6 @@ void semcheck_expr_set_resolved_type(struct Expression *expr, int type_tag)
     if (expr == NULL)
         return;
 
-    expr->resolved_type = type_tag;
-
     if (expr->resolved_kgpc_type != NULL)
     {
         destroy_kgpc_type(expr->resolved_kgpc_type);
@@ -249,11 +247,9 @@ int semcheck_expr_is_char_like(struct Expression *expr)
     if (expr->type == EXPR_STRING && expr->expr_data.string != NULL &&
         strlen(expr->expr_data.string) == 1)
         return 1;
-    if (expr->resolved_type == CHAR_TYPE)
-        return 1;
     if (expr->resolved_kgpc_type != NULL)
     {
-        if (kgpc_type_get_primitive_tag(expr->resolved_kgpc_type) == CHAR_TYPE)
+        if (kgpc_type_is_char(expr->resolved_kgpc_type))
             return 1;
         struct TypeAlias *alias = kgpc_type_get_type_alias(expr->resolved_kgpc_type);
         if (alias != NULL && alias->is_char_alias)
@@ -266,8 +262,7 @@ int semcheck_expr_is_char_pointer(struct Expression *expr)
 {
     if (expr == NULL)
         return 0;
-    if (expr->resolved_type != POINTER_TYPE &&
-        (expr->resolved_kgpc_type == NULL || !kgpc_type_is_pointer(expr->resolved_kgpc_type)))
+    if (expr->resolved_kgpc_type == NULL || !kgpc_type_is_pointer(expr->resolved_kgpc_type))
         return 0;
     if (expr->pointer_subtype == CHAR_TYPE)
         return 1;
@@ -313,12 +308,7 @@ void semcheck_promote_pointer_expr_to_string(struct Expression *expr)
 {
     if (expr == NULL)
         return;
-    if (expr->resolved_kgpc_type != NULL)
-    {
-        destroy_kgpc_type(expr->resolved_kgpc_type);
-        expr->resolved_kgpc_type = NULL;
-    }
-    expr->resolved_type = STRING_TYPE;
+    semcheck_expr_set_resolved_type(expr, STRING_TYPE);
 }
 
 int is_and_or(int *type)

@@ -82,7 +82,7 @@ void semcheck_set_array_info_from_kgpctype(struct Expression *expr, SymTab_t *sy
     KgpcType *element_type = kgpc_type_get_array_element_type(array_type);
     if (element_type != NULL)
     {
-        expr->array_element_type = kgpc_type_get_legacy_tag(element_type);
+        expr->array_element_type = semcheck_tag_from_kgpc(element_type);
         if (element_type->kind == TYPE_KIND_RECORD)
             expr->array_element_record_type = kgpc_type_get_record(element_type);
         else
@@ -202,7 +202,7 @@ void semcheck_set_array_info_from_alias(struct Expression *expr, SymTab_t *symta
     }
 
     if (alias->is_shortstring)
-        expr->resolved_type = SHORTSTRING_TYPE;
+        semcheck_expr_set_resolved_type(expr, SHORTSTRING_TYPE);
 
     if (expr->array_element_type == UNKNOWN_TYPE && expr->array_element_type_id != NULL)
     {
@@ -280,7 +280,7 @@ void semcheck_set_array_info_from_hashnode(struct Expression *expr, SymTab_t *sy
         KgpcType *elem_type = kgpc_type_get_array_element_type_resolved(node->type, symtab);
         if (elem_type != NULL)
         {
-            expr->array_element_type = kgpc_type_get_legacy_tag(elem_type);
+            expr->array_element_type = semcheck_tag_from_kgpc(elem_type);
             if (expr->array_element_type == UNKNOWN_TYPE &&
                 elem_type->type_alias != NULL &&
                 elem_type->type_alias->target_type_id != NULL)

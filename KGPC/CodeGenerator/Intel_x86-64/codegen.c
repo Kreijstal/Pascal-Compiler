@@ -30,6 +30,27 @@
 #include "../../Parser/SemanticCheck/SemChecks/SemCheck_expr.h"
 #include "../../identifier_utils.h"
 
+static int codegen_tag_from_kgpc(const KgpcType *type)
+{
+    if (type == NULL)
+        return UNKNOWN_TYPE;
+    if (type->kind == TYPE_KIND_PRIMITIVE)
+        return type->info.primitive_type_tag;
+    if (kgpc_type_is_array_of_const((KgpcType *)type))
+        return ARRAY_OF_CONST_TYPE;
+    if (kgpc_type_is_array((KgpcType *)type) &&
+        type->type_alias != NULL &&
+        type->type_alias->is_shortstring)
+        return SHORTSTRING_TYPE;
+    if (kgpc_type_is_record((KgpcType *)type))
+        return RECORD_TYPE;
+    if (kgpc_type_is_pointer((KgpcType *)type))
+        return POINTER_TYPE;
+    if (kgpc_type_is_procedure((KgpcType *)type))
+        return PROCEDURE;
+    return UNKNOWN_TYPE;
+}
+
 #define CODEGEN_POINTER_SIZE_BYTES 8
 #define CODEGEN_LABEL_BUFFER_SIZE 256
 
@@ -3797,9 +3818,9 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                 if (inferred_type_tag == UNKNOWN_TYPE)
                 {
                     if (resolved_type_node != NULL && resolved_type_node->type != NULL)
-                        inferred_type_tag = kgpc_type_get_legacy_tag(resolved_type_node->type);
+                        inferred_type_tag = codegen_tag_from_kgpc(resolved_type_node->type);
                     else if (cached_arg_type != NULL)
-                        inferred_type_tag = kgpc_type_get_legacy_tag(cached_arg_type);
+                        inferred_type_tag = codegen_tag_from_kgpc(cached_arg_type);
                 }
 
                 while(arg_ids != NULL)
@@ -3832,15 +3853,15 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                             (void *)resolved_type_node, (void *)cached_arg_type);
                         if (resolved_type_node != NULL && resolved_type_node->type != NULL)
                         {
-                            fprintf(stderr, "[CODEGEN]   resolved_type_node->type kind=%d legacy=%d\n",
+                            fprintf(stderr, "[CODEGEN]   resolved_type_node->type kind=%d tag=%d\n",
                                 resolved_type_node->type->kind,
-                                kgpc_type_get_legacy_tag(resolved_type_node->type));
+                                codegen_tag_from_kgpc(resolved_type_node->type));
                         }
                         if (cached_arg_type != NULL)
                         {
-                            fprintf(stderr, "[CODEGEN]   cached_arg_type kind=%d legacy=%d\n",
+                            fprintf(stderr, "[CODEGEN]   cached_arg_type kind=%d tag=%d\n",
                                 cached_arg_type->kind,
-                                kgpc_type_get_legacy_tag(cached_arg_type));
+                                codegen_tag_from_kgpc(cached_arg_type));
                         }
                     }
                     if (!symbol_is_var_param)

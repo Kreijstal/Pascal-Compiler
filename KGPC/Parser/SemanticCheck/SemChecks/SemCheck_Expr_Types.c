@@ -28,7 +28,7 @@ int semcheck_typecast(int *type_return,
     int inner_type = UNKNOWN_TYPE;
 
     if (expr->expr_data.typecast_data.expr != NULL)
-        error_count += semcheck_expr_main(&inner_type, symtab,
+        error_count += semcheck_expr_legacy_tag(&inner_type, symtab,
             expr->expr_data.typecast_data.expr, max_scope_lev, NO_MUTATE);
 
     int target_type = expr->expr_data.typecast_data.target_type;
@@ -63,7 +63,7 @@ int semcheck_typecast(int *type_return,
     }
 
     *type_return = target_type;
-    expr->resolved_type = target_type;
+    semcheck_expr_set_resolved_type(expr, target_type);
 
     if (expr->resolved_kgpc_type != NULL)
     {
@@ -207,7 +207,7 @@ int semcheck_is_expr(int *type_return,
     }
 
     int value_type = UNKNOWN_TYPE;
-    error_count += semcheck_expr_main(&value_type, symtab, value_expr, max_scope_lev, NO_MUTATE);
+    error_count += semcheck_expr_legacy_tag(&value_type, symtab, value_expr, max_scope_lev, NO_MUTATE);
 
     struct RecordType *value_record = value_expr->record_type;
     
@@ -262,7 +262,7 @@ int semcheck_is_expr(int *type_return,
 
     expr->expr_data.is_data.target_type = target_type;
     expr->expr_data.is_data.target_record_type = target_record;
-    expr->resolved_type = BOOL;
+    semcheck_expr_set_resolved_type(expr, BOOL);
     *type_return = BOOL;
     return error_count;
 }
@@ -287,7 +287,7 @@ int semcheck_as_expr(int *type_return,
     }
 
     int value_type = UNKNOWN_TYPE;
-    error_count += semcheck_expr_main(&value_type, symtab, value_expr, max_scope_lev, NO_MUTATE);
+    error_count += semcheck_expr_legacy_tag(&value_type, symtab, value_expr, max_scope_lev, NO_MUTATE);
 
     struct RecordType *value_record = value_expr->record_type;
     
@@ -351,7 +351,7 @@ int semcheck_as_expr(int *type_return,
     expr->expr_data.as_data.target_type = target_type;
     expr->expr_data.as_data.target_record_type = target_record;
     expr->record_type = target_record;
-    expr->resolved_type = target_type;
+    semcheck_expr_set_resolved_type(expr, target_type);
     
     if (expr->resolved_kgpc_type != NULL)
     {
@@ -389,7 +389,7 @@ int semcheck_pointer_deref(int *type_return,
 
     int error_count = 0;
     int pointer_type = UNKNOWN_TYPE;
-    error_count += semcheck_expr_main(&pointer_type, symtab, pointer_expr,
+    error_count += semcheck_expr_legacy_tag(&pointer_type, symtab, pointer_expr,
         max_scope_lev, NO_MUTATE);
 
     if (pointer_type != POINTER_TYPE)
@@ -526,7 +526,7 @@ int semcheck_pointer_deref(int *type_return,
 
     /* Set the expression's resolved type to the pointed-to type.
      * This is critical for code generation to emit correct-sized loads. */
-    expr->resolved_type = target_type;
+    semcheck_expr_set_resolved_type(expr, target_type);
     *type_return = target_type;
     return error_count;
 }
@@ -667,14 +667,14 @@ int semcheck_transform_property_getter_call(int *type_return,
     semcheck_expr_set_call_kgpc_type(expr, method_node->type, 0);
     expr->expr_data.function_call_data.is_call_info_valid = 1;
     expr->record_type = NULL;
-    expr->resolved_type = UNKNOWN_TYPE;
+    semcheck_expr_set_resolved_type(expr, UNKNOWN_TYPE);
     expr->is_array_expr = 0;
     expr->array_element_type = UNKNOWN_TYPE;
     expr->array_element_type_id = NULL;
     expr->array_element_record_type = NULL;
     expr->array_element_size = 0;
 
-    return semcheck_expr_main(type_return, symtab, expr, max_scope_lev, mutating);
+    return semcheck_expr_legacy_tag(type_return, symtab, expr, max_scope_lev, mutating);
 }
 
 int semcheck_recordaccess(int *type_return,
@@ -734,7 +734,7 @@ int semcheck_recordaccess(int *type_return,
                 }
                 new_record_access->expr_data.record_access_data.field_offset = 0;
                 new_record_access->record_type = NULL;
-                new_record_access->resolved_type = UNKNOWN_TYPE;
+                semcheck_expr_set_resolved_type(new_record_access, UNKNOWN_TYPE);
                 new_record_access->is_array_expr = 0;
                 new_record_access->array_element_type = UNKNOWN_TYPE;
                 new_record_access->array_element_type_id = NULL;
@@ -841,7 +841,7 @@ int semcheck_recordaccess(int *type_return,
                     /* Transform to integer literal for constants */
                     expr->type = EXPR_INUM;
                     expr->expr_data.i_num = field_node->const_int_value;
-                    expr->resolved_type = LONGINT_TYPE;
+                    semcheck_expr_set_resolved_type(expr, LONGINT_TYPE);
                     if (field_node->type != NULL)
                     {
                         semcheck_expr_set_resolved_kgpc_type_shared(expr, field_node->type);
@@ -908,7 +908,7 @@ int semcheck_recordaccess(int *type_return,
                             /* Found the enum literal - transform to integer constant */
                             expr->type = EXPR_INUM;
                             expr->expr_data.i_num = ordinal;
-                            expr->resolved_type = ENUM_TYPE;
+                            semcheck_expr_set_resolved_type(expr, ENUM_TYPE);
                             if (type_alias->kgpc_type != NULL)
                             {
                                 /* Use the shared type setter to properly manage reference counting */
@@ -936,7 +936,7 @@ int semcheck_recordaccess(int *type_return,
 
     int error_count = 0;
     int record_type = UNKNOWN_TYPE;
-    error_count += semcheck_expr_main(&record_type, symtab, record_expr, max_scope_lev, mutating);
+    error_count += semcheck_expr_legacy_tag(&record_type, symtab, record_expr, max_scope_lev, mutating);
 
     if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
         fprintf(stderr, "[SemCheck] semcheck_recordaccess: field_id=%s, record_type=%d, record_expr->record_type=%p\n",
@@ -1308,7 +1308,7 @@ int semcheck_recordaccess(int *type_return,
                     }
 
                     expr->record_type = (property_type == RECORD_TYPE) ? property_record : NULL;
-                    expr->resolved_type = property_type;
+                    semcheck_expr_set_resolved_type(expr, property_type);
                     *type_return = property_type;
                     return error_count;
                 }
@@ -1411,7 +1411,7 @@ int semcheck_recordaccess(int *type_return,
 
                     /* Re-run semantic checking as a function call */
                     expr->record_type = NULL;
-                    expr->resolved_type = UNKNOWN_TYPE;
+                    semcheck_expr_set_resolved_type(expr, UNKNOWN_TYPE);
                     return semcheck_funccall(type_return, symtab, expr, max_scope_lev, mutating);
                 }
             }
@@ -1465,7 +1465,7 @@ int semcheck_recordaccess(int *type_return,
                 struct Expression *size_arg = (struct Expression *)calloc(1, sizeof(struct Expression));
                 size_arg->type = EXPR_INUM;
                 size_arg->expr_data.i_num = class_size;
-                size_arg->resolved_type = INT_TYPE;
+                semcheck_expr_set_resolved_type(size_arg, INT_TYPE);
                 
                 /* Create argument 2: VMT pointer */
                 struct Expression *vmt_arg;
@@ -1476,7 +1476,7 @@ int semcheck_recordaccess(int *type_return,
                     char vmt_label[256];
                     snprintf(vmt_label, sizeof(vmt_label), "%s_VMT", expr_name);
                     vmt_arg->expr_data.id = strdup(vmt_label);
-                    vmt_arg->resolved_type = POINTER_TYPE;
+                    semcheck_expr_set_resolved_type(vmt_arg, POINTER_TYPE);
                 } else {
                     /* Class reference variable: use the variable's value as VMT */
                     /* The variable already holds a pointer to the VMT */
@@ -1499,7 +1499,7 @@ int semcheck_recordaccess(int *type_return,
                 
                 /* Set the return type information */
                 expr->record_type = record_info;
-                expr->resolved_type = POINTER_TYPE;
+                semcheck_expr_set_resolved_type(expr, POINTER_TYPE);
                 
                 /* Create a KgpcType for the class (pointer to record) */
                 KgpcType *class_kgpc = create_pointer_type(record_kgpc);
@@ -1578,7 +1578,7 @@ int semcheck_recordaccess(int *type_return,
 
                     /* Re-run semantic checking as a function call */
                     expr->record_type = NULL;
-                    expr->resolved_type = UNKNOWN_TYPE;
+                    semcheck_expr_set_resolved_type(expr, UNKNOWN_TYPE);
                     return semcheck_funccall(type_return, symtab, expr, max_scope_lev, mutating);
                 }
             }
@@ -1636,7 +1636,7 @@ int semcheck_recordaccess(int *type_return,
                         }
 
                         expr->record_type = NULL;
-                        expr->resolved_type = UNKNOWN_TYPE;
+                        semcheck_expr_set_resolved_type(expr, UNKNOWN_TYPE);
                         return semcheck_funccall(type_return, symtab, expr, max_scope_lev, mutating);
                     }
                 }
@@ -1874,7 +1874,7 @@ FIELD_RESOLVED:
     }
 
     expr->record_type = (field_type == RECORD_TYPE) ? field_record : NULL;
-    expr->resolved_type = field_type;
+    semcheck_expr_set_resolved_type(expr, field_type);
     *type_return = field_type;
     if (getenv("KGPC_DEBUG_RECORD_FIELD") != NULL &&
         field_id != NULL &&
@@ -2046,7 +2046,7 @@ int semcheck_reinterpret_typecast_as_call(int *type_return, SymTab_t *symtab,
     if (arg_expr != NULL)
         expr->expr_data.function_call_data.args_expr = CreateListNode(arg_expr, LIST_EXPR);
 
-    return semcheck_expr_main(type_return, symtab, expr, max_scope_lev, NO_MUTATE);
+    return semcheck_expr_legacy_tag(type_return, symtab, expr, max_scope_lev, NO_MUTATE);
 }
 
 
@@ -2116,7 +2116,7 @@ int semcheck_addressof(int *type_return,
     }
 
     if (!treated_as_proc_ref)
-        semcheck_expr_main(&inner_type, symtab, inner, max_scope_lev, NO_MUTATE);
+        semcheck_expr_legacy_tag(&inner_type, symtab, inner, max_scope_lev, NO_MUTATE);
 
     /* Special case: If the inner expression was auto-converted from a function identifier
      * to a function call (because we're in NO_MUTATE mode), we need to reverse that

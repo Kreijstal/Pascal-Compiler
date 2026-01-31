@@ -21,13 +21,29 @@
 #endif
 #include "SemCheck_stmt.h"
 #include "SemCheck_expr.h"
+#include "SemCheck_overload.h"
 #include "../SemCheck.h"
 #include "../NameMangling.h"
 #include "../HashTable/HashTable.h"
 #include "../SymTab/SymTab.h"
 #include "../../ParseTree/tree.h"
 #include "../../ParseTree/tree_types.h"
+#include "../../ParseTree/type_tags.h"
 #include "../../List/List.h"
+
+void semcheck_expr_set_resolved_type(struct Expression *expr, int type_tag);
+
+static int semcheck_stmt_expr_tag(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev, int mutating)
+{
+    KgpcType *resolved = NULL;
+    int result = semcheck_expr_main(symtab, expr, max_scope_lev, mutating, &resolved);
+    if (type_return != NULL)
+    {
+        *type_return = semcheck_tag_from_kgpc(resolved);
+    }
+    return result;
+}
 
 static inline struct RecordType* semcheck_stmt_get_record_type_from_node(HashNode_t *node)
 {
@@ -86,8 +102,6 @@ static int semcheck_expr_is_shortstring(const struct Expression *expr)
             }
         }
     }
-    if (expr->resolved_type == SHORTSTRING_TYPE)
-        return 1;
     if (expr->is_array_expr &&
         expr->array_element_type == CHAR_TYPE &&
         expr->array_lower_bound == 0 &&
@@ -184,7 +198,6 @@ static int semcheck_try_record_assignment_operator(SymTab_t *symtab,
         destroy_kgpc_type(call_expr->resolved_kgpc_type);
     call_expr->resolved_kgpc_type = return_type;
     kgpc_type_retain(return_type);
-    call_expr->resolved_type = kgpc_type_get_legacy_tag(return_type);
 
     stmt->stmt_data.var_assign_data.expr = call_expr;
 
@@ -274,7 +287,7 @@ static int semcheck_param_types_compatible(Tree_t *param_decl, KgpcType *expecte
         !param_decl->tree_data.var_decl_data.is_var_param &&
         actual->kind == TYPE_KIND_PRIMITIVE)
     {
-        int expected_tag = kgpc_type_get_legacy_tag(effective);
+        int expected_tag = semcheck_tag_from_kgpc(effective);
         int actual_tag = actual->info.primitive_type_tag;
         if ((expected_tag == LONGINT_TYPE && actual_tag == INT_TYPE) ||
             (expected_tag == INT64_TYPE &&
@@ -691,7 +704,6 @@ static struct Expression *make_tfpglist_ctor_expr(struct RecordType *record, int
     }
 
     call->record_type = record;
-    call->resolved_type = RECORD_TYPE;
     if (call->resolved_kgpc_type != NULL)
     {
         destroy_kgpc_type(call->resolved_kgpc_type);
@@ -1085,7 +1097,7 @@ static int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, 
 #endif
 
     int target_type = UNKNOWN_TYPE;
-    return_val += semcheck_expr_main(&target_type, symtab, array_expr, max_scope_lev, MUTATE);
+    return_val += semcheck_stmt_expr_tag(&target_type, symtab, array_expr, max_scope_lev, MUTATE);
     int target_is_shortstring = semcheck_expr_is_shortstring(array_expr);
 
     int target_is_string = (target_type == STRING_TYPE);
@@ -1177,7 +1189,7 @@ static int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, 
     }
 
     int length_type = UNKNOWN_TYPE;
-    return_val += semcheck_expr_main(&length_type, symtab, length_expr, max_scope_lev, NO_MUTATE);
+    return_val += semcheck_stmt_expr_tag(&length_type, symtab, length_expr, max_scope_lev, NO_MUTATE);
     if (!is_integer_type(length_type))
     {
         semcheck_error_with_context("Error on line %d, SetLength length argument must be an integer.\n", stmt->line_num);
@@ -1206,7 +1218,7 @@ static int semcheck_builtin_setstring(SymTab_t *symtab, struct Statement *stmt, 
 
     /* First argument must be a string variable (output parameter) */
     int string_type = UNKNOWN_TYPE;
-    return_val += semcheck_expr_main(&string_type, symtab, string_expr, max_scope_lev, MUTATE);
+    return_val += semcheck_stmt_expr_tag(&string_type, symtab, string_expr, max_scope_lev, MUTATE);
     int target_is_shortstring = semcheck_expr_is_shortstring(string_expr);
     if (string_type != STRING_TYPE && string_type != UNKNOWN_TYPE && !target_is_shortstring)
     {
@@ -1216,7 +1228,7 @@ static int semcheck_builtin_setstring(SymTab_t *symtab, struct Statement *stmt, 
 
     /* Second argument must be a PChar/pointer to char */
     int buffer_type = UNKNOWN_TYPE;
-    return_val += semcheck_expr_main(&buffer_type, symtab, buffer_expr, max_scope_lev, NO_MUTATE);
+    return_val += semcheck_stmt_expr_tag(&buffer_type, symtab, buffer_expr, max_scope_lev, NO_MUTATE);
     if (buffer_type != POINTER_TYPE && buffer_type != UNKNOWN_TYPE)
     {
         /* Allow if it's an array of char or similar */
@@ -1236,7 +1248,7 @@ static int semcheck_builtin_setstring(SymTab_t *symtab, struct Statement *stmt, 
 
     /* Third argument must be an integer length */
     int length_type = UNKNOWN_TYPE;
-    return_val += semcheck_expr_main(&length_type, symtab, length_expr, max_scope_lev, NO_MUTATE);
+    return_val += semcheck_stmt_expr_tag(&length_type, symtab, length_expr, max_scope_lev, NO_MUTATE);
     if (!is_integer_type(length_type))
     {
         semcheck_error_with_context("Error on line %d, SetString length argument must be an integer.\n", stmt->line_num);
@@ -1378,7 +1390,7 @@ static int semcheck_builtin_strproc(SymTab_t *symtab, struct Statement *stmt, in
     struct Expression *target_expr = (struct Expression *)args->next->cur;
 
     int value_type = UNKNOWN_TYPE;
-    return_val += semcheck_expr_main(&value_type, symtab, value_expr, INT_MAX, NO_MUTATE);
+    return_val += semcheck_stmt_expr_tag(&value_type, symtab, value_expr, INT_MAX, NO_MUTATE);
     if (!is_integer_type(value_type) && value_type != REAL_TYPE)
     {
         semcheck_error_with_context("Error on line %d, Str value must be an integer or real.\n", stmt->line_num);
@@ -1388,7 +1400,7 @@ static int semcheck_builtin_strproc(SymTab_t *symtab, struct Statement *stmt, in
     if (value_expr != NULL && value_expr->field_width != NULL)
     {
         int width_type = UNKNOWN_TYPE;
-        return_val += semcheck_expr_main(&width_type, symtab, value_expr->field_width, INT_MAX, NO_MUTATE);
+        return_val += semcheck_stmt_expr_tag(&width_type, symtab, value_expr->field_width, INT_MAX, NO_MUTATE);
         if (!is_integer_type(width_type))
         {
             semcheck_error_with_context("Error on line %d, Str field width must be an integer.\n", stmt->line_num);
@@ -1399,7 +1411,7 @@ static int semcheck_builtin_strproc(SymTab_t *symtab, struct Statement *stmt, in
     if (value_expr != NULL && value_expr->field_precision != NULL)
     {
         int precision_type = UNKNOWN_TYPE;
-        return_val += semcheck_expr_main(&precision_type, symtab, value_expr->field_precision, INT_MAX, NO_MUTATE);
+        return_val += semcheck_stmt_expr_tag(&precision_type, symtab, value_expr->field_precision, INT_MAX, NO_MUTATE);
         if (!is_integer_type(precision_type))
         {
             semcheck_error_with_context("Error on line %d, Str field precision must be an integer.\n", stmt->line_num);
@@ -1408,7 +1420,7 @@ static int semcheck_builtin_strproc(SymTab_t *symtab, struct Statement *stmt, in
     }
 
     int target_type = UNKNOWN_TYPE;
-    return_val += semcheck_expr_main(&target_type, symtab, target_expr, max_scope_lev, MUTATE);
+    return_val += semcheck_stmt_expr_tag(&target_type, symtab, target_expr, max_scope_lev, MUTATE);
     if (target_type != STRING_TYPE && target_type != SHORTSTRING_TYPE)
     {
         semcheck_error_with_context("Error on line %d, Str output must be a string variable.\n", stmt->line_num);
@@ -1438,7 +1450,7 @@ static int semcheck_builtin_insert(SymTab_t *symtab, struct Statement *stmt, int
     struct Expression *index_expr = (struct Expression *)args->next->next->cur;
 
     int source_type = UNKNOWN_TYPE;
-    error_count += semcheck_expr_main(&source_type, symtab, source_expr, max_scope_lev, NO_MUTATE);
+    error_count += semcheck_stmt_expr_tag(&source_type, symtab, source_expr, max_scope_lev, NO_MUTATE);
     int source_is_shortstring = semcheck_expr_is_shortstring(source_expr);
     if (source_type != STRING_TYPE && source_type != CHAR_TYPE && !source_is_shortstring)
     {
@@ -1448,7 +1460,7 @@ static int semcheck_builtin_insert(SymTab_t *symtab, struct Statement *stmt, int
     }
 
     int target_type = UNKNOWN_TYPE;
-    error_count += semcheck_expr_main(&target_type, symtab, target_expr, max_scope_lev, MUTATE);
+    error_count += semcheck_stmt_expr_tag(&target_type, symtab, target_expr, max_scope_lev, MUTATE);
     int target_is_shortstring = semcheck_expr_is_shortstring(target_expr);
     if (target_type != STRING_TYPE && !target_is_shortstring)
     {
@@ -1458,7 +1470,7 @@ static int semcheck_builtin_insert(SymTab_t *symtab, struct Statement *stmt, int
     }
 
     int index_type = UNKNOWN_TYPE;
-    error_count += semcheck_expr_main(&index_type, symtab, index_expr, max_scope_lev, NO_MUTATE);
+    error_count += semcheck_stmt_expr_tag(&index_type, symtab, index_expr, max_scope_lev, NO_MUTATE);
     if (!is_integer_type(index_type))
     {
         semcheck_error_with_context("Error on line %d, Insert index must be an integer.\n",
@@ -1504,7 +1516,7 @@ static int semcheck_builtin_delete(SymTab_t *symtab, struct Statement *stmt, int
     struct Expression *count_expr = (struct Expression *)args->next->next->cur;
 
     int target_type = UNKNOWN_TYPE;
-    error_count += semcheck_expr_main(&target_type, symtab, target_expr, max_scope_lev, MUTATE);
+    error_count += semcheck_stmt_expr_tag(&target_type, symtab, target_expr, max_scope_lev, MUTATE);
     
     /* Check if target is a string type OR a shortstring (array of char) */
     int is_valid_target = is_string_type(target_type) ||
@@ -1519,7 +1531,7 @@ static int semcheck_builtin_delete(SymTab_t *symtab, struct Statement *stmt, int
     }
 
     int index_type = UNKNOWN_TYPE;
-    error_count += semcheck_expr_main(&index_type, symtab, index_expr, max_scope_lev, NO_MUTATE);
+    error_count += semcheck_stmt_expr_tag(&index_type, symtab, index_expr, max_scope_lev, NO_MUTATE);
     if (!is_integer_type(index_type))
     {
         semcheck_error_with_context("Error on line %d, Delete index must be an integer.\n",
@@ -1528,7 +1540,7 @@ static int semcheck_builtin_delete(SymTab_t *symtab, struct Statement *stmt, int
     }
 
     int count_type = UNKNOWN_TYPE;
-    error_count += semcheck_expr_main(&count_type, symtab, count_expr, max_scope_lev, NO_MUTATE);
+    error_count += semcheck_stmt_expr_tag(&count_type, symtab, count_expr, max_scope_lev, NO_MUTATE);
     if (!is_integer_type(count_type))
     {
         semcheck_error_with_context("Error on line %d, Delete count must be an integer.\n",
@@ -1572,7 +1584,7 @@ static int semcheck_builtin_val(SymTab_t *symtab, struct Statement *stmt, int ma
 
     struct Expression *source_expr = (struct Expression *)args->cur;
     int source_type = UNKNOWN_TYPE;
-    error_count += semcheck_expr_main(&source_type, symtab, source_expr, max_scope_lev, NO_MUTATE);
+    error_count += semcheck_stmt_expr_tag(&source_type, symtab, source_expr, max_scope_lev, NO_MUTATE);
     if (source_type != STRING_TYPE)
     {
         semcheck_error_with_context("Error on line %d, Val expects its first argument to be a string.\n",
@@ -1582,7 +1594,7 @@ static int semcheck_builtin_val(SymTab_t *symtab, struct Statement *stmt, int ma
 
     struct Expression *value_expr = (struct Expression *)args->next->cur;
     int value_type = UNKNOWN_TYPE;
-    error_count += semcheck_expr_main(&value_type, symtab, value_expr, max_scope_lev, MUTATE);
+    error_count += semcheck_stmt_expr_tag(&value_type, symtab, value_expr, max_scope_lev, MUTATE);
     if (!is_integer_type(value_type) && value_type != REAL_TYPE)
     {
         fprintf(stderr,
@@ -1593,7 +1605,7 @@ static int semcheck_builtin_val(SymTab_t *symtab, struct Statement *stmt, int ma
 
     struct Expression *code_expr = (struct Expression *)args->next->next->cur;
     int code_type = UNKNOWN_TYPE;
-    error_count += semcheck_expr_main(&code_type, symtab, code_expr, max_scope_lev, MUTATE);
+    error_count += semcheck_stmt_expr_tag(&code_type, symtab, code_expr, max_scope_lev, MUTATE);
     if (!is_integer_type(code_type))
     {
         semcheck_error_with_context("Error on line %d, Val code argument must be an integer variable.\n",
@@ -1619,7 +1631,7 @@ static int semcheck_builtin_inc(SymTab_t *symtab, struct Statement *stmt, int ma
     int return_val = 0;
     struct Expression *target_expr = (struct Expression *)args->cur;
     int target_type = UNKNOWN_TYPE;
-    return_val += semcheck_expr_main(&target_type, symtab, target_expr, max_scope_lev, MUTATE);
+    return_val += semcheck_stmt_expr_tag(&target_type, symtab, target_expr, max_scope_lev, MUTATE);
     int target_is_pointer = (target_type == POINTER_TYPE);
     if (!is_integer_type(target_type) && !target_is_pointer)
     {
@@ -1631,7 +1643,7 @@ static int semcheck_builtin_inc(SymTab_t *symtab, struct Statement *stmt, int ma
     {
         struct Expression *value_expr = (struct Expression *)args->next->cur;
         int value_type = UNKNOWN_TYPE;
-        return_val += semcheck_expr_main(&value_type, symtab, value_expr, max_scope_lev, NO_MUTATE);
+        return_val += semcheck_stmt_expr_tag(&value_type, symtab, value_expr, max_scope_lev, NO_MUTATE);
         if (!is_integer_type(value_type))
         {
             semcheck_error_with_context("Error on line %d, Inc increment must be an integer.\n", stmt->line_num);
@@ -1664,7 +1676,7 @@ static int semcheck_builtin_include_like(SymTab_t *symtab, struct Statement *stm
     int error_count = 0;
     struct Expression *set_expr = (struct Expression *)args->cur;
     int set_type = UNKNOWN_TYPE;
-    error_count += semcheck_expr_main(&set_type, symtab, set_expr, max_scope_lev, MUTATE);
+    error_count += semcheck_stmt_expr_tag(&set_type, symtab, set_expr, max_scope_lev, MUTATE);
     if (set_type != SET_TYPE || !semcheck_expr_is_char_set(symtab, set_expr))
     {
         semcheck_error_with_context("Error on line %d, %s target must be a set of char.\n",
@@ -1674,7 +1686,7 @@ static int semcheck_builtin_include_like(SymTab_t *symtab, struct Statement *stm
 
     struct Expression *value_expr = (struct Expression *)args->next->cur;
     int value_type = UNKNOWN_TYPE;
-    error_count += semcheck_expr_main(&value_type, symtab, value_expr, max_scope_lev, NO_MUTATE);
+    error_count += semcheck_stmt_expr_tag(&value_type, symtab, value_expr, max_scope_lev, NO_MUTATE);
     if (!is_integer_type(value_type) && value_type != CHAR_TYPE)
     {
         semcheck_error_with_context("Error on line %d, %s element must be an ordinal value.\n",
@@ -1708,7 +1720,21 @@ static int semcheck_builtin_write_like(SymTab_t *symtab, struct Statement *stmt,
     {
         struct Expression *expr = (struct Expression *)args->cur;
         int expr_type = UNKNOWN_TYPE;
-        return_val += semcheck_expr_main(&expr_type, symtab, expr, INT_MAX, NO_MUTATE);
+        return_val += semcheck_stmt_expr_tag(&expr_type, symtab, expr, INT_MAX, NO_MUTATE);
+        int expr_is_char_array = 0;
+        if (expr_type == UNKNOWN_TYPE && expr != NULL && expr->resolved_kgpc_type != NULL)
+        {
+            KgpcType *expr_type_kgpc = expr->resolved_kgpc_type;
+            if (kgpc_type_is_array(expr_type_kgpc))
+            {
+                KgpcType *elem_type = kgpc_type_get_array_element_type_resolved(expr_type_kgpc, symtab);
+                if (elem_type != NULL && elem_type->kind == TYPE_KIND_PRIMITIVE &&
+                    elem_type->info.primitive_type_tag == CHAR_TYPE)
+                {
+                    expr_is_char_array = 1;
+                }
+            }
+        }
 
         if (!saw_file_arg && expr_type == TEXT_TYPE)
         {
@@ -1717,7 +1743,9 @@ static int semcheck_builtin_write_like(SymTab_t *symtab, struct Statement *stmt,
             continue;
         }
 
-        if (!is_integer_type(expr_type) && expr_type != STRING_TYPE && expr_type != SHORTSTRING_TYPE && expr_type != BOOL && expr_type != POINTER_TYPE && expr_type != REAL_TYPE && expr_type != CHAR_TYPE && expr_type != ENUM_TYPE)
+        if (!is_integer_type(expr_type) && expr_type != STRING_TYPE && expr_type != SHORTSTRING_TYPE &&
+            expr_type != BOOL && expr_type != POINTER_TYPE && expr_type != REAL_TYPE &&
+            expr_type != CHAR_TYPE && expr_type != ENUM_TYPE && !expr_is_char_array)
         {
             semcheck_error_with_context("Error on line %d, write argument %d must be integer, longint, real, boolean, string, pointer, or enum.\n",
                     stmt->line_num, arg_index);
@@ -1727,7 +1755,7 @@ static int semcheck_builtin_write_like(SymTab_t *symtab, struct Statement *stmt,
         if (expr != NULL && expr->field_width != NULL)
         {
             int width_type = UNKNOWN_TYPE;
-            return_val += semcheck_expr_main(&width_type, symtab, expr->field_width, INT_MAX, NO_MUTATE);
+            return_val += semcheck_stmt_expr_tag(&width_type, symtab, expr->field_width, INT_MAX, NO_MUTATE);
             if (!is_integer_type(width_type))
             {
                 semcheck_error_with_context("Error on line %d, field width for argument %d must be an integer.\n",
@@ -1739,7 +1767,7 @@ static int semcheck_builtin_write_like(SymTab_t *symtab, struct Statement *stmt,
         if (expr != NULL && expr->field_precision != NULL)
         {
             int precision_type = UNKNOWN_TYPE;
-            return_val += semcheck_expr_main(&precision_type, symtab, expr->field_precision, INT_MAX, NO_MUTATE);
+            return_val += semcheck_stmt_expr_tag(&precision_type, symtab, expr->field_precision, INT_MAX, NO_MUTATE);
             if (!is_integer_type(precision_type))
             {
                 semcheck_error_with_context("Error on line %d, field precision for argument %d must be an integer.\n",
@@ -1773,7 +1801,7 @@ static int semcheck_builtin_writestr(SymTab_t *symtab, struct Statement *stmt, i
     /* First argument must be a string variable (var parameter) */
     struct Expression *dest_expr = (struct Expression *)args->cur;
     int dest_type = UNKNOWN_TYPE;
-    return_val += semcheck_expr_main(&dest_type, symtab, dest_expr, max_scope_lev, MUTATE);
+    return_val += semcheck_stmt_expr_tag(&dest_type, symtab, dest_expr, max_scope_lev, MUTATE);
     
     if (dest_type != STRING_TYPE && dest_type != SHORTSTRING_TYPE)
     {
@@ -1789,7 +1817,7 @@ static int semcheck_builtin_writestr(SymTab_t *symtab, struct Statement *stmt, i
     {
         struct Expression *expr = (struct Expression *)args->cur;
         int expr_type = UNKNOWN_TYPE;
-        return_val += semcheck_expr_main(&expr_type, symtab, expr, INT_MAX, NO_MUTATE);
+        return_val += semcheck_stmt_expr_tag(&expr_type, symtab, expr, INT_MAX, NO_MUTATE);
 
         if (!is_integer_type(expr_type) && expr_type != STRING_TYPE && expr_type != SHORTSTRING_TYPE && 
             expr_type != BOOL && expr_type != POINTER_TYPE && expr_type != REAL_TYPE && 
@@ -1823,7 +1851,7 @@ static int semcheck_builtin_read_like(SymTab_t *symtab, struct Statement *stmt, 
         int expr_type = UNKNOWN_TYPE;
         
         /* For read, we need to check if this is a file argument first */
-        return_val += semcheck_expr_main(&expr_type, symtab, expr, max_scope_lev, NO_MUTATE);
+        return_val += semcheck_stmt_expr_tag(&expr_type, symtab, expr, max_scope_lev, NO_MUTATE);
         
         if (!saw_file_arg && expr_type == TEXT_TYPE)
         {
@@ -1836,7 +1864,7 @@ static int semcheck_builtin_read_like(SymTab_t *symtab, struct Statement *stmt, 
         /* After file arg (if any), remaining args must be mutable lvalues */
         /* Re-check with MUTATE flag to ensure it's an lvalue */
         expr_type = UNKNOWN_TYPE;
-        return_val += semcheck_expr_main(&expr_type, symtab, expr, max_scope_lev, MUTATE);
+        return_val += semcheck_stmt_expr_tag(&expr_type, symtab, expr, max_scope_lev, MUTATE);
         
         if (!is_integer_type(expr_type) && expr_type != CHAR_TYPE && expr_type != STRING_TYPE && expr_type != REAL_TYPE)
         {
@@ -1866,7 +1894,7 @@ static int semcheck_builtin_untyped_call(SymTab_t *symtab, struct Statement *stm
         struct Expression *expr = (struct Expression *)args->cur;
         int expr_type = UNKNOWN_TYPE;
         int mutate_flag = (arg_index == 0 && first_arg_mutate) ? MUTATE : NO_MUTATE;
-        return_val += semcheck_expr_main(&expr_type, symtab, expr, max_scope_lev, mutate_flag);
+        return_val += semcheck_stmt_expr_tag(&expr_type, symtab, expr, max_scope_lev, mutate_flag);
         args = args->next;
         ++arg_index;
     }
@@ -1964,7 +1992,7 @@ static int semcheck_set_stmt_call_mangled_id(SymTab_t *symtab, struct Statement 
                 struct Expression *actual_expr = (struct Expression *)actual->cur;
                 int formal_type = resolve_param_type(formal_decl, symtab);
                 int actual_type = UNKNOWN_TYPE;
-                semcheck_expr_main(&actual_type, symtab, actual_expr, max_scope_lev, NO_MUTATE);
+                semcheck_stmt_expr_tag(&actual_type, symtab, actual_expr, max_scope_lev, NO_MUTATE);
 
                 if (formal_type == UNKNOWN_TYPE || actual_type == UNKNOWN_TYPE)
                     current_score += 0;
@@ -2044,7 +2072,7 @@ static int semcheck_builtin_halt(SymTab_t *symtab, struct Statement *stmt, int m
     int return_val = 0;
     struct Expression *code_expr = (struct Expression *)args->cur;
     int code_type = UNKNOWN_TYPE;
-    return_val += semcheck_expr_main(&code_type, symtab, code_expr, max_scope_lev, NO_MUTATE);
+    return_val += semcheck_stmt_expr_tag(&code_type, symtab, code_expr, max_scope_lev, NO_MUTATE);
     return_val += semcheck_set_stmt_call_mangled_id(symtab, stmt, max_scope_lev);
     return return_val;
 }
@@ -2067,7 +2095,7 @@ static int semcheck_builtin_getmem(SymTab_t *symtab, struct Statement *stmt, int
     {
         struct Expression *size_expr = (struct Expression *)args->cur;
         int size_type = UNKNOWN_TYPE;
-        return_val += semcheck_expr_main(&size_type, symtab, size_expr, max_scope_lev, NO_MUTATE);
+        return_val += semcheck_stmt_expr_tag(&size_type, symtab, size_expr, max_scope_lev, NO_MUTATE);
         return_val += semcheck_set_stmt_call_mangled_id(symtab, stmt, max_scope_lev);
         return return_val;
     }
@@ -2076,8 +2104,8 @@ static int semcheck_builtin_getmem(SymTab_t *symtab, struct Statement *stmt, int
     struct Expression *size_expr = (struct Expression *)args->next->cur;
     int target_type = UNKNOWN_TYPE;
     int size_type = UNKNOWN_TYPE;
-    return_val += semcheck_expr_main(&target_type, symtab, target_expr, max_scope_lev, MUTATE);
-    return_val += semcheck_expr_main(&size_type, symtab, size_expr, max_scope_lev, NO_MUTATE);
+    return_val += semcheck_stmt_expr_tag(&target_type, symtab, target_expr, max_scope_lev, MUTATE);
+    return_val += semcheck_stmt_expr_tag(&size_type, symtab, size_expr, max_scope_lev, NO_MUTATE);
     return_val += semcheck_set_stmt_call_mangled_id(symtab, stmt, max_scope_lev);
     return return_val;
 }
@@ -2100,12 +2128,12 @@ static int semcheck_builtin_freemem(SymTab_t *symtab, struct Statement *stmt, in
     {
         struct Expression *ptr_expr = (struct Expression *)args->cur;
         int ptr_type = UNKNOWN_TYPE;
-        return_val += semcheck_expr_main(&ptr_type, symtab, ptr_expr, max_scope_lev, NO_MUTATE);
+        return_val += semcheck_stmt_expr_tag(&ptr_type, symtab, ptr_expr, max_scope_lev, NO_MUTATE);
         if (args->next != NULL)
         {
             struct Expression *size_expr = (struct Expression *)args->next->cur;
             int size_type = UNKNOWN_TYPE;
-            return_val += semcheck_expr_main(&size_type, symtab, size_expr, max_scope_lev, NO_MUTATE);
+            return_val += semcheck_stmt_expr_tag(&size_type, symtab, size_expr, max_scope_lev, NO_MUTATE);
         }
     }
 
@@ -2132,9 +2160,9 @@ static int semcheck_builtin_move(SymTab_t *symtab, struct Statement *stmt, int m
     int src_type = UNKNOWN_TYPE;
     int dst_type = UNKNOWN_TYPE;
     int count_type = UNKNOWN_TYPE;
-    return_val += semcheck_expr_main(&src_type, symtab, src_expr, max_scope_lev, NO_MUTATE);
-    return_val += semcheck_expr_main(&dst_type, symtab, dst_expr, max_scope_lev, MUTATE);
-    return_val += semcheck_expr_main(&count_type, symtab, count_expr, max_scope_lev, NO_MUTATE);
+    return_val += semcheck_stmt_expr_tag(&src_type, symtab, src_expr, max_scope_lev, NO_MUTATE);
+    return_val += semcheck_stmt_expr_tag(&dst_type, symtab, dst_expr, max_scope_lev, MUTATE);
+    return_val += semcheck_stmt_expr_tag(&count_type, symtab, count_expr, max_scope_lev, NO_MUTATE);
     return return_val;
 }
 
@@ -2155,8 +2183,8 @@ static int semcheck_builtin_reallocmem(SymTab_t *symtab, struct Statement *stmt,
     struct Expression *size_expr = (struct Expression *)args->next->cur;
     int target_type = UNKNOWN_TYPE;
     int size_type = UNKNOWN_TYPE;
-    return_val += semcheck_expr_main(&target_type, symtab, target_expr, max_scope_lev, NO_MUTATE);
-    return_val += semcheck_expr_main(&size_type, symtab, size_expr, max_scope_lev, NO_MUTATE);
+    return_val += semcheck_stmt_expr_tag(&target_type, symtab, target_expr, max_scope_lev, NO_MUTATE);
+    return_val += semcheck_stmt_expr_tag(&size_type, symtab, size_expr, max_scope_lev, NO_MUTATE);
     return return_val;
 }
 
@@ -2182,8 +2210,8 @@ static int semcheck_builtin_interlockedexchangeadd(SymTab_t *symtab, struct Stat
     struct Expression *value_expr = (struct Expression *)args->next->cur;
     int target_type = UNKNOWN_TYPE;
     int value_type = UNKNOWN_TYPE;
-    return_val += semcheck_expr_main(&target_type, symtab, target_expr, max_scope_lev, NO_MUTATE);
-    return_val += semcheck_expr_main(&value_type, symtab, value_expr, max_scope_lev, NO_MUTATE);
+    return_val += semcheck_stmt_expr_tag(&target_type, symtab, target_expr, max_scope_lev, NO_MUTATE);
+    return_val += semcheck_stmt_expr_tag(&value_type, symtab, value_expr, max_scope_lev, NO_MUTATE);
     return return_val;
 }
 
@@ -2202,7 +2230,7 @@ static int semcheck_builtin_new(SymTab_t *symtab, struct Statement *stmt, int ma
 
     struct Expression *target_expr = (struct Expression *)args->cur;
     int pointer_type = UNKNOWN_TYPE;
-    return_val += semcheck_expr_main(&pointer_type, symtab, target_expr, max_scope_lev, MUTATE);
+    return_val += semcheck_stmt_expr_tag(&pointer_type, symtab, target_expr, max_scope_lev, MUTATE);
 
     if (pointer_type != POINTER_TYPE)
     {
@@ -2241,7 +2269,7 @@ static int semcheck_builtin_dispose(SymTab_t *symtab, struct Statement *stmt, in
 
     struct Expression *target_expr = (struct Expression *)args->cur;
     int pointer_type = UNKNOWN_TYPE;
-    return_val += semcheck_expr_main(&pointer_type, symtab, target_expr, max_scope_lev, MUTATE);
+    return_val += semcheck_stmt_expr_tag(&pointer_type, symtab, target_expr, max_scope_lev, MUTATE);
 
     if (pointer_type != POINTER_TYPE)
     {
@@ -2296,6 +2324,8 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
     assert(symtab != NULL);
     if (stmt == NULL)
         return 0;
+
+    semcheck_set_error_context(stmt->line_num, stmt->col_num, stmt->source_index);
     
     // In semcheck_for:
     // semcheck_loop_depth++;
@@ -2389,7 +2419,7 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                 {
                     /* Type-check the return expression */
                     int expr_type;
-                    return_val += semcheck_expr(&expr_type, symtab, return_expr, max_scope_lev, 0);
+                    return_val += semcheck_stmt_expr_tag(&expr_type, symtab, return_expr, max_scope_lev, 0);
                     
                     /* Mark Result as assigned if we're in a function context */
                     HashNode_t *result_node = NULL;
@@ -2405,7 +2435,7 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             /* Check the selector expression */
             {
                 int selector_type;
-                return_val += semcheck_expr(&selector_type, symtab, stmt->stmt_data.case_data.selector_expr, max_scope_lev, 0);
+                return_val += semcheck_stmt_expr_tag(&selector_type, symtab, stmt->stmt_data.case_data.selector_expr, max_scope_lev, 0);
             }
             
             /* Check each case branch */
@@ -2420,17 +2450,17 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                             if (label_node->type == LIST_EXPR) {
                                 struct Expression *label_expr = (struct Expression *)label_node->cur;
                                 int label_type;
-                                return_val += semcheck_expr(&label_type, symtab, label_expr, max_scope_lev, 0);
+                                return_val += semcheck_stmt_expr_tag(&label_type, symtab, label_expr, max_scope_lev, 0);
                             } else if (label_node->type == LIST_SET_ELEMENT) {
                                 struct SetElement *range = (struct SetElement *)label_node->cur;
                                 if (range != NULL) {
                                     if (range->lower != NULL) {
                                         int lower_type;
-                                        return_val += semcheck_expr(&lower_type, symtab, range->lower, max_scope_lev, 0);
+                                        return_val += semcheck_stmt_expr_tag(&lower_type, symtab, range->lower, max_scope_lev, 0);
                                     }
                                     if (range->upper != NULL) {
                                         int upper_type;
-                                        return_val += semcheck_expr(&upper_type, symtab, range->upper, max_scope_lev, 0);
+                                        return_val += semcheck_stmt_expr_tag(&upper_type, symtab, range->upper, max_scope_lev, 0);
                                     }
                                 }
                             }
@@ -2465,7 +2495,7 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             }
             else
             {
-                return_val += semcheck_expr_main(&ctx_type, symtab, context_expr, max_scope_lev, NO_MUTATE);
+                return_val += semcheck_stmt_expr_tag(&ctx_type, symtab, context_expr, max_scope_lev, NO_MUTATE);
                 record_info = semcheck_with_resolve_record_type(symtab, context_expr, ctx_type, stmt->line_num);
                 if (record_info == NULL)
                 {
@@ -2552,7 +2582,7 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             if (stmt->stmt_data.raise_data.exception_expr != NULL)
             {
                 int raise_type = UNKNOWN_TYPE;
-                return_val += semcheck_expr_main(&raise_type, symtab, stmt->stmt_data.raise_data.exception_expr, INT_MAX, NO_MUTATE);
+                return_val += semcheck_stmt_expr_tag(&raise_type, symtab, stmt->stmt_data.raise_data.exception_expr, INT_MAX, NO_MUTATE);
             }
             break;
 
@@ -2754,7 +2784,7 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                 {
                     /* For other expression types, use general expression checking */
                     int expr_type = UNKNOWN_TYPE;
-                    return_val += semcheck_expr_main(&expr_type, symtab, call_expr, max_scope_lev, NO_MUTATE);
+                    return_val += semcheck_stmt_expr_tag(&expr_type, symtab, call_expr, max_scope_lev, NO_MUTATE);
                 }
             }
             break;
@@ -2771,37 +2801,6 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
 /****** STMT SEMCHECKS *******/
 
 /** VAR_ASSIGN **/
-static const char *type_tag_to_name(int type_tag)
-{
-    switch (type_tag)
-    {
-        case INT_TYPE:
-            return "integer";
-        case LONGINT_TYPE:
-            return "longint";
-        case REAL_TYPE:
-            return "real";
-        case STRING_TYPE:
-            return "string";
-        case BOOL:
-            return "boolean";
-        case CHAR_TYPE:
-            return "char";
-        case PROCEDURE:
-            return "procedure";
-        case SET_TYPE:
-            return "set";
-        case RECORD_TYPE:
-            return "record";
-        case POINTER_TYPE:
-            return "pointer";
-        case UNKNOWN_TYPE:
-            return "unknown";
-        default:
-            return "unsupported";
-    }
-}
-
 int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
     int return_val;
@@ -2827,7 +2826,7 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
 
     /* NOTE: Grammar will make sure the left side is a variable */
     /* Left side var assigns must abide by scoping rules */
-    return_val += semcheck_expr_main(&type_first, symtab, var, max_scope_lev, MUTATE);
+    return_val += semcheck_stmt_expr_tag(&type_first, symtab, var, max_scope_lev, MUTATE);
     if (expr != NULL && expr->type == EXPR_RECORD_CONSTRUCTOR && expr->record_type == NULL)
     {
         struct RecordType *record_type = var != NULL ? var->record_type : NULL;
@@ -2862,7 +2861,7 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
         }
         expr->record_type = record_type;
     }
-    return_val += semcheck_expr_main(&type_second, symtab, expr, INT_MAX, NO_MUTATE);
+    return_val += semcheck_stmt_expr_tag(&type_second, symtab, expr, INT_MAX, NO_MUTATE);
 
     if (getenv("KGPC_DEBUG_SEMCHECK") != NULL && expr != NULL && expr->type == EXPR_FUNCTION_CALL &&
         expr->expr_data.function_call_data.id != NULL &&
@@ -2932,10 +2931,7 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
         }
         if ((rhs_is_single_char_literal || rhs_is_single_char_const) && lhs_is_char)
         {
-            expr->resolved_type = CHAR_TYPE;
-            if (expr->resolved_kgpc_type != NULL)
-                destroy_kgpc_type(expr->resolved_kgpc_type);
-            expr->resolved_kgpc_type = create_primitive_type(CHAR_TYPE);
+            semcheck_expr_set_resolved_type(expr, CHAR_TYPE);
             goto assignment_types_ok;
         }
 
@@ -2946,10 +2942,7 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
         if (lhs_is_string && expr != NULL && semcheck_expr_is_widechar(symtab, expr))
         {
             /* Mark expression as CHAR_TYPE for codegen to promote to string */
-            expr->resolved_type = CHAR_TYPE;
-            if (expr->resolved_kgpc_type != NULL)
-                destroy_kgpc_type(expr->resolved_kgpc_type);
-            expr->resolved_kgpc_type = create_primitive_type(CHAR_TYPE);
+            semcheck_expr_set_resolved_type(expr, CHAR_TYPE);
             goto assignment_types_ok;
         }
 
@@ -2965,10 +2958,7 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             long long scaled = llround(expr->expr_data.r_num * 10000.0);
             expr->type = EXPR_INUM;
             expr->expr_data.i_num = scaled;
-            expr->resolved_type = INT64_TYPE;
-            if (expr->resolved_kgpc_type != NULL)
-                destroy_kgpc_type(expr->resolved_kgpc_type);
-            expr->resolved_kgpc_type = create_primitive_type(INT64_TYPE);
+            semcheck_expr_set_resolved_type(expr, INT64_TYPE);
             goto assignment_types_ok;
         }
         if (semcheck_is_currency_kgpc_type(lhs_kgpctype) &&
@@ -2999,7 +2989,7 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                     &rhs_kgpctype, &rhs_owned))
             {
                 expr = stmt->stmt_data.var_assign_data.expr;
-                type_second = kgpc_type_get_legacy_tag(rhs_kgpctype);
+                type_second = semcheck_tag_from_kgpc(rhs_kgpctype);
                 goto assignment_types_ok;
             }
 
@@ -3013,10 +3003,7 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                 strlen(expr->expr_data.string) == 1)
             {
                 allow_char_literal = 1;
-                expr->resolved_type = CHAR_TYPE;
-                if (expr->resolved_kgpc_type != NULL)
-                    destroy_kgpc_type(expr->resolved_kgpc_type);
-                expr->resolved_kgpc_type = create_primitive_type(CHAR_TYPE);
+                semcheck_expr_set_resolved_type(expr, CHAR_TYPE);
             }
             if (allow_char_literal)
                 goto assignment_types_ok;
@@ -3109,7 +3096,7 @@ assignment_types_ok:
                         expr->type = EXPR_RNUM;
                         expr->expr_data.r_num = coerced_value;
                     }
-                    expr->resolved_type = REAL_TYPE;
+                    semcheck_expr_set_resolved_type(expr, REAL_TYPE);
                 }
             }
             else if (type_first == CHAR_TYPE && type_second == STRING_TYPE &&
@@ -3118,7 +3105,7 @@ assignment_types_ok:
             {
                 types_compatible = 1;
                 coerced_rhs_type = CHAR_TYPE;
-                expr->resolved_type = CHAR_TYPE;
+                semcheck_expr_set_resolved_type(expr, CHAR_TYPE);
             }
             /* Allow char to string assignment - char will be promoted to single-character string */
             /* Only for actual string variables, not char arrays */
@@ -3142,7 +3129,7 @@ assignment_types_ok:
             {
                 types_compatible = 1;
                 /* Mark expression as CHAR_TYPE for codegen to promote to string */
-                expr->resolved_type = CHAR_TYPE;
+                semcheck_expr_set_resolved_type(expr, CHAR_TYPE);
             }
             /* Allow char assignment to char arrays (FPC compatibility) */
             else if (type_first == CHAR_TYPE && type_second == CHAR_TYPE &&
@@ -3187,11 +3174,13 @@ assignment_types_ok:
             const char *lhs_name = "<expression>";
             if (var != NULL && var->type == EXPR_VAR_ID)
                 lhs_name = var->expr_data.id;
+            const char *lhs_desc = (lhs_kgpctype != NULL) ? kgpc_type_to_string(lhs_kgpctype) : "unknown";
+            const char *rhs_desc = (rhs_kgpctype != NULL) ? kgpc_type_to_string(rhs_kgpctype) : "unknown";
             semantic_error(stmt->line_num, stmt->col_num,
                 "type mismatch in assignment statement for %s (lhs: %s, rhs: %s)",
                 lhs_name,
-                type_tag_to_name(type_first),
-                type_tag_to_name(type_second));
+                lhs_desc,
+                rhs_desc);
             ++return_val;
         }
         else
@@ -3381,7 +3370,7 @@ static int semcheck_try_property_assignment(SymTab_t *symtab,
         return -1;
 
     struct RecordType *object_record = semcheck_with_resolve_record_type(symtab,
-        object_expr, object_expr->resolved_type, stmt->line_num);
+        object_expr, semcheck_tag_from_kgpc(object_expr->resolved_kgpc_type), stmt->line_num);
     if (object_record == NULL)
         object_record = object_expr->record_type;
 
@@ -3684,7 +3673,7 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
         if (receiver_expr != NULL)
         {
             int recv_type = UNKNOWN_TYPE;
-            semcheck_expr_main(&recv_type, symtab, receiver_expr, max_scope_lev, NO_MUTATE);
+            semcheck_stmt_expr_tag(&recv_type, symtab, receiver_expr, max_scope_lev, NO_MUTATE);
 
             struct RecordType *recv_record = NULL;
             if (recv_type == RECORD_TYPE)
@@ -3769,7 +3758,12 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                         proc_expr->expr_data.record_access_data.field_id = strdup(field_lookup);
                         proc_expr->expr_data.record_access_data.field_offset = (int)field_offset;
                         proc_expr->record_type = recv_record;
-                        proc_expr->resolved_type = PROCEDURE;
+                        if (proc_type != NULL)
+                        {
+                            if (proc_expr->resolved_kgpc_type != NULL)
+                                destroy_kgpc_type(proc_expr->resolved_kgpc_type);
+                            proc_expr->resolved_kgpc_type = proc_type;
+                        }
 
                         /* Validate argument count/types if we know the procedural signature */
                         if (proc_type != NULL)
@@ -3793,7 +3787,7 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                                 struct Expression *actual_expr = (struct Expression *)actual->cur;
                                 int formal_type = resolve_param_type(formal_decl, symtab);
                                 int actual_type = UNKNOWN_TYPE;
-                                semcheck_expr_main(&actual_type, symtab, actual_expr, max_scope_lev, NO_MUTATE);
+                                semcheck_stmt_expr_tag(&actual_type, symtab, actual_expr, max_scope_lev, NO_MUTATE);
                                 if (formal_type != UNKNOWN_TYPE && actual_type != UNKNOWN_TYPE &&
                                     formal_type != actual_type)
                                 {
@@ -3873,7 +3867,7 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                     KgpcType *arg_type = semcheck_resolve_expression_kgpc_type(symtab,
                         first_arg, max_scope_lev, NO_MUTATE, &arg_type_owned);
                     int helper_tag = UNKNOWN_TYPE;
-                    semcheck_expr_main(&helper_tag, symtab, first_arg, max_scope_lev, NO_MUTATE);
+                    semcheck_stmt_expr_tag(&helper_tag, symtab, first_arg, max_scope_lev, NO_MUTATE);
                     const char *helper_name = NULL;
                     if (arg_type != NULL)
                     {
@@ -3982,7 +3976,7 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
              * (e.g., for 'as' expressions which destroy and replace resolved_kgpc_type)
              */
             int helper_tag = UNKNOWN_TYPE;
-            semcheck_expr_main(&helper_tag, symtab, first_arg, max_scope_lev, NO_MUTATE);
+            semcheck_stmt_expr_tag(&helper_tag, symtab, first_arg, max_scope_lev, NO_MUTATE);
             
             /* Now it's safe to get the KgpcType since semcheck_expr_main has finalized it */
             int arg_type_owned = 0;
@@ -4317,320 +4311,20 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
         }
     }
 
-    /* If no exact mangled match, choose the best overload by parameter compatibility */
+    /* If no exact mangled match, choose the best overload deterministically */
     if (match_count == 0 && overload_candidates != NULL)
     {
-        ListNode_t *call_args = stmt->stmt_data.procedure_call_data.expr_args;
-    int call_arg_count = 0;
-    ListNode_t *count_args = call_args;
-    while (count_args != NULL)
-    {
-        call_arg_count++;
-        count_args = count_args->next;
-    }
-    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
-    {
-        fprintf(stderr, "[SemCheck] proccall id='%s' args=%d\n",
-            proc_id != NULL ? proc_id : "(null)", call_arg_count);
-    }
-
         HashNode_t *best_candidate = NULL;
-        int best_score = INT_MAX;
         int num_best_matches = 0;
+        struct Expression call_stub;
+        memset(&call_stub, 0, sizeof(call_stub));
+        call_stub.line_num = stmt->line_num;
+        call_stub.type = EXPR_FUNCTION_CALL;
 
-        ListNode_t *cur = overload_candidates;
-        while (cur != NULL)
-        {
-            HashNode_t *candidate = (HashNode_t *)cur->cur;
-            if ((candidate->hash_type == HASHTYPE_PROCEDURE ||
-                 candidate->hash_type == HASHTYPE_BUILTIN_PROCEDURE ||
-                 candidate->hash_type == HASHTYPE_FUNCTION) &&
-                candidate->id != NULL && pascal_identifier_equals(candidate->id, proc_id))
-            {
-                int candidate_param_count = 0;
-                ListNode_t *param = NULL;
-                if (candidate->type != NULL && candidate->type->kind == TYPE_KIND_PROCEDURE)
-                    param = candidate->type->info.proc_info.params;
-                ListNode_t *param_count_iter = param;
-                while (param_count_iter != NULL)
-                {
-                    candidate_param_count++;
-                    param_count_iter = param_count_iter->next;
-                }
-                
-                /* Count required parameters (those without default values) */
-                int required_params = count_required_params(param);
+        int overload_status = semcheck_resolve_overload(&best_candidate, NULL, &num_best_matches,
+            overload_candidates, args_given, symtab, &call_stub, max_scope_lev, 0);
 
-                /* Match if given args is at least required count and at most total params */
-                if (call_arg_count >= required_params && call_arg_count <= candidate_param_count)
-                {
-                    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
-                    {
-                        fprintf(stderr, "[SemCheck] proccall candidate %s params=%d required=%d\n",
-                            candidate->id != NULL ? candidate->id : "(null)", candidate_param_count, required_params);
-                    }
-                    int score = 0;
-                    ListNode_t *param_iter = param;
-                    ListNode_t *arg_iter = call_args;
-                    /* Score only the provided arguments */
-                    while (param_iter != NULL && arg_iter != NULL)
-                    {
-                        Tree_t *param_decl = (Tree_t *)param_iter->cur;
-                        struct Expression *arg_expr = (struct Expression *)arg_iter->cur;
-                        int expected_owned = 0;
-                        int actual_owned = 0;
-                        KgpcType *expected = resolve_type_from_vardecl(param_decl, symtab, &expected_owned);
-                        KgpcType *actual = NULL;
-                        struct RecordType *saved_record_type = NULL;
-
-                        if (arg_expr != NULL && arg_expr->type == EXPR_RECORD_CONSTRUCTOR &&
-                            arg_expr->record_type == NULL)
-                        {
-                            saved_record_type = arg_expr->record_type;
-                            if (expected != NULL)
-                            {
-                                struct RecordType *record_type = NULL;
-                                if (kgpc_type_is_record(expected))
-                                    record_type = kgpc_type_get_record(expected);
-                                else if (kgpc_type_is_pointer(expected) &&
-                                    expected->info.points_to != NULL &&
-                                    kgpc_type_is_record(expected->info.points_to))
-                                    record_type = kgpc_type_get_record(expected->info.points_to);
-
-                                if (record_type != NULL)
-                                {
-                                    arg_expr->record_type = record_type;
-                                    actual = expected;
-                                    actual_owned = 0;
-                                }
-                            }
-                        }
-
-                        if (actual == NULL && arg_expr != NULL &&
-                            !(arg_expr->type == EXPR_RECORD_CONSTRUCTOR && arg_expr->record_type == NULL))
-                        {
-                            actual = semcheck_resolve_expression_kgpc_type(symtab, arg_expr,
-                                INT_MAX, NO_MUTATE, &actual_owned);
-                            if (actual == NULL)
-                            {
-                                int tag = UNKNOWN_TYPE;
-                                if (semcheck_expr_main(&tag, symtab, arg_expr, INT_MAX, NO_MUTATE) == 0)
-                                {
-                                    if (arg_expr->resolved_kgpc_type != NULL)
-                                    {
-                                        actual = arg_expr->resolved_kgpc_type;
-                                        actual_owned = 0;
-                                    }
-                                    else if (tag != UNKNOWN_TYPE)
-                                    {
-                                        if (tag == RECORD_TYPE && arg_expr->record_type != NULL)
-                                        {
-                                            actual = create_record_type(arg_expr->record_type);
-                                            actual_owned = 1;
-                                        }
-                                        else
-                                        {
-                                            actual = create_primitive_type(tag);
-                                            actual_owned = 1;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        if (expected == NULL)
-                        {
-                            /* Untyped parameters accept any argument but prefer typed overloads. */
-                            score += 10;
-                        }
-                        else if (actual == NULL)
-                        {
-                            score += 1000;
-                        }
-                        else
-                        {
-                            if (!semcheck_param_types_compatible(param_decl, expected, actual, symtab))
-                            {
-                                score += 1000;
-                            }
-                            else
-                            {
-                                KgpcType *tag_expected = semcheck_param_effective_type(param_decl, expected);
-                                if (tag_expected != NULL &&
-                                    tag_expected->kind == TYPE_KIND_ARRAY &&
-                                    actual->kind == TYPE_KIND_POINTER)
-                                {
-                                    score += 2;
-                                }
-                                if (tag_expected != NULL &&
-                                    tag_expected->kind == TYPE_KIND_ARRAY &&
-                                    actual->kind == TYPE_KIND_PRIMITIVE &&
-                                    actual->info.primitive_type_tag == STRING_TYPE)
-                                {
-                                    score += 2;
-                                }
-                                if (tag_expected != NULL &&
-                                    tag_expected->kind == TYPE_KIND_ARRAY &&
-                                    actual->kind == TYPE_KIND_PRIMITIVE &&
-                                    actual->info.primitive_type_tag == CHAR_TYPE)
-                                {
-                                    score += 2;
-                                }
-                                int expected_tag = kgpc_type_get_legacy_tag(tag_expected);
-                                int actual_tag = kgpc_type_get_legacy_tag(actual);
-                                
-                                /* For string literals, prefer ShortString over UnicodeString/RawByteString/AnsiString */
-                                int is_string_literal = (arg_expr != NULL && arg_expr->type == EXPR_STRING);
-                                if (is_string_literal && param_decl != NULL && param_decl->type == TREE_VAR_DECL)
-                                {
-                                    const char *type_id = param_decl->tree_data.var_decl_data.type_id;
-                                    if (type_id != NULL)
-                                    {
-                                        /* ShortString gets highest priority (no penalty) for string literals */
-                                        if (pascal_identifier_equals(type_id, "ShortString"))
-                                        {
-                                            /* No penalty - best match */
-                                        }
-                                        /* UnicodeString/RawByteString/WideString get penalty */
-                                        else if (pascal_identifier_equals(type_id, "UnicodeString") ||
-                                                 pascal_identifier_equals(type_id, "RawByteString") ||
-                                                 pascal_identifier_equals(type_id, "WideString") ||
-                                                 pascal_identifier_equals(type_id, "AnsiString"))
-                                        {
-                                            score += 3;
-                                        }
-                                    }
-                                }
-
-                                /* Prefer overloads whose formal string alias matches the actual alias. */
-                                if (param_decl != NULL && param_decl->type == TREE_VAR_DECL)
-                                {
-                                    const char *formal_type_id = param_decl->tree_data.var_decl_data.type_id;
-                                    struct TypeAlias *actual_alias = kgpc_type_get_type_alias(actual);
-                                    if (formal_type_id != NULL && actual_alias != NULL &&
-                                        actual_alias->alias_name != NULL)
-                                    {
-                                        int formal_is_string_alias =
-                                            pascal_identifier_equals(formal_type_id, "String") ||
-                                            pascal_identifier_equals(formal_type_id, "AnsiString") ||
-                                            pascal_identifier_equals(formal_type_id, "RawByteString") ||
-                                            pascal_identifier_equals(formal_type_id, "UnicodeString") ||
-                                            pascal_identifier_equals(formal_type_id, "WideString") ||
-                                            pascal_identifier_equals(formal_type_id, "ShortString");
-                                        int actual_is_string_alias =
-                                            pascal_identifier_equals(actual_alias->alias_name, "String") ||
-                                            pascal_identifier_equals(actual_alias->alias_name, "AnsiString") ||
-                                            pascal_identifier_equals(actual_alias->alias_name, "RawByteString") ||
-                                            pascal_identifier_equals(actual_alias->alias_name, "UnicodeString") ||
-                                            pascal_identifier_equals(actual_alias->alias_name, "WideString") ||
-                                            pascal_identifier_equals(actual_alias->alias_name, "ShortString");
-                                        if (formal_is_string_alias && actual_is_string_alias &&
-                                            !pascal_identifier_equals(formal_type_id, actual_alias->alias_name))
-                                        {
-                                            score += 1;
-                                        }
-                                    }
-                                }
-                                
-                                if (expected_tag == LONGINT_TYPE && actual_tag == LONGINT_TYPE &&
-                                    param_decl != NULL && param_decl->type == TREE_VAR_DECL)
-                                {
-                                    const char *type_id = param_decl->tree_data.var_decl_data.type_id;
-                                    if (type_id != NULL &&
-                                        (pascal_identifier_equals(type_id, "Cardinal") ||
-                                         pascal_identifier_equals(type_id, "LongWord") ||
-                                         pascal_identifier_equals(type_id, "Word") ||
-                                         pascal_identifier_equals(type_id, "Byte")))
-                                    {
-                                        score += 2;
-                                    }
-                                }
-                                if (expected_tag != UNKNOWN_TYPE && actual_tag != UNKNOWN_TYPE &&
-                                    expected_tag != actual_tag)
-                                {
-                                    score += 1;
-                                }
-                            }
-                        }
-
-                        if (arg_expr != NULL && arg_expr->type == EXPR_RECORD_CONSTRUCTOR &&
-                            saved_record_type != NULL)
-                        {
-                            arg_expr->record_type = saved_record_type;
-                        }
-                        else if (arg_expr != NULL && arg_expr->type == EXPR_RECORD_CONSTRUCTOR &&
-                            saved_record_type == NULL && actual == expected && actual != NULL)
-                        {
-                            arg_expr->record_type = NULL;
-                        }
-
-                        if (expected_owned && expected != NULL)
-                            destroy_kgpc_type(expected);
-                        if (actual_owned && actual != NULL)
-                            destroy_kgpc_type(actual);
-
-                        param_iter = param_iter->next;
-                        arg_iter = arg_iter->next;
-                    }
-                    
-                    /* Add small penalty for using default parameters (prefer exact match) */
-                    int missing_args = candidate_param_count - call_arg_count;
-                    if (missing_args > 0)
-                        score += missing_args;  /* Small penalty per default param used */
-
-                    if (score < best_score)
-                    {
-                        best_score = score;
-                        best_candidate = candidate;
-                        num_best_matches = 1;
-                    }
-                    else if (score == best_score)
-                    {
-                        int is_duplicate = 0;
-                        if (best_candidate != NULL && candidate != NULL)
-                        {
-                            /* Prefer non-builtin over builtin when both match with same score.
-                             * If best_candidate is a user-defined/parsed procedure and candidate is a builtin,
-                             * treat the builtin as a duplicate to prefer the parsed version. */
-                            if ((best_candidate->hash_type == HASHTYPE_PROCEDURE ||
-                                 best_candidate->hash_type == HASHTYPE_FUNCTION) &&
-                                candidate->hash_type == HASHTYPE_BUILTIN_PROCEDURE)
-                            {
-                                is_duplicate = 1;
-                            }
-                            else if (best_candidate->mangled_id != NULL &&
-                                candidate->mangled_id != NULL &&
-                                strcmp(best_candidate->mangled_id, candidate->mangled_id) == 0)
-                            {
-                                is_duplicate = 1;
-                            }
-                            else if (best_candidate->type != NULL && candidate->type != NULL &&
-                                best_candidate->type->kind == TYPE_KIND_PROCEDURE &&
-                                candidate->type->kind == TYPE_KIND_PROCEDURE)
-                            {
-                                ListNode_t *best_params = best_candidate->type->info.proc_info.params;
-                                if (semcheck_param_lists_equivalent_stmt(best_params, param))
-                                    is_duplicate = 1;
-                            }
-                            /* Prefer non-builtin over builtin when both match with same score.
-                             * If best_candidate is a user-defined/parsed procedure and candidate is a builtin,
-                             * treat the builtin as a duplicate to prefer the parsed version. */
-                            if ((best_candidate->hash_type == HASHTYPE_PROCEDURE ||
-                                 best_candidate->hash_type == HASHTYPE_FUNCTION) &&
-                                candidate->hash_type == HASHTYPE_BUILTIN_PROCEDURE)
-                            {
-                                is_duplicate = 1;
-                            }
-                        }
-                        if (!is_duplicate)
-                            num_best_matches++;
-                    }
-                }
-            }
-            cur = cur->next;
-        }
-
-        if (num_best_matches == 1 && best_candidate != NULL)
+        if (overload_status == 0 && best_candidate != NULL && num_best_matches == 1)
         {
             resolved_proc = best_candidate;
             match_count = 1;
@@ -4639,6 +4333,20 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                 free(mangled_name);
                 mangled_name = strdup(best_candidate->mangled_id);
             }
+        }
+        else if (overload_status == 2)
+        {
+            match_count = num_best_matches > 0 ? num_best_matches : 2;
+        }
+        else if (overload_status == 3)
+        {
+            DestroyList(overload_candidates);
+            free(mangled_name);
+            return ++return_val;
+        }
+        else
+        {
+            match_count = 0;
         }
     }
 
@@ -4884,7 +4592,7 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                 
                 /* Call semcheck_expr_main to properly mark the variable as mutated */
                 int dummy_type = UNKNOWN_TYPE;
-                semcheck_expr_main(&dummy_type, symtab, arg_expr, INT_MAX, mutate_flag);
+                semcheck_stmt_expr_tag(&dummy_type, symtab, arg_expr, INT_MAX, mutate_flag);
                 
                 int arg_type_owned = 0;
                 KgpcType *arg_kgpc_type = NULL;
@@ -4899,7 +4607,8 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                 }
                 else
                 {
-                    arg_kgpc_type = semcheck_expr_main_kgpc(symtab, arg_expr, INT_MAX, mutate_flag, &arg_type_owned);
+                    arg_type_owned = 0;
+                    semcheck_expr_main(symtab, arg_expr, INT_MAX, mutate_flag, &arg_kgpc_type);
                 }
                 if (arg_kgpc_type == NULL)
                 {
@@ -5064,7 +4773,7 @@ int semcheck_ifthen(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
     if_stmt = stmt->stmt_data.if_then_data.if_stmt;
     else_stmt = stmt->stmt_data.if_then_data.else_stmt;
 
-    return_val += semcheck_expr_main(&if_type, symtab, relop_expr, INT_MAX, NO_MUTATE);
+    return_val += semcheck_stmt_expr_tag(&if_type, symtab, relop_expr, INT_MAX, NO_MUTATE);
 
     if(if_type != BOOL)
     {
@@ -5096,7 +4805,7 @@ int semcheck_while(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
     relop_expr = stmt->stmt_data.while_data.relop_expr;
     while_stmt = stmt->stmt_data.while_data.while_stmt;
 
-    return_val += semcheck_expr_main(&while_type, symtab, relop_expr, INT_MAX, NO_MUTATE);
+    return_val += semcheck_stmt_expr_tag(&while_type, symtab, relop_expr, INT_MAX, NO_MUTATE);
     if(while_type != BOOL)
     {
         semcheck_error_with_context("Error on line %d, expected relational inside while statement!\n\n",
@@ -5133,7 +4842,7 @@ int semcheck_repeat(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
     }
     semcheck_loop_depth--;
 
-    return_val += semcheck_expr_main(&until_type, symtab, stmt->stmt_data.repeat_data.until_expr, INT_MAX, NO_MUTATE);
+    return_val += semcheck_stmt_expr_tag(&until_type, symtab, stmt->stmt_data.repeat_data.until_expr, INT_MAX, NO_MUTATE);
     if (until_type != BOOL)
     {
         semcheck_error_with_context("Error on line %d, expected relational inside repeat statement!\n\n",
@@ -5172,7 +4881,7 @@ int semcheck_for(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
     if(for_assign_type == STMT_FOR_VAR)
     {
         for_var = stmt->stmt_data.for_data.for_assign_data.var;
-        return_val += semcheck_expr_main(&for_type, symtab, for_var, max_scope_lev, BOTH_MUTATE_REFERENCE);
+        return_val += semcheck_stmt_expr_tag(&for_type, symtab, for_var, max_scope_lev, BOTH_MUTATE_REFERENCE);
         /* Check for type */
         if(!is_ordinal_type(for_type))
         {
@@ -5190,7 +4899,7 @@ int semcheck_for(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
         if (for_assign != NULL)
         {
             for_var = for_assign->stmt_data.var_assign_data.var;
-            for_type = (for_var != NULL) ? for_var->resolved_type : UNKNOWN_TYPE;
+            for_type = (for_var != NULL) ? semcheck_tag_from_kgpc(for_var->resolved_kgpc_type) : UNKNOWN_TYPE;
         }
     }
 
@@ -5203,14 +4912,14 @@ int semcheck_for(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
         for_kgpc_type = semcheck_resolve_expression_kgpc_type(symtab, for_var,
             max_scope_lev, BOTH_MUTATE_REFERENCE, &for_type_owned);
         if (for_type == UNKNOWN_TYPE && for_kgpc_type != NULL)
-            for_type = kgpc_type_get_legacy_tag(for_kgpc_type);
+            for_type = semcheck_tag_from_kgpc(for_kgpc_type);
     }
 
-    return_val += semcheck_expr_main(&to_type, symtab, to_expr, INT_MAX, NO_MUTATE);
+    return_val += semcheck_stmt_expr_tag(&to_type, symtab, to_expr, INT_MAX, NO_MUTATE);
     to_kgpc_type = semcheck_resolve_expression_kgpc_type(symtab, to_expr,
         INT_MAX, NO_MUTATE, &to_type_owned);
     if (to_type == UNKNOWN_TYPE && to_kgpc_type != NULL)
-        to_type = kgpc_type_get_legacy_tag(to_kgpc_type);
+        to_type = semcheck_tag_from_kgpc(to_kgpc_type);
 
     int bounds_compatible = 1;
     if (for_type == UNKNOWN_TYPE && for_kgpc_type == NULL)
@@ -5232,7 +4941,7 @@ int semcheck_for(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
             to_expr->expr_data.string != NULL && strlen(to_expr->expr_data.string) == 1)
         {
             to_type = CHAR_TYPE;
-            to_expr->resolved_type = CHAR_TYPE;
+            semcheck_expr_set_resolved_type(to_expr, CHAR_TYPE);
         }
         else if (for_kgpc_type != NULL && to_kgpc_type != NULL &&
             are_types_compatible_for_assignment(for_kgpc_type, to_kgpc_type, symtab))
@@ -5254,7 +4963,7 @@ int semcheck_for(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 
     if (for_kgpc_type != NULL && !is_ordinal_type(for_type))
     {
-        int legacy = kgpc_type_get_legacy_tag(for_kgpc_type);
+        int legacy = semcheck_tag_from_kgpc(for_kgpc_type);
         if (!is_ordinal_type(legacy))
         {
             semcheck_error_with_context("Error on line %d, expected ordinal type in \"for\" assignment!\n\n",
@@ -5310,7 +5019,7 @@ int semcheck_for_in(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
     
     /* Check loop variable (must be a lvalue) */
     if (loop_var != NULL) {
-        return_val += semcheck_expr_main(&loop_var_type, symtab, loop_var, max_scope_lev, BOTH_MUTATE_REFERENCE);
+        return_val += semcheck_stmt_expr_tag(&loop_var_type, symtab, loop_var, max_scope_lev, BOTH_MUTATE_REFERENCE);
         
         if (!is_ordinal_type(loop_var_type) && loop_var_type != UNKNOWN_TYPE) {
             loop_var_nonordinal = 1;
@@ -5327,7 +5036,7 @@ int semcheck_for_in(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
         int collection_is_string = 0;
         const char *list_element_id = NULL;
 
-        return_val += semcheck_expr_main(&collection_type, symtab, collection, INT_MAX, NO_MUTATE);
+        return_val += semcheck_stmt_expr_tag(&collection_type, symtab, collection, INT_MAX, NO_MUTATE);
         collection_is_string = is_string_type(collection_type);
         
         KgpcType *collection_kgpc_type = semcheck_resolve_expression_kgpc_type(symtab, collection, 
@@ -5404,8 +5113,8 @@ int semcheck_for_assign(SymTab_t *symtab, struct Statement *for_assign, int max_
     expr = for_assign->stmt_data.var_assign_data.expr;
 
     /* NOTE: Grammar will make sure the left side is a variable */
-    return_val += semcheck_expr_main(&type_first, symtab, var, max_scope_lev, BOTH_MUTATE_REFERENCE);
-    return_val += semcheck_expr_main(&type_second, symtab, expr, INT_MAX, NO_MUTATE);
+    return_val += semcheck_stmt_expr_tag(&type_first, symtab, var, max_scope_lev, BOTH_MUTATE_REFERENCE);
+    return_val += semcheck_stmt_expr_tag(&type_second, symtab, expr, INT_MAX, NO_MUTATE);
 
     lhs_kgpc_type = semcheck_resolve_expression_kgpc_type(symtab, var, max_scope_lev,
         BOTH_MUTATE_REFERENCE, &lhs_owned);
@@ -5413,9 +5122,9 @@ int semcheck_for_assign(SymTab_t *symtab, struct Statement *for_assign, int max_
         NO_MUTATE, &rhs_owned);
 
     if (type_first == UNKNOWN_TYPE && lhs_kgpc_type != NULL)
-        type_first = kgpc_type_get_legacy_tag(lhs_kgpc_type);
+        type_first = semcheck_tag_from_kgpc(lhs_kgpc_type);
     if (type_second == UNKNOWN_TYPE && rhs_kgpc_type != NULL)
-        type_second = kgpc_type_get_legacy_tag(rhs_kgpc_type);
+        type_second = semcheck_tag_from_kgpc(rhs_kgpc_type);
 
     int types_compatible = (type_first == type_second);
     if (!types_compatible)
@@ -5431,7 +5140,7 @@ int semcheck_for_assign(SymTab_t *symtab, struct Statement *for_assign, int max_
         {
             types_compatible = 1;
             type_second = CHAR_TYPE;
-            expr->resolved_type = CHAR_TYPE;
+            semcheck_expr_set_resolved_type(expr, CHAR_TYPE);
         }
         else if (lhs_kgpc_type != NULL && rhs_kgpc_type != NULL &&
             are_types_compatible_for_assignment(lhs_kgpc_type, rhs_kgpc_type, symtab))
@@ -5456,8 +5165,8 @@ int semcheck_for_assign(SymTab_t *symtab, struct Statement *for_assign, int max_
 
     if (return_val == 0)
     {
-        var->resolved_type = type_first;
-        expr->resolved_type = type_second;
+        semcheck_expr_set_resolved_type(var, type_first);
+        semcheck_expr_set_resolved_type(expr, type_second);
     }
 
     if (lhs_owned && lhs_kgpc_type != NULL)
