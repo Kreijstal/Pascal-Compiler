@@ -1055,6 +1055,29 @@ int semcheck_funccall(int *type_return,
                             if (ret_node != NULL && ret_node->type != NULL)
                                 ret_type = ret_node->type;
                         }
+                        /* Resolve through aliases to get the underlying type */
+                        while (ret_type != NULL && ret_type->kind == TYPE_KIND_ALIAS)
+                        {
+                            struct TypeAlias *alias = kgpc_type_get_type_alias(ret_type);
+                            if (alias != NULL && alias->target_type_id != NULL)
+                            {
+                                HashNode_t *target_node = semcheck_find_preferred_type_node(symtab, alias->target_type_id);
+                                if (target_node != NULL && target_node->type != NULL)
+                                    ret_type = target_node->type;
+                                else
+                                    break;
+                            }
+                            else if (alias != NULL && alias->base_type != UNKNOWN_TYPE)
+                            {
+                                /* Alias resolves to a primitive type tag */
+                                *type_return = alias->base_type;
+                                expr->resolved_type = *type_return;
+                                ret_type = NULL;  /* Mark as handled */
+                                break;
+                            }
+                            else
+                                break;
+                        }
                         if (ret_type != NULL && ret_type->kind == TYPE_KIND_PRIMITIVE)
                         {
                             *type_return = kgpc_type_get_primitive_tag(ret_type);
@@ -1071,11 +1094,14 @@ int semcheck_funccall(int *type_return,
                             *type_return = POINTER_TYPE;
                             expr->resolved_type = POINTER_TYPE;
                         }
-                        else
+                        else if (ret_type != NULL)
                         {
+                            /* Fallback - unhandled type kind */
                             *type_return = PROCEDURE;
                             expr->resolved_type = PROCEDURE;
                         }
+                        /* If ret_type is NULL and we didn't set type_return above (from alias),
+                         * keep whatever was set */
                     }
                     else
                     {
