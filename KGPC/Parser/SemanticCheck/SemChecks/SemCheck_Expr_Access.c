@@ -2413,8 +2413,9 @@ int semcheck_funccall(int *type_return,
                 {
                     *type_return = UNKNOWN_TYPE;
                 }
-                
+
                 semcheck_expr_set_resolved_kgpc_type_shared(expr, return_type);
+                expr->resolved_type = *type_return;  /* Also set resolved_type explicitly */
             }
             else
             {

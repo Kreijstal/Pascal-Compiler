@@ -867,7 +867,14 @@ int semcheck_expr_main(int *type_return,
     assert(type_return != NULL);
 
     return_val = 0;
-    expr->resolved_type = UNKNOWN_TYPE;
+    /* Don't reset resolved_type if already set during a previous evaluation.
+     * This preserves the type from procedural variable calls which may be
+     * re-evaluated during name mangling. */
+    int was_already_resolved = (expr->type == EXPR_FUNCTION_CALL &&
+                                expr->expr_data.function_call_data.is_procedural_var_call &&
+                                expr->resolved_type != UNKNOWN_TYPE);
+    if (!was_already_resolved)
+        expr->resolved_type = UNKNOWN_TYPE;
     switch(expr->type)
     {
         case EXPR_RELOP:

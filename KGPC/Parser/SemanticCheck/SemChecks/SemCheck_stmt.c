@@ -4612,6 +4612,15 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                                 if (semcheck_param_lists_equivalent_stmt(best_params, param))
                                     is_duplicate = 1;
                             }
+                            /* Prefer non-builtin over builtin when both match with same score.
+                             * If best_candidate is a user-defined/parsed procedure and candidate is a builtin,
+                             * treat the builtin as a duplicate to prefer the parsed version. */
+                            if ((best_candidate->hash_type == HASHTYPE_PROCEDURE ||
+                                 best_candidate->hash_type == HASHTYPE_FUNCTION) &&
+                                candidate->hash_type == HASHTYPE_BUILTIN_PROCEDURE)
+                            {
+                                is_duplicate = 1;
+                            }
                         }
                         if (!is_duplicate)
                             num_best_matches++;
