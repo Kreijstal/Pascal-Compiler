@@ -89,7 +89,8 @@ int types_numeric_compatible(int lhs, int rhs);
 
 /* Coerce char and string operands for comparison */
 void semcheck_coerce_char_string_operands(int *type_first, struct Expression *expr1,
-    int *type_second, struct Expression *expr2);
+                                          int *type_second, struct Expression *expr2);
+void semcheck_expr_set_resolved_type(struct Expression *expr, int type_tag);
 
 /* Check if expression is char-like (single char or char type) */
 int semcheck_expr_is_char_like(struct Expression *expr);

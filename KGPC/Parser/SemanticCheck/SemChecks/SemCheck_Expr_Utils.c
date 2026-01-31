@@ -26,6 +26,44 @@ int semcheck_is_currency_kgpc_type(KgpcType *type)
     return 0;
 }
 
+void semcheck_expr_set_resolved_type(struct Expression *expr, int type_tag)
+{
+    if (expr == NULL)
+        return;
+
+    expr->resolved_type = type_tag;
+
+    if (expr->resolved_kgpc_type != NULL)
+    {
+        destroy_kgpc_type(expr->resolved_kgpc_type);
+        expr->resolved_kgpc_type = NULL;
+    }
+
+    if (type_tag == RECORD_TYPE)
+    {
+        if (expr->record_type != NULL)
+            expr->resolved_kgpc_type = create_record_type(expr->record_type);
+        return;
+    }
+
+    if (type_tag == ARRAY_OF_CONST_TYPE)
+    {
+        expr->resolved_kgpc_type = create_array_of_const_type();
+        return;
+    }
+
+    if (type_tag == POINTER_TYPE)
+    {
+        KgpcType *points_to = NULL;
+        if (expr->pointer_subtype != UNKNOWN_TYPE)
+            points_to = create_primitive_type(expr->pointer_subtype);
+        expr->resolved_kgpc_type = create_pointer_type(points_to);
+        return;
+    }
+
+    expr->resolved_kgpc_type = create_primitive_type(type_tag);
+}
+
 void semcheck_debug_expr_brief(const struct Expression *expr, const char *label)
 {
     if (expr == NULL)
@@ -173,13 +211,13 @@ void semcheck_coerce_char_string_operands(int *type_first, struct Expression *ex
         {
             *type_first = STRING_TYPE;
             if (expr1 != NULL)
-                expr1->resolved_type = STRING_TYPE;
+                semcheck_expr_set_resolved_type(expr1, STRING_TYPE);
         }
         else /* *type_second == CHAR_TYPE */
         {
             *type_second = STRING_TYPE;
             if (expr2 != NULL)
-                expr2->resolved_type = STRING_TYPE;
+                semcheck_expr_set_resolved_type(expr2, STRING_TYPE);
         }
     }
     
@@ -197,9 +235,9 @@ void semcheck_coerce_char_string_operands(int *type_first, struct Expression *ex
             *type_first = STRING_TYPE;
             *type_second = STRING_TYPE;
             if (expr1 != NULL)
-                expr1->resolved_type = STRING_TYPE;
+                semcheck_expr_set_resolved_type(expr1, STRING_TYPE);
             if (expr2 != NULL)
-                expr2->resolved_type = STRING_TYPE;
+                semcheck_expr_set_resolved_type(expr2, STRING_TYPE);
         }
     }
 }

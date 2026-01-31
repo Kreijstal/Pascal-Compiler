@@ -127,6 +127,17 @@ long long kgpc_type_sizeof(KgpcType *type);
 /* Check if a type is an array type. */
 int kgpc_type_is_array(KgpcType *type);
 int kgpc_type_is_array_of_const(KgpcType *type);
+int kgpc_type_is_pointer(KgpcType *type);
+int kgpc_type_is_record(KgpcType *type);
+int kgpc_type_is_procedure(KgpcType *type);
+
+int kgpc_type_is_char(KgpcType *type);
+int kgpc_type_is_string(KgpcType *type);
+int kgpc_type_is_shortstring(KgpcType *type);
+int kgpc_type_is_integer(KgpcType *type);
+int kgpc_type_is_real(KgpcType *type);
+int kgpc_type_is_numeric(KgpcType *type);
+int kgpc_type_is_boolean(KgpcType *type);
 
 /* Check if a type is a record type. */
 int kgpc_type_is_record(KgpcType *type);

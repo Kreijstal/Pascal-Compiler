@@ -890,6 +890,19 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
 
     switch (lhs_type->kind) {
         case TYPE_KIND_PRIMITIVE:
+            /* Allow enum <-> integer compatibility for ordinal values. */
+            if (lhs_type->info.primitive_type_tag == ENUM_TYPE &&
+                rhs_type->info.primitive_type_tag != ENUM_TYPE &&
+                is_integer_type(rhs_type->info.primitive_type_tag))
+            {
+                return 1;
+            }
+            if (rhs_type->info.primitive_type_tag == ENUM_TYPE &&
+                lhs_type->info.primitive_type_tag != ENUM_TYPE &&
+                is_integer_type(lhs_type->info.primitive_type_tag))
+            {
+                return 1;
+            }
             /* Use numeric compatibility for primitives */
             return types_numeric_compatible(
                 lhs_type->info.primitive_type_tag,
@@ -1391,6 +1404,11 @@ int kgpc_type_is_array_of_const(KgpcType *type)
     return (type != NULL && type->kind == TYPE_KIND_ARRAY_OF_CONST);
 }
 
+int kgpc_type_is_pointer(KgpcType *type)
+{
+    return (type != NULL && type->kind == TYPE_KIND_POINTER);
+}
+
 int kgpc_type_is_record(KgpcType *type)
 {
     return (type != NULL && type->kind == TYPE_KIND_RECORD);
@@ -1401,6 +1419,56 @@ int kgpc_type_is_procedure(KgpcType *type)
     return (type != NULL && type->kind == TYPE_KIND_PROCEDURE);
 }
 
+int kgpc_type_is_char(KgpcType *type)
+{
+    return (type != NULL &&
+        type->kind == TYPE_KIND_PRIMITIVE &&
+        type->info.primitive_type_tag == CHAR_TYPE);
+}
+
+int kgpc_type_is_string(KgpcType *type)
+{
+    return (type != NULL &&
+        type->kind == TYPE_KIND_PRIMITIVE &&
+        type->info.primitive_type_tag == STRING_TYPE);
+}
+
+int kgpc_type_is_shortstring(KgpcType *type)
+{
+    return (type != NULL &&
+        type->kind == TYPE_KIND_PRIMITIVE &&
+        type->info.primitive_type_tag == SHORTSTRING_TYPE);
+}
+
+int kgpc_type_is_integer(KgpcType *type)
+{
+    return (type != NULL &&
+        type->kind == TYPE_KIND_PRIMITIVE &&
+        is_integer_type(type->info.primitive_type_tag));
+}
+
+int kgpc_type_is_real(KgpcType *type)
+{
+    return (type != NULL &&
+        type->kind == TYPE_KIND_PRIMITIVE &&
+        type->info.primitive_type_tag == REAL_TYPE);
+}
+
+int kgpc_type_is_numeric(KgpcType *type)
+{
+    if (type == NULL || type->kind != TYPE_KIND_PRIMITIVE)
+        return 0;
+    if (is_integer_type(type->info.primitive_type_tag))
+        return 1;
+    return (type->info.primitive_type_tag == REAL_TYPE);
+}
+
+int kgpc_type_is_boolean(KgpcType *type)
+{
+    return (type != NULL &&
+        type->kind == TYPE_KIND_PRIMITIVE &&
+        type->info.primitive_type_tag == BOOL);
+}
 int kgpc_type_get_array_bounds(KgpcType *type, int *start_out, int *end_out)
 {
     if (type == NULL || type->kind != TYPE_KIND_ARRAY)
@@ -1764,12 +1832,6 @@ int kgpc_type_get_legacy_tag(KgpcType *type)
         default:
             return UNKNOWN_TYPE;
     }
-}
-
-/* Check if a KgpcType represents a pointer type */
-int kgpc_type_is_pointer(KgpcType *type)
-{
-    return type != NULL && type->kind == TYPE_KIND_POINTER;
 }
 
 /* For pointer types, get the type tag of what it points to */

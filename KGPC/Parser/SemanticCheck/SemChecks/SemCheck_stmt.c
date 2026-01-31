@@ -974,7 +974,7 @@ static int semcheck_call_with_proc_var(SymTab_t *symtab, struct Statement *stmt,
             /* Use comprehensive KgpcType-based type compatibility checking */
             if (!semcheck_param_types_compatible(param_decl, param_type, arg_type, symtab))
             {
-                fprintf(stderr,
+                semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index,
                     "Error on line %d, on procedure call %s, argument %d: Type mismatch (expected %s, got %s)!\n\n",
                     stmt->line_num,
                     stmt->stmt_data.procedure_call_data.id,
@@ -998,13 +998,15 @@ static int semcheck_call_with_proc_var(SymTab_t *symtab, struct Statement *stmt,
 
     if (formal_params == NULL && args_given != NULL)
     {
-        semcheck_error_with_context("Error on line %d, on procedure call %s, too many arguments given!\n\n",
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index,
+            "Error on line %d, on procedure call %s, too many arguments given!\n\n",
             stmt->line_num, stmt->stmt_data.procedure_call_data.id);
         ++return_val;
     }
     else if (formal_params != NULL && args_given == NULL)
     {
-        semcheck_error_with_context("Error on line %d, on procedure call %s, not enough arguments given!\n\n",
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index,
+            "Error on line %d, on procedure call %s, not enough arguments given!\n\n",
             stmt->line_num, stmt->stmt_data.procedure_call_data.id);
         ++return_val;
     }
@@ -4876,7 +4878,24 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                 semcheck_expr_main(&dummy_type, symtab, arg_expr, INT_MAX, mutate_flag);
                 
                 int arg_type_owned = 0;
-                KgpcType *arg_kgpc_type = semcheck_resolve_expression_kgpc_type(symtab, arg_expr, INT_MAX, mutate_flag, &arg_type_owned);
+                KgpcType *arg_kgpc_type = NULL;
+                if (arg_expr != NULL && arg_expr->type == EXPR_ARRAY_LITERAL)
+                {
+                    arg_kgpc_type = semcheck_resolve_expression_kgpc_type(symtab, arg_expr, INT_MAX, mutate_flag, &arg_type_owned);
+                }
+                else if (arg_expr != NULL && arg_expr->resolved_kgpc_type != NULL)
+                {
+                    arg_kgpc_type = arg_expr->resolved_kgpc_type;
+                    arg_type_owned = 0;
+                }
+                else
+                {
+                    arg_kgpc_type = semcheck_expr_main_kgpc(symtab, arg_expr, INT_MAX, mutate_flag, &arg_type_owned);
+                }
+                if (arg_kgpc_type == NULL)
+                {
+                    arg_kgpc_type = semcheck_resolve_expression_kgpc_type(symtab, arg_expr, INT_MAX, mutate_flag, &arg_type_owned);
+                }
                 int param_is_untyped = semcheck_var_decl_is_untyped(arg_decl);
 
                 /* Perform type compatibility check using KgpcType */
@@ -4884,7 +4903,8 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                 if ((expected_kgpc_type == NULL || arg_kgpc_type == NULL) && !param_is_untyped)
                 {
                     /* Fallback: if we can't get KgpcTypes, report error */
-                    semcheck_error_with_context("Error on line %d, on procedure call %s, argument %d: Unable to resolve types (expected=%p, arg=%p)!\n\n",
+                    semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index,
+                        "Error on line %d, on procedure call %s, argument %d: Unable to resolve types (expected=%p, arg=%p)!\n\n",
                         stmt->line_num, proc_id, cur_arg, (void*)expected_kgpc_type, (void*)arg_kgpc_type);
                     if (expected_kgpc_type != NULL)
                         fprintf(stderr, "  Expected type: %s\n", kgpc_type_to_string(expected_kgpc_type));
@@ -4930,7 +4950,8 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                             expected_kgpc_type ? kgpc_type_to_string(expected_kgpc_type) : "<null>",
                             arg_kgpc_type ? kgpc_type_to_string(arg_kgpc_type) : "<null>");
                     }
-                    semcheck_error_with_context("Error on line %d, on procedure call %s, argument %d: Type mismatch!\n\n",
+                    semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index,
+                        "Error on line %d, on procedure call %s, argument %d: Type mismatch!\n\n",
                         stmt->line_num, proc_id, cur_arg);
                     ++return_val;
                 }
@@ -4945,7 +4966,8 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
         /* Verify arg counts match up */
         if(true_args == NULL && args_given != NULL)
         {
-            semcheck_error_with_context("Error on line %d, on procedure call %s, too many arguments given!\n\n",
+            semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index,
+                "Error on line %d, on procedure call %s, too many arguments given!\n\n",
                 stmt->line_num, proc_id);
             ++return_val;
         }
@@ -4967,7 +4989,8 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
             
             if (!all_have_defaults)
             {
-                semcheck_error_with_context("Error on line %d, on procedure call %s, not enough arguments given!\n\n",
+                semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index,
+                    "Error on line %d, on procedure call %s, not enough arguments given!\n\n",
                     stmt->line_num, proc_id);
                 ++return_val;
             }

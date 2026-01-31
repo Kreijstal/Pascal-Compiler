@@ -543,6 +543,78 @@ static void print_error_context(int line_num, int col_num, int source_index)
     fprintf(stderr, "\n");
 }
 
+static int semcheck_parse_line_directive(const char *line, size_t len)
+{
+    if (len < 8)
+        return -1;
+    if (line[0] != '{' || line[1] != '#')
+        return -1;
+    if (len < 7 || strncasecmp(line + 2, "line", 4) != 0)
+        return -1;
+
+    size_t pos = 6;
+    while (pos < len && (line[pos] == ' ' || line[pos] == '\t'))
+        ++pos;
+
+    int line_num = 0;
+    while (pos < len && line[pos] >= '0' && line[pos] <= '9')
+    {
+        line_num = line_num * 10 + (line[pos] - '0');
+        ++pos;
+    }
+
+    return line_num > 0 ? line_num : -1;
+}
+
+static int semcheck_line_from_source_offset(const char *buffer, size_t length, int source_offset)
+{
+    if (buffer == NULL || length == 0 || source_offset < 0 || (size_t)source_offset >= length)
+        return -1;
+
+    int current_line_at_offset = 1;
+    int scan_pos = source_offset;
+    while (scan_pos > 0)
+    {
+        int line_start = scan_pos;
+        while (line_start > 0 && buffer[line_start - 1] != '\n')
+            --line_start;
+
+        size_t line_len = 0;
+        int temp_pos = line_start;
+        while ((size_t)temp_pos < length && buffer[temp_pos] != '\n')
+        {
+            ++temp_pos;
+            ++line_len;
+        }
+
+        int directive_line = semcheck_parse_line_directive(buffer + line_start, line_len);
+        if (directive_line >= 0)
+        {
+            int lines_after_directive = 0;
+            int pos = line_start;
+            while ((size_t)pos < length && buffer[pos] != '\n')
+                ++pos;
+            if ((size_t)pos < length && buffer[pos] == '\n')
+                ++pos;
+            while (pos < source_offset)
+            {
+                if (buffer[pos] == '\n')
+                    ++lines_after_directive;
+                ++pos;
+            }
+            current_line_at_offset = directive_line + lines_after_directive;
+            break;
+        }
+
+        if (line_start > 0)
+            scan_pos = line_start - 1;
+        else
+            break;
+    }
+
+    return current_line_at_offset;
+}
+
 /* Helper function to print semantic error with source code context */
 void semantic_error(int line_num, int col_num, const char *format, ...)
 {
@@ -564,6 +636,20 @@ void semantic_error(int line_num, int col_num, const char *format, ...)
 /* Helper function to print semantic error with accurate source context using byte offset */
 void semantic_error_at(int line_num, int col_num, int source_index, const char *format, ...)
 {
+    if (source_index >= 0)
+    {
+        const char *context_buf = preprocessed_source;
+        size_t context_buf_len = preprocessed_length;
+        if (context_buf == NULL || context_buf_len == 0)
+        {
+            context_buf = g_semcheck_source_buffer;
+            context_buf_len = g_semcheck_source_length;
+        }
+        int computed_line = semcheck_line_from_source_offset(context_buf, context_buf_len, source_index);
+        if (computed_line > 0)
+            line_num = computed_line;
+    }
+
     fprintf(stderr, "Error on line %d", line_num);
     if (col_num > 0) {
         fprintf(stderr, ", column %d", col_num);
@@ -577,6 +663,58 @@ void semantic_error_at(int line_num, int col_num, int source_index, const char *
     fprintf(stderr, "\n");
 
     print_error_context(line_num, col_num, source_index);
+}
+
+void semcheck_error_with_context_at(int line_num, int col_num, int source_index,
+    const char *format, ...)
+{
+    const char *file_path = (file_to_parse != NULL && *file_to_parse != '\0')
+                                ? file_to_parse
+                                : ((preprocessed_path != NULL && *preprocessed_path != '\0') ? preprocessed_path
+                                                                                              : pascal_frontend_current_path());
+    if (file_path == NULL)
+        file_path = g_semcheck_source_path;
+    size_t context_len = preprocessed_length;
+    if (context_len == 0 && preprocessed_source != NULL)
+        context_len = strlen(preprocessed_source);
+
+    va_list args;
+    va_start(args, format);
+    vfprintf(stderr, format, args);
+    va_end(args);
+
+    size_t len = format ? strlen(format) : 0;
+    if (len == 0 || format[len - 1] != '\n') {
+        fprintf(stderr, "\n");
+    }
+
+    if (line_num > 0) {
+        const char *context_buf = preprocessed_source;
+        size_t context_buf_len = context_len;
+        if (context_buf == NULL || context_buf_len == 0)
+        {
+            context_buf = g_semcheck_source_buffer;
+            context_buf_len = g_semcheck_source_length;
+        }
+        if (getenv("KGPC_DEBUG_SEM_CONTEXT") != NULL)
+        {
+            fprintf(stderr,
+                "[SemCheck] context file=%s pre_len=%zu buf_len=%zu line=%d col=%d offset=%d\n",
+                file_path != NULL ? file_path : "<null>",
+                context_len,
+                context_buf_len,
+                line_num,
+                col_num,
+                source_index);
+        }
+        int printed = print_source_context_at_offset(context_buf, context_buf_len, source_index, line_num, col_num, 2);
+        if (!printed)
+            printed = semcheck_print_context_from_file(file_path, line_num, col_num, 2);
+        if (!printed && file_path != NULL)
+            print_source_context(file_path, line_num, col_num, 2);
+    }
+
+    fprintf(stderr, "\n");
 }
 
 /* Helper for legacy error prints that already include "Error on line %d". */

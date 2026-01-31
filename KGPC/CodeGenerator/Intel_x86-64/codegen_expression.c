@@ -1044,6 +1044,8 @@ KgpcType* expr_get_kgpc_type(const struct Expression *expr)
 {
     if (expr == NULL)
         return NULL;
+
+    static KgpcType *primitive_cache[256];
     
     /* Prefer KgpcType if available */
     if (expr->resolved_kgpc_type != NULL)
@@ -1066,9 +1068,12 @@ KgpcType* expr_get_kgpc_type(const struct Expression *expr)
         case ENUM_TYPE:
         case FILE_TYPE:
         case TEXT_TYPE:
-            /* These can be represented as primitive KgpcTypes, but we can't
-             * create them here without memory management issues.
-             * Better to just return NULL and let callers fall back to legacy logic */
+            if (type_tag >= 0 && type_tag < (int)(sizeof(primitive_cache) / sizeof(primitive_cache[0])))
+            {
+                if (primitive_cache[type_tag] == NULL)
+                    primitive_cache[type_tag] = create_primitive_type(type_tag);
+                return primitive_cache[type_tag];
+            }
             return NULL;
         
         case POINTER_TYPE:
@@ -1083,14 +1088,6 @@ KgpcType* expr_get_kgpc_type(const struct Expression *expr)
 
 long long expr_effective_size_bytes(const struct Expression *expr)
 {
-    KgpcType *type = expr_get_kgpc_type(expr);
-    if (type != NULL)
-    {
-        long long size = kgpc_type_sizeof(type);
-        if (size > 0)
-            return size;
-    }
-
     /* For pointer dereference, try to get size from the pointer's subtype info.
      * This handles cases like PByte^ where Byte is a subrange type that maps to
      * INT_TYPE but should have size 1. */
@@ -1108,6 +1105,14 @@ long long expr_effective_size_bytes(const struct Expression *expr)
                     return size;
             }
         }
+    }
+
+    KgpcType *type = expr_get_kgpc_type(expr);
+    if (type != NULL)
+    {
+        long long size = kgpc_type_sizeof(type);
+        if (size > 0)
+            return size;
     }
 
     int tag = expr_get_type_tag(expr);
@@ -1151,6 +1156,19 @@ int expr_get_type_tag(const struct Expression *expr)
         int tag = kgpc_type_get_legacy_tag(expr->resolved_kgpc_type);
         if (tag != UNKNOWN_TYPE)
             return tag;
+        switch (expr->resolved_kgpc_type->kind)
+        {
+            case TYPE_KIND_POINTER:
+                return POINTER_TYPE;
+            case TYPE_KIND_RECORD:
+                return RECORD_TYPE;
+            case TYPE_KIND_PROCEDURE:
+                return PROCEDURE;
+            case TYPE_KIND_ARRAY_OF_CONST:
+                return ARRAY_OF_CONST_TYPE;
+            default:
+                break;
+        }
     }
     
     /* Fall back to legacy field */

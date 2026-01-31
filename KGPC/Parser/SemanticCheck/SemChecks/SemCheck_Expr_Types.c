@@ -914,6 +914,10 @@ int semcheck_recordaccess(int *type_return,
                                 /* Use the shared type setter to properly manage reference counting */
                                 semcheck_expr_set_resolved_kgpc_type_shared(expr, type_alias->kgpc_type);
                             }
+                            else
+                            {
+                                semcheck_expr_set_resolved_type(expr, ENUM_TYPE);
+                            }
                             *type_return = ENUM_TYPE;
                             return 0;
                         }
