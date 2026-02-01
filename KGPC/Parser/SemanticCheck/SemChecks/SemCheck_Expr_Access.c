@@ -9,6 +9,13 @@
 */
 
 #include "SemCheck_Expr_Internal.h"
+#include <time.h>
+
+#define FUNCCALL_TIMINGS_ENABLED() (getenv("KGPC_DEBUG_FUNCCALL_TIMINGS") != NULL)
+
+static double funccall_now_ms(void) {
+    return (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC;
+}
 
 
 /** ARRAY_ACCESS **/
@@ -288,6 +295,12 @@ int semcheck_funccall(int *type_return,
 
     return_val = 0;
     id = expr->expr_data.function_call_data.id;
+    double timing_start_ms = 0.0;
+    if (FUNCCALL_TIMINGS_ENABLED()) {
+        timing_start_ms = funccall_now_ms();
+        fprintf(stderr, "[timing] funccall enter id=%s line=%d\n",
+            id != NULL ? id : "(null)", expr->line_num);
+    }
     if (expr->expr_data.function_call_data.is_procedural_var_call) {
         if (type_return != NULL)
         {
@@ -2515,9 +2528,16 @@ method_call_resolved:
 
     if (best_match == NULL)
     {
+        double resolve_t0 = 0.0;
+        if (FUNCCALL_TIMINGS_ENABLED())
+            resolve_t0 = funccall_now_ms();
         int resolve_status = semcheck_resolve_overload(&best_match, &best_score,
             &num_best_matches, overload_candidates, args_given, symtab, expr,
             max_scope_lev, prefer_non_builtin);
+        if (FUNCCALL_TIMINGS_ENABLED()) {
+            fprintf(stderr, "[timing] funccall resolve_overload id=%s: %.2f ms\n",
+                id != NULL ? id : "(null)", funccall_now_ms() - resolve_t0);
+        }
         if (resolve_status == 3)
         {
             *type_return = UNKNOWN_TYPE;
@@ -3436,6 +3456,10 @@ skip_overload_resolution:
     final_status = return_val;
 
 funccall_cleanup:
+    if (FUNCCALL_TIMINGS_ENABLED()) {
+        fprintf(stderr, "[timing] funccall exit id=%s total: %.2f ms\n",
+            id != NULL ? id : "(null)", funccall_now_ms() - timing_start_ms);
+    }
     if (overload_candidates != NULL)
         DestroyList(overload_candidates);
     if (mangled_name != NULL)

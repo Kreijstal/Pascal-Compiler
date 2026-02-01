@@ -16,6 +16,7 @@
 #include <string.h>
 #include <limits.h>
 #include <stdint.h>
+#include <time.h>
 #ifndef _WIN32
 #include <strings.h>
 #else
@@ -3550,6 +3551,7 @@ SymTab_t *start_semcheck(Tree_t *parse_tree, int *sem_result)
 {
     SymTab_t *symtab;
     int return_val;
+    double t0 = 0.0;
 
     assert(parse_tree != NULL);
     assert(sem_result != NULL);
@@ -3566,13 +3568,25 @@ SymTab_t *start_semcheck(Tree_t *parse_tree, int *sem_result)
 
     symtab = InitSymTab();
     PushScope(symtab);  /* Push global scope for built-in constants and types */
+    if (getenv("KGPC_DEBUG_TIMINGS") != NULL)
+        t0 = (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC;
     semcheck_add_builtins(symtab);
+    if (getenv("KGPC_DEBUG_TIMINGS") != NULL) {
+        double t1 = (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC;
+        fprintf(stderr, "[timing] semcheck_add_builtins: %.2f ms\n", t1 - t0);
+    }
     /*PrintSymTab(symtab, stderr, 0);*/
 
+    if (getenv("KGPC_DEBUG_TIMINGS") != NULL)
+        t0 = (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC;
     if (parse_tree->type == TREE_UNIT) {
         return_val = semcheck_unit(symtab, parse_tree);
     } else {
         return_val = semcheck_program(symtab, parse_tree);
+    }
+    if (getenv("KGPC_DEBUG_TIMINGS") != NULL) {
+        double t1 = (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC;
+        fprintf(stderr, "[timing] semcheck_program/unit: %.2f ms\n", t1 - t0);
     }
 
     if(return_val > 0)
@@ -7371,6 +7385,20 @@ void semcheck_add_builtins(SymTab_t *symtab)
 }
 
 /* Semantic check for a program */
+#define SEMCHECK_TIMINGS_ENABLED() (getenv("KGPC_DEBUG_TIMINGS") != NULL)
+
+static double semcheck_now_ms(void) {
+    return (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC;
+}
+
+static void semcheck_timing_step(const char *label, double *last_ms) {
+    if (!SEMCHECK_TIMINGS_ENABLED() || last_ms == NULL)
+        return;
+    double now = semcheck_now_ms();
+    fprintf(stderr, "[timing] semcheck_program %s: %.2f ms\n", label, now - *last_ms);
+    *last_ms = now;
+}
+
 int semcheck_program(SymTab_t *symtab, Tree_t *tree)
 {
     int return_val;
@@ -7379,20 +7407,26 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
     assert(tree->type == TREE_PROGRAM_TYPE);
 
     return_val = 0;
+    double t0 = 0.0;
+    if (SEMCHECK_TIMINGS_ENABLED())
+        t0 = semcheck_now_ms();
 
     PushScope(symtab);
 
     semcheck_unit_names_reset();
     semcheck_unit_name_add("System");
     semcheck_unit_names_add_list(tree->tree_data.program_data.uses_units);
+    semcheck_timing_step("unit names", &t0);
 
     return_val += semcheck_id_not_main(tree->tree_data.program_data.program_id);
+    semcheck_timing_step("id check", &t0);
 
     /* TODO: Push program name onto scope */
 
     /* TODO: Fix line number bug here */
     return_val += semcheck_args(symtab, tree->tree_data.program_data.args_char,
       tree->line_num);
+    semcheck_timing_step("args", &t0);
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after args: %d\n", return_val);
 #endif
@@ -7400,12 +7434,14 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
     return_val += predeclare_enum_literals(symtab, tree->tree_data.program_data.type_declaration);
     /* Pre-declare types so they're available for const expressions like High(MyType) */
     return_val += predeclare_types(symtab, tree->tree_data.program_data.type_declaration);
+    semcheck_timing_step("predeclare types", &t0);
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after type predeclare: %d\n", return_val);
 #endif
 
     /* Predeclare subprograms so they can be referenced in const initializers */
     return_val += predeclare_subprograms(symtab, tree->tree_data.program_data.subprograms, 0, NULL);
+    semcheck_timing_step("predeclare subprograms", &t0);
     if (getenv("KGPC_DEBUG_GENERIC_CLONES") != NULL)
     {
         ListNode_t *debug_cur = tree->tree_data.program_data.type_declaration;
@@ -7435,6 +7471,7 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
 
     /* Pass 1: Imported unit untyped constants */
     return_val += semcheck_const_decls_imported(symtab, tree->tree_data.program_data.const_declaration);
+    semcheck_timing_step("consts pass1 imported untyped", &t0);
 
     /* Pass 2: Imported unit typed constants */
     ListNode_t *unit_typed_consts = collect_typed_const_decls_filtered(symtab,
@@ -7444,9 +7481,11 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
         return_val += semcheck_decls(symtab, unit_typed_consts);
         DestroyList(unit_typed_consts);
     }
+    semcheck_timing_step("consts pass2 imported typed", &t0);
 
     /* Pass 3: Local untyped constants */
     return_val += semcheck_const_decls_local(symtab, tree->tree_data.program_data.const_declaration);
+    semcheck_timing_step("consts pass3 local untyped", &t0);
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after consts: %d\n", return_val);
 #endif
@@ -7459,23 +7498,28 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
         return_val += semcheck_decls(symtab, local_typed_consts);
         DestroyList(local_typed_consts);
     }
+    semcheck_timing_step("consts pass4 local typed", &t0);
 
     return_val += semcheck_type_decls(symtab, tree->tree_data.program_data.type_declaration);
+    semcheck_timing_step("type decls", &t0);
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after types: %d\n", return_val);
 #endif
 
     return_val += semcheck_decls(symtab, tree->tree_data.program_data.var_declaration);
+    semcheck_timing_step("var decls", &t0);
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after vars: %d\n", return_val);
 #endif
 
     return_val += semcheck_subprograms(symtab, tree->tree_data.program_data.subprograms, 0, NULL);
+    semcheck_timing_step("subprograms", &t0);
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after subprograms: %d\n", return_val);
 #endif
 
     return_val += semcheck_stmt(symtab, tree->tree_data.program_data.body_statement, INT_MAX);
+    semcheck_timing_step("body", &t0);
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after body: %d\n", return_val);
 #endif
@@ -7491,6 +7535,7 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
             final_node = final_node->next;
         }
     }
+    semcheck_timing_step("finalization", &t0);
 
     if(optimize_flag() > 0 && return_val == 0)
     {

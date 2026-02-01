@@ -790,10 +790,37 @@ static combinator_t* create_optional_modifier(void) {
 static ast_t* detach_type_spec(ast_t* identifier_start, ast_t** out_type_spec, ast_t** out_default_value) {
     ast_t* prev = NULL;
     ast_t* cursor = identifier_start;
+    ast_t* slow = identifier_start;
+    ast_t* fast = identifier_start;
+    int guard = 0;
+    const int guard_limit = 100000;
     if (out_default_value != NULL) {
         *out_default_value = NULL;
     }
     while (cursor != NULL) {
+        guard++;
+        if (guard > guard_limit) {
+            fprintf(stderr, "ERROR: detach_type_spec exceeded guard limit (%d); possible cycle in param list (node=%p typ=%d).\n",
+                guard_limit, (void*)cursor, cursor->typ);
+            *out_type_spec = NULL;
+            if (out_default_value != NULL) {
+                *out_default_value = NULL;
+            }
+            return identifier_start;
+        }
+        if (fast != NULL && fast->next != NULL) {
+            fast = fast->next->next;
+            slow = slow ? slow->next : NULL;
+            if (fast != NULL && slow == fast) {
+                fprintf(stderr, "ERROR: Cycle detected in parameter list while detaching type spec (node=%p typ=%d).\n",
+                    (void*)cursor, cursor->typ);
+                *out_type_spec = NULL;
+                if (out_default_value != NULL) {
+                    *out_default_value = NULL;
+                }
+                return identifier_start;
+            }
+        }
         if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL) {
             fprintf(stderr, "[detach_type_spec] cursor=%p typ=%d (TYPE_SPEC=%d DEFAULT_VALUE=%d) next=%p next_typ=%d\n",
                 (void*)cursor, cursor->typ,
@@ -829,8 +856,28 @@ static ast_t* detach_type_spec(ast_t* identifier_start, ast_t** out_type_spec, a
 
 static ast_t* find_tail(ast_t* node) {
     ast_t* tail = node;
-    while (tail != NULL && tail->next != NULL)
+    ast_t* slow = node;
+    ast_t* fast = node;
+    int guard = 0;
+    const int guard_limit = 100000;
+    while (tail != NULL && tail->next != NULL) {
+        guard++;
+        if (guard > guard_limit) {
+            fprintf(stderr, "ERROR: find_tail exceeded guard limit (%d); possible cycle in param list (node=%p typ=%d).\n",
+                guard_limit, (void*)tail, tail->typ);
+            return tail;
+        }
+        if (fast != NULL && fast->next != NULL) {
+            fast = fast->next->next;
+            slow = slow ? slow->next : NULL;
+            if (fast != NULL && slow == fast) {
+                fprintf(stderr, "ERROR: Cycle detected while finding tail of parameter list (node=%p typ=%d).\n",
+                    (void*)tail, tail->typ);
+                return tail;
+            }
+        }
         tail = tail->next;
+    }
     return tail;
 }
 

@@ -14,6 +14,7 @@
 #include <limits.h>
 #include <string.h>
 #include <stdint.h>
+#include <time.h>
 #ifndef _WIN32
 #include <strings.h>
 #else
@@ -30,6 +31,12 @@
 #include "../../ParseTree/tree_types.h"
 #include "../../ParseTree/type_tags.h"
 #include "../../List/List.h"
+
+#define SEMSTMT_TIMINGS_ENABLED() (getenv("KGPC_DEBUG_SEMSTMT_TIMINGS") != NULL)
+
+static double semstmt_now_ms(void) {
+    return (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC;
+}
 
 void semcheck_expr_set_resolved_type(struct Expression *expr, int type_tag);
 
@@ -2259,6 +2266,38 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
     if (stmt == NULL)
         return 0;
 
+    static long semcheck_stmt_counter = 0;
+    static long semcheck_stmt_limit = -1;
+    static int semcheck_stmt_limit_inited = 0;
+    static int semcheck_stmt_log_enabled = -1;
+    static int semcheck_stmt_verbose = -1;
+    if (!semcheck_stmt_limit_inited) {
+        const char *limit_env = getenv("KGPC_DEBUG_SEMSTMT_LIMIT");
+        if (limit_env != NULL)
+            semcheck_stmt_limit = atol(limit_env);
+        semcheck_stmt_limit_inited = 1;
+    }
+    if (semcheck_stmt_log_enabled == -1) {
+        semcheck_stmt_log_enabled = getenv("KGPC_DEBUG_SEMSTMT") != NULL;
+    }
+    if (semcheck_stmt_verbose == -1) {
+        semcheck_stmt_verbose = getenv("KGPC_DEBUG_SEMSTMT_VERBOSE") != NULL;
+    }
+    semcheck_stmt_counter++;
+    if (semcheck_stmt_verbose) {
+        fprintf(stderr, "[semcheck_stmt] enter type=%d line=%d col=%d\n",
+                stmt->type, stmt->line_num, stmt->col_num);
+    }
+    if (semcheck_stmt_log_enabled && (semcheck_stmt_counter % 10000) == 0) {
+        fprintf(stderr, "[semcheck_stmt] count=%ld last_type=%d line=%d\n",
+                semcheck_stmt_counter, stmt->type, stmt->line_num);
+    }
+    if (semcheck_stmt_limit > 0 && semcheck_stmt_counter > semcheck_stmt_limit) {
+        fprintf(stderr, "ERROR: semcheck_stmt exceeded limit (%ld) at type=%d line=%d.\n",
+                semcheck_stmt_limit, stmt->type, stmt->line_num);
+        return 1;
+    }
+
     semcheck_set_error_context(stmt->line_num, stmt->col_num, stmt->source_index);
     
     // In semcheck_for:
@@ -2760,7 +2799,14 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
 
     /* NOTE: Grammar will make sure the left side is a variable */
     /* Left side var assigns must abide by scoping rules */
-    return_val += semcheck_stmt_expr_tag(&type_first, symtab, var, max_scope_lev, MUTATE);
+    if (SEMSTMT_TIMINGS_ENABLED()) {
+        double t0 = semstmt_now_ms();
+        return_val += semcheck_stmt_expr_tag(&type_first, symtab, var, max_scope_lev, MUTATE);
+        fprintf(stderr, "[timing] varassign lhs semcheck_stmt_expr_tag: %.2f ms (line=%d)\n",
+                semstmt_now_ms() - t0, stmt->line_num);
+    } else {
+        return_val += semcheck_stmt_expr_tag(&type_first, symtab, var, max_scope_lev, MUTATE);
+    }
     if (expr != NULL && expr->type == EXPR_RECORD_CONSTRUCTOR && expr->record_type == NULL)
     {
         struct RecordType *record_type = var != NULL ? var->record_type : NULL;
@@ -2795,7 +2841,14 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
         }
         expr->record_type = record_type;
     }
-    return_val += semcheck_stmt_expr_tag(&type_second, symtab, expr, INT_MAX, NO_MUTATE);
+    if (SEMSTMT_TIMINGS_ENABLED()) {
+        double t0 = semstmt_now_ms();
+        return_val += semcheck_stmt_expr_tag(&type_second, symtab, expr, INT_MAX, NO_MUTATE);
+        fprintf(stderr, "[timing] varassign rhs semcheck_stmt_expr_tag: %.2f ms (line=%d)\n",
+                semstmt_now_ms() - t0, stmt->line_num);
+    } else {
+        return_val += semcheck_stmt_expr_tag(&type_second, symtab, expr, INT_MAX, NO_MUTATE);
+    }
 
     if (getenv("KGPC_DEBUG_SEMCHECK") != NULL && expr != NULL && expr->type == EXPR_FUNCTION_CALL &&
         expr->expr_data.function_call_data.id != NULL &&
@@ -2812,8 +2865,21 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
     }
 
     int lhs_owned = 0, rhs_owned = 0;
-    KgpcType *lhs_kgpctype = semcheck_resolve_expression_kgpc_type(symtab, var, max_scope_lev, MUTATE, &lhs_owned);
-    KgpcType *rhs_kgpctype = semcheck_resolve_expression_kgpc_type(symtab, expr, INT_MAX, NO_MUTATE, &rhs_owned);
+    KgpcType *lhs_kgpctype = NULL;
+    KgpcType *rhs_kgpctype = NULL;
+    if (SEMSTMT_TIMINGS_ENABLED()) {
+        double t0 = semstmt_now_ms();
+        lhs_kgpctype = semcheck_resolve_expression_kgpc_type(symtab, var, max_scope_lev, MUTATE, &lhs_owned);
+        fprintf(stderr, "[timing] varassign lhs resolve_kgpc_type: %.2f ms (line=%d)\n",
+                semstmt_now_ms() - t0, stmt->line_num);
+        t0 = semstmt_now_ms();
+        rhs_kgpctype = semcheck_resolve_expression_kgpc_type(symtab, expr, INT_MAX, NO_MUTATE, &rhs_owned);
+        fprintf(stderr, "[timing] varassign rhs resolve_kgpc_type: %.2f ms (line=%d)\n",
+                semstmt_now_ms() - t0, stmt->line_num);
+    } else {
+        lhs_kgpctype = semcheck_resolve_expression_kgpc_type(symtab, var, max_scope_lev, MUTATE, &lhs_owned);
+        rhs_kgpctype = semcheck_resolve_expression_kgpc_type(symtab, expr, INT_MAX, NO_MUTATE, &rhs_owned);
+    }
     int handled_by_kgpctype = 0;
 
     if (lhs_kgpctype != NULL && rhs_kgpctype != NULL)
@@ -4658,15 +4724,36 @@ int semcheck_compoundstmt(SymTab_t *symtab, struct Statement *stmt, int max_scop
 {
     int return_val;
     ListNode_t *stmt_list;
+    ListNode_t *slow = NULL;
+    ListNode_t *fast = NULL;
+    int guard = 0;
+    const int guard_limit = 100000;
     assert(symtab != NULL);
     assert(stmt != NULL);
     assert(stmt->type == STMT_COMPOUND_STATEMENT);
 
     return_val = 0;
     stmt_list = stmt->stmt_data.compound_statement;
+    slow = stmt_list;
+    fast = stmt_list;
     while (stmt_list != NULL)
     {
         assert(stmt_list->type == LIST_STMT);
+        guard++;
+        if (guard > guard_limit) {
+            fprintf(stderr, "ERROR: semcheck_compoundstmt exceeded guard limit (%d); possible cycle in stmt list (node=%p).\n",
+                    guard_limit, (void*)stmt_list);
+            break;
+        }
+        if (fast != NULL && fast->next != NULL) {
+            fast = fast->next->next;
+            slow = slow ? slow->next : NULL;
+            if (fast != NULL && slow == fast) {
+                fprintf(stderr, "ERROR: Cycle detected in compound statement list (node=%p).\n",
+                        (void*)stmt_list);
+                break;
+            }
+        }
 
         if (stmt_list->cur != NULL)
         {

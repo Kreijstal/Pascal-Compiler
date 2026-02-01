@@ -373,6 +373,23 @@ void set_flags(char **, int);
 #include "stacktrace.h"
 
 #include <assert.h>
+#include <time.h>
+
+static double kgpc_now_ms(void) {
+    return (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC;
+}
+
+static void kgpc_timing_log(const char *label, double start_ms) {
+    if (getenv("KGPC_DEBUG_TIMINGS") == NULL)
+        return;
+    double elapsed = kgpc_now_ms() - start_ms;
+    fprintf(stderr, "[timing] %s: %.2f ms\n", label, elapsed);
+}
+
+static double kgpc_timing_start(void) {
+    return kgpc_now_ms();
+}
+
 int main(int argc, char **argv)
 {
     assert(argv != NULL);
@@ -401,9 +418,17 @@ int main(int argc, char **argv)
 
     file_to_parse = "KGPC/Units/system.p";
     unit_search_paths_set_vendor(&g_unit_paths, file_to_parse);
-    prelude_tree = ParsePascalOnly("KGPC/Units/system.p");
+    {
+        double t0 = kgpc_timing_start();
+        prelude_tree = ParsePascalOnly("KGPC/Units/system.p");
+        kgpc_timing_log("parse system.p", t0);
+    }
     file_to_parse = argv[1];
-    user_tree = ParsePascalOnly(argv[1]);
+    {
+        double t0 = kgpc_timing_start();
+        user_tree = ParsePascalOnly(argv[1]);
+        kgpc_timing_log("parse user file", t0);
+    }
 
     if(prelude_tree != NULL && user_tree != NULL)
     {
@@ -457,14 +482,18 @@ int main(int argc, char **argv)
             }
         }
 
-        if (prelude_tree->type == TREE_PROGRAM_TYPE)
-            load_units_from_list(user_tree, prelude_tree->tree_data.program_data.uses_units, &visited_units);
-        else if (prelude_tree->type == TREE_UNIT)
         {
-            load_units_from_list(user_tree, prelude_tree->tree_data.unit_data.interface_uses, &visited_units);
-            load_units_from_list(user_tree, prelude_tree->tree_data.unit_data.implementation_uses, &visited_units);
+            double t0 = kgpc_timing_start();
+            if (prelude_tree->type == TREE_PROGRAM_TYPE)
+                load_units_from_list(user_tree, prelude_tree->tree_data.program_data.uses_units, &visited_units);
+            else if (prelude_tree->type == TREE_UNIT)
+            {
+                load_units_from_list(user_tree, prelude_tree->tree_data.unit_data.interface_uses, &visited_units);
+                load_units_from_list(user_tree, prelude_tree->tree_data.unit_data.implementation_uses, &visited_units);
+            }
+            load_units_from_list(user_tree, user_tree->tree_data.program_data.uses_units, &visited_units);
+            kgpc_timing_log("load units", t0);
         }
-        load_units_from_list(user_tree, user_tree->tree_data.program_data.uses_units, &visited_units);
 
         unit_set_destroy(&visited_units);
 
@@ -487,7 +516,12 @@ int main(int argc, char **argv)
         }
 
         int sem_result;
-        SymTab_t *symtab = start_semcheck(user_tree, &sem_result);
+        SymTab_t *symtab = NULL;
+        {
+            double t0 = kgpc_timing_start();
+            symtab = start_semcheck(user_tree, &sem_result);
+            kgpc_timing_log("semantic check", t0);
+        }
         if(sem_result == 0)
         {
             fprintf(stderr, "Generating code to file: %s\n", argv[2]);
@@ -510,11 +544,19 @@ int main(int argc, char **argv)
             ctx.loop_capacity = 0;
 
             /* Mark which functions are actually used */
-            extern void mark_used_functions(Tree_t *program, SymTab_t *symtab);
-            mark_used_functions(user_tree, symtab);
-            mark_program_subs_used(user_tree);
+            {
+                double t0 = kgpc_timing_start();
+                extern void mark_used_functions(Tree_t *program, SymTab_t *symtab);
+                mark_used_functions(user_tree, symtab);
+                mark_program_subs_used(user_tree);
+                kgpc_timing_log("mark used functions", t0);
+            }
 
-            codegen(user_tree, argv[1], &ctx, symtab);
+            {
+                double t0 = kgpc_timing_start();
+                codegen(user_tree, argv[1], &ctx, symtab);
+                kgpc_timing_log("codegen", t0);
+            }
 
             int codegen_failed = codegen_had_error(&ctx);
             fclose(ctx.output_file);

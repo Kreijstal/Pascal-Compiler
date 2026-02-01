@@ -1009,8 +1009,28 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
 
     int given_count = ListLength(args_given);
 
+    ListNode_t *slow = overload_candidates;
+    ListNode_t *fast = overload_candidates;
+    int guard = 0;
+    const int guard_limit = 100000;
+
     for (ListNode_t *cur = overload_candidates; cur != NULL; cur = cur->next)
     {
+        guard++;
+        if (guard > guard_limit) {
+            fprintf(stderr, "ERROR: semcheck_resolve_overload exceeded guard limit (%d); possible cycle in overload candidates list (node=%p).\n",
+                guard_limit, (void*)cur);
+            break;
+        }
+        if (fast != NULL && fast->next != NULL) {
+            fast = fast->next->next;
+            slow = slow ? slow->next : NULL;
+            if (fast != NULL && slow == fast) {
+                fprintf(stderr, "ERROR: Cycle detected in overload candidates list (node=%p).\n",
+                    (void*)cur);
+                break;
+            }
+        }
         HashNode_t *candidate = (HashNode_t *)cur->cur;
         if (candidate == NULL ||
             (candidate->hash_type != HASHTYPE_FUNCTION &&

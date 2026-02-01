@@ -4907,8 +4907,27 @@ static ListNode_t *convert_param(ast_t *param_node) {
 static ListNode_t *convert_param_list(ast_t **cursor) {
     ListNode_t *params = NULL;
     ast_t *cur = *cursor;
+    ast_t *slow = cur;
+    ast_t *fast = cur;
+    int guard = 0;
+    const int guard_limit = 100000;
 
     while (cur != NULL && cur->typ == PASCAL_T_PARAM) {
+        guard++;
+        if (guard > guard_limit) {
+            fprintf(stderr, "ERROR: convert_param_list exceeded guard limit (%d); possible cycle in param list (node=%p typ=%d).\n",
+                guard_limit, (void*)cur, cur->typ);
+            break;
+        }
+        if (fast != NULL && fast->next != NULL) {
+            fast = fast->next->next;
+            slow = slow ? slow->next : NULL;
+            if (fast != NULL && slow == fast) {
+                fprintf(stderr, "ERROR: Cycle detected in param list during conversion (node=%p typ=%d).\n",
+                    (void*)cur, cur->typ);
+                break;
+            }
+        }
         ListNode_t *param_nodes = convert_param(cur);
         extend_list(&params, param_nodes);
         cur = cur->next;
