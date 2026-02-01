@@ -6460,11 +6460,6 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
     return decl;
 }
 
-/* Backward-compatible wrapper */
-static Tree_t *convert_type_decl(ast_t *type_decl_node, ListNode_t **method_clones) {
-    return convert_type_decl_ex(type_decl_node, method_clones, NULL);
-}
-
 static Tree_t *convert_generic_type_decl(ast_t *type_decl_node) {
     if (type_decl_node == NULL)
         return NULL;

@@ -13,6 +13,44 @@
  * String/Character Builtins
  *===========================================================================*/
 
+/* Detect whether an expression should be treated as a ShortString.
+ * This mirrors the logic in SemCheck_stmt.c so helpers and statements
+ * agree on ShortString handling. */
+static int semcheck_expr_is_shortstring(const struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+
+    if (expr->resolved_kgpc_type != NULL)
+    {
+        struct TypeAlias *alias = kgpc_type_get_type_alias(expr->resolved_kgpc_type);
+        if (alias != NULL)
+        {
+            if (alias->is_shortstring)
+                return 1;
+            if ((alias->alias_name != NULL &&
+                 pascal_identifier_equals(alias->alias_name, "ShortString")) ||
+                (alias->target_type_id != NULL &&
+                 pascal_identifier_equals(alias->target_type_id, "ShortString")))
+            {
+                return 1;
+            }
+        }
+        if (kgpc_type_is_shortstring(expr->resolved_kgpc_type))
+            return 1;
+    }
+
+    if (expr->is_array_expr &&
+        expr->array_element_type == CHAR_TYPE &&
+        expr->array_lower_bound == 0 &&
+        expr->array_upper_bound >= 0)
+    {
+        return 1;
+    }
+
+    return 0;
+}
+
 int semcheck_builtin_chr(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev)
 {
@@ -288,15 +326,7 @@ int semcheck_builtin_length(int *type_return, SymTab_t *symtab,
             is_dynamic_array = 1;
     }
     int is_static_array = (arg_expr != NULL && arg_expr->is_array_expr && !arg_expr->array_is_dynamic);
-    int is_shortstring = 0;
-
-    if (arg_expr != NULL && arg_expr->is_array_expr &&
-        arg_expr->array_element_type == CHAR_TYPE &&
-        arg_expr->array_lower_bound == 0 &&
-        arg_expr->array_upper_bound >= 0)
-    {
-        is_shortstring = 1;
-    }
+    int is_shortstring = semcheck_expr_is_shortstring(arg_expr);
 
     /* For static arrays, convert Length() to a compile-time constant */
     if (error_count == 0 && is_static_array && !is_shortstring)
@@ -422,14 +452,7 @@ int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
     error_count += semcheck_expr_legacy_tag(&source_type, symtab, source_expr, max_scope_lev, NO_MUTATE);
 
     /* Check for ShortString (array[0..N] of char) like Length does */
-    int is_shortstring = 0;
-    if (source_expr != NULL && source_expr->is_array_expr &&
-        source_expr->array_element_type == CHAR_TYPE &&
-        source_expr->array_lower_bound == 0 &&
-        source_expr->array_upper_bound >= 0)
-    {
-        is_shortstring = 1;
-    }
+    int is_shortstring = semcheck_expr_is_shortstring(source_expr);
 
     if (error_count == 0 && !is_string_type(source_type) && !is_shortstring)
     {

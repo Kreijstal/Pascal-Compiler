@@ -95,7 +95,7 @@ static int codegen_self_param_is_class(Tree_t *formal_arg_decl, CodeGenContext *
     if (type == NULL && ctx != NULL && ctx->symtab != NULL && type_id != NULL)
     {
         HashNode_t *type_node = NULL;
-        if (FindIdent(&type_node, ctx->symtab, type_id) == 0 &&
+        if (FindIdent(&type_node, ctx->symtab, (char *)type_id) == 0 &&
             type_node != NULL && type_node->type != NULL)
             type = type_node->type;
     }
@@ -1039,6 +1039,7 @@ int codegen_type_uses_qword(int type_tag)
 {
     return (type_tag == REAL_TYPE || type_tag == INT64_TYPE ||
         type_tag == POINTER_TYPE || type_tag == STRING_TYPE ||
+        type_tag == SHORTSTRING_TYPE ||
         type_is_file_like(type_tag) || type_tag == PROCEDURE);
 }
 
@@ -4548,8 +4549,19 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         
         /* Also check if we're passing a static array argument (even if not declared as var param) */
         int is_array_arg = (arg_expr != NULL && arg_expr->is_array_expr && !arg_expr->array_is_dynamic);
-        int treat_self_by_value = 0;
-
+        if (!is_array_arg && arg_expr != NULL)
+        {
+            KgpcType *arg_type = expr_get_kgpc_type(arg_expr);
+            if (arg_type != NULL)
+            {
+                struct TypeAlias *alias = kgpc_type_get_type_alias(arg_type);
+                if (kgpc_type_is_shortstring(arg_type) ||
+                    (alias != NULL && alias->is_shortstring))
+                {
+                    is_array_arg = 1;
+                }
+            }
+        }
         int expected_type = codegen_param_expected_type(formal_arg_decl, ctx->symtab);
         if (expected_type == UNKNOWN_TYPE && procedure_name != NULL)
             expected_type = codegen_expected_type_for_builtin(procedure_name);
@@ -4596,7 +4608,6 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             }
             if (formal_id != NULL && pascal_identifier_equals(formal_id, "Self"))
             {
-                treat_self_by_value = 1;
                 is_var_param = 0;
             }
         }
@@ -4614,9 +4625,6 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             }
         }
 
-        /* NOTE: treat_self_by_value is excluded because when passing Self by value
-         * (for type helpers on primitive types), we pass the actual value, not a pointer.
-         * The appropriate register class (SSE for floats, INT for integers) should be used. */
         int is_pointer_like = (is_var_param || is_array_param || is_array_arg || formal_is_dynarray);
 
         if (arg_infos != NULL)

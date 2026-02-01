@@ -309,11 +309,6 @@ static int parse_line_directive_with_file(const char *line, size_t len, char *fi
     return line_num > 0 ? line_num : -1;
 }
 
-static int parse_line_directive(const char *line, size_t len)
-{
-    return parse_line_directive_with_file(line, len, NULL, 0);
-}
-
 int print_source_context_from_buffer(const char *buffer, size_t length,
                                      int error_line, int error_col,
                                      int num_context_lines)

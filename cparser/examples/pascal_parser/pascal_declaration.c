@@ -2649,23 +2649,6 @@ void init_pascal_procedure_parser(combinator_t** p) {
 
     combinator_t* routine_directives = many(routine_directive);
     
-    combinator_t* directive_stmt = seq(new_combinator(), PASCAL_T_NONE,
-        directive_keyword,
-        // Tolerate simple forms like: external name 'foo'; or external 'lib';
-        optional(seq(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("name")),
-            token(pascal_string(PASCAL_T_STRING)),
-            NULL
-        )),
-        optional(multi(new_combinator(), PASCAL_T_NONE,
-            token(pascal_string(PASCAL_T_STRING)),
-            token(cident(PASCAL_T_IDENTIFIER)),
-            NULL
-        )),
-        token(match(";")),
-        NULL
-    );
-
     combinator_t* procedure_decl = seq(new_combinator(), PASCAL_T_PROCEDURE_DECL,
         token(match("procedure")),               // procedure keyword
         token(cident(PASCAL_T_IDENTIFIER)),      // procedure name

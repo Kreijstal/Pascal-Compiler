@@ -1838,12 +1838,15 @@ int kgpc_type_uses_qword(KgpcType *type)
     {
         return (type->type_alias->storage_size > 4);
     }
+    if (type->type_alias != NULL && type->type_alias->is_shortstring)
+        return 1;
     
     switch (type->kind) {
         case TYPE_KIND_PRIMITIVE:
             switch (type->info.primitive_type_tag) {
                 case REAL_TYPE:
                 case STRING_TYPE:
+                case SHORTSTRING_TYPE:
                 case FILE_TYPE:
                 case TEXT_TYPE:
                 case POINTER_TYPE:

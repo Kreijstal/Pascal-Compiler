@@ -1065,6 +1065,28 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
         }
         if (var_node->is_reference)
             treat_as_reference = 1;
+        /* ShortStrings may be stored as pointers in a single qword slot.
+         * In that case we need to load the pointer value, not take the
+         * address of the spill slot itself. */
+        if (!treat_as_reference && symbol != NULL && symbol->type != NULL &&
+            var_node->size <= CODEGEN_POINTER_SIZE_BYTES)
+        {
+            struct TypeAlias *alias = kgpc_type_get_type_alias(symbol->type);
+            int is_shortstring = kgpc_type_is_shortstring(symbol->type) ||
+                (alias != NULL && alias->is_shortstring);
+            if (!is_shortstring && alias != NULL)
+            {
+                if ((alias->alias_name != NULL &&
+                     pascal_identifier_equals(alias->alias_name, "ShortString")) ||
+                    (alias->target_type_id != NULL &&
+                     pascal_identifier_equals(alias->target_type_id, "ShortString")))
+                {
+                    is_shortstring = 1;
+                }
+            }
+            if (is_shortstring)
+                treat_as_reference = 1;
+        }
 
         /* Try normal allocation first, then spill if needed */
         Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);

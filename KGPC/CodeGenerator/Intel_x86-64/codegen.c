@@ -64,7 +64,7 @@ static int codegen_self_param_is_class(Tree_t *arg_decl, SymTab_t *symtab)
     if (type == NULL && symtab != NULL && type_id != NULL)
     {
         HashNode_t *type_node = NULL;
-        if (FindIdent(&type_node, symtab, type_id) == 0 &&
+        if (FindIdent(&type_node, symtab, (char *)type_id) == 0 &&
             type_node != NULL && type_node->type != NULL)
             type = type_node->type;
     }
@@ -502,8 +502,14 @@ static inline int get_var_storage_size(HashNode_t *node)
         {
             /* Honor explicit storage overrides from type aliases (e.g., Int64/QWord) */
             struct TypeAlias *alias = kgpc_type_get_type_alias(node->type);
-            if (alias != NULL && alias->storage_size > 0)
-                return (int)alias->storage_size;
+            if (alias != NULL)
+            {
+                /* ShortStrings are passed/preserved via pointer-sized slots */
+                if (alias->is_shortstring)
+                    return 8;
+                if (alias->storage_size > 0)
+                    return (int)alias->storage_size;
+            }
 
             int tag = kgpc_type_get_primitive_tag(node->type);
             switch (tag)
@@ -514,6 +520,7 @@ static inline int get_var_storage_size(HashNode_t *node)
                     return 8;
                 case REAL_TYPE:
                 case STRING_TYPE:  /* PCHAR */
+                case SHORTSTRING_TYPE:
                 case POINTER_TYPE:
                 case PROCEDURE:
                     return 8;
@@ -4032,6 +4039,7 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     int is_array_type = 0;
                     int type_requires_qword = 0;
                     int real_storage_size = 8;
+                    int is_shortstring_param = 0;
                     
                     /* Determine if parameter is an array type via resolved type only */
                     if (resolved_type_node != NULL && resolved_type_node->type != NULL &&
@@ -4039,6 +4047,10 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     {
                         is_array_type = 1;
                         type_requires_qword = kgpc_type_uses_qword(resolved_type_node->type);
+                        struct TypeAlias *alias = kgpc_type_get_type_alias(resolved_type_node->type);
+                        if (kgpc_type_is_shortstring(resolved_type_node->type) ||
+                            (alias != NULL && alias->is_shortstring))
+                            is_shortstring_param = 1;
                     }
                     else if (cached_arg_type != NULL &&
                         kgpc_type_is_array(cached_arg_type))
@@ -4049,10 +4061,18 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     else if (resolved_type_node != NULL && resolved_type_node->type != NULL)
                     {
                         type_requires_qword = kgpc_type_uses_qword(resolved_type_node->type);
+                        struct TypeAlias *alias = kgpc_type_get_type_alias(resolved_type_node->type);
+                        if (kgpc_type_is_shortstring(resolved_type_node->type) ||
+                            (alias != NULL && alias->is_shortstring))
+                            is_shortstring_param = 1;
                     }
                     else if (cached_arg_type != NULL)
                     {
                         type_requires_qword = kgpc_type_uses_qword(cached_arg_type);
+                        struct TypeAlias *alias = kgpc_type_get_type_alias(cached_arg_type);
+                        if (kgpc_type_is_shortstring(cached_arg_type) ||
+                            (alias != NULL && alias->is_shortstring))
+                            is_shortstring_param = 1;
                     }
 
                     if (inferred_type_tag == REAL_TYPE)
@@ -4066,7 +4086,7 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     int use_sse_reg = (!is_var_param && !is_array_type &&
                         inferred_type_tag == REAL_TYPE);
                     arg_stack = use_64bit ? add_q_z((char *)arg_ids->cur) : add_l_z((char *)arg_ids->cur);
-                    if (arg_stack != NULL && (symbol_is_var_param || is_array_type))
+                    if (arg_stack != NULL && (symbol_is_var_param || is_array_type || is_shortstring_param))
                         arg_stack->is_reference = 1;
                     if (use_sse_reg)
                     {

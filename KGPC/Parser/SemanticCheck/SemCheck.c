@@ -8101,7 +8101,6 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             int element_type_tag = alias->array_element_type;
 
                             /* If element type is a type reference, resolve it */
-                            int element_type_owned = 0;  /* Track if we own element_type */
                             if (element_type_tag == UNKNOWN_TYPE && alias->array_element_type_id != NULL)
                             {
                                 HashNode_t *element_type_node = NULL;
@@ -8113,21 +8112,18 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                                      * and create_array_type takes ownership. Without this, both the symbol
                                      * table and array_type would try to free the same type, causing double-free. */
                                     kgpc_type_retain(element_type);
-                                    element_type_owned = 1;
                                 }
                             }
                             else if (element_type_tag != UNKNOWN_TYPE)
                             {
                                 /* Direct primitive type tag - use create_primitive_type */
                                 element_type = create_primitive_type(element_type_tag);
-                                element_type_owned = 1;
                             }
 
                             /* If element type is still NULL, create an unknown type to avoid crash */
                             if (element_type == NULL)
                             {
                                 element_type = create_primitive_type(UNKNOWN_TYPE);
-                                element_type_owned = 1;
                             }
 
                             /* Create array KgpcType - takes ownership of element_type */

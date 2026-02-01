@@ -364,46 +364,6 @@ static struct Expression *get_param_default_value(Tree_t *decl)
     return NULL;
 }
 
-static int semcheck_param_decl_equivalent_stmt(const Tree_t *lhs, const Tree_t *rhs)
-{
-    if (lhs == NULL || rhs == NULL)
-        return 0;
-    if (lhs->type != TREE_VAR_DECL || rhs->type != TREE_VAR_DECL)
-        return 0;
-    if (lhs->tree_data.var_decl_data.is_var_param != rhs->tree_data.var_decl_data.is_var_param)
-        return 0;
-    int lhs_type = lhs->tree_data.var_decl_data.type;
-    int rhs_type = rhs->tree_data.var_decl_data.type;
-    int types_equivalent = 0;
-    if (lhs_type == rhs_type)
-        types_equivalent = 1;
-    else if ((lhs_type == INT_TYPE && rhs_type == LONGINT_TYPE) ||
-             (lhs_type == LONGINT_TYPE && rhs_type == INT_TYPE))
-        types_equivalent = 1;
-    if (!types_equivalent)
-        return 0;
-    if (lhs->tree_data.var_decl_data.type_id == NULL || rhs->tree_data.var_decl_data.type_id == NULL)
-        return 1;
-    if (lhs_type != rhs_type)
-        return 1;
-    return strcasecmp(lhs->tree_data.var_decl_data.type_id,
-        rhs->tree_data.var_decl_data.type_id) == 0;
-}
-
-static int semcheck_param_lists_equivalent_stmt(ListNode_t *lhs, ListNode_t *rhs)
-{
-    while (lhs != NULL && rhs != NULL)
-    {
-        Tree_t *lhs_decl = (Tree_t *)lhs->cur;
-        Tree_t *rhs_decl = (Tree_t *)rhs->cur;
-        if (!semcheck_param_decl_equivalent_stmt(lhs_decl, rhs_decl))
-            return 0;
-        lhs = lhs->next;
-        rhs = rhs->next;
-    }
-    return (lhs == NULL && rhs == NULL);
-}
-
 static int append_default_args(ListNode_t **args_head, ListNode_t *formal_params, int line_num)
 {
     if (args_head == NULL)
@@ -465,32 +425,6 @@ static int append_default_args(ListNode_t **args_head, ListNode_t *formal_params
     }
 
     return 0;
-}
-
-/* Helper to count required parameters (those without defaults) */
-static int count_required_params(ListNode_t *params)
-{
-    int required = 0;
-    int total = 0;
-    ListNode_t *cur = params;
-    
-    /* Once we see a parameter with a default, all following must also have defaults */
-    while (cur != NULL)
-    {
-        Tree_t *param_decl = (Tree_t *)cur->cur;
-        total++;
-        if (!param_has_default_value(param_decl))
-            required++;
-        else
-            break;  /* All remaining params have defaults */
-        cur = cur->next;
-    }
-    
-    if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL) {
-        fprintf(stderr, "[SemCheck] count_required_params: total=%d required=%d\n", total, required);
-    }
-    
-    return required;
 }
 
 /* Helper to get the default value expression from a parameter */
@@ -3061,6 +2995,7 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             }
         }
 assignment_types_ok:
+        ;
     }
 
     if (!handled_by_kgpctype)
