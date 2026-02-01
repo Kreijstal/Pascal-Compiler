@@ -536,17 +536,15 @@ class TAPTestResult(unittest.TestResult):
         self._test_states[test] = {"reported": False, "had_failure": False}
         self._test_start_times[test] = time.monotonic()
         if self.VERBOSE_LOG:
-            sys.stderr.write(f"[TAP] Starting ({self._test_index}): {self._test_name(test)}\n")
-            sys.stderr.flush()
+            # Use TAP diagnostic comment (# prefix) so meson shows it
+            self._emit(f"# [STARTING] {self._test_name(test)}")
 
     def stopTest(self, test):
         elapsed = 0.0
         start_time = self._test_start_times.pop(test, None)
         if start_time is not None:
             elapsed = time.monotonic() - start_time
-        if self.VERBOSE_LOG:
-            sys.stderr.write(f"[TAP] Finished ({self._test_index}): {self._test_name(test)} ({elapsed:.1f}s)\n")
-            sys.stderr.flush()
+        # Note: stopTest is called after addSuccess/addFailure, so the result line is already emitted
         super().stopTest(test)
         self._test_states.pop(test, None)
 
