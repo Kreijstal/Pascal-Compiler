@@ -3362,8 +3362,11 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
                     (void*)cursor, cursor ? cursor->typ : -1);
             #endif
         } else {
-            /* Skip to parameter list if present */
-            while (cursor != NULL && cursor->typ != PASCAL_T_PARAM && cursor->typ != PASCAL_T_TYPE_SPEC)
+            /* Skip to parameter list if present, but stop at return type (for parameterless functions) */
+            while (cursor != NULL && 
+                   cursor->typ != PASCAL_T_PARAM && 
+                   cursor->typ != PASCAL_T_TYPE_SPEC &&
+                   cursor->typ != PASCAL_T_RETURN_TYPE)
                 cursor = cursor->next;
             
             if (cursor != NULL && cursor->typ == PASCAL_T_PARAM) {
@@ -3390,9 +3393,19 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
             /* The return type might be:
              * 1. A direct sibling (PASCAL_T_TYPE_SPEC or PASCAL_T_IDENTIFIER)
              * 2. A child of an intermediate wrapper node (check child->typ)
+             * 3. Wrapped in PASCAL_T_RETURN_TYPE node
              */
             while (cursor != NULL && cursor->typ != PASCAL_T_TYPE_SPEC && cursor->typ != PASCAL_T_IDENTIFIER)
             {
+                /* Check for RETURN_TYPE wrapper */
+                if (cursor->typ == PASCAL_T_RETURN_TYPE) {
+                    if (cursor->child != NULL &&
+                        (cursor->child->typ == PASCAL_T_TYPE_SPEC || cursor->child->typ == PASCAL_T_IDENTIFIER))
+                    {
+                        cursor = cursor->child;
+                        break;
+                    }
+                }
                 /* Check if the child is a TYPE_SPEC or IDENTIFIER */
                 if (cursor->child != NULL && 
                     (cursor->child->typ == PASCAL_T_TYPE_SPEC || cursor->child->typ == PASCAL_T_IDENTIFIER))

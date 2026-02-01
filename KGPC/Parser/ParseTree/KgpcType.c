@@ -1145,14 +1145,11 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
             ProcedureTypeInfo *lhs_proc = &lhs_type->info.proc_info;
             ProcedureTypeInfo *rhs_proc = &rhs_type->info.proc_info;
 
-            /* DEBUG: Log parameter counts */
-
             /* 1. Check function vs procedure compatibility 
              * A procedure variable can only hold a procedure, not a function, and vice versa 
              * Note: A function has either return_type != NULL or return_type_id != NULL */
             int lhs_is_function = (lhs_proc->return_type != NULL || lhs_proc->return_type_id != NULL);
             int rhs_is_function = (rhs_proc->return_type != NULL || rhs_proc->return_type_id != NULL);
-            
             
             if (lhs_is_function != rhs_is_function)
                 return 0; /* Cannot assign function to procedure var or vice versa */

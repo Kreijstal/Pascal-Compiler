@@ -1,10 +1,11 @@
 { TDD test for DoCapSizeInt with widestringmanager pattern
-  This test exposes a bug where:
-  1. Procedural field types from FPC's System unit aren't properly resolved
-  2. DoCapSizeInt overload can't match when the argument comes from a 
+  This test verifies that:
+  1. Procedural field types with return types are properly resolved
+  2. DoCapSizeInt overload matches when the argument comes from a 
      function pointer call in a record field
+  3. Assignment to procedural fields works correctly
   
-  Verified: Passes with FPC, fails with KGPC when using --no-stdlib
+  Verified: Passes with FPC and KGPC
 }
 {$mode objfpc}
 program tdd_capsizeint_wsm;
