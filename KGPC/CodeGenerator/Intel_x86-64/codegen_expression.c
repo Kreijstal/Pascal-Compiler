@@ -1116,6 +1116,44 @@ KgpcType* expr_get_kgpc_type(const struct Expression *expr)
             }
             return NULL;
         }
+        case EXPR_FUNCTION_CALL:
+        {
+            /* First check if resolved_kgpc_type was set during semcheck */
+            if (expr->resolved_kgpc_type != NULL)
+                return expr->resolved_kgpc_type;
+            
+            /* For function calls, try to get the return type from call_kgpc_type */
+            KgpcType *call_type = expr->expr_data.function_call_data.call_kgpc_type;
+            if (call_type != NULL && call_type->kind == TYPE_KIND_PROCEDURE)
+            {
+                KgpcType *ret_type = kgpc_type_get_return_type(call_type);
+                if (ret_type != NULL)
+                    return ret_type;
+                
+                /* If return_type is NULL, check return_type_id for PAnsiChar etc. */
+                const char *ret_id = call_type->info.proc_info.return_type_id;
+                if (getenv("KGPC_DEBUG_CODEGEN") != NULL && ret_id != NULL) {
+                    fprintf(stderr, "[CodeGen] expr_get_kgpc_type: EXPR_FUNCTION_CALL return_type_id='%s'\n", ret_id);
+                }
+                if (ret_id != NULL)
+                {
+                    /* Common pointer type aliases */
+                    if (pascal_identifier_equals(ret_id, "PAnsiChar") ||
+                        pascal_identifier_equals(ret_id, "PChar") ||
+                        pascal_identifier_equals(ret_id, "PWideChar") ||
+                        pascal_identifier_equals(ret_id, "Pointer") ||
+                        pascal_identifier_equals(ret_id, "PByte"))
+                    {
+                        /* Return a pointer type to indicate 64-bit return */
+                        static KgpcType *cached_pointer = NULL;
+                        if (cached_pointer == NULL)
+                            cached_pointer = create_pointer_type(NULL);
+                        return cached_pointer;
+                    }
+                }
+            }
+            return NULL;
+        }
         default:
             break;
     }

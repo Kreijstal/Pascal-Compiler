@@ -6122,6 +6122,32 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                 int value_is_qword = expr_uses_qword_kgpctype(assign_expr);
                 if (coerced_to_real)
                     value_is_qword = 1;
+                /* Check for procedural var calls with pointer return type */
+                if (!value_is_qword && assign_expr != NULL &&
+                    assign_expr->type == EXPR_FUNCTION_CALL &&
+                    assign_expr->expr_data.function_call_data.is_procedural_var_call &&
+                    assign_expr->expr_data.function_call_data.call_kgpc_type != NULL)
+                {
+                    KgpcType *call_type = assign_expr->expr_data.function_call_data.call_kgpc_type;
+                    if (call_type->kind == TYPE_KIND_PROCEDURE)
+                    {
+                        KgpcType *ret_type = kgpc_type_get_return_type(call_type);
+                        if (ret_type != NULL && kgpc_type_uses_qword(ret_type))
+                            value_is_qword = 1;
+                        else if (call_type->info.proc_info.return_type_id != NULL)
+                        {
+                            const char *ret_id = call_type->info.proc_info.return_type_id;
+                            if (pascal_identifier_equals(ret_id, "PAnsiChar") ||
+                                pascal_identifier_equals(ret_id, "PChar") ||
+                                pascal_identifier_equals(ret_id, "PWideChar") ||
+                                pascal_identifier_equals(ret_id, "Pointer") ||
+                                pascal_identifier_equals(ret_id, "PByte"))
+                            {
+                                value_is_qword = 1;
+                            }
+                        }
+                    }
+                }
                 if (!value_is_qword)
                     inst_list = codegen_sign_extend32_to64(inst_list, reg->bit_32, reg->bit_64);
             }
@@ -6235,6 +6261,32 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                 int value_is_qword = expr_uses_qword_kgpctype(assign_expr);
                 if (coerced_to_real)
                     value_is_qword = 1;
+                /* Check for procedural var calls with pointer return type */
+                if (!value_is_qword && assign_expr != NULL &&
+                    assign_expr->type == EXPR_FUNCTION_CALL &&
+                    assign_expr->expr_data.function_call_data.is_procedural_var_call &&
+                    assign_expr->expr_data.function_call_data.call_kgpc_type != NULL)
+                {
+                    KgpcType *call_type = assign_expr->expr_data.function_call_data.call_kgpc_type;
+                    if (call_type->kind == TYPE_KIND_PROCEDURE)
+                    {
+                        KgpcType *ret_type = kgpc_type_get_return_type(call_type);
+                        if (ret_type != NULL && kgpc_type_uses_qword(ret_type))
+                            value_is_qword = 1;
+                        else if (call_type->info.proc_info.return_type_id != NULL)
+                        {
+                            const char *ret_id = call_type->info.proc_info.return_type_id;
+                            if (pascal_identifier_equals(ret_id, "PAnsiChar") ||
+                                pascal_identifier_equals(ret_id, "PChar") ||
+                                pascal_identifier_equals(ret_id, "PWideChar") ||
+                                pascal_identifier_equals(ret_id, "Pointer") ||
+                                pascal_identifier_equals(ret_id, "PByte"))
+                            {
+                                value_is_qword = 1;
+                            }
+                        }
+                    }
+                }
                 if (!value_is_qword)
                     inst_list = codegen_sign_extend32_to64(inst_list, reg->bit_32, reg->bit_64);
                 snprintf(buffer, 50, "\tmovq\t%s, -%d(%s)\n", reg->bit_64, offset, current_non_local_reg64());
@@ -6360,6 +6412,32 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             int value_is_qword = expr_uses_qword_kgpctype(assign_expr);
             if (coerced_to_real)
                 value_is_qword = 1;
+            /* Check for procedural var calls with pointer return type */
+            if (!value_is_qword && assign_expr != NULL &&
+                assign_expr->type == EXPR_FUNCTION_CALL &&
+                assign_expr->expr_data.function_call_data.is_procedural_var_call &&
+                assign_expr->expr_data.function_call_data.call_kgpc_type != NULL)
+            {
+                KgpcType *call_type = assign_expr->expr_data.function_call_data.call_kgpc_type;
+                if (call_type->kind == TYPE_KIND_PROCEDURE)
+                {
+                    KgpcType *ret_type = kgpc_type_get_return_type(call_type);
+                    if (ret_type != NULL && kgpc_type_uses_qword(ret_type))
+                        value_is_qword = 1;
+                    else if (call_type->info.proc_info.return_type_id != NULL)
+                    {
+                        const char *ret_id = call_type->info.proc_info.return_type_id;
+                        if (pascal_identifier_equals(ret_id, "PAnsiChar") ||
+                            pascal_identifier_equals(ret_id, "PChar") ||
+                            pascal_identifier_equals(ret_id, "PWideChar") ||
+                            pascal_identifier_equals(ret_id, "Pointer") ||
+                            pascal_identifier_equals(ret_id, "PByte"))
+                        {
+                            value_is_qword = 1;
+                        }
+                    }
+                }
+            }
             if (!value_is_qword)
                 inst_list = codegen_sign_extend32_to64(inst_list, value_reg->bit_32, value_reg->bit_64);
             snprintf(buffer, 50, "\tmovq\t%s, (%s)\n", value_reg->bit_64, addr_reload->bit_64);
@@ -6464,6 +6542,32 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             int value_is_qword = expr_uses_qword_kgpctype(assign_expr);
             if (coerced_to_real)
                 value_is_qword = 1;
+            /* Check for procedural var calls with pointer return type */
+            if (!value_is_qword && assign_expr != NULL &&
+                assign_expr->type == EXPR_FUNCTION_CALL &&
+                assign_expr->expr_data.function_call_data.is_procedural_var_call &&
+                assign_expr->expr_data.function_call_data.call_kgpc_type != NULL)
+            {
+                KgpcType *call_type = assign_expr->expr_data.function_call_data.call_kgpc_type;
+                if (call_type->kind == TYPE_KIND_PROCEDURE)
+                {
+                    KgpcType *ret_type = kgpc_type_get_return_type(call_type);
+                    if (ret_type != NULL && kgpc_type_uses_qword(ret_type))
+                        value_is_qword = 1;
+                    else if (call_type->info.proc_info.return_type_id != NULL)
+                    {
+                        const char *ret_id = call_type->info.proc_info.return_type_id;
+                        if (pascal_identifier_equals(ret_id, "PAnsiChar") ||
+                            pascal_identifier_equals(ret_id, "PChar") ||
+                            pascal_identifier_equals(ret_id, "PWideChar") ||
+                            pascal_identifier_equals(ret_id, "Pointer") ||
+                            pascal_identifier_equals(ret_id, "PByte"))
+                        {
+                            value_is_qword = 1;
+                        }
+                    }
+                }
+            }
             if (!value_is_qword)
                 inst_list = codegen_sign_extend32_to64(inst_list, value_reg->bit_32, value_reg->bit_64);
             snprintf(buffer, 50, "\tmovq\t%s, (%s)\n", value_reg->bit_64, addr_reload->bit_64);
@@ -6571,6 +6675,32 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             int value_is_qword = expr_uses_qword_kgpctype(assign_expr);
             if (coerced_to_real)
                 value_is_qword = 1;
+            /* Check for procedural var calls with pointer return type */
+            if (!value_is_qword && assign_expr != NULL &&
+                assign_expr->type == EXPR_FUNCTION_CALL &&
+                assign_expr->expr_data.function_call_data.is_procedural_var_call &&
+                assign_expr->expr_data.function_call_data.call_kgpc_type != NULL)
+            {
+                KgpcType *call_type = assign_expr->expr_data.function_call_data.call_kgpc_type;
+                if (call_type->kind == TYPE_KIND_PROCEDURE)
+                {
+                    KgpcType *ret_type = kgpc_type_get_return_type(call_type);
+                    if (ret_type != NULL && kgpc_type_uses_qword(ret_type))
+                        value_is_qword = 1;
+                    else if (call_type->info.proc_info.return_type_id != NULL)
+                    {
+                        const char *ret_id = call_type->info.proc_info.return_type_id;
+                        if (pascal_identifier_equals(ret_id, "PAnsiChar") ||
+                            pascal_identifier_equals(ret_id, "PChar") ||
+                            pascal_identifier_equals(ret_id, "PWideChar") ||
+                            pascal_identifier_equals(ret_id, "Pointer") ||
+                            pascal_identifier_equals(ret_id, "PByte"))
+                        {
+                            value_is_qword = 1;
+                        }
+                    }
+                }
+            }
             if (!value_is_qword)
                 inst_list = codegen_sign_extend32_to64(inst_list, value_reg->bit_32, value_reg->bit_64);
             snprintf(buffer, 50, "\tmovq\t%s, (%s)\n", value_reg->bit_64, addr_reload->bit_64);

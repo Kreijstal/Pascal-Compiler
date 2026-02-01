@@ -18,6 +18,7 @@
 #include "../stackmng/stackmng.h"
 #include "../../../flags.h"
 #include "../../../Parser/List/List.h"
+#include "../../../identifier_utils.h"
 #include "../../../Parser/ParseTree/tree.h"
 #include "../../../Parser/ParseTree/tree_types.h"
 #include "../../../Parser/ParseTree/KgpcType.h"
@@ -1980,10 +1981,41 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                     inst_list = add_inst(inst_list, "\tcvtss2sd\t%xmm0, %xmm0\n");
                 snprintf(buffer, sizeof(buffer), "\tmovq\t%%xmm0, %s\n", target_reg->bit_64);
             }
-            else if (expr_uses_qword_kgpctype(expr))
-                snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", target_reg->bit_64);
             else
-                snprintf(buffer, sizeof(buffer), "\tmovl\t%%eax, %s\n", target_reg->bit_32);
+            {
+                /* For procedural var calls, check call_kgpc_type's return type */
+                int use_qword = expr_uses_qword_kgpctype(expr);
+                if (!use_qword && expr->expr_data.function_call_data.is_procedural_var_call &&
+                    expr->expr_data.function_call_data.call_kgpc_type != NULL)
+                {
+                    KgpcType *call_type = expr->expr_data.function_call_data.call_kgpc_type;
+                    KgpcType *ret_type = kgpc_type_get_return_type(call_type);
+                    if (getenv("KGPC_DEBUG_CODEGEN") != NULL) {
+                        fprintf(stderr, "[CodeGen] gencode_case0: is_procedural_var_call=1, call_type=%p, ret_type=%p, return_type_id=%s\n",
+                            (void*)call_type, (void*)ret_type,
+                            call_type->info.proc_info.return_type_id ? call_type->info.proc_info.return_type_id : "(null)");
+                    }
+                    if (ret_type != NULL && kgpc_type_uses_qword(ret_type))
+                        use_qword = 1;
+                    /* Also check return_type_id for common pointer types */
+                    else if (call_type->info.proc_info.return_type_id != NULL)
+                    {
+                        const char *ret_id = call_type->info.proc_info.return_type_id;
+                        if (pascal_identifier_equals(ret_id, "PAnsiChar") ||
+                            pascal_identifier_equals(ret_id, "PChar") ||
+                            pascal_identifier_equals(ret_id, "PWideChar") ||
+                            pascal_identifier_equals(ret_id, "Pointer") ||
+                            pascal_identifier_equals(ret_id, "PByte"))
+                        {
+                            use_qword = 1;
+                        }
+                    }
+                }
+                if (use_qword)
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", target_reg->bit_64);
+                else
+                    snprintf(buffer, sizeof(buffer), "\tmovl\t%%eax, %s\n", target_reg->bit_32);
+            }
             inst_list = add_inst(inst_list, buffer);
         }
         return inst_list;
@@ -2282,6 +2314,33 @@ cleanup_constructor:
     int storage_qword = 0;
     if (expr != NULL)
         storage_qword = expr_uses_qword_kgpctype(expr);
+    
+    /* For procedural var calls, check if return type is a pointer */
+    if (!storage_qword && expr != NULL && expr->type == EXPR_FUNCTION_CALL &&
+        expr->expr_data.function_call_data.is_procedural_var_call &&
+        expr->expr_data.function_call_data.call_kgpc_type != NULL)
+    {
+        KgpcType *call_type = expr->expr_data.function_call_data.call_kgpc_type;
+        if (call_type->kind == TYPE_KIND_PROCEDURE)
+        {
+            KgpcType *ret_type = kgpc_type_get_return_type(call_type);
+            if (ret_type != NULL && kgpc_type_uses_qword(ret_type))
+                storage_qword = 1;
+            else if (call_type->info.proc_info.return_type_id != NULL)
+            {
+                const char *ret_id = call_type->info.proc_info.return_type_id;
+                if (pascal_identifier_equals(ret_id, "PAnsiChar") ||
+                    pascal_identifier_equals(ret_id, "PChar") ||
+                    pascal_identifier_equals(ret_id, "PWideChar") ||
+                    pascal_identifier_equals(ret_id, "Pointer") ||
+                    pascal_identifier_equals(ret_id, "PByte"))
+                {
+                    storage_qword = 1;
+                }
+            }
+        }
+    }
+    
     if (!storage_qword)
         storage_qword = codegen_type_uses_qword(storage_tag);
     if (!desired_qword && storage_qword)

@@ -1,26 +1,49 @@
 {$mode objfpc}
-program test_funcptr_assign;
+program test_pansichar_assign;
 
-{ Test: Assigning function pointer to procedural field in record
-  This tests that a function address can be assigned to a procedural field
-  in a record when the function has a pointer return type. }
+{ Test: Assigning PAnsiChar result from record function pointer to PAnsiChar Result
+  This tests that when a function pointer in a record returns PAnsiChar,
+  assigning its result to a function's Result variable of type PAnsiChar works. }
 
 type
-  TIntFunc = function(X: Integer): Integer;
+  TStrFunc = function(S: PAnsiChar): PAnsiChar;
   
-  TRec = record
-    Func: TIntFunc;
+  TManager = record
+    StrLowerProc: TStrFunc;
   end;
 
-function Double(X: Integer): Integer;
+function MyStrLower(S: PAnsiChar): PAnsiChar;
+var
+  P: PAnsiChar;
 begin
-  Result := X * 2;
+  P := S;
+  if P <> nil then
+    while P^ <> #0 do
+    begin
+      if (P^ >= 'A') and (P^ <= 'Z') then
+        P^ := Chr(Ord(P^) + 32);
+      Inc(P);
+    end;
+  Result := S;
 end;
 
 var
-  R: TRec;
+  Manager: TManager;
+
+function AnsiStrLower(Str: PAnsiChar): PAnsiChar;
 begin
-  R.Func := @Double;
-  { Only test assignment, not call through the field }
-  WriteLn('PASS');
+  { This assignment should work - both are PAnsiChar }
+  Result := Manager.StrLowerProc(Str);
+end;
+
+var
+  Buf: array[0..10] of AnsiChar;
+  R: PAnsiChar;
+begin
+  Manager.StrLowerProc := @MyStrLower;
+  Buf[0] := 'H';
+  Buf[1] := 'I';
+  Buf[2] := #0;
+  R := AnsiStrLower(@Buf[0]);
+  WriteLn(R);
 end.

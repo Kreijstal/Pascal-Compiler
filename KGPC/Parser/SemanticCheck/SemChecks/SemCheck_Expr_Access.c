@@ -319,7 +319,12 @@ int semcheck_funccall(int *type_return,
             else if (ret_type != NULL && ret_type->kind == TYPE_KIND_POINTER)
             {
                 *type_return = POINTER_TYPE;
-                semcheck_expr_set_resolved_type(expr, POINTER_TYPE);
+                /* Directly set resolved_kgpc_type to preserve full pointer type info
+                 * (e.g., PAnsiChar needs to be a pointer-to-char, not just POINTER_TYPE) */
+                if (expr->resolved_kgpc_type != NULL)
+                    destroy_kgpc_type(expr->resolved_kgpc_type);
+                kgpc_type_retain(ret_type);
+                expr->resolved_kgpc_type = ret_type;
             }
             else if (expr->resolved_kgpc_type != NULL)
             {
@@ -1084,7 +1089,11 @@ int semcheck_funccall(int *type_return,
                         else if (ret_type != NULL && ret_type->kind == TYPE_KIND_POINTER)
                         {
                             *type_return = POINTER_TYPE;
-                            semcheck_expr_set_resolved_type(expr, POINTER_TYPE);
+                            /* Directly set resolved_kgpc_type to preserve full pointer type info */
+                            if (expr->resolved_kgpc_type != NULL)
+                                destroy_kgpc_type(expr->resolved_kgpc_type);
+                            kgpc_type_retain(ret_type);
+                            expr->resolved_kgpc_type = ret_type;
                         }
                         else if (ret_type != NULL)
                         {
