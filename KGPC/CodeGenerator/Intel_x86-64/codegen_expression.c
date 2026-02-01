@@ -4733,9 +4733,11 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
 
             char escaped_str[CODEGEN_MAX_INST_BUF];
             escape_string(escaped_str, str_data ? str_data : "", sizeof(escaped_str));
-            snprintf(buffer, sizeof(buffer), "%s\n%s:\n\t.string \"%s\"\n\t.text\n",
+            /* Use larger buffer for string literal embedding to avoid truncation */
+            char str_literal_buffer[CODEGEN_MAX_INST_BUF + 128];
+            snprintf(str_literal_buffer, sizeof(str_literal_buffer), "%s\n%s:\n\t.string \"%s\"\n\t.text\n",
                      readonly_section, label, escaped_str);
-            inst_list = add_inst(inst_list, buffer);
+            inst_list = add_inst(inst_list, str_literal_buffer);
 
             StackNode_t *desc_slot = codegen_alloc_temp_bytes("str_arr_desc",
                 2 * CODEGEN_POINTER_SIZE_BYTES);
@@ -4829,9 +4831,11 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             
             char escaped_str[CODEGEN_MAX_INST_BUF];
             escape_string(escaped_str, str_data ? str_data : "", sizeof(escaped_str));
-            snprintf(buffer, sizeof(buffer), "%s\n%s:\n\t.string \"%s\"\n\t.text\n",
+            /* Use larger buffer for string literal embedding to avoid truncation */
+            char str_literal_buffer[CODEGEN_MAX_INST_BUF + 128];
+            snprintf(str_literal_buffer, sizeof(str_literal_buffer), "%s\n%s:\n\t.string \"%s\"\n\t.text\n",
                      readonly_section, label, escaped_str);
-            inst_list = add_inst(inst_list, buffer);
+            inst_list = add_inst(inst_list, str_literal_buffer);
             
             /* Get register for buffer address */
             Register_t *buf_addr_reg = get_free_reg(get_reg_stack(), &inst_list);
