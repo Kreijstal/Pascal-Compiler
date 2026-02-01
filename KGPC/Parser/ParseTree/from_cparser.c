@@ -1813,6 +1813,11 @@ static int map_type_name(const char *name, char **type_id_out) {
             *type_id_out = strdup("string");
         return STRING_TYPE;
     }
+    if (strcasecmp(name, "shortstring") == 0) {
+        if (type_id_out != NULL)
+            *type_id_out = strdup("shortstring");
+        return SHORTSTRING_TYPE;
+    }
     /* RawByteString and UnicodeString need to preserve their original names
      * for correct name mangling of overloaded procedures */
     if (strcasecmp(name, "rawbytestring") == 0) {

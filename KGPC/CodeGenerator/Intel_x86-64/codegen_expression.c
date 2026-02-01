@@ -1672,6 +1672,8 @@ static long long codegen_sizeof_type_tag(int type_tag)
         case TEXT_TYPE:
         case PROCEDURE:
             return CODEGEN_POINTER_SIZE_BYTES;
+        case SHORTSTRING_TYPE:
+            return 256;  // ShortString is 256 bytes (1 byte length + 255 chars)
         case CHAR_TYPE:
             return 1;
         case RECORD_TYPE:

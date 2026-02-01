@@ -458,6 +458,15 @@ static combinator_t* create_method_type_param_list(void) {
     ));
 }
 
+// Helper function to create a method return type parser
+// Wraps the type in PASCAL_T_RETURN_TYPE for consistent handling
+static combinator_t* create_method_return_type_parser(void) {
+    return seq(new_combinator(), PASCAL_T_RETURN_TYPE,
+        create_type_ref_parser(),
+        NULL
+    );
+}
+
 combinator_t* class_type(tag_t tag) {
     // Type reference for field declarations, method return types, etc.
     combinator_t* type_ref = create_type_ref_parser();
@@ -513,7 +522,7 @@ combinator_t* class_type(tag_t tag) {
         create_method_type_param_list(),  // Optional type parameters for generic methods
         create_pascal_param_parser(),
         token(match(":")),
-        create_type_ref_parser(),  // Support both simple and constructed types
+        create_method_return_type_parser(),  // Wrap return type in PASCAL_T_RETURN_TYPE
         token(match(";")),
         create_class_method_directives(),  // Support virtual, override, reintroduce, etc.
         NULL
@@ -526,7 +535,7 @@ combinator_t* class_type(tag_t tag) {
         token(operator_name(PASCAL_T_IDENTIFIER)),
         create_pascal_param_parser(),
         token(match(":")),
-        create_type_ref_parser(),  // Support both simple and constructed types
+        create_method_return_type_parser(),  // Wrap return type in PASCAL_T_RETURN_TYPE
         token(match(";")),
         NULL
     );
@@ -922,7 +931,7 @@ combinator_t* interface_type(tag_t tag) {
         create_method_type_param_list(),  // Optional type parameters for generic methods
         create_pascal_param_parser(),
         token(match(":")),
-        create_type_ref_parser(),  // Support both simple and constructed types
+        create_method_return_type_parser(),  // Wrap return type in PASCAL_T_RETURN_TYPE
         token(match(";")),
         create_class_method_directives(),
         NULL
