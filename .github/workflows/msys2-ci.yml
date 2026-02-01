@@ -44,6 +44,8 @@ jobs:
       env:
         # Meson test() sets workdir to the project source root, so this must be source-root relative.
         KGPC_CI_FAILURE_DIR: builddir/failing-tests
+        # Enable verbose test logging to identify hanging tests
+        KGPC_TEST_VERBOSE: "1"
       run: |
         rm -rf builddir/failing-tests failing-tests
         meson test -v -C builddir
