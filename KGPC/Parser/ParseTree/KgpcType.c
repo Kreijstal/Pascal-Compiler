@@ -1913,8 +1913,16 @@ int kgpc_type_equals_tag(KgpcType *type, int type_tag)
     return 0;
 }
 
-int kgpc_type_equals(KgpcType *a, KgpcType *b)
+/* Internal helper with depth tracking to prevent infinite recursion */
+static int kgpc_type_equals_internal(KgpcType *a, KgpcType *b, int depth)
 {
+    /* Prevent infinite recursion - if we've recursed too deep, assume not equal */
+    if (depth > 100)
+    {
+        fprintf(stderr, "Warning: kgpc_type_equals recursion depth exceeded\n");
+        return 0;
+    }
+
     if (a == b)
         return 1;
     if (a == NULL || b == NULL)
@@ -1927,7 +1935,7 @@ int kgpc_type_equals(KgpcType *a, KgpcType *b)
         case TYPE_KIND_PRIMITIVE:
             return a->info.primitive_type_tag == b->info.primitive_type_tag;
         case TYPE_KIND_POINTER:
-            return kgpc_type_equals(a->info.points_to, b->info.points_to);
+            return kgpc_type_equals_internal(a->info.points_to, b->info.points_to, depth + 1);
         case TYPE_KIND_ARRAY:
             if (a->info.array_info.start_index != b->info.array_info.start_index ||
                 a->info.array_info.end_index != b->info.array_info.end_index)
@@ -1935,8 +1943,8 @@ int kgpc_type_equals(KgpcType *a, KgpcType *b)
             if (a->info.array_info.element_type != NULL &&
                 b->info.array_info.element_type != NULL)
             {
-                return kgpc_type_equals(a->info.array_info.element_type,
-                    b->info.array_info.element_type);
+                return kgpc_type_equals_internal(a->info.array_info.element_type,
+                    b->info.array_info.element_type, depth + 1);
             }
             if (a->info.array_info.element_type_id != NULL ||
                 b->info.array_info.element_type_id != NULL)
@@ -1957,6 +1965,11 @@ int kgpc_type_equals(KgpcType *a, KgpcType *b)
         default:
             return 0;
     }
+}
+
+int kgpc_type_equals(KgpcType *a, KgpcType *b)
+{
+    return kgpc_type_equals_internal(a, b, 0);
 }
 
 int kgpc_type_pointers_compatible(KgpcType *ptr_a, KgpcType *ptr_b)
