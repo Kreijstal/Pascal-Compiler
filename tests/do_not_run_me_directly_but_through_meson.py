@@ -254,7 +254,7 @@ def run_executable_with_valgrind(executable_args, **kwargs):
         command = valgrind_cmd + command
         print(f"--- Running executable with valgrind: {' '.join(command)} ---", file=sys.stderr)
 
-        if IS_WINE and "timeout" not in kwargs:
+        if "timeout" not in kwargs:
             kwargs["timeout"] = EXEC_TIMEOUT
         return subprocess.run(command, **kwargs)
 
@@ -350,7 +350,7 @@ def run_executable_with_valgrind(executable_args, **kwargs):
                 os.close(slave_fd)
             os.close(master_fd)
 
-    if IS_WINE and "timeout" not in kwargs:
+    if "timeout" not in kwargs:
         kwargs["timeout"] = EXEC_TIMEOUT
     return subprocess.run(command, **kwargs)
 
@@ -427,18 +427,19 @@ def run_compiler(input_file, output_file, flags=None):
         ]
         command = valgrind_cmd + command
         print(f"--- Running compiler with valgrind: {' '.join(command)} ---", file=sys.stderr)
+        sys.stderr.flush()
     else:
         print(f"--- Running compiler: {' '.join(command)} ---", file=sys.stderr)
-    
+        sys.stderr.flush()
+
     start = time.perf_counter()
     try:
         run_kwargs = {
             "check": True,
             "capture_output": True,
             "text": True,
+            "timeout": COMPILER_TIMEOUT,
         }
-        if IS_WINE:
-            run_kwargs["timeout"] = COMPILER_TIMEOUT
         result = subprocess.run(command, **run_kwargs)
         duration = time.perf_counter() - start
         for line in result.stderr.splitlines():
@@ -535,9 +536,8 @@ class TAPTestResult(unittest.TestResult):
         self._test_index += 1
         self._test_states[test] = {"reported": False, "had_failure": False}
         self._test_start_times[test] = time.monotonic()
-        if self.VERBOSE_LOG:
-            # Use TAP diagnostic comment (# prefix) so meson shows it
-            self._emit(f"# [STARTING] {self._test_name(test)}")
+        # Always emit starting message so we can see which test is running
+        self._emit(f"# [STARTING] {self._test_name(test)}")
 
     def stopTest(self, test):
         elapsed = 0.0
@@ -1072,9 +1072,8 @@ class TestCompiler(unittest.TestCase):
                 "check": True,
                 "capture_output": True,
                 "text": True,
+                "timeout": LINK_TIMEOUT,
             }
-            if IS_WINE:
-                compile_kwargs["timeout"] = LINK_TIMEOUT
             subprocess.run(command, **compile_kwargs)
         except subprocess.CalledProcessError as e:
             self.fail(f"{self.c_compiler_display} compilation failed: {e.stderr}")
@@ -2660,7 +2659,6 @@ def _discover_and_add_auto_tests():
         def make_test_method(test_base_name):
             def test_method(self):
                 """Auto-discovered test case."""
-                # No platform skips here; all discovered tests must run.
                 # Skip Unix fork-dependent tests on MinGW (which lacks POSIX fork)
                 # Cygwin and MSYS have fork, pure MinGW does not
                 if test_base_name == "unix_wait_helpers_demo":
