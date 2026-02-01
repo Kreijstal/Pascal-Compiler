@@ -1325,6 +1325,7 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
     g_current_codegen_abi = ctx->target_abi;
     g_stack_home_space_bytes = (ctx->target_abi == KGPC_TARGET_ABI_WINDOWS) ? 32 : 0;
     ctx->pending_stack_arg_bytes = 0;
+    ctx->emitted_subprograms = NULL;
 
     ctx->symtab = symtab;
 
@@ -1343,6 +1344,12 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
     codegen_main(prgm_name, ctx);
 
     codegen_program_footer(ctx);
+
+    if (ctx->emitted_subprograms != NULL)
+    {
+        DestroyList(ctx->emitted_subprograms);
+        ctx->emitted_subprograms = NULL;
+    }
 
     free_stackmng();
     codegen_reset_loop_stack(ctx);
@@ -1370,6 +1377,7 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
     g_current_codegen_abi = ctx->target_abi;
     g_stack_home_space_bytes = (ctx->target_abi == KGPC_TARGET_ABI_WINDOWS) ? 32 : 0;
     ctx->pending_stack_arg_bytes = 0;
+    ctx->emitted_subprograms = NULL;
 
     ctx->symtab = symtab;
 
@@ -1434,6 +1442,12 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
     }
 
     codegen_program_footer(ctx);
+
+    if (ctx->emitted_subprograms != NULL)
+    {
+        DestroyList(ctx->emitted_subprograms);
+        ctx->emitted_subprograms = NULL;
+    }
 
     free_stackmng();
     codegen_reset_loop_stack(ctx);
@@ -2500,17 +2514,48 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
         assert(sub != NULL);
         assert(sub->type == TREE_SUBPROGRAM);
 
+        const char *mangled_id = sub->tree_data.subprogram_data.mangled_id;
+        if (mangled_id != NULL && ctx->emitted_subprograms != NULL)
+        {
+            ListNode_t *seen = ctx->emitted_subprograms;
+            int already_emitted = 0;
+            while (seen != NULL)
+            {
+                if (seen->type == LIST_STRING && seen->cur != NULL &&
+                    strcmp((const char *)seen->cur, mangled_id) == 0)
+                {
+                    already_emitted = 1;
+                    break;
+                }
+                seen = seen->next;
+            }
+            if (already_emitted)
+            {
+                sub_list = sub_list->next;
+                continue;
+            }
+        }
+
         if (sub->tree_data.subprogram_data.statement_list == NULL)
         {
             sub_list = sub_list->next;
             continue;
         }
 
-        /* Skip unused functions (dead code elimination / reachability pass) */
-        if (!sub->tree_data.subprogram_data.is_used)
+        /* Skip unused functions (dead code elimination / reachability pass). */
+        if (!disable_dce_flag() && !sub->tree_data.subprogram_data.is_used)
         {
             sub_list = sub_list->next;
             continue;
+        }
+
+        if (mangled_id != NULL)
+        {
+            ListNode_t *node = CreateListNode((void *)mangled_id, LIST_STRING);
+            if (ctx->emitted_subprograms == NULL)
+                ctx->emitted_subprograms = node;
+            else
+                ctx->emitted_subprograms = PushListNodeBack(ctx->emitted_subprograms, node);
         }
 
         switch(sub->tree_data.subprogram_data.sub_type)

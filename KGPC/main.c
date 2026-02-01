@@ -640,6 +640,11 @@ void set_flags(char **optional_args, int count)
             fprintf(stderr, "Assembly debug comments enabled.\n\n");
             set_asm_debug_flag();
         }
+        else if(strcmp(arg, "--disable-dce") == 0 || strcmp(arg, "--no-dce") == 0)
+        {
+            fprintf(stderr, "Dead-code elimination disabled (emit unused subprograms).\n\n");
+            set_disable_dce_flag();
+        }
         else
         {
             fprintf(stderr, "ERROR: Unrecognized flag: %s\n", arg);
