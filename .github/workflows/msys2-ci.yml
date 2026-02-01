@@ -60,11 +60,7 @@ jobs:
         KGPC_TEST_VERBOSE: "1"
       run: |
         rm -rf builddir/failing-tests failing-tests
-        if [ "${{ matrix.sys }}" = "CLANG64" ]; then
-          meson test -v -C builddir "Compiler tests" --test-args "test_auto_fpc_bootstrap_constructor_overload_default"
-        else
-          meson test -v -C builddir
-        fi
+        meson test -v -C builddir
 
     - name: Upload meson logs (on failure)
       if: failure()
