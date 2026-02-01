@@ -1873,6 +1873,18 @@ FIELD_RESOLVED:
         semcheck_set_pointer_info(expr, pointer_subtype, pointer_subtype_id);
     }
 
+    /* For procedural type fields (function/procedure pointers), set the full KgpcType
+     * so type compatibility can check return types and parameters. */
+    if (field_type == PROCEDURE && field_desc->type_id != NULL)
+    {
+        HashNode_t *proc_type_node = semcheck_find_type_node_with_kgpc_type(symtab, field_desc->type_id);
+        if (proc_type_node != NULL && proc_type_node->type != NULL &&
+            proc_type_node->type->kind == TYPE_KIND_PROCEDURE)
+        {
+            semcheck_expr_set_resolved_kgpc_type_shared(expr, proc_type_node->type);
+        }
+    }
+
     expr->record_type = (field_type == RECORD_TYPE) ? field_record : NULL;
     semcheck_expr_set_resolved_type(expr, field_type);
     *type_return = field_type;

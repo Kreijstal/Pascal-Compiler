@@ -1148,9 +1148,10 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
             /* DEBUG: Log parameter counts */
 
             /* 1. Check function vs procedure compatibility 
-             * A procedure variable can only hold a procedure, not a function, and vice versa */
-            int lhs_is_function = (lhs_proc->return_type != NULL);
-            int rhs_is_function = (rhs_proc->return_type != NULL);
+             * A procedure variable can only hold a procedure, not a function, and vice versa 
+             * Note: A function has either return_type != NULL or return_type_id != NULL */
+            int lhs_is_function = (lhs_proc->return_type != NULL || lhs_proc->return_type_id != NULL);
+            int rhs_is_function = (rhs_proc->return_type != NULL || rhs_proc->return_type_id != NULL);
             
             
             if (lhs_is_function != rhs_is_function)
@@ -1158,11 +1159,29 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
 
             /* 2. If both are functions, check return types */
             if (lhs_is_function) {
-                if (!are_types_compatible_for_assignment(
-                        lhs_proc->return_type,
-                        rhs_proc->return_type,
-                        symtab))
-                    return 0;
+                /* Handle case where return_type is NULL but return_type_id is set */
+                if (lhs_proc->return_type != NULL && rhs_proc->return_type != NULL) {
+                    if (!are_types_compatible_for_assignment(
+                            lhs_proc->return_type,
+                            rhs_proc->return_type,
+                            symtab))
+                        return 0;
+                } else if (lhs_proc->return_type_id != NULL && rhs_proc->return_type_id != NULL) {
+                    /* Both have return_type_id but no resolved return_type - compare by name */
+                    if (strcasecmp(lhs_proc->return_type_id, rhs_proc->return_type_id) != 0)
+                        return 0;
+                } else if (lhs_proc->return_type != NULL && rhs_proc->return_type_id != NULL) {
+                    /* LHS has resolved type, RHS has type_id - compare by string representation */
+                    const char *lhs_str = kgpc_type_to_string(lhs_proc->return_type);
+                    if (lhs_str == NULL || strcasecmp(lhs_str, rhs_proc->return_type_id) != 0)
+                        return 0;
+                } else if (lhs_proc->return_type_id != NULL && rhs_proc->return_type != NULL) {
+                    /* LHS has type_id, RHS has resolved type - compare by string representation */
+                    const char *rhs_str = kgpc_type_to_string(rhs_proc->return_type);
+                    if (rhs_str == NULL || strcasecmp(lhs_proc->return_type_id, rhs_str) != 0)
+                        return 0;
+                }
+                /* If all above checks pass or fall through, types are compatible */
             }
 
             /* 3. Check parameter counts */
@@ -1251,7 +1270,17 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
 }
 
 const char* kgpc_type_to_string(KgpcType *type) {
-    static char buffer[256];
+    /* Use multiple static buffers to handle recursive calls.
+     * Each recursive level uses a different buffer to prevent
+     * the inner call from overwriting the outer call's data. */
+    #define TYPE_STRING_BUFFER_COUNT 8
+    #define TYPE_STRING_BUFFER_SIZE 256
+    static char buffers[TYPE_STRING_BUFFER_COUNT][TYPE_STRING_BUFFER_SIZE];
+    static int buffer_index = 0;
+    
+    char *buffer = buffers[buffer_index];
+    buffer_index = (buffer_index + 1) % TYPE_STRING_BUFFER_COUNT;
+    
     if (type == NULL) {
         return "NULL";
     }
@@ -1270,14 +1299,14 @@ const char* kgpc_type_to_string(KgpcType *type) {
                 case ENUM_TYPE: return "enum";
                 case FILE_TYPE: return "file";
                 default:
-                    snprintf(buffer, sizeof(buffer), "primitive(%d)", type->info.primitive_type_tag);
+                    snprintf(buffer, TYPE_STRING_BUFFER_SIZE, "primitive(%d)", type->info.primitive_type_tag);
                     return buffer;
             }
         case TYPE_KIND_POINTER:
-            snprintf(buffer, sizeof(buffer), "^%s", kgpc_type_to_string(type->info.points_to));
+            snprintf(buffer, TYPE_STRING_BUFFER_SIZE, "^%s", kgpc_type_to_string(type->info.points_to));
             return buffer;
         case TYPE_KIND_ARRAY:
-            snprintf(buffer, sizeof(buffer), "array[%d..%d] of %s",
+            snprintf(buffer, TYPE_STRING_BUFFER_SIZE, "array[%d..%d] of %s",
                 type->info.array_info.start_index,
                 type->info.array_info.end_index,
                 kgpc_type_to_string(type->info.array_info.element_type));
@@ -1286,15 +1315,23 @@ const char* kgpc_type_to_string(KgpcType *type) {
             return "record";
         case TYPE_KIND_PROCEDURE:
             if (type->info.proc_info.return_type == NULL) {
+                /* If return_type is NULL but return_type_id is set, show it as a function */
+                if (type->info.proc_info.return_type_id != NULL) {
+                    snprintf(buffer, TYPE_STRING_BUFFER_SIZE, "function: %s",
+                        type->info.proc_info.return_type_id);
+                    return buffer;
+                }
                 return "procedure";
             } else {
-                snprintf(buffer, sizeof(buffer), "function: %s",
+                snprintf(buffer, TYPE_STRING_BUFFER_SIZE, "function: %s",
                     kgpc_type_to_string(type->info.proc_info.return_type));
                 return buffer;
             }
         default:
             return "unknown";
     }
+    #undef TYPE_STRING_BUFFER_COUNT
+    #undef TYPE_STRING_BUFFER_SIZE
 }
 
 // --- Helper Function Implementations ---
