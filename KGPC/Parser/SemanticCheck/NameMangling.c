@@ -29,12 +29,52 @@ static char* str_tolower_dup(const char* src) {
     return dst;
 }
 
-// Helper to free a list of integers
-static void DestroyIntList(ListNode_t* list) {
+typedef struct MangleType {
+    int kind;
+    char *type_id;
+} MangleType;
+
+static MangleType *create_mangle_type(int kind, const char *type_id)
+{
+    MangleType *mt = (MangleType *)malloc(sizeof(MangleType));
+    if (mt == NULL)
+        return NULL;
+    mt->kind = kind;
+    mt->type_id = type_id != NULL ? strdup(type_id) : NULL;
+    return mt;
+}
+
+static char *sanitize_type_id(const char *type_id)
+{
+    if (type_id == NULL)
+        return NULL;
+    size_t len = strlen(type_id);
+    char *out = (char *)malloc(len + 1);
+    if (out == NULL)
+        return NULL;
+    for (size_t i = 0; i < len; ++i)
+    {
+        unsigned char c = (unsigned char)type_id[i];
+        if (isalnum(c) || c == '_')
+            out[i] = (char)tolower(c);
+        else
+            out[i] = '_';
+    }
+    out[len] = '\0';
+    return out;
+}
+
+// Helper to free a list of mangle types
+static void DestroyMangleTypeList(ListNode_t* list) {
     assert(list != NULL);
     ListNode_t* cur = list;
     while (cur != NULL) {
-        free(cur->cur);
+        MangleType *mt = (MangleType *)cur->cur;
+        if (mt != NULL)
+        {
+            free(mt->type_id);
+            free(mt);
+        }
         ListNode_t* next = cur->next;
         free(cur);
         cur = next;
@@ -215,6 +255,7 @@ static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab
     while (arg_cur != NULL) {
         Tree_t* decl_tree = (Tree_t*)arg_cur->cur;
         enum VarType resolved_type = HASHVAR_UNTYPED; // Default to untyped
+        const char *record_type_id = NULL;
         ListNode_t* ids;
 
         if (decl_tree->type == TREE_VAR_DECL) {
@@ -271,6 +312,14 @@ static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab
                     HashNode_t* type_node = find_type_node_for_mangling(symtab, type_id);
                     if (type_node != NULL) {
                         resolved_type = GetVarTypeFromTypeNode(type_node);
+                        if (resolved_type == HASHVAR_RECORD &&
+                            type_node->type != NULL &&
+                            type_node->type->kind == TYPE_KIND_RECORD &&
+                            type_node->type->info.record_info != NULL &&
+                            type_node->type->info.record_info->type_id != NULL)
+                        {
+                            record_type_id = type_node->type->info.record_info->type_id;
+                        }
                     }
                 }
             } else {
@@ -279,6 +328,13 @@ static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab
                     // It's a built-in type, convert from parser token to semantic type
                     resolved_type = ConvertParserTypeToVarType(decl_tree->tree_data.var_decl_data.type);
                 }
+            }
+
+            if (resolved_type == HASHVAR_RECORD && record_type_id == NULL &&
+                decl_tree->tree_data.var_decl_data.inline_record_type != NULL &&
+                decl_tree->tree_data.var_decl_data.inline_record_type->type_id != NULL)
+            {
+                record_type_id = decl_tree->tree_data.var_decl_data.inline_record_type->type_id;
             }
         } else { // Assume array or other type for now
             ids = decl_tree->tree_data.arr_decl_data.ids;
@@ -328,13 +384,12 @@ static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab
 
         ListNode_t* id_cur = ids;
         while (id_cur != NULL) {
-            int* type_ptr = malloc(sizeof(int));
-            assert(type_ptr != NULL);
-            *type_ptr = resolved_type;
+            MangleType *mt = create_mangle_type(resolved_type, record_type_id);
+            assert(mt != NULL);
             if (type_list == NULL) {
-                type_list = CreateListNode(type_ptr, LIST_UNSPECIFIED);
+                type_list = CreateListNode(mt, LIST_UNSPECIFIED);
             } else {
-                PushListNodeBack(type_list, CreateListNode(type_ptr, LIST_UNSPECIFIED));
+                PushListNodeBack(type_list, CreateListNode(mt, LIST_UNSPECIFIED));
             }
             id_cur = id_cur->next;
         }
@@ -368,7 +423,19 @@ static char* MangleNameFromTypeList(const char* original_name, ListNode_t* type_
     size_t total_len = strlen(lower_name);
     ListNode_t* cur = type_list;
     while (cur != NULL) {
-        total_len += 6; // Max length of a type suffix (e.g., "_ai64" is 5 chars)
+        MangleType *mt = (MangleType *)cur->cur;
+        if (mt != NULL && mt->kind == HASHVAR_RECORD && mt->type_id != NULL)
+        {
+            char *sanitized = sanitize_type_id(mt->type_id);
+            size_t extra = sanitized != NULL ? strlen(sanitized) : 0;
+            if (sanitized != NULL)
+                free(sanitized);
+            total_len += 3 + extra; // "_u_" + type id
+        }
+        else
+        {
+            total_len += 6; // Max length of a type suffix (e.g., "_ai64" is 5 chars)
+        }
         cur = cur->next;
     }
     total_len += 1; // Null terminator
@@ -380,8 +447,10 @@ static char* MangleNameFromTypeList(const char* original_name, ListNode_t* type_
 
     cur = type_list;
     while (cur != NULL) {
-        int type = *(int*)cur->cur;
-        const char* type_suffix;
+        MangleType *mt = (MangleType *)cur->cur;
+        int type = mt != NULL ? mt->kind : HASHVAR_UNTYPED;
+        const char* type_suffix = NULL;
+        char *type_suffix_dynamic = NULL;
         /* Handle array element types (100+ range) */
         if (type >= 100) {
             int elem_type = type - 100;
@@ -398,6 +467,18 @@ static char* MangleNameFromTypeList(const char* original_name, ListNode_t* type_
                 case HASHVAR_RECORD:  type_suffix = "_au"; break;   /* array of Record */
                 default:              type_suffix = "_a"; break;    /* array of unknown */
             }
+        } else if (type == HASHVAR_RECORD && mt != NULL && mt->type_id != NULL) {
+            char *sanitized = sanitize_type_id(mt->type_id);
+            if (sanitized != NULL)
+            {
+                size_t len = strlen(sanitized) + 4;
+                type_suffix_dynamic = (char *)malloc(len);
+                if (type_suffix_dynamic != NULL)
+                    snprintf(type_suffix_dynamic, len, "_u_%s", sanitized);
+                free(sanitized);
+            }
+            if (type_suffix_dynamic == NULL)
+                type_suffix = "_u";
         } else {
             switch (type) {
                 case HASHVAR_INTEGER: type_suffix = "_i"; break;
@@ -422,11 +503,16 @@ static char* MangleNameFromTypeList(const char* original_name, ListNode_t* type_
                 default:              type_suffix = "_u"; break; // Unknown/unsupported
             }
         }
-        strcat(mangled_name, type_suffix);
+        if (type_suffix_dynamic != NULL) {
+            strcat(mangled_name, type_suffix_dynamic);
+            free(type_suffix_dynamic);
+        } else if (type_suffix != NULL) {
+            strcat(mangled_name, type_suffix);
+        }
         cur = cur->next;
     }
 
-    DestroyIntList(type_list);
+    DestroyMangleTypeList(type_list);
     return mangled_name;
 }
 
@@ -450,9 +536,12 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
     while (arg_cur != NULL) {
         struct Expression *arg_expr = (struct Expression *)arg_cur->cur;
         enum VarType resolved_type = HASHVAR_UNTYPED;
+        const char *record_type_id = NULL;
         if (arg_expr != NULL && arg_expr->type == EXPR_RECORD_CONSTRUCTOR)
         {
             resolved_type = HASHVAR_RECORD;
+            if (arg_expr->record_type != NULL && arg_expr->record_type->type_id != NULL)
+                record_type_id = arg_expr->record_type->type_id;
         }
         else
         {
@@ -483,7 +572,12 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
                     }
                 }
                 else if (kgpc_type->kind == TYPE_KIND_RECORD)
+                {
                     resolved_type = HASHVAR_RECORD;
+                    if (kgpc_type->info.record_info != NULL &&
+                        kgpc_type->info.record_info->type_id != NULL)
+                        record_type_id = kgpc_type->info.record_info->type_id;
+                }
                 else if (kgpc_type->kind == TYPE_KIND_POINTER)
                     resolved_type = HASHVAR_POINTER;
                 else if (kgpc_type->kind == TYPE_KIND_PROCEDURE)
@@ -542,13 +636,12 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
             }
         }
 
-        int* type_ptr = malloc(sizeof(int));
-        assert(type_ptr != NULL);
-        *type_ptr = resolved_type;
+        MangleType *mt = create_mangle_type(resolved_type, record_type_id);
+        assert(mt != NULL);
         if (type_list == NULL) {
-            type_list = CreateListNode(type_ptr, LIST_UNSPECIFIED);
+            type_list = CreateListNode(mt, LIST_UNSPECIFIED);
         } else {
-            PushListNodeBack(type_list, CreateListNode(type_ptr, LIST_UNSPECIFIED));
+            PushListNodeBack(type_list, CreateListNode(mt, LIST_UNSPECIFIED));
         }
         arg_cur = arg_cur->next;
     }
