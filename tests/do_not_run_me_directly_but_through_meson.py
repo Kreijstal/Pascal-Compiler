@@ -2370,6 +2370,27 @@ sys.exit(3)
         self.assertEqual(lines, expected_lines)
         self.assertEqual(process.returncode, 0)
 
+    def test_fpc_bootstrap_sysutils_unit(self):
+        """Compiles FPC's sysutils.pp with KGPC include paths (bootstrap coverage)."""
+        input_file = os.path.join("fpc-src", "rtl", "unix", "sysutils.pp")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "fpc_bootstrap_sysutils.s")
+        flags = [
+            "--no-stdlib",
+            "-I./fpc-src/rtl/unix",
+            "-I./fpc-src/rtl/objpas",
+            "-I./fpc-src/rtl/objpas/sysutils",
+            "-I./fpc-src/rtl/inc",
+            "-I./fpc-src/rtl/linux",
+            "-I./fpc-src/rtl/linux/x86_64",
+            "-I./fpc-src/rtl/x86_64",
+            "-I./fpc-src/packages/rtl-objpas/src/inc",
+        ]
+
+        run_compiler(input_file, asm_file, flags=flags)
+
+        self.assertTrue(os.path.exists(asm_file))
+        self.assertGreater(os.path.getsize(asm_file), 0)
+
     def test_unix_gethostname(self):
         """Ensures the Unix unit exposes GetHostName with actual hostname output."""
         input_file = os.path.join(TEST_CASES_DIR, "unix_gethostname_demo.p")
