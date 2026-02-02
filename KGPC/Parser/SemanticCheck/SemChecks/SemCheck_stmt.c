@@ -2888,7 +2888,34 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
     if (lhs_kgpctype != NULL && rhs_kgpctype != NULL)
     {
         handled_by_kgpctype = 1;
-        
+
+        if (var != NULL && var->type == EXPR_VAR_ID && var->expr_data.id != NULL &&
+            pascal_identifier_equals(var->expr_data.id, "Result"))
+        {
+            const char *cur_id = semcheck_get_current_subprogram_id();
+            if (cur_id != NULL)
+            {
+                HashNode_t *ret_node = NULL;
+                if (FindIdent(&ret_node, symtab, (char *)cur_id) >= 0 &&
+                    ret_node != NULL &&
+                    ret_node->hash_type == HASHTYPE_FUNCTION_RETURN &&
+                    ret_node->type != NULL)
+                {
+                    int lhs_is_char = (lhs_kgpctype->kind == TYPE_KIND_PRIMITIVE &&
+                        lhs_kgpctype->info.primitive_type_tag == CHAR_TYPE);
+                    int ret_is_string = (ret_node->type->kind == TYPE_KIND_PRIMITIVE &&
+                        ret_node->type->info.primitive_type_tag == STRING_TYPE);
+                    if (lhs_is_char && ret_is_string)
+                    {
+                        if (lhs_owned && lhs_kgpctype != NULL)
+                            destroy_kgpc_type(lhs_kgpctype);
+                        lhs_kgpctype = ret_node->type;
+                        lhs_owned = 0;
+                    }
+                }
+            }
+        }
+
         if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
             fprintf(stderr, "[SemCheck] Type compatibility check:\n");
             fprintf(stderr, "[SemCheck]   lhs_kgpctype=%p kind=%d\n", (void*)lhs_kgpctype, lhs_kgpctype->kind);
@@ -3030,6 +3057,16 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             }
             if (allow_string_to_pchar)
                 goto assignment_types_ok;
+
+            if (getenv("KGPC_DEBUG_RESULT") != NULL && var != NULL &&
+                var->type == EXPR_VAR_ID && var->expr_data.id != NULL &&
+                pascal_identifier_equals(var->expr_data.id, "Result"))
+            {
+                fprintf(stderr,
+                    "[KGPC] assignment Result type mismatch: lhs=%s rhs=%s\n",
+                    kgpc_type_to_string(lhs_kgpctype),
+                    kgpc_type_to_string(rhs_kgpctype));
+            }
 
             const char *lhs_name = "<expression>";
             if (var != NULL && var->type == EXPR_VAR_ID)

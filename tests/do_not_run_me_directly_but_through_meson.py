@@ -110,6 +110,7 @@ UNIT_ONLY_TESTS = {
     "unit_pointer_deref_nil",
     "unit_sizeof_array_bounds",
     "unit_sizeof_const",
+    "unit_include_init_section",
 }
 
 UNIT_ONLY_FLAGS = {}

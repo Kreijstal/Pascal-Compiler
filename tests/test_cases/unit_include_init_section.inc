@@ -1,0 +1,3 @@
+procedure InitExceptions;
+begin
+end;

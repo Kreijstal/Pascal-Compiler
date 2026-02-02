@@ -355,9 +355,10 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
     {
         case EXPR_VAR_ID:
         {
-            /* For variable IDs, we can get the KgpcType directly from the symbol table */
+            /* Prefer explicit symbols to avoid clobbering user-defined "result" variables. */
             HashNode_t *node = NULL;
-            if (FindIdent(&node, symtab, expr->expr_data.id) != -1 && node != NULL)
+            if (expr->expr_data.id != NULL &&
+                FindIdent(&node, symtab, expr->expr_data.id) != -1 && node != NULL)
             {
                 if (node->hash_type == HASHTYPE_FUNCTION && mutating != NO_MUTATE &&
                     node->type != NULL)
@@ -379,6 +380,15 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                     return node->type;
                 }
             }
+
+            if (expr->expr_data.id != NULL &&
+                pascal_identifier_equals(expr->expr_data.id, "Result"))
+            {
+                KgpcType *result_type = semcheck_get_current_subprogram_return_kgpc_type(symtab, owns_type);
+                if (result_type != NULL)
+                    return result_type;
+            }
+
             break;
         }
         

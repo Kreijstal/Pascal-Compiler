@@ -1407,6 +1407,8 @@ long long kgpc_type_sizeof(KgpcType *type)
                 case POINTER_TYPE:
                 case PROCEDURE:
                     return 8; /* Pointers are 8 bytes on x86-64 */
+                case SHORTSTRING_TYPE:
+                    return 256; /* length byte + 255 chars */
                 case FILE_TYPE:
                     if (type->size_in_bytes > 0)
                         return type->size_in_bytes;
@@ -1640,6 +1642,8 @@ static int var_type_to_primitive_tag(enum VarType var_type)
             return CHAR_TYPE;
         case HASHVAR_PCHAR:
             return STRING_TYPE;
+        case HASHVAR_SHORTSTRING:
+            return SHORTSTRING_TYPE;
         case HASHVAR_SET:
             return SET_TYPE;
         case HASHVAR_FILE:
@@ -1676,6 +1680,7 @@ KgpcType* kgpc_type_from_var_type(enum VarType var_type)
         case HASHVAR_BOOLEAN:
         case HASHVAR_CHAR:
         case HASHVAR_PCHAR:
+        case HASHVAR_SHORTSTRING:
         case HASHVAR_SET:
         case HASHVAR_FILE:
         case HASHVAR_TEXT:
@@ -1990,6 +1995,9 @@ static int kgpc_type_equals_internal(KgpcType *a, KgpcType *b, int depth)
         return 1;
     if (a == NULL || b == NULL)
         return 0;
+    if ((kgpc_type_is_shortstring(a) && is_char_array_type(b)) ||
+        (kgpc_type_is_shortstring(b) && is_char_array_type(a)))
+        return 1;
     if (a->kind != b->kind)
         return 0;
 
@@ -2051,6 +2059,10 @@ int kgpc_type_conversion_rank(KgpcType *from, KgpcType *to)
     if (from == NULL || to == NULL)
         return -1;
     if (kgpc_type_equals(from, to))
+        return 0;
+
+    if ((kgpc_type_is_shortstring(from) && is_char_array_type(to)) ||
+        (kgpc_type_is_shortstring(to) && is_char_array_type(from)))
         return 0;
 
     if (to->kind == TYPE_KIND_ARRAY_OF_CONST)

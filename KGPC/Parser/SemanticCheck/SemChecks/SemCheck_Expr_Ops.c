@@ -1129,6 +1129,16 @@ int semcheck_varid(int *type_return,
     }
 
     scope_return = FindIdent(&hash_return, symtab, id);
+    if (getenv("KGPC_DEBUG_RESULT") != NULL && id != NULL &&
+        pascal_identifier_equals(id, "Result"))
+    {
+        fprintf(stderr,
+            "[KGPC] semcheck_varid Result: scope_return=%d hash_return=%p hash_type=%d type=%s\n",
+            scope_return,
+            (void*)hash_return,
+            hash_return != NULL ? hash_return->hash_type : -1,
+            hash_return != NULL ? kgpc_type_to_string(hash_return->type) : "<null>");
+    }
     if (getenv("KGPC_DEBUG_TYPE_HELPER") != NULL && id != NULL &&
         pascal_identifier_equals(id, "Self"))
     {

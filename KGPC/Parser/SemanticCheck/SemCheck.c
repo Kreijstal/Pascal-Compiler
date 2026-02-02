@@ -1575,6 +1575,44 @@ const char *semcheck_get_current_subprogram_id(void)
     return g_semcheck_current_subprogram->tree_data.subprogram_data.id;
 }
 
+KgpcType *semcheck_get_current_subprogram_return_kgpc_type(SymTab_t *symtab, int *owns_type)
+{
+    if (owns_type != NULL)
+        *owns_type = 0;
+    if (g_semcheck_current_subprogram == NULL || symtab == NULL)
+        return NULL;
+
+    const char *rt_id = g_semcheck_current_subprogram->tree_data.subprogram_data.return_type_id;
+    if (rt_id != NULL)
+    {
+        HashNode_t *type_node = semcheck_find_type_node_with_kgpc_type(symtab, rt_id);
+        if (type_node != NULL && type_node->type != NULL)
+        {
+            if (owns_type != NULL)
+                *owns_type = 0;
+            return type_node->type;
+        }
+
+        int builtin_tag = semcheck_map_builtin_type_name_local(rt_id);
+        if (builtin_tag != UNKNOWN_TYPE)
+        {
+            if (owns_type != NULL)
+                *owns_type = 1;
+            return create_primitive_type(builtin_tag);
+        }
+    }
+
+    int rt_tag = g_semcheck_current_subprogram->tree_data.subprogram_data.return_type;
+    if (rt_tag != UNKNOWN_TYPE)
+    {
+        if (owns_type != NULL)
+            *owns_type = 1;
+        return create_primitive_type(rt_tag);
+    }
+
+    return NULL;
+}
+
 void semcheck_mark_static_link_needed(int scope_level, HashNode_t *node)
 {
     if (scope_level <= 0)
@@ -1780,13 +1818,17 @@ static KgpcType *build_function_return_type(Tree_t *subprogram, SymTab_t *symtab
     {
         const char *rt_id = subprogram->tree_data.subprogram_data.return_type_id;
         int primitive_tag = subprogram->tree_data.subprogram_data.return_type;
+        const char *resolved_type = (type_node != NULL && type_node->type != NULL)
+            ? kgpc_type_to_string(type_node->type)
+            : "<null>";
         fprintf(stderr,
-            "[KGPC] build_function_return_type: subprogram=%s return_type_id=%s primitive=%d type_node=%p kind=%d\n",
+            "[KGPC] build_function_return_type: subprogram=%s return_type_id=%s primitive=%d type_node=%p kind=%d resolved=%s\n",
             subprogram->tree_data.subprogram_data.id ? subprogram->tree_data.subprogram_data.id : "<anon>",
             rt_id ? rt_id : "<null>",
             primitive_tag,
             (void *)type_node,
-            (type_node != NULL && type_node->type != NULL) ? type_node->type->kind : -1);
+            (type_node != NULL && type_node->type != NULL) ? type_node->type->kind : -1,
+            resolved_type);
     }
 
     if (builtin_return != NULL)
@@ -9477,6 +9519,22 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         {
             /* "Result" is not already declared in this scope, so add it as an alias */
             PushFuncRetOntoScope_Typed(symtab, "Result", return_kgpc_type);
+            if (getenv("KGPC_DEBUG_RESULT") != NULL)
+            {
+                fprintf(stderr,
+                    "[KGPC] add Result alias for %s type=%s\n",
+                    subprogram->tree_data.subprogram_data.id ?
+                        subprogram->tree_data.subprogram_data.id : "<anon>",
+                    kgpc_type_to_string(return_kgpc_type));
+            }
+        }
+        else if (getenv("KGPC_DEBUG_RESULT") != NULL)
+        {
+            fprintf(stderr,
+                "[KGPC] Result alias already exists for %s existing_type=%s\n",
+                subprogram->tree_data.subprogram_data.id ?
+                    subprogram->tree_data.subprogram_data.id : "<anon>",
+                kgpc_type_to_string(result_check->type));
         }
 
         /* For class methods, also add an alias using the unmangled method name (suffix after __) */

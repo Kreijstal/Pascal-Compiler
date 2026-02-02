@@ -85,6 +85,94 @@ static int codegen_expr_is_shortstring_array_local(const struct Expression *expr
     return 0;
 }
 
+static int codegen_expr_is_shortstring_value(const struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+
+    if (expr_get_type_tag(expr) == SHORTSTRING_TYPE)
+        return 1;
+
+    KgpcType *expr_type = expr_get_kgpc_type(expr);
+    if (expr_type != NULL)
+    {
+        if (kgpc_type_is_shortstring(expr_type))
+            return 1;
+        struct TypeAlias *alias = kgpc_type_get_type_alias(expr_type);
+        if (alias != NULL && alias->is_shortstring)
+            return 1;
+        if (kgpc_type_is_array(expr_type) &&
+            expr_type->type_alias != NULL &&
+            expr_type->type_alias->is_shortstring)
+        {
+            return 1;
+        }
+    }
+
+    if (codegen_expr_is_shortstring_array_local(expr))
+        return 1;
+
+    if (expr->is_array_expr &&
+        expr->array_element_type == CHAR_TYPE &&
+        expr_get_array_lower_bound(expr) == 0)
+    {
+        int upper = expr_get_array_upper_bound(expr);
+        if (upper >= 0 && upper <= 255)
+            return 1;
+    }
+
+    return 0;
+}
+
+static int codegen_array_access_targets_shortstring(const struct Expression *expr, CodeGenContext *ctx)
+{
+    if (expr == NULL || ctx == NULL)
+        return 0;
+    if (expr->type != EXPR_ARRAY_ACCESS)
+        return 0;
+    if (codegen_expr_is_shortstring_value(expr))
+        return 1;
+
+    struct Expression *base_expr = expr->expr_data.array_access_data.array_expr;
+    if (base_expr == NULL)
+        return 0;
+
+    KgpcType *base_type = base_expr->resolved_kgpc_type;
+    if (base_type == NULL && base_expr->type == EXPR_VAR_ID && ctx->symtab != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindIdent(&node, ctx->symtab, base_expr->expr_data.id) >= 0 && node != NULL)
+            base_type = node->type;
+    }
+
+    if (base_type != NULL && kgpc_type_is_array(base_type))
+    {
+        KgpcType *elem_type = kgpc_type_get_array_element_type(base_type);
+        if (elem_type != NULL)
+        {
+            if (kgpc_type_is_shortstring(elem_type))
+                return 1;
+            struct TypeAlias *alias = kgpc_type_get_type_alias(elem_type);
+            if (alias != NULL && alias->is_shortstring)
+                return 1;
+            if (kgpc_type_is_array(elem_type))
+            {
+                KgpcType *inner = kgpc_type_get_array_element_type(elem_type);
+                int start = 0;
+                int end = 0;
+                if (inner != NULL && kgpc_type_is_char(inner) &&
+                    kgpc_type_get_array_bounds(elem_type, &start, &end) == 0 &&
+                    start == 0 && end >= 0 && end <= 255)
+                {
+                    return 1;
+                }
+            }
+        }
+    }
+
+    return 0;
+}
+
 static int codegen_self_param_is_class(Tree_t *formal_arg_decl, CodeGenContext *ctx)
 {
     if (formal_arg_decl == NULL || formal_arg_decl->type != TREE_VAR_DECL)
@@ -2080,6 +2168,13 @@ int codegen_get_record_size(CodeGenContext *ctx, struct Expression *expr,
     if (expr == NULL || size_out == NULL)
         return 1;
 
+    /* ShortString uses fixed 256-byte storage (length byte + 255 chars). */
+    if (expr_get_type_tag(expr) == SHORTSTRING_TYPE)
+    {
+        *size_out = 256;
+        return 0;
+    }
+
     if (getenv("KGPC_DEBUG_RECORD_SIZE") != NULL)
     {
         KgpcType *dbg_type = expr_get_kgpc_type(expr);
@@ -3732,6 +3827,19 @@ ListNode_t *codegen_array_access(struct Expression *expr, ListNode_t *inst_list,
         return inst_list;
     }
     int element_size = (int)element_size_ll;
+
+    if (element_size > CODEGEN_POINTER_SIZE_BYTES ||
+        expr_has_type_tag(expr, RECORD_TYPE) ||
+        codegen_expr_is_shortstring_value(expr) ||
+        codegen_array_access_targets_shortstring(expr, ctx))
+    {
+        char buffer[100];
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
+            addr_reg->bit_64, target_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        free_reg(get_reg_stack(), addr_reg);
+        return inst_list;
+    }
 
     char buffer[100];
     if (expr_uses_qword_kgpctype(expr))

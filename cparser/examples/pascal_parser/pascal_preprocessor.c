@@ -138,7 +138,7 @@ PascalPreprocessor *pascal_preprocessor_create(void) {
     pp->defines = NULL;
     pp->define_count = 0;
     pp->define_capacity = 0;
-    pp->macro_enabled = false;  // Macros are off by default
+    pp->macro_enabled = true;  // Match FPC: macros (:=) expand by default
     pp->flatten_only = false;
     pp->include_paths = NULL;
     pp->include_path_count = 0;

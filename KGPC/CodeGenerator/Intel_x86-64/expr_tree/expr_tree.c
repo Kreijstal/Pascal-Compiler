@@ -2227,8 +2227,22 @@ cleanup_constructor:
                 (expr->resolved_kgpc_type != NULL &&
                  kgpc_type_is_array(expr->resolved_kgpc_type));
 
+            int is_shortstring = 0;
+            if (expr_type == SHORTSTRING_TYPE)
+                is_shortstring = 1;
+            else if (expr->resolved_kgpc_type != NULL)
+            {
+                struct TypeAlias *alias = kgpc_type_get_type_alias(expr->resolved_kgpc_type);
+                if (kgpc_type_is_shortstring(expr->resolved_kgpc_type) ||
+                    (alias != NULL && alias->is_shortstring))
+                {
+                    is_shortstring = 1;
+                }
+            }
+
             int should_deref = 0;
-            if (!is_array_like && expr_type != RECORD_TYPE && expr_type != SET_TYPE)
+            if (!is_array_like && !is_shortstring &&
+                expr_type != RECORD_TYPE && expr_type != SET_TYPE)
                 should_deref = 1;
 
             snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", buf_leaf, target_reg->bit_64);

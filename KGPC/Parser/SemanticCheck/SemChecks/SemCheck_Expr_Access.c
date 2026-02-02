@@ -2167,6 +2167,28 @@ int semcheck_funccall(int *type_return,
                         owner_type_owned = 1;
                     }
                 }
+                else if (owner_type != NULL && owner_type->kind == TYPE_KIND_POINTER &&
+                    owner_type->info.points_to != NULL &&
+                    owner_type->info.points_to->kind == TYPE_KIND_PRIMITIVE &&
+                    owner_type->info.points_to->info.primitive_type_tag == RECORD_TYPE)
+                {
+                    /* "class of T" is represented as pointer-to-primitive(record).
+                     * Constructors return an instance pointer (^record), not a class ref. */
+                    KgpcType *rec_type = create_record_type(record_info);
+                    if (rec_type != NULL)
+                    {
+                        KgpcType *ptr_type = create_pointer_type(rec_type);
+                        if (ptr_type != NULL)
+                        {
+                            owner_type = ptr_type;
+                            owner_type_owned = 1;
+                        }
+                        else
+                        {
+                            destroy_kgpc_type(rec_type);
+                        }
+                    }
+                }
                 else if (owner_type == NULL)
                 {
                     KgpcType *rec_type = create_record_type(record_info);

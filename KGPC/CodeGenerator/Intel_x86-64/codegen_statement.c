@@ -1719,10 +1719,24 @@ static int codegen_expr_is_shortstring_array(const struct Expression *expr)
 
 static int codegen_get_shortstring_capacity(const struct Expression *expr, CodeGenContext *ctx)
 {
-    int lower_bound = expr_get_array_lower_bound(expr);
-    int upper_bound = expr_get_array_upper_bound(expr);
-    if (upper_bound >= lower_bound && upper_bound >= 0)
-        return upper_bound - lower_bound + 1;
+    if (expr != NULL)
+    {
+        KgpcType *expr_type = expr_get_kgpc_type(expr);
+        if (expr_type != NULL &&
+            expr_type->kind == TYPE_KIND_PRIMITIVE &&
+            expr_type->info.primitive_type_tag == SHORTSTRING_TYPE)
+        {
+            return 256;
+        }
+    }
+
+    if (expr != NULL && expr->is_array_expr)
+    {
+        int lower_bound = expr_get_array_lower_bound(expr);
+        int upper_bound = expr_get_array_upper_bound(expr);
+        if (upper_bound >= lower_bound && upper_bound >= 0)
+            return upper_bound - lower_bound + 1;
+    }
 
     if (expr != NULL && expr->type == EXPR_ARRAY_ACCESS)
     {
@@ -6022,6 +6036,14 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             free_reg(get_reg_stack(), value_reg);
             free_reg(get_reg_stack(), addr_reg);
             return inst_list;
+        }
+
+        /* Handle ShortString-to-ShortString assignment (copy 256-byte record). */
+        if ((var_type == SHORTSTRING_TYPE || codegen_expr_is_shortstring_array(var_expr) ||
+             targets_shortstring) &&
+            expr_get_type_tag(assign_expr) == SHORTSTRING_TYPE)
+        {
+            return codegen_assign_record_value(var_expr, assign_expr, inst_list, ctx);
         }
 
         /* Handle CHAR assignment to ShortString arrays - set length=1 and store char at position 1 */

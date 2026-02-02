@@ -504,9 +504,8 @@ static inline int get_var_storage_size(HashNode_t *node)
             struct TypeAlias *alias = kgpc_type_get_type_alias(node->type);
             if (alias != NULL)
             {
-                /* ShortStrings are passed/preserved via pointer-sized slots */
                 if (alias->is_shortstring)
-                    return 8;
+                    return 256;
                 if (alias->storage_size > 0)
                     return (int)alias->storage_size;
             }
@@ -520,10 +519,11 @@ static inline int get_var_storage_size(HashNode_t *node)
                     return 8;
                 case REAL_TYPE:
                 case STRING_TYPE:  /* PCHAR */
-                case SHORTSTRING_TYPE:
                 case POINTER_TYPE:
                 case PROCEDURE:
                     return 8;
+                case SHORTSTRING_TYPE:
+                    return 256;
                 case FILE_TYPE:
                 case TEXT_TYPE:
                 {
@@ -1980,6 +1980,9 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                             case POINTER_TYPE:
                                 element_size = 8;
                                 break;
+                            case SHORTSTRING_TYPE:
+                                element_size = 256;
+                                break;
                             case FILE_TYPE:
                                 element_size = 368;
                                 break;
@@ -2388,6 +2391,9 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                         case FILE_TYPE:
                         case TEXT_TYPE:
                             element_size = 8;
+                            break;
+                        case SHORTSTRING_TYPE:
+                            element_size = 256;
                             break;
                         case BOOL:
                         case CHAR_TYPE:
@@ -2992,6 +2998,16 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
         }
     }
 
+    if (!has_record_return && func_node != NULL && func_node->type != NULL)
+    {
+        KgpcType *return_type = kgpc_type_get_return_type(func_node->type);
+        if (return_type != NULL && kgpc_type_is_shortstring(return_type))
+        {
+            has_record_return = 1;
+            record_return_size = 256;
+        }
+    }
+
     /* Only functions that close over variables need static links (excluding class methods). */
     int will_need_static_link = (!is_class_method &&
         func->requires_static_link);
@@ -3504,6 +3520,8 @@ static int codegen_dynamic_array_element_size_from_type(CodeGenContext *ctx, Kgp
                 case STRING_TYPE:
                 case POINTER_TYPE:
                     return 8;
+                case SHORTSTRING_TYPE:
+                    return 256;
                 case CHAR_TYPE:
                 case BOOL:
                     return 1;
