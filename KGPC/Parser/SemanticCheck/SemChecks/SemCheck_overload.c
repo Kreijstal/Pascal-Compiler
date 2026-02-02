@@ -744,8 +744,27 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
                 /* This handles constructor Self parameter matching where both are ^record */
                 if (formal_kgpc->kind == TYPE_KIND_POINTER && actual_kgpc->kind == TYPE_KIND_POINTER)
                 {
+                    /* Check if types are directly compatible */
                     if (are_types_compatible_for_assignment(formal_kgpc, actual_kgpc, symtab))
                         return semcheck_make_quality(MATCH_EXACT);
+                    /* For class pointers, also check if the pointed-to records are related.
+                     * This handles cases where ^Record and ^record represent the same class
+                     * but have different KgpcType instances. */
+                    KgpcType *formal_inner = formal_kgpc->info.points_to;
+                    KgpcType *actual_inner = actual_kgpc->info.points_to;
+                    if (formal_inner != NULL && actual_inner != NULL &&
+                        formal_inner->kind == TYPE_KIND_RECORD &&
+                        actual_inner->kind == TYPE_KIND_RECORD)
+                    {
+                        /* If both are records, check if they share the same record_info
+                         * or if one is a subclass of the other */
+                        if (formal_inner->info.record_info == actual_inner->info.record_info)
+                            return semcheck_make_quality(MATCH_EXACT);
+                        /* Also allow if actual's record has the formal's record as an ancestor
+                         * via the class hierarchy (checked by name since record_info may differ) */
+                        if (are_types_compatible_for_assignment(formal_inner, actual_inner, symtab))
+                            return semcheck_make_quality(MATCH_EXACT);
+                    }
                 }
             }
             if (actual_kgpc->kind == TYPE_KIND_RECORD &&
