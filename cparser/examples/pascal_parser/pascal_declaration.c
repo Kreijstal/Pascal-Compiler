@@ -2039,7 +2039,23 @@ void init_pascal_unit_parser(combinator_t** p) {
     );
     set_combinator_name(bracket_directive_required, "bracket_directive_required");
 
-    // Optional bracket directives (for use after function body)
+    // Routine directives with proper argument support
+    combinator_t* routine_directive = seq(new_combinator(), PASCAL_T_NONE,
+        directive_keyword,
+        directive_argument,
+        token(match(";")),
+        NULL
+    );
+
+    // Combined directives (standard directives AND bracket directives)
+    // This allows mixing them in any order: [public]; inline; [alias: '...'];
+    combinator_t* combined_routine_directives = many(multi(new_combinator(), PASCAL_T_NONE,
+        routine_directive,
+        bracket_directive_required,
+        NULL
+    ));
+
+    // Optional bracket directives (legacy/specific uses)
     combinator_t* bracket_directives = optional(bracket_directive_required);
 
     // Header-only bracket directives: [internproc:N], [internconst:N], [compilerproc], etc.
@@ -2067,13 +2083,7 @@ void init_pascal_unit_parser(combinator_t** p) {
     );
     set_combinator_name(internproc_directive, "internproc_directive");
 
-    combinator_t* routine_directive = seq(new_combinator(), PASCAL_T_NONE,
-        directive_keyword,
-        directive_argument,
-        token(match(";")),
-        NULL
-    );
-
+    // Standard routine directives (legacy list)
     combinator_t* routine_directives = many(routine_directive);
     
     // A directive that indicates no body follows - either keyword-based or bracket-based.
@@ -2244,8 +2254,7 @@ void init_pascal_unit_parser(combinator_t** p) {
     combinator_t* procedure_impl = seq(new_combinator(), PASCAL_T_PROCEDURE_DECL,
         optional(token(keyword_ci("class"))),
         token(keyword_ci("procedure")), token(cident(PASCAL_T_IDENTIFIER)), optional(param_list), token(match(";")),
-        bracket_directives,  // FPC [public, alias: 'name'] syntax
-        routine_directives,
+        combined_routine_directives,  // Mixed standard and bracket directives
         function_body, optional(token(match(";"))), NULL);
     set_combinator_name(procedure_impl, "procedure_impl");
 
@@ -2347,7 +2356,7 @@ void init_pascal_unit_parser(combinator_t** p) {
         method_type_params,                          // optional type parameters <T, U>
         optional(param_list),                        // optional parameter list
         token(match(";")),                           // semicolon
-        routine_directives,
+        combined_routine_directives,                 // mixed directives
         function_body,                               // method body with local declarations
         optional(token(match(";"))),                 // optional terminating semicolon
         NULL
@@ -2363,7 +2372,7 @@ void init_pascal_unit_parser(combinator_t** p) {
         optional(param_list),                        // optional parameter list
         return_type,                                 // return type
         token(match(";")),                           // semicolon
-        routine_directives,
+        combined_routine_directives,                 // mixed directives
         function_body,                               // method body with local declarations
         optional(token(match(";"))),                 // optional terminating semicolon
         NULL
@@ -2375,8 +2384,7 @@ void init_pascal_unit_parser(combinator_t** p) {
         optional(token(keyword_ci("class"))),
         token(keyword_ci("function")), token(cident(PASCAL_T_IDENTIFIER)), optional(param_list),
         return_type, token(match(";")),
-        bracket_directives,  // FPC [public, alias: 'name'] syntax
-        routine_directives,
+        combined_routine_directives,  // Mixed standard and bracket directives
         function_body, optional(token(match(";"))), NULL);
     set_combinator_name(function_impl, "function_impl");
 
@@ -2738,6 +2746,41 @@ void init_pascal_method_implementation_parser(combinator_t** p) {
     *stmt_parser = new_combinator();
     init_pascal_statement_parser(stmt_parser);
 
+    // Simple function body - just the statement block (no local declarations for simplicity)
+    combinator_t* function_body = seq(new_combinator(), PASCAL_T_FUNCTION_BODY,
+        lazy(stmt_parser),                         // main statement block
+        NULL
+    );
+    set_combinator_name(function_body, "function_body");
+
+    // Directive keyword for routine directives
+    combinator_t* directive_keyword = multi(new_combinator(), PASCAL_T_NONE,
+        token(create_keyword_parser("inline", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("overload", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("cdecl", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("stdcall", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("register", PASCAL_T_IDENTIFIER)),
+        NULL
+    );
+
+    // Simple directive argument (optional string or identifier)
+    combinator_t* directive_argument = optional(multi(new_combinator(), PASCAL_T_NONE,
+        token(pascal_string(PASCAL_T_STRING)),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        NULL
+    ));
+
+    // Routine directive with semicolon
+    combinator_t* routine_directive = seq(new_combinator(), PASCAL_T_NONE,
+        directive_keyword,
+        directive_argument,
+        token(match(";")),
+        NULL
+    );
+
+    // Combined routine directives (zero or more)
+    combinator_t* combined_routine_directives = many(routine_directive);
+
     // Helper for class-level generic type parameters in method implementations: ClassName<T>
     combinator_t* class_generic_type_params = optional(seq(new_combinator(), PASCAL_T_TYPE_PARAM_LIST,
         token(match("<")),
@@ -2755,29 +2798,33 @@ void init_pascal_method_implementation_parser(combinator_t** p) {
         NULL
     );
 
-    // Constructor implementation: constructor ClassName.MethodName[(params)]; body
+    // Constructor implementation (with required body)
     combinator_t* constructor_impl = seq(new_combinator(), PASCAL_T_CONSTRUCTOR_DECL,
         optional(token(keyword_ci("class"))),    // optional class modifier
         token(keyword_ci("constructor")),        // constructor keyword
         method_name_with_class,                  // ClassName.MethodName
         create_simple_param_list(),              // optional parameter list
         token(match(";")),                       // semicolon
-        lazy(stmt_parser),                       // method body
+        combined_routine_directives,             // mixed directives
+        function_body,                               // method body with local declarations
         optional(token(match(";"))),             // optional terminating semicolon
         NULL
     );
+    set_combinator_name(constructor_impl, "constructor_impl");
 
-    // Destructor implementation: destructor ClassName.MethodName[(params)]; body
+    // Destructor implementation (with required body)
     combinator_t* destructor_impl = seq(new_combinator(), PASCAL_T_DESTRUCTOR_DECL,
         optional(token(keyword_ci("class"))),    // optional class modifier
         token(keyword_ci("destructor")),         // destructor keyword
         method_name_with_class,                  // ClassName.MethodName
         create_simple_param_list(),              // optional parameter list
         token(match(";")),                       // semicolon
-        lazy(stmt_parser),                       // method body
+        combined_routine_directives,             // mixed directives
+        function_body,                               // method body with local declarations
         optional(token(match(";"))),             // optional terminating semicolon
         NULL
     );
+    set_combinator_name(destructor_impl, "destructor_impl");
 
     // Procedure implementation: procedure ClassName.MethodName[(params)]; body
     combinator_t* procedure_impl = seq(new_combinator(), PASCAL_T_PROCEDURE_DECL,
@@ -2785,7 +2832,8 @@ void init_pascal_method_implementation_parser(combinator_t** p) {
         method_name_with_class,                  // ClassName.MethodName
         create_simple_param_list(),              // optional parameter list
         token(match(";")),                       // semicolon
-        lazy(stmt_parser),                       // method body
+        combined_routine_directives,             // mixed directives
+        function_body,                           // method body with local declarations
         optional(token(match(";"))),             // optional terminating semicolon
         NULL
     );
@@ -3424,7 +3472,40 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         token(match(";")),
         NULL
     );
-    combinator_t* implementation_routine_directives = many(implementation_routine_directive);
+    // FPC bracket directive syntax for program-level procedures: [public, alias : 'name', nostackframe]
+    // Each directive can be: identifier or identifier : value
+    combinator_t* prog_bracket_directive_value = optional(seq(new_combinator(), PASCAL_T_NONE,
+        token(match(":")),
+        multi(new_combinator(), PASCAL_T_NONE,
+            token(pascal_string(PASCAL_T_STRING)),
+            token(cident(PASCAL_T_IDENTIFIER)),
+            NULL
+        ),
+        NULL
+    ));
+
+    combinator_t* prog_bracket_directive_item = seq(new_combinator(), PASCAL_T_NONE,
+        token(cident(PASCAL_T_IDENTIFIER)),  // directive name like 'public', 'alias', 'nostackframe'
+        prog_bracket_directive_value,         // optional : value
+        NULL
+    );
+
+    // Required bracket directive with semicolon
+    combinator_t* prog_bracket_directive_required = seq(new_combinator(), PASCAL_T_NONE,
+        token(match("[")),
+        sep_by(prog_bracket_directive_item, token(match(","))),
+        token(match("]")),
+        token(match(";")),
+        NULL
+    );
+
+    // Combined implementation routine directives (standard directives AND bracket directives)
+    combinator_t* combined_impl_directive = multi(new_combinator(), PASCAL_T_NONE,
+        implementation_routine_directive,
+        prog_bracket_directive_required,
+        NULL
+    );
+    combinator_t* implementation_routine_directives = many(combined_impl_directive);
 
     // Directives that indicate no body should follow - preserve the directive keyword in AST
     // combinator_t* program_no_body_directive = multi(new_combinator(), PASCAL_T_IDENTIFIER,
