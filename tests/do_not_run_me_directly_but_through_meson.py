@@ -1607,6 +1607,20 @@ class TestCompiler(unittest.TestCase):
         self.assertTrue(os.path.exists(asm_file))
         self.assertGreater(os.path.getsize(asm_file), 0)
 
+    def test_unit_init_after_nested_body(self):
+        """Initialization should resolve procedures declared after nested function bodies."""
+        input_file = os.path.join(
+            TEST_CASES_DIR, "tdd_top_level_subprograms_after_nested_body.p"
+        )
+        asm_file = os.path.join(
+            TEST_OUTPUT_DIR, "tdd_top_level_subprograms_after_nested_body.s"
+        )
+
+        run_compiler(input_file, asm_file)
+
+        self.assertTrue(os.path.exists(asm_file))
+        self.assertGreater(os.path.getsize(asm_file), 0)
+
     def test_runtime_features(self):
         """Verifies string helpers, Inc, and dynamic arrays on NativeUInt values."""
         input_file = os.path.join(TEST_CASES_DIR, "runtime_features.p")
