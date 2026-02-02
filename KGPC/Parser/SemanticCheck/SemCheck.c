@@ -16,6 +16,7 @@
 #include <string.h>
 #include <limits.h>
 #include <stdint.h>
+#include <time.h>
 #ifndef _WIN32
 #include <strings.h>
 #else
@@ -239,22 +240,25 @@ static int semcheck_map_builtin_type_name_local(const char *id)
         pascal_identifier_equals(id, "Extended"))
         return REAL_TYPE;
     if (pascal_identifier_equals(id, "Byte") ||
-        pascal_identifier_equals(id, "ShortInt") ||
-        pascal_identifier_equals(id, "SmallInt") ||
-        pascal_identifier_equals(id, "Word") ||
-        pascal_identifier_equals(id, "LongWord") ||
+        pascal_identifier_equals(id, "UInt8"))
+        return BYTE_TYPE;
+    if (pascal_identifier_equals(id, "Word") ||
+        pascal_identifier_equals(id, "UInt16"))
+        return WORD_TYPE;
+    if (pascal_identifier_equals(id, "LongWord") ||
         pascal_identifier_equals(id, "Cardinal") ||
         pascal_identifier_equals(id, "DWord") ||
-        pascal_identifier_equals(id, "Int8") ||
-        pascal_identifier_equals(id, "UInt8") ||
-        pascal_identifier_equals(id, "Int16") ||
-        pascal_identifier_equals(id, "UInt16") ||
-        pascal_identifier_equals(id, "Int32") ||
         pascal_identifier_equals(id, "UInt32"))
-        return INT_TYPE;
+        return LONGWORD_TYPE;
     if (pascal_identifier_equals(id, "QWord") ||
         pascal_identifier_equals(id, "UInt64"))
-        return INT64_TYPE;
+        return QWORD_TYPE;
+    if (pascal_identifier_equals(id, "ShortInt") ||
+        pascal_identifier_equals(id, "SmallInt") ||
+        pascal_identifier_equals(id, "Int8") ||
+        pascal_identifier_equals(id, "Int16") ||
+        pascal_identifier_equals(id, "Int32"))
+        return INT_TYPE;
     if (pascal_identifier_equals(id, "String") ||
         pascal_identifier_equals(id, "AnsiString") ||
         pascal_identifier_equals(id, "RawByteString") ||
@@ -540,12 +544,158 @@ static void print_error_context(int line_num, int col_num, int source_index)
     fprintf(stderr, "\n");
 }
 
+static int semcheck_parse_line_directive(const char *line, size_t len)
+{
+    if (len < 8)
+        return -1;
+    if (line[0] != '{' || line[1] != '#')
+        return -1;
+    if (len < 7 || strncasecmp(line + 2, "line", 4) != 0)
+        return -1;
+
+    size_t pos = 6;
+    while (pos < len && (line[pos] == ' ' || line[pos] == '\t'))
+        ++pos;
+
+    int line_num = 0;
+    while (pos < len && line[pos] >= '0' && line[pos] <= '9')
+    {
+        line_num = line_num * 10 + (line[pos] - '0');
+        ++pos;
+    }
+
+    return line_num > 0 ? line_num : -1;
+}
+
+static int semcheck_line_from_source_offset(const char *buffer, size_t length, int source_offset)
+{
+    if (buffer == NULL || length == 0 || source_offset < 0 || (size_t)source_offset >= length)
+        return -1;
+
+    int current_line_at_offset = 1;
+    int scan_pos = source_offset;
+    while (scan_pos > 0)
+    {
+        int line_start = scan_pos;
+        while (line_start > 0 && buffer[line_start - 1] != '\n')
+            --line_start;
+
+        size_t line_len = 0;
+        int temp_pos = line_start;
+        while ((size_t)temp_pos < length && buffer[temp_pos] != '\n')
+        {
+            ++temp_pos;
+            ++line_len;
+        }
+
+        int directive_line = semcheck_parse_line_directive(buffer + line_start, line_len);
+        if (directive_line >= 0)
+        {
+            int lines_after_directive = 0;
+            int pos = line_start;
+            while ((size_t)pos < length && buffer[pos] != '\n')
+                ++pos;
+            if ((size_t)pos < length && buffer[pos] == '\n')
+                ++pos;
+            while (pos < source_offset)
+            {
+                if (buffer[pos] == '\n')
+                    ++lines_after_directive;
+                ++pos;
+            }
+            current_line_at_offset = directive_line + lines_after_directive;
+            break;
+        }
+
+        if (line_start > 0)
+            scan_pos = line_start - 1;
+        else
+            break;
+    }
+
+    return current_line_at_offset;
+}
+
+static int g_semcheck_error_line = 0;
+static int g_semcheck_error_col = 0;
+static int g_semcheck_error_source_index = -1;
+
+void semcheck_set_error_context(int line_num, int col_num, int source_index)
+{
+    g_semcheck_error_line = line_num;
+    g_semcheck_error_col = col_num;
+    g_semcheck_error_source_index = source_index;
+}
+
+void semcheck_clear_error_context(void)
+{
+    g_semcheck_error_line = 0;
+    g_semcheck_error_col = 0;
+    g_semcheck_error_source_index = -1;
+}
+
+int semcheck_tag_from_kgpc(const KgpcType *type)
+{
+    if (type == NULL)
+        return UNKNOWN_TYPE;
+    if (type->kind == TYPE_KIND_PRIMITIVE)
+        return type->info.primitive_type_tag;
+    if (kgpc_type_is_array_of_const((KgpcType *)type))
+        return ARRAY_OF_CONST_TYPE;
+    /* Check for ShortString: array[0..255] of Char or explicit is_shortstring flag */
+    if (kgpc_type_is_array((KgpcType *)type)) {
+        /* Check explicit shortstring flag */
+        if (type->type_alias != NULL && type->type_alias->is_shortstring)
+            return SHORTSTRING_TYPE;
+        /* Check for ShortString-like array: bounds [0..255] with char element type */
+        if (type->info.array_info.start_index == 0 &&
+            type->info.array_info.end_index == 255) {
+            KgpcType *elem = type->info.array_info.element_type;
+            if (elem == NULL) {
+                /* array[0..255] with NULL element_type is treated as ShortString */
+                return SHORTSTRING_TYPE;
+            }
+            if (elem->kind == TYPE_KIND_PRIMITIVE &&
+                elem->info.primitive_type_tag == CHAR_TYPE) {
+                return SHORTSTRING_TYPE;
+            }
+        }
+    }
+    if (kgpc_type_is_record((KgpcType *)type))
+        return RECORD_TYPE;
+    if (kgpc_type_is_pointer((KgpcType *)type))
+        return POINTER_TYPE;
+    if (kgpc_type_is_procedure((KgpcType *)type))
+        return PROCEDURE;
+    return UNKNOWN_TYPE;
+}
+
 /* Helper function to print semantic error with source code context */
 void semantic_error(int line_num, int col_num, const char *format, ...)
 {
-    fprintf(stderr, "Error on line %d", line_num);
-    if (col_num > 0) {
-        fprintf(stderr, ", column %d", col_num);
+    int effective_line = line_num;
+    int effective_col = col_num;
+    int effective_source_index = g_semcheck_error_source_index;
+
+    if (effective_source_index >= 0)
+    {
+        const char *context_buf = preprocessed_source;
+        size_t context_buf_len = preprocessed_length;
+        if (context_buf == NULL || context_buf_len == 0)
+        {
+            context_buf = g_semcheck_source_buffer;
+            context_buf_len = g_semcheck_source_length;
+        }
+        int computed_line = semcheck_line_from_source_offset(context_buf, context_buf_len, effective_source_index);
+        if (computed_line > 0)
+            effective_line = computed_line;
+        if (effective_col <= 0 && g_semcheck_error_col > 0)
+            effective_col = g_semcheck_error_col;
+    }
+
+    fprintf(stderr, "Error on line %d", effective_line);
+    if (effective_col > 0) {
+        fprintf(stderr, ", column %d", effective_col);
     }
     fprintf(stderr, ": ");
 
@@ -555,12 +705,26 @@ void semantic_error(int line_num, int col_num, const char *format, ...)
     va_end(args);
     fprintf(stderr, "\n");
 
-    print_error_context(line_num, col_num, -1);  /* -1 = no offset, use line-based search */
+    print_error_context(effective_line, effective_col, effective_source_index);
 }
 
 /* Helper function to print semantic error with accurate source context using byte offset */
 void semantic_error_at(int line_num, int col_num, int source_index, const char *format, ...)
 {
+    if (source_index >= 0)
+    {
+        const char *context_buf = preprocessed_source;
+        size_t context_buf_len = preprocessed_length;
+        if (context_buf == NULL || context_buf_len == 0)
+        {
+            context_buf = g_semcheck_source_buffer;
+            context_buf_len = g_semcheck_source_length;
+        }
+        int computed_line = semcheck_line_from_source_offset(context_buf, context_buf_len, source_index);
+        if (computed_line > 0)
+            line_num = computed_line;
+    }
+
     fprintf(stderr, "Error on line %d", line_num);
     if (col_num > 0) {
         fprintf(stderr, ", column %d", col_num);
@@ -576,6 +740,88 @@ void semantic_error_at(int line_num, int col_num, int source_index, const char *
     print_error_context(line_num, col_num, source_index);
 }
 
+void semcheck_error_with_context_at(int line_num, int col_num, int source_index,
+    const char *format, ...)
+{
+    const char *file_path = (file_to_parse != NULL && *file_to_parse != '\0')
+                                ? file_to_parse
+                                : ((preprocessed_path != NULL && *preprocessed_path != '\0') ? preprocessed_path
+                                                                                              : pascal_frontend_current_path());
+    if (file_path == NULL)
+        file_path = g_semcheck_source_path;
+    size_t context_len = preprocessed_length;
+    if (context_len == 0 && preprocessed_source != NULL)
+        context_len = strlen(preprocessed_source);
+
+    int effective_line = line_num;
+    int effective_col = col_num;
+    if (source_index >= 0)
+    {
+        const char *context_buf = preprocessed_source;
+        size_t context_buf_len = context_len;
+        if (context_buf == NULL || context_buf_len == 0)
+        {
+            context_buf = g_semcheck_source_buffer;
+            context_buf_len = g_semcheck_source_length;
+        }
+        int computed_line = semcheck_line_from_source_offset(context_buf, context_buf_len, source_index);
+        if (computed_line > 0)
+            effective_line = computed_line;
+        if (effective_col <= 0 && g_semcheck_error_col > 0)
+            effective_col = g_semcheck_error_col;
+    }
+
+    va_list args;
+    va_start(args, format);
+    if (format != NULL && strncmp(format, "Error on line %d", 16) == 0)
+    {
+        int original_line = va_arg(args, int);
+        (void)original_line;
+        fprintf(stderr, "Error on line %d", effective_line);
+        const char *rest = format + 16;
+        vfprintf(stderr, rest, args);
+    }
+    else
+    {
+        vfprintf(stderr, format, args);
+    }
+    va_end(args);
+
+    size_t len = format ? strlen(format) : 0;
+    if (len == 0 || format[len - 1] != '\n') {
+        fprintf(stderr, "\n");
+    }
+
+    if (effective_line > 0) {
+        const char *context_buf = preprocessed_source;
+        size_t context_buf_len = context_len;
+        if (context_buf == NULL || context_buf_len == 0)
+        {
+            context_buf = g_semcheck_source_buffer;
+            context_buf_len = g_semcheck_source_length;
+        }
+        if (getenv("KGPC_DEBUG_SEM_CONTEXT") != NULL)
+        {
+            fprintf(stderr,
+                "[SemCheck] context file=%s pre_len=%zu buf_len=%zu line=%d col=%d offset=%d\n",
+                file_path != NULL ? file_path : "<null>",
+                context_len,
+                context_buf_len,
+                effective_line,
+                effective_col,
+                source_index);
+        }
+        int printed = print_source_context_at_offset(context_buf, context_buf_len,
+            source_index, effective_line, effective_col, 2);
+        if (!printed)
+            printed = semcheck_print_context_from_file(file_path, effective_line, effective_col, 2);
+        if (!printed && file_path != NULL)
+            print_source_context(file_path, effective_line, effective_col, 2);
+    }
+
+    fprintf(stderr, "\n");
+}
+
 /* Helper for legacy error prints that already include "Error on line %d". */
 void semcheck_error_with_context(const char *format, ...)
 {
@@ -589,6 +835,9 @@ void semcheck_error_with_context(const char *format, ...)
     if (context_len == 0 && preprocessed_source != NULL)
         context_len = strlen(preprocessed_source);
     int line_num = 0;
+    int effective_line = 0;
+    int effective_col = 0;
+    int effective_source_index = g_semcheck_error_source_index;
 
     va_list args;
     va_start(args, format);
@@ -598,7 +847,37 @@ void semcheck_error_with_context(const char *format, ...)
     line_num = va_arg(args_copy, int);
     va_end(args_copy);
 
-    vfprintf(stderr, format, args);
+    if (effective_source_index >= 0)
+    {
+        const char *context_buf = preprocessed_source;
+        size_t context_buf_len = preprocessed_length;
+        if (context_buf == NULL || context_buf_len == 0)
+        {
+            context_buf = g_semcheck_source_buffer;
+            context_buf_len = g_semcheck_source_length;
+        }
+        int computed_line = semcheck_line_from_source_offset(context_buf, context_buf_len, effective_source_index);
+        if (computed_line > 0)
+            effective_line = computed_line;
+        if (g_semcheck_error_col > 0)
+            effective_col = g_semcheck_error_col;
+    }
+    if (effective_line <= 0)
+        effective_line = line_num;
+
+    /* If the format starts with "Error on line %d", rewrite that part to use the effective line. */
+    if (format != NULL && strncmp(format, "Error on line %d", 16) == 0)
+    {
+        int original_line = va_arg(args, int);
+        (void)original_line;
+        fprintf(stderr, "Error on line %d", effective_line);
+        const char *rest = format + 16;
+        vfprintf(stderr, rest, args);
+    }
+    else
+    {
+        vfprintf(stderr, format, args);
+    }
     va_end(args);
 
     size_t len = format ? strlen(format) : 0;
@@ -606,7 +885,7 @@ void semcheck_error_with_context(const char *format, ...)
         fprintf(stderr, "\n");
     }
 
-    if (line_num > 0) {
+    if (effective_line > 0) {
         const char *context_buf = preprocessed_source;
         size_t context_buf_len = context_len;
         if (context_buf == NULL || context_buf_len == 0)
@@ -621,14 +900,15 @@ void semcheck_error_with_context(const char *format, ...)
                 file_path != NULL ? file_path : "<null>",
                 context_len,
                 context_buf_len,
-                line_num,
-                0);
+                effective_line,
+                effective_col);
         }
-        int printed = print_source_context_from_buffer(context_buf, context_buf_len, line_num, 0, 2);
+        int printed = print_source_context_at_offset(context_buf, context_buf_len,
+            effective_source_index, effective_line, effective_col, 2);
         if (!printed)
-            printed = semcheck_print_context_from_file(file_path, line_num, 0, 2);
+            printed = semcheck_print_context_from_file(file_path, effective_line, effective_col, 2);
         if (!printed && file_path != NULL)
-            print_source_context(file_path, line_num, 0, 2);
+            print_source_context(file_path, effective_line, effective_col, 2);
     }
 
     fprintf(stderr, "\n");
@@ -1295,6 +1575,44 @@ const char *semcheck_get_current_subprogram_id(void)
     return g_semcheck_current_subprogram->tree_data.subprogram_data.id;
 }
 
+KgpcType *semcheck_get_current_subprogram_return_kgpc_type(SymTab_t *symtab, int *owns_type)
+{
+    if (owns_type != NULL)
+        *owns_type = 0;
+    if (g_semcheck_current_subprogram == NULL || symtab == NULL)
+        return NULL;
+
+    const char *rt_id = g_semcheck_current_subprogram->tree_data.subprogram_data.return_type_id;
+    if (rt_id != NULL)
+    {
+        HashNode_t *type_node = semcheck_find_type_node_with_kgpc_type(symtab, rt_id);
+        if (type_node != NULL && type_node->type != NULL)
+        {
+            if (owns_type != NULL)
+                *owns_type = 0;
+            return type_node->type;
+        }
+
+        int builtin_tag = semcheck_map_builtin_type_name_local(rt_id);
+        if (builtin_tag != UNKNOWN_TYPE)
+        {
+            if (owns_type != NULL)
+                *owns_type = 1;
+            return create_primitive_type(builtin_tag);
+        }
+    }
+
+    int rt_tag = g_semcheck_current_subprogram->tree_data.subprogram_data.return_type;
+    if (rt_tag != UNKNOWN_TYPE)
+    {
+        if (owns_type != NULL)
+            *owns_type = 1;
+        return create_primitive_type(rt_tag);
+    }
+
+    return NULL;
+}
+
 void semcheck_mark_static_link_needed(int scope_level, HashNode_t *node)
 {
     if (scope_level <= 0)
@@ -1500,13 +1818,17 @@ static KgpcType *build_function_return_type(Tree_t *subprogram, SymTab_t *symtab
     {
         const char *rt_id = subprogram->tree_data.subprogram_data.return_type_id;
         int primitive_tag = subprogram->tree_data.subprogram_data.return_type;
+        const char *resolved_type = (type_node != NULL && type_node->type != NULL)
+            ? kgpc_type_to_string(type_node->type)
+            : "<null>";
         fprintf(stderr,
-            "[KGPC] build_function_return_type: subprogram=%s return_type_id=%s primitive=%d type_node=%p kind=%d\n",
+            "[KGPC] build_function_return_type: subprogram=%s return_type_id=%s primitive=%d type_node=%p kind=%d resolved=%s\n",
             subprogram->tree_data.subprogram_data.id ? subprogram->tree_data.subprogram_data.id : "<anon>",
             rt_id ? rt_id : "<null>",
             primitive_tag,
             (void *)type_node,
-            (type_node != NULL && type_node->type != NULL) ? type_node->type->kind : -1);
+            (type_node != NULL && type_node->type != NULL) ? type_node->type->kind : -1,
+            resolved_type);
     }
 
     if (builtin_return != NULL)
@@ -3182,7 +3504,7 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                 HashNode_t *type_node = NULL;
                 if (FindIdent(&type_node, symtab, id) >= 0 && type_node != NULL && type_node->type != NULL)
                 {
-                    int legacy_tag = kgpc_type_get_legacy_tag(type_node->type);
+                    int legacy_tag = semcheck_tag_from_kgpc(type_node->type);
                     if (legacy_tag == UNKNOWN_TYPE && type_node->type->type_alias != NULL)
                         legacy_tag = type_node->type->type_alias->base_type;
                     if (legacy_tag != UNKNOWN_TYPE)
@@ -3286,6 +3608,7 @@ SymTab_t *start_semcheck(Tree_t *parse_tree, int *sem_result)
 {
     SymTab_t *symtab;
     int return_val;
+    double t0 = 0.0;
 
     assert(parse_tree != NULL);
     assert(sem_result != NULL);
@@ -3302,13 +3625,25 @@ SymTab_t *start_semcheck(Tree_t *parse_tree, int *sem_result)
 
     symtab = InitSymTab();
     PushScope(symtab);  /* Push global scope for built-in constants and types */
+    if (getenv("KGPC_DEBUG_TIMINGS") != NULL)
+        t0 = (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC;
     semcheck_add_builtins(symtab);
+    if (getenv("KGPC_DEBUG_TIMINGS") != NULL) {
+        double t1 = (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC;
+        fprintf(stderr, "[timing] semcheck_add_builtins: %.2f ms\n", t1 - t0);
+    }
     /*PrintSymTab(symtab, stderr, 0);*/
 
+    if (getenv("KGPC_DEBUG_TIMINGS") != NULL)
+        t0 = (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC;
     if (parse_tree->type == TREE_UNIT) {
         return_val = semcheck_unit(symtab, parse_tree);
     } else {
         return_val = semcheck_program(symtab, parse_tree);
+    }
+    if (getenv("KGPC_DEBUG_TIMINGS") != NULL) {
+        double t1 = (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC;
+        fprintf(stderr, "[timing] semcheck_program/unit: %.2f ms\n", t1 - t0);
     }
 
     if(return_val > 0)
@@ -3783,6 +4118,16 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                     /* Only pre-declare simple primitive type aliases */
                     KgpcType *kgpc_type = NULL;
                     int created_new_type = 0;
+
+                    /* WideChar/UnicodeChar should be treated as 2-byte CHAR_TYPE, even if aliased to Word. */
+                    if (type_id != NULL &&
+                        (pascal_identifier_equals(type_id, "WideChar") ||
+                         pascal_identifier_equals(type_id, "UnicodeChar")))
+                    {
+                        kgpc_type = create_primitive_type_with_size(CHAR_TYPE, 2);
+                        if (kgpc_type != NULL)
+                            created_new_type = 1;
+                    }
                     
                     /* Case 1: Direct primitive type tag (e.g., MyInt = Integer where base_type is set)
                      * Exclude PROCEDURE - procedure types are NOT primitive and need special handling.
@@ -3791,7 +4136,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                      * WideChar aliases would get 4 bytes (INT_TYPE) instead of 2 bytes. */
                     int skip_case1_for_widechar = (alias->target_type_id != NULL &&
                         pascal_identifier_equals(alias->target_type_id, "WideChar"));
-                    if (!skip_case1_for_widechar &&
+                    if (kgpc_type == NULL && !skip_case1_for_widechar &&
                         alias->base_type != UNKNOWN_TYPE && alias->base_type != 0 &&
                         alias->base_type != PROCEDURE)
                     {
@@ -3804,7 +4149,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             created_new_type = 1;
                     }
                     /* Case 2: Reference to a known primitive type name */
-                    else if (alias->target_type_id != NULL)
+                    else if (kgpc_type == NULL && alias->target_type_id != NULL)
                     {
                         /* Check if target is a known builtin primitive type */
                         const char *target = alias->target_type_id;
@@ -4229,6 +4574,8 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
                     free(field->name);
                     free(field->type_id);
                     free(field->array_element_type_id);
+                    if (field->proc_type != NULL)
+                        kgpc_type_release(field->proc_type);
                     free(field);
                     free(temp);
                 }
@@ -4239,6 +4586,9 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
             cloned_field->type = original_field->type;
             cloned_field->type_id = original_field->type_id ? strdup(original_field->type_id) : NULL;
             cloned_field->nested_record = original_field->nested_record;  /* Share the nested record */
+            cloned_field->proc_type = original_field->proc_type;
+            if (cloned_field->proc_type != NULL)
+                kgpc_type_retain(cloned_field->proc_type);
             cloned_field->is_array = original_field->is_array;
             cloned_field->array_start = original_field->array_start;
             cloned_field->array_end = original_field->array_end;
@@ -4259,6 +4609,8 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
                 free(cloned_field->name);
                 free(cloned_field->type_id);
                 free(cloned_field->array_element_type_id);
+                if (cloned_field->proc_type != NULL)
+                    kgpc_type_release(cloned_field->proc_type);
                 free(cloned_field);
                 
                 /* Clean up previously allocated fields */
@@ -4270,6 +4622,8 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
                     free(field->name);
                     free(field->type_id);
                     free(field->array_element_type_id);
+                    if (field->proc_type != NULL)
+                        kgpc_type_release(field->proc_type);
                     free(field);
                     free(temp);
                 }
@@ -5885,8 +6239,8 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
             /* Run semantic check on the value expression to resolve types properly.
              * This is important for scoped enum literals like TEndian.Little
              * which need to have their resolved_kgpc_type set. */
-            int expr_type = UNKNOWN_TYPE;
-            semcheck_expr_main(&expr_type, symtab, value_expr, INT_MAX, NO_MUTATE);
+            KgpcType *expr_type = NULL;
+            semcheck_expr_main(symtab, value_expr, INT_MAX, NO_MUTATE, &expr_type);
             
             if (evaluate_const_expr(symtab, value_expr, &value) != 0)
             {
@@ -5911,7 +6265,9 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                 /* If the const expression is an explicit typecast, prefer that as the const's type. */
                 if (value_expr != NULL && value_expr->type == EXPR_TYPECAST)
                 {
-                    int target_tag = value_expr->resolved_type;
+                    int target_tag = (value_expr->resolved_kgpc_type != NULL)
+                        ? semcheck_tag_from_kgpc(value_expr->resolved_kgpc_type)
+                        : UNKNOWN_TYPE;
                     if (target_tag == UNKNOWN_TYPE &&
                         value_expr->expr_data.typecast_data.target_type_id != NULL)
                     {
@@ -6406,6 +6762,25 @@ void semcheck_add_builtins(SymTab_t *symtab)
         AddBuiltinProc_Typed(symtab, assign_name, assign_type);
         destroy_kgpc_type(assign_type);
         free(assign_name);
+    }
+    const char *sysutils_hooks[] = {
+        "InitExceptions",
+        "InitInternational",
+        "DoneExceptions",
+        "FreeDriveStr",
+        "FreeTerminateProcs",
+        "SysBeep"
+    };
+    for (size_t i = 0; i < sizeof(sysutils_hooks) / sizeof(sysutils_hooks[0]); ++i)
+    {
+        char *hook_name = strdup(sysutils_hooks[i]);
+        if (hook_name != NULL) {
+            KgpcType *hook_type = create_procedure_type(NULL, NULL);
+            assert(hook_type != NULL && "Failed to create sysutils hook type");
+            AddBuiltinProc_Typed(symtab, hook_name, hook_type);
+            destroy_kgpc_type(hook_type);
+            free(hook_name);
+        }
     }
     char *close_name = strdup("Close");
     if (close_name != NULL) {
@@ -6998,7 +7373,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
     /* IndexChar: function IndexChar(const buf; len: SizeInt; b: Char): SizeInt */
     {
         const char *func_name = "IndexChar";
-        ListNode_t *param_buf = semcheck_create_builtin_param("buf", POINTER_TYPE);
+        ListNode_t *param_buf = semcheck_create_builtin_param("buf", UNKNOWN_TYPE);
         ListNode_t *param_len = semcheck_create_builtin_param("len", LONGINT_TYPE);
         ListNode_t *param_b = semcheck_create_builtin_param("b", CHAR_TYPE);
         ListNode_t *params = ConcatList(ConcatList(param_buf, param_len), param_b);
@@ -7016,8 +7391,8 @@ void semcheck_add_builtins(SymTab_t *symtab)
     /* CompareByte: function CompareByte(const buf1, buf2; len: SizeInt): SizeInt */
     {
         const char *func_name = "CompareByte";
-        ListNode_t *param_buf1 = semcheck_create_builtin_param("buf1", POINTER_TYPE);
-        ListNode_t *param_buf2 = semcheck_create_builtin_param("buf2", POINTER_TYPE);
+        ListNode_t *param_buf1 = semcheck_create_builtin_param("buf1", UNKNOWN_TYPE);
+        ListNode_t *param_buf2 = semcheck_create_builtin_param("buf2", UNKNOWN_TYPE);
         ListNode_t *param_len = semcheck_create_builtin_param("len", LONGINT_TYPE);
         ListNode_t *params = ConcatList(ConcatList(param_buf1, param_buf2), param_len);
         KgpcType *return_type = create_primitive_type(LONGINT_TYPE);
@@ -7031,10 +7406,65 @@ void semcheck_add_builtins(SymTab_t *symtab)
             DestroyList(params);
     }
 
+    /* UniqueString: procedure UniqueString(var S: String) */
+    {
+        const char *func_name = "UniqueString";
+        ListNode_t *param_s = semcheck_create_builtin_param_var("S", STRING_TYPE);
+        KgpcType *func_type = create_procedure_type(param_s, NULL);
+        if (func_type != NULL)
+        {
+            AddBuiltinProc_Typed(symtab, strdup(func_name), func_type);
+            destroy_kgpc_type(func_type);
+        }
+        if (param_s != NULL)
+            DestroyList(param_s);
+    }
+
+    /* Bit scan builtins (FPC compatibility) */
+    {
+        struct {
+            const char *name;
+            int param_tag;
+        } bsr_bsf[] = {
+            {"BsrByte", BYTE_TYPE}, {"BsfByte", BYTE_TYPE},
+            {"BsrWord", WORD_TYPE}, {"BsfWord", WORD_TYPE},
+            {"BsrDWord", LONGWORD_TYPE}, {"BsfDWord", LONGWORD_TYPE},
+            {"BsrQWord", QWORD_TYPE}, {"BsfQWord", QWORD_TYPE},
+        };
+
+        for (size_t i = 0; i < sizeof(bsr_bsf) / sizeof(bsr_bsf[0]); i++)
+        {
+            ListNode_t *param = semcheck_create_builtin_param("AValue", bsr_bsf[i].param_tag);
+            KgpcType *return_type = create_primitive_type(LONGINT_TYPE);
+            KgpcType *func_type = create_procedure_type(param, return_type);
+            if (func_type != NULL)
+            {
+                AddBuiltinFunction_Typed(symtab, strdup(bsr_bsf[i].name), func_type);
+                destroy_kgpc_type(func_type);
+            }
+            if (param != NULL)
+                DestroyList(param);
+        }
+    }
+
     /* Builtins are now in system.p */
 }
 
 /* Semantic check for a program */
+#define SEMCHECK_TIMINGS_ENABLED() (getenv("KGPC_DEBUG_TIMINGS") != NULL)
+
+static double semcheck_now_ms(void) {
+    return (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC;
+}
+
+static void semcheck_timing_step(const char *label, double *last_ms) {
+    if (!SEMCHECK_TIMINGS_ENABLED() || last_ms == NULL)
+        return;
+    double now = semcheck_now_ms();
+    fprintf(stderr, "[timing] semcheck_program %s: %.2f ms\n", label, now - *last_ms);
+    *last_ms = now;
+}
+
 int semcheck_program(SymTab_t *symtab, Tree_t *tree)
 {
     int return_val;
@@ -7043,20 +7473,26 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
     assert(tree->type == TREE_PROGRAM_TYPE);
 
     return_val = 0;
+    double t0 = 0.0;
+    if (SEMCHECK_TIMINGS_ENABLED())
+        t0 = semcheck_now_ms();
 
     PushScope(symtab);
 
     semcheck_unit_names_reset();
     semcheck_unit_name_add("System");
     semcheck_unit_names_add_list(tree->tree_data.program_data.uses_units);
+    semcheck_timing_step("unit names", &t0);
 
     return_val += semcheck_id_not_main(tree->tree_data.program_data.program_id);
+    semcheck_timing_step("id check", &t0);
 
     /* TODO: Push program name onto scope */
 
     /* TODO: Fix line number bug here */
     return_val += semcheck_args(symtab, tree->tree_data.program_data.args_char,
       tree->line_num);
+    semcheck_timing_step("args", &t0);
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after args: %d\n", return_val);
 #endif
@@ -7064,12 +7500,14 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
     return_val += predeclare_enum_literals(symtab, tree->tree_data.program_data.type_declaration);
     /* Pre-declare types so they're available for const expressions like High(MyType) */
     return_val += predeclare_types(symtab, tree->tree_data.program_data.type_declaration);
+    semcheck_timing_step("predeclare types", &t0);
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after type predeclare: %d\n", return_val);
 #endif
 
     /* Predeclare subprograms so they can be referenced in const initializers */
     return_val += predeclare_subprograms(symtab, tree->tree_data.program_data.subprograms, 0, NULL);
+    semcheck_timing_step("predeclare subprograms", &t0);
     if (getenv("KGPC_DEBUG_GENERIC_CLONES") != NULL)
     {
         ListNode_t *debug_cur = tree->tree_data.program_data.type_declaration;
@@ -7099,6 +7537,7 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
 
     /* Pass 1: Imported unit untyped constants */
     return_val += semcheck_const_decls_imported(symtab, tree->tree_data.program_data.const_declaration);
+    semcheck_timing_step("consts pass1 imported untyped", &t0);
 
     /* Pass 2: Imported unit typed constants */
     ListNode_t *unit_typed_consts = collect_typed_const_decls_filtered(symtab,
@@ -7108,9 +7547,11 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
         return_val += semcheck_decls(symtab, unit_typed_consts);
         DestroyList(unit_typed_consts);
     }
+    semcheck_timing_step("consts pass2 imported typed", &t0);
 
     /* Pass 3: Local untyped constants */
     return_val += semcheck_const_decls_local(symtab, tree->tree_data.program_data.const_declaration);
+    semcheck_timing_step("consts pass3 local untyped", &t0);
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after consts: %d\n", return_val);
 #endif
@@ -7123,23 +7564,28 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
         return_val += semcheck_decls(symtab, local_typed_consts);
         DestroyList(local_typed_consts);
     }
+    semcheck_timing_step("consts pass4 local typed", &t0);
 
     return_val += semcheck_type_decls(symtab, tree->tree_data.program_data.type_declaration);
+    semcheck_timing_step("type decls", &t0);
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after types: %d\n", return_val);
 #endif
 
     return_val += semcheck_decls(symtab, tree->tree_data.program_data.var_declaration);
+    semcheck_timing_step("var decls", &t0);
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after vars: %d\n", return_val);
 #endif
 
     return_val += semcheck_subprograms(symtab, tree->tree_data.program_data.subprograms, 0, NULL);
+    semcheck_timing_step("subprograms", &t0);
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after subprograms: %d\n", return_val);
 #endif
 
     return_val += semcheck_stmt(symtab, tree->tree_data.program_data.body_statement, INT_MAX);
+    semcheck_timing_step("body", &t0);
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after body: %d\n", return_val);
 #endif
@@ -7155,6 +7601,7 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
             final_node = final_node->next;
         }
     }
+    semcheck_timing_step("finalization", &t0);
 
     if(optimize_flag() > 0 && return_val == 0)
     {
@@ -7483,6 +7930,24 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     tree->tree_data.var_decl_data.cached_kgpc_type = create_primitive_type(builtin_tag);
                 }
             }
+            /* AUDIT: Log when KgpcType is missing for a type_id */
+            if (getenv("KGPC_AUDIT_TYPES") != NULL && tree->tree_data.var_decl_data.type_id != NULL)
+            {
+                const char *var_name = (ids_head && ids_head->cur) ? (char*)ids_head->cur : "<unknown>";
+                const char *type_id = tree->tree_data.var_decl_data.type_id;
+                KgpcType *kgpc = tree->tree_data.var_decl_data.cached_kgpc_type;
+                if (kgpc == NULL)
+                {
+                    fprintf(stderr, "[TYPE_AUDIT] MISSING: var=%s type_id=%s resolved_node=%p\n",
+                        var_name, type_id, (void*)resolved_type);
+                }
+                else if (kgpc->kind == TYPE_KIND_PRIMITIVE && kgpc->info.primitive_type_tag == POINTER_TYPE)
+                {
+                    /* Pointer type but no points_to info - this is a problem */
+                    fprintf(stderr, "[TYPE_AUDIT] INCOMPLETE_PTR: var=%s type_id=%s kind=PRIMITIVE tag=POINTER (should be TYPE_KIND_POINTER)\n",
+                        var_name, type_id);
+                }
+            }
         }
         int skip_initializer = 0;
         while(ids != NULL)
@@ -7747,7 +8212,6 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             int element_type_tag = alias->array_element_type;
 
                             /* If element type is a type reference, resolve it */
-                            int element_type_owned = 0;  /* Track if we own element_type */
                             if (element_type_tag == UNKNOWN_TYPE && alias->array_element_type_id != NULL)
                             {
                                 HashNode_t *element_type_node = NULL;
@@ -7759,21 +8223,18 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                                      * and create_array_type takes ownership. Without this, both the symbol
                                      * table and array_type would try to free the same type, causing double-free. */
                                     kgpc_type_retain(element_type);
-                                    element_type_owned = 1;
                                 }
                             }
                             else if (element_type_tag != UNKNOWN_TYPE)
                             {
                                 /* Direct primitive type tag - use create_primitive_type */
                                 element_type = create_primitive_type(element_type_tag);
-                                element_type_owned = 1;
                             }
 
                             /* If element type is still NULL, create an unknown type to avoid crash */
                             if (element_type == NULL)
                             {
                                 element_type = create_primitive_type(UNKNOWN_TYPE);
-                                element_type_owned = 1;
                             }
 
                             /* Create array KgpcType - takes ownership of element_type */
@@ -8435,7 +8896,7 @@ next_identifier:
                             }
                         }
 
-                        int expr_type = UNKNOWN_TYPE;
+                        KgpcType *expr_type = NULL;
                         if (init_expr->type == EXPR_RECORD_CONSTRUCTOR && init_expr->record_type == NULL)
                         {
                             struct RecordType *record_type = NULL;
@@ -8455,7 +8916,7 @@ next_identifier:
                             }
                             init_expr->record_type = record_type;
                         }
-                        return_val += semcheck_expr_main(&expr_type, symtab, init_expr, INT_MAX, NO_MUTATE);
+                        return_val += semcheck_expr_main(symtab, init_expr, INT_MAX, NO_MUTATE, &expr_type);
 
                         if (tree->tree_data.var_decl_data.is_typed_const && var_node != NULL &&
                             init_expr->type != EXPR_ADDR && init_expr->type != EXPR_ADDR_OF_PROC &&
@@ -8511,7 +8972,8 @@ next_identifier:
                             }
                         }
 
-                    if (expr_type == UNKNOWN_TYPE)
+                    int expr_tag = expr_type != NULL ? semcheck_tag_from_kgpc(expr_type) : UNKNOWN_TYPE;
+                    if (expr_tag == UNKNOWN_TYPE)
                     {
                         if (!is_default_param)
                         {
@@ -8522,14 +8984,14 @@ next_identifier:
                     else
                     {
                         enum VarType inferred_var_type = HASHVAR_UNTYPED;
-                        int normalized_type = expr_type;
+                        int normalized_type = expr_tag;
 
-                        switch(expr_type)
+                        switch(expr_tag)
                         {
                             case INT_TYPE:
                             case LONGINT_TYPE:
                                 inferred_var_type = HASHVAR_INTEGER;
-                                normalized_type = (expr_type == LONGINT_TYPE) ? LONGINT_TYPE : INT_TYPE;
+                                normalized_type = (expr_tag == LONGINT_TYPE) ? LONGINT_TYPE : INT_TYPE;
                                 break;
                             case INT64_TYPE:
                                 inferred_var_type = HASHVAR_INT64;
@@ -8627,7 +9089,7 @@ next_identifier:
                                 }
                             }
 
-                            if (!compatible && current_var_type == HASHVAR_PCHAR && expr_type == CHAR_TYPE)
+                            if (!compatible && current_var_type == HASHVAR_PCHAR && expr_tag == CHAR_TYPE)
                             {
                                 compatible = 1;
                             }
@@ -8637,13 +9099,13 @@ next_identifier:
                              * be pointer types. This enables patterns like: var my_ptr: PChar = nil; */
                             if (!compatible)
                             {
-                                int inferred_is_pointer = (inferred_var_type == HASHVAR_POINTER || expr_type == POINTER_TYPE);
+                                int inferred_is_pointer = (inferred_var_type == HASHVAR_POINTER || expr_tag == POINTER_TYPE);
                                 int current_is_pointer = (current_var_type == HASHVAR_POINTER);
                                 int current_is_proc = (current_var_type == HASHVAR_PROCEDURE);
                                 if (var_node->type != NULL)
                                 {
                                     current_is_pointer |= kgpc_type_is_pointer(var_node->type);
-                                    if (kgpc_type_get_legacy_tag(var_node->type) == POINTER_TYPE)
+                                    if (semcheck_tag_from_kgpc(var_node->type) == POINTER_TYPE)
                                         current_is_pointer = 1;
                                     if (var_node->type->kind == TYPE_KIND_PROCEDURE)
                                         current_is_proc = 1;
@@ -8658,7 +9120,7 @@ next_identifier:
                                     compatible = 1;
                             }
 
-                            if (!compatible && current_var_type == HASHVAR_RECORD && expr_type == STRING_TYPE)
+                            if (!compatible && current_var_type == HASHVAR_RECORD && expr_tag == STRING_TYPE)
                             {
                                 const char *record_id = NULL;
                                 if (var_node->type != NULL)
@@ -9057,6 +9519,22 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         {
             /* "Result" is not already declared in this scope, so add it as an alias */
             PushFuncRetOntoScope_Typed(symtab, "Result", return_kgpc_type);
+            if (getenv("KGPC_DEBUG_RESULT") != NULL)
+            {
+                fprintf(stderr,
+                    "[KGPC] add Result alias for %s type=%s\n",
+                    subprogram->tree_data.subprogram_data.id ?
+                        subprogram->tree_data.subprogram_data.id : "<anon>",
+                    kgpc_type_to_string(return_kgpc_type));
+            }
+        }
+        else if (getenv("KGPC_DEBUG_RESULT") != NULL)
+        {
+            fprintf(stderr,
+                "[KGPC] Result alias already exists for %s existing_type=%s\n",
+                subprogram->tree_data.subprogram_data.id ?
+                    subprogram->tree_data.subprogram_data.id : "<anon>",
+                kgpc_type_to_string(result_check->type));
         }
 
         /* For class methods, also add an alias using the unmangled method name (suffix after __) */

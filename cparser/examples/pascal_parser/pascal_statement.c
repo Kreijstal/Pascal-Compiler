@@ -292,42 +292,6 @@ static ast_t* discard_ast_stmt(ast_t* ast) {
     return ast_nil;
 }
 
-// Extract the statement body from an exception handler of the form
-// "on <id>[:<type>] do <statement>" and discard the header tokens.
-// We keep only the final statement node so downstream consumers treat
-// handlers like regular except-body statements.
-static ast_t* wrap_except_on_handler(ast_t* parsed) {
-    const char* debug_flag = getenv("KGPC_DEBUG_ON_HANDLER");
-    if (debug_flag != NULL) {
-        fprintf(stderr, "[pascal_parser] on-handler wrapper invoked\n");
-    }
-    if (parsed == NULL || parsed == ast_nil) {
-        return ast_nil;
-    }
-
-    ast_t* chain = parsed->child;
-    ast_t* prev = NULL;
-    ast_t* tail = chain;
-    while (tail != NULL && tail->next != NULL) {
-        prev = tail;
-        tail = tail->next;
-    }
-
-    if (tail == NULL) {
-        free_ast(parsed);
-        return ast_nil;
-    }
-
-    if (prev != NULL) {
-        prev->next = NULL;
-        free_ast(chain);
-    }
-
-    parsed->child = NULL;
-    free_ast(parsed);
-    return tail;
-}
-
 static bool slice_matches_keyword_ci(const char* slice, size_t len, const char* keyword) {
     if (slice == NULL || keyword == NULL) {
         return false;

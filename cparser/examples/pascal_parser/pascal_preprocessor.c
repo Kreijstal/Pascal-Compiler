@@ -138,7 +138,7 @@ PascalPreprocessor *pascal_preprocessor_create(void) {
     pp->defines = NULL;
     pp->define_count = 0;
     pp->define_capacity = 0;
-    pp->macro_enabled = false;  // Macros are off by default
+    pp->macro_enabled = true;  // Match FPC: macros (:=) expand by default
     pp->flatten_only = false;
     pp->include_paths = NULL;
     pp->include_path_count = 0;
@@ -2449,16 +2449,16 @@ static bool parse_factor(const char **cursor,
             strcmp(type_name, "TTHREADID") == 0)) {
             size = 8;
             found = true;
-        } else if (strcmp(type_name, "LONGINT") == 0 || strcmp(type_name, "INT32") == 0 || 
-                   strcmp(type_name, "CARDINAL") == 0 || strcmp(type_name, "DWORD") == 0 || 
-                   strcmp(type_name, "UINT32") == 0 || strcmp(type_name, "LONGWORD") == 0 ||
-                   strcmp(type_name, "LONGBOOL") == 0) {
+        } else if (strcmp(type_name, "INTEGER") == 0 || strcmp(type_name, "LONGINT") == 0 ||
+                   strcmp(type_name, "INT32") == 0 || strcmp(type_name, "CARDINAL") == 0 ||
+                   strcmp(type_name, "DWORD") == 0 || strcmp(type_name, "UINT32") == 0 ||
+                   strcmp(type_name, "LONGWORD") == 0 || strcmp(type_name, "LONGBOOL") == 0) {
             size = 4;
             found = true;
-        } else if (strcmp(type_name, "INTEGER") == 0 || strcmp(type_name, "SMALLINT") == 0 ||
-                   strcmp(type_name, "INT16") == 0 || strcmp(type_name, "WORD") == 0 ||
-                   strcmp(type_name, "UINT16") == 0 || strcmp(type_name, "WIDECHAR") == 0 ||
-                   strcmp(type_name, "WORDBOOL") == 0 || strcmp(type_name, "TCOMPILERWIDECHAR") == 0) {
+        } else if (strcmp(type_name, "SMALLINT") == 0 || strcmp(type_name, "INT16") == 0 ||
+                   strcmp(type_name, "WORD") == 0 || strcmp(type_name, "UINT16") == 0 ||
+                   strcmp(type_name, "WIDECHAR") == 0 || strcmp(type_name, "WORDBOOL") == 0 ||
+                   strcmp(type_name, "TCOMPILERWIDECHAR") == 0) {
             size = 2;
             found = true;
         } else if (strcmp(type_name, "SHORTINT") == 0 || strcmp(type_name, "INT8") == 0 || 
@@ -2564,13 +2564,15 @@ static bool parse_factor(const char **cursor,
             // For unsigned, Low is 0, High is max
             result = is_high ? (int64_t)UINT64_MAX : 0;
             found = true;
-        } else if (strcmp(type_name, "LONGINT") == 0 || strcmp(type_name, "INT32") == 0) {
+        } else if (strcmp(type_name, "INTEGER") == 0 || strcmp(type_name, "LONGINT") == 0 ||
+                   strcmp(type_name, "INT32") == 0) {
             result = is_high ? INT32_MAX : INT32_MIN;
             found = true;
-        } else if (strcmp(type_name, "CARDINAL") == 0 || strcmp(type_name, "DWORD") == 0 || strcmp(type_name, "UINT32") == 0 || strcmp(type_name, "LONGWORD") == 0) {
+        } else if (strcmp(type_name, "CARDINAL") == 0 || strcmp(type_name, "DWORD") == 0 ||
+                   strcmp(type_name, "UINT32") == 0 || strcmp(type_name, "LONGWORD") == 0) {
             result = is_high ? (int64_t)UINT32_MAX : 0;
             found = true;
-        } else if (strcmp(type_name, "INTEGER") == 0 || strcmp(type_name, "SMALLINT") == 0 || strcmp(type_name, "INT16") == 0) {
+        } else if (strcmp(type_name, "SMALLINT") == 0 || strcmp(type_name, "INT16") == 0) {
             result = is_high ? INT16_MAX : INT16_MIN;
             found = true;
         } else if (strcmp(type_name, "WORD") == 0 || strcmp(type_name, "UINT16") == 0) {

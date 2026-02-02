@@ -7,6 +7,7 @@
 #include "../List/List.h"
 #include "../ParseTree/type_tags.h"
 #include "SemChecks/SemCheck_expr.h"
+#include "SemCheck.h"
 #include "SymTab/SymTab.h"
 #include "../ParseTree/KgpcType.h"
 
@@ -36,6 +37,8 @@ static enum VarType ConvertParserTypeToVarType(int parser_type)
             return HASHVAR_REAL;
         case STRING_TYPE:
             return HASHVAR_PCHAR;
+        case SHORTSTRING_TYPE:
+            return HASHVAR_SHORTSTRING;
         case BOOL:
             return HASHVAR_BOOLEAN;
         case CHAR_TYPE:
@@ -67,6 +70,8 @@ static enum VarType GetVarTypeFromTypeNode(HashNode_t* type_node) {
 
     // If KgpcType is available, extract VarType from it
     if (type_node->type != NULL) {
+        if (kgpc_type_is_shortstring(type_node->type))
+            return HASHVAR_SHORTSTRING;
         if (type_node->type->kind == TYPE_KIND_PRIMITIVE) {
             int tag = kgpc_type_get_primitive_tag(type_node->type);
             return ConvertParserTypeToVarType(tag);
@@ -97,6 +102,8 @@ static enum VarType MapBuiltinTypeNameToVarType(const char *type_name) {
     if (strcasecmp(type_name, "String") == 0 || strcasecmp(type_name, "AnsiString") == 0 ||
         strcasecmp(type_name, "WideString") == 0)
         return HASHVAR_PCHAR;
+    if (strcasecmp(type_name, "ShortString") == 0)
+        return HASHVAR_SHORTSTRING;
     if (strcasecmp(type_name, "RawByteString") == 0)
         return HASHVAR_RAWBYTESTRING;
     if (strcasecmp(type_name, "UnicodeString") == 0)
@@ -195,7 +202,47 @@ static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab
         if (decl_tree->type == TREE_VAR_DECL) {
             ids = decl_tree->tree_data.var_decl_data.ids;
             // --- THIS IS THE CORE LOGIC ---
-            if (decl_tree->tree_data.var_decl_data.type_id != NULL) {
+            struct TypeAlias *inline_alias = decl_tree->tree_data.var_decl_data.inline_type_alias;
+            if (inline_alias != NULL && inline_alias->is_array)
+            {
+                int element_type = inline_alias->array_element_type;
+                const char *element_type_id = inline_alias->array_element_type_id;
+
+                if (element_type == ARRAY_OF_CONST_TYPE ||
+                    (element_type_id != NULL && strcasecmp(element_type_id, "const") == 0))
+                {
+                    resolved_type = HASHVAR_ARRAY;
+                }
+                else if (element_type == UNKNOWN_TYPE && element_type_id != NULL)
+                {
+                    resolved_type = MapBuiltinTypeNameToVarType(element_type_id);
+                    if (resolved_type == HASHVAR_UNTYPED)
+                    {
+                        HashNode_t *type_node = find_type_node_for_mangling(symtab, element_type_id);
+                        if (type_node != NULL)
+                            resolved_type = GetVarTypeFromTypeNode(type_node);
+                    }
+                    if (resolved_type != HASHVAR_UNTYPED)
+                        resolved_type = resolved_type + 100;
+                    else
+                        resolved_type = HASHVAR_ARRAY;
+                }
+                else if (element_type != UNKNOWN_TYPE)
+                {
+                    resolved_type = ConvertParserTypeToVarType(element_type);
+                    if (resolved_type != HASHVAR_UNTYPED)
+                        resolved_type = resolved_type + 100;
+                    else
+                        resolved_type = HASHVAR_ARRAY;
+                }
+                else
+                {
+                    resolved_type = HASHVAR_ARRAY;
+                }
+            }
+
+            if (resolved_type == HASHVAR_UNTYPED &&
+                decl_tree->tree_data.var_decl_data.type_id != NULL) {
                 const char *type_id = decl_tree->tree_data.var_decl_data.type_id;
                 
                 // First try to map built-in type names directly
@@ -209,8 +256,11 @@ static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab
                     }
                 }
             } else {
-                // It's a built-in type, convert from parser token to semantic type
-                resolved_type = ConvertParserTypeToVarType(decl_tree->tree_data.var_decl_data.type);
+                if (resolved_type == HASHVAR_UNTYPED)
+                {
+                    // It's a built-in type, convert from parser token to semantic type
+                    resolved_type = ConvertParserTypeToVarType(decl_tree->tree_data.var_decl_data.type);
+                }
             }
         } else { // Assume array or other type for now
             ids = decl_tree->tree_data.arr_decl_data.ids;
@@ -313,6 +363,7 @@ static char* MangleNameFromTypeList(const char* original_name, ListNode_t* type_
                 case HASHVAR_INT64:   type_suffix = "_ai64"; break; /* array of Int64 */
                 case HASHVAR_REAL:    type_suffix = "_ar"; break;   /* array of Real */
                 case HASHVAR_PCHAR:   type_suffix = "_as"; break;   /* array of String */
+                case HASHVAR_SHORTSTRING: type_suffix = "_ass"; break; /* array of ShortString */
                 case HASHVAR_BOOLEAN: type_suffix = "_ab"; break;   /* array of Boolean */
                 case HASHVAR_CHAR:    type_suffix = "_ac"; break;   /* array of Char */
                 case HASHVAR_POINTER: type_suffix = "_ap"; break;   /* array of Pointer */
@@ -326,6 +377,7 @@ static char* MangleNameFromTypeList(const char* original_name, ListNode_t* type_
                 case HASHVAR_INT64:   type_suffix = "_i64"; break;
                 case HASHVAR_REAL:    type_suffix = "_r"; break;
                 case HASHVAR_PCHAR:   type_suffix = "_s"; break; // For String (keep backwards compat)
+                case HASHVAR_SHORTSTRING: type_suffix = "_ss"; break; // ShortString
                 case HASHVAR_PANSICHAR: type_suffix = "_pc"; break; // For PAnsiChar/PChar
                 case HASHVAR_PWIDECHAR: type_suffix = "_pw"; break; // For PWideChar
                 case HASHVAR_BOOLEAN: type_suffix = "_b"; break;
@@ -376,10 +428,10 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
         }
         else
         {
-            int type;
-            semcheck_expr_main(&type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
-
-            resolved_type = ConvertParserTypeToVarType(type);
+            KgpcType *arg_type = NULL;
+            semcheck_expr_main(symtab, arg_expr, max_scope_lev, NO_MUTATE, &arg_type);
+            int type_tag = arg_type != NULL ? semcheck_tag_from_kgpc(arg_type) : UNKNOWN_TYPE;
+            resolved_type = ConvertParserTypeToVarType(type_tag);
             if (arg_expr != NULL && arg_expr->resolved_kgpc_type != NULL)
             {
                 KgpcType *kgpc_type = arg_expr->resolved_kgpc_type;
@@ -411,7 +463,7 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
                 /* Check type_alias for STRING_TYPE to distinguish between
                  * RawByteString and UnicodeString. With the fix in commit 868406b,
                  * type_alias is now owned by KgpcType and should be valid. */
-                else if (type == STRING_TYPE && kgpc_type->type_alias != NULL)
+                else if (type_tag == STRING_TYPE && kgpc_type->type_alias != NULL)
                 {
                     struct TypeAlias *alias = kgpc_type->type_alias;
                     if (alias->alias_name != NULL)

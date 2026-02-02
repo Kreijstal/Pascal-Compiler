@@ -30,6 +30,27 @@
 #include "../../Parser/SemanticCheck/SemChecks/SemCheck_expr.h"
 #include "../../identifier_utils.h"
 
+static int codegen_tag_from_kgpc(const KgpcType *type)
+{
+    if (type == NULL)
+        return UNKNOWN_TYPE;
+    if (type->kind == TYPE_KIND_PRIMITIVE)
+        return type->info.primitive_type_tag;
+    if (kgpc_type_is_array_of_const((KgpcType *)type))
+        return ARRAY_OF_CONST_TYPE;
+    if (kgpc_type_is_array((KgpcType *)type) &&
+        type->type_alias != NULL &&
+        type->type_alias->is_shortstring)
+        return SHORTSTRING_TYPE;
+    if (kgpc_type_is_record((KgpcType *)type))
+        return RECORD_TYPE;
+    if (kgpc_type_is_pointer((KgpcType *)type))
+        return POINTER_TYPE;
+    if (kgpc_type_is_procedure((KgpcType *)type))
+        return PROCEDURE;
+    return UNKNOWN_TYPE;
+}
+
 #define CODEGEN_POINTER_SIZE_BYTES 8
 #define CODEGEN_LABEL_BUFFER_SIZE 256
 
@@ -43,7 +64,7 @@ static int codegen_self_param_is_class(Tree_t *arg_decl, SymTab_t *symtab)
     if (type == NULL && symtab != NULL && type_id != NULL)
     {
         HashNode_t *type_node = NULL;
-        if (FindIdent(&type_node, symtab, type_id) == 0 &&
+        if (FindIdent(&type_node, symtab, (char *)type_id) == 0 &&
             type_node != NULL && type_node->type != NULL)
             type = type_node->type;
     }
@@ -481,8 +502,13 @@ static inline int get_var_storage_size(HashNode_t *node)
         {
             /* Honor explicit storage overrides from type aliases (e.g., Int64/QWord) */
             struct TypeAlias *alias = kgpc_type_get_type_alias(node->type);
-            if (alias != NULL && alias->storage_size > 0)
-                return (int)alias->storage_size;
+            if (alias != NULL)
+            {
+                if (alias->is_shortstring)
+                    return 256;
+                if (alias->storage_size > 0)
+                    return (int)alias->storage_size;
+            }
 
             int tag = kgpc_type_get_primitive_tag(node->type);
             switch (tag)
@@ -496,6 +522,8 @@ static inline int get_var_storage_size(HashNode_t *node)
                 case POINTER_TYPE:
                 case PROCEDURE:
                     return 8;
+                case SHORTSTRING_TYPE:
+                    return 256;
                 case FILE_TYPE:
                 case TEXT_TYPE:
                 {
@@ -1304,6 +1332,7 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
     g_current_codegen_abi = ctx->target_abi;
     g_stack_home_space_bytes = (ctx->target_abi == KGPC_TARGET_ABI_WINDOWS) ? 32 : 0;
     ctx->pending_stack_arg_bytes = 0;
+    ctx->emitted_subprograms = NULL;
 
     ctx->symtab = symtab;
 
@@ -1322,6 +1351,12 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
     codegen_main(prgm_name, ctx);
 
     codegen_program_footer(ctx);
+
+    if (ctx->emitted_subprograms != NULL)
+    {
+        DestroyList(ctx->emitted_subprograms);
+        ctx->emitted_subprograms = NULL;
+    }
 
     free_stackmng();
     codegen_reset_loop_stack(ctx);
@@ -1349,6 +1384,7 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
     g_current_codegen_abi = ctx->target_abi;
     g_stack_home_space_bytes = (ctx->target_abi == KGPC_TARGET_ABI_WINDOWS) ? 32 : 0;
     ctx->pending_stack_arg_bytes = 0;
+    ctx->emitted_subprograms = NULL;
 
     ctx->symtab = symtab;
 
@@ -1413,6 +1449,12 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
     }
 
     codegen_program_footer(ctx);
+
+    if (ctx->emitted_subprograms != NULL)
+    {
+        DestroyList(ctx->emitted_subprograms);
+        ctx->emitted_subprograms = NULL;
+    }
 
     free_stackmng();
     codegen_reset_loop_stack(ctx);
@@ -1938,6 +1980,9 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                             case POINTER_TYPE:
                                 element_size = 8;
                                 break;
+                            case SHORTSTRING_TYPE:
+                                element_size = 256;
+                                break;
                             case FILE_TYPE:
                                 element_size = 368;
                                 break;
@@ -2347,6 +2392,9 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                         case TEXT_TYPE:
                             element_size = 8;
                             break;
+                        case SHORTSTRING_TYPE:
+                            element_size = 256;
+                            break;
                         case BOOL:
                         case CHAR_TYPE:
                             element_size = 1;
@@ -2479,17 +2527,48 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
         assert(sub != NULL);
         assert(sub->type == TREE_SUBPROGRAM);
 
+        const char *mangled_id = sub->tree_data.subprogram_data.mangled_id;
+        if (mangled_id != NULL && ctx->emitted_subprograms != NULL)
+        {
+            ListNode_t *seen = ctx->emitted_subprograms;
+            int already_emitted = 0;
+            while (seen != NULL)
+            {
+                if (seen->type == LIST_STRING && seen->cur != NULL &&
+                    strcmp((const char *)seen->cur, mangled_id) == 0)
+                {
+                    already_emitted = 1;
+                    break;
+                }
+                seen = seen->next;
+            }
+            if (already_emitted)
+            {
+                sub_list = sub_list->next;
+                continue;
+            }
+        }
+
         if (sub->tree_data.subprogram_data.statement_list == NULL)
         {
             sub_list = sub_list->next;
             continue;
         }
 
-        /* Skip unused functions (dead code elimination / reachability pass) */
-        if (!sub->tree_data.subprogram_data.is_used)
+        /* Skip unused functions (dead code elimination / reachability pass). */
+        if (!disable_dce_flag() && !sub->tree_data.subprogram_data.is_used)
         {
             sub_list = sub_list->next;
             continue;
+        }
+
+        if (mangled_id != NULL)
+        {
+            ListNode_t *node = CreateListNode((void *)mangled_id, LIST_STRING);
+            if (ctx->emitted_subprograms == NULL)
+                ctx->emitted_subprograms = node;
+            else
+                ctx->emitted_subprograms = PushListNodeBack(ctx->emitted_subprograms, node);
         }
 
         switch(sub->tree_data.subprogram_data.sub_type)
@@ -2916,6 +2995,16 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
             codegen_report_error(ctx,
                 "ERROR: Unable to determine size for array return value of %s.", func->id);
             record_return_size = 0;
+        }
+    }
+
+    if (!has_record_return && func_node != NULL && func_node->type != NULL)
+    {
+        KgpcType *return_type = kgpc_type_get_return_type(func_node->type);
+        if (return_type != NULL && kgpc_type_is_shortstring(return_type))
+        {
+            has_record_return = 1;
+            record_return_size = 256;
         }
     }
 
@@ -3431,6 +3520,8 @@ static int codegen_dynamic_array_element_size_from_type(CodeGenContext *ctx, Kgp
                 case STRING_TYPE:
                 case POINTER_TYPE:
                     return 8;
+                case SHORTSTRING_TYPE:
+                    return 256;
                 case CHAR_TYPE:
                 case BOOL:
                     return 1;
@@ -3797,9 +3888,9 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                 if (inferred_type_tag == UNKNOWN_TYPE)
                 {
                     if (resolved_type_node != NULL && resolved_type_node->type != NULL)
-                        inferred_type_tag = kgpc_type_get_legacy_tag(resolved_type_node->type);
+                        inferred_type_tag = codegen_tag_from_kgpc(resolved_type_node->type);
                     else if (cached_arg_type != NULL)
-                        inferred_type_tag = kgpc_type_get_legacy_tag(cached_arg_type);
+                        inferred_type_tag = codegen_tag_from_kgpc(cached_arg_type);
                 }
 
                 while(arg_ids != NULL)
@@ -3832,15 +3923,15 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                             (void *)resolved_type_node, (void *)cached_arg_type);
                         if (resolved_type_node != NULL && resolved_type_node->type != NULL)
                         {
-                            fprintf(stderr, "[CODEGEN]   resolved_type_node->type kind=%d legacy=%d\n",
+                            fprintf(stderr, "[CODEGEN]   resolved_type_node->type kind=%d tag=%d\n",
                                 resolved_type_node->type->kind,
-                                kgpc_type_get_legacy_tag(resolved_type_node->type));
+                                codegen_tag_from_kgpc(resolved_type_node->type));
                         }
                         if (cached_arg_type != NULL)
                         {
-                            fprintf(stderr, "[CODEGEN]   cached_arg_type kind=%d legacy=%d\n",
+                            fprintf(stderr, "[CODEGEN]   cached_arg_type kind=%d tag=%d\n",
                                 cached_arg_type->kind,
-                                kgpc_type_get_legacy_tag(cached_arg_type));
+                                codegen_tag_from_kgpc(cached_arg_type));
                         }
                     }
                     if (!symbol_is_var_param)
@@ -3966,6 +4057,7 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     int is_array_type = 0;
                     int type_requires_qword = 0;
                     int real_storage_size = 8;
+                    int is_shortstring_param = 0;
                     
                     /* Determine if parameter is an array type via resolved type only */
                     if (resolved_type_node != NULL && resolved_type_node->type != NULL &&
@@ -3973,6 +4065,10 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     {
                         is_array_type = 1;
                         type_requires_qword = kgpc_type_uses_qword(resolved_type_node->type);
+                        struct TypeAlias *alias = kgpc_type_get_type_alias(resolved_type_node->type);
+                        if (kgpc_type_is_shortstring(resolved_type_node->type) ||
+                            (alias != NULL && alias->is_shortstring))
+                            is_shortstring_param = 1;
                     }
                     else if (cached_arg_type != NULL &&
                         kgpc_type_is_array(cached_arg_type))
@@ -3983,10 +4079,18 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     else if (resolved_type_node != NULL && resolved_type_node->type != NULL)
                     {
                         type_requires_qword = kgpc_type_uses_qword(resolved_type_node->type);
+                        struct TypeAlias *alias = kgpc_type_get_type_alias(resolved_type_node->type);
+                        if (kgpc_type_is_shortstring(resolved_type_node->type) ||
+                            (alias != NULL && alias->is_shortstring))
+                            is_shortstring_param = 1;
                     }
                     else if (cached_arg_type != NULL)
                     {
                         type_requires_qword = kgpc_type_uses_qword(cached_arg_type);
+                        struct TypeAlias *alias = kgpc_type_get_type_alias(cached_arg_type);
+                        if (kgpc_type_is_shortstring(cached_arg_type) ||
+                            (alias != NULL && alias->is_shortstring))
+                            is_shortstring_param = 1;
                     }
 
                     if (inferred_type_tag == REAL_TYPE)
@@ -4000,7 +4104,7 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     int use_sse_reg = (!is_var_param && !is_array_type &&
                         inferred_type_tag == REAL_TYPE);
                     arg_stack = use_64bit ? add_q_z((char *)arg_ids->cur) : add_l_z((char *)arg_ids->cur);
-                    if (arg_stack != NULL && (symbol_is_var_param || is_array_type))
+                    if (arg_stack != NULL && (symbol_is_var_param || is_array_type || is_shortstring_param))
                         arg_stack->is_reference = 1;
                     if (use_sse_reg)
                     {

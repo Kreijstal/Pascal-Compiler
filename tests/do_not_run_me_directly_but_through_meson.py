@@ -1,5 +1,6 @@
 # THIS PROGRAM WILL NOT WORK IF YOU DO NOT COMPILE SOURCES FIRST WITH MESON
 import argparse
+import concurrent.futures
 import json
 import os
 import shutil
@@ -10,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import threading
 import time
 import traceback
 import unittest
@@ -58,6 +60,19 @@ try:
 except ValueError:
     LINK_TIMEOUT = 60
 
+# Per-test timeout (entire test including compile, link, and run).
+# Useful for CI to detect hanging tests.
+try:
+    TEST_CASE_TIMEOUT = int(os.environ.get("KGPC_TEST_CASE_TIMEOUT", "300"))
+except ValueError:
+    TEST_CASE_TIMEOUT = 300
+
+# Number of parallel workers for test execution (0 = sequential).
+try:
+    PARALLEL_WORKERS = int(os.environ.get("KGPC_PARALLEL_WORKERS", "0"))
+except ValueError:
+    PARALLEL_WORKERS = 0
+
 # Meson exposes toggleable behaviour via environment variables so CI can
 # selectively disable particularly slow checks such as the valgrind leak test.
 RUN_VALGRIND_TESTS = os.environ.get("RUN_VALGRIND_TESTS", "false").lower() in (
@@ -95,6 +110,7 @@ UNIT_ONLY_TESTS = {
     "unit_pointer_deref_nil",
     "unit_sizeof_array_bounds",
     "unit_sizeof_const",
+    "unit_include_init_section",
 }
 
 UNIT_ONLY_FLAGS = {}
@@ -239,7 +255,7 @@ def run_executable_with_valgrind(executable_args, **kwargs):
         command = valgrind_cmd + command
         print(f"--- Running executable with valgrind: {' '.join(command)} ---", file=sys.stderr)
 
-        if IS_WINE and "timeout" not in kwargs:
+        if "timeout" not in kwargs:
             kwargs["timeout"] = EXEC_TIMEOUT
         return subprocess.run(command, **kwargs)
 
@@ -335,7 +351,7 @@ def run_executable_with_valgrind(executable_args, **kwargs):
                 os.close(slave_fd)
             os.close(master_fd)
 
-    if IS_WINE and "timeout" not in kwargs:
+    if "timeout" not in kwargs:
         kwargs["timeout"] = EXEC_TIMEOUT
     return subprocess.run(command, **kwargs)
 
@@ -412,18 +428,19 @@ def run_compiler(input_file, output_file, flags=None):
         ]
         command = valgrind_cmd + command
         print(f"--- Running compiler with valgrind: {' '.join(command)} ---", file=sys.stderr)
+        sys.stderr.flush()
     else:
         print(f"--- Running compiler: {' '.join(command)} ---", file=sys.stderr)
-    
+        sys.stderr.flush()
+
     start = time.perf_counter()
     try:
         run_kwargs = {
             "check": True,
             "capture_output": True,
             "text": True,
+            "timeout": COMPILER_TIMEOUT,
         }
-        if IS_WINE:
-            run_kwargs["timeout"] = COMPILER_TIMEOUT
         result = subprocess.run(command, **run_kwargs)
         duration = time.perf_counter() - start
         for line in result.stderr.splitlines():
@@ -457,11 +474,15 @@ def run_compiler(input_file, output_file, flags=None):
 
 
 class TAPTestResult(unittest.TestResult):
+    # Enable verbose logging to stderr (controlled by env var for CI debugging)
+    VERBOSE_LOG = os.environ.get("KGPC_TEST_VERBOSE", "false").lower() in ("1", "true", "yes")
+
     def __init__(self, stream):
         super().__init__()
         self.stream = stream
         self._test_index = 0
         self._test_states = {}
+        self._test_start_times = {}
 
     def _emit(self, line):
         self.stream.write(f"{line}\n")
@@ -515,8 +536,16 @@ class TAPTestResult(unittest.TestResult):
         super().startTest(test)
         self._test_index += 1
         self._test_states[test] = {"reported": False, "had_failure": False}
+        self._test_start_times[test] = time.monotonic()
+        # Always emit starting message so we can see which test is running
+        self._emit(f"# [STARTING] {self._test_name(test)}")
 
     def stopTest(self, test):
+        elapsed = 0.0
+        start_time = self._test_start_times.pop(test, None)
+        if start_time is not None:
+            elapsed = time.monotonic() - start_time
+        # Note: stopTest is called after addSuccess/addFailure, so the result line is already emitted
         super().stopTest(test)
         self._test_states.pop(test, None)
 
@@ -594,6 +623,132 @@ class TAPTestRunner:
             test(result)
         finally:
             result.stopTestRun()
+        return result
+
+
+def _flatten_tests(test):
+    """Recursively flatten a TestSuite into individual test cases."""
+    if isinstance(test, unittest.TestSuite):
+        for t in test:
+            yield from _flatten_tests(t)
+    else:
+        yield test
+
+
+def _run_single_test_with_timeout(test, timeout, log_stream):
+    """Run a single test with a timeout. Returns (test, result_type, err_info)."""
+    test_id = test.id()
+    start_time = time.monotonic()
+    log_stream.write(f"[PARALLEL] Starting: {test_id}\n")
+    log_stream.flush()
+
+    result = unittest.TestResult()
+    exception_info = None
+    result_type = "success"
+
+    def run_test():
+        nonlocal result_type, exception_info
+        try:
+            test(result)
+            if result.failures:
+                result_type = "failure"
+                exception_info = result.failures[0][1]
+            elif result.errors:
+                result_type = "error"
+                exception_info = result.errors[0][1]
+            elif result.skipped:
+                result_type = "skipped"
+                exception_info = result.skipped[0][1]
+        except Exception as e:
+            result_type = "error"
+            exception_info = traceback.format_exc()
+
+    thread = threading.Thread(target=run_test, daemon=True)
+    thread.start()
+    thread.join(timeout=timeout)
+
+    elapsed = time.monotonic() - start_time
+
+    if thread.is_alive():
+        # Test timed out
+        result_type = "timeout"
+        exception_info = f"Test timed out after {timeout} seconds"
+        log_stream.write(f"[PARALLEL] TIMEOUT: {test_id} (after {elapsed:.1f}s)\n")
+        log_stream.flush()
+        # Note: We cannot forcibly kill the thread, but we can continue
+        # The thread will be left as a daemon and cleaned up on exit
+    else:
+        status = result_type.upper()
+        log_stream.write(f"[PARALLEL] Finished: {test_id} [{status}] ({elapsed:.1f}s)\n")
+        log_stream.flush()
+
+    return test, result_type, exception_info, elapsed
+
+
+class ParallelTestResult(unittest.TestResult):
+    """Thread-safe test result that aggregates results from parallel execution."""
+
+    def __init__(self, stream=None):
+        super().__init__()
+        self.stream = stream or sys.stderr
+        self.lock = threading.Lock()
+        self.test_timings = []
+
+    def add_result(self, test, result_type, err_info, elapsed):
+        with self.lock:
+            self.test_timings.append((test.id(), elapsed, result_type.upper()))
+            if result_type == "success":
+                self.successes = getattr(self, "successes", 0) + 1
+            elif result_type == "failure":
+                self.failures.append((test, err_info))
+            elif result_type == "error":
+                self.errors.append((test, err_info))
+            elif result_type == "skipped":
+                self.skipped.append((test, err_info))
+            elif result_type == "timeout":
+                self.errors.append((test, err_info))
+
+
+class ParallelTestRunner:
+    """Run tests in parallel with per-test timeouts."""
+
+    def __init__(self, workers=4, timeout=300, stream=None):
+        self.workers = workers
+        self.timeout = timeout
+        self.stream = stream or sys.stderr
+
+    def run(self, test):
+        tests = list(_flatten_tests(test))
+        result = ParallelTestResult(self.stream)
+        result.testsRun = 0
+
+        self.stream.write(f"[PARALLEL] Running {len(tests)} tests with {self.workers} workers, timeout={self.timeout}s\n")
+        self.stream.flush()
+
+        result.startTestRun()
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=self.workers) as executor:
+                futures = {
+                    executor.submit(_run_single_test_with_timeout, t, self.timeout, self.stream): t
+                    for t in tests
+                }
+                for future in concurrent.futures.as_completed(futures):
+                    try:
+                        test_case, result_type, err_info, elapsed = future.result()
+                        result.add_result(test_case, result_type, err_info, elapsed)
+                        result.testsRun += 1
+                    except Exception as e:
+                        test_case = futures[future]
+                        result.errors.append((test_case, traceback.format_exc()))
+                        result.testsRun += 1
+        finally:
+            result.stopTestRun()
+
+        # Print summary
+        self.stream.write(f"\n[PARALLEL] Completed: {result.testsRun} tests\n")
+        self.stream.write(f"[PARALLEL] Failures: {len(result.failures)}, Errors: {len(result.errors)}, Skipped: {len(result.skipped)}\n")
+        self.stream.flush()
+
         return result
 
 
@@ -918,9 +1073,8 @@ class TestCompiler(unittest.TestCase):
                 "check": True,
                 "capture_output": True,
                 "text": True,
+                "timeout": LINK_TIMEOUT,
             }
-            if IS_WINE:
-                compile_kwargs["timeout"] = LINK_TIMEOUT
             subprocess.run(command, **compile_kwargs)
         except subprocess.CalledProcessError as e:
             self.fail(f"{self.c_compiler_display} compilation failed: {e.stderr}")
@@ -2506,7 +2660,6 @@ def _discover_and_add_auto_tests():
         def make_test_method(test_base_name):
             def test_method(self):
                 """Auto-discovered test case."""
-                # No platform skips here; all discovered tests must run.
                 # Skip Unix fork-dependent tests on MinGW (which lacks POSIX fork)
                 # Cygwin and MSYS have fork, pure MinGW does not
                 if test_base_name == "unix_wait_helpers_demo":
@@ -2668,7 +2821,15 @@ def main():
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--tap", action="store_true")
     parser.add_argument("--timings-out", dest="timings_out")
+    parser.add_argument("--parallel", "-j", type=int, default=None,
+                        help="Run tests in parallel with N workers (default: from KGPC_PARALLEL_WORKERS env)")
+    parser.add_argument("--test-timeout", type=int, default=None,
+                        help="Per-test timeout in seconds (default: from KGPC_TEST_CASE_TIMEOUT env or 300)")
     args, remaining = parser.parse_known_args()
+
+    # Determine parallel workers and timeout
+    parallel_workers = args.parallel if args.parallel is not None else PARALLEL_WORKERS
+    test_timeout = args.test_timeout if args.test_timeout is not None else TEST_CASE_TIMEOUT
 
     tap_enabled = args.tap or os.environ.get("KGPC_TEST_PROTOCOL", "").lower() == "tap"
     if tap_enabled and args.timings_out:
@@ -2680,6 +2841,25 @@ def main():
         runner = TAPTestRunner()
         result = runner.run(suite)
         sys.exit(0 if result.wasSuccessful() else 1)
+
+    # Parallel mode with timeouts
+    if parallel_workers > 0:
+        if remaining:
+            suite = unittest.defaultTestLoader.loadTestsFromNames(
+                remaining, sys.modules[__name__]
+            )
+        else:
+            suite = _load_suite()
+        runner = ParallelTestRunner(workers=parallel_workers, timeout=test_timeout, stream=sys.stderr)
+        result = runner.run(suite)
+        # Print timing summary if there were timeouts or slow tests
+        slow_tests = [(tid, t, s) for tid, t, s in result.test_timings if t > 30]
+        if slow_tests:
+            print("\n[PARALLEL] Slow tests (>30s):", file=sys.stderr)
+            for test_id, elapsed, status in sorted(slow_tests, key=lambda x: -x[1]):
+                print(f"  {elapsed:8.1f}s  {status:8s}  {test_id}", file=sys.stderr)
+        sys.exit(0 if result.wasSuccessful() else 1)
+
     if args.timings_out:
         if remaining:
             suite = unittest.defaultTestLoader.loadTestsFromNames(

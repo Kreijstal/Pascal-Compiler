@@ -1813,6 +1813,11 @@ static int map_type_name(const char *name, char **type_id_out) {
             *type_id_out = strdup("string");
         return STRING_TYPE;
     }
+    if (strcasecmp(name, "shortstring") == 0) {
+        if (type_id_out != NULL)
+            *type_id_out = strdup("shortstring");
+        return SHORTSTRING_TYPE;
+    }
     /* RawByteString and UnicodeString need to preserve their original names
      * for correct name mangling of overloaded procedures */
     if (strcasecmp(name, "rawbytestring") == 0) {
@@ -3357,8 +3362,11 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
                     (void*)cursor, cursor ? cursor->typ : -1);
             #endif
         } else {
-            /* Skip to parameter list if present */
-            while (cursor != NULL && cursor->typ != PASCAL_T_PARAM && cursor->typ != PASCAL_T_TYPE_SPEC)
+            /* Skip to parameter list if present, but stop at return type (for parameterless functions) */
+            while (cursor != NULL && 
+                   cursor->typ != PASCAL_T_PARAM && 
+                   cursor->typ != PASCAL_T_TYPE_SPEC &&
+                   cursor->typ != PASCAL_T_RETURN_TYPE)
                 cursor = cursor->next;
             
             if (cursor != NULL && cursor->typ == PASCAL_T_PARAM) {
@@ -3368,6 +3376,7 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
         
         /* For functions, get return type */
         KgpcType *return_type = NULL;
+        char *return_type_id = NULL;
         if (is_function) {
             #ifdef DEBUG_KGPC_TYPE_CREATION
             fprintf(stderr, "DEBUG: Looking for return type, cursor=%p, cursor->typ=%d, cursor->sym=%s, cursor->child=%p\n",
@@ -3384,9 +3393,19 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
             /* The return type might be:
              * 1. A direct sibling (PASCAL_T_TYPE_SPEC or PASCAL_T_IDENTIFIER)
              * 2. A child of an intermediate wrapper node (check child->typ)
+             * 3. Wrapped in PASCAL_T_RETURN_TYPE node
              */
             while (cursor != NULL && cursor->typ != PASCAL_T_TYPE_SPEC && cursor->typ != PASCAL_T_IDENTIFIER)
             {
+                /* Check for RETURN_TYPE wrapper */
+                if (cursor->typ == PASCAL_T_RETURN_TYPE) {
+                    if (cursor->child != NULL &&
+                        (cursor->child->typ == PASCAL_T_TYPE_SPEC || cursor->child->typ == PASCAL_T_IDENTIFIER))
+                    {
+                        cursor = cursor->child;
+                        break;
+                    }
+                }
                 /* Check if the child is a TYPE_SPEC or IDENTIFIER */
                 if (cursor->child != NULL && 
                     (cursor->child->typ == PASCAL_T_TYPE_SPEC || cursor->child->typ == PASCAL_T_IDENTIFIER))
@@ -3400,6 +3419,33 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
                 #endif
                 cursor = cursor->next;
             }
+
+            if (cursor == NULL)
+            {
+                /* Fallback: scan the function type node for a return type */
+                ast_t *scan = spec_node->child;
+                while (scan != NULL)
+                {
+                    ast_t *node = unwrap_pascal_node(scan);
+                    if (node != NULL)
+                    {
+                        if (node->typ == PASCAL_T_RETURN_TYPE)
+                        {
+                            if (node->child != NULL)
+                            {
+                                cursor = node->child;
+                                break;
+                            }
+                        }
+                        else if (node->typ == PASCAL_T_TYPE_SPEC || node->typ == PASCAL_T_IDENTIFIER)
+                        {
+                            cursor = node;
+                            break;
+                        }
+                    }
+                    scan = scan->next;
+                }
+            }
                 
             if (cursor != NULL) {
                 #ifdef DEBUG_KGPC_TYPE_CREATION
@@ -3407,6 +3453,11 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
                 #endif
                 if (cursor->typ == PASCAL_T_TYPE_SPEC) {
                     return_type = convert_type_spec_to_kgpctype(cursor, symtab);
+                    if (return_type_id == NULL && cursor->child != NULL &&
+                        cursor->child->sym != NULL && cursor->child->sym->name != NULL)
+                    {
+                        return_type_id = strdup(cursor->child->sym->name);
+                    }
                 } else if (cursor->typ == PASCAL_T_IDENTIFIER) {
                     char *ret_type_name = dup_symbol(cursor);
                     if (ret_type_name != NULL) {
@@ -3422,6 +3473,8 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
                                 return_type = type_node->type;
                             }
                         }
+                        if (return_type_id == NULL)
+                            return_type_id = strdup(ret_type_name);
                         free(ret_type_name);
                     }
                 }
@@ -3433,7 +3486,12 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
             #endif
         }
         
-        return create_procedure_type(params, return_type);
+        KgpcType *proc_type = create_procedure_type(params, return_type);
+        if (proc_type != NULL && return_type_id != NULL)
+            proc_type->info.proc_info.return_type_id = return_type_id;
+        else if (return_type_id != NULL)
+            free(return_type_id);
+        return proc_type;
     }
 
     /* Handle reference to types (wraps procedure/function types) */
@@ -3884,7 +3942,28 @@ static void annotate_method_template(struct MethodTemplate *method_template, ast
         return;
 
     method_template->kind = METHOD_TEMPLATE_UNKNOWN;
+    
+    /* First pass: check ALL children for "class" keyword before the method name.
+     * The parser places optional(token(keyword_ci("class"))) before the function keyword,
+     * so we need to scan all children to find it. */
     ast_t *cursor = method_ast->child;
+    while (cursor != NULL)
+    {
+        ast_t *node = unwrap_pascal_node(cursor);
+        if (node == NULL)
+            node = cursor;
+        const char *sym_name = (node->sym != NULL) ? node->sym->name : NULL;
+        
+        /* Check for "class" keyword in any child node */
+        if (sym_name != NULL && strcasecmp(sym_name, "class") == 0) {
+            method_template->is_class_method = 1;
+            method_template->is_static = 1;
+        }
+        cursor = cursor->next;
+    }
+    
+    /* Second pass: process all other attributes */
+    cursor = method_ast->child;
     while (cursor != NULL)
     {
         ast_t *node = unwrap_pascal_node(cursor);
@@ -4266,7 +4345,10 @@ static ListNode_t *convert_field_decl(ast_t *field_decl_node) {
 
     while (cursor != NULL && cursor->typ != PASCAL_T_TYPE_SPEC &&
            cursor->typ != PASCAL_T_RECORD_TYPE && cursor->typ != PASCAL_T_OBJECT_TYPE &&
-           cursor->typ != PASCAL_T_IDENTIFIER) {
+           cursor->typ != PASCAL_T_IDENTIFIER &&
+           cursor->typ != PASCAL_T_PROCEDURE_TYPE &&
+           cursor->typ != PASCAL_T_FUNCTION_TYPE &&
+           cursor->typ != PASCAL_T_REFERENCE_TO_TYPE) {
         cursor = cursor->next;
     }
 
@@ -4275,9 +4357,24 @@ static ListNode_t *convert_field_decl(ast_t *field_decl_node) {
     TypeInfo field_info;
     memset(&field_info, 0, sizeof(TypeInfo));
     int field_type = UNKNOWN_TYPE;
+    KgpcType *inline_proc_type = NULL;
 
     if (cursor != NULL) {
         field_type = convert_type_spec(cursor, &field_type_id, &nested_record, &field_info);
+        /* Capture inline procedural type signatures for record fields */
+        {
+            ast_t *spec_node = cursor;
+            if (spec_node->typ == PASCAL_T_TYPE_SPEC && spec_node->child != NULL)
+                spec_node = spec_node->child;
+            spec_node = unwrap_pascal_node(spec_node);
+            if (spec_node != NULL &&
+                (spec_node->typ == PASCAL_T_PROCEDURE_TYPE ||
+                 spec_node->typ == PASCAL_T_FUNCTION_TYPE ||
+                 spec_node->typ == PASCAL_T_REFERENCE_TO_TYPE))
+            {
+                inline_proc_type = convert_type_spec_to_kgpctype(cursor, NULL);
+            }
+        }
     } else if (names != NULL) {
         char *candidate = pop_last_identifier(&names);
         if (candidate != NULL) {
@@ -4319,6 +4416,9 @@ static ListNode_t *convert_field_decl(ast_t *field_decl_node) {
             field_desc->type = field_type;
             field_desc->type_id = type_id_copy;
             field_desc->nested_record = nested_copy;
+            field_desc->proc_type = inline_proc_type;
+            if (field_desc->proc_type != NULL)
+                kgpc_type_retain(field_desc->proc_type);
             field_desc->is_array = field_info.is_array;
             field_desc->array_start = field_info.start;
             field_desc->array_end = field_info.end;
@@ -4351,6 +4451,8 @@ static ListNode_t *convert_field_decl(ast_t *field_decl_node) {
         free(field_type_id);
     if (nested_record != NULL)
         destroy_record_type(nested_record);
+    if (inline_proc_type != NULL)
+        kgpc_type_release(inline_proc_type);
     destroy_type_info_contents(&field_info);
 
     return list_builder_finish(&result_builder);
@@ -4868,8 +4970,27 @@ static ListNode_t *convert_param(ast_t *param_node) {
 static ListNode_t *convert_param_list(ast_t **cursor) {
     ListNode_t *params = NULL;
     ast_t *cur = *cursor;
+    ast_t *slow = cur;
+    ast_t *fast = cur;
+    int guard = 0;
+    const int guard_limit = 100000;
 
     while (cur != NULL && cur->typ == PASCAL_T_PARAM) {
+        guard++;
+        if (guard > guard_limit) {
+            fprintf(stderr, "ERROR: convert_param_list exceeded guard limit (%d); possible cycle in param list (node=%p typ=%d).\n",
+                guard_limit, (void*)cur, cur->typ);
+            break;
+        }
+        if (fast != NULL && fast->next != NULL) {
+            fast = fast->next->next;
+            slow = slow ? slow->next : NULL;
+            if (fast != NULL && slow == fast) {
+                fprintf(stderr, "ERROR: Cycle detected in param list during conversion (node=%p typ=%d).\n",
+                    (void*)cur, cur->typ);
+                break;
+            }
+        }
         ListNode_t *param_nodes = convert_param(cur);
         extend_list(&params, param_nodes);
         cur = cur->next;
@@ -6048,10 +6169,21 @@ static int select_range_primitive_tag(const TypeInfo *info)
         end = tmp;
     }
 
+    if (start >= 0)
+    {
+        if (end <= 0xFF)
+            return BYTE_TYPE;
+        if (end <= 0xFFFF)
+            return WORD_TYPE;
+        if (end <= 0xFFFFFFFFLL)
+            return LONGWORD_TYPE;
+        return QWORD_TYPE;
+    }
+
     if (start >= INT_MIN && end <= INT_MAX)
         return INT_TYPE;
 
-    /* Range exceeds 32-bit, use 64-bit Int64 */
+    /* Signed range exceeds 32-bit, use 64-bit Int64 */
     return INT64_TYPE;
 }
 
@@ -6419,11 +6551,6 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
         append_specialized_method_clones(decl, method_clones);
 
     return decl;
-}
-
-/* Backward-compatible wrapper */
-static Tree_t *convert_type_decl(ast_t *type_decl_node, ListNode_t **method_clones) {
-    return convert_type_decl_ex(type_decl_node, method_clones, NULL);
 }
 
 static Tree_t *convert_generic_type_decl(ast_t *type_decl_node) {
@@ -10351,6 +10478,14 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                         break;
                     }
 
+                    if (getenv("KGPC_DEBUG_IMPL_NONE") != NULL &&
+                        definition->typ == PASCAL_T_NONE &&
+                        definition->child == NULL &&
+                        definition->sym != NULL &&
+                        definition->sym->name != NULL) {
+                        fprintf(stderr, "[KGPC] impl NONE at line=%d: %.120s\n",
+                            definition->line, definition->sym->name);
+                    }
                     ast_t *node = unwrap_pascal_node(definition);
                     for (ast_t *node_cursor = node; node_cursor != NULL;
                          node_cursor = (definition->typ == PASCAL_T_NONE) ? node_cursor->next : NULL) {

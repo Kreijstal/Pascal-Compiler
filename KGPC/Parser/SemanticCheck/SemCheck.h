@@ -25,12 +25,18 @@ SymTab_t *start_semcheck(Tree_t *parse_tree, int *sem_result);
  */
 void semantic_error(int line_num, int col_num, const char *format, ...);
 void semantic_error_at(int line_num, int col_num, int source_index, const char *format, ...);
+void semcheck_error_with_context_at(int line_num, int col_num, int source_index,
+    const char *format, ...);
 void semcheck_error_with_context(const char *format, ...);
+int semcheck_tag_from_kgpc(const struct KgpcType *type);
+void semcheck_set_error_context(int line_num, int col_num, int source_index);
+void semcheck_clear_error_context(void);
 void semcheck_set_source_path(const char *path);
 void semcheck_set_source_buffer(const char *buffer, size_t length);
 
 HashNode_t *semcheck_find_type_node_with_kgpc_type(SymTab_t *symtab, const char *type_id);
 int semcheck_is_unit_name(const char *name);
 const char *semcheck_get_current_subprogram_id(void);
+KgpcType *semcheck_get_current_subprogram_return_kgpc_type(struct SymTab *symtab, int *owns_type);
 
 #endif

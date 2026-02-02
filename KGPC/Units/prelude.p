@@ -120,7 +120,7 @@ type
   Currency = Int64;
   PCurrency = ^Currency;
 
-  Variant = Pointer;
+  Variant = String;
   PVariant = ^Variant;
 
 const

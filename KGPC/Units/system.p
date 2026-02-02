@@ -65,11 +65,18 @@ type
   { Code page types - for FPC bootstrap compatibility }
   TSystemCodePage = Word;
 
-  { Low-level I/O compatibility types }
-  THandle = LongInt;
-  HRESULT = LongInt;  { Windows COM result type }
-  CodePointer = Pointer;
-  
+  { String comparison options (SysUtils compatibility) }
+  TCompareOption = (coIgnoreCase);
+  TCompareOptions = set of TCompareOption;
+
+  { Standard code page identifiers (SysUtils compatibility) }
+  TStandardCodePageEnum = (
+    scpAnsi,
+    scpConsoleInput,
+    scpConsoleOutput,
+    scpFileSystemSingleByte
+  );
+
   { String types - for FPC bootstrap compatibility }
   AnsiString = String;
   UnicodeString = String;
@@ -86,6 +93,68 @@ type
   TextBuf = array[0..255] of AnsiChar;
   TTextBuf = TextBuf;
 
+  { Unicode/Ansi string manager hook types (FPC compatibility) }
+  TWide2AnsiMoveProc = procedure(source: PWideChar; var dest: RawByteString; cp: TSystemCodePage; len: SizeInt);
+  TAnsi2WideMoveProc = procedure(source: PAnsiChar; cp: TSystemCodePage; var dest: WideString; len: SizeInt);
+  TUpperWideStringProc = function(const S: WideString): WideString;
+  TLowerWideStringProc = function(const S: WideString): WideString;
+  TCompareWideStringProc = function(const s1, s2: WideString; Options: TCompareOptions): PtrInt;
+  TCharLengthPCharProc = function(const Str: PAnsiChar): PtrInt;
+  TCodePointLengthProc = function(const Str: PAnsiChar; MaxLookAead: PtrInt): PtrInt;
+  TUpperAnsiStringProc = function(const s: AnsiString): AnsiString;
+  TLowerAnsiStringProc = function(const s: AnsiString): AnsiString;
+  TCompareStrAnsiStringProc = function(const S1, S2: AnsiString): PtrInt;
+  TCompareTextAnsiStringProc = function(const S1, S2: AnsiString): PtrInt;
+  TStrCompAnsiStringProc = function(S1, S2: PAnsiChar): PtrInt;
+  TStrICompAnsiStringProc = function(S1, S2: PAnsiChar): PtrInt;
+  TStrLCompAnsiStringProc = function(S1, S2: PAnsiChar; MaxLen: PtrUInt): PtrInt;
+  TStrLICompAnsiStringProc = function(S1, S2: PAnsiChar; MaxLen: PtrUInt): PtrInt;
+  TStrLowerAnsiStringProc = function(Str: PAnsiChar): PAnsiChar;
+  TStrUpperAnsiStringProc = function(Str: PAnsiChar): PAnsiChar;
+  TThreadInitProc = procedure;
+  TThreadFiniProc = procedure;
+  TUnicode2AnsiMoveProc = procedure(source: PUnicodeChar; var dest: RawByteString; cp: TSystemCodePage; len: SizeInt);
+  TAnsi2UnicodeMoveProc = procedure(source: PAnsiChar; cp: TSystemCodePage; var dest: UnicodeString; len: SizeInt);
+  TUpperUnicodeStringProc = function(const S: UnicodeString): UnicodeString;
+  TLowerUnicodeStringProc = function(const S: UnicodeString): UnicodeString;
+  TCompareUnicodeStringProc = function(const s1, s2: UnicodeString; Options: TCompareOptions): PtrInt;
+  TGetStandardCodePageProc = function(const stdcp: TStandardCodePageEnum): TSystemCodePage;
+
+  { Unicode/Ansi string manager hooks (FPC compatibility) }
+  TUnicodeStringManager = record
+    Wide2AnsiMoveProc: TWide2AnsiMoveProc;
+    Ansi2WideMoveProc: TAnsi2WideMoveProc;
+    UpperWideStringProc: TUpperWideStringProc;
+    LowerWideStringProc: TLowerWideStringProc;
+    CompareWideStringProc: TCompareWideStringProc;
+    CharLengthPCharProc: TCharLengthPCharProc;
+    CodePointLengthProc: TCodePointLengthProc;
+    UpperAnsiStringProc: TUpperAnsiStringProc;
+    LowerAnsiStringProc: TLowerAnsiStringProc;
+    CompareStrAnsiStringProc: TCompareStrAnsiStringProc;
+    CompareTextAnsiStringProc: TCompareTextAnsiStringProc;
+    StrCompAnsiStringProc: TStrCompAnsiStringProc;
+    StrICompAnsiStringProc: TStrICompAnsiStringProc;
+    StrLCompAnsiStringProc: TStrLCompAnsiStringProc;
+    StrLICompAnsiStringProc: TStrLICompAnsiStringProc;
+    StrLowerAnsiStringProc: TStrLowerAnsiStringProc;
+    StrUpperAnsiStringProc: TStrUpperAnsiStringProc;
+    ThreadInitProc: TThreadInitProc;
+    ThreadFiniProc: TThreadFiniProc;
+    Unicode2AnsiMoveProc: TUnicode2AnsiMoveProc;
+    Ansi2UnicodeMoveProc: TAnsi2UnicodeMoveProc;
+    UpperUnicodeStringProc: TUpperUnicodeStringProc;
+    LowerUnicodeStringProc: TLowerUnicodeStringProc;
+    CompareUnicodeStringProc: TCompareUnicodeStringProc;
+    GetStandardCodePageProc: TGetStandardCodePageProc;
+  end;
+
+  { Low-level I/O compatibility types }
+  THandle = LongInt;
+  HRESULT = LongInt;  { Windows COM result type }
+  CodePointer = Pointer;
+  
+  { String types - for FPC bootstrap compatibility }
   { Root class for ObjPas compatibility }
   TObject = class
   public
@@ -162,7 +231,7 @@ type
     - Memory management for string/array variants  
     - COM interoperability (OleVariant)
     This stub only provides the type name for parsing purposes. }
-  Variant = Pointer;
+  Variant = String;
   PVariant = ^Variant;
 
 const
@@ -282,11 +351,16 @@ var
   IsLibrary: Boolean = False;
   InOutRes: Word;
   FirstDotAtFileNameStartIsExtension: Boolean;
+  WideStringManager: TUnicodeStringManager;
+  DefaultTextLineBreakStyle: TTextLineBreakStyle;
   DefaultSystemCodePage: TSystemCodePage;
   DefaultUnicodeCodePage: TSystemCodePage;
   DefaultFileSystemCodePage: TSystemCodePage;
   DefaultRTLFileSystemCodePage: TSystemCodePage;
   UTF8CompareLocale: TSystemCodePage;
+  StdInputHandle: THandle;
+  StdOutputHandle: THandle;
+  StdErrorHandle: THandle;
 
 { ============================================================================
   Compiler Intrinsic Functions
@@ -401,6 +475,38 @@ begin
     pred := i - 1;
 end;
 
+function IndexByte(const buf; len: SizeInt; b: byte): SizeInt;
+var
+    p: PByte;
+    i: SizeInt;
+begin
+    p := PByte(@buf);
+    i := 0;
+    if len < 0 then
+    begin
+        while p^ <> b do
+        begin
+            Inc(p);
+            Inc(i);
+        end;
+        IndexByte := i;
+        Exit;
+    end;
+
+    while i < len do
+    begin
+        if p^ = b then
+        begin
+            IndexByte := i;
+            Exit;
+        end;
+        Inc(p);
+        Inc(i);
+    end;
+
+    IndexByte := -1;
+end;
+
 procedure interlocked_exchange_add_i32_impl(var target: longint; value: longint; var result: longint);
 begin
     assembler;
@@ -433,9 +539,30 @@ begin
     end
 end;
 
-function kgpc_get_current_dir: AnsiString; external;
-function kgpc_set_current_dir(path: PChar): Integer; external;
-function kgpc_ioresult_peek: Integer; external;
+function kgpc_get_current_dir: AnsiString; cdecl; external name 'kgpc_get_current_dir';
+function kgpc_set_current_dir(path: PChar): Integer; cdecl; external name 'kgpc_set_current_dir';
+function kgpc_ioresult_peek: Integer; cdecl; external name 'kgpc_ioresult_peek';
+procedure kgpc_text_assign(var f: text; filename: PAnsiChar); cdecl; external name 'kgpc_text_assign';
+procedure kgpc_text_rewrite(var f: text); cdecl; external name 'kgpc_text_rewrite';
+procedure kgpc_text_reset(var f: text); cdecl; external name 'kgpc_text_reset';
+procedure kgpc_text_close(var f: text); cdecl; external name 'kgpc_text_close';
+procedure kgpc_text_app(var f: text); cdecl; external name 'kgpc_text_app';
+procedure kgpc_tfile_assign(var f: file; filename: PAnsiChar); cdecl; external name 'kgpc_tfile_assign';
+procedure kgpc_tfile_rewrite(var f: file); cdecl; external name 'kgpc_tfile_rewrite';
+procedure kgpc_tfile_reset(var f: file); cdecl; external name 'kgpc_tfile_reset';
+procedure kgpc_tfile_close(var f: file); cdecl; external name 'kgpc_tfile_close';
+procedure kgpc_tfile_read_int(var f: file; var value: integer); cdecl; external name 'kgpc_tfile_read_int';
+procedure kgpc_tfile_write_int(var f: file; value: integer); cdecl; external name 'kgpc_tfile_write_int';
+procedure kgpc_tfile_read_char(var f: file; var value: char); cdecl; external name 'kgpc_tfile_read_char';
+procedure kgpc_tfile_write_char(var f: file; value: char); cdecl; external name 'kgpc_tfile_write_char';
+procedure kgpc_tfile_read_real(var f: file; var value: real); cdecl; external name 'kgpc_tfile_read_real';
+procedure kgpc_tfile_write_real(var f: file; value: real); cdecl; external name 'kgpc_tfile_write_real';
+procedure kgpc_tfile_blockread(var f: file; var buffer; count: longint; result_ptr: pointer); cdecl; external name 'kgpc_tfile_blockread';
+procedure kgpc_tfile_blockwrite(var f: file; var buffer; count: longint; result_ptr: pointer); cdecl; external name 'kgpc_tfile_blockwrite';
+procedure kgpc_tfile_filepos(var f: file; var position: int64); cdecl; external name 'kgpc_tfile_filepos';
+procedure kgpc_tfile_seek(var f: file; index: longint); cdecl; external name 'kgpc_tfile_seek';
+procedure kgpc_tfile_truncate_current(var f: file); cdecl; external name 'kgpc_tfile_truncate_current';
+procedure kgpc_tfile_truncate(var f: file; length: longint); cdecl; external name 'kgpc_tfile_truncate';
 
 function InterlockedExchangeAdd(var target: integer; value: integer): integer; overload;
 var
@@ -509,27 +636,18 @@ end;
 
 procedure assign_text_internal(var f: text; filename: string);
 begin
-    assembler;
-    asm
-        call kgpc_text_assign
-    end
+    kgpc_text_assign(f, PAnsiChar(filename));
 end;
 
 { Assign with PAnsiChar - used by FPC bootstrap (objpas.pp) }
 procedure assign_text_pchar_internal(var f: text; filename: PAnsiChar);
 begin
-    assembler;
-    asm
-        call kgpc_text_assign
-    end
+    kgpc_text_assign(f, filename);
 end;
 
 procedure rewrite_text_internal(var f: text);
 begin
-    assembler;
-    asm
-        call kgpc_text_rewrite
-    end
+    kgpc_text_rewrite(f);
 end;
 
 procedure halt; overload;
@@ -585,10 +703,7 @@ end;
 
 procedure reset(var f: text); overload;
 begin
-    assembler;
-    asm
-        call kgpc_text_reset
-    end
+    kgpc_text_reset(f);
 end;
 
 procedure tfile_configure_internal(var f: file; recsize: longint; tag: longint);
@@ -601,10 +716,7 @@ end;
 
 procedure close(var f: text); overload;
 begin
-    assembler;
-    asm
-        call kgpc_text_close
-    end
+    kgpc_text_close(f);
 end;
 
 { SetTextCodePage - Sets the code page for text file encoding
@@ -692,10 +804,7 @@ end;
 
 procedure append(var f: text); overload;
 begin
-    assembler;
-    asm
-        call kgpc_text_app;
-    end
+    kgpc_text_app(f);
 end;
 
 { --------------------------------------------------------------------
@@ -706,19 +815,13 @@ end;
 
 procedure assign(var f: file; filename: string); overload;
 begin
-    assembler;
-    asm
-        call kgpc_tfile_assign
-    end
+    kgpc_tfile_assign(f, PAnsiChar(filename));
 end;
 
 { Assign with PAnsiChar for typed/untyped files - FPC bootstrap compatibility }
 procedure assign(var f: file; filename: PAnsiChar); overload;
 begin
-    assembler;
-    asm
-        call kgpc_tfile_assign
-    end
+    kgpc_tfile_assign(f, filename);
 end;
 
 { Assign with AnsiChar (single character filename) for files - FPC bootstrap compatibility }
@@ -732,10 +835,7 @@ end;
 
 procedure rewrite(var f: file); overload;
 begin
-    assembler;
-    asm
-        call kgpc_tfile_rewrite
-    end
+    kgpc_tfile_rewrite(f);
 end;
 
 procedure rewrite(var f: file; recsize: longint); overload;
@@ -746,10 +846,7 @@ end;
 
 procedure reset(var f: file); overload;
 begin
-    assembler;
-    asm
-        call kgpc_tfile_reset
-    end
+    kgpc_tfile_reset(f);
 end;
 
 procedure reset(var f: file; recsize: longint); overload;
@@ -760,82 +857,52 @@ end;
 
 procedure close(var f: file); overload;
 begin
-    assembler;
-    asm
-        call kgpc_tfile_close
-    end
+    kgpc_tfile_close(f);
 end;
 
 procedure file_read_integer(var f: file; var value: integer);
 begin
-    assembler;
-    asm
-        call kgpc_tfile_read_int
-    end
+    kgpc_tfile_read_int(f, value);
 end;
 
 procedure file_write_integer(var f: file; value: integer);
 begin
-    assembler;
-    asm
-        call kgpc_tfile_write_int
-    end
+    kgpc_tfile_write_int(f, value);
 end;
 
 procedure file_read_char(var f: file; var value: char);
 begin
-    assembler;
-    asm
-        call kgpc_tfile_read_char
-    end
+    kgpc_tfile_read_char(f, value);
 end;
 
 procedure file_write_char(var f: file; value: char);
 begin
-    assembler;
-    asm
-        call kgpc_tfile_write_char
-    end
+    kgpc_tfile_write_char(f, value);
 end;
 
 procedure file_read_real(var f: file; var value: real);
 begin
-    assembler;
-    asm
-        call kgpc_tfile_read_real
-    end
+    kgpc_tfile_read_real(f, value);
 end;
 
 procedure file_write_real(var f: file; value: real);
 begin
-    assembler;
-    asm
-        call kgpc_tfile_write_real
-    end
+    kgpc_tfile_write_real(f, value);
 end;
 
 procedure blockread_impl(var f: file; var buffer; count: longint; result_ptr: pointer);
 begin
-    assembler;
-    asm
-        call kgpc_tfile_blockread
-    end
+    kgpc_tfile_blockread(f, buffer, count, result_ptr);
 end;
 
 procedure blockwrite_impl(var f: file; var buffer; count: longint; result_ptr: pointer);
 begin
-    assembler;
-    asm
-        call kgpc_tfile_blockwrite
-    end
+    kgpc_tfile_blockwrite(f, buffer, count, result_ptr);
 end;
 
 procedure filepos_impl(var f: file; var position: int64);
 begin
-    assembler;
-    asm
-        call kgpc_tfile_filepos
-    end
+    kgpc_tfile_filepos(f, position);
 end;
 
 procedure move_impl(var source; var dest; count: longint);
@@ -982,10 +1049,7 @@ end;
 
 procedure Seek(var f: file; index: longint); overload;
 begin
-    assembler;
-    asm
-        call kgpc_tfile_seek
-    end
+    kgpc_tfile_seek(f, index);
 end;
 
 function FilePos(var f: file): longint; overload;
@@ -999,18 +1063,12 @@ end;
 
 procedure Truncate(var f: file); overload;
 begin
-    assembler;
-    asm
-        call kgpc_tfile_truncate_current
-    end
+    kgpc_tfile_truncate_current(f);
 end;
 
 procedure Truncate(var f: file; length: longint); overload;
 begin
-    assembler;
-    asm
-        call kgpc_tfile_truncate
-    end
+    kgpc_tfile_truncate(f, length);
 end;
 
 function IOResult: integer;

@@ -41,7 +41,8 @@ enum VarType{
     HASHVAR_FILE,
     HASHVAR_TEXT,
     HASHVAR_RAWBYTESTRING,
-    HASHVAR_UNICODESTRING
+    HASHVAR_UNICODESTRING,
+    HASHVAR_SHORTSTRING
 };
 
 /* Items we put in the hash table */

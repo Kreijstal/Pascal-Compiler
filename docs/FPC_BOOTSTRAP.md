@@ -25,7 +25,7 @@ git clone https://github.com/fpc/FPCSource
   -I./FPCSource/rtl/x86_64
 ```
 
-### sysutils.pp (24 errors)
+### sysutils.pp (9 errors)
 ```bash
 ./build/KGPC/kgpc ./FPCSource/rtl/unix/sysutils.pp /tmp/sysutils.s \
   --no-stdlib \
@@ -113,18 +113,19 @@ chmod +x /tmp/cvise_indexofany.sh
 cvise --timeout 7200 /tmp/cvise_indexofany.sh sysutils_indexofany.pp
 ```
 
-### Error categories (23 errors + 1 warning):
+### Error categories (9 errors + 1 warning):
 | Count | Error | Root Cause |
 |-------|-------|------------|
-| 6 | DoCapSizeInt type mismatch | PtrInt vs SizeInt type compatibility |
-| 3 | ShortString S assignment errors | array[0..255] of char type compatibility |
-| 2 | InitExceptions/InitInternational overload not found | Forward reference issues |
-| 2 | SysBeep/OnBeep undeclared | Forward reference support needed |
-| 2 | Result pointer vs procedure mismatch | pointer vs procedure types |
-| 2 | strlen ambiguous call | Overload resolution |
-| 2 | FreeDriveStr/FreeTerminateProcs/DoneExceptions overload not found | Forward reference issues |
-| 2 | Result type incompatibility | primitive(38) vs real, char vs string |
-| 1 | Result pointer vs procedure | Type compatibility issues |
+| 5 | InitExceptions/InitInternational/FreeDriveStr/etc. not declared | Procedures in conditional compilation blocks not parsed |
+| 1 | Join argument type mismatch | array of ShortString vs array of const |
+| 1 | LowerCase result type (Char vs String) | Type alias resolution in FPC source |
+| 1 | TryStrToDWord overload not found | Integer vs DWord parameter mismatch |
+| 1 | OnBeep procedure assignment | Procedure variable type mismatch |
+
+**Fixed issues (this PR):**
+- ShortString to String parameter compatibility (31 errors fixed)
+- Class constructor Self parameter matching (18+ errors fixed)
+- VAR parameter pointer type compatibility
 
 **Note**: The "LowerCase" function result warning is caused by FPC source (sysutils/sysstr.inc) using `{ELSE}` instead of `{$ELSE}`. This is now treated as a warning (matching FPC's behavior) rather than an error.
 
@@ -143,5 +144,5 @@ Error on line 250, incompatible types in assignment for S ...
 ## Units with Compilation Errors
 
 - `baseunix.pp` - **0 errors** ✓
-- `sysutils.pp` - **23 errors, 1 warning** (with `--no-stdlib`)
+- `sysutils.pp` - **9 errors, 1 warning** (with `--no-stdlib`)
 - `math.pp` - Depends on sysutils

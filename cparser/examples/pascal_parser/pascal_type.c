@@ -33,6 +33,7 @@ static combinator_t* make_generic_type_prefix(void) {
 static combinator_t* create_record_field_type_spec(void);
 static combinator_t* create_record_method_directives(void);
 static combinator_t* create_class_method_directives(void);
+static ast_t* map_const_type_keyword(ast_t* ast);
 
 static combinator_t* create_nested_method_directives(void) {
     combinator_t* directive = multi(new_combinator(), PASCAL_T_NONE,
@@ -308,38 +309,37 @@ static ParseResult array_type_fn(input_t* in, void* args, char* parser_name) {
 
     // Parse element type - support full type specs (record, set, pointer, identifier with optional [size], etc.)
     ast_t* element_ast = NULL;
-    {
-        // Try a rich element type first: record/class/interface/proc/func/set/file/pointer/range
-        combinator_t* packed_record = seq(new_combinator(), PASCAL_T_RECORD_TYPE,
-            token(keyword_ci("packed")),
-            record_type(PASCAL_T_RECORD_TYPE),
-            NULL
-        );
-        combinator_t* rich_element_type = multi(new_combinator(), PASCAL_T_TYPE_SPEC,
-            array_type(PASCAL_T_ARRAY_TYPE),
-            packed_record,
-            record_type(PASCAL_T_RECORD_TYPE),
-            interface_type(PASCAL_T_INTERFACE_TYPE),
-            class_type(PASCAL_T_CLASS_TYPE),
-            procedure_type(PASCAL_T_PROCEDURE_TYPE),
-            function_type(PASCAL_T_FUNCTION_TYPE),
-            set_type(PASCAL_T_SET),
-            file_type(PASCAL_T_FILE_TYPE),
-            pointer_type(PASCAL_T_POINTER_TYPE),
-            range_type(PASCAL_T_RANGE_TYPE),
-            token(pascal_identifier_with_subscript(PASCAL_T_IDENTIFIER)),
-            token(cident(PASCAL_T_IDENTIFIER)),
-            NULL
-        );
-        ParseResult el_res = parse(in, rich_element_type);
-        free_combinator(rich_element_type);
-        if (!el_res.is_success) {
-            discard_failure(el_res);
-            free_ast(indices_ast);
-            return fail_with_message("Expected element type after 'OF'", in, &state, parser_name);
-        }
-        element_ast = el_res.value.ast;
+    // Try a rich element type first: record/class/interface/proc/func/set/file/pointer/range
+    combinator_t* packed_record = seq(new_combinator(), PASCAL_T_RECORD_TYPE,
+        token(keyword_ci("packed")),
+        record_type(PASCAL_T_RECORD_TYPE),
+        NULL
+    );
+    combinator_t* rich_element_type = multi(new_combinator(), PASCAL_T_TYPE_SPEC,
+        array_type(PASCAL_T_ARRAY_TYPE),
+        packed_record,
+        record_type(PASCAL_T_RECORD_TYPE),
+        interface_type(PASCAL_T_INTERFACE_TYPE),
+        class_type(PASCAL_T_CLASS_TYPE),
+        procedure_type(PASCAL_T_PROCEDURE_TYPE),
+        function_type(PASCAL_T_FUNCTION_TYPE),
+        set_type(PASCAL_T_SET),
+        file_type(PASCAL_T_FILE_TYPE),
+        pointer_type(PASCAL_T_POINTER_TYPE),
+        range_type(PASCAL_T_RANGE_TYPE),
+        map(token(keyword_ci("const")), map_const_type_keyword),
+        token(pascal_identifier_with_subscript(PASCAL_T_IDENTIFIER)),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        NULL
+    );
+    ParseResult el_res = parse(in, rich_element_type);
+    free_combinator(rich_element_type);
+    if (!el_res.is_success) {
+        discard_failure(el_res);
+        free_ast(indices_ast);
+        return fail_with_message("Expected element type after 'OF'", in, &state, parser_name);
     }
+    element_ast = el_res.value.ast;
 
     // Build AST
     ast_t* array_ast = new_ast();
@@ -381,6 +381,18 @@ static ast_t* build_class_ast(ast_t* ast) {
 
     free_ast(ast);
     return class_node;
+}
+
+static ast_t* map_const_type_keyword(ast_t* ast) {
+    /* keyword_ci returns ast_nil on success, so we need to create a proper identifier node */
+    if (ast == NULL || ast == ast_nil) {
+        ast = new_ast();
+    }
+    ast->typ = PASCAL_T_IDENTIFIER;
+    ast->sym = sym_lookup("const");
+    ast->child = NULL;
+    ast->next = NULL;
+    return ast;
 }
 
 // Helper function to create a type reference parser that supports both
@@ -446,6 +458,15 @@ static combinator_t* create_method_type_param_list(void) {
     ));
 }
 
+// Helper function to create a method return type parser
+// Wraps the type in PASCAL_T_RETURN_TYPE for consistent handling
+static combinator_t* create_method_return_type_parser(void) {
+    return seq(new_combinator(), PASCAL_T_RETURN_TYPE,
+        create_type_ref_parser(),
+        NULL
+    );
+}
+
 combinator_t* class_type(tag_t tag) {
     // Type reference for field declarations, method return types, etc.
     combinator_t* type_ref = create_type_ref_parser();
@@ -501,7 +522,7 @@ combinator_t* class_type(tag_t tag) {
         create_method_type_param_list(),  // Optional type parameters for generic methods
         create_pascal_param_parser(),
         token(match(":")),
-        create_type_ref_parser(),  // Support both simple and constructed types
+        create_method_return_type_parser(),  // Wrap return type in PASCAL_T_RETURN_TYPE
         token(match(";")),
         create_class_method_directives(),  // Support virtual, override, reintroduce, etc.
         NULL
@@ -514,7 +535,7 @@ combinator_t* class_type(tag_t tag) {
         token(operator_name(PASCAL_T_IDENTIFIER)),
         create_pascal_param_parser(),
         token(match(":")),
-        create_type_ref_parser(),  // Support both simple and constructed types
+        create_method_return_type_parser(),  // Wrap return type in PASCAL_T_RETURN_TYPE
         token(match(";")),
         NULL
     );
@@ -910,7 +931,7 @@ combinator_t* interface_type(tag_t tag) {
         create_method_type_param_list(),  // Optional type parameters for generic methods
         create_pascal_param_parser(),
         token(match(":")),
-        create_type_ref_parser(),  // Support both simple and constructed types
+        create_method_return_type_parser(),  // Wrap return type in PASCAL_T_RETURN_TYPE
         token(match(";")),
         create_class_method_directives(),
         NULL

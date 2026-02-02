@@ -127,6 +127,17 @@ long long kgpc_type_sizeof(KgpcType *type);
 /* Check if a type is an array type. */
 int kgpc_type_is_array(KgpcType *type);
 int kgpc_type_is_array_of_const(KgpcType *type);
+int kgpc_type_is_pointer(KgpcType *type);
+int kgpc_type_is_record(KgpcType *type);
+int kgpc_type_is_procedure(KgpcType *type);
+
+int kgpc_type_is_char(KgpcType *type);
+int kgpc_type_is_string(KgpcType *type);
+int kgpc_type_is_shortstring(KgpcType *type);
+int kgpc_type_is_integer(KgpcType *type);
+int kgpc_type_is_real(KgpcType *type);
+int kgpc_type_is_numeric(KgpcType *type);
+int kgpc_type_is_boolean(KgpcType *type);
 
 /* Check if a type is a record type. */
 int kgpc_type_is_record(KgpcType *type);
@@ -190,13 +201,6 @@ struct TypeAlias* kgpc_type_get_type_alias(KgpcType *type);
  * The TypeAlias is owned by the AST, not by KgpcType. */
 void kgpc_type_set_type_alias(KgpcType *type, struct TypeAlias *alias);
 
-/* Get the legacy type tag from a KgpcType for compatibility with codegen.
- * This is a migration helper that allows code to work with both old and new type systems.
- * Returns a type tag (INT_TYPE, REAL_TYPE, etc.) for primitives, or specialized tags
- * like RECORD_TYPE, POINTER_TYPE, PROCEDURE for complex types.
- * Returns UNKNOWN_TYPE if the type cannot be mapped. */
-int kgpc_type_get_legacy_tag(KgpcType *type);
-
 /* Check if a KgpcType represents a pointer type.
  * Returns 1 if it's a pointer, 0 otherwise. */
 int kgpc_type_is_pointer(KgpcType *type);
@@ -220,6 +224,16 @@ int kgpc_type_is_signed(KgpcType *type);
  * Returns 1 if the type matches the tag, 0 otherwise. */
 int kgpc_type_equals_tag(KgpcType *type, int type_tag);
 
+/* Compare two KgpcType instances for identity. */
+int kgpc_type_equals(KgpcType *a, KgpcType *b);
+
+/* Determine conversion rank from 'from' to 'to'.
+ * Returns -1 if incompatible. */
+int kgpc_type_conversion_rank(KgpcType *from, KgpcType *to);
+
+/* Check if two pointer types are compatible. */
+int kgpc_type_pointers_compatible(KgpcType *ptr_a, KgpcType *ptr_b);
+
 /* Build the function return type from inline alias/type-id/primitive specification.
  * This consolidates the logic used by semantic checking for both forward declarations
  * and full definitions. */
@@ -227,5 +241,16 @@ KgpcType* kgpc_type_build_function_return(struct TypeAlias *inline_alias,
                                         struct HashNode *resolved_type_node,
                                         int primitive_tag,
                                         struct SymTab *symtab);
+
+/* Check if a type identified by name uses 64-bit operations.
+ * This resolves the type by name through the symbol table, then checks if it uses qword.
+ * Returns 1 if the type uses 64-bit operations, 0 otherwise.
+ * If symtab is NULL or type cannot be resolved, uses heuristics based on naming conventions
+ * (e.g., names starting with 'P' followed by uppercase letter are likely pointers). */
+int kgpc_type_id_uses_qword(const char *type_id, struct SymTab *symtab);
+
+/* Convert a legacy type tag (INT_TYPE, REAL_TYPE, etc.) to a human-readable string.
+ * Returns a static string, no need to free. */
+const char* type_tag_to_string(int type_tag);
 
 #endif // KGPC_TYPE_H

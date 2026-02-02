@@ -18,18 +18,21 @@
 #include "../../ParseTree/tree_types.h"
 #include "../../ParseTree/KgpcType.h"
 
-/* Semantic check on a normal expression */
-int semcheck_expr(int *type_return,
-    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
+/* Semantic check on a normal expression. */
+int semcheck_expr(SymTab_t *symtab, struct Expression *expr,
+    int max_scope_lev, int mutating, KgpcType **out_type);
 
-/* Semantic check on a function expression (no side effects allowed) */
-int semcheck_expr_func(int *type_return,
-    SymTab_t *symtab, struct Expression *expr, int mutating);
+/* Semantic check on a function expression (no side effects allowed). */
+int semcheck_expr_func(SymTab_t *symtab, struct Expression *expr,
+    int mutating, KgpcType **out_type);
 
-/* Main semantic checking */
-/* NOTE: Using one of the above two functions is more readable */
-int semcheck_expr_main(int *type_return,
-    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
+/* Main semantic checking.
+ * NOTE: Using one of the above two functions is more readable. */
+int semcheck_expr_main(SymTab_t *symtab, struct Expression *expr,
+    int max_scope_lev, int mutating, KgpcType **out_type);
+
+
+int resolve_param_type(Tree_t *decl, SymTab_t *symtab);
 
 /* Helper function to resolve KgpcType from an expression
  * This bridges the legacy type system to the new KgpcType system.

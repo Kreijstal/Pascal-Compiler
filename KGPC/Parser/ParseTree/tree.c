@@ -360,6 +360,8 @@ static void destroy_record_field(struct RecordField *field)
         free(field->array_element_type_id);
     if (field->pointer_type_id != NULL)
         free(field->pointer_type_id);
+    if (field->proc_type != NULL)
+        kgpc_type_release(field->proc_type);
     destroy_record_type(field->nested_record);
     free(field);
 }
@@ -1810,6 +1812,9 @@ static struct RecordField *clone_record_field(const struct RecordField *field)
     clone->type = field->type;
     clone->type_id = field->type_id != NULL ? strdup(field->type_id) : NULL;
     clone->nested_record = clone_record_type(field->nested_record);
+    clone->proc_type = field->proc_type;
+    if (clone->proc_type != NULL)
+        kgpc_type_retain(clone->proc_type);
     clone->is_array = field->is_array;
     clone->array_start = field->array_start;
     clone->array_end = field->array_end;
@@ -2608,7 +2613,6 @@ static void init_expression(struct Expression *expr, int line_num, enum ExprType
     expr->type = type;
     expr->field_width = NULL;
     expr->field_precision = NULL;
-    expr->resolved_type = UNKNOWN_TYPE;
     expr->resolved_kgpc_type = NULL;
     expr->is_default_initializer = 0;
     expr->pointer_subtype = UNKNOWN_TYPE;
