@@ -2745,9 +2745,12 @@ method_call_resolved:
     {
         if (id != NULL && pascal_identifier_equals(id, "AllocMem"))
             return semcheck_builtin_allocmem(type_return, symtab, expr, max_scope_lev);
-        if (getenv("KGPC_DEBUG_OVERLOAD") != NULL)
+        
+        /* Build detailed error message with argument types and available overloads */
         {
-            fprintf(stderr, "[SemCheck] no overload match for %s at line %d\n", id, expr->line_num);
+            /* First, build a string showing the actual argument types */
+            char arg_types_buf[1024] = "(";
+            int buf_pos = 1;
             if (args_given != NULL)
             {
                 int idx = 0;
@@ -2756,28 +2759,121 @@ method_call_resolved:
                     struct Expression *arg = (struct Expression *)cur->cur;
                     int tag = UNKNOWN_TYPE;
                     semcheck_expr_legacy_tag(&tag, symtab, arg, max_scope_lev, NO_MUTATE);
-                    fprintf(stderr, "  arg[%d]: %s(%d)\n", idx,
-                        semcheck_type_tag_name(tag), tag);
+                    const char *type_name = semcheck_type_tag_name(tag);
+                    
+                    /* Also check for resolved_kgpc_type for better type info */
+                    if (arg != NULL && arg->resolved_kgpc_type != NULL)
+                    {
+                        const char *kgpc_str = kgpc_type_to_string(arg->resolved_kgpc_type);
+                        if (kgpc_str != NULL && kgpc_str[0] != '\0')
+                            type_name = kgpc_str;
+                    }
+                    
+                    if (idx > 0 && buf_pos < (int)sizeof(arg_types_buf) - 3)
+                    {
+                        arg_types_buf[buf_pos++] = ',';
+                        arg_types_buf[buf_pos++] = ' ';
+                    }
+                    int remaining = (int)sizeof(arg_types_buf) - buf_pos - 1;
+                    if (remaining > 0)
+                    {
+                        int written = snprintf(arg_types_buf + buf_pos, remaining, "%s", type_name);
+                        if (written > 0)
+                            buf_pos += (written < remaining) ? written : remaining - 1;
+                    }
                     idx++;
                 }
             }
+            if (buf_pos < (int)sizeof(arg_types_buf) - 1)
+                arg_types_buf[buf_pos++] = ')';
+            arg_types_buf[buf_pos] = '\0';
+            
+            /* Now build a string showing available overloads */
+            char overloads_buf[2048] = "";
+            int ovl_pos = 0;
             if (overload_candidates != NULL)
             {
-                fprintf(stderr, "  candidates:\n");
                 for (ListNode_t *cur = overload_candidates; cur != NULL; cur = cur->next)
                 {
                     HashNode_t *cand = (HashNode_t *)cur->cur;
-                    if (cand != NULL)
+                    if (cand != NULL && cand->type != NULL &&
+                        (cand->hash_type == HASHTYPE_FUNCTION ||
+                         cand->hash_type == HASHTYPE_PROCEDURE))
                     {
-                        fprintf(stderr, "    - %s mangled=%s kind=%d\n",
-                            cand->id ? cand->id : "<null>",
-                            cand->mangled_id ? cand->mangled_id : "<null>",
-                            cand->hash_type);
+                        int remaining = (int)sizeof(overloads_buf) - ovl_pos - 1;
+                        if (remaining <= 0) break;
+                        
+                        /* Format: "  - function_name(param_types): return_type" */
+                        int written = snprintf(overloads_buf + ovl_pos, remaining, "  - %s(",
+                            cand->id ? cand->id : "<anonymous>");
+                        if (written > 0) ovl_pos += (written < remaining) ? written : remaining - 1;
+                        
+                        /* Add parameter types */
+                        ListNode_t *params = kgpc_type_get_procedure_params(cand->type);
+                        int param_idx = 0;
+                        for (ListNode_t *p = params; p != NULL; p = p->next)
+                        {
+                            Tree_t *param = (Tree_t *)p->cur;
+                            if (param != NULL)
+                            {
+                                remaining = (int)sizeof(overloads_buf) - ovl_pos - 1;
+                                if (remaining <= 0) break;
+                                
+                                if (param_idx > 0)
+                                {
+                                    written = snprintf(overloads_buf + ovl_pos, remaining, ", ");
+                                    if (written > 0) ovl_pos += (written < remaining) ? written : remaining - 1;
+                                    remaining = (int)sizeof(overloads_buf) - ovl_pos - 1;
+                                }
+                                
+                                const char *param_type_str = "?";
+                                if (param->tree_data.var_decl_data.cached_kgpc_type != NULL)
+                                    param_type_str = kgpc_type_to_string(param->tree_data.var_decl_data.cached_kgpc_type);
+                                else if (param->tree_data.var_decl_data.type_id != NULL)
+                                    param_type_str = param->tree_data.var_decl_data.type_id;
+                                else if (param->tree_data.var_decl_data.type != UNKNOWN_TYPE)
+                                    param_type_str = semcheck_type_tag_name(param->tree_data.var_decl_data.type);
+                                
+                                written = snprintf(overloads_buf + ovl_pos, remaining, "%s", param_type_str);
+                                if (written > 0) ovl_pos += (written < remaining) ? written : remaining - 1;
+                                param_idx++;
+                            }
+                        }
+                        
+                        remaining = (int)sizeof(overloads_buf) - ovl_pos - 1;
+                        if (remaining > 0)
+                        {
+                            /* Add return type for functions */
+                            KgpcType *ret_type = kgpc_type_get_return_type(cand->type);
+                            if (ret_type != NULL)
+                            {
+                                written = snprintf(overloads_buf + ovl_pos, remaining, "): %s\n",
+                                    kgpc_type_to_string(ret_type));
+                            }
+                            else
+                            {
+                                written = snprintf(overloads_buf + ovl_pos, remaining, ")\n");
+                            }
+                            if (written > 0) ovl_pos += (written < remaining) ? written : remaining - 1;
+                        }
                     }
                 }
             }
+            
+            if (overloads_buf[0] != '\0')
+            {
+                semcheck_error_with_context(
+                    "Error on line %d, call to function %s%s does not match any available overload.\n"
+                    "Available overloads:\n%s",
+                    expr->line_num, id, arg_types_buf, overloads_buf);
+            }
+            else
+            {
+                semcheck_error_with_context(
+                    "Error on line %d, call to function %s%s does not match any available overload.\n",
+                    expr->line_num, id, arg_types_buf);
+            }
         }
-        semcheck_error_with_context("Error on line %d, call to function %s does not match any available overload\n", expr->line_num, id);
         *type_return = UNKNOWN_TYPE;
         final_status = ++return_val;
         goto funccall_cleanup;
