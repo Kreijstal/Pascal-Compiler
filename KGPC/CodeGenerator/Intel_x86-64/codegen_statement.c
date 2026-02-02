@@ -2608,8 +2608,73 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
             return inst_list;
         }
 
+        /* Handle string literal assigned to ShortString (record-like) destination.
+         * ShortStrings use Pascal format: length byte at index 0, followed by string data.
+         * We need to convert the C string literal to a ShortString. */
+        if (src_expr->type == EXPR_STRING)
+        {
+            const char *str_data = src_expr->expr_data.string;
+            int str_len = (str_data != NULL) ? (int)strlen(str_data) : 0;
+            if (str_len > 255) str_len = 255;  /* ShortString max length */
+            
+            /* Put string literal in rodata section */
+            const char *readonly_section = codegen_readonly_section_directive();
+            char label[64];
+            snprintf(label, sizeof(label), ".LC%d", ctx->write_label_counter++);
+            
+            char escaped_str[CODEGEN_MAX_INST_BUF];
+            escape_string(escaped_str, str_data ? str_data : "", sizeof(escaped_str));
+            /* Use larger buffer for string literal embedding to avoid truncation */
+            char str_literal_buffer[CODEGEN_MAX_INST_BUF + 128];
+            snprintf(str_literal_buffer, sizeof(str_literal_buffer), "%s\n%s:\n\t.string \"%s\"\n\t.text\n",
+                     readonly_section, label, escaped_str);
+            inst_list = add_inst(inst_list, str_literal_buffer);
+            
+            /* Get register for string literal address */
+            Register_t *str_addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+            if (str_addr_reg == NULL)
+            {
+                free_reg(get_reg_stack(), dest_reg);
+                codegen_report_error(ctx,
+                    "ERROR: Unable to allocate register for string literal address.");
+                return inst_list;
+            }
+            
+            /* Load string literal address */
+            char buffer[128];
+            snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                label, str_addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            
+            /* Call kgpc_string_to_shortstring(dest, src, max_len) */
+            if (codegen_target_is_windows())
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", dest_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", str_addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                inst_list = add_inst(inst_list, "\tmovl\t$256, %r8d\n");
+            }
+            else
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", dest_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", str_addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                inst_list = add_inst(inst_list, "\tmovl\t$256, %edx\n");
+            }
+            
+            inst_list = codegen_vect_reg(inst_list, 0);
+            inst_list = add_inst(inst_list, "\tcall\tkgpc_string_to_shortstring\n");
+            free_arg_regs();
+            
+            free_reg(get_reg_stack(), str_addr_reg);
+            free_reg(get_reg_stack(), dest_reg);
+            return inst_list;
+        }
+
         codegen_report_error(ctx,
-            "ERROR: Unsupported record-valued source expression.");
+            "ERROR: Unsupported record-valued source expression (type=%d).", src_expr ? src_expr->type : -1);
         free_reg(get_reg_stack(), dest_reg);
         return inst_list;
     }
