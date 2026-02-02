@@ -819,11 +819,16 @@ int semcheck_expr_main(SymTab_t *symtab, struct Expression *expr,
 
     return_val = 0;
     /* Don't reset resolved_kgpc_type if already set during a previous evaluation.
-     * This preserves the type from procedural variable calls which may be
-     * re-evaluated during name mangling. */
+     * This preserves the type from:
+     * - Procedural variable calls which may be re-evaluated during name mangling
+     * - EXPR_NIL placeholders used for constructor Self arguments (already typed) */
     int was_already_resolved = (expr->type == EXPR_FUNCTION_CALL &&
                                 expr->expr_data.function_call_data.is_procedural_var_call &&
                                 expr->resolved_kgpc_type != NULL);
+    /* Also preserve resolved_kgpc_type for NIL expressions that already have a type
+     * (e.g., constructor Self placeholders with the class pointer type) */
+    if (expr->type == EXPR_NIL && expr->resolved_kgpc_type != NULL)
+        was_already_resolved = 1;
     if (!was_already_resolved && expr->resolved_kgpc_type != NULL)
     {
         destroy_kgpc_type(expr->resolved_kgpc_type);
@@ -951,10 +956,11 @@ int semcheck_expr_main(SymTab_t *symtab, struct Expression *expr,
             *type_return = POINTER_TYPE;
             semcheck_clear_pointer_info(expr);
             /* Create a proper KgpcType for nil with points_to = NULL */
-            if (expr->resolved_kgpc_type != NULL) {
-                destroy_kgpc_type(expr->resolved_kgpc_type);
+            /* But preserve existing resolved_kgpc_type if it's already set
+             * (e.g., for constructor Self placeholder which has the class type) */
+            if (expr->resolved_kgpc_type == NULL) {
+                expr->resolved_kgpc_type = create_pointer_type(NULL);
             }
-            expr->resolved_kgpc_type = create_pointer_type(NULL);
             break;
         case EXPR_SET:
             *type_return = SET_TYPE;
