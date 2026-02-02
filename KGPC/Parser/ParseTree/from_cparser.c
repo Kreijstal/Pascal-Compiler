@@ -3419,6 +3419,33 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
                 #endif
                 cursor = cursor->next;
             }
+
+            if (cursor == NULL)
+            {
+                /* Fallback: scan the function type node for a return type */
+                ast_t *scan = spec_node->child;
+                while (scan != NULL)
+                {
+                    ast_t *node = unwrap_pascal_node(scan);
+                    if (node != NULL)
+                    {
+                        if (node->typ == PASCAL_T_RETURN_TYPE)
+                        {
+                            if (node->child != NULL)
+                            {
+                                cursor = node->child;
+                                break;
+                            }
+                        }
+                        else if (node->typ == PASCAL_T_TYPE_SPEC || node->typ == PASCAL_T_IDENTIFIER)
+                        {
+                            cursor = node;
+                            break;
+                        }
+                    }
+                    scan = scan->next;
+                }
+            }
                 
             if (cursor != NULL) {
                 #ifdef DEBUG_KGPC_TYPE_CREATION
@@ -4318,7 +4345,10 @@ static ListNode_t *convert_field_decl(ast_t *field_decl_node) {
 
     while (cursor != NULL && cursor->typ != PASCAL_T_TYPE_SPEC &&
            cursor->typ != PASCAL_T_RECORD_TYPE && cursor->typ != PASCAL_T_OBJECT_TYPE &&
-           cursor->typ != PASCAL_T_IDENTIFIER) {
+           cursor->typ != PASCAL_T_IDENTIFIER &&
+           cursor->typ != PASCAL_T_PROCEDURE_TYPE &&
+           cursor->typ != PASCAL_T_FUNCTION_TYPE &&
+           cursor->typ != PASCAL_T_REFERENCE_TO_TYPE) {
         cursor = cursor->next;
     }
 
@@ -4327,9 +4357,24 @@ static ListNode_t *convert_field_decl(ast_t *field_decl_node) {
     TypeInfo field_info;
     memset(&field_info, 0, sizeof(TypeInfo));
     int field_type = UNKNOWN_TYPE;
+    KgpcType *inline_proc_type = NULL;
 
     if (cursor != NULL) {
         field_type = convert_type_spec(cursor, &field_type_id, &nested_record, &field_info);
+        /* Capture inline procedural type signatures for record fields */
+        {
+            ast_t *spec_node = cursor;
+            if (spec_node->typ == PASCAL_T_TYPE_SPEC && spec_node->child != NULL)
+                spec_node = spec_node->child;
+            spec_node = unwrap_pascal_node(spec_node);
+            if (spec_node != NULL &&
+                (spec_node->typ == PASCAL_T_PROCEDURE_TYPE ||
+                 spec_node->typ == PASCAL_T_FUNCTION_TYPE ||
+                 spec_node->typ == PASCAL_T_REFERENCE_TO_TYPE))
+            {
+                inline_proc_type = convert_type_spec_to_kgpctype(cursor, NULL);
+            }
+        }
     } else if (names != NULL) {
         char *candidate = pop_last_identifier(&names);
         if (candidate != NULL) {
@@ -4371,6 +4416,9 @@ static ListNode_t *convert_field_decl(ast_t *field_decl_node) {
             field_desc->type = field_type;
             field_desc->type_id = type_id_copy;
             field_desc->nested_record = nested_copy;
+            field_desc->proc_type = inline_proc_type;
+            if (field_desc->proc_type != NULL)
+                kgpc_type_retain(field_desc->proc_type);
             field_desc->is_array = field_info.is_array;
             field_desc->array_start = field_info.start;
             field_desc->array_end = field_info.end;
@@ -4403,6 +4451,8 @@ static ListNode_t *convert_field_decl(ast_t *field_decl_node) {
         free(field_type_id);
     if (nested_record != NULL)
         destroy_record_type(nested_record);
+    if (inline_proc_type != NULL)
+        kgpc_type_release(inline_proc_type);
     destroy_type_info_contents(&field_info);
 
     return list_builder_finish(&result_builder);
@@ -6119,10 +6169,21 @@ static int select_range_primitive_tag(const TypeInfo *info)
         end = tmp;
     }
 
+    if (start >= 0)
+    {
+        if (end <= 0xFF)
+            return BYTE_TYPE;
+        if (end <= 0xFFFF)
+            return WORD_TYPE;
+        if (end <= 0xFFFFFFFFLL)
+            return LONGWORD_TYPE;
+        return QWORD_TYPE;
+    }
+
     if (start >= INT_MIN && end <= INT_MAX)
         return INT_TYPE;
 
-    /* Range exceeds 32-bit, use 64-bit Int64 */
+    /* Signed range exceeds 32-bit, use 64-bit Int64 */
     return INT64_TYPE;
 }
 

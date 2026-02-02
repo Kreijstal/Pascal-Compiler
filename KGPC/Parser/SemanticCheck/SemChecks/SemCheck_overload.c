@@ -566,6 +566,41 @@ static int semcheck_resolve_arg_kgpc_type(struct Expression *arg_expr,
         if (!keep)
             arg_type = NULL;
     }
+    if (arg_type == NULL && arg_expr->is_array_expr)
+    {
+        KgpcType *elem_type = NULL;
+        int elem_owned = 0;
+        if (arg_expr->array_element_type_id != NULL && symtab != NULL)
+        {
+            HashNode_t *elem_node = NULL;
+            if (FindIdent(&elem_node, symtab, arg_expr->array_element_type_id) == 0 &&
+                elem_node != NULL && elem_node->type != NULL)
+                elem_type = elem_node->type;
+        }
+        if (elem_type == NULL && arg_expr->array_element_type != UNKNOWN_TYPE)
+        {
+            elem_type = create_primitive_type(arg_expr->array_element_type);
+            elem_owned = 1;
+        }
+        if (elem_type != NULL)
+        {
+            if (!elem_owned)
+                kgpc_type_retain(elem_type);
+            int start = arg_expr->array_lower_bound;
+            int end = arg_expr->array_upper_bound;
+            if (arg_expr->array_is_dynamic)
+                end = start - 1;
+            KgpcType *arr_type = create_array_type(elem_type, start, end);
+            if (arr_type != NULL)
+            {
+                arg_type = arr_type;
+                if (owns_type_out != NULL)
+                    *owns_type_out = 1;
+            }
+            if (elem_owned && elem_type != NULL)
+                destroy_kgpc_type(elem_type);
+        }
+    }
     if (arg_type == NULL)
     {
         switch (arg_tag)
@@ -665,11 +700,32 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
 {
     if (is_var_param)
     {
+        if (actual_kgpc != NULL && formal_kgpc != NULL)
+        {
+            if (kgpc_type_equals(actual_kgpc, formal_kgpc))
+                return semcheck_make_quality(MATCH_EXACT);
+            int formal_is_untyped_ptr = (formal_kgpc->kind == TYPE_KIND_PRIMITIVE &&
+                formal_kgpc->info.primitive_type_tag == POINTER_TYPE);
+            int actual_is_untyped_ptr = (actual_kgpc->kind == TYPE_KIND_PRIMITIVE &&
+                actual_kgpc->info.primitive_type_tag == POINTER_TYPE);
+            int formal_is_ptr = (formal_kgpc->kind == TYPE_KIND_POINTER || formal_is_untyped_ptr);
+            int actual_is_ptr = (actual_kgpc->kind == TYPE_KIND_POINTER || actual_is_untyped_ptr);
+            if (formal_is_ptr && actual_is_ptr)
+            {
+                if (formal_is_untyped_ptr || actual_is_untyped_ptr)
+                    return semcheck_make_quality(MATCH_EXACT);
+            }
+            if (actual_kgpc->kind == TYPE_KIND_RECORD &&
+                formal_kgpc->kind == TYPE_KIND_RECORD &&
+                formal_kgpc->info.record_info != NULL &&
+                formal_kgpc->info.record_info->is_class)
+            {
+                if (are_types_compatible_for_assignment(formal_kgpc, actual_kgpc, symtab))
+                    return semcheck_make_quality(MATCH_EXACT);
+            }
+            return semcheck_make_quality(MATCH_INCOMPATIBLE);
+        }
         if (actual_tag == formal_tag)
-            return semcheck_make_quality(MATCH_EXACT);
-        if (actual_kgpc != NULL && formal_kgpc != NULL &&
-            actual_kgpc->kind == formal_kgpc->kind &&
-            kgpc_type_sizeof(actual_kgpc) == kgpc_type_sizeof(formal_kgpc))
             return semcheck_make_quality(MATCH_EXACT);
         return semcheck_make_quality(MATCH_INCOMPATIBLE);
     }
@@ -761,6 +817,10 @@ static const char *semcheck_get_expr_decl_type_id(struct Expression *expr, SymTa
         return node->type->type_alias->alias_name;
     if (node->type->type_alias != NULL && node->type->type_alias->target_type_id != NULL)
         return node->type->type_alias->target_type_id;
+    if (node->type->kind == TYPE_KIND_RECORD &&
+        node->type->info.record_info != NULL &&
+        node->type->info.record_info->type_id != NULL)
+        return node->type->info.record_info->type_id;
     return NULL;
 }
 

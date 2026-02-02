@@ -984,6 +984,13 @@ int semcheck_funccall(int *type_return,
                         is_proc_field = 1;
                     }
                 }
+                else if (field_desc->proc_type != NULL &&
+                         field_desc->proc_type->kind == TYPE_KIND_PROCEDURE)
+                {
+                    proc_type = field_desc->proc_type;
+                    kgpc_type_retain(proc_type);
+                    is_proc_field = 1;
+                }
 
                 if (is_proc_field)
                 {
@@ -2104,6 +2111,7 @@ int semcheck_funccall(int *type_return,
         
         /* Get the record info from either resolved_kgpc_type or record_type */
         KgpcType *owner_type = first_arg->resolved_kgpc_type;
+        int owner_type_owned = 0;
         struct RecordType *record_info = NULL;
         
         if (owner_type != NULL) {
@@ -2146,6 +2154,37 @@ int semcheck_funccall(int *type_return,
         }
         
         if (record_info != NULL && record_info->type_id != NULL) {
+            /* Ensure owner_type represents the class instance pointer for constructors. */
+            if (record_type_is_class(record_info))
+            {
+                if (owner_type != NULL && owner_type->kind == TYPE_KIND_RECORD)
+                {
+                    kgpc_type_retain(owner_type);
+                    KgpcType *ptr_type = create_pointer_type(owner_type);
+                    if (ptr_type != NULL)
+                    {
+                        owner_type = ptr_type;
+                        owner_type_owned = 1;
+                    }
+                }
+                else if (owner_type == NULL)
+                {
+                    KgpcType *rec_type = create_record_type(record_info);
+                    if (rec_type != NULL)
+                    {
+                        KgpcType *ptr_type = create_pointer_type(rec_type);
+                        if (ptr_type != NULL)
+                        {
+                            owner_type = ptr_type;
+                            owner_type_owned = 1;
+                        }
+                        else
+                        {
+                            destroy_kgpc_type(rec_type);
+                        }
+                    }
+                }
+            }
             struct RecordType *method_owner = record_info;
             ListNode_t *method_candidates = NULL;
             char *mangled_method_name = NULL;

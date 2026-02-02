@@ -2218,10 +2218,28 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
     else
     {
         int arg_type = UNKNOWN_TYPE;
-        error_count += semcheck_expr_legacy_tag(&arg_type, symtab, arg, max_scope_lev, NO_MUTATE);
-        if (error_count == 0)
-            error_count += sizeof_from_type_ref(symtab, arg_type, NULL, &computed_size,
-                0, expr->line_num);
+        if (arg != NULL && arg->resolved_kgpc_type != NULL)
+        {
+            long long size = kgpc_type_sizeof(arg->resolved_kgpc_type);
+            if (size >= 0)
+            {
+                computed_size = size;
+            }
+            else
+            {
+                error_count += semcheck_expr_legacy_tag(&arg_type, symtab, arg, max_scope_lev, NO_MUTATE);
+                if (error_count == 0)
+                    error_count += sizeof_from_type_ref(symtab, arg_type, NULL, &computed_size,
+                        0, expr->line_num);
+            }
+        }
+        else
+        {
+            error_count += semcheck_expr_legacy_tag(&arg_type, symtab, arg, max_scope_lev, NO_MUTATE);
+            if (error_count == 0)
+                error_count += sizeof_from_type_ref(symtab, arg_type, NULL, &computed_size,
+                    0, expr->line_num);
+        }
     }
 
     if (error_count == 0)

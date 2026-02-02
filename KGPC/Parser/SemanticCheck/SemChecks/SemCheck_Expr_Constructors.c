@@ -332,6 +332,12 @@ KgpcType *semcheck_field_expected_kgpc_type(SymTab_t *symtab, struct RecordField
     if (symtab == NULL || field == NULL)
         return NULL;
 
+    if (field->proc_type != NULL)
+    {
+        kgpc_type_retain(field->proc_type);
+        return field->proc_type;
+    }
+
     if (field->is_array)
     {
         KgpcType *element_type = NULL;

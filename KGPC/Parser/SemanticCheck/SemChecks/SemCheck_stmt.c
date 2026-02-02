@@ -3738,6 +3738,13 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                             is_proc_field = 1;
                         }
                     }
+                    else if (field_desc->proc_type != NULL &&
+                             field_desc->proc_type->kind == TYPE_KIND_PROCEDURE)
+                    {
+                        proc_type = field_desc->proc_type;
+                        kgpc_type_retain(proc_type);
+                        is_proc_field = 1;
+                    }
 
                     if (is_proc_field)
                     {

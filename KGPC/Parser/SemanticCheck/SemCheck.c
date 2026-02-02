@@ -4517,6 +4517,8 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
                     free(field->name);
                     free(field->type_id);
                     free(field->array_element_type_id);
+                    if (field->proc_type != NULL)
+                        kgpc_type_release(field->proc_type);
                     free(field);
                     free(temp);
                 }
@@ -4527,6 +4529,9 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
             cloned_field->type = original_field->type;
             cloned_field->type_id = original_field->type_id ? strdup(original_field->type_id) : NULL;
             cloned_field->nested_record = original_field->nested_record;  /* Share the nested record */
+            cloned_field->proc_type = original_field->proc_type;
+            if (cloned_field->proc_type != NULL)
+                kgpc_type_retain(cloned_field->proc_type);
             cloned_field->is_array = original_field->is_array;
             cloned_field->array_start = original_field->array_start;
             cloned_field->array_end = original_field->array_end;
@@ -4547,6 +4552,8 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
                 free(cloned_field->name);
                 free(cloned_field->type_id);
                 free(cloned_field->array_element_type_id);
+                if (cloned_field->proc_type != NULL)
+                    kgpc_type_release(cloned_field->proc_type);
                 free(cloned_field);
                 
                 /* Clean up previously allocated fields */
@@ -4558,6 +4565,8 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
                     free(field->name);
                     free(field->type_id);
                     free(field->array_element_type_id);
+                    if (field->proc_type != NULL)
+                        kgpc_type_release(field->proc_type);
                     free(field);
                     free(temp);
                 }

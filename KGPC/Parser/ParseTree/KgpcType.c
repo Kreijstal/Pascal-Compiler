@@ -755,6 +755,21 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
         return 1;
     }
 
+    /* Allow pointer-to-array to be assigned to pointer-to-element when element types match.
+     * This supports idioms like: pchar := @char_array; */
+    if (lhs_type->kind == TYPE_KIND_POINTER && rhs_type->kind == TYPE_KIND_POINTER)
+    {
+        KgpcType *lhs_points_to = lhs_type->info.points_to;
+        KgpcType *rhs_points_to = rhs_type->info.points_to;
+        if (lhs_points_to != NULL && rhs_points_to != NULL &&
+            rhs_points_to->kind == TYPE_KIND_ARRAY)
+        {
+            KgpcType *rhs_elem = kgpc_type_get_array_element_type_resolved(rhs_points_to, symtab);
+            if (rhs_elem != NULL && kgpc_type_equals(lhs_points_to, rhs_elem))
+                return 1;
+        }
+    }
+
     /* Allow assigning procedure values to strings in helper conversions
      * (e.g., unresolved parameterless method references in array-of-const formatting). */
     if (lhs_is_string && rhs_type->kind == TYPE_KIND_PROCEDURE)

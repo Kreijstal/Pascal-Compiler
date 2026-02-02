@@ -79,6 +79,7 @@ struct RecordField
     int type;
     char *type_id;
     struct RecordType *nested_record;
+    struct KgpcType *proc_type;
     int is_array;
     int array_start;
     int array_end;

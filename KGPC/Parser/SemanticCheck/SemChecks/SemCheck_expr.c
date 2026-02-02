@@ -481,24 +481,27 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                                     /* Found the field, resolve its type */
                                     KgpcType *field_type = NULL;
                                     
-                                    if (field->type_id != NULL)
+                                    if (field->is_pointer)
                                     {
-                                        /* User-defined type - look up in symbol table */
-                                        HashNode_t *type_node =
-                                            semcheck_find_preferred_type_node(symtab, field->type_id);
-                                        if (type_node != NULL)
+                                        /* Inline pointer field like ^Char */
+                                        KgpcType *pointee_type = NULL;
+                                        if (field->pointer_type_id != NULL)
                                         {
-                                            if (owns_type != NULL)
-                                                *owns_type = 0;
-                                            field_type = type_node->type;
+                                            HashNode_t *pointee_node =
+                                                semcheck_find_preferred_type_node(symtab, field->pointer_type_id);
+                                            if (pointee_node != NULL && pointee_node->type != NULL)
+                                            {
+                                                kgpc_type_retain(pointee_node->type);
+                                                pointee_type = pointee_node->type;
+                                            }
                                         }
-                                    }
-                                    else if (field->nested_record != NULL)
-                                    {
-                                        /* Nested record type */
+                                        if (pointee_type == NULL && field->pointer_type != UNKNOWN_TYPE)
+                                        {
+                                            pointee_type = create_primitive_type(field->pointer_type);
+                                        }
                                         if (owns_type != NULL)
                                             *owns_type = 1;
-                                        field_type = create_record_type(field->nested_record);
+                                        field_type = create_pointer_type(pointee_type);
                                     }
                                     else if (field->is_array)
                                     {
@@ -533,27 +536,30 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                                             field_type = create_array_type(element_type, field->array_start, field->array_end);
                                         }
                                     }
-                                    else if (field->is_pointer)
+                                    else if (field->type_id != NULL)
                                     {
-                                        /* Inline pointer field like ^Char */
-                                        KgpcType *pointee_type = NULL;
-                                        if (field->pointer_type_id != NULL)
+                                        /* User-defined type - look up in symbol table */
+                                        HashNode_t *type_node =
+                                            semcheck_find_preferred_type_node(symtab, field->type_id);
+                                        if (type_node != NULL)
                                         {
-                                            HashNode_t *pointee_node =
-                                                semcheck_find_preferred_type_node(symtab, field->pointer_type_id);
-                                            if (pointee_node != NULL && pointee_node->type != NULL)
-                                            {
-                                                kgpc_type_retain(pointee_node->type);
-                                                pointee_type = pointee_node->type;
-                                            }
+                                            if (owns_type != NULL)
+                                                *owns_type = 0;
+                                            field_type = type_node->type;
                                         }
-                                        if (pointee_type == NULL && field->pointer_type != UNKNOWN_TYPE)
-                                        {
-                                            pointee_type = create_primitive_type(field->pointer_type);
-                                        }
+                                    }
+                                    else if (field->proc_type != NULL)
+                                    {
+                                        if (owns_type != NULL)
+                                            *owns_type = 0;
+                                        field_type = field->proc_type;
+                                    }
+                                    else if (field->nested_record != NULL)
+                                    {
+                                        /* Nested record type */
                                         if (owns_type != NULL)
                                             *owns_type = 1;
-                                        field_type = create_pointer_type(pointee_type);
+                                        field_type = create_record_type(field->nested_record);
                                     }
                                     else
                                     {

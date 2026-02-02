@@ -1793,7 +1793,7 @@ FIELD_RESOLVED:
 
     struct TypeAlias *array_alias = NULL;
 
-    if (field_desc->type_id != NULL)
+    if (!field_desc->is_pointer && field_desc->type_id != NULL)
     {
         int resolved_type = field_type;
         if (resolve_type_identifier(&resolved_type, symtab, field_desc->type_id, expr->line_num) != 0)
@@ -1806,6 +1806,15 @@ FIELD_RESOLVED:
 
         if (type_node != NULL)
         {
+            if (type_node->type != NULL && expr->resolved_kgpc_type == NULL)
+                semcheck_expr_set_resolved_kgpc_type_shared(expr, type_node->type);
+            if (type_node->type != NULL &&
+                (kgpc_type_is_array(type_node->type) || kgpc_type_is_array_of_const(type_node->type)) &&
+                !expr->is_array_expr)
+            {
+                semcheck_set_array_info_from_hashnode(expr, symtab, type_node, expr->line_num);
+            }
+
             struct RecordType *record_type = get_record_type_from_node(type_node);
             if (record_type != NULL)
                 field_record = record_type;
@@ -1848,12 +1857,59 @@ FIELD_RESOLVED:
 
     if (array_alias != NULL)
         semcheck_set_array_info_from_alias(expr, symtab, array_alias, expr->line_num);
+    if (array_alias != NULL && expr->resolved_kgpc_type == NULL)
+    {
+        KgpcType *arr_type = create_kgpc_type_from_type_alias(array_alias, symtab);
+        if (arr_type != NULL)
+        {
+            semcheck_expr_set_resolved_kgpc_type_shared(expr, arr_type);
+            destroy_kgpc_type(arr_type);
+        }
+    }
+
+    if (expr->resolved_kgpc_type == NULL && field_desc->is_array)
+    {
+        KgpcType *elem_type = NULL;
+        int elem_owned = 0;
+        if (field_desc->array_element_type_id != NULL)
+        {
+            HashNode_t *elem_node = semcheck_find_type_node_with_kgpc_type(
+                symtab, field_desc->array_element_type_id);
+            if (elem_node != NULL && elem_node->type != NULL)
+                elem_type = elem_node->type;
+        }
+        if (elem_type == NULL && field_desc->array_element_type != UNKNOWN_TYPE)
+        {
+            elem_type = create_primitive_type(field_desc->array_element_type);
+            elem_owned = 1;
+        }
+        if (elem_type != NULL)
+        {
+            if (!elem_owned)
+                kgpc_type_retain(elem_type);
+            KgpcType *arr_type = create_array_type(elem_type,
+                field_desc->array_start, field_desc->array_end);
+            if (arr_type != NULL)
+                semcheck_expr_set_resolved_kgpc_type_shared(expr, arr_type);
+            if (arr_type != NULL)
+                destroy_kgpc_type(arr_type);
+            if (elem_owned && elem_type != NULL)
+                destroy_kgpc_type(elem_type);
+        }
+    }
 
     if (field_type == POINTER_TYPE)
     {
         int pointer_subtype = UNKNOWN_TYPE;
         const char *pointer_subtype_id = NULL;
-        if (field_desc->type_id != NULL)
+        if (field_desc->pointer_type_id != NULL || field_desc->pointer_type != UNKNOWN_TYPE)
+        {
+            if (field_desc->pointer_type != UNKNOWN_TYPE)
+                pointer_subtype = field_desc->pointer_type;
+            if (field_desc->pointer_type_id != NULL)
+                pointer_subtype_id = field_desc->pointer_type_id;
+        }
+        else if (field_desc->type_id != NULL)
         {
             HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, field_desc->type_id);
             if (type_node == NULL)
@@ -1871,6 +1927,42 @@ FIELD_RESOLVED:
             }
         }
         semcheck_set_pointer_info(expr, pointer_subtype, pointer_subtype_id);
+        if (expr->resolved_kgpc_type != NULL &&
+            expr->resolved_kgpc_type->kind != TYPE_KIND_POINTER)
+        {
+            destroy_kgpc_type(expr->resolved_kgpc_type);
+            expr->resolved_kgpc_type = NULL;
+        }
+        if (expr->resolved_kgpc_type == NULL)
+        {
+            KgpcType *points_to = NULL;
+            if (pointer_subtype_id != NULL)
+            {
+                HashNode_t *target_node = semcheck_find_type_node_with_kgpc_type(symtab, pointer_subtype_id);
+                if (target_node != NULL && target_node->type != NULL)
+                {
+                    points_to = target_node->type;
+                    kgpc_type_retain(points_to);
+                }
+            }
+            if (points_to == NULL && pointer_subtype != UNKNOWN_TYPE)
+                points_to = create_primitive_type(pointer_subtype);
+            KgpcType *ptr_type = create_pointer_type(points_to);
+            if (ptr_type != NULL)
+            {
+                semcheck_expr_set_resolved_kgpc_type_shared(expr, ptr_type);
+                destroy_kgpc_type(ptr_type);
+            }
+        }
+    }
+    if (getenv("KGPC_DEBUG_BUFPTR") != NULL &&
+        field_id != NULL && pascal_identifier_equals(field_id, "bufptr"))
+    {
+        fprintf(stderr, "[KGPC_DEBUG_BUFPTR] field=%s type=%d resolved=%s kind=%d\n",
+            field_id,
+            field_type,
+            expr->resolved_kgpc_type ? kgpc_type_to_string(expr->resolved_kgpc_type) : "<null>",
+            expr->resolved_kgpc_type ? expr->resolved_kgpc_type->kind : -1);
     }
 
     /* For procedural type fields (function/procedure pointers), set the full KgpcType
@@ -1884,9 +1976,22 @@ FIELD_RESOLVED:
             semcheck_expr_set_resolved_kgpc_type_shared(expr, proc_type_node->type);
         }
     }
+    else if (field_type == PROCEDURE && field_desc->proc_type != NULL)
+    {
+        semcheck_expr_set_resolved_kgpc_type_shared(expr, field_desc->proc_type);
+    }
 
     expr->record_type = (field_type == RECORD_TYPE) ? field_record : NULL;
-    semcheck_expr_set_resolved_type(expr, field_type);
+    if (expr->resolved_kgpc_type != NULL &&
+        (kgpc_type_is_array(expr->resolved_kgpc_type) ||
+         kgpc_type_is_array_of_const(expr->resolved_kgpc_type)))
+    {
+        /* Preserve array KgpcType for overload resolution (var params/open arrays). */
+    }
+    else
+    {
+        semcheck_expr_set_resolved_type(expr, field_type);
+    }
     *type_return = field_type;
     if (getenv("KGPC_DEBUG_RECORD_FIELD") != NULL &&
         field_id != NULL &&
@@ -2129,6 +2234,45 @@ int semcheck_addressof(int *type_return,
 
     if (!treated_as_proc_ref)
         semcheck_expr_legacy_tag(&inner_type, symtab, inner, max_scope_lev, NO_MUTATE);
+
+    /* Special case: address-of array expressions (array variables/fields). */
+    if (inner_type == UNKNOWN_TYPE &&
+        inner != NULL && inner->resolved_kgpc_type != NULL &&
+        kgpc_type_is_array(inner->resolved_kgpc_type))
+    {
+        KgpcType *array_type = inner->resolved_kgpc_type;
+        KgpcType *element_type = kgpc_type_get_array_element_type_resolved(array_type, symtab);
+        int element_tag = UNKNOWN_TYPE;
+        const char *element_type_id = NULL;
+        struct RecordType *element_record = NULL;
+
+        if (element_type != NULL)
+        {
+            element_tag = semcheck_tag_from_kgpc(element_type);
+            if (element_tag == RECORD_TYPE)
+                element_record = kgpc_type_get_record(element_type);
+            if (element_type->type_alias != NULL)
+            {
+                element_type_id = element_type->type_alias->alias_name != NULL
+                    ? element_type->type_alias->alias_name
+                    : element_type->type_alias->target_type_id;
+            }
+        }
+
+        semcheck_set_pointer_info(expr, element_tag, element_type_id);
+        expr->record_type = element_record;
+        *type_return = POINTER_TYPE;
+
+        /* Preserve pointer-to-array KgpcType for overloads like pSigSet. */
+        kgpc_type_retain(array_type);
+        KgpcType *ptr_type = create_pointer_type(array_type);
+        if (ptr_type != NULL)
+        {
+            semcheck_expr_set_resolved_kgpc_type_shared(expr, ptr_type);
+            destroy_kgpc_type(ptr_type);
+        }
+        return error_count;
+    }
 
     /* Special case: If the inner expression was auto-converted from a function identifier
      * to a function call (because we're in NO_MUTATE mode), we need to reverse that
