@@ -7910,17 +7910,19 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 tree->tree_data.var_decl_data.type_id);
         if (tree->type == TREE_VAR_DECL)
         {
-            if (tree->tree_data.var_decl_data.cached_kgpc_type != NULL)
-            {
-                destroy_kgpc_type(tree->tree_data.var_decl_data.cached_kgpc_type);
-                tree->tree_data.var_decl_data.cached_kgpc_type = NULL;
-            }
             if (resolved_type != NULL && resolved_type->type != NULL)
             {
+                /* Clear any pre-existing cached type if we're replacing with resolved type */
+                if (tree->tree_data.var_decl_data.cached_kgpc_type != NULL)
+                {
+                    destroy_kgpc_type(tree->tree_data.var_decl_data.cached_kgpc_type);
+                    tree->tree_data.var_decl_data.cached_kgpc_type = NULL;
+                }
                 kgpc_type_retain(resolved_type->type);
                 tree->tree_data.var_decl_data.cached_kgpc_type = resolved_type->type;
             }
-            else if (resolved_type == NULL && tree->tree_data.var_decl_data.type_id != NULL)
+            else if (tree->tree_data.var_decl_data.cached_kgpc_type == NULL &&
+                     resolved_type == NULL && tree->tree_data.var_decl_data.type_id != NULL)
             {
                 /* Fallback: Create KgpcType for built-in type names not in symbol table */
                 const char *type_id = tree->tree_data.var_decl_data.type_id;
@@ -7930,6 +7932,8 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     tree->tree_data.var_decl_data.cached_kgpc_type = create_primitive_type(builtin_tag);
                 }
             }
+            /* Note: If cached_kgpc_type is already set (e.g., for inline procedure types from parser),
+             * preserve it rather than destroying it. */
             /* AUDIT: Log when KgpcType is missing for a type_id */
             if (getenv("KGPC_AUDIT_TYPES") != NULL && tree->tree_data.var_decl_data.type_id != NULL)
             {
@@ -8376,6 +8380,8 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     var_type = HASHVAR_FILE;
                 else if(tree->tree_data.var_decl_data.type == TEXT_TYPE)
                     var_type = HASHVAR_TEXT;
+                else if(tree->tree_data.var_decl_data.type == PROCEDURE)
+                    var_type = HASHVAR_PROCEDURE;
                 else
                     var_type = HASHVAR_REAL;
                 
@@ -8385,6 +8391,11 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 {
                     /* Use KgpcType from resolved type if available */
                     var_kgpc_type = resolved_type->type;
+                }
+                else if (tree->tree_data.var_decl_data.cached_kgpc_type != NULL)
+                {
+                    /* Use pre-cached KgpcType (e.g., for inline procedure types) */
+                    var_kgpc_type = tree->tree_data.var_decl_data.cached_kgpc_type;
                 }
                 else if (tree->tree_data.var_decl_data.inline_record_type != NULL)
                 {

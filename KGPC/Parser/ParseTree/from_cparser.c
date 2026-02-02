@@ -5099,6 +5099,28 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
         }
     }
 
+    /* Handle inline procedure/function types for variables */
+    KgpcType *inline_proc_type = NULL;
+    if (var_type == PROCEDURE) {
+        /* Find the procedure type specification node */
+        ast_t *search = decl_node->child;
+        while (search != NULL && search->typ == PASCAL_T_IDENTIFIER)
+            search = search->next;
+        if (search != NULL) {
+            ast_t *spec_node = search;
+            if (spec_node->typ == PASCAL_T_TYPE_SPEC && spec_node->child != NULL)
+                spec_node = spec_node->child;
+            spec_node = unwrap_pascal_node(spec_node);
+            if (spec_node != NULL &&
+                (spec_node->typ == PASCAL_T_PROCEDURE_TYPE ||
+                 spec_node->typ == PASCAL_T_FUNCTION_TYPE ||
+                 spec_node->typ == PASCAL_T_REFERENCE_TO_TYPE))
+            {
+                inline_proc_type = convert_type_spec_to_kgpctype(search, NULL);
+            }
+        }
+    }
+
     if (type_info.is_array) {
         int element_type = type_info.element_type;
         char *element_type_id = type_info.element_type_id;
@@ -5348,6 +5370,14 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
         inferred, initializer_stmt, inline_record, inline_alias, absolute_target);
     if (decl == NULL && absolute_target != NULL)
         free(absolute_target);
+    
+    /* Store inline procedure type in cached_kgpc_type */
+    if (decl != NULL && inline_proc_type != NULL) {
+        decl->tree_data.var_decl_data.cached_kgpc_type = inline_proc_type;
+        inline_proc_type = NULL;  /* Transfer ownership */
+    } else if (inline_proc_type != NULL) {
+        kgpc_type_release(inline_proc_type);
+    }
     
     /* Apply external/public name override */
     if (decl != NULL && cname_override != NULL) {
