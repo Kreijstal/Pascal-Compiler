@@ -242,4 +242,11 @@ KgpcType* kgpc_type_build_function_return(struct TypeAlias *inline_alias,
                                         int primitive_tag,
                                         struct SymTab *symtab);
 
+/* Check if a type identified by name uses 64-bit operations.
+ * This resolves the type by name through the symbol table, then checks if it uses qword.
+ * Returns 1 if the type uses 64-bit operations, 0 otherwise.
+ * If symtab is NULL or type cannot be resolved, uses heuristics based on naming conventions
+ * (e.g., names starting with 'P' followed by uppercase letter are likely pointers). */
+int kgpc_type_id_uses_qword(const char *type_id, struct SymTab *symtab);
+
 #endif // KGPC_TYPE_H

@@ -1997,18 +1997,12 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                     }
                     if (ret_type != NULL && kgpc_type_uses_qword(ret_type))
                         use_qword = 1;
-                    /* Also check return_type_id for common pointer types */
+                    /* Also check return_type_id using type system lookup */
                     else if (call_type->info.proc_info.return_type_id != NULL)
                     {
                         const char *ret_id = call_type->info.proc_info.return_type_id;
-                        if (pascal_identifier_equals(ret_id, "PAnsiChar") ||
-                            pascal_identifier_equals(ret_id, "PChar") ||
-                            pascal_identifier_equals(ret_id, "PWideChar") ||
-                            pascal_identifier_equals(ret_id, "Pointer") ||
-                            pascal_identifier_equals(ret_id, "PByte"))
-                        {
+                        if (kgpc_type_id_uses_qword(ret_id, ctx->symtab))
                             use_qword = 1;
-                        }
                     }
                 }
                 if (use_qword)
@@ -2329,14 +2323,8 @@ cleanup_constructor:
             else if (call_type->info.proc_info.return_type_id != NULL)
             {
                 const char *ret_id = call_type->info.proc_info.return_type_id;
-                if (pascal_identifier_equals(ret_id, "PAnsiChar") ||
-                    pascal_identifier_equals(ret_id, "PChar") ||
-                    pascal_identifier_equals(ret_id, "PWideChar") ||
-                    pascal_identifier_equals(ret_id, "Pointer") ||
-                    pascal_identifier_equals(ret_id, "PByte"))
-                {
+                if (kgpc_type_id_uses_qword(ret_id, ctx->symtab))
                     storage_qword = 1;
-                }
             }
         }
     }

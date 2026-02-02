@@ -2146,3 +2146,83 @@ KgpcType* kgpc_type_build_function_return(struct TypeAlias *inline_alias,
 
     return result;
 }
+
+/* Check if a type identified by name uses 64-bit operations */
+int kgpc_type_id_uses_qword(const char *type_id, struct SymTab *symtab)
+{
+    if (type_id == NULL)
+        return 0;
+
+    /* First, try to resolve the type through the symbol table */
+    if (symtab != NULL)
+    {
+        HashNode_t *type_node = kgpc_find_type_node(symtab, type_id);
+        if (type_node != NULL && type_node->type != NULL)
+        {
+            return kgpc_type_uses_qword(type_node->type);
+        }
+    }
+
+    /* If we can't resolve through symbol table, use naming conventions.
+     * In Pascal, pointer types typically:
+     * - Start with 'P' followed by uppercase letter (e.g., PAnsiChar, PByte)
+     * - Are named 'Pointer' (untyped pointer)
+     * - Are named 'CodePointer' (code pointer)
+     * - Are named '*string' types (dynamic strings are references)
+     * All pointers are 64-bit on x86-64. */
+    size_t len = strlen(type_id);
+    
+    /* Check for common 64-bit types by name */
+    if (pascal_identifier_equals(type_id, "Pointer") ||
+        pascal_identifier_equals(type_id, "CodePointer"))
+        return 1;
+    
+    /* Check for pointer types: P followed by uppercase letter */
+    if (len >= 2 && (type_id[0] == 'P' || type_id[0] == 'p'))
+    {
+        char second = type_id[1];
+        if (second >= 'A' && second <= 'Z')
+            return 1;  /* Likely a pointer type like PAnsiChar, PByte, PInteger, etc. */
+    }
+    
+    /* Check for 64-bit primitive types */
+    if (pascal_identifier_equals(type_id, "Int64") ||
+        pascal_identifier_equals(type_id, "QWord") ||
+        pascal_identifier_equals(type_id, "UInt64") ||
+        pascal_identifier_equals(type_id, "Double") ||
+        pascal_identifier_equals(type_id, "Real") ||
+        pascal_identifier_equals(type_id, "Extended") ||
+        pascal_identifier_equals(type_id, "Currency"))
+        return 1;
+    
+    /* Check for string types (dynamic strings are references/pointers) */
+    if (pascal_identifier_equals(type_id, "String") ||
+        pascal_identifier_equals(type_id, "AnsiString") ||
+        pascal_identifier_equals(type_id, "WideString") ||
+        pascal_identifier_equals(type_id, "UnicodeString") ||
+        pascal_identifier_equals(type_id, "RawByteString") ||
+        pascal_identifier_equals(type_id, "ShortString"))
+        return 1;
+    
+    /* Check for SizeInt/PtrInt/NativeInt which are pointer-sized */
+    if (pascal_identifier_equals(type_id, "SizeInt") ||
+        pascal_identifier_equals(type_id, "SizeUInt") ||
+        pascal_identifier_equals(type_id, "PtrInt") ||
+        pascal_identifier_equals(type_id, "PtrUInt") ||
+        pascal_identifier_equals(type_id, "NativeInt") ||
+        pascal_identifier_equals(type_id, "NativeUInt") ||
+        pascal_identifier_equals(type_id, "IntPtr") ||
+        pascal_identifier_equals(type_id, "UIntPtr"))
+        return 1;
+    
+    /* Check for TObject and class types (classes are references) */
+    if (len >= 2 && (type_id[0] == 'T' || type_id[0] == 't'))
+    {
+        /* TObject and T-prefixed classes are references */
+        if (pascal_identifier_equals(type_id, "TObject") ||
+            pascal_identifier_equals(type_id, "TClass"))
+            return 1;
+    }
+    
+    return 0;
+}

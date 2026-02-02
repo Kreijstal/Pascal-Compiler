@@ -1130,26 +1130,18 @@ KgpcType* expr_get_kgpc_type(const struct Expression *expr)
                 if (ret_type != NULL)
                     return ret_type;
                 
-                /* If return_type is NULL, check return_type_id for PAnsiChar etc. */
+                /* If return_type is NULL, check return_type_id using type lookup */
                 const char *ret_id = call_type->info.proc_info.return_type_id;
                 if (getenv("KGPC_DEBUG_CODEGEN") != NULL && ret_id != NULL) {
                     fprintf(stderr, "[CodeGen] expr_get_kgpc_type: EXPR_FUNCTION_CALL return_type_id='%s'\n", ret_id);
                 }
-                if (ret_id != NULL)
+                if (ret_id != NULL && kgpc_type_id_uses_qword(ret_id, NULL))
                 {
-                    /* Common pointer type aliases */
-                    if (pascal_identifier_equals(ret_id, "PAnsiChar") ||
-                        pascal_identifier_equals(ret_id, "PChar") ||
-                        pascal_identifier_equals(ret_id, "PWideChar") ||
-                        pascal_identifier_equals(ret_id, "Pointer") ||
-                        pascal_identifier_equals(ret_id, "PByte"))
-                    {
-                        /* Return a pointer type to indicate 64-bit return */
-                        static KgpcType *cached_pointer = NULL;
-                        if (cached_pointer == NULL)
-                            cached_pointer = create_pointer_type(NULL);
-                        return cached_pointer;
-                    }
+                    /* Return a pointer type to indicate 64-bit return */
+                    static KgpcType *cached_pointer = NULL;
+                    if (cached_pointer == NULL)
+                        cached_pointer = create_pointer_type(NULL);
+                    return cached_pointer;
                 }
             }
             return NULL;

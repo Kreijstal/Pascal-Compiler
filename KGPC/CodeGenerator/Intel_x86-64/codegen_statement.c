@@ -6137,14 +6137,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                         else if (call_type->info.proc_info.return_type_id != NULL)
                         {
                             const char *ret_id = call_type->info.proc_info.return_type_id;
-                            if (pascal_identifier_equals(ret_id, "PAnsiChar") ||
-                                pascal_identifier_equals(ret_id, "PChar") ||
-                                pascal_identifier_equals(ret_id, "PWideChar") ||
-                                pascal_identifier_equals(ret_id, "Pointer") ||
-                                pascal_identifier_equals(ret_id, "PByte"))
-                            {
+                            if (kgpc_type_id_uses_qword(ret_id, ctx->symtab))
                                 value_is_qword = 1;
-                            }
                         }
                     }
                 }
@@ -6276,14 +6270,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                         else if (call_type->info.proc_info.return_type_id != NULL)
                         {
                             const char *ret_id = call_type->info.proc_info.return_type_id;
-                            if (pascal_identifier_equals(ret_id, "PAnsiChar") ||
-                                pascal_identifier_equals(ret_id, "PChar") ||
-                                pascal_identifier_equals(ret_id, "PWideChar") ||
-                                pascal_identifier_equals(ret_id, "Pointer") ||
-                                pascal_identifier_equals(ret_id, "PByte"))
-                            {
+                            if (kgpc_type_id_uses_qword(ret_id, ctx->symtab))
                                 value_is_qword = 1;
-                            }
                         }
                     }
                 }
@@ -6427,14 +6415,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                     else if (call_type->info.proc_info.return_type_id != NULL)
                     {
                         const char *ret_id = call_type->info.proc_info.return_type_id;
-                        if (pascal_identifier_equals(ret_id, "PAnsiChar") ||
-                            pascal_identifier_equals(ret_id, "PChar") ||
-                            pascal_identifier_equals(ret_id, "PWideChar") ||
-                            pascal_identifier_equals(ret_id, "Pointer") ||
-                            pascal_identifier_equals(ret_id, "PByte"))
-                        {
+                        if (kgpc_type_id_uses_qword(ret_id, ctx->symtab))
                             value_is_qword = 1;
-                        }
                     }
                 }
             }
@@ -6557,14 +6539,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                     else if (call_type->info.proc_info.return_type_id != NULL)
                     {
                         const char *ret_id = call_type->info.proc_info.return_type_id;
-                        if (pascal_identifier_equals(ret_id, "PAnsiChar") ||
-                            pascal_identifier_equals(ret_id, "PChar") ||
-                            pascal_identifier_equals(ret_id, "PWideChar") ||
-                            pascal_identifier_equals(ret_id, "Pointer") ||
-                            pascal_identifier_equals(ret_id, "PByte"))
-                        {
+                        if (kgpc_type_id_uses_qword(ret_id, ctx->symtab))
                             value_is_qword = 1;
-                        }
                     }
                 }
             }
@@ -6690,14 +6666,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                     else if (call_type->info.proc_info.return_type_id != NULL)
                     {
                         const char *ret_id = call_type->info.proc_info.return_type_id;
-                        if (pascal_identifier_equals(ret_id, "PAnsiChar") ||
-                            pascal_identifier_equals(ret_id, "PChar") ||
-                            pascal_identifier_equals(ret_id, "PWideChar") ||
-                            pascal_identifier_equals(ret_id, "Pointer") ||
-                            pascal_identifier_equals(ret_id, "PByte"))
-                        {
+                        if (kgpc_type_id_uses_qword(ret_id, ctx->symtab))
                             value_is_qword = 1;
-                        }
                     }
                 }
             }
