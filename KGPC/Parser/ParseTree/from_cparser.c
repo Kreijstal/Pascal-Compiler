@@ -1329,6 +1329,50 @@ static void append_subprograms_from_ast_recursive(ast_t *node, ListNode_t **subp
     append_subprograms_from_ast_recursive(node->next, subprograms, visited);
 }
 
+static void append_top_level_subprograms_from_ast(ast_t *node, ListNode_t **subprograms,
+    VisitedSet *visited, int in_subprogram)
+{
+    if (node == NULL || node == ast_nil || subprograms == NULL || visited == NULL)
+        return;
+
+    if (visited_set_contains(visited, node))
+    {
+        /* Still traverse siblings to avoid skipping shared subtrees. */
+        append_top_level_subprograms_from_ast(node->next, subprograms, visited, in_subprogram);
+        return;
+    }
+    visited_set_add(visited, node);
+
+    int is_subprogram = (node->typ == PASCAL_T_PROCEDURE_DECL ||
+        node->typ == PASCAL_T_FUNCTION_DECL ||
+        node->typ == PASCAL_T_METHOD_IMPL ||
+        node->typ == PASCAL_T_CONSTRUCTOR_DECL ||
+        node->typ == PASCAL_T_DESTRUCTOR_DECL);
+
+    if (is_subprogram && !in_subprogram)
+    {
+        if (node->typ == PASCAL_T_PROCEDURE_DECL)
+        {
+            Tree_t *proc = convert_procedure(node);
+            append_subprogram_if_unique(subprograms, proc);
+        }
+        else if (node->typ == PASCAL_T_FUNCTION_DECL)
+        {
+            Tree_t *func = convert_function(node);
+            append_subprogram_if_unique(subprograms, func);
+        }
+        else
+        {
+            Tree_t *method_tree = convert_method_impl(node);
+            append_subprogram_if_unique(subprograms, method_tree);
+        }
+    }
+
+    int child_in_subprogram = in_subprogram || is_subprogram;
+    append_top_level_subprograms_from_ast(node->child, subprograms, visited, child_in_subprogram);
+    append_top_level_subprograms_from_ast(node->next, subprograms, visited, in_subprogram);
+}
+
 static void sync_method_impls_from_generic_template(struct RecordType *record)
 {
     if (record == NULL || record->generic_decl == NULL ||
@@ -10316,6 +10360,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
     if (cur->typ == PASCAL_T_UNIT_DECL) {
         ast_t *unit_name_node = cur->child;
         char *unit_id = unit_name_node != NULL ? dup_symbol(unit_name_node) : strdup("unit");
+        ast_t *unit_scan_copy = copy_ast(cur);
 
         ListNode_t *interface_uses = NULL;
         ListNode_t *interface_const_decls = NULL;
@@ -10345,6 +10390,8 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
         if (visited_unit == NULL) {
             fprintf(stderr, "ERROR: Failed to allocate visited set for unit sections\n");
             free(unit_id);
+            if (unit_scan_copy != NULL)
+                free_ast(unit_scan_copy);
             return NULL;
         }
 
@@ -10592,7 +10639,8 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
             VisitedSet *visited_subs = visited_set_create();
             if (visited_subs != NULL)
             {
-                append_subprograms_from_ast_recursive(cur, &subprograms, visited_subs);
+                ast_t *scan_root = unit_scan_copy != NULL ? unit_scan_copy : cur;
+                append_top_level_subprograms_from_ast(scan_root, &subprograms, visited_subs, 0);
                 visited_set_destroy(visited_subs);
             }
         }
@@ -10648,6 +10696,8 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                                implementation_const_decls,
                                implementation_type_decls, list_builder_finish(&implementation_var_builder),
                                subprograms, initialization, finalization);
+        if (unit_scan_copy != NULL)
+            free_ast(unit_scan_copy);
         return tree;
     }
 
