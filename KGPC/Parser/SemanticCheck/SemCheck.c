@@ -655,10 +655,9 @@ int semcheck_tag_from_kgpc(const KgpcType *type)
                 /* array[0..255] with NULL element_type is treated as ShortString */
                 return SHORTSTRING_TYPE;
             }
-            if (elem->kind == TYPE_KIND_PRIMITIVE) {
-                int tag = elem->info.primitive_type_tag;
-                if (tag == CHAR_TYPE || tag == STRING_TYPE || tag == SHORTSTRING_TYPE)
-                    return SHORTSTRING_TYPE;
+            if (elem->kind == TYPE_KIND_PRIMITIVE &&
+                elem->info.primitive_type_tag == CHAR_TYPE) {
+                return SHORTSTRING_TYPE;
             }
         }
     }
