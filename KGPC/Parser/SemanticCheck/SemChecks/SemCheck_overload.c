@@ -735,7 +735,8 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
     /* For pointer types, don't return early - need to compare subtypes */
     if (actual_tag == formal_tag && formal_tag != POINTER_TYPE)
         return semcheck_make_quality(MATCH_EXACT);
-    if (formal_tag == SHORTSTRING_TYPE && is_string_type(actual_tag))
+    /* String types are mutually compatible (STRING_TYPE, SHORTSTRING_TYPE) */
+    if (is_string_type(formal_tag) && is_string_type(actual_tag))
         return semcheck_make_quality(MATCH_PROMOTION);
 
     if (actual_kgpc != NULL && formal_kgpc != NULL &&
@@ -777,8 +778,6 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
     if (is_integer_type(actual_tag) && formal_tag == REAL_TYPE)
         return semcheck_make_quality(MATCH_CONVERSION);
     if (is_string_type(formal_tag) && actual_tag == CHAR_TYPE)
-        return semcheck_make_quality(MATCH_PROMOTION);
-    if (formal_tag == SHORTSTRING_TYPE && is_string_type(actual_tag))
         return semcheck_make_quality(MATCH_PROMOTION);
     if (actual_tag == CHAR_TYPE && formal_kgpc != NULL && kgpc_type_is_pointer(formal_kgpc))
     {

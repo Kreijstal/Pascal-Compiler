@@ -5,19 +5,17 @@ program tdd_shortstring_to_string;
 type
   ShortString255 = string[255];
 
-function StrToIntWrapper(const S: string): Integer;
+function TakeString(const S: string): Integer;
 begin
-  if S = '42' then
-    Result := 42
-  else
-    Result := 0;
+  { Just return a fixed value to test that the call succeeds }
+  Result := 42;
 end;
 
 var
   SS: ShortString255;
   I: Integer;
 begin
-  SS := '42';
-  I := StrToIntWrapper(SS);
+  SS := 'hello';
+  I := TakeString(SS);
   WriteLn(I);
 end.

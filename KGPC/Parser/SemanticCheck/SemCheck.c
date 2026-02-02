@@ -642,10 +642,26 @@ int semcheck_tag_from_kgpc(const KgpcType *type)
         return type->info.primitive_type_tag;
     if (kgpc_type_is_array_of_const((KgpcType *)type))
         return ARRAY_OF_CONST_TYPE;
-    if (kgpc_type_is_array((KgpcType *)type) &&
-        type->type_alias != NULL &&
-        type->type_alias->is_shortstring)
-        return SHORTSTRING_TYPE;
+    /* Check for ShortString: array[0..255] of Char or explicit is_shortstring flag */
+    if (kgpc_type_is_array((KgpcType *)type)) {
+        /* Check explicit shortstring flag */
+        if (type->type_alias != NULL && type->type_alias->is_shortstring)
+            return SHORTSTRING_TYPE;
+        /* Check for ShortString-like array: bounds [0..255] with char element type */
+        if (type->info.array_info.start_index == 0 &&
+            type->info.array_info.end_index == 255) {
+            KgpcType *elem = type->info.array_info.element_type;
+            if (elem == NULL) {
+                /* array[0..255] with NULL element_type is treated as ShortString */
+                return SHORTSTRING_TYPE;
+            }
+            if (elem->kind == TYPE_KIND_PRIMITIVE) {
+                int tag = elem->info.primitive_type_tag;
+                if (tag == CHAR_TYPE || tag == STRING_TYPE || tag == SHORTSTRING_TYPE)
+                    return SHORTSTRING_TYPE;
+            }
+        }
+    }
     if (kgpc_type_is_record((KgpcType *)type))
         return RECORD_TYPE;
     if (kgpc_type_is_pointer((KgpcType *)type))
