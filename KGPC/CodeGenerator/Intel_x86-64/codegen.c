@@ -315,15 +315,20 @@ static void codegen_add_class_vars_for_static_method(const char *mangled_name,
         return;
     }
     
+    /* Use the original class name from the type definition to match the CLASSVAR label.
+     * The mangled name may have different casing, but the CLASSVAR label uses the original type_id. */
+    const char *original_class_name = (record_info != NULL && record_info->type_id != NULL) ?
+        record_info->type_id : class_name;
+    
     /* Build the class var storage label */
-    size_t label_len = strlen(class_name) + strlen("_CLASSVAR") + 1;
+    size_t label_len = strlen(original_class_name) + strlen("_CLASSVAR") + 1;
     char *classvar_label = (char *)malloc(label_len);
     if (classvar_label == NULL)
     {
         free(class_name);
         return;
     }
-    snprintf(classvar_label, label_len, "%s_CLASSVAR", class_name);
+    snprintf(classvar_label, label_len, "%s_CLASSVAR", original_class_name);
     
     /* Iterate over fields and register each as a static var with proper offset */
     ListNode_t *field_node = record_info->fields;
@@ -2681,7 +2686,7 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
      * Constructors receive Self in the first parameter and should return it
      * to allow constructor chaining and assignment. */
     int is_constructor = 0;
-    if (sub_id != NULL && strstr(sub_id, "__Create") != NULL)
+    if (sub_id != NULL && pascal_strcasestr(sub_id, "__create") != NULL)
         is_constructor = 1;
     
     if (is_constructor && num_args > 0)

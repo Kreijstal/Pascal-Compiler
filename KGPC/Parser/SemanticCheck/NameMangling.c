@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <assert.h>
+#include <ctype.h>
 #include "NameMangling.h"
 #include "../ParseTree/tree.h"
 #include "../List/List.h"
@@ -10,6 +11,23 @@
 #include "SemCheck.h"
 #include "SymTab/SymTab.h"
 #include "../ParseTree/KgpcType.h"
+
+// Helper to create a lowercase copy of a string (for case-insensitive mangling)
+static char* str_tolower_dup(const char* src) {
+    if (src == NULL)
+        return NULL;
+    
+    size_t len = strlen(src);
+    char* dst = (char*)malloc(len + 1);
+    if (dst == NULL)
+        return NULL;
+    
+    for (size_t i = 0; i < len; ++i)
+        dst[i] = (char)tolower((unsigned char)src[i]);
+    
+    dst[len] = '\0';
+    return dst;
+}
 
 // Helper to free a list of integers
 static void DestroyIntList(ListNode_t* list) {
@@ -328,17 +346,26 @@ static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab
 // Core mangling function
 static char* MangleNameFromTypeList(const char* original_name, ListNode_t* type_list) {
     assert(original_name != NULL);
+    
+    // Normalize function name to lowercase for case-insensitive matching
+    // (Pascal is case-insensitive, so Lowercase and LowerCase should produce the same mangled name)
+    char* lower_name = str_tolower_dup(original_name);
+    if (lower_name == NULL) {
+        lower_name = strdup(original_name); // fallback
+    }
+    
     if (type_list == NULL) {
         // No args, append _void
         const char* suffix = "_void";
-        char* mangled_name = malloc(strlen(original_name) + strlen(suffix) + 1);
+        char* mangled_name = malloc(strlen(lower_name) + strlen(suffix) + 1);
         assert(mangled_name != NULL);
-        sprintf(mangled_name, "%s%s", original_name, suffix);
+        sprintf(mangled_name, "%s%s", lower_name, suffix);
+        free(lower_name);
         return mangled_name;
     }
 
     // Calculate length - max suffix is "_ai64" (5 chars), use 6 for safety
-    size_t total_len = strlen(original_name);
+    size_t total_len = strlen(lower_name);
     ListNode_t* cur = type_list;
     while (cur != NULL) {
         total_len += 6; // Max length of a type suffix (e.g., "_ai64" is 5 chars)
@@ -348,7 +375,8 @@ static char* MangleNameFromTypeList(const char* original_name, ListNode_t* type_
 
     char* mangled_name = malloc(total_len);
     assert(mangled_name != NULL);
-    strcpy(mangled_name, original_name);
+    strcpy(mangled_name, lower_name);
+    free(lower_name);
 
     cur = type_list;
     while (cur != NULL) {

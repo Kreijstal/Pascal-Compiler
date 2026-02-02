@@ -1406,11 +1406,12 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         
         if (func_mangled_name != NULL)
         {
-            /* Check if name contains __Create (may be followed by type suffix like __Create_u) */
-            const char *create_pos = strstr(func_mangled_name, "__Create");
+            /* Check if name contains __create (may be followed by type suffix like __create_u) */
+            /* Use case-insensitive search since mangled names are now lowercased */
+            const char *create_pos = pascal_strcasestr(func_mangled_name, "__create");
             if (create_pos != NULL)
                 is_constructor = 1;
-            else if (strcmp(func_mangled_name, "Create") == 0)
+            else if (pascal_identifier_equals(func_mangled_name, "Create"))
                 is_constructor = 1;
             
             CODEGEN_DEBUG("DEBUG Constructor Check: func_mangled_name=%s, is_constructor=%d\n", 

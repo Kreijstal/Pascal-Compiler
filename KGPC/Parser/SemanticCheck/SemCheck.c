@@ -9273,6 +9273,22 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         ListNode_t *all_matches = FindAllIdents(symtab, id_to_use_for_lookup);
         ListNode_t *cur = all_matches;
         
+        if (getenv("KGPC_DEBUG_OVERLOAD_MATCH") != NULL)
+        {
+            fprintf(stderr, "[KGPC] Matching impl %s mangled=%s\n",
+                id_to_use_for_lookup ? id_to_use_for_lookup : "<null>",
+                subprogram->tree_data.subprogram_data.mangled_id);
+            ListNode_t *debug_cur = all_matches;
+            while (debug_cur != NULL)
+            {
+                HashNode_t *debug_cand = (HashNode_t *)debug_cur->cur;
+                fprintf(stderr, "  candidate: id=%s mangled=%s\n",
+                    debug_cand && debug_cand->id ? debug_cand->id : "<null>",
+                    debug_cand && debug_cand->mangled_id ? debug_cand->mangled_id : "<null>");
+                debug_cur = debug_cur->next;
+            }
+        }
+        
         while (cur != NULL && existing_decl == NULL)
         {
             HashNode_t *candidate = (HashNode_t *)cur->cur;
