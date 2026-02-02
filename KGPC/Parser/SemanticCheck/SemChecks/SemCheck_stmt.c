@@ -4606,8 +4606,9 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
             }
             else
             {
+                /* No overloads found - procedure is not declared */
                 semcheck_error_with_context(
-                    "Error on line %d, call to procedure %s%s does not match any available overload.\n",
+                    "Error on line %d, procedure %s%s is not declared.\n",
                     stmt->line_num, proc_id, arg_types_buf);
             }
         }
@@ -4772,6 +4773,14 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                     }
                 }
 
+                /* Save type strings before cleanup for error message */
+                char expected_type_str[256] = "<unknown>";
+                char given_type_str[256] = "<unknown>";
+                if (expected_kgpc_type != NULL)
+                    snprintf(expected_type_str, sizeof(expected_type_str), "%s", kgpc_type_to_string(expected_kgpc_type));
+                if (arg_kgpc_type != NULL)
+                    snprintf(given_type_str, sizeof(given_type_str), "%s", kgpc_type_to_string(arg_kgpc_type));
+
                 /* Clean up owned types */
                 if (expected_type_owned && expected_kgpc_type != NULL)
                     destroy_kgpc_type(expected_kgpc_type);
@@ -4786,12 +4795,12 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                             "[SemCheck] proccall %s arg %d mismatch: expected=%s actual=%s\n",
                             proc_id ? proc_id : "<null>",
                             cur_arg,
-                            expected_kgpc_type ? kgpc_type_to_string(expected_kgpc_type) : "<null>",
-                            arg_kgpc_type ? kgpc_type_to_string(arg_kgpc_type) : "<null>");
+                            expected_type_str,
+                            given_type_str);
                     }
                     semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index,
-                        "Error on line %d, on procedure call %s, argument %d: Type mismatch!\n\n",
-                        stmt->line_num, proc_id, cur_arg);
+                        "Error on line %d, on procedure call %s, argument %d: Type mismatch (expected: %s, given: %s)!\n\n",
+                        stmt->line_num, proc_id, cur_arg, expected_type_str, given_type_str);
                     ++return_val;
                 }
 

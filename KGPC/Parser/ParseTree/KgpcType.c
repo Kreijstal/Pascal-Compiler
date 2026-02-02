@@ -1285,16 +1285,27 @@ const char* kgpc_type_to_string(KgpcType *type) {
     switch (type->kind) {
         case TYPE_KIND_PRIMITIVE:
             switch (type->info.primitive_type_tag) {
-                case INT_TYPE: return "integer";
-                case REAL_TYPE: return "real";
-                case LONGINT_TYPE: return "longint";
-                case STRING_TYPE: return "string";
-                case CHAR_TYPE: return "char";
-                case BOOL: return "boolean";
-                case POINTER_TYPE: return "pointer";
-                case SET_TYPE: return "set";
-                case ENUM_TYPE: return "enum";
-                case FILE_TYPE: return "file";
+                case INT_TYPE: return "Integer";
+                case REAL_TYPE: return "Real";
+                case LONGINT_TYPE: return "LongInt";
+                case STRING_TYPE: return "String";
+                case CHAR_TYPE: return "Char";
+                case BOOL: return "Boolean";
+                case POINTER_TYPE: return "Pointer";
+                case SET_TYPE: return "Set";
+                case ENUM_TYPE: return "Enum";
+                case FILE_TYPE: return "File";
+                case UNKNOWN_TYPE: return "Unknown";
+                case BUILTIN_ANY_TYPE: return "Any";
+                case INT64_TYPE: return "Int64";
+                case RECORD_TYPE: return "Record";
+                case ARRAY_OF_CONST_TYPE: return "array of const";
+                case TEXT_TYPE: return "Text";
+                case SHORTSTRING_TYPE: return "ShortString";
+                case BYTE_TYPE: return "Byte";
+                case WORD_TYPE: return "Word";
+                case LONGWORD_TYPE: return "LongWord";
+                case QWORD_TYPE: return "QWord";
                 default:
                     snprintf(buffer, TYPE_STRING_BUFFER_SIZE, "primitive(%d)", type->info.primitive_type_tag);
                     return buffer;
@@ -2225,4 +2236,37 @@ int kgpc_type_id_uses_qword(const char *type_id, struct SymTab *symtab)
     }
     
     return 0;
+}
+
+const char* type_tag_to_string(int type_tag)
+{
+    switch (type_tag)
+    {
+        case UNKNOWN_TYPE: return "Unknown";
+        case INT_TYPE: return "Integer";
+        case REAL_TYPE: return "Real";
+        case LONGINT_TYPE: return "LongInt";
+        case STRING_TYPE: return "String";
+        case BUILTIN_ANY_TYPE: return "Any";
+        case INT64_TYPE: return "Int64";
+        case RECORD_TYPE: return "Record";
+        case ARRAY_OF_CONST_TYPE: return "array of const";
+        case TEXT_TYPE: return "Text";
+        case CHAR_TYPE: return "Char";
+        case POINTER_TYPE: return "Pointer";
+        case SET_TYPE: return "Set";
+        case ENUM_TYPE: return "Enum";
+        case FILE_TYPE: return "File";
+        case SHORTSTRING_TYPE: return "ShortString";
+        case BYTE_TYPE: return "Byte";
+        case WORD_TYPE: return "Word";
+        case LONGWORD_TYPE: return "LongWord";
+        case QWORD_TYPE: return "QWord";
+        default:
+        {
+            static char buf[32];
+            snprintf(buf, sizeof(buf), "type(%d)", type_tag);
+            return buf;
+        }
+    }
 }

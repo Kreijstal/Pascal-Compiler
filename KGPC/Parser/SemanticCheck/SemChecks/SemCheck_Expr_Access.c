@@ -2869,8 +2869,9 @@ method_call_resolved:
             }
             else
             {
+                /* No overloads found - function is not declared */
                 semcheck_error_with_context(
-                    "Error on line %d, call to function %s%s does not match any available overload.\n",
+                    "Error on line %d, function %s%s is not declared.\n",
                     expr->line_num, id, arg_types_buf);
             }
         }
@@ -3483,8 +3484,16 @@ skip_overload_resolution:
 
                         if (!type_compatible)
                         {
-                            semcheck_error_with_context("Error on line %d, on function call %s, argument %d: Type mismatch!\n\n",
-                                expr->line_num, id, cur_arg);
+                            /* Get better type descriptions */
+                            const char *expected_str = type_tag_to_string(expected_type);
+                            const char *given_str = type_tag_to_string(arg_type);
+                            
+                            /* Try to get more detailed types from resolved_kgpc_type */
+                            if (current_arg_expr != NULL && current_arg_expr->resolved_kgpc_type != NULL)
+                                given_str = kgpc_type_to_string(current_arg_expr->resolved_kgpc_type);
+                            
+                            semcheck_error_with_context("Error on line %d, on function call %s, argument %d: Type mismatch (expected: %s, given: %s)!\n\n",
+                                expr->line_num, id, cur_arg, expected_str, given_str);
                             ++return_val;
                         }
                     }

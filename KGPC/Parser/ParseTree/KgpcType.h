@@ -249,4 +249,8 @@ KgpcType* kgpc_type_build_function_return(struct TypeAlias *inline_alias,
  * (e.g., names starting with 'P' followed by uppercase letter are likely pointers). */
 int kgpc_type_id_uses_qword(const char *type_id, struct SymTab *symtab);
 
+/* Convert a legacy type tag (INT_TYPE, REAL_TYPE, etc.) to a human-readable string.
+ * Returns a static string, no need to free. */
+const char* type_tag_to_string(int type_tag);
+
 #endif // KGPC_TYPE_H
