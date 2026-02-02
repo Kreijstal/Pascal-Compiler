@@ -91,6 +91,32 @@ static int semcheck_get_pointer_param_subtype(Tree_t *decl, SymTab_t *symtab)
     return subtype;
 }
 
+/*
+ * Check if two primitive type tags are size-and-signedness compatible.
+ * This is used for VAR/OUT parameter matching where Integer/LongInt and
+ * Cardinal/LongWord/DWord should be treated as the same type.
+ * Returns 1 if compatible, 0 otherwise.
+ */
+static int are_primitive_tags_compatible(int tag_a, int tag_b)
+{
+    if (tag_a == tag_b)
+        return 1;
+    
+    /* Integer and LongInt are both 32-bit signed on x86-64 */
+    if ((tag_a == INT_TYPE || tag_a == LONGINT_TYPE) &&
+        (tag_b == INT_TYPE || tag_b == LONGINT_TYPE))
+        return 1;
+    
+    /* Cardinal, LongWord, DWord are all 32-bit unsigned */
+    /* They share the LONGWORD_TYPE tag, but might have different type_alias names */
+    if (tag_a == LONGWORD_TYPE && tag_b == LONGWORD_TYPE)
+        return 1;
+    
+    /* Int64 and QWord have different signedness, so not compatible */
+    
+    return 0;
+}
+
 int semcheck_candidates_share_signature(SymTab_t *symtab, HashNode_t *a, HashNode_t *b)
 {
     if (a == NULL || b == NULL || a->type == NULL || b->type == NULL)
@@ -730,9 +756,22 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
                 if (are_types_compatible_for_assignment(formal_kgpc, actual_kgpc, symtab))
                     return semcheck_make_quality(MATCH_EXACT);
             }
+            /* For primitive types with the same size and signedness, treat as compatible.
+               This allows Integer/LongInt and Cardinal/LongWord/DWord to be interchangeable
+               for VAR/OUT parameters, matching FPC behavior. */
+            if (actual_kgpc->kind == TYPE_KIND_PRIMITIVE &&
+                formal_kgpc->kind == TYPE_KIND_PRIMITIVE &&
+                are_primitive_tags_compatible(actual_kgpc->info.primitive_type_tag,
+                                              formal_kgpc->info.primitive_type_tag))
+            {
+                return semcheck_make_quality(MATCH_EXACT);
+            }
             return semcheck_make_quality(MATCH_INCOMPATIBLE);
         }
         if (actual_tag == formal_tag)
+            return semcheck_make_quality(MATCH_EXACT);
+        /* Check for compatible primitive types (e.g., Integer/LongInt) */
+        if (are_primitive_tags_compatible(actual_tag, formal_tag))
             return semcheck_make_quality(MATCH_EXACT);
         return semcheck_make_quality(MATCH_INCOMPATIBLE);
     }

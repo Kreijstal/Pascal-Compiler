@@ -4,11 +4,9 @@ program TestCardinalDWordVar;
   Test that Cardinal and DWord are treated as the same type.
   Both should be unsigned 32-bit integers (LongWord).
   This is crucial for VAR/OUT parameter matching in overload resolution.
+  
+  NOTE: This test uses the system unit's type definitions - no local overrides.
 }
-
-type
-  DWord = LongWord;
-  Cardinal = LongWord;
 
 function TryStrToDWord(const s: string; var C: DWord): Boolean;
 begin
