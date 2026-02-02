@@ -714,6 +714,13 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
             {
                 if (formal_is_untyped_ptr || actual_is_untyped_ptr)
                     return semcheck_make_quality(MATCH_EXACT);
+                /* For class types: allow subclass to match parent class type */
+                /* This handles constructor Self parameter matching where both are ^record */
+                if (formal_kgpc->kind == TYPE_KIND_POINTER && actual_kgpc->kind == TYPE_KIND_POINTER)
+                {
+                    if (are_types_compatible_for_assignment(formal_kgpc, actual_kgpc, symtab))
+                        return semcheck_make_quality(MATCH_EXACT);
+                }
             }
             if (actual_kgpc->kind == TYPE_KIND_RECORD &&
                 formal_kgpc->kind == TYPE_KIND_RECORD &&
