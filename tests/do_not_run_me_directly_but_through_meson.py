@@ -111,11 +111,6 @@ UNIT_ONLY_TESTS = {
     "unit_sizeof_array_bounds",
     "unit_sizeof_const",
     "unit_include_init_section",
-    # TDD tests for sysutils.pp include file procedure visibility
-    "fpc_bootstrap_unit_include_init",
-    "fpc_bootstrap_sysutils_include_init",
-    "fpc_bootstrap_multi_include_init",
-    "fpc_bootstrap_sysutils_pattern",
 }
 
 UNIT_ONLY_FLAGS = {}
