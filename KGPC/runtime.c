@@ -89,7 +89,7 @@ int kgpc_threading_already_used(void)
     return kgpc_threading_used;
 }
 
-int ThreadingAlreadyUsed_void(void)
+int threadingalreadyused_void(void)
 {
     return kgpc_threading_already_used();
 }
