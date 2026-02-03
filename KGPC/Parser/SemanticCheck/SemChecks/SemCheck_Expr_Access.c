@@ -271,6 +271,28 @@ int semcheck_arrayaccess(int *type_return,
         ++return_val;
     }
 
+    /* Type-check extra indices for multi-dimensional arrays */
+    if (expr->expr_data.array_access_data.extra_indices != NULL)
+    {
+        ListNode_t *extra_idx = expr->expr_data.array_access_data.extra_indices;
+        while (extra_idx != NULL)
+        {
+            struct Expression *idx_expr = (struct Expression *)extra_idx->cur;
+            if (idx_expr != NULL)
+            {
+                int extra_idx_type = UNKNOWN_TYPE;
+                return_val += semcheck_expr_legacy_tag(&extra_idx_type, symtab, idx_expr, max_scope_lev, NO_MUTATE);
+                if (!is_ordinal_type(extra_idx_type))
+                {
+                    semcheck_error_with_context("Error on line %d, expected ordinal type (integer, char, boolean, or enum) in array index expression!\n\n",
+                        expr->line_num);
+                    ++return_val;
+                }
+            }
+            extra_idx = extra_idx->next;
+        }
+    }
+
     if (element_type == UNKNOWN_TYPE)
         element_type = LONGINT_TYPE;
 

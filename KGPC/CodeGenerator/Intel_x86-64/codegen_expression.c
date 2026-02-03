@@ -3754,11 +3754,63 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
     }
 
     int element_size = (int)element_size_ll;
+    
+    /* For multi-dimensional arrays, the first index stride is element_size * product of remaining dimension sizes.
+     * Get dimension info from TypeAlias. */
+    int first_index_stride = element_size;
+    int dim_count = 1;
+    int dim_sizes[10] = {0};
+    struct TypeAlias *alias = NULL;
+    
+    if (expr->expr_data.array_access_data.extra_indices != NULL && 
+        array_expr->type == EXPR_VAR_ID && ctx->symtab != NULL)
+    {
+        HashNode_t *arr_node = NULL;
+        if (FindIdent(&arr_node, ctx->symtab, array_expr->expr_data.id) >= 0 && arr_node != NULL)
+        {
+            alias = get_type_alias_from_node(arr_node);
+            if (alias != NULL && alias->array_dimensions != NULL)
+            {
+                ListNode_t *dim = alias->array_dimensions;
+                while (dim != NULL && dim_count < 10)
+                {
+                    const char *range_str = (const char *)dim->cur;
+                    if (range_str != NULL)
+                    {
+                        char *range_copy = strdup(range_str);
+                        if (range_copy != NULL)
+                        {
+                            char *dotdot = strstr(range_copy, "..");
+                            if (dotdot != NULL)
+                            {
+                                *dotdot = '\0';
+                                int dim_start = atoi(range_copy);
+                                int dim_end = atoi(dotdot + 2);
+                                dim_sizes[dim_count - 1] = dim_end - dim_start + 1;
+                            }
+                            free(range_copy);
+                        }
+                    }
+                    dim_count++;
+                    dim = dim->next;
+                }
+                
+                /* Compute first index stride: product of all dimension sizes except first, times element_size */
+                first_index_stride = element_size;
+                for (int d = 1; d < dim_count && d < 10; d++)
+                {
+                    if (dim_sizes[d] > 0)
+                        first_index_stride *= dim_sizes[d];
+                }
+            }
+        }
+    }
+    
     static const int scaled_sizes[] = {1, 2, 4, 8};
     int can_scale = 0;
     for (size_t i = 0; i < sizeof(scaled_sizes) / sizeof(scaled_sizes[0]); ++i)
     {
-        if (element_size == scaled_sizes[i])
+        if (first_index_stride == scaled_sizes[i])
         {
             can_scale = 1;
             break;
@@ -3768,7 +3820,7 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
     if (can_scale)
     {
         snprintf(buffer, sizeof(buffer), "\tleaq\t(%s,%s,%d), %s\n",
-            base_reg->bit_64, index_reg->bit_64, element_size, index_reg->bit_64);
+            base_reg->bit_64, index_reg->bit_64, first_index_stride, index_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
     }
     else
@@ -3781,6 +3833,130 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
 
         snprintf(buffer, sizeof(buffer), "\taddq\t%s, %s\n", base_reg->bit_64, index_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
+    }
+
+    /* Handle extra indices for multi-dimensional arrays.
+     * For arr[x, y] with dimensions [1..M, 1..N], after processing x we have:
+     *   addr = base + (x - lower1) * (N * elem_size)
+     * Now for each additional index y:
+     *   addr = addr + (y - lower2) * stride2
+     * where stride2 = elem_size for the last dimension, or stride2 = dim3 * ... * dimN * elem_size.
+     * 
+     * For simplicity, we get the inner dimension size from the TypeAlias's array_dimensions. */
+    if (expr->expr_data.array_access_data.extra_indices != NULL)
+    {
+        /* Get the array type alias to determine dimension strides */
+        struct TypeAlias *alias = NULL;
+        if (array_expr->type == EXPR_VAR_ID && ctx->symtab != NULL)
+        {
+            HashNode_t *arr_node = NULL;
+            if (FindIdent(&arr_node, ctx->symtab, array_expr->expr_data.id) >= 0 && arr_node != NULL)
+            {
+                alias = get_type_alias_from_node(arr_node);
+            }
+        }
+        
+        /* Count dimensions and compute strides */
+        int dim_count = 1;
+        int dim_sizes[10] = {0};
+        if (alias != NULL && alias->array_dimensions != NULL)
+        {
+            ListNode_t *dim = alias->array_dimensions;
+            while (dim != NULL && dim_count < 10)
+            {
+                const char *range_str = (const char *)dim->cur;
+                if (range_str != NULL)
+                {
+                    char *range_copy = strdup(range_str);
+                    if (range_copy != NULL)
+                    {
+                        char *dotdot = strstr(range_copy, "..");
+                        if (dotdot != NULL)
+                        {
+                            *dotdot = '\0';
+                            int dim_start = atoi(range_copy);
+                            int dim_end = atoi(dotdot + 2);
+                            dim_sizes[dim_count - 1] = dim_end - dim_start + 1;
+                        }
+                        free(range_copy);
+                    }
+                }
+                dim_count++;
+                dim = dim->next;
+            }
+        }
+        
+        /* Process each extra index */
+        int extra_idx_num = 1;
+        ListNode_t *extra_idx_node = expr->expr_data.array_access_data.extra_indices;
+        while (extra_idx_node != NULL)
+        {
+            struct Expression *extra_idx_expr = (struct Expression *)extra_idx_node->cur;
+            if (extra_idx_expr != NULL)
+            {
+                Register_t *extra_idx_reg = NULL;
+                inst_list = codegen_expr_with_result(extra_idx_expr, inst_list, ctx, &extra_idx_reg);
+                if (codegen_had_error(ctx) || extra_idx_reg == NULL)
+                    break;
+                
+                /* Compute stride for this dimension */
+                int stride = element_size;
+                for (int d = extra_idx_num + 1; d < dim_count && d < 10; d++)
+                {
+                    if (dim_sizes[d] > 0)
+                        stride *= dim_sizes[d];
+                }
+                
+                /* Get lower bound for this dimension */
+                int extra_lower_bound = 1; /* Default to 1-based */
+                if (alias != NULL && alias->array_dimensions != NULL)
+                {
+                    ListNode_t *dim = alias->array_dimensions;
+                    for (int d = 0; d < extra_idx_num && dim != NULL; d++)
+                        dim = dim->next;
+                    if (dim != NULL && dim->cur != NULL)
+                    {
+                        const char *range_str = (const char *)dim->cur;
+                        char *range_copy = strdup(range_str);
+                        if (range_copy != NULL)
+                        {
+                            char *dotdot = strstr(range_copy, "..");
+                            if (dotdot != NULL)
+                            {
+                                *dotdot = '\0';
+                                extra_lower_bound = atoi(range_copy);
+                            }
+                            free(range_copy);
+                        }
+                    }
+                }
+                
+                /* Subtract lower bound */
+                if (extra_lower_bound != 0)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tsubl\t$%d, %s\n", extra_lower_bound, extra_idx_reg->bit_32);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+                
+                /* Sign extend to 64-bit */
+                inst_list = codegen_sign_extend32_to64(inst_list, extra_idx_reg->bit_32, extra_idx_reg->bit_64);
+                
+                /* Multiply by stride */
+                if (stride != 1)
+                {
+                    snprintf(buffer, sizeof(buffer), "\timulq\t$%d, %s\n", stride, extra_idx_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+                
+                /* Add to address */
+                snprintf(buffer, sizeof(buffer), "\taddq\t%s, %s\n", extra_idx_reg->bit_64, index_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                
+                free_reg(get_reg_stack(), extra_idx_reg);
+            }
+            extra_idx_num++;
+            extra_idx_node = extra_idx_node->next;
+        }
     }
 
     free_reg(get_reg_stack(), base_reg);

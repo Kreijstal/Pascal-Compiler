@@ -7441,8 +7441,35 @@ static struct Expression *convert_factor(ast_t *expr_node) {
         ast_t *array_node = expr_node->child;
         ast_t *index_expr_node = array_node != NULL ? array_node->next : NULL;
         struct Expression *base = convert_expression(array_node);
-        struct Expression *index = convert_expression(index_expr_node);
-        return mk_arrayaccess(expr_node->line, base, index);
+        struct Expression *first_index = convert_expression(index_expr_node);
+        struct Expression *result = mk_arrayaccess(expr_node->line, base, first_index);
+        
+        /* For multi-dimensional arrays like arr[x, y, z], the indices are chained
+         * via ->next. Store additional indices in extra_indices list. */
+        if (index_expr_node != NULL && index_expr_node->next != NULL) {
+            ast_t *extra_idx_node = index_expr_node->next;
+            ListNode_t *extra_indices = NULL;
+            ListNode_t *extra_tail = NULL;
+            
+            while (extra_idx_node != NULL) {
+                struct Expression *extra_idx = convert_expression(extra_idx_node);
+                if (extra_idx != NULL) {
+                    ListNode_t *new_node = CreateListNode(extra_idx, LIST_EXPR);
+                    if (new_node != NULL) {
+                        if (extra_tail == NULL) {
+                            extra_indices = new_node;
+                            extra_tail = new_node;
+                        } else {
+                            extra_tail->next = new_node;
+                            extra_tail = new_node;
+                        }
+                    }
+                }
+                extra_idx_node = extra_idx_node->next;
+            }
+            result->expr_data.array_access_data.extra_indices = extra_indices;
+        }
+        return result;
     }
     default:
         return NULL;

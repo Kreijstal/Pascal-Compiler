@@ -948,6 +948,21 @@ void expr_print(struct Expression *expr, FILE *f, int num_indent)
           print_indent(f, num_indent);
           fprintf(f, "[INDEX]:\n");
           expr_print(expr->expr_data.array_access_data.index_expr, f, num_indent+1);
+
+          /* Print extra indices for multi-dimensional arrays */
+          if (expr->expr_data.array_access_data.extra_indices != NULL)
+          {
+              int idx_num = 2;
+              ListNode_t *idx = expr->expr_data.array_access_data.extra_indices;
+              while (idx != NULL)
+              {
+                  print_indent(f, num_indent);
+                  fprintf(f, "[INDEX_%d]:\n", idx_num++);
+                  if (idx->cur != NULL)
+                      expr_print((struct Expression *)idx->cur, f, num_indent+1);
+                  idx = idx->next;
+              }
+          }
           break;
 
         case EXPR_RECORD_ACCESS:
@@ -1519,6 +1534,19 @@ void destroy_expr(struct Expression *expr)
               destroy_expr(expr->expr_data.array_access_data.array_expr);
           if (expr->expr_data.array_access_data.index_expr != NULL)
               destroy_expr(expr->expr_data.array_access_data.index_expr);
+          /* Free extra indices for multi-dimensional arrays */
+          if (expr->expr_data.array_access_data.extra_indices != NULL)
+          {
+              ListNode_t *idx = expr->expr_data.array_access_data.extra_indices;
+              while (idx != NULL)
+              {
+                  ListNode_t *next = idx->next;
+                  if (idx->cur != NULL)
+                      destroy_expr((struct Expression *)idx->cur);
+                  free(idx);
+                  idx = next;
+              }
+          }
           break;
 
         case EXPR_RECORD_ACCESS:
@@ -2724,6 +2752,7 @@ struct Expression *mk_arrayaccess(int line_num, struct Expression *array_expr, s
     init_expression(new_expr, line_num, EXPR_ARRAY_ACCESS);
     new_expr->expr_data.array_access_data.array_expr = array_expr;
     new_expr->expr_data.array_access_data.index_expr = index_expr;
+    new_expr->expr_data.array_access_data.extra_indices = NULL;
 
     return new_expr;
 }

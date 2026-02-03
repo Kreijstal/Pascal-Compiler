@@ -430,6 +430,7 @@ struct Expression
         {
             struct Expression *array_expr;
             struct Expression *index_expr;
+            ListNode_t *extra_indices;  /* For multi-dimensional arrays: additional indices beyond the first */
         } array_access_data;
 
         /* Record field access */
