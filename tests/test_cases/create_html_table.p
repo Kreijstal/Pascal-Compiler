@@ -13,7 +13,7 @@ end;
 var
   i: Integer;
 begin
-  SetRandSeed(12345);
+  RandSeed := 12345;
   Writeln('<table>');
   Writeln('  <tr><th></th><th>X</th><th>Y</th><th>Z</th></tr>');
   for i := 1 to 4 do

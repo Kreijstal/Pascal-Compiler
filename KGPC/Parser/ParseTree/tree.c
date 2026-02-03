@@ -1547,6 +1547,18 @@ void destroy_expr(struct Expression *expr)
                   idx = next;
               }
           }
+          if (expr->expr_data.array_access_data.linear_strides != NULL)
+          {
+              free(expr->expr_data.array_access_data.linear_strides);
+              expr->expr_data.array_access_data.linear_strides = NULL;
+          }
+          if (expr->expr_data.array_access_data.linear_lowers != NULL)
+          {
+              free(expr->expr_data.array_access_data.linear_lowers);
+              expr->expr_data.array_access_data.linear_lowers = NULL;
+          }
+          expr->expr_data.array_access_data.linear_index_count = 0;
+          expr->expr_data.array_access_data.linear_info_valid = 0;
           break;
 
         case EXPR_RECORD_ACCESS:
@@ -2672,6 +2684,10 @@ static void init_expression(struct Expression *expr, int line_num, enum ExprType
     expr->expr_data.function_call_data.is_virtual_call = 0;
     expr->expr_data.function_call_data.vmt_index = -1;
     expr->expr_data.function_call_data.self_class_name = NULL;
+    expr->expr_data.array_access_data.linear_index_count = 0;
+    expr->expr_data.array_access_data.linear_strides = NULL;
+    expr->expr_data.array_access_data.linear_lowers = NULL;
+    expr->expr_data.array_access_data.linear_info_valid = 0;
 }
 
 struct Expression *mk_relop(int line_num, int type, struct Expression *left,
@@ -2753,6 +2769,10 @@ struct Expression *mk_arrayaccess(int line_num, struct Expression *array_expr, s
     new_expr->expr_data.array_access_data.array_expr = array_expr;
     new_expr->expr_data.array_access_data.index_expr = index_expr;
     new_expr->expr_data.array_access_data.extra_indices = NULL;
+    new_expr->expr_data.array_access_data.linear_index_count = 0;
+    new_expr->expr_data.array_access_data.linear_strides = NULL;
+    new_expr->expr_data.array_access_data.linear_lowers = NULL;
+    new_expr->expr_data.array_access_data.linear_info_valid = 0;
 
     return new_expr;
 }

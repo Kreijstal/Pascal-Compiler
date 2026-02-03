@@ -7183,17 +7183,6 @@ void semcheck_add_builtins(SymTab_t *symtab)
         free(upcase_name);
     }
 
-    char *randseed_name = strdup("RandSeed");
-    if (randseed_name != NULL) {
-        KgpcType *return_type = kgpc_type_from_var_type(HASHVAR_LONGINT);
-        assert(return_type != NULL && "Failed to create return type for RandSeed");
-        KgpcType *randseed_type = create_procedure_type(NULL, return_type);
-        assert(randseed_type != NULL && "Failed to create RandSeed function type");
-        AddBuiltinFunction_Typed(symtab, randseed_name, randseed_type);
-        destroy_kgpc_type(randseed_type);
-        free(randseed_name);
-    }
-
     char *sqr_name = strdup("Sqr");
     if (sqr_name != NULL) {
         KgpcType *return_type = kgpc_type_from_var_type(HASHVAR_LONGINT);

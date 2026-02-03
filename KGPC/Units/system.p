@@ -351,6 +351,7 @@ var
   IsLibrary: Boolean = False;
   InOutRes: Word;
   FirstDotAtFileNameStartIsExtension: Boolean;
+  RandSeed: LongWord; external name 'kgpc_randseed';
   WideStringManager: TUnicodeStringManager;
   DefaultTextLineBreakStyle: TTextLineBreakStyle;
   DefaultSystemCodePage: TSystemCodePage;
@@ -447,12 +448,9 @@ begin
     end
 end;
 
-procedure SetRandSeed(seed: longint);
+procedure SetRandSeed(seed: LongWord);
 begin
-    assembler;
-    asm
-        call kgpc_set_randseed
-    end
+    RandSeed := seed;
 end;
 
 function succ(i: integer): integer;

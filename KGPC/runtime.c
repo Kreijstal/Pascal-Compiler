@@ -15,7 +15,18 @@
 #include "format_arg.h"
 
 static const double KGPC_PI = 3.14159265358979323846264338327950288;
-static uint64_t kgpc_rand_state = 0x9e3779b97f4a7c15ULL;
+
+uint32_t kgpc_randseed = 0u;
+static uint32_t kgpc_old_randseed = 0xFFFFFFFFu;
+
+/* MT19937 state (matching FPC's mtwist implementation). */
+#define KGPC_MT_N 624u
+#define KGPC_MT_M 397u
+#define KGPC_MT_MATRIX_A 0x9908b0dfu
+#define KGPC_MT_UPPER_MASK 0x80000000u
+#define KGPC_MT_LOWER_MASK 0x7fffffffu
+static uint32_t kgpc_mt_state[KGPC_MT_N];
+static uint32_t kgpc_mt_index = 0u;
 
 /* Forward decl for optional debug flag helper */
 static int kgpc_env_flag(const char *name);
@@ -4881,24 +4892,67 @@ long long kgpc_floor(double value)
 {
     return (long long)floor(value);
 }
-static uint64_t kgpc_rand_next(void)
+
+static void kgpc_mtwist_init(uint32_t seed)
 {
-    kgpc_rand_state = kgpc_rand_state * 2862933555777941757ULL + 3037000493ULL;
-    return kgpc_rand_state;
+    kgpc_mt_state[0] = seed;
+    for (uint32_t i = 1; i < KGPC_MT_N; ++i)
+    {
+        uint32_t prev = kgpc_mt_state[i - 1];
+        kgpc_mt_state[i] = (uint32_t)(1812433253u * (prev ^ (prev >> 30)) + i);
+    }
+    kgpc_mt_index = KGPC_MT_N;
+}
+
+static void kgpc_mtwist_update_state(void)
+{
+    for (uint32_t i = 0; i < KGPC_MT_N; ++i)
+    {
+        uint32_t y = (kgpc_mt_state[i] & KGPC_MT_UPPER_MASK) |
+            (kgpc_mt_state[(i + 1) % KGPC_MT_N] & KGPC_MT_LOWER_MASK);
+        uint32_t mag = (y & 1u) ? KGPC_MT_MATRIX_A : 0u;
+        kgpc_mt_state[i] = kgpc_mt_state[(i + KGPC_MT_M) % KGPC_MT_N] ^ (y >> 1) ^ mag;
+    }
+    kgpc_mt_index = 0;
+}
+
+static uint32_t kgpc_mtwist_u32rand(void)
+{
+    uint32_t idx = kgpc_mt_index;
+    kgpc_mt_index = idx + 1;
+
+    if (kgpc_randseed != kgpc_old_randseed || idx >= (KGPC_MT_N + 1))
+    {
+        kgpc_mtwist_init(kgpc_randseed);
+        kgpc_randseed = ~kgpc_randseed;
+        kgpc_old_randseed = kgpc_randseed;
+        idx = KGPC_MT_N;
+    }
+
+    if (idx == KGPC_MT_N)
+    {
+        kgpc_mtwist_update_state();
+        idx = 0;
+        kgpc_mt_index = 1;
+    }
+
+    uint32_t y = kgpc_mt_state[idx];
+    y ^= (y >> 11);
+    y ^= (y << 7) & 0x9d2c5680u;
+    y ^= (y << 15) & 0xefc60000u;
+    y ^= (y >> 18);
+    return y;
 }
 
 void kgpc_randomize(void)
 {
-    uint64_t seed = ((uint64_t)time(NULL) << 32) ^ (uint64_t)clock();
-    if (seed == 0)
-        seed = 0x9e3779b97f4a7c15ULL;
-    kgpc_rand_state = seed;
+    kgpc_randseed = (uint32_t)time(NULL);
 }
 
 double kgpc_random_real(void)
 {
-    uint64_t value = kgpc_rand_next();
-    return (double)(value >> 11) * (1.0 / 9007199254740992.0);
+    const double scale = 1.0 / 4294967296.0;
+    return (double)kgpc_mtwist_u32rand() * scale;
 }
 
 double kgpc_random_real_upper(double upper)
@@ -4908,36 +4962,116 @@ double kgpc_random_real_upper(double upper)
     return kgpc_random_real() * upper;
 }
 
+static int64_t kgpc_random_longint(int64_t l)
+{
+    int64_t result = l;
+    if (l < 0)
+        result = -result - 1;
+
+    uint32_t bound = (uint32_t)result;
+    if (bound == 0u)
+        return 0;
+
+    uint64_t m = (uint64_t)kgpc_mtwist_u32rand() * (uint64_t)bound;
+    if ((uint32_t)m < bound)
+    {
+        uint32_t t = (uint32_t)(0u - bound) % bound;
+        while ((uint32_t)m < t)
+            m = (uint64_t)kgpc_mtwist_u32rand() * (uint64_t)bound;
+    }
+
+    result = (int64_t)(m >> 32);
+    if (l < -1)
+        result = -result - 1;
+    return result;
+}
+
 int64_t kgpc_random_int(int64_t upper)
 {
-    if (upper <= 0)
+    if (upper == (int64_t)(int32_t)upper)
+        return kgpc_random_longint(upper);
+
+    uint64_t ul = (uint64_t)upper;
+    if (upper < 0)
+        ul = ~ul;
+    if (ul == 0u)
         return 0;
-    uint64_t value = kgpc_rand_next();
-    uint64_t range = (uint64_t)upper;
-    return (int64_t)(value % range);
+
+    uint32_t a = kgpc_mtwist_u32rand();
+    uint64_t high = 0;
+    __uint128_t prod = ((__uint128_t)a << 32) | kgpc_mtwist_u32rand();
+    __uint128_t full = prod * ul;
+    uint64_t mLo = (uint64_t)full;
+    high = (uint64_t)(full >> 64);
+
+    if (mLo < ul)
+    {
+        uint64_t t = (uint64_t)(0u - ul) % ul;
+        while (mLo < t)
+        {
+            a = kgpc_mtwist_u32rand();
+            prod = ((__uint128_t)a << 32) | kgpc_mtwist_u32rand();
+            full = prod * ul;
+            mLo = (uint64_t)full;
+            high = (uint64_t)(full >> 64);
+        }
+    }
+
+    int64_t result = (int64_t)high;
+    if (upper < -1)
+        result = -result - 1;
+    return result;
+}
+
+int64_t kgpc_random_int64(int64_t upper)
+{
+    uint64_t ul = (uint64_t)upper;
+    if (upper < 0)
+        ul = ~ul;
+    if (ul == 0u)
+        return 0;
+
+    uint32_t a = kgpc_mtwist_u32rand();
+    uint64_t high = 0;
+    __uint128_t prod = ((__uint128_t)a << 32) | kgpc_mtwist_u32rand();
+    __uint128_t full = prod * ul;
+    uint64_t mLo = (uint64_t)full;
+    high = (uint64_t)(full >> 64);
+
+    if (mLo < ul)
+    {
+        uint64_t t = (uint64_t)(0u - ul) % ul;
+        while (mLo < t)
+        {
+            a = kgpc_mtwist_u32rand();
+            prod = ((__uint128_t)a << 32) | kgpc_mtwist_u32rand();
+            full = prod * ul;
+            mLo = (uint64_t)full;
+            high = (uint64_t)(full >> 64);
+        }
+    }
+
+    int64_t result = (int64_t)high;
+    if (upper < -1)
+        result = -result - 1;
+    return result;
 }
 
 int64_t kgpc_random_range(int64_t low, int64_t high)
 {
     if (high <= low)
         return low;
-    uint64_t diff = (uint64_t)(high - low);
-    uint64_t value = kgpc_rand_next();
-    uint64_t offset = value % diff;
-    return low + (int64_t)offset;
+    return low + kgpc_random_int64(high - low);
 }
 
-int64_t kgpc_get_randseed(void)
+uint32_t kgpc_get_randseed(void)
 {
-    return (int64_t)kgpc_rand_state;
+    return kgpc_randseed;
 }
 
-void kgpc_set_randseed(int64_t seed)
+void kgpc_set_randseed(uint32_t seed)
 {
-    if ((uint64_t)seed == 0)
-        kgpc_rand_state = 0x9e3779b97f4a7c15ULL;
-    else
-        kgpc_rand_state = (uint64_t)seed;
+    kgpc_randseed = seed;
 }
 
 void kgpc_sincos_bits(int64_t angle_bits, double *sin_out, double *cos_out)

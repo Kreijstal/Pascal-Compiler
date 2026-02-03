@@ -10,11 +10,323 @@
 
 #include "SemCheck_Expr_Internal.h"
 #include <time.h>
+#include <ctype.h>
 
 #define FUNCCALL_TIMINGS_ENABLED() (getenv("KGPC_DEBUG_FUNCCALL_TIMINGS") != NULL)
 
 static double funccall_now_ms(void) {
     return (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC;
+}
+
+static void semcheck_clear_array_linearization(struct Expression *expr)
+{
+    if (expr == NULL)
+        return;
+    if (expr->expr_data.array_access_data.linear_strides != NULL)
+    {
+        free(expr->expr_data.array_access_data.linear_strides);
+        expr->expr_data.array_access_data.linear_strides = NULL;
+    }
+    if (expr->expr_data.array_access_data.linear_lowers != NULL)
+    {
+        free(expr->expr_data.array_access_data.linear_lowers);
+        expr->expr_data.array_access_data.linear_lowers = NULL;
+    }
+    expr->expr_data.array_access_data.linear_index_count = 0;
+    expr->expr_data.array_access_data.linear_info_valid = 0;
+}
+
+static int resolve_const_identifier_local(SymTab_t *symtab, const char *id, long long *out_value)
+{
+    if (symtab == NULL || id == NULL || out_value == NULL)
+        return 1;
+
+    HashNode_t *node = NULL;
+    if (FindIdent(&node, symtab, id) >= 0 &&
+        node != NULL && (node->hash_type == HASHTYPE_CONST || node->is_typed_const))
+    {
+        *out_value = node->const_int_value;
+        return 0;
+    }
+    return 1;
+}
+
+static char *copy_trim_token(const char *token)
+{
+    if (token == NULL)
+        return NULL;
+    const char *start = token;
+    while (*start != '\0' && isspace((unsigned char)*start))
+        ++start;
+    const char *end = start + strlen(start);
+    while (end > start && isspace((unsigned char)end[-1]))
+        --end;
+    size_t len = (size_t)(end - start);
+    char *out = (char *)malloc(len + 1);
+    if (out == NULL)
+        return NULL;
+    memcpy(out, start, len);
+    out[len] = '\0';
+    return out;
+}
+
+static int parse_bound_token(SymTab_t *symtab, const char *token, long long *out_value)
+{
+    if (token == NULL || out_value == NULL)
+        return 1;
+    char *trimmed = copy_trim_token(token);
+    if (trimmed == NULL)
+        return 1;
+
+    char *endptr = NULL;
+    long long val = strtoll(trimmed, &endptr, 10);
+    if (endptr != NULL && *endptr == '\0' && endptr != trimmed)
+    {
+        *out_value = val;
+        free(trimmed);
+        return 0;
+    }
+
+    int res = resolve_const_identifier_local(symtab, trimmed, out_value);
+    free(trimmed);
+    return res;
+}
+
+static int resolve_dimension_bounds(SymTab_t *symtab, const char *dim_str,
+    long long *out_low, long long *out_high)
+{
+    if (dim_str == NULL || out_low == NULL || out_high == NULL)
+        return 1;
+
+    const char *dotdot = strstr(dim_str, "..");
+    if (dotdot != NULL)
+    {
+        size_t left_len = (size_t)(dotdot - dim_str);
+        char *left = (char *)malloc(left_len + 1);
+        if (left == NULL)
+            return 1;
+        memcpy(left, dim_str, left_len);
+        left[left_len] = '\0';
+        const char *right = dotdot + 2;
+
+        long long low = 0;
+        long long high = 0;
+        int left_ok = parse_bound_token(symtab, left, &low);
+        int right_ok = parse_bound_token(symtab, right, &high);
+        free(left);
+        if (left_ok != 0 || right_ok != 0)
+            return 1;
+        *out_low = low;
+        *out_high = high;
+        return 0;
+    }
+
+    if (pascal_identifier_equals(dim_str, "Boolean"))
+    {
+        *out_low = 0;
+        *out_high = 1;
+        return 0;
+    }
+
+    if (symtab != NULL)
+    {
+        HashNode_t *type_node = NULL;
+        if (FindIdent(&type_node, symtab, dim_str) >= 0 &&
+            type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+        {
+            struct TypeAlias *alias = get_type_alias_from_node(type_node);
+            if (alias != NULL)
+            {
+                if (alias->is_enum && alias->enum_literals != NULL)
+                {
+                    int count = ListLength(alias->enum_literals);
+                    if (count > 0)
+                    {
+                        *out_low = 0;
+                        *out_high = count - 1;
+                        return 0;
+                    }
+                }
+                if (alias->is_range && alias->range_known)
+                {
+                    *out_low = alias->range_start;
+                    *out_high = alias->range_end;
+                    return 0;
+                }
+            }
+        }
+    }
+
+    return 1;
+}
+
+static struct TypeAlias *resolve_array_alias_for_expr(SymTab_t *symtab, struct Expression *array_expr)
+{
+    if (array_expr == NULL)
+        return NULL;
+    if (array_expr->resolved_kgpc_type != NULL)
+        return kgpc_type_get_type_alias(array_expr->resolved_kgpc_type);
+
+    if (array_expr->type == EXPR_VAR_ID && symtab != NULL && array_expr->expr_data.id != NULL)
+    {
+        HashNode_t *arr_node = NULL;
+        if (FindIdent(&arr_node, symtab, array_expr->expr_data.id) >= 0 && arr_node != NULL)
+            return get_type_alias_from_node(arr_node);
+    }
+
+    return NULL;
+}
+
+static void semcheck_compute_array_linearization(SymTab_t *symtab,
+    struct Expression *expr, struct Expression *array_expr)
+{
+    if (expr == NULL || array_expr == NULL)
+        return;
+
+    int index_count = 1;
+    if (expr->expr_data.array_access_data.extra_indices != NULL)
+        index_count += ListLength(expr->expr_data.array_access_data.extra_indices);
+    if (index_count <= 1)
+        return;
+
+    long long *lowers = (long long *)calloc((size_t)index_count, sizeof(long long));
+    long long *sizes = (long long *)calloc((size_t)index_count, sizeof(long long));
+    if (lowers == NULL || sizes == NULL)
+    {
+        free(lowers);
+        free(sizes);
+        return;
+    }
+
+    int bounds_ok = 0;
+    if (array_expr->resolved_kgpc_type != NULL &&
+        kgpc_type_is_array(array_expr->resolved_kgpc_type))
+    {
+        bounds_ok = 1;
+        KgpcType *type_iter = array_expr->resolved_kgpc_type;
+        for (int i = 0; i < index_count; ++i)
+        {
+            int start = 0;
+            int end = -1;
+            if (type_iter == NULL || !kgpc_type_is_array(type_iter) ||
+                kgpc_type_get_array_bounds(type_iter, &start, &end) != 0)
+            {
+                bounds_ok = 0;
+                break;
+            }
+            long long size = (long long)end - (long long)start + 1;
+            if (size <= 0)
+            {
+                bounds_ok = 0;
+                break;
+            }
+            lowers[i] = (long long)start;
+            sizes[i] = size;
+            type_iter = kgpc_type_get_array_element_type(type_iter);
+        }
+    }
+
+    if (!bounds_ok)
+    {
+        struct TypeAlias *alias = resolve_array_alias_for_expr(symtab, array_expr);
+        if (alias != NULL && alias->array_dimensions != NULL)
+        {
+            int dim_available = ListLength(alias->array_dimensions);
+            if (dim_available >= index_count)
+            {
+                bounds_ok = 1;
+                ListNode_t *dim = alias->array_dimensions;
+                for (int i = 0; i < index_count; ++i)
+                {
+                    if (dim == NULL || dim->cur == NULL)
+                    {
+                        bounds_ok = 0;
+                        break;
+                    }
+                    long long low = 0;
+                    long long high = 0;
+                    if (resolve_dimension_bounds(symtab, (const char *)dim->cur, &low, &high) != 0)
+                    {
+                        bounds_ok = 0;
+                        break;
+                    }
+                    long long size = high - low + 1;
+                    if (size <= 0)
+                    {
+                        bounds_ok = 0;
+                        break;
+                    }
+                    lowers[i] = low;
+                    sizes[i] = size;
+                    dim = dim->next;
+                }
+            }
+        }
+    }
+
+    if (!bounds_ok)
+    {
+        free(lowers);
+        free(sizes);
+        return;
+    }
+
+    long long element_size = 0;
+    if (array_expr->resolved_kgpc_type != NULL)
+    {
+        KgpcType *type_iter = array_expr->resolved_kgpc_type;
+        for (int i = 0; i < index_count; ++i)
+        {
+            if (type_iter == NULL || !kgpc_type_is_array(type_iter))
+            {
+                type_iter = NULL;
+                break;
+            }
+            type_iter = kgpc_type_get_array_element_type(type_iter);
+        }
+        if (type_iter != NULL)
+            element_size = kgpc_type_sizeof(type_iter);
+    }
+    if (element_size <= 0)
+        element_size = array_expr->array_element_size;
+    if (element_size <= 0 && array_expr->resolved_kgpc_type != NULL)
+        element_size = (long long)kgpc_type_get_array_element_size(array_expr->resolved_kgpc_type);
+    if (element_size <= 0)
+        element_size = 1;
+
+    long long *strides = (long long *)calloc((size_t)index_count, sizeof(long long));
+    if (strides == NULL)
+    {
+        free(lowers);
+        free(sizes);
+        return;
+    }
+
+    for (int i = 0; i < index_count; ++i)
+    {
+        long long stride = element_size;
+        for (int j = i + 1; j < index_count; ++j)
+            stride *= sizes[j];
+        strides[i] = stride;
+    }
+
+    semcheck_clear_array_linearization(expr);
+    expr->expr_data.array_access_data.linear_index_count = index_count;
+    expr->expr_data.array_access_data.linear_strides = strides;
+    expr->expr_data.array_access_data.linear_lowers = lowers;
+    expr->expr_data.array_access_data.linear_info_valid = 1;
+
+    if (getenv("KGPC_DEBUG_ARRAY_LINEAR") != NULL)
+    {
+        fprintf(stderr, "[SemCheck] array linearization: indices=%d elem_size=%lld\n",
+            index_count, element_size);
+        for (int i = 0; i < index_count; ++i)
+        {
+            fprintf(stderr, "  dim%d: low=%lld size=%lld stride=%lld\n",
+                i, lowers[i], sizes[i], strides[i]);
+        }
+    }
+    free(sizes);
 }
 
 
@@ -34,6 +346,7 @@ int semcheck_arrayaccess(int *type_return,
 
     semcheck_clear_pointer_info(expr);
     semcheck_clear_array_info(expr);
+    semcheck_clear_array_linearization(expr);
     expr->record_type = NULL;
 
     array_expr = expr->expr_data.array_access_data.array_expr;
@@ -274,6 +587,10 @@ int semcheck_arrayaccess(int *type_return,
     /* Type-check extra indices for multi-dimensional arrays */
     if (expr->expr_data.array_access_data.extra_indices != NULL)
     {
+        if (getenv("KGPC_DEBUG_ARRAY_LINEAR") != NULL)
+        {
+            fprintf(stderr, "[SemCheck] array access has extra indices\n");
+        }
         ListNode_t *extra_idx = expr->expr_data.array_access_data.extra_indices;
         while (extra_idx != NULL)
         {
@@ -314,6 +631,8 @@ int semcheck_arrayaccess(int *type_return,
     if (expr->resolved_kgpc_type != NULL)
         destroy_kgpc_type(expr->resolved_kgpc_type);
     expr->resolved_kgpc_type = res_type;
+
+    semcheck_compute_array_linearization(symtab, expr, array_expr);
 
     return return_val;
 }
@@ -1659,9 +1978,6 @@ int semcheck_funccall(int *type_return,
     
     if (id != NULL && pascal_identifier_equals(id, "RandomRange"))
         return semcheck_builtin_randomrange(type_return, symtab, expr, max_scope_lev);
-
-    if (id != NULL && pascal_identifier_equals(id, "RandSeed"))
-        return semcheck_builtin_randseed(type_return, symtab, expr, max_scope_lev);
 
     if (id != NULL && pascal_identifier_equals(id, "Aligned"))
         return semcheck_builtin_aligned(type_return, symtab, expr, max_scope_lev);

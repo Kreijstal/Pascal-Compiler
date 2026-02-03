@@ -33,7 +33,7 @@ static int sizeof_from_variant_part(SymTab_t *symtab, struct VariantPart *varian
     long long *size_out, int depth, int line_num);
 static int find_field_in_members(SymTab_t *symtab, ListNode_t *members,
     const char *field_name, struct RecordField **out_field, long long *offset_out,
-    int depth, int line_num, int *found);
+    long long start_offset, int depth, int line_num, int *found);
 static int find_field_in_variant(SymTab_t *symtab, struct VariantPart *variant,
     const char *field_name, struct RecordField **out_field, long long *offset_out,
     int depth, int line_num, int *found);
@@ -515,7 +515,7 @@ static int find_field_in_variant(SymTab_t *symtab, struct VariantPart *variant,
             long long branch_offset = 0;
             int branch_found = 0;
             if (find_field_in_members(symtab, branch->members, field_name, out_field,
-                    &branch_offset, depth + 1, line_num, &branch_found) != 0)
+                    &branch_offset, 0, depth + 1, line_num, &branch_found) != 0)
                 return 1;
             if (branch_found)
             {
@@ -534,12 +534,12 @@ static int find_field_in_variant(SymTab_t *symtab, struct VariantPart *variant,
 
 static int find_field_in_members(SymTab_t *symtab, ListNode_t *members,
     const char *field_name, struct RecordField **out_field, long long *offset_out,
-    int depth, int line_num, int *found)
+    long long start_offset, int depth, int line_num, int *found)
 {
     if (found != NULL)
         *found = 0;
 
-    long long offset = 0;
+    long long offset = start_offset;
     ListNode_t *cur = members;
     while (cur != NULL)
     {
@@ -793,8 +793,9 @@ int resolve_record_field(SymTab_t *symtab, struct RecordType *record,
 
     long long offset = 0;
     int found = 0;
+    long long start_offset = record->is_class ? POINTER_SIZE_BYTES : 0;
     if (find_field_in_members(symtab, record->fields, field_name, out_field,
-            &offset, 0, line_num, &found) != 0)
+            &offset, start_offset, 0, line_num, &found) != 0)
         return 1;
 
     if (!found)

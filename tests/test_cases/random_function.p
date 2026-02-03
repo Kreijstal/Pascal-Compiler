@@ -3,6 +3,7 @@ var
   r: real;
   i: longint;
 begin
+  RandSeed := 0;
   r := Random;
   writeln('RandReal=', r:0:8);
   i := Random(10);
