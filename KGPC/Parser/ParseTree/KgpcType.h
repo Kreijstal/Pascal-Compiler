@@ -125,25 +125,25 @@ KgpcType* resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
 long long kgpc_type_sizeof(KgpcType *type);
 
 /* Check if a type is an array type. */
-int kgpc_type_is_array(KgpcType *type);
-int kgpc_type_is_array_of_const(KgpcType *type);
-int kgpc_type_is_pointer(KgpcType *type);
-int kgpc_type_is_record(KgpcType *type);
-int kgpc_type_is_procedure(KgpcType *type);
+int kgpc_type_is_array(const KgpcType *type);
+int kgpc_type_is_array_of_const(const KgpcType *type);
+int kgpc_type_is_pointer(const KgpcType *type);
+int kgpc_type_is_record(const KgpcType *type);
+int kgpc_type_is_procedure(const KgpcType *type);
 
-int kgpc_type_is_char(KgpcType *type);
-int kgpc_type_is_string(KgpcType *type);
-int kgpc_type_is_shortstring(KgpcType *type);
-int kgpc_type_is_integer(KgpcType *type);
-int kgpc_type_is_real(KgpcType *type);
-int kgpc_type_is_numeric(KgpcType *type);
-int kgpc_type_is_boolean(KgpcType *type);
+int kgpc_type_is_char(const KgpcType *type);
+int kgpc_type_is_string(const KgpcType *type);
+int kgpc_type_is_shortstring(const KgpcType *type);
+int kgpc_type_is_integer(const KgpcType *type);
+int kgpc_type_is_real(const KgpcType *type);
+int kgpc_type_is_numeric(const KgpcType *type);
+int kgpc_type_is_boolean(const KgpcType *type);
 
 /* Check if a type is a record type. */
-int kgpc_type_is_record(KgpcType *type);
+int kgpc_type_is_record(const KgpcType *type);
 
 /* Check if a type is a procedure type. */
-int kgpc_type_is_procedure(KgpcType *type);
+int kgpc_type_is_procedure(const KgpcType *type);
 
 /* Get array bounds. Returns 0 on success, -1 if not an array.
  * start_out and end_out may be NULL if not needed. */
@@ -176,7 +176,7 @@ KgpcType* kgpc_type_get_return_type(KgpcType *type);
 
 /* Check if an array type is a dynamic/open array.
  * Returns 1 if it is a dynamic array, 0 otherwise. */
-int kgpc_type_is_dynamic_array(KgpcType *type);
+int kgpc_type_is_dynamic_array(const KgpcType *type);
 
 /* Get element size in bytes for an array type.
  * Returns the element size, or -1 if not an array or size cannot be determined. */
@@ -203,7 +203,7 @@ void kgpc_type_set_type_alias(KgpcType *type, struct TypeAlias *alias);
 
 /* Check if a KgpcType represents a pointer type.
  * Returns 1 if it's a pointer, 0 otherwise. */
-int kgpc_type_is_pointer(KgpcType *type);
+int kgpc_type_is_pointer(const KgpcType *type);
 
 /* For pointer types, get the type tag of what it points to.
  * Returns UNKNOWN_TYPE if not a pointer or if the pointed-to type is complex. */
@@ -217,7 +217,7 @@ int kgpc_type_uses_qword(KgpcType *type);
 /* Check if a KgpcType represents a signed integer type.
  * Returns 1 if signed, 0 otherwise.
  * This replaces codegen_type_is_signed() for KgpcType-based code. */
-int kgpc_type_is_signed(KgpcType *type);
+int kgpc_type_is_signed(const KgpcType *type);
 
 /* Check if a KgpcType matches a specific legacy type tag.
  * This is a helper for transitioning code that compares types.

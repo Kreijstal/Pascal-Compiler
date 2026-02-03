@@ -108,10 +108,10 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id,
 
 /* Searches for the given identifier in the table. Returns NULL if not found */
 /* Mutating tells whether it's being referenced in an assignment context */
-HashNode_t *FindIdentInTable(HashTable_t *table, char *id);
+HashNode_t *FindIdentInTable(HashTable_t *table, const char *id);
 
 /* Searches for all instances of a given identifier in the table. Returns a list of HashNode_t* or NULL if not found */
-ListNode_t *FindAllIdentsInTable(HashTable_t *table, char *id);
+ListNode_t *FindAllIdentsInTable(HashTable_t *table, const char *id);
 
 /* Resets hash node mutation and reference status */
 void ResetHashNodeStatus(HashNode_t *hash_node);
@@ -232,6 +232,6 @@ static inline struct TypeAlias* hashnode_get_type_alias(const HashNode_t *node)
  * Peter J. Weinberger's hash function
  * Source: Aho, Sethi, and Ullman, "Compilers", Addison-Wesley, 1986 (page 436).
  */
-int hashpjw( char *s );
+int hashpjw( const char *s );
 
 #endif
