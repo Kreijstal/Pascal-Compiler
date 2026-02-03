@@ -8,6 +8,7 @@ const
   ADFGVX = 'ADFGVX';
   ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
   MESSAGE = 'ATTACKAT1200AM';
+  FNAME = 'unixdict.txt';
 
 type
   //tPolybiusarr = array[1..6,1..6] of string;
@@ -95,8 +96,6 @@ type
         if (length(lst[x]) <> size) or HasRepeatedCharacters(lst[x]) then lst.Delete(x);
     end;
 
-  const
-    FNAME = 'unixdict.txt';
   var
     list: TStringList;
   begin

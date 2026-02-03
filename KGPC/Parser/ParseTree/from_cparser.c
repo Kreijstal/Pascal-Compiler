@@ -3281,15 +3281,36 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
         while (element_node != NULL && element_node->next != NULL)
             element_node = element_node->next;
 
-        /* Get range if available (first dimension only for now) */
-        int start = 0, end = -1;
-        if (child != NULL && child->typ == PASCAL_T_RANGE_TYPE) {
-            ast_t *lower = child->child;
-            ast_t *upper = (lower != NULL) ? lower->next : NULL;
-            if (lower != NULL && upper != NULL && lower->sym != NULL && upper->sym != NULL) {
-                start = atoi(lower->sym->name);
-                end = atoi(upper->sym->name);
+        /* Collect all dimension ranges into an array.
+         * For array[1..3, 1..3] of char, we have two ranges as siblings. */
+        int dimension_count = 0;
+        ast_t *range_node = child;
+        while (range_node != NULL && range_node != element_node) {
+            if (range_node->typ == PASCAL_T_RANGE_TYPE || range_node->typ == PASCAL_T_IDENTIFIER) {
+                dimension_count++;
             }
+            range_node = range_node->next;
+        }
+
+        /* Build arrays for storing ranges (limited to 10 dimensions) */
+        int starts[10] = {0};
+        int ends[10] = {-1};
+        int dim_idx = 0;
+        range_node = child;
+        while (range_node != NULL && range_node != element_node && dim_idx < 10) {
+            if (range_node->typ == PASCAL_T_RANGE_TYPE) {
+                ast_t *lower = range_node->child;
+                ast_t *upper = (lower != NULL) ? lower->next : NULL;
+                if (lower != NULL && upper != NULL && lower->sym != NULL && upper->sym != NULL) {
+                    starts[dim_idx] = atoi(lower->sym->name);
+                    ends[dim_idx] = atoi(upper->sym->name);
+                }
+                dim_idx++;
+            } else if (range_node->typ == PASCAL_T_IDENTIFIER) {
+                /* Identifier as index type (like array[Byte] of char) - use default 0..-1 */
+                dim_idx++;
+            }
+            range_node = range_node->next;
         }
 
         /* Recursively convert element type */
@@ -3311,7 +3332,18 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
         if (element_type == NULL)
             return NULL;
 
-        return create_array_type(element_type, start, end);
+        /* Build nested array types from innermost to outermost dimension.
+         * For array[1..3, 1..3] of char, we create:
+         *   array[1..3] of (array[1..3] of char)
+         * We iterate from the last dimension back to the first. */
+        KgpcType *result_type = element_type;
+        for (int i = dim_idx - 1; i >= 0; i--) {
+            result_type = create_array_type(result_type, starts[i], ends[i]);
+            if (result_type == NULL)
+                return NULL;
+        }
+
+        return result_type;
     }
 
     /* Handle file types */

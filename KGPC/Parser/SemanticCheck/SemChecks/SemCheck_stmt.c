@@ -3926,6 +3926,9 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
      * where we explicitly want to call the parent class method).
      */
     
+    /* Track if we already removed the static method's first argument to avoid double removal */
+    int static_arg_already_removed = 0;
+    
     /* Check for method call with unresolved name (member-access placeholder) where first arg is the instance. */
     if (stmt->stmt_data.procedure_call_data.is_method_call_placeholder && args_given != NULL) {
         struct Expression *first_arg = (struct Expression *)args_given->cur;
@@ -3972,6 +3975,7 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                     stmt->stmt_data.procedure_call_data.expr_args = old_head->next;
                     old_head->next = NULL;
                     args_given = stmt->stmt_data.procedure_call_data.expr_args;
+                    static_arg_already_removed = 1;
                 }
             }
         }
@@ -3983,7 +3987,7 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
      * 2. ClassName__MethodName(object, ...) - method call with class prefix
      */
     char *method_double_underscore = (proc_id != NULL) ? strstr(proc_id, "__") : NULL;
-    if (method_double_underscore != NULL && args_given != NULL) {
+    if (method_double_underscore != NULL && args_given != NULL && !static_arg_already_removed) {
         const char *method_name = method_double_underscore + 2;
         const char *class_name = NULL;
         int need_free_class_name = 0;
