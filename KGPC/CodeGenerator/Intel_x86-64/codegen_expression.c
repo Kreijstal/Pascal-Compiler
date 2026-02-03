@@ -9,6 +9,7 @@
 #include <string.h>
 #include <limits.h>
 
+#include "codegen.h"
 #include "codegen_expression.h"
 #include "register_types.h"
 #include "stackmng/stackmng.h"
@@ -24,27 +25,6 @@
 #include "../../Parser/SemanticCheck/SymTab/SymTab.h"
 #include "../../identifier_utils.h"
 #include "../../format_arg.h"
-
-static int codegen_tag_from_kgpc(const KgpcType *type)
-{
-    if (type == NULL)
-        return UNKNOWN_TYPE;
-    if (type->kind == TYPE_KIND_PRIMITIVE)
-        return type->info.primitive_type_tag;
-    if (kgpc_type_is_array_of_const((KgpcType *)type))
-        return ARRAY_OF_CONST_TYPE;
-    if (kgpc_type_is_array((KgpcType *)type) &&
-        type->type_alias != NULL &&
-        type->type_alias->is_shortstring)
-        return SHORTSTRING_TYPE;
-    if (kgpc_type_is_record((KgpcType *)type))
-        return RECORD_TYPE;
-    if (kgpc_type_is_pointer((KgpcType *)type))
-        return POINTER_TYPE;
-    if (kgpc_type_is_procedure((KgpcType *)type))
-        return PROCEDURE;
-    return UNKNOWN_TYPE;
-}
 
 #define CODEGEN_POINTER_SIZE_BYTES 8
 #define CODEGEN_SIZEOF_RECURSION_LIMIT 32
@@ -183,7 +163,7 @@ static int codegen_self_param_is_class(Tree_t *formal_arg_decl, CodeGenContext *
     if (type == NULL && ctx != NULL && ctx->symtab != NULL && type_id != NULL)
     {
         HashNode_t *type_node = NULL;
-        if (FindIdent(&type_node, ctx->symtab, (char *)type_id) == 0 &&
+        if (FindIdent(&type_node, ctx->symtab, type_id) == 0 &&
             type_node != NULL && type_node->type != NULL)
             type = type_node->type;
     }
@@ -1836,7 +1816,7 @@ static int codegen_sizeof_type(CodeGenContext *ctx, int type_tag, const char *ty
     if (type_id != NULL && ctx != NULL && ctx->symtab != NULL)
     {
         HashNode_t *node = NULL;
-        if (FindIdent(&node, ctx->symtab, (char *)type_id) >= 0 && node != NULL)
+        if (FindIdent(&node, ctx->symtab, type_id) >= 0 && node != NULL)
             return codegen_sizeof_hashnode(ctx, node, size_out, depth + 1);
 
         codegen_report_error(ctx, "ERROR: Unable to resolve type %s for size computation.", type_id);
@@ -2271,7 +2251,7 @@ int codegen_sizeof_pointer_target(CodeGenContext *ctx, struct Expression *pointe
     if (record_type == NULL && type_id != NULL && ctx != NULL && ctx->symtab != NULL)
     {
         HashNode_t *node = NULL;
-        if (FindIdent(&node, ctx->symtab, (char *)type_id) >= 0 && node != NULL)
+        if (FindIdent(&node, ctx->symtab, type_id) >= 0 && node != NULL)
             record_type = get_record_type_from_node(node);
     }
 

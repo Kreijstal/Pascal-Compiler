@@ -767,7 +767,7 @@ void set_vars_lists(SymTab_t *symtab, ListNode_t *vars, ListNode_t **vars_to_che
 
             while(ids != NULL)
             {
-                assert(FindIdent(&node, symtab, (char *)ids->cur) == 0);
+                assert(FindIdent(&node, symtab, ids->cur) == 0);
                 assert(node != NULL);
                 if (node->defined_in_unit)
                 {

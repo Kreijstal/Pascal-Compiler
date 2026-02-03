@@ -18,27 +18,6 @@
 #include "../../Parser/ParseTree/type_tags.h"
 #include "../../identifier_utils.h"
 #include "../../Parser/SemanticCheck/SymTab/SymTab.h"
-
-static int codegen_tag_from_kgpc(const KgpcType *type)
-{
-    if (type == NULL)
-        return UNKNOWN_TYPE;
-    if (type->kind == TYPE_KIND_PRIMITIVE)
-        return type->info.primitive_type_tag;
-    if (kgpc_type_is_array_of_const((KgpcType *)type))
-        return ARRAY_OF_CONST_TYPE;
-    if (kgpc_type_is_array((KgpcType *)type) &&
-        type->type_alias != NULL &&
-        type->type_alias->is_shortstring)
-        return SHORTSTRING_TYPE;
-    if (kgpc_type_is_record((KgpcType *)type))
-        return RECORD_TYPE;
-    if (kgpc_type_is_pointer((KgpcType *)type))
-        return POINTER_TYPE;
-    if (kgpc_type_is_procedure((KgpcType *)type))
-        return PROCEDURE;
-    return UNKNOWN_TYPE;
-}
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
 
 #ifndef CODEGEN_POINTER_SIZE_BYTES
@@ -556,7 +535,7 @@ static struct TypeAlias *codegen_lookup_type_alias(CodeGenContext *ctx, const ch
         return NULL;
 
     HashNode_t *node = NULL;
-    if (FindIdent(&node, ctx->symtab, (char *)type_id) < 0 || node == NULL)
+    if (FindIdent(&node, ctx->symtab, type_id) < 0 || node == NULL)
         return NULL;
 
     return hashnode_get_type_alias(node);
@@ -2861,7 +2840,7 @@ static void codegen_get_current_return_info(CodeGenContext *ctx, SymTab_t *symta
         return;
 
     HashNode_t *func_node = NULL;
-    if (FindIdent(&func_node, symtab, (char *)lookup_id) >= 0 && func_node != NULL &&
+    if (FindIdent(&func_node, symtab, lookup_id) >= 0 && func_node != NULL &&
         func_node->type != NULL)
     {
         KgpcType *return_type = kgpc_type_get_return_type(func_node->type);

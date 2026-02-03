@@ -959,7 +959,7 @@ int semcheck_recordaccess(int *type_return,
             {
                 HashNode_t *type_node = semcheck_find_type_node_with_kgpc_type(symtab, target_id);
                 if (type_node == NULL)
-                    FindIdent(&type_node, symtab, (char *)target_id);
+                    FindIdent(&type_node, symtab, target_id);
                 if (type_node != NULL)
                 {
                     record_info = get_record_type_from_node(type_node);
@@ -1059,7 +1059,7 @@ int semcheck_recordaccess(int *type_return,
                 pascal_identifier_equals(field_id, "Length"))
             {
                 /* These are no-arg methods that take the string as single argument */
-                if (FindIdent(&func_node, symtab, (char *)field_id) == 0 &&
+                if (FindIdent(&func_node, symtab, field_id) == 0 &&
                     func_node != NULL && func_node->hash_type == HASHTYPE_FUNCTION)
                 {
                     is_string_method = 1;
@@ -1072,7 +1072,7 @@ int semcheck_recordaccess(int *type_return,
                      pascal_identifier_equals(field_id, "EndsWith"))
             {
                 /* These methods take additional arguments - handled by method call transformation */
-                if (FindIdent(&func_node, symtab, (char *)field_id) == 0 &&
+                if (FindIdent(&func_node, symtab, field_id) == 0 &&
                     func_node != NULL && func_node->hash_type == HASHTYPE_FUNCTION)
                 {
                     is_string_method = 1;
@@ -2056,7 +2056,7 @@ int semcheck_try_reinterpret_as_typecast(int *type_return,
         target_type = RECORD_TYPE;
     }
     if (type_node == NULL)
-        FindIdent(&type_node, symtab, (char *)id);
+        FindIdent(&type_node, symtab, id);
     if (target_type == UNKNOWN_TYPE && type_node != NULL && type_node->type != NULL &&
         kgpc_type_is_record(type_node->type))
     {
@@ -2217,7 +2217,7 @@ int semcheck_addressof(int *type_return,
         if (func_id != NULL)
         {
             HashNode_t *inner_symbol = NULL;
-            int found = FindIdent(&inner_symbol, symtab, (char *)func_id);
+            int found = FindIdent(&inner_symbol, symtab, func_id);
             if (found >= 0 &&
                 inner_symbol != NULL &&
                 (inner_symbol->hash_type == HASHTYPE_FUNCTION ||
@@ -2285,7 +2285,7 @@ int semcheck_addressof(int *type_return,
         if (func_id != NULL)
         {
             HashNode_t *func_symbol = NULL;
-            if (FindIdent(&func_symbol, symtab, (char *)func_id) >= 0 &&
+            if (FindIdent(&func_symbol, symtab, func_id) >= 0 &&
                 func_symbol != NULL && 
                 (func_symbol->hash_type == HASHTYPE_FUNCTION ||
                  func_symbol->hash_type == HASHTYPE_PROCEDURE ||
@@ -2364,7 +2364,7 @@ int semcheck_addressof(int *type_return,
         if (proc_id != NULL)
         {
             HashNode_t *proc_symbol = NULL;
-            if (FindIdent(&proc_symbol, symtab, (char *)proc_id) >= 0 &&
+            if (FindIdent(&proc_symbol, symtab, proc_id) >= 0 &&
                 proc_symbol != NULL && 
                 (proc_symbol->hash_type == HASHTYPE_PROCEDURE || proc_symbol->hash_type == HASHTYPE_FUNCTION) &&
                 proc_symbol->type != NULL && proc_symbol->type->kind == TYPE_KIND_PROCEDURE)
@@ -2403,7 +2403,7 @@ int semcheck_addressof(int *type_return,
             if (func_id != NULL)
             {
                 HashNode_t *proc_symbol = NULL;
-                if (FindIdent(&proc_symbol, symtab, (char *)func_id) >= 0 &&
+                if (FindIdent(&proc_symbol, symtab, func_id) >= 0 &&
                     proc_symbol != NULL && 
                     (proc_symbol->hash_type == HASHTYPE_FUNCTION || proc_symbol->hash_type == HASHTYPE_PROCEDURE))
                 {

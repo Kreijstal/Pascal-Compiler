@@ -50,6 +50,7 @@ static char *g_semcheck_current_unit_name = NULL;
 static char *g_semcheck_source_path = NULL;
 static char *g_semcheck_source_buffer = NULL;
 static size_t g_semcheck_source_length = 0;
+static int g_semcheck_warning_count = 0;
 
 void semcheck_set_source_path(const char *path)
 {
@@ -351,13 +352,13 @@ static int semcheck_find_ident_with_qualified_fallback(HashNode_t **out, SymTab_
     if (out == NULL || symtab == NULL || id == NULL)
         return -1;
 
-    int found = FindIdent(out, symtab, (char *)id);
+    int found = FindIdent(out, symtab, id);
     if (found >= 0 && out != NULL && *out != NULL)
         return found;
 
     const char *dot = strrchr(id, '.');
     if (dot != NULL && dot[1] != '\0')
-        return FindIdent(out, symtab, (char *)(dot + 1));
+        return FindIdent(out, symtab, dot + 1);
 
     return found;
 }
@@ -368,12 +369,12 @@ static HashNode_t *semcheck_find_type_excluding_alias(SymTab_t *symtab, const ch
     if (symtab == NULL || type_id == NULL)
         return NULL;
 
-    ListNode_t *matches = FindAllIdents(symtab, (char *)type_id);
+    ListNode_t *matches = FindAllIdents(symtab, type_id);
     if (matches == NULL)
     {
         const char *base = semcheck_base_type_name(type_id);
         if (base != NULL && base != type_id)
-            matches = FindAllIdents(symtab, (char *)base);
+            matches = FindAllIdents(symtab, base);
     }
     ListNode_t *cur = matches;
     while (cur != NULL)
@@ -931,7 +932,7 @@ static void semcheck_update_symbol_alias(SymTab_t *symtab, const char *id, const
         return;
 
     HashNode_t *node = NULL;
-    if (FindIdent(&node, symtab, (char *)id) != -1 && node != NULL)
+    if (FindIdent(&node, symtab, id) != -1 && node != NULL)
     {
         if (node->mangled_id != NULL)
             free(node->mangled_id);
@@ -1464,12 +1465,12 @@ static HashNode_t *semcheck_find_preferred_type_node(SymTab_t *symtab, const cha
     if (symtab == NULL || type_id == NULL)
         return NULL;
 
-    ListNode_t *matches = FindAllIdents(symtab, (char *)type_id);
+    ListNode_t *matches = FindAllIdents(symtab, type_id);
     if (matches == NULL)
     {
         const char *base = semcheck_base_type_name(type_id);
         if (base != NULL && base != type_id)
-            matches = FindAllIdents(symtab, (char *)base);
+            matches = FindAllIdents(symtab, base);
     }
     HashNode_t *best = NULL;
     ListNode_t *cur = matches;
@@ -1496,7 +1497,7 @@ static HashNode_t *semcheck_find_type_node_with_unit_flag(SymTab_t *symtab,
     if (symtab == NULL || type_id == NULL)
         return NULL;
 
-    ListNode_t *matches = FindAllIdents(symtab, (char *)type_id);
+    ListNode_t *matches = FindAllIdents(symtab, type_id);
     HashNode_t *best = NULL;
     ListNode_t *cur = matches;
     while (cur != NULL)
@@ -1753,7 +1754,7 @@ HashNode_t *semcheck_find_type_node_with_kgpc_type(SymTab_t *symtab, const char 
         return NULL;
 
     HashNode_t *result = NULL;
-    ListNode_t *all_nodes = FindAllIdents(symtab, (char *)type_id);
+    ListNode_t *all_nodes = FindAllIdents(symtab, type_id);
     ListNode_t *cur = all_nodes;
     while (cur != NULL)
     {
@@ -2475,7 +2476,7 @@ static const char *resolve_type_to_base_name(SymTab_t *symtab, const char *type_
         const char *lookup_name = type_name;
         
         /* Handle qualified type names like "UnixType.culong" - try full name first */
-        int found = FindIdent(&type_node, symtab, (char *)lookup_name);
+        int found = FindIdent(&type_node, symtab, lookup_name);
         
         if (getenv("KGPC_DEBUG_RESOLVE_TYPE") != NULL)
         {
@@ -2490,7 +2491,7 @@ static const char *resolve_type_to_base_name(SymTab_t *symtab, const char *type_
             if (dot != NULL && dot[1] != '\0')
             {
                 lookup_name = dot + 1;  /* Skip past the dot to get unqualified name */
-                found = FindIdent(&type_node, symtab, (char *)lookup_name);
+                found = FindIdent(&type_node, symtab, lookup_name);
                 if (getenv("KGPC_DEBUG_RESOLVE_TYPE") != NULL)
                 {
                     fprintf(stderr, "[resolve_type] '%s' unqualified '%s' found=%d node=%p\n",
@@ -2957,7 +2958,7 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                 const char *base_id = semcheck_base_type_name(id);
                 if (!found_type && base_id != NULL && base_id != id)
                 {
-                    found_type = (FindIdent(&type_node, symtab, (char *)base_id) >= 0 &&
+                    found_type = (FindIdent(&type_node, symtab, base_id) >= 0 &&
                         type_node != NULL && type_node->hash_type == HASHTYPE_TYPE);
                 }
 
@@ -3613,6 +3614,9 @@ SymTab_t *start_semcheck(Tree_t *parse_tree, int *sem_result)
     assert(parse_tree != NULL);
     assert(sem_result != NULL);
 
+    /* Reset warning counter at start of semantic check */
+    g_semcheck_warning_count = 0;
+
     if (g_semcheck_source_path != NULL)
         file_to_parse = g_semcheck_source_path;
     if (g_semcheck_source_buffer != NULL)
@@ -3648,8 +3652,14 @@ SymTab_t *start_semcheck(Tree_t *parse_tree, int *sem_result)
 
     if(return_val > 0)
         fprintf(stderr, "\nCheck failed with %d error(s)!\n\n", return_val);
+    else if (g_semcheck_warning_count > 0)
+        fprintf(stderr, "\nCheck successful with %d warning(s)!\n\n", g_semcheck_warning_count);
     else
         fprintf(stderr, "\nCheck successful!\n\n");
+
+    /* Return -1 if there were warnings but no errors (per SemCheck.h API) */
+    if (return_val == 0 && g_semcheck_warning_count > 0)
+        return_val = -1;
 
     *sem_result = return_val;
     return symtab;
@@ -3851,7 +3861,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                 
                 /* Check if already declared (e.g., from a previous pass or builtin) */
                 HashNode_t *existing = NULL;
-                int scope_level = FindIdent(&existing, symtab, (char *)type_id);
+                int scope_level = FindIdent(&existing, symtab, type_id);
                 if (scope_level == 0 && existing != NULL)
                 {
                     /* Allow local types to shadow imported unit types */
@@ -3922,7 +3932,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             alias->inline_record_type->type_id = strdup(type_id);
                         const char *record_name = alias->inline_record_type->type_id;
                         HashNode_t *existing_inline = NULL;
-                        int inline_scope = FindIdent(&existing_inline, symtab, (char *)record_name);
+                        int inline_scope = FindIdent(&existing_inline, symtab, record_name);
                         if (inline_scope != 0 || existing_inline == NULL)
                         {
                             KgpcType *inline_kgpc = create_record_type(alias->inline_record_type);
@@ -4226,14 +4236,14 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             int has_dot = (dot != NULL && dot[1] != '\0');
                             
                             /* Handle qualified type names like "UnixType.culong" */
-                            int found = FindIdent(&target_node, symtab, (char *)lookup_target);
+                            int found = FindIdent(&target_node, symtab, lookup_target);
                             if (found < 0 || target_node == NULL)
                             {
                                 /* Try unqualified name if it contains a dot */
                                 if (has_dot)
                                 {
                                     lookup_target = dot + 1;
-                                    found = FindIdent(&target_node, symtab, (char *)lookup_target);
+                                    found = FindIdent(&target_node, symtab, lookup_target);
                                 }
                             }
                             if (found >= 0 && target_node != NULL && has_dot &&
@@ -4451,7 +4461,7 @@ static int check_circular_inheritance(SymTab_t *symtab, const char *class_name, 
     
     /* Look up parent class */
     HashNode_t *parent_node = NULL;
-    if (FindIdent(&parent_node, symtab, (char *)parent_name) == -1 || parent_node == NULL)
+    if (FindIdent(&parent_node, symtab, parent_name) == -1 || parent_node == NULL)
         return 0;  /* Parent not found yet, not necessarily circular */
     
     struct RecordType *parent_record = get_record_type_from_node(parent_node);
@@ -4839,7 +4849,7 @@ static int resolve_const_identifier(SymTab_t *symtab, const char *id, long long 
         return 1;
     
     HashNode_t *node = NULL;
-    if (FindIdent(&node, symtab, (char *)id) >= 0 && 
+    if (FindIdent(&node, symtab, id) >= 0 && 
         node != NULL && (node->hash_type == HASHTYPE_CONST || node->is_typed_const))
     {
         *out_value = node->const_int_value;
@@ -4859,12 +4869,12 @@ static int resolve_scoped_enum_literal(SymTab_t *symtab, const char *type_name,
     for (int depth = 0; depth < 8; ++depth)
     {
         HashNode_t *type_node = NULL;
-        if (FindIdent(&type_node, symtab, (char *)current_type) < 0 || type_node == NULL ||
+        if (FindIdent(&type_node, symtab, current_type) < 0 || type_node == NULL ||
             type_node->hash_type != HASHTYPE_TYPE)
         {
             const char *base = semcheck_base_type_name(current_type);
             if (base == NULL || base == current_type ||
-                FindIdent(&type_node, symtab, (char *)base) < 0 || type_node == NULL ||
+                FindIdent(&type_node, symtab, base) < 0 || type_node == NULL ||
                 type_node->hash_type != HASHTYPE_TYPE)
             {
                 break;
@@ -5971,7 +5981,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 
                 /* Only register if not already registered to avoid redeclaration errors */
                 HashNode_t *existing = NULL;
-                if (FindIdent(&existing, symtab, (char *)mangled_name) == -1)
+                if (FindIdent(&existing, symtab, mangled_name) == -1)
                 {
                     /* Create a KgpcType for the inline record if not already created */
                     KgpcType *inline_kgpc_type = create_record_type(alias_info->inline_record_type);
@@ -7965,7 +7975,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 if (tree->tree_data.var_decl_data.is_typed_const)
                 {
                     HashNode_t *existing_node = NULL;
-                    if (FindIdent(&existing_node, symtab, (char *)ids->cur) >= 0 &&
+                    if (FindIdent(&existing_node, symtab, ids->cur) >= 0 &&
                         existing_node != NULL && existing_node->is_typed_const)
                     {
                         mark_hashnode_unit_info(existing_node,
@@ -8024,7 +8034,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         if (func_return == 0)
                         {
                             HashNode_t *var_node = NULL;
-                            if (FindIdent(&var_node, symtab, (char *)ids->cur) != -1 && var_node != NULL)
+                            if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
                             {
                                 var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
                                 mark_hashnode_unit_info(var_node,
@@ -8068,7 +8078,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         if (func_return == 0)
                         {
                             HashNode_t *var_node = NULL;
-                            if (FindIdent(&var_node, symtab, (char *)ids->cur) != -1 && var_node != NULL)
+                            if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
                             {
                                 var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
                                 mark_hashnode_unit_info(var_node,
@@ -8141,7 +8151,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             if (func_return == 0)
                             {
                                 HashNode_t *var_node = NULL;
-                                if (FindIdent(&var_node, symtab, (char *)ids->cur) != -1 && var_node != NULL)
+                                if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
                                 {
                                     var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
                                     mark_hashnode_unit_info(var_node,
@@ -8185,7 +8195,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             if (func_return == 0)
                             {
                                 HashNode_t *var_node = NULL;
-                                if (FindIdent(&var_node, symtab, (char *)ids->cur) != -1 && var_node != NULL)
+                                if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
                                 {
                                     var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
                                     mark_hashnode_unit_info(var_node,
@@ -8252,7 +8262,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             if (func_return == 0)
                             {
                                 HashNode_t *var_node = NULL;
-                                if (FindIdent(&var_node, symtab, (char *)ids->cur) != -1 && var_node != NULL)
+                                if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
                                 {
                                     mark_hashnode_unit_info(var_node,
                                         tree->tree_data.var_decl_data.defined_in_unit,
@@ -8340,7 +8350,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         if (func_return == 0)
                         {
                             HashNode_t *var_node = NULL;
-                            if (FindIdent(&var_node, symtab, (char *)ids->cur) != -1 && var_node != NULL)
+                            if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
                             {
                                 var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
                                 mark_hashnode_unit_info(var_node,
@@ -8574,7 +8584,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 if (func_return == 0)
                 {
                     HashNode_t *var_node = NULL;
-                    if (FindIdent(&var_node, symtab, (char *)ids->cur) != -1 && var_node != NULL)
+                    if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
                     {
                         var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
                         mark_hashnode_unit_info(var_node,
@@ -8822,7 +8832,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
             else
             {
                 HashNode_t *decl_node = NULL;
-                if (FindIdent(&decl_node, symtab, (char *)ids->cur) != -1 && decl_node != NULL)
+                if (FindIdent(&decl_node, symtab, ids->cur) != -1 && decl_node != NULL)
                 {
                     if (tree->type == TREE_VAR_DECL)
                     {
@@ -9786,7 +9796,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             const char *sep = strstr(id, "__");
             if (sep != NULL && sep[2] != '\0') {
                 HashNode_t *suffix_node = NULL;
-                if (FindIdent(&suffix_node, symtab, (char *)(sep + 2)) == 0 && suffix_node != NULL) {
+                if (FindIdent(&suffix_node, symtab, (sep + 2)) == 0 && suffix_node != NULL) {
                     return_was_assigned = (suffix_node->mutated != NO_MUTATE);
                 }
             }
@@ -9816,7 +9826,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                 fprintf(stderr,
                     "Warning in function %s: function result does not seem to be set\n\n",
                     subprogram->tree_data.subprogram_data.id);
-                /* Note: Not incrementing return_val - this is a warning, not an error */
+                g_semcheck_warning_count++;
             }
         }
     }

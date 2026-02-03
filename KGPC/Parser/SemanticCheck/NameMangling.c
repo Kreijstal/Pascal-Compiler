@@ -216,13 +216,13 @@ static HashNode_t *find_type_node_for_mangling(SymTab_t *symtab, const char *typ
         return NULL;
 
     HashNode_t *type_node = NULL;
-    if (FindIdent(&type_node, symtab, (char *)type_id) >= 0 && type_node != NULL)
+    if (FindIdent(&type_node, symtab, type_id) >= 0 && type_node != NULL)
     {
         if (type_node->hash_type == HASHTYPE_TYPE)
             return type_node;
     }
 
-    ListNode_t *matches = FindAllIdents(symtab, (char *)type_id);
+    ListNode_t *matches = FindAllIdents(symtab, type_id);
     ListNode_t *cur = matches;
     while (cur != NULL)
     {

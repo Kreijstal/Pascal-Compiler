@@ -49,7 +49,7 @@ int semcheck_map_builtin_type_name(SymTab_t *symtab, const char *id)
     if (symtab != NULL)
     {
         HashNode_t *type_node = NULL;
-        if (FindIdent(&type_node, symtab, (char *)id) == 0 &&
+        if (FindIdent(&type_node, symtab, id) == 0 &&
             type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
         {
             int mapped = UNKNOWN_TYPE;
