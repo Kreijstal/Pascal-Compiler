@@ -30,23 +30,23 @@
 #include "../../Parser/SemanticCheck/SemChecks/SemCheck_expr.h"
 #include "../../identifier_utils.h"
 
-static int codegen_tag_from_kgpc(const KgpcType *type)
+int codegen_tag_from_kgpc(const KgpcType *type)
 {
     if (type == NULL)
         return UNKNOWN_TYPE;
     if (type->kind == TYPE_KIND_PRIMITIVE)
         return type->info.primitive_type_tag;
-    if (kgpc_type_is_array_of_const((KgpcType *)type))
+    if (kgpc_type_is_array_of_const(type))
         return ARRAY_OF_CONST_TYPE;
-    if (kgpc_type_is_array((KgpcType *)type) &&
+    if (kgpc_type_is_array(type) &&
         type->type_alias != NULL &&
         type->type_alias->is_shortstring)
         return SHORTSTRING_TYPE;
-    if (kgpc_type_is_record((KgpcType *)type))
+    if (kgpc_type_is_record(type))
         return RECORD_TYPE;
-    if (kgpc_type_is_pointer((KgpcType *)type))
+    if (kgpc_type_is_pointer(type))
         return POINTER_TYPE;
-    if (kgpc_type_is_procedure((KgpcType *)type))
+    if (kgpc_type_is_procedure(type))
         return PROCEDURE;
     return UNKNOWN_TYPE;
 }
@@ -64,7 +64,7 @@ static int codegen_self_param_is_class(Tree_t *arg_decl, SymTab_t *symtab)
     if (type == NULL && symtab != NULL && type_id != NULL)
     {
         HashNode_t *type_node = NULL;
-        if (FindIdent(&type_node, symtab, (char *)type_id) == 0 &&
+        if (FindIdent(&type_node, symtab, type_id) == 0 &&
             type_node != NULL && type_node->type != NULL)
             type = type_node->type;
     }
@@ -1942,7 +1942,7 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                     fallback_type_node = &cached_type_node;
                 }
                 if (symtab != NULL)
-                    FindIdent(&var_info, symtab, (char *)id_list->cur);
+                    FindIdent(&var_info, symtab, id_list->cur);
 
                 HashNode_t *effective_type_node = type_node;
                 if (effective_type_node == NULL)
@@ -2128,7 +2128,7 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                     
                     if (symtab != NULL)
                     {
-                        if (FindIdent(&var_info, symtab, (char *)id_list->cur) >= 0 && var_info != NULL)
+                        if (FindIdent(&var_info, symtab, id_list->cur) >= 0 && var_info != NULL)
                             size_node = var_info;
                     }
                     /* Use type_node if we don't have specific var_info */
@@ -4549,7 +4549,7 @@ static int codegen_resolve_file_component(const struct TypeAlias *alias, SymTab_
     HashNode_t *type_node = NULL;
     if (parser_tag == UNKNOWN_TYPE && alias->file_type_id != NULL && symtab != NULL)
     {
-        if (FindIdent(&type_node, symtab, (char *)alias->file_type_id) >= 0 && type_node != NULL)
+        if (FindIdent(&type_node, symtab, alias->file_type_id) >= 0 && type_node != NULL)
         {
             if (type_node->type != NULL)
                 parser_tag = kgpc_type_get_primitive_tag(type_node->type);

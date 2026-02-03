@@ -32,13 +32,13 @@ static HashNode_t *kgpc_find_type_node(SymTab_t *symtab, const char *type_id)
     while (cur != NULL)
     {
         HashTable_t *table = (HashTable_t *)cur->cur;
-        HashNode_t *node = FindIdentInTable(table, (char *)type_id);
+        HashNode_t *node = FindIdentInTable(table, type_id);
         if (node != NULL && node->hash_type == HASHTYPE_TYPE)
             return node;
         cur = cur->next;
     }
 
-    HashNode_t *builtin = FindIdentInTable(symtab->builtins, (char *)type_id);
+    HashNode_t *builtin = FindIdentInTable(symtab->builtins, type_id);
     if (builtin != NULL && builtin->hash_type == HASHTYPE_TYPE)
         return builtin;
 
@@ -1456,67 +1456,67 @@ long long kgpc_type_sizeof(KgpcType *type)
     }
 }
 
-int kgpc_type_is_array(KgpcType *type)
+int kgpc_type_is_array(const KgpcType *type)
 {
     return (type != NULL && type->kind == TYPE_KIND_ARRAY);
 }
 
-int kgpc_type_is_array_of_const(KgpcType *type)
+int kgpc_type_is_array_of_const(const KgpcType *type)
 {
     return (type != NULL && type->kind == TYPE_KIND_ARRAY_OF_CONST);
 }
 
-int kgpc_type_is_pointer(KgpcType *type)
+int kgpc_type_is_pointer(const KgpcType *type)
 {
     return (type != NULL && type->kind == TYPE_KIND_POINTER);
 }
 
-int kgpc_type_is_record(KgpcType *type)
+int kgpc_type_is_record(const KgpcType *type)
 {
     return (type != NULL && type->kind == TYPE_KIND_RECORD);
 }
 
-int kgpc_type_is_procedure(KgpcType *type)
+int kgpc_type_is_procedure(const KgpcType *type)
 {
     return (type != NULL && type->kind == TYPE_KIND_PROCEDURE);
 }
 
-int kgpc_type_is_char(KgpcType *type)
+int kgpc_type_is_char(const KgpcType *type)
 {
     return (type != NULL &&
         type->kind == TYPE_KIND_PRIMITIVE &&
         type->info.primitive_type_tag == CHAR_TYPE);
 }
 
-int kgpc_type_is_string(KgpcType *type)
+int kgpc_type_is_string(const KgpcType *type)
 {
     return (type != NULL &&
         type->kind == TYPE_KIND_PRIMITIVE &&
         type->info.primitive_type_tag == STRING_TYPE);
 }
 
-int kgpc_type_is_shortstring(KgpcType *type)
+int kgpc_type_is_shortstring(const KgpcType *type)
 {
     return (type != NULL &&
         type->kind == TYPE_KIND_PRIMITIVE &&
         type->info.primitive_type_tag == SHORTSTRING_TYPE);
 }
 
-int kgpc_type_is_integer(KgpcType *type)
+int kgpc_type_is_integer(const KgpcType *type)
 {
     return (type != NULL &&
         type->kind == TYPE_KIND_PRIMITIVE &&
         is_integer_type(type->info.primitive_type_tag));
 }
 
-int kgpc_type_is_real(KgpcType *type)
+int kgpc_type_is_real(const KgpcType *type)
 {
     return (type != NULL &&
         type->kind == TYPE_KIND_PRIMITIVE &&
         type->info.primitive_type_tag == REAL_TYPE);
 }
 
-int kgpc_type_is_numeric(KgpcType *type)
+int kgpc_type_is_numeric(const KgpcType *type)
 {
     if (type == NULL || type->kind != TYPE_KIND_PRIMITIVE)
         return 0;
@@ -1525,7 +1525,7 @@ int kgpc_type_is_numeric(KgpcType *type)
     return (type->info.primitive_type_tag == REAL_TYPE);
 }
 
-int kgpc_type_is_boolean(KgpcType *type)
+int kgpc_type_is_boolean(const KgpcType *type)
 {
     return (type != NULL &&
         type->kind == TYPE_KIND_PRIMITIVE &&
@@ -1605,7 +1605,7 @@ KgpcType* kgpc_type_get_return_type(KgpcType *type)
     return type->info.proc_info.return_type;
 }
 
-int kgpc_type_is_dynamic_array(KgpcType *type)
+int kgpc_type_is_dynamic_array(const KgpcType *type)
 {
     if (type == NULL || type->kind != TYPE_KIND_ARRAY)
         return 0;
@@ -1937,7 +1937,7 @@ int kgpc_type_uses_qword(KgpcType *type)
 }
 
 /* Check if a KgpcType represents a signed integer type */
-int kgpc_type_is_signed(KgpcType *type)
+int kgpc_type_is_signed(const KgpcType *type)
 {
     if (type == NULL)
         return 0;

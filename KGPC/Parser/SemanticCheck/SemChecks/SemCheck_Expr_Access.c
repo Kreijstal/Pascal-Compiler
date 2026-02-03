@@ -2619,7 +2619,7 @@ method_call_resolved:
                 const char *ret_id = best_match->type->info.proc_info.return_type_id;
                 HashNode_t *type_node = NULL;
                 KgpcType *ret_type = NULL;
-                if (FindIdent(&type_node, symtab, (char *)ret_id) != -1 &&
+                if (FindIdent(&type_node, symtab, ret_id) != -1 &&
                     type_node != NULL && type_node->type != NULL)
                 {
                     kgpc_type_retain(type_node->type);

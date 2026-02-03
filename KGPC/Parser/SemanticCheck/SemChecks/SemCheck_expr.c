@@ -621,7 +621,7 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                 if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                     fprintf(stderr, "[SemCheck] Resolving array element type alias: %s\n", alias_id);
                 }
-                if (FindIdent(&type_node, symtab, (char *)alias_id) != -1 &&
+                if (FindIdent(&type_node, symtab, alias_id) != -1 &&
                     type_node != NULL && type_node->type != NULL)
                 {
                     if (owns_type != NULL)
@@ -640,7 +640,7 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                 if (expr->pointer_subtype_id != NULL)
                 {
                     HashNode_t *type_node = NULL;
-                    if (FindIdent(&type_node, symtab, (char *)expr->pointer_subtype_id) != -1 &&
+                    if (FindIdent(&type_node, symtab, expr->pointer_subtype_id) != -1 &&
                         type_node != NULL && type_node->type != NULL)
                     {
                         kgpc_type_retain(type_node->type);
@@ -747,7 +747,7 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
             if (target_id != NULL)
             {
                 HashNode_t *type_node = NULL;
-                if (FindIdent(&type_node, symtab, (char *)target_id) >= 0 &&
+                if (FindIdent(&type_node, symtab, target_id) >= 0 &&
                     type_node != NULL && type_node->type != NULL &&
                     type_node->type->kind == TYPE_KIND_PROCEDURE)
                 {

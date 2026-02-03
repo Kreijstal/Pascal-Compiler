@@ -576,7 +576,7 @@ static HashNode_t *lookup_hashnode(SymTab_t *symtab, const char *id)
     if (symtab == NULL || id == NULL)
         return NULL;
     HashNode_t *node = NULL;
-    if (FindIdent(&node, symtab, (char *)id) >= 0 && node != NULL)
+    if (FindIdent(&node, symtab, id) >= 0 && node != NULL)
         return node;
     return NULL;
 }
@@ -1879,7 +1879,7 @@ static int semcheck_set_stmt_call_mangled_id(SymTab_t *symtab, struct Statement 
         return 1;
     }
 
-    ListNode_t *candidates = FindAllIdents(symtab, (char *)proc_id);
+    ListNode_t *candidates = FindAllIdents(symtab, proc_id);
     HashNode_t *exact_match = NULL;
     if (candidates != NULL)
     {
@@ -2590,7 +2590,7 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                     HashNode_t *target_symbol = NULL;
                     const char *call_id = call_expr->expr_data.function_call_data.id;
                     if (call_id != NULL)
-                        FindIdent(&target_symbol, symtab, (char *)call_id);
+                        FindIdent(&target_symbol, symtab, call_id);
 
                     int is_function_symbol = (target_symbol != NULL) &&
                         (target_symbol->hash_type == HASHTYPE_FUNCTION ||
@@ -2896,7 +2896,7 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             if (cur_id != NULL)
             {
                 HashNode_t *ret_node = NULL;
-                if (FindIdent(&ret_node, symtab, (char *)cur_id) >= 0 &&
+                if (FindIdent(&ret_node, symtab, cur_id) >= 0 &&
                     ret_node != NULL &&
                     ret_node->hash_type == HASHTYPE_FUNCTION_RETURN &&
                     ret_node->type != NULL)
@@ -3264,7 +3264,7 @@ static int semcheck_try_module_property_assignment(SymTab_t *symtab,
     if (prop_name == NULL)
         return -1;
 
-    ListNode_t *matches = FindAllIdents(symtab, (char *)prop_name);
+    ListNode_t *matches = FindAllIdents(symtab, prop_name);
     HashNode_t *setter = NULL;
     int has_storage_symbol = 0;
 

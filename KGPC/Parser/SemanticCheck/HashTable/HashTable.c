@@ -170,7 +170,7 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id,
     return add_ident_to_table_internal(table, &params);
 }
 
-HashNode_t *FindIdentInTable(HashTable_t *table, char *id)
+HashNode_t *FindIdentInTable(HashTable_t *table, const char *id)
 {
     ListNode_t *list, *cur;
     HashNode_t *hash_node;
@@ -207,7 +207,7 @@ HashNode_t *FindIdentInTable(HashTable_t *table, char *id)
     return NULL;
 }
 
-ListNode_t *FindAllIdentsInTable(HashTable_t *table, char *id)
+ListNode_t *FindAllIdentsInTable(HashTable_t *table, const char *id)
 {
     ListNode_t *list, *cur;
     HashNode_t *hash_node;
@@ -342,9 +342,9 @@ void PrintHashTable(HashTable_t *table, FILE *f, int num_indent)
  * Peter J. Weinberger's hash function
  * Source: Aho, Sethi, and Ullman, "Compilers", Addison-Wesley, 1986 (page 436).
  */
-int hashpjw( char *s )
+int hashpjw( const char *s )
 {
-    char *p;
+    const char *p;
     unsigned h = 0, g;
 
     for(p = s; *p != '\0'; p++)
