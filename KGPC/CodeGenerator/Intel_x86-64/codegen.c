@@ -2036,6 +2036,38 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                         long long total_size = (long long)length * (long long)element_size;
                         if (total_size <= 0)
                             total_size = element_size;
+
+                        /* Check for multi-dimensional arrays using array_dimensions list.
+                         * For array[1..3, 1..3] of char, array_dimensions contains ["1..3", "1..3"].
+                         * We need to compute total size from all dimensions. */
+                        if (alias->array_dimensions != NULL && alias->array_dimensions->next != NULL) {
+                            /* Multi-dimensional array: compute total size from all dimensions */
+                            int computed_total = 1;
+                            ListNode_t *dim = alias->array_dimensions;
+                            while (dim != NULL) {
+                                const char *range_str = (const char *)dim->cur;
+                                if (range_str != NULL) {
+                                    char *range_copy = strdup(range_str);
+                                    if (range_copy != NULL) {
+                                        char *dotdot = strstr(range_copy, "..");
+                                        if (dotdot != NULL) {
+                                            *dotdot = '\0';
+                                            int dim_start = atoi(range_copy);
+                                            int dim_end = atoi(dotdot + 2);
+                                            int dim_len = dim_end - dim_start + 1;
+                                            if (dim_len > 0)
+                                                computed_total *= dim_len;
+                                        }
+                                        free(range_copy);
+                                    }
+                                }
+                                dim = dim->next;
+                            }
+                            long long multidim_total = (long long)computed_total * (long long)element_size;
+                            if (multidim_total > total_size)
+                                total_size = multidim_total;
+                        }
+
                         if (is_program_scope)
                         {
                             char *static_label = codegen_make_program_var_label(ctx, (char *)id_list->cur);
@@ -2442,6 +2474,21 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                 int total_size = length * element_size;
                 if (total_size <= 0)
                     total_size = element_size;
+
+                /* For multi-dimensional arrays, the variable should have a KgpcType
+                 * with the correct total size. Look up by variable name. */
+                if (id_list != NULL && symtab != NULL) {
+                    const char *var_name = (const char *)id_list->cur;
+                    HashNode_t *var_node = NULL;
+                    int find_result = FindIdent(&var_node, symtab, var_name);
+                    if (find_result >= 0 && var_node != NULL && var_node->type != NULL) {
+                        long long kgpc_size = kgpc_type_sizeof(var_node->type);
+                        if (kgpc_size > total_size) {
+                            /* KgpcType gives larger size - this is likely a multi-dimensional array */
+                            total_size = (int)kgpc_size;
+                        }
+                    }
+                }
 
                 int use_static_storage = arr->has_static_storage || is_program_scope;
                 if (arr->has_static_storage)
