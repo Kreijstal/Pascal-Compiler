@@ -7446,7 +7446,8 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
         if (record_info != NULL && record_info->type_id != NULL) {
             const char *prefix = "TFPGList$";
             size_t prefix_len = strlen(prefix);
-            if (strncasecmp(record_info->type_id, prefix, prefix_len) == 0) {
+            if (strncasecmp(record_info->type_id, prefix, prefix_len) == 0 ||
+                pascal_identifier_equals(record_info->type_id, "TStringList")) {
                 is_fpglist = 1;
             }
         }
@@ -7738,7 +7739,7 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
 
     // Check if collection is a string type (dynamic string or shortstring)
     int collection_type_tag = expr_get_type_tag(collection);
-    int is_string_collection = (collection_type_tag == STRING_TYPE);
+    int is_string_collection = (collection_type_tag == STRING_TYPE || collection_type_tag == SHORTSTRING_TYPE);
     
     if (is_string_collection) {
         // Handle FOR-IN iteration over string
@@ -7825,9 +7826,12 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
         snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", index_slot->offset, idx_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
 
-        // Subtract 1 from index (convert 1-based to 0-based)
-        snprintf(buffer, sizeof(buffer), "\tdecq\t%s\n", idx_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
+        if (collection_type_tag == STRING_TYPE)
+        {
+            // Subtract 1 from index (convert 1-based to 0-based for dynamic strings)
+            snprintf(buffer, sizeof(buffer), "\tdecq\t%s\n", idx_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
 
         // Load character from string: base[index]
         Register_t *char_reg = get_free_reg(get_reg_stack(), &inst_list);

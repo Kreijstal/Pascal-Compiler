@@ -1,0 +1,15 @@
+The 6 x 6 Polybius square:
+
+  | A D F G V X
+---------------
+A | I Q Z F D U
+D | 7 5 O S W 2
+F | J 9 P A L V
+G | 4 0 H T K B
+V | C 8 M E 3 R
+X | Y X G 6 1 N
+
+The key is              : WORKING
+the plain message is    : ATTACKAT1200AM
+the encrypted message is: GFGVF IVAGD KFGGD NGVFG OGGXV RGGDX WFGGG
+the decrypted message is: ATTACKAT1200AM

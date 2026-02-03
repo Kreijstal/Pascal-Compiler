@@ -2331,7 +2331,7 @@ int semcheck_builtin_random(int *type_return, SymTab_t *symtab,
     int upper_type = UNKNOWN_TYPE;
     int error_count = semcheck_expr_legacy_tag(&upper_type, symtab, upper_expr, max_scope_lev, NO_MUTATE);
     int is_real_upper = (upper_type == REAL_TYPE);
-    if (!is_real_upper && upper_type != INT_TYPE && upper_type != LONGINT_TYPE)
+    if (!is_real_upper && upper_type != INT_TYPE && upper_type != LONGINT_TYPE && upper_type != INT64_TYPE)
     {
         semcheck_error_with_context("Error on line %d, Random parameter must be numeric.\n",
             expr->line_num);
@@ -2397,13 +2397,13 @@ int semcheck_builtin_randomrange(int *type_return, SymTab_t *symtab,
     error_count += semcheck_expr_legacy_tag(&low_type, symtab, low_expr, max_scope_lev, NO_MUTATE);
     error_count += semcheck_expr_legacy_tag(&high_type, symtab, high_expr, max_scope_lev, NO_MUTATE);
 
-    if (low_type != INT_TYPE && low_type != LONGINT_TYPE)
+    if (low_type != INT_TYPE && low_type != LONGINT_TYPE && low_type != INT64_TYPE)
     {
         semcheck_error_with_context("Error on line %d, RandomRange lower bound must be integer.\n",
             expr->line_num);
         ++error_count;
     }
-    if (high_type != INT_TYPE && high_type != LONGINT_TYPE)
+    if (high_type != INT_TYPE && high_type != LONGINT_TYPE && high_type != INT64_TYPE)
     {
         semcheck_error_with_context("Error on line %d, RandomRange upper bound must be integer.\n",
             expr->line_num);

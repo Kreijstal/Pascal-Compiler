@@ -8426,6 +8426,9 @@ static struct Statement *convert_proc_call(ast_t *call_node, bool implicit_ident
     struct Statement *call = mk_procedurecall(call_node->line, id, args);
     if (call != NULL) {
         call->source_index = call_node->index;
+        /* If id starts with __, it might be a method call placeholder from convert_method_call_statement */
+        if (id != NULL && strncmp(id, "__", 2) == 0)
+            call->stmt_data.procedure_call_data.is_method_call_placeholder = 1;
     }
     return call;
 }
@@ -8516,7 +8519,10 @@ static struct Statement *convert_method_call_statement(ast_t *member_node, ast_t
     }
 
     ListNode_t *args = list_builder_finish(&arg_builder);
-    return mk_procedurecall(member_node->line, proc_name, args);
+    struct Statement *call = mk_procedurecall(member_node->line, proc_name, args);
+    if (call != NULL)
+        call->stmt_data.procedure_call_data.is_method_call_placeholder = 1;
+    return call;
 }
 
 static struct Statement *build_nested_with_statements(int line,

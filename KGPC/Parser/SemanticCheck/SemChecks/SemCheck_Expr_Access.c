@@ -62,6 +62,51 @@ int semcheck_arrayaccess(int *type_return,
     int base_type = UNKNOWN_TYPE;
     return_val += semcheck_expr_legacy_tag(&base_type, symtab, array_expr, max_scope_lev, mutating);
 
+    /* Support TStringList indexing by converting obj[idx] to obj.FItems[idx] */
+    {
+        KgpcType *rec_ptr_type = array_expr->resolved_kgpc_type;
+        struct RecordType *rec = NULL;
+        if (rec_ptr_type != NULL && kgpc_type_is_pointer(rec_ptr_type) &&
+            rec_ptr_type->info.points_to != NULL && kgpc_type_is_record(rec_ptr_type->info.points_to))
+        {
+            rec = kgpc_type_get_record(rec_ptr_type->info.points_to);
+        }
+        else if (rec_ptr_type != NULL && kgpc_type_is_record(rec_ptr_type))
+        {
+            rec = kgpc_type_get_record(rec_ptr_type);
+        }
+
+        int is_already_fitems = 0;
+        if (array_expr->type == EXPR_RECORD_ACCESS && array_expr->expr_data.record_access_data.field_id != NULL &&
+            pascal_identifier_equals(array_expr->expr_data.record_access_data.field_id, "FItems"))
+        {
+            is_already_fitems = 1;
+        }
+
+        if (!is_already_fitems)
+        {
+            if (rec != NULL && rec->type_id != NULL && pascal_identifier_equals(rec->type_id, "TStringList"))
+            {
+                /* Transform to lst.FItems[idx] */
+                struct Expression *fitems_access = (struct Expression *)calloc(1, sizeof(struct Expression));
+                fitems_access->line_num = array_expr->line_num;
+                fitems_access->type = EXPR_RECORD_ACCESS;
+                fitems_access->expr_data.record_access_data.record_expr = array_expr;
+                fitems_access->expr_data.record_access_data.field_id = strdup("FItems");
+                fitems_access->record_type = rec;
+
+                /* We need to semcheck this new expression so its array info is populated */
+                int fitems_type = UNKNOWN_TYPE;
+                semcheck_expr_legacy_tag(&fitems_type, symtab, fitems_access, max_scope_lev, mutating);
+
+                expr->expr_data.array_access_data.array_expr = fitems_access;
+                array_expr = fitems_access;
+                base_type = fitems_type;
+                /* Continue with the rest of semcheck using the new array_expr */
+            }
+        }
+    }
+
     int base_is_string = (is_string_type(base_type) && !array_expr->is_array_expr);
     /* Only treat as pointer indexing if NOT an array expression - for arrays of pointers,
      * we want to go through the array path to properly handle element type info */
@@ -230,6 +275,24 @@ int semcheck_arrayaccess(int *type_return,
         element_type = LONGINT_TYPE;
 
     *type_return = element_type;
+
+    /* Propagate resolved KgpcType to the result of the indexing expression */
+    KgpcType *res_type = NULL;
+    if (array_expr->resolved_kgpc_type != NULL && kgpc_type_is_array(array_expr->resolved_kgpc_type))
+    {
+        res_type = kgpc_type_get_array_element_type(array_expr->resolved_kgpc_type);
+        if (res_type != NULL) kgpc_type_retain(res_type);
+    }
+
+    if (res_type == NULL)
+    {
+        res_type = create_primitive_type(element_type);
+    }
+
+    if (expr->resolved_kgpc_type != NULL)
+        destroy_kgpc_type(expr->resolved_kgpc_type);
+    expr->resolved_kgpc_type = res_type;
+
     return return_val;
 }
 
@@ -2111,7 +2174,6 @@ int semcheck_funccall(int *type_return,
         
         /* Get the record info from either resolved_kgpc_type or record_type */
         KgpcType *owner_type = first_arg->resolved_kgpc_type;
-        int owner_type_owned = 0;
         struct RecordType *record_info = NULL;
         
         if (owner_type != NULL) {
@@ -2164,7 +2226,6 @@ int semcheck_funccall(int *type_return,
                     if (ptr_type != NULL)
                     {
                         owner_type = ptr_type;
-                        owner_type_owned = 1;
                     }
                 }
                 else if (owner_type != NULL && owner_type->kind == TYPE_KIND_POINTER &&
@@ -2181,7 +2242,6 @@ int semcheck_funccall(int *type_return,
                         if (ptr_type != NULL)
                         {
                             owner_type = ptr_type;
-                            owner_type_owned = 1;
                         }
                         else
                         {
@@ -2198,7 +2258,6 @@ int semcheck_funccall(int *type_return,
                         if (ptr_type != NULL)
                         {
                             owner_type = ptr_type;
-                            owner_type_owned = 1;
                         }
                         else
                         {
@@ -2519,7 +2578,7 @@ int semcheck_funccall(int *type_return,
     if (id == NULL) {
         semcheck_error_with_context("Error on line %d: function call with NULL id\n", expr->line_num);
         *type_return = UNKNOWN_TYPE;
-        destroy_list(overload_candidates);
+        if (overload_candidates != NULL) destroy_list(overload_candidates);
         return ++return_val;
     }
     mangled_name = MangleFunctionNameFromCallSite(id, args_given, symtab, max_scope_lev);

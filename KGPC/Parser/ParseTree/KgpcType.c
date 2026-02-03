@@ -776,6 +776,13 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
     {
         return 1;
     }
+
+    /* Allow boolean to integer assignment (False=0, True=1) */
+    if (lhs_type->kind == TYPE_KIND_PRIMITIVE && is_integer_type(lhs_type->info.primitive_type_tag) &&
+        rhs_type->kind == TYPE_KIND_PRIMITIVE && rhs_type->info.primitive_type_tag == BOOL)
+    {
+        return 1;
+    }
     if (lhs_is_string && rhs_type->kind == TYPE_KIND_PRIMITIVE &&
         rhs_type->info.primitive_type_tag == PROCEDURE)
     {

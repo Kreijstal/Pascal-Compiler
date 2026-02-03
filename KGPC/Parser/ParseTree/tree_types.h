@@ -236,6 +236,7 @@ struct Statement
             int is_procedural_var_call;      /* 1 if calling through a procedural variable/expression */
             struct HashNode *procedural_var_symbol; /* Symbol for procedural var (if any) */
             struct Expression *procedural_var_expr; /* Expression yielding procedure pointer */
+            int is_method_call_placeholder;  /* 1 if created from member access and needs method resolution */
         } procedure_call_data;
 
         /* Compound Statements */
