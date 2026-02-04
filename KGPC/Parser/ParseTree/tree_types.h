@@ -236,6 +236,7 @@ struct Statement
             int is_procedural_var_call;      /* 1 if calling through a procedural variable/expression */
             struct HashNode *procedural_var_symbol; /* Symbol for procedural var (if any) */
             struct Expression *procedural_var_expr; /* Expression yielding procedure pointer */
+            int is_method_call_placeholder;  /* 1 if created from member access and needs method resolution */
         } procedure_call_data;
 
         /* Compound Statements */
@@ -429,6 +430,11 @@ struct Expression
         {
             struct Expression *array_expr;
             struct Expression *index_expr;
+            ListNode_t *extra_indices;  /* For multi-dimensional arrays: additional indices beyond the first */
+            int linear_index_count;      /* Total number of indices (first + extra_indices) */
+            long long *linear_strides;   /* Byte stride for each index (length linear_index_count) */
+            long long *linear_lowers;    /* Lower bounds for each index (length linear_index_count) */
+            int linear_info_valid;       /* 1 if stride/lower info has been computed */
         } array_access_data;
 
         /* Record field access */

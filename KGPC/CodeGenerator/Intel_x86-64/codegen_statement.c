@@ -19,6 +19,7 @@
 #include "../../identifier_utils.h"
 #include "../../Parser/SemanticCheck/SymTab/SymTab.h"
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
+#include "../../Parser/SemanticCheck/SemChecks/SemCheck_sizeof.h"
 
 #ifndef CODEGEN_POINTER_SIZE_BYTES
 #define CODEGEN_POINTER_SIZE_BYTES 8
@@ -248,7 +249,19 @@ static int expr_is_unsigned_type(const struct Expression *expr)
 {
     if (expr == NULL)
         return 0;
-    
+
+    int type_tag = expr_get_type_tag(expr);
+    if (type_tag == BYTE_TYPE || type_tag == WORD_TYPE || type_tag == LONGWORD_TYPE)
+        return 1;
+
+    if (expr->resolved_kgpc_type != NULL &&
+        expr->resolved_kgpc_type->kind == TYPE_KIND_PRIMITIVE)
+    {
+        int tag = expr->resolved_kgpc_type->info.primitive_type_tag;
+        if (tag == BYTE_TYPE || tag == WORD_TYPE || tag == LONGWORD_TYPE)
+            return 1;
+    }
+
     /* Check resolved_kgpc_type for type alias information */
     if (expr->resolved_kgpc_type != NULL && expr->resolved_kgpc_type->type_alias != NULL)
     {
@@ -3359,9 +3372,22 @@ static ListNode_t *codegen_builtin_setlength(struct Statement *stmt, ListNode_t 
     int element_size;
     if (is_field_array)
     {
-        /* For field arrays, we need to determine element size from the expression type */
-        /* For now, assume Integer (4 bytes) - this should be improved */
+        struct RecordField *field = codegen_lookup_record_field_expr(array_expr);
         element_size = 4;
+        if (field != NULL && field->is_array)
+        {
+            long long elem_size = 0;
+            if (codegen_sizeof_type_reference(ctx, field->array_element_type,
+                    field->array_element_type_id, NULL, &elem_size) == 0 &&
+                elem_size > 0)
+            {
+                element_size = (int)elem_size;
+            }
+            else
+            {
+                element_size = CODEGEN_POINTER_SIZE_BYTES;
+            }
+        }
     }
     else
     {
@@ -7425,7 +7451,8 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
         if (record_info != NULL && record_info->type_id != NULL) {
             const char *prefix = "TFPGList$";
             size_t prefix_len = strlen(prefix);
-            if (strncasecmp(record_info->type_id, prefix, prefix_len) == 0) {
+            if (strncasecmp(record_info->type_id, prefix, prefix_len) == 0 ||
+                pascal_identifier_equals(record_info->type_id, "TStringList")) {
                 is_fpglist = 1;
             }
         }
@@ -7477,14 +7504,47 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
         
         free_reg(get_reg_stack(), obj_addr_reg);
 
+        long long fitems_offset = 8;
+        long long fcount_offset = 24;
+        long long fcount_size = 8;
+        struct RecordField *fitems_field = NULL;
+        struct RecordField *fcount_field = NULL;
+
+        if (record_info != NULL) {
+            if (resolve_record_field(symtab, record_info, "FItems", &fitems_field,
+                    &fitems_offset, stmt->line_num, 1) != 0) {
+                fitems_offset = 8;
+                fitems_field = NULL;
+            }
+            if (resolve_record_field(symtab, record_info, "FCount", &fcount_field,
+                    &fcount_offset, stmt->line_num, 1) != 0) {
+                fcount_offset = 24;
+                fcount_field = NULL;
+            } else if (fcount_field != NULL) {
+                long long size_out = 0;
+                if (sizeof_from_type_ref(symtab, fcount_field->type, fcount_field->type_id,
+                        &size_out, 0, stmt->line_num) == 0 && size_out > 0) {
+                    fcount_size = size_out;
+                }
+            }
+        }
+
         // Load FCount and store to stack slot (to prevent register clobbering in loop body)
-        // Layout: [0..7]: TypeInfo, [8..23]: FItems (descriptor: data + length), [24..31]: FCount
-        // We use temp_reg (holding obj ptr) to access FCount at offset 24, then immediately
-        // spill to a stack slot so the loop body codegen can't clobber it
-        snprintf(buffer, sizeof(buffer), "\tmovq\t24(%s), %s\n", temp_reg->bit_64, temp_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", temp_reg->bit_64, count_slot->offset);
-        inst_list = add_inst(inst_list, buffer);
+        if (fcount_size <= 4) {
+            snprintf(buffer, sizeof(buffer), "\tmovl\t%lld(%s), %s\n",
+                fcount_offset, temp_reg->bit_64, temp_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                temp_reg->bit_64, count_slot->offset);
+            inst_list = add_inst(inst_list, buffer);
+        } else {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%lld(%s), %s\n",
+                fcount_offset, temp_reg->bit_64, temp_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                temp_reg->bit_64, count_slot->offset);
+            inst_list = add_inst(inst_list, buffer);
+        }
         free_reg(get_reg_stack(), temp_reg);
 
         // Initialize index to 0
@@ -7524,7 +7584,7 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
         inst_list = add_inst(inst_list, buffer);
 
         // Load FItems.data pointer from object using two-step approach
-        // Step 1: Get address of FItems descriptor (at Self+8)  
+        // Step 1: Get address of FItems descriptor (at Self+fitems_offset)
         // Step 2: Load data pointer from descriptor[0]
         Register_t *desc_addr_reg = get_free_reg(get_reg_stack(), &inst_list);
         if (desc_addr_reg == NULL) {
@@ -7534,7 +7594,8 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
             codegen_report_error(ctx, "ERROR: Unable to allocate register for descriptor address");
             return inst_list;
         }
-        snprintf(buffer, sizeof(buffer), "\tleaq\t8(%s), %s\n", obj_reload_reg->bit_64, desc_addr_reg->bit_64);
+        snprintf(buffer, sizeof(buffer), "\tleaq\t%lld(%s), %s\n", fitems_offset,
+            obj_reload_reg->bit_64, desc_addr_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
         snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", desc_addr_reg->bit_64, fitems_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
@@ -7717,7 +7778,7 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
 
     // Check if collection is a string type (dynamic string or shortstring)
     int collection_type_tag = expr_get_type_tag(collection);
-    int is_string_collection = (collection_type_tag == STRING_TYPE);
+    int is_string_collection = (collection_type_tag == STRING_TYPE || collection_type_tag == SHORTSTRING_TYPE);
     
     if (is_string_collection) {
         // Handle FOR-IN iteration over string
@@ -7804,9 +7865,12 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
         snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", index_slot->offset, idx_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
 
-        // Subtract 1 from index (convert 1-based to 0-based)
-        snprintf(buffer, sizeof(buffer), "\tdecq\t%s\n", idx_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
+        if (collection_type_tag == STRING_TYPE)
+        {
+            // Subtract 1 from index (convert 1-based to 0-based for dynamic strings)
+            snprintf(buffer, sizeof(buffer), "\tdecq\t%s\n", idx_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
 
         // Load character from string: base[index]
         Register_t *char_reg = get_free_reg(get_reg_stack(), &inst_list);

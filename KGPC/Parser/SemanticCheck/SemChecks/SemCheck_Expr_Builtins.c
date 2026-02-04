@@ -2331,7 +2331,7 @@ int semcheck_builtin_random(int *type_return, SymTab_t *symtab,
     int upper_type = UNKNOWN_TYPE;
     int error_count = semcheck_expr_legacy_tag(&upper_type, symtab, upper_expr, max_scope_lev, NO_MUTATE);
     int is_real_upper = (upper_type == REAL_TYPE);
-    if (!is_real_upper && upper_type != INT_TYPE && upper_type != LONGINT_TYPE)
+    if (!is_real_upper && upper_type != INT_TYPE && upper_type != LONGINT_TYPE && upper_type != INT64_TYPE)
     {
         semcheck_error_with_context("Error on line %d, Random parameter must be numeric.\n",
             expr->line_num);
@@ -2351,6 +2351,8 @@ int semcheck_builtin_random(int *type_return, SymTab_t *symtab,
     }
     if (is_real_upper)
         expr->expr_data.function_call_data.mangled_id = strdup("kgpc_random_real_upper");
+    else if (upper_type == INT64_TYPE)
+        expr->expr_data.function_call_data.mangled_id = strdup("kgpc_random_int64");
     else
         expr->expr_data.function_call_data.mangled_id = strdup("kgpc_random_int");
     if (expr->expr_data.function_call_data.mangled_id == NULL)
@@ -2362,6 +2364,8 @@ int semcheck_builtin_random(int *type_return, SymTab_t *symtab,
 
     if (is_real_upper)
         semcheck_expr_set_resolved_type(expr, REAL_TYPE);
+    else if (upper_type == INT64_TYPE)
+        semcheck_expr_set_resolved_type(expr, INT64_TYPE);
     else if (upper_type == LONGINT_TYPE)
         semcheck_expr_set_resolved_type(expr, LONGINT_TYPE);
     else
@@ -2397,13 +2401,13 @@ int semcheck_builtin_randomrange(int *type_return, SymTab_t *symtab,
     error_count += semcheck_expr_legacy_tag(&low_type, symtab, low_expr, max_scope_lev, NO_MUTATE);
     error_count += semcheck_expr_legacy_tag(&high_type, symtab, high_expr, max_scope_lev, NO_MUTATE);
 
-    if (low_type != INT_TYPE && low_type != LONGINT_TYPE)
+    if (low_type != INT_TYPE && low_type != LONGINT_TYPE && low_type != INT64_TYPE)
     {
         semcheck_error_with_context("Error on line %d, RandomRange lower bound must be integer.\n",
             expr->line_num);
         ++error_count;
     }
-    if (high_type != INT_TYPE && high_type != LONGINT_TYPE)
+    if (high_type != INT_TYPE && high_type != LONGINT_TYPE && high_type != INT64_TYPE)
     {
         semcheck_error_with_context("Error on line %d, RandomRange upper bound must be integer.\n",
             expr->line_num);
@@ -2436,8 +2440,11 @@ int semcheck_builtin_randomrange(int *type_return, SymTab_t *symtab,
         expr->resolved_kgpc_type = NULL;
     }
 
-    int result_type = (low_type == LONGINT_TYPE || high_type == LONGINT_TYPE)
-        ? LONGINT_TYPE : INT_TYPE;
+    int result_type = INT_TYPE;
+    if (low_type == INT64_TYPE || high_type == INT64_TYPE)
+        result_type = INT64_TYPE;
+    else if (low_type == LONGINT_TYPE || high_type == LONGINT_TYPE)
+        result_type = LONGINT_TYPE;
     semcheck_expr_set_resolved_type(expr, result_type);
     expr->resolved_kgpc_type = create_primitive_type(result_type);
     *type_return = result_type;
@@ -2510,49 +2517,6 @@ int semcheck_builtin_power(int *type_return, SymTab_t *symtab,
     semcheck_expr_set_resolved_type(expr, REAL_TYPE);
     expr->resolved_kgpc_type = create_primitive_type(REAL_TYPE);
     *type_return = REAL_TYPE;
-    return 0;
-}
-
-int semcheck_builtin_randseed(int *type_return, SymTab_t *symtab,
-    struct Expression *expr, int max_scope_lev)
-{
-    (void)symtab;
-    (void)max_scope_lev;
-
-    assert(type_return != NULL);
-    assert(expr != NULL);
-    assert(expr->type == EXPR_FUNCTION_CALL);
-
-    if (expr->expr_data.function_call_data.args_expr != NULL)
-    {
-        semcheck_error_with_context("Error on line %d, RandSeed expects no arguments.\n",
-            expr->line_num);
-        *type_return = UNKNOWN_TYPE;
-        return 1;
-    }
-
-    if (expr->expr_data.function_call_data.mangled_id != NULL)
-    {
-        free(expr->expr_data.function_call_data.mangled_id);
-        expr->expr_data.function_call_data.mangled_id = NULL;
-    }
-    expr->expr_data.function_call_data.mangled_id = strdup("kgpc_get_randseed");
-    if (expr->expr_data.function_call_data.mangled_id == NULL)
-    {
-        fprintf(stderr, "Error: failed to allocate mangled name for RandSeed.\n");
-        *type_return = UNKNOWN_TYPE;
-        return 1;
-    }
-
-    semcheck_reset_function_call_cache(expr);
-    if (expr->resolved_kgpc_type != NULL)
-    {
-        destroy_kgpc_type(expr->resolved_kgpc_type);
-        expr->resolved_kgpc_type = NULL;
-    }
-    semcheck_expr_set_resolved_type(expr, LONGINT_TYPE);
-    expr->resolved_kgpc_type = create_primitive_type(LONGINT_TYPE);
-    *type_return = LONGINT_TYPE;
     return 0;
 }
 

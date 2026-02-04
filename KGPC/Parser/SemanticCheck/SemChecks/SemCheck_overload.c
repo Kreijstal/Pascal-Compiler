@@ -729,6 +729,9 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
     int formal_tag, KgpcType *formal_kgpc, int is_var_param, SymTab_t *symtab,
     int is_integer_literal)
 {
+    if (formal_tag == UNKNOWN_TYPE || formal_tag == BUILTIN_ANY_TYPE)
+        return semcheck_make_quality(MATCH_EXACT);
+
     if (is_var_param)
     {
         if (actual_kgpc != NULL && formal_kgpc != NULL)
@@ -847,6 +850,13 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
     }
     if (is_integer_type(actual_tag) && formal_tag == REAL_TYPE)
         return semcheck_make_quality(MATCH_CONVERSION);
+
+    /* Boolean to integer: allow implicit conversion for builtins like FillChar.
+     * We treat it as promotion so it's preferred over more complex conversions. */
+    if (actual_tag == BOOL && is_integer_type(formal_tag))
+    {
+        return semcheck_make_quality(MATCH_PROMOTION);
+    }
     if (is_string_type(formal_tag) && actual_tag == CHAR_TYPE)
         return semcheck_make_quality(MATCH_PROMOTION);
     if (actual_tag == CHAR_TYPE && formal_kgpc != NULL && kgpc_type_is_pointer(formal_kgpc))

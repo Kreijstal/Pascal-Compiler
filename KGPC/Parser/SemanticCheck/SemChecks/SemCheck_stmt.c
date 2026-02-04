@@ -2402,6 +2402,16 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                     if (FindIdent(&result_node, symtab, "Result") == 0 && result_node != NULL)
                     {
                         result_node->mutated = MUTATE;
+                        if (result_node->type != NULL && return_expr->resolved_kgpc_type != NULL)
+                        {
+                            if (!are_types_compatible_for_assignment(result_node->type,
+                                                                    return_expr->resolved_kgpc_type, symtab))
+                            {
+                                semcheck_error_with_context("Error on line %d, incompatible return type in exit().\n",
+                                    stmt->line_num);
+                                ++return_val;
+                            }
+                        }
                     }
                 }
             }
@@ -3540,6 +3550,42 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
         }
     }
 
+    /* If no explicit receiver was provided, but Self is in scope and defines this method,
+     * prepend Self so unqualified method calls resolve correctly. */
+    if (proc_id != NULL && !stmt->stmt_data.procedure_call_data.is_method_call_placeholder)
+    {
+        HashNode_t *self_node = NULL;
+        if (FindIdent(&self_node, symtab, "Self") == 0 && self_node != NULL)
+        {
+            struct RecordType *self_record = semcheck_stmt_get_record_type_from_node(self_node);
+            if (self_record != NULL)
+            {
+                HashNode_t *method_node = semcheck_find_class_method(symtab, self_record, proc_id, NULL);
+                if (method_node != NULL && method_node->hash_type == HASHTYPE_PROCEDURE)
+                {
+                    /* Prepend Self to arguments */
+                    struct Expression *self_expr = mk_varid(stmt->line_num, strdup("Self"));
+                    ListNode_t *self_arg = CreateListNode(self_expr, LIST_EXPR);
+                    self_arg->next = args_given;
+                    stmt->stmt_data.procedure_call_data.expr_args = self_arg;
+                    args_given = self_arg;
+
+                    /* Update proc_id to mangled name */
+                    size_t class_len = strlen(self_record->type_id);
+                    size_t method_len = strlen(proc_id);
+                    char *new_proc_id = (char *)malloc(class_len + 2 + method_len + 1);
+                    if (new_proc_id != NULL)
+                    {
+                        sprintf(new_proc_id, "%s__%s", self_record->type_id, proc_id);
+                        free(proc_id);
+                        proc_id = new_proc_id;
+                        stmt->stmt_data.procedure_call_data.id = proc_id;
+                    }
+                }
+            }
+        }
+    }
+
     int handled_builtin = 0;
     return_val += try_resolve_builtin_procedure(symtab, stmt, "Halt",
         semcheck_builtin_halt, max_scope_lev, &handled_builtin);
@@ -3880,13 +3926,68 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
      * where we explicitly want to call the parent class method).
      */
     
+    /* Track if we already removed the static method's first argument to avoid double removal */
+    int static_arg_already_removed = 0;
+    
+    /* Check for method call with unresolved name (member-access placeholder) where first arg is the instance. */
+    if (stmt->stmt_data.procedure_call_data.is_method_call_placeholder && args_given != NULL) {
+        struct Expression *first_arg = (struct Expression *)args_given->cur;
+        int first_arg_type_tag;
+        semcheck_stmt_expr_tag(&first_arg_type_tag, symtab, first_arg, max_scope_lev, NO_MUTATE);
+
+        KgpcType *owner_type = first_arg->resolved_kgpc_type;
+        struct RecordType *record_info = NULL;
+
+        if (owner_type != NULL) {
+            if (owner_type->kind == TYPE_KIND_RECORD) {
+                record_info = owner_type->info.record_info;
+            } else if (owner_type->kind == TYPE_KIND_POINTER &&
+                       owner_type->info.points_to != NULL &&
+                       owner_type->info.points_to->kind == TYPE_KIND_RECORD) {
+                record_info = owner_type->info.points_to->info.record_info;
+            }
+        }
+
+        if (record_info != NULL && record_info->type_id != NULL) {
+            const char *method_name = proc_id;
+            if (method_name != NULL && strncmp(method_name, "__", 2) == 0)
+                method_name += 2;
+
+            int is_static = from_cparser_is_method_static(record_info->type_id, method_name);
+            HashNode_t *method_node = semcheck_find_class_method(symtab, record_info, method_name, NULL);
+
+            if (method_node != NULL) {
+                /* Resolved the method. Update proc_id to include class prefix. */
+                size_t class_len = strlen(record_info->type_id);
+                size_t method_len = strlen(method_name);
+                char *new_proc_id = (char *)malloc(class_len + 2 + method_len + 1);
+                if (new_proc_id != NULL) {
+                    sprintf(new_proc_id, "%s__%s", record_info->type_id, method_name);
+                    free(proc_id);
+                    proc_id = new_proc_id;
+                    stmt->stmt_data.procedure_call_data.id = proc_id;
+                    stmt->stmt_data.procedure_call_data.is_method_call_placeholder = 0;
+                }
+
+                if (is_static) {
+                    /* For static methods, remove the first argument (the instance/type identifier) */
+                    ListNode_t *old_head = args_given;
+                    stmt->stmt_data.procedure_call_data.expr_args = old_head->next;
+                    old_head->next = NULL;
+                    args_given = stmt->stmt_data.procedure_call_data.expr_args;
+                    static_arg_already_removed = 1;
+                }
+            }
+        }
+    }
+
     /* First, check if this is a static method call.
      * Method calls can have two patterns:
      * 1. __MethodName(object, ...) - method call without class prefix
      * 2. ClassName__MethodName(object, ...) - method call with class prefix
      */
     char *method_double_underscore = (proc_id != NULL) ? strstr(proc_id, "__") : NULL;
-    if (method_double_underscore != NULL && args_given != NULL) {
+    if (method_double_underscore != NULL && args_given != NULL && !static_arg_already_removed) {
         const char *method_name = method_double_underscore + 2;
         const char *class_name = NULL;
         int need_free_class_name = 0;
@@ -5253,6 +5354,9 @@ int semcheck_for_in(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
                         if (strncasecmp(record_info->type_id, prefix, prefix_len) == 0) {
                             collection_is_list = 1;
                             list_element_id = record_info->type_id + prefix_len;
+                        } else if (pascal_identifier_equals(record_info->type_id, "TStringList")) {
+                            collection_is_list = 1;
+                            list_element_id = "String";
                         }
                     }
                 }
@@ -5281,7 +5385,9 @@ int semcheck_for_in(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
     
     /* Check body statement */
     if (do_stmt != NULL) {
+        semcheck_loop_depth++;
         return_val += semcheck_stmt(symtab, do_stmt, max_scope_lev);
+        semcheck_loop_depth--;
     }
     
     return return_val;

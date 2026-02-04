@@ -2681,6 +2681,20 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                             snprintf(buffer, buf_len, "$0");
                         }
                     }
+                    else if (node->const_string_value != NULL)
+                    {
+                        /* String constant - emit in rodata and use its address */
+                        char label[20];
+                        snprintf(label, 20, ".LC%d", ctx->write_label_counter++);
+                        char add_rodata[1024];
+                        const char *readonly_section = codegen_readonly_section_directive();
+                        char *escaped = escape_string_for_assembly(node->const_string_value);
+                        snprintf(add_rodata, 1024, "%s\n%s:\n\t.string \"%s\"\n\t.text\n",
+                            readonly_section, label, escaped ? escaped : node->const_string_value);
+                        if (escaped) free(escaped);
+                        inst_list = add_inst(inst_list, add_rodata);
+                        snprintf(buffer, buf_len, "%s(%%rip)", label);
+                    }
                     else
                     {
                         /* Integer constant */

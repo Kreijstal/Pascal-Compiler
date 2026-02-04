@@ -7441,8 +7441,35 @@ static struct Expression *convert_factor(ast_t *expr_node) {
         ast_t *array_node = expr_node->child;
         ast_t *index_expr_node = array_node != NULL ? array_node->next : NULL;
         struct Expression *base = convert_expression(array_node);
-        struct Expression *index = convert_expression(index_expr_node);
-        return mk_arrayaccess(expr_node->line, base, index);
+        struct Expression *first_index = convert_expression(index_expr_node);
+        struct Expression *result = mk_arrayaccess(expr_node->line, base, first_index);
+        
+        /* For multi-dimensional arrays like arr[x, y, z], the indices are chained
+         * via ->next. Store additional indices in extra_indices list. */
+        if (index_expr_node != NULL && index_expr_node->next != NULL) {
+            ast_t *extra_idx_node = index_expr_node->next;
+            ListNode_t *extra_indices = NULL;
+            ListNode_t *extra_tail = NULL;
+            
+            while (extra_idx_node != NULL) {
+                struct Expression *extra_idx = convert_expression(extra_idx_node);
+                if (extra_idx != NULL) {
+                    ListNode_t *new_node = CreateListNode(extra_idx, LIST_EXPR);
+                    if (new_node != NULL) {
+                        if (extra_tail == NULL) {
+                            extra_indices = new_node;
+                            extra_tail = new_node;
+                        } else {
+                            extra_tail->next = new_node;
+                            extra_tail = new_node;
+                        }
+                    }
+                }
+                extra_idx_node = extra_idx_node->next;
+            }
+            result->expr_data.array_access_data.extra_indices = extra_indices;
+        }
+        return result;
     }
     default:
         return NULL;
@@ -8321,7 +8348,41 @@ static struct Expression *convert_member_access_chain(int line,
             return NULL;
         }
 
-        return mk_arrayaccess(node_line, field_expr, index_expr);
+        struct Expression *result = mk_arrayaccess(node_line, field_expr, index_expr);
+        if (result == NULL)
+            return NULL;
+
+        if (index_node != NULL && index_node->next != NULL)
+        {
+            ast_t *extra_idx_node = index_node->next;
+            ListNode_t *extra_indices = NULL;
+            ListNode_t *extra_tail = NULL;
+            while (extra_idx_node != NULL)
+            {
+                struct Expression *extra_idx = convert_expression(extra_idx_node);
+                if (extra_idx != NULL)
+                {
+                    ListNode_t *new_node = CreateListNode(extra_idx, LIST_EXPR);
+                    if (new_node != NULL)
+                    {
+                        if (extra_tail == NULL)
+                        {
+                            extra_indices = new_node;
+                            extra_tail = new_node;
+                        }
+                        else
+                        {
+                            extra_tail->next = new_node;
+                            extra_tail = new_node;
+                        }
+                    }
+                }
+                extra_idx_node = extra_idx_node->next;
+            }
+            result->expr_data.array_access_data.extra_indices = extra_indices;
+        }
+
+        return result;
     }
     case PASCAL_T_MEMBER_ACCESS: {
         ast_t *inner_base = unwrapped->child;
@@ -8426,6 +8487,9 @@ static struct Statement *convert_proc_call(ast_t *call_node, bool implicit_ident
     struct Statement *call = mk_procedurecall(call_node->line, id, args);
     if (call != NULL) {
         call->source_index = call_node->index;
+        /* If id starts with __, it might be a method call placeholder from convert_method_call_statement */
+        if (id != NULL && strncmp(id, "__", 2) == 0)
+            call->stmt_data.procedure_call_data.is_method_call_placeholder = 1;
     }
     return call;
 }
@@ -8516,7 +8580,10 @@ static struct Statement *convert_method_call_statement(ast_t *member_node, ast_t
     }
 
     ListNode_t *args = list_builder_finish(&arg_builder);
-    return mk_procedurecall(member_node->line, proc_name, args);
+    struct Statement *call = mk_procedurecall(member_node->line, proc_name, args);
+    if (call != NULL)
+        call->stmt_data.procedure_call_data.is_method_call_placeholder = 1;
+    return call;
 }
 
 static struct Statement *build_nested_with_statements(int line,

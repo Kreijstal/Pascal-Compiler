@@ -15,10 +15,12 @@ import threading
 import time
 import traceback
 import unittest
+import signal
 from pathlib import Path
 try:
     import pty  # type: ignore
     import termios  # type: ignore
+    import fcntl  # type: ignore
 
     HAS_PTY = True
 except ImportError:  # Windows/POSIX-less runtimes
@@ -272,6 +274,11 @@ def run_executable_with_valgrind(executable_args, **kwargs):
 
         master_fd, slave_fd = pty.openpty()
         try:
+            try:
+                os.set_blocking(master_fd, False)
+            except AttributeError:
+                flags = fcntl.fcntl(master_fd, fcntl.F_GETFL)
+                fcntl.fcntl(master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
             attrs = termios.tcgetattr(slave_fd)
             attrs[3] &= ~termios.ECHO
             termios.tcsetattr(slave_fd, termios.TCSANOW, attrs)
@@ -303,11 +310,12 @@ def run_executable_with_valgrind(executable_args, **kwargs):
                 if r:
                     try:
                         chunk = os.read(master_fd, 4096)
+                    except BlockingIOError:
+                        chunk = b""
                     except OSError:
                         break
-                    if not chunk:
-                        break
-                    output_bytes.extend(chunk)
+                    if chunk:
+                        output_bytes.extend(chunk)
 
                 if proc.poll() is not None and not r:
                     break
@@ -316,6 +324,8 @@ def run_executable_with_valgrind(executable_args, **kwargs):
             while True:
                 try:
                     chunk = os.read(master_fd, 4096)
+                except BlockingIOError:
+                    break
                 except OSError:
                     break
                 if not chunk:
@@ -534,6 +544,14 @@ class TAPTestResult(unittest.TestResult):
 
     def startTest(self, test):
         super().startTest(test)
+        # Enforce per-test timeout in TAP mode to avoid hangs.
+        if not IS_WINDOWS_ABI and hasattr(signal, "SIGALRM"):
+            def _timeout_handler(_signum, _frame):
+                raise TimeoutError(f"Test timed out after {TEST_CASE_TIMEOUT} seconds")
+
+            self._prev_alarm_handler = signal.getsignal(signal.SIGALRM)
+            signal.signal(signal.SIGALRM, _timeout_handler)
+            signal.alarm(TEST_CASE_TIMEOUT)
         self._test_index += 1
         self._test_states[test] = {"reported": False, "had_failure": False}
         self._test_start_times[test] = time.monotonic()
@@ -545,6 +563,11 @@ class TAPTestResult(unittest.TestResult):
         start_time = self._test_start_times.pop(test, None)
         if start_time is not None:
             elapsed = time.monotonic() - start_time
+        if not IS_WINDOWS_ABI and hasattr(signal, "SIGALRM"):
+            signal.alarm(0)
+            prev = getattr(self, "_prev_alarm_handler", None)
+            if prev is not None:
+                signal.signal(signal.SIGALRM, prev)
         # Note: stopTest is called after addSuccess/addFailure, so the result line is already emitted
         super().stopTest(test)
         self._test_states.pop(test, None)

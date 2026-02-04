@@ -18,6 +18,55 @@
 
 #include "SemCheck_Expr_Internal.h"
 
+static void destroy_expr_list(ListNode_t *head)
+{
+    ListNode_t *cur = head;
+    while (cur != NULL)
+    {
+        ListNode_t *next = cur->next;
+        if (cur->cur != NULL)
+            destroy_expr((struct Expression *)cur->cur);
+        free(cur);
+        cur = next;
+    }
+}
+
+static ListNode_t *clone_expr_list(const ListNode_t *head)
+{
+    const ListNode_t *cur = head;
+    ListNode_t *out_head = NULL;
+    ListNode_t *out_tail = NULL;
+    while (cur != NULL)
+    {
+        struct Expression *expr = (struct Expression *)cur->cur;
+        struct Expression *clone_expr = clone_expression(expr);
+        if (expr != NULL && clone_expr == NULL)
+        {
+            destroy_expr_list(out_head);
+            return NULL;
+        }
+        ListNode_t *new_node = CreateListNode(clone_expr, LIST_EXPR);
+        if (new_node == NULL)
+        {
+            destroy_expr(clone_expr);
+            destroy_expr_list(out_head);
+            return NULL;
+        }
+        if (out_tail == NULL)
+        {
+            out_head = new_node;
+            out_tail = new_node;
+        }
+        else
+        {
+            out_tail->next = new_node;
+            out_tail = new_node;
+        }
+        cur = cur->next;
+    }
+    return out_head;
+}
+
 struct Expression *clone_expression(const struct Expression *expr)
 {
     if (expr == NULL)
@@ -129,6 +178,43 @@ struct Expression *clone_expression(const struct Expression *expr)
                 clone_expression(expr->expr_data.array_access_data.array_expr);
             clone->expr_data.array_access_data.index_expr =
                 clone_expression(expr->expr_data.array_access_data.index_expr);
+            clone->expr_data.array_access_data.extra_indices =
+                clone_expr_list(expr->expr_data.array_access_data.extra_indices);
+            clone->expr_data.array_access_data.linear_index_count =
+                expr->expr_data.array_access_data.linear_index_count;
+            clone->expr_data.array_access_data.linear_info_valid =
+                expr->expr_data.array_access_data.linear_info_valid;
+            if (expr->expr_data.array_access_data.linear_info_valid &&
+                expr->expr_data.array_access_data.linear_index_count > 0)
+            {
+                int count = expr->expr_data.array_access_data.linear_index_count;
+                if (expr->expr_data.array_access_data.linear_strides != NULL)
+                {
+                    clone->expr_data.array_access_data.linear_strides =
+                        (long long *)calloc((size_t)count, sizeof(long long));
+                    if (clone->expr_data.array_access_data.linear_strides == NULL)
+                    {
+                        destroy_expr(clone);
+                        return NULL;
+                    }
+                    memcpy(clone->expr_data.array_access_data.linear_strides,
+                        expr->expr_data.array_access_data.linear_strides,
+                        (size_t)count * sizeof(long long));
+                }
+                if (expr->expr_data.array_access_data.linear_lowers != NULL)
+                {
+                    clone->expr_data.array_access_data.linear_lowers =
+                        (long long *)calloc((size_t)count, sizeof(long long));
+                    if (clone->expr_data.array_access_data.linear_lowers == NULL)
+                    {
+                        destroy_expr(clone);
+                        return NULL;
+                    }
+                    memcpy(clone->expr_data.array_access_data.linear_lowers,
+                        expr->expr_data.array_access_data.linear_lowers,
+                        (size_t)count * sizeof(long long));
+                }
+            }
             break;
         case EXPR_TYPECAST:
             clone->expr_data.typecast_data.target_type = expr->expr_data.typecast_data.target_type;
