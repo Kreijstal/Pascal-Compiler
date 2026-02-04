@@ -75,6 +75,24 @@ extern ListNode_t *type_helper_entries;
  * Core Type Checking Functions
  *===========================================================================*/
 
+/**
+ * LEGACY WRAPPER - Use semcheck_expr_with_type() for new code.
+ * 
+ * This function is deprecated and should be replaced with either:
+ * 1. semcheck_expr_with_type() - returns KgpcType* via output parameter
+ * 2. semcheck_expr_main() - same, but more verbose signature
+ * 
+ * After calling this function, the expression's resolved_kgpc_type field
+ * contains the full type information. The integer type_return is just
+ * a lossy conversion of that type.
+ * 
+ * Migration pattern:
+ *   OLD: semcheck_expr_legacy_tag(&tag, symtab, expr, scope, mutating);
+ *        if (tag == INT_TYPE) ...
+ * 
+ *   NEW: semcheck_expr_with_type(&type, symtab, expr, scope, mutating);
+ *        if (kgpc_type_is_integer(type)) ...
+ */
 static inline int semcheck_expr_legacy_tag(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev, int mutating)
 {
@@ -83,6 +101,25 @@ static inline int semcheck_expr_legacy_tag(int *type_return, SymTab_t *symtab,
     if (type_return != NULL)
         *type_return = semcheck_tag_from_kgpc(resolved);
     return result;
+}
+
+/**
+ * Semantic check an expression and return its KgpcType.
+ * 
+ * This is the preferred API for new code. The returned type is owned by the
+ * expression (expr->resolved_kgpc_type) and should not be freed by the caller.
+ * 
+ * @param out_type Output parameter for the resolved type (may be NULL)
+ * @param symtab Symbol table
+ * @param expr Expression to check
+ * @param max_scope_lev Maximum scope level for variable lookup
+ * @param mutating Whether this expression is being mutated (assigned to)
+ * @return Error count (0 on success)
+ */
+static inline int semcheck_expr_with_type(KgpcType **out_type, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev, int mutating)
+{
+    return semcheck_expr_main(symtab, expr, max_scope_lev, mutating, out_type);
 }
 
 /* Verifies a type is an INT_TYPE or REAL_TYPE */

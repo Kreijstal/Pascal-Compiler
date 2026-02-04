@@ -129,4 +129,31 @@ static inline int is_shortstring_array(int type_tag, int is_array_expr)
     return is_array_expr && type_tag == CHAR_TYPE;
 }
 
+/**
+ * Check if a type tag represents a 64-bit integer type.
+ * These types require 64-bit operations and registers in code generation.
+ * Includes:
+ * - INT64_TYPE (64-bit signed integer)
+ * - QWORD_TYPE (64-bit unsigned integer)
+ */
+static inline int is_64bit_integer_type(int type_tag)
+{
+    return (type_tag == INT64_TYPE || type_tag == QWORD_TYPE);
+}
+
+/**
+ * Check if a type tag represents a 32-bit or larger integer type.
+ * These types may need either 32-bit or 64-bit operations.
+ * Includes:
+ * - LONGINT_TYPE (32-bit signed)
+ * - LONGWORD_TYPE (32-bit unsigned)
+ * - INT64_TYPE (64-bit signed)
+ * - QWORD_TYPE (64-bit unsigned)
+ */
+static inline int is_32bit_or_larger_integer_type(int type_tag)
+{
+    return (type_tag == LONGINT_TYPE || type_tag == LONGWORD_TYPE ||
+            type_tag == INT64_TYPE || type_tag == QWORD_TYPE);
+}
+
 #endif /* TYPE_TAGS_H */
