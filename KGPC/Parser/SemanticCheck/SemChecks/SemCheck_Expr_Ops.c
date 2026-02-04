@@ -31,9 +31,15 @@ int semcheck_relop(int *type_return,
     expr1 = expr->expr_data.relop_data.left;
     expr2 = expr->expr_data.relop_data.right;
 
-    return_val += semcheck_expr_legacy_tag(&type_first, symtab, expr1, max_scope_lev, mutating);
+    KgpcType *kgpc_type_first = NULL;
+    KgpcType *kgpc_type_second = NULL;
+    return_val += semcheck_expr_with_type(&kgpc_type_first, symtab, expr1, max_scope_lev, mutating);
+    type_first = semcheck_tag_from_kgpc(kgpc_type_first);
     if(expr2 != NULL)
-        return_val += semcheck_expr_legacy_tag(&type_second, symtab, expr2, max_scope_lev, mutating);
+    {
+        return_val += semcheck_expr_with_type(&kgpc_type_second, symtab, expr2, max_scope_lev, mutating);
+        type_second = semcheck_tag_from_kgpc(kgpc_type_second);
+    }
 
     /* Verifying types */
 
@@ -388,7 +394,9 @@ int semcheck_signterm(int *type_return,
     return_val = 0;
     sign_expr = expr->expr_data.sign_term;
 
-    return_val += semcheck_expr_legacy_tag(type_return, symtab, sign_expr, max_scope_lev, mutating);
+    KgpcType *sign_kgpc_type = NULL;
+    return_val += semcheck_expr_with_type(&sign_kgpc_type, symtab, sign_expr, max_scope_lev, mutating);
+    *type_return = semcheck_tag_from_kgpc(sign_kgpc_type);
 
     /* Checking types */
     if(!is_type_ir(type_return))
@@ -416,8 +424,12 @@ int semcheck_addop(int *type_return,
     expr1 = expr->expr_data.addop_data.left_expr;
     expr2 = expr->expr_data.addop_data.right_term;
 
-    return_val += semcheck_expr_legacy_tag(&type_first, symtab, expr1, max_scope_lev, mutating);
-    return_val += semcheck_expr_legacy_tag(&type_second, symtab, expr2, max_scope_lev, mutating);
+    KgpcType *kgpc_type_first = NULL;
+    KgpcType *kgpc_type_second = NULL;
+    return_val += semcheck_expr_with_type(&kgpc_type_first, symtab, expr1, max_scope_lev, mutating);
+    return_val += semcheck_expr_with_type(&kgpc_type_second, symtab, expr2, max_scope_lev, mutating);
+    type_first = semcheck_tag_from_kgpc(kgpc_type_first);
+    type_second = semcheck_tag_from_kgpc(kgpc_type_second);
 
     int op_type = expr->expr_data.addop_data.addop_type;
     if (op_type == OR)
@@ -742,8 +754,12 @@ int semcheck_mulop(int *type_return,
     expr1 = expr->expr_data.mulop_data.left_term;
     expr2 = expr->expr_data.mulop_data.right_factor;
 
-    return_val += semcheck_expr_legacy_tag(&type_first, symtab, expr1, max_scope_lev, mutating);
-    return_val += semcheck_expr_legacy_tag(&type_second, symtab, expr2, max_scope_lev, mutating);
+    KgpcType *kgpc_type_first = NULL;
+    KgpcType *kgpc_type_second = NULL;
+    return_val += semcheck_expr_with_type(&kgpc_type_first, symtab, expr1, max_scope_lev, mutating);
+    return_val += semcheck_expr_with_type(&kgpc_type_second, symtab, expr2, max_scope_lev, mutating);
+    type_first = semcheck_tag_from_kgpc(kgpc_type_first);
+    type_second = semcheck_tag_from_kgpc(kgpc_type_second);
 
     int op_type = expr->expr_data.mulop_data.mulop_type;
     
