@@ -7449,7 +7449,8 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
     if (record_candidate != NULL && record_candidate->kind == TYPE_KIND_RECORD) {
         record_info = kgpc_type_get_record(record_candidate);
         if (record_info != NULL) {
-            /* Check for TFPGList$ pattern (generic list) */
+            /* Check for TFPGList$ pattern (generic list) - element type is encoded in class name.
+             * This is kept separate from default_indexed_property for backwards compatibility. */
             if (record_info->type_id != NULL) {
                 const char *prefix = "TFPGList$";
                 size_t prefix_len = strlen(prefix);
@@ -7457,7 +7458,7 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
                     is_list_class = 1;
                 }
             }
-            /* Check for default indexed property (handles TStringList and similar) */
+            /* Check for default indexed property (handles TStringList and other classes with FItems) */
             if (!is_list_class && record_info->default_indexed_property != NULL) {
                 is_list_class = 1;
             }

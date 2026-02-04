@@ -5349,7 +5349,9 @@ int semcheck_for_in(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
                 if (record_candidate != NULL && kgpc_type_is_record(record_candidate)) {
                     struct RecordType *record_info = kgpc_type_get_record(record_candidate);
                     if (record_info != NULL) {
-                        /* Check for TFPGList$ pattern (generic list) */
+                        /* Check for TFPGList$ pattern (generic list) - extracts element type from the mangled name.
+                         * This is kept separate from default_indexed_property because TFPGList$ encodes the 
+                         * element type in its class name (e.g., TFPGList$String for list of strings). */
                         if (record_info->type_id != NULL) {
                             const char *prefix = "TFPGList$";
                             size_t prefix_len = strlen(prefix);
@@ -5358,7 +5360,7 @@ int semcheck_for_in(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
                                 list_element_id = record_info->type_id + prefix_len;
                             }
                         }
-                        /* Check for default indexed property (handles TStringList and similar) */
+                        /* Check for default indexed property (handles TStringList and other classes with FItems) */
                         if (!collection_is_list && record_info->default_indexed_property != NULL) {
                             collection_is_list = 1;
                             list_element_id = record_info->default_indexed_element_type_id;

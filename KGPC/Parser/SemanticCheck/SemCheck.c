@@ -4533,6 +4533,9 @@ static int ensure_class_storage_capacity(SymTab_t *symtab, struct RecordType *re
  * 1. If a class has an open array field (array_is_open == 1) and it's the only such field,
  *    or specifically named "FItems" (Delphi convention), use it as the default indexed property.
  * 2. Also inherit from parent class if parent has a default_indexed_property and child doesn't.
+ * 
+ * @param record_info The class RecordType to configure. Must not be NULL.
+ * @param parent_record The parent class RecordType, or NULL for base classes like TObject.
  */
 static void detect_default_indexed_property(struct RecordType *record_info, const struct RecordType *parent_record)
 {

@@ -75,7 +75,7 @@ int kgpc_type_is_pointer(const KgpcType *type);
 
 ### In Progress
 
-The legacy wrapper function `semcheck_expr_legacy_tag()` still exists and is used in approximately 80 callsites across 7 files:
+The legacy wrapper function `semcheck_expr_legacy_tag()` still exists and is used in approximately 81 callsites across 6 files:
 
 | File | Count |
 |------|-------|
