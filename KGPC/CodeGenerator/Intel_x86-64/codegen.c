@@ -1957,11 +1957,30 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                 if (param_type != NULL && kgpc_type_is_array(param_type))
                 {
                     KgpcArrayDimensionInfo array_info;
-                    kgpc_type_get_array_dimension_info(param_type, symtab, &array_info);
-
-                    int element_size = (int)array_info.element_size;
-                    int array_start = (int)array_info.dim_lowers[0];
-                    long long total_size = kgpc_type_sizeof(param_type);
+                    int dim_info_result = kgpc_type_get_array_dimension_info(param_type, symtab, &array_info);
+                    
+                    /* If dimension info lookup succeeded, use its values; otherwise fall back to simpler methods */
+                    int element_size;
+                    int array_start;
+                    long long total_size;
+                    
+                    if (dim_info_result == 0)
+                    {
+                        /* Use computed values from kgpc_type_get_array_dimension_info which handles
+                         * multi-dimensional arrays and constant-based bounds correctly */
+                        element_size = (int)array_info.element_size;
+                        array_start = (int)array_info.dim_lowers[0];
+                        total_size = array_info.total_size;
+                    }
+                    else
+                    {
+                        /* Fallback: use simpler methods that work for basic array types */
+                        element_size = (int)kgpc_type_get_array_element_size(param_type);
+                        if (element_size <= 0) element_size = 1;
+                        array_start = param_type->info.array_info.start_index;
+                        total_size = kgpc_type_sizeof(param_type);
+                    }
+                    
                     int is_open_array = kgpc_type_is_dynamic_array(param_type);
 
                     if (is_open_array)

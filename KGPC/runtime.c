@@ -4637,6 +4637,12 @@ int64_t kgpc_abs_longint(int64_t value)
     return (value < 0) ? -value : value;
 }
 
+/* Abs for unsigned types is a no-op (identity function) */
+uint64_t kgpc_abs_unsigned(uint64_t value)
+{
+    return value;
+}
+
 double kgpc_abs_real(double value)
 {
     return fabs(value);
