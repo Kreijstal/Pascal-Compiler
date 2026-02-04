@@ -76,21 +76,43 @@ end;
 
 procedure TStringList.AddDelimitedtext(const S: string; Delimiter: char; Strict: boolean);
 var
-  i, start: integer;
+  i, start, len: integer;
   sub: string;
-begin
-  start := 1;
-  for i := 1 to Length(S) do
+  function TrimString(const Str: string): string;
+  var
+    s, e: integer;
   begin
-    if S[i] = Delimiter then
+    s := 1;
+    while (s <= Length(Str)) and (Str[s] <= ' ') do s := s + 1;
+    e := Length(Str);
+    while (e >= s) and (Str[e] <= ' ') do e := e - 1;
+    if s > e then TrimString := ''
+    else TrimString := Copy(Str, s, e - s + 1);
+  end;
+begin
+  if S = '' then exit;
+  start := 1;
+  len := Length(S);
+  for i := 1 to len do
+  begin
+    { In non-strict mode, both Delimiter and whitespace act as delimiters }
+    if (S[i] = Delimiter) or (not Strict and (S[i] <= ' ')) then
     begin
       sub := Copy(S, start, i - start);
-      Self.Add(sub);
+      if not Strict then sub := TrimString(sub);
+
+      { Only add non-empty tokens if not strict }
+      if Strict or (Length(sub) > 0) then
+        Self.Add(sub);
+
       start := i + 1;
     end;
   end;
-  if start <= Length(S) then
-    Self.Add(Copy(S, start, Length(S) - start + 1));
+
+  sub := Copy(S, start, len - start + 1);
+  if not Strict then sub := TrimString(sub);
+  if Strict or (Length(sub) > 0) then
+    Self.Add(sub);
 end;
 
 end.

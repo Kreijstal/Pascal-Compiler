@@ -7,6 +7,9 @@
 #include <stdio.h>
 #include <assert.h>
 #include <string.h>
+#include <ctype.h>
+#include <limits.h>
+#include <errno.h>
 #ifndef _WIN32
 #include <strings.h>
 #else
@@ -666,7 +669,7 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
 
 /* Helper function to check if a record type is a subclass of another */
 /* Helper to get RecordType from HashNode, handling pointer types (classes) */
-static struct RecordType* get_record_from_hashnode(HashNode_t *node) {
+static struct RecordType* get_record_type_from_hashnode(HashNode_t *node) {
     if (node == NULL || node->type == NULL)
         return NULL;
     
@@ -694,7 +697,7 @@ static int is_record_subclass(struct RecordType *subclass, struct RecordType *su
         /* Look up parent class in symbol table */
         HashNode_t *parent_node = NULL;
         if (FindIdent(&parent_node, symtab, current->parent_class_name) != -1 && parent_node != NULL) {
-            struct RecordType *parent_record = get_record_from_hashnode(parent_node);
+            struct RecordType *parent_record = get_record_type_from_hashnode(parent_node);
             if (parent_record == superclass)
                 return 1;
             current = parent_record;
@@ -1435,6 +1438,13 @@ long long kgpc_type_sizeof(KgpcType *type)
         
         case TYPE_KIND_ARRAY:
         {
+            if (kgpc_type_is_dynamic_array(type))
+                return 8;
+            /* Use the KgpcType's concrete start_index/end_index.
+             * Note: For multi-dimensional arrays defined via TypeAlias, the size computation
+             * might be incorrect here because element_type may not be nested arrays.
+             * Callers with access to symtab should use kgpc_type_get_array_dimension_info
+             * for accurate multi-dimensional array sizes. */
             long long element_size = kgpc_type_sizeof(type->info.array_info.element_type);
             if (element_size < 0)
                 return -1;
@@ -1572,6 +1582,196 @@ KgpcType* kgpc_type_get_array_element_type(KgpcType *type)
     return type->info.array_info.element_type;
 }
 
+static int kgpc_parse_array_bound(struct SymTab *symtab, const char *token, long long *out_value)
+{
+    if (out_value == NULL || token == NULL)
+        return -1;
+    while (*token && isspace((unsigned char)*token)) token++;
+    if (*token == '\0')
+        return -1;
+
+    char *endptr = NULL;
+    errno = 0;
+    long long val = strtoll(token, &endptr, 10);
+    if (endptr != token)
+    {
+        while (*endptr && isspace((unsigned char)*endptr)) endptr++;
+        if (*endptr == '\0' && errno != ERANGE)
+        {
+            *out_value = val;
+            return 0;
+        }
+    }
+
+    if (symtab != NULL)
+    {
+        /* Trim the token for lookup */
+        char *trimmed = strdup(token);
+        if (trimmed == NULL)
+            return -1;
+
+        char *end = trimmed + strlen(trimmed) - 1;
+        while (end >= trimmed && isspace((unsigned char)*end)) *end-- = '\0';
+
+        HashNode_t *node = NULL;
+        if (FindIdent(&node, symtab, trimmed) >= 0 && node != NULL &&
+            (node->hash_type == HASHTYPE_CONST || node->is_typed_const))
+        {
+            *out_value = node->const_int_value;
+            free(trimmed);
+            return 0;
+        }
+        free(trimmed);
+    }
+    return -1;
+}
+
+int kgpc_type_get_array_dimension_info(KgpcType *type, struct SymTab *symtab, KgpcArrayDimensionInfo *info)
+{
+    if (type == NULL || info == NULL || type->kind != TYPE_KIND_ARRAY)
+        return -1;
+
+    memset(info, 0, sizeof(KgpcArrayDimensionInfo));
+    struct TypeAlias *alias = kgpc_type_get_type_alias(type);
+
+    if (alias != NULL && alias->array_dimensions != NULL)
+    {
+        /* Use dimensions metadata from TypeAlias */
+        ListNode_t *dim_node = alias->array_dimensions;
+        while (dim_node != NULL && info->dim_count < 10)
+        {
+            const char *range_str = (const char *)dim_node->cur;
+            int dim_parsed = 0;
+            if (range_str != NULL)
+            {
+                const char *dotdot = strstr(range_str, "..");
+                if (dotdot != NULL)
+                {
+                    size_t left_len = (size_t)(dotdot - range_str);
+                    char *left = (char *)malloc(left_len + 1);
+                    if (left != NULL)
+                    {
+                        memcpy(left, range_str, left_len);
+                        left[left_len] = '\0';
+                        long long lower = 0;
+                        long long upper = 0;
+                        if (kgpc_parse_array_bound(symtab, left, &lower) != 0)
+                        {
+                            free(left);
+                            return -1;
+                        }
+                        free(left);
+                        if (kgpc_parse_array_bound(symtab, dotdot + 2, &upper) != 0)
+                            return -1;
+
+                        long long size = upper - lower + 1;
+                        if (size <= 0)
+                            return -1;
+
+                        info->dim_lowers[info->dim_count] = lower;
+                        info->dim_uppers[info->dim_count] = upper;
+                        info->dim_sizes[info->dim_count] = size;
+                        dim_parsed = 1;
+                    }
+                    else
+                    {
+                        /* malloc failure: this is a critical error, but we return error from function */
+                        return -1;
+                    }
+                }
+                else if (pascal_identifier_equals(range_str, "Boolean"))
+                {
+                    info->dim_lowers[info->dim_count] = 0;
+                    info->dim_uppers[info->dim_count] = 1;
+                    info->dim_sizes[info->dim_count] = 2;
+                    dim_parsed = 1;
+                }
+                else if (symtab != NULL)
+                {
+                    HashNode_t *type_node = NULL;
+                    if (FindIdent(&type_node, symtab, range_str) >= 0 &&
+                        type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+                    {
+                        struct TypeAlias *range_alias = hashnode_get_type_alias(type_node);
+                        if (range_alias != NULL)
+                        {
+                            if (range_alias->is_enum && range_alias->enum_literals != NULL)
+                            {
+                                info->dim_lowers[info->dim_count] = 0;
+                                info->dim_sizes[info->dim_count] = (long long)ListLength(range_alias->enum_literals);
+                                info->dim_uppers[info->dim_count] = info->dim_sizes[info->dim_count] - 1;
+                                if (info->dim_sizes[info->dim_count] <= 0)
+                                    return -1;
+                                dim_parsed = 1;
+                            }
+                            else if (range_alias->is_range && range_alias->range_known)
+                            {
+                                long long lower = range_alias->range_start;
+                                long long upper = range_alias->range_end;
+                                long long size = upper - lower + 1;
+                                if (size <= 0)
+                                    return -1;
+
+                                info->dim_lowers[info->dim_count] = lower;
+                                info->dim_uppers[info->dim_count] = upper;
+                                info->dim_sizes[info->dim_count] = size;
+                                dim_parsed = 1;
+                            }
+                        }
+                    }
+                }
+            }
+            if (dim_parsed)
+                info->dim_count++;
+            dim_node = dim_node->next;
+        }
+
+        info->element_size = kgpc_type_get_array_element_size(type);
+        if (info->element_size <= 0 && alias->array_element_type_id != NULL && symtab != NULL)
+        {
+            HashNode_t *node = kgpc_find_type_node(symtab, alias->array_element_type_id);
+            if (node != NULL && node->type != NULL)
+                info->element_size = kgpc_type_sizeof(node->type);
+        }
+    }
+    else
+    {
+        /* Traverse nested KgpcType objects */
+        KgpcType *curr = type;
+        while (curr != NULL && curr->kind == TYPE_KIND_ARRAY && info->dim_count < 10)
+        {
+            info->dim_lowers[info->dim_count] = curr->info.array_info.start_index;
+            info->dim_uppers[info->dim_count] = curr->info.array_info.end_index;
+            info->dim_sizes[info->dim_count] = info->dim_uppers[info->dim_count] - info->dim_lowers[info->dim_count] + 1;
+            info->dim_count++;
+            curr = curr->info.array_info.element_type;
+        }
+        if (curr != NULL)
+            info->element_size = kgpc_type_sizeof(curr);
+    }
+
+    if (info->dim_count == 0)
+        return -1;
+
+    if (info->element_size <= 0)
+        info->element_size = 1;
+
+    /* Compute strides and total size */
+    info->total_size = info->element_size;
+    for (int i = info->dim_count - 1; i >= 0; i--)
+    {
+        info->strides[i] = info->total_size;
+        if (info->dim_sizes[i] > 0)
+        {
+            if (info->total_size > LLONG_MAX / info->dim_sizes[i])
+                return -1;
+            info->total_size *= info->dim_sizes[i];
+        }
+    }
+
+    return 0;
+}
+
 KgpcType* kgpc_type_get_array_element_type_resolved(KgpcType *type, SymTab_t *symtab)
 {
     if (type == NULL || type->kind != TYPE_KIND_ARRAY)
@@ -1589,8 +1789,10 @@ KgpcType* kgpc_type_get_array_element_type_resolved(KgpcType *type, SymTab_t *sy
             type->info.array_info.element_type = element_node->type;
             kgpc_type_retain(element_node->type);
             /* Free element_type_id since resolution is complete */
-            free(type->info.array_info.element_type_id);
-            type->info.array_info.element_type_id = NULL;
+            if (type->info.array_info.element_type_id != NULL) {
+                free(type->info.array_info.element_type_id);
+                type->info.array_info.element_type_id = NULL;
+            }
             return type->info.array_info.element_type;
         }
     }
