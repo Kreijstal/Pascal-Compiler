@@ -1135,18 +1135,12 @@ ListNode_t *gencode_modulus(const char *left, const char *right, ListNode_t *ins
 {
     StackNode_t *temp;
     char buffer[128];
+    const char *div_operand = left;
+    char div_buf[64];
 
     assert(left != NULL);
     assert(right != NULL);
     /* Note: inst_list can be NULL at the start of code generation */
-
-    // Move dividend (A, right) to eax
-    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%eax\n", right);
-    inst_list = add_inst(inst_list, buffer);
-
-    // Sign extend eax to edx
-    snprintf(buffer, sizeof(buffer), "\tcltd\n");
-    inst_list = add_inst(inst_list, buffer);
 
     // If divisor (B, left) is a constant, move it to memory
     if(left[0] == '$')
@@ -1156,14 +1150,29 @@ ListNode_t *gencode_modulus(const char *left, const char *right, ListNode_t *ins
             temp = add_l_t("TEMP_MOD");
         snprintf(buffer, sizeof(buffer), "\tmovl\t%s, -%d(%%rbp)\n", left, temp->offset);
         inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tidivl\t-%d(%%rbp)\n", temp->offset);
-        inst_list = add_inst(inst_list, buffer);
+        snprintf(div_buf, sizeof(div_buf), "-%d(%%rbp)", temp->offset);
+        div_operand = div_buf;
     }
     else // Divisor is a register
     {
-        snprintf(buffer, sizeof(buffer), "\tidivl\t%s\n", left);
+        const char *tmp_div = "%r10d";
+        if (strcmp(right, "%r10d") == 0)
+            tmp_div = "%r11d";
+        snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", left, tmp_div);
         inst_list = add_inst(inst_list, buffer);
+        div_operand = tmp_div;
     }
+
+    // Move dividend (A, right) to eax
+    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%eax\n", right);
+    inst_list = add_inst(inst_list, buffer);
+
+    // Sign extend eax to edx
+    snprintf(buffer, sizeof(buffer), "\tcltd\n");
+    inst_list = add_inst(inst_list, buffer);
+
+    snprintf(buffer, sizeof(buffer), "\tidivl\t%s\n", div_operand);
+    inst_list = add_inst(inst_list, buffer);
 
     // Move remainder from edx to the target register (A's location, right)
     snprintf(buffer, sizeof(buffer), "\tmovl\t%%edx, %s\n", right);
@@ -3261,13 +3270,19 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
 
                 if (use_qword_op)
                 {
+                    const char *tmp_div = "%r10";
+                    if (strcmp(op_left, "%r10") == 0)
+                        tmp_div = "%r11";
+
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", op_right, tmp_div);
+                    inst_list = add_inst(inst_list, buffer);
+
                     snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rax\n", op_left);
                     inst_list = add_inst(inst_list, buffer);
                     inst_list = add_inst(inst_list, "\tcqo\n");
 
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r10\n", op_right);
+                    snprintf(buffer, sizeof(buffer), "\tidivq\t%s\n", tmp_div);
                     inst_list = add_inst(inst_list, buffer);
-                    inst_list = add_inst(inst_list, "\tidivq\t%r10\n");
 
                     snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", op_left);
                     inst_list = add_inst(inst_list, buffer);
@@ -3278,13 +3293,20 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                     char right32[16];
                     const char *div_left = reg64_to_reg32(left, left32, sizeof(left32));
                     const char *div_right = reg64_to_reg32(right, right32, sizeof(right32));
+
+                    const char *tmp_div = "%r10d";
+                    if (strcmp(div_left, "%r10d") == 0)
+                        tmp_div = "%r11d";
+
+                    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", div_right, tmp_div);
+                    inst_list = add_inst(inst_list, buffer);
+
                     snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%eax\n", div_left);
                     inst_list = add_inst(inst_list, buffer);
                     inst_list = add_inst(inst_list, "\tcdq\n");
 
-                    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%r10d\n", div_right);
+                    snprintf(buffer, sizeof(buffer), "\tidivl\t%s\n", tmp_div);
                     inst_list = add_inst(inst_list, buffer);
-                    inst_list = add_inst(inst_list, "\tidivl\t%r10d\n");
 
                     snprintf(buffer, sizeof(buffer), "\tmovl\t%%eax, %s\n", div_left);
                     inst_list = add_inst(inst_list, buffer);

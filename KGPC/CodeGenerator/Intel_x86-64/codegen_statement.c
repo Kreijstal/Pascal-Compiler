@@ -178,6 +178,10 @@ static int expr_is_64bit_integer(const struct Expression *expr)
     if (expr == NULL)
         return 0;
     
+    /* Use robust helper to detect 64-bit types (Int64, QWord, pointers, etc.) */
+    if (expr_uses_qword_kgpctype(expr))
+        return 1;
+
     /* Check storage_size in KgpcType for Int64/QWord/UInt64 */
     if (expr->resolved_kgpc_type != NULL)
     {
