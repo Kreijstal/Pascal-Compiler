@@ -375,7 +375,8 @@ int semcheck_arrayaccess(int *type_return,
     int base_type = UNKNOWN_TYPE;
     return_val += semcheck_expr_legacy_tag(&base_type, symtab, array_expr, max_scope_lev, mutating);
 
-    /* Support TStringList indexing by converting obj[idx] to obj.FItems[idx] */
+    /* Support default indexed property access by converting obj[idx] to obj.field[idx].
+     * This handles classes like TStringList where obj[i] maps to obj.FItems[i]. */
     {
         KgpcType *rec_ptr_type = array_expr->resolved_kgpc_type;
         struct RecordType *rec = NULL;
@@ -389,32 +390,34 @@ int semcheck_arrayaccess(int *type_return,
             rec = kgpc_type_get_record(rec_ptr_type);
         }
 
-        int is_already_fitems = 0;
-        if (array_expr->type == EXPR_RECORD_ACCESS && array_expr->expr_data.record_access_data.field_id != NULL &&
-            pascal_identifier_equals(array_expr->expr_data.record_access_data.field_id, "FItems"))
+        /* Check if class has a default indexed property and we're not already accessing it */
+        if (rec != NULL && rec->default_indexed_property != NULL)
         {
-            is_already_fitems = 1;
-        }
-
-        if (!is_already_fitems)
-        {
-            if (rec != NULL && rec->type_id != NULL && pascal_identifier_equals(rec->type_id, "TStringList"))
+            int is_already_default_field = 0;
+            if (array_expr->type == EXPR_RECORD_ACCESS && array_expr->expr_data.record_access_data.field_id != NULL &&
+                pascal_identifier_equals(array_expr->expr_data.record_access_data.field_id, rec->default_indexed_property))
             {
-                /* Transform to lst.FItems[idx] */
-                struct Expression *fitems_access = (struct Expression *)calloc(1, sizeof(struct Expression));
-                fitems_access->line_num = array_expr->line_num;
-                fitems_access->type = EXPR_RECORD_ACCESS;
-                fitems_access->expr_data.record_access_data.record_expr = array_expr;
-                fitems_access->expr_data.record_access_data.field_id = strdup("FItems");
-                fitems_access->record_type = rec;
+                is_already_default_field = 1;
+            }
+
+            if (!is_already_default_field)
+            {
+                /* Transform to obj.default_indexed_property[idx] */
+                struct Expression *field_access = (struct Expression *)calloc(1, sizeof(struct Expression));
+                assert(field_access != NULL);
+                field_access->line_num = array_expr->line_num;
+                field_access->type = EXPR_RECORD_ACCESS;
+                field_access->expr_data.record_access_data.record_expr = array_expr;
+                field_access->expr_data.record_access_data.field_id = strdup(rec->default_indexed_property);
+                field_access->record_type = rec;
 
                 /* We need to semcheck this new expression so its array info is populated */
-                int fitems_type = UNKNOWN_TYPE;
-                semcheck_expr_legacy_tag(&fitems_type, symtab, fitems_access, max_scope_lev, mutating);
+                int field_type = UNKNOWN_TYPE;
+                semcheck_expr_legacy_tag(&field_type, symtab, field_access, max_scope_lev, mutating);
 
-                expr->expr_data.array_access_data.array_expr = fitems_access;
-                array_expr = fitems_access;
-                base_type = fitems_type;
+                expr->expr_data.array_access_data.array_expr = field_access;
+                array_expr = field_access;
+                base_type = field_type;
                 /* Continue with the rest of semcheck using the new array_expr */
             }
         }
