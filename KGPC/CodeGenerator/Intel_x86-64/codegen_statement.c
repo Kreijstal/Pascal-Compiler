@@ -7706,21 +7706,27 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
 
         // Store element to loop variable
         if (element_size == 1) {
-            char byte_reg[16];
-            const char *reg32 = elem_reg->bit_32;
-            if (strncmp(reg32, "%e", 2) == 0 && strlen(reg32) >= 4) {
-                snprintf(byte_reg, sizeof(byte_reg), "%%%cl", reg32[3]);
-            } else {
-                strcpy(byte_reg, "%al"); // Fallback, conceptually incorrect but practically unused for non-rax registers in this allocator
+            const char *byte_reg = register_name8(elem_reg);
+            if (byte_reg == NULL) {
+                codegen_report_error(ctx, "codegen_for_in: unable to get 8-bit register name for element storage");
+                free_reg(get_reg_stack(), elem_reg);
+                free_reg(get_reg_stack(), idx_reg);
+                free_reg(get_reg_stack(), fitems_reg);
+                free_reg(get_reg_stack(), loop_var_addr_reg);
+                codegen_pop_loop(ctx);
+                return inst_list;
             }
             snprintf(buffer, sizeof(buffer), "\tmovb\t%s, (%s)\n", byte_reg, loop_var_addr_reg->bit_64);
         } else if (element_size == 2) {
-            char word_reg[16];
-            const char *reg32 = elem_reg->bit_32;
-            if (strncmp(reg32, "%e", 2) == 0 && strlen(reg32) >= 4) {
-                snprintf(word_reg, sizeof(word_reg), "%%%.2s", reg32 + 3);
-            } else {
-                strcpy(word_reg, "%ax");
+            const char *word_reg = codegen_register_name16(elem_reg);
+            if (word_reg == NULL) {
+                codegen_report_error(ctx, "codegen_for_in: unable to get 16-bit register name for element storage");
+                free_reg(get_reg_stack(), elem_reg);
+                free_reg(get_reg_stack(), idx_reg);
+                free_reg(get_reg_stack(), fitems_reg);
+                free_reg(get_reg_stack(), loop_var_addr_reg);
+                codegen_pop_loop(ctx);
+                return inst_list;
             }
             snprintf(buffer, sizeof(buffer), "\tmovw\t%s, (%s)\n", word_reg, loop_var_addr_reg->bit_64);
         } else if (element_size == 4) {
@@ -7905,17 +7911,13 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
         }
 
         // Store byte to loop variable
-        char byte_reg[16];
-        const char *reg32 = char_reg->bit_32;
-        if (strncmp(reg32, "%e", 2) == 0 && strlen(reg32) >= 4) {
-            snprintf(byte_reg, sizeof(byte_reg), "%%%cl", reg32[3]);
-        } else if (strncmp(reg32, "%r", 2) == 0 && strlen(reg32) >= 4) {
-            int len = strlen(reg32);
-            strncpy(byte_reg, reg32, len - 1);
-            byte_reg[len - 1] = 'b';
-            byte_reg[len] = '\0';
-        } else {
-            strcpy(byte_reg, "%al");
+        const char *byte_reg = register_name8(char_reg);
+        if (byte_reg == NULL) {
+            codegen_report_error(ctx, "codegen_for_in: unable to get 8-bit register name for char storage");
+            free_reg(get_reg_stack(), char_reg);
+            free_reg(get_reg_stack(), loop_var_addr_reg);
+            codegen_pop_loop(ctx);
+            return inst_list;
         }
         snprintf(buffer, sizeof(buffer), "\tmovb\t%s, (%s)\n", byte_reg, loop_var_addr_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
@@ -8091,38 +8093,24 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
 
     // Store element to loop variable (using proper byte/word/dword/qword)
     if (element_size == 1) {
-        // Extract byte register name from 32-bit register (e.g., %eax -> %al)
-        char byte_reg[16];
-        const char *reg32 = element_reg->bit_32;
-        if (strncmp(reg32, "%e", 2) == 0 && strlen(reg32) >= 4) {
-            // %eax -> %al, %ebx -> %bl, etc.
-            snprintf(byte_reg, sizeof(byte_reg), "%%%cl", reg32[3]);
-        } else if (strncmp(reg32, "%r", 2) == 0 && strlen(reg32) >= 4) {
-            // %r8d -> %r8b, %r9d -> %r9b, etc.
-            int len = strlen(reg32);
-            strncpy(byte_reg, reg32, len - 1);
-            byte_reg[len - 1] = 'b';
-            byte_reg[len] = '\0';
-        } else {
-            strcpy(byte_reg, "%al");  // Fallback
+        const char *byte_reg = register_name8(element_reg);
+        if (byte_reg == NULL) {
+            codegen_report_error(ctx, "codegen_for_in: unable to get 8-bit register name for element storage");
+            free_reg(get_reg_stack(), element_reg);
+            free_reg(get_reg_stack(), loop_var_addr_reg);
+            codegen_pop_loop(ctx);
+            return inst_list;
         }
         snprintf(buffer, sizeof(buffer), "\tmovb\t%s, (%s)\n", byte_reg, loop_var_addr_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
     } else if (element_size == 2) {
-        // Extract word register name from 32-bit register (e.g., %eax -> %ax)
-        char word_reg[16];
-        const char *reg32 = element_reg->bit_32;
-        if (strncmp(reg32, "%e", 2) == 0 && strlen(reg32) >= 4) {
-            // %eax -> %ax, %ebx -> %bx, etc.
-            snprintf(word_reg, sizeof(word_reg), "%%%.2s", reg32 + 3);
-        } else if (strncmp(reg32, "%r", 2) == 0 && strlen(reg32) >= 4) {
-            // %r8d -> %r8w, %r9d -> %r9w, etc.
-            int len = strlen(reg32);
-            strncpy(word_reg, reg32, len - 1);
-            word_reg[len - 1] = 'w';
-            word_reg[len] = '\0';
-        } else {
-            strcpy(word_reg, "%ax");  // Fallback
+        const char *word_reg = codegen_register_name16(element_reg);
+        if (word_reg == NULL) {
+            codegen_report_error(ctx, "codegen_for_in: unable to get 16-bit register name for element storage");
+            free_reg(get_reg_stack(), element_reg);
+            free_reg(get_reg_stack(), loop_var_addr_reg);
+            codegen_pop_loop(ctx);
+            return inst_list;
         }
         snprintf(buffer, sizeof(buffer), "\tmovw\t%s, (%s)\n", word_reg, loop_var_addr_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);

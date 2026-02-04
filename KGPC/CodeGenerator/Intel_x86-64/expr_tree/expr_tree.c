@@ -624,7 +624,14 @@ static const char *reg_to_reg64(const char *reg_name, char *buffer, size_t buf_s
 {
     if (reg_name == NULL)
         return NULL;
-    if (reg_name[0] == '%' && (reg_name[1] == 'e' || (reg_name[1] == 'r' && strchr(reg_name, 'd') != NULL)))
+    /* Check for 32-bit registers:
+     * - %e* registers (e.g., %eax, %ebx)
+     * - %r*d registers (e.g., %r8d, %r9d) - must END with 'd', not just contain it
+     *   Note: %rdx is already 64-bit, not a 32-bit register ending with 'd' */
+    size_t len = strlen(reg_name);
+    if (reg_name[0] == '%' && 
+        (reg_name[1] == 'e' || 
+         (reg_name[1] == 'r' && len > 2 && reg_name[len - 1] == 'd' && reg_name[2] >= '0' && reg_name[2] <= '9')))
         return reg32_to_reg64(reg_name, buffer, buf_size);
     return reg_name;
 }

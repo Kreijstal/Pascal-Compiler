@@ -1948,68 +1948,46 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                 if (effective_type_node == NULL)
                     effective_type_node = fallback_type_node;
 
-                struct TypeAlias *alias = get_type_alias_from_node(effective_type_node);
-                if (alias == NULL && var_info != NULL)
-                    alias = get_type_alias_from_node(var_info);
-                if (alias != NULL && alias->is_array)
+                KgpcType *param_type = NULL;
+                if (effective_type_node != NULL)
+                    param_type = effective_type_node->type;
+                if (param_type == NULL && var_info != NULL)
+                    param_type = var_info->type;
+
+                if (param_type != NULL && kgpc_type_is_array(param_type))
                 {
-                    long long computed_size = 0;
-                    int element_size = 0;
-                    struct RecordType *element_record = NULL;
-
-                    if (alias->array_element_type == RECORD_TYPE && ctx != NULL && ctx->symtab != NULL &&
-                        alias->array_element_type_id != NULL)
+                    KgpcArrayDimensionInfo array_info;
+                    int dim_info_result = kgpc_type_get_array_dimension_info(param_type, symtab, &array_info);
+                    
+                    /* If dimension info lookup succeeded, use its values; otherwise fall back to simpler methods */
+                    int element_size;
+                    int array_start;
+                    long long total_size;
+                    
+                    if (dim_info_result == 0 && array_info.dim_count > 0 &&
+                        array_info.element_size > 0 &&
+                        array_info.element_size <= INT_MAX &&
+                        array_info.dim_lowers[0] >= INT_MIN &&
+                        array_info.dim_lowers[0] <= INT_MAX)
                     {
-                        HashNode_t *element_node = NULL;
-                        if (FindIdent(&element_node, ctx->symtab, alias->array_element_type_id) >= 0 &&
-                            element_node != NULL)
-                            element_record = get_record_type_from_node(element_node);
+                        /* Use computed values from kgpc_type_get_array_dimension_info which handles
+                         * multi-dimensional arrays and constant-based bounds correctly */
+                        element_size = (int)array_info.element_size;
+                        array_start = (int)array_info.dim_lowers[0];
+                        total_size = array_info.total_size;
                     }
-
-                    if (codegen_sizeof_type_reference(ctx, alias->array_element_type,
-                            alias->array_element_type_id, element_record, &computed_size) == 0 &&
-                        computed_size > 0 && computed_size <= INT_MAX)
+                    else
                     {
-                        element_size = (int)computed_size;
+                        /* Fallback: use simpler methods that work for basic array types */
+                        element_size = (int)kgpc_type_get_array_element_size(param_type);
+                        if (element_size <= 0) element_size = 1;
+                        array_start = param_type->info.array_info.start_index;
+                        total_size = kgpc_type_sizeof(param_type);
                     }
+                    
+                    int is_open_array = kgpc_type_is_dynamic_array(param_type);
 
-                    if (element_size <= 0)
-                    {
-                        switch (alias->array_element_type)
-                        {
-                            case LONGINT_TYPE:
-                                element_size = 4;  // Match FPC's 32-bit LongInt
-                                break;
-                            case REAL_TYPE:
-                            case STRING_TYPE:
-                            case POINTER_TYPE:
-                                element_size = 8;
-                                break;
-                            case SHORTSTRING_TYPE:
-                                element_size = 256;
-                                break;
-                            case FILE_TYPE:
-                                element_size = 368;
-                                break;
-                            case TEXT_TYPE:
-                                element_size = 632;
-                                break;
-                            case CHAR_TYPE:
-                                element_size = 1;
-                                break;
-                            case INT_TYPE:
-                            case BOOL:
-                            case SET_TYPE:
-                            case ENUM_TYPE:
-                                element_size = 4;
-                                break;
-                            default:
-                                element_size = 4;
-                                break;
-                        }
-                    }
-
-                    if (alias->is_open_array)
+                    if (is_open_array)
                     {
                         char *static_label = NULL;
                         if (is_program_scope)
@@ -2024,49 +2002,14 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                             }
                         }
                         add_dynamic_array((char *)id_list->cur, element_size,
-                            alias->array_start, is_program_scope, static_label);
+                            array_start, is_program_scope, static_label);
                         if (static_label != NULL)
                             free(static_label);
                     }
                     else
                     {
-                        int length = alias->array_end - alias->array_start + 1;
-                        if (length < 0)
-                            length = 0;
-                        long long total_size = (long long)length * (long long)element_size;
                         if (total_size <= 0)
                             total_size = element_size;
-
-                        /* Check for multi-dimensional arrays using array_dimensions list.
-                         * For array[1..3, 1..3] of char, array_dimensions contains ["1..3", "1..3"].
-                         * We need to compute total size from all dimensions. */
-                        if (alias->array_dimensions != NULL && alias->array_dimensions->next != NULL) {
-                            /* Multi-dimensional array: compute total size from all dimensions */
-                            int computed_total = 1;
-                            ListNode_t *dim = alias->array_dimensions;
-                            while (dim != NULL) {
-                                const char *range_str = (const char *)dim->cur;
-                                if (range_str != NULL) {
-                                    char *range_copy = strdup(range_str);
-                                    if (range_copy != NULL) {
-                                        char *dotdot = strstr(range_copy, "..");
-                                        if (dotdot != NULL) {
-                                            *dotdot = '\0';
-                                            int dim_start = atoi(range_copy);
-                                            int dim_end = atoi(dotdot + 2);
-                                            int dim_len = dim_end - dim_start + 1;
-                                            if (dim_len > 0)
-                                                computed_total *= dim_len;
-                                        }
-                                        free(range_copy);
-                                    }
-                                }
-                                dim = dim->next;
-                            }
-                            long long multidim_total = (long long)computed_total * (long long)element_size;
-                            if (multidim_total > total_size)
-                                total_size = multidim_total;
-                        }
 
                         if (is_program_scope)
                         {
@@ -2078,14 +2021,14 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                                     static_label, (int)total_size, alignment);
                             }
                             add_static_array((char *)id_list->cur, (int)total_size, element_size,
-                                alias->array_start, static_label);
+                                array_start, static_label);
                             if (static_label != NULL)
                                 free(static_label);
                         }
                         else
                         {
                             add_array((char *)id_list->cur, (int)total_size, element_size,
-                                alias->array_start);
+                                array_start);
                         }
                     }
                 }
