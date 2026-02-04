@@ -95,8 +95,8 @@ int semcheck_typecheck_array_literal(struct Expression *expr, SymTab_t *symtab,
         while (cur_elem != NULL)
         {
             struct Expression *element_expr = (struct Expression *)cur_elem->cur;
-            KgpcType *element_kgpc_type = NULL;
-            semcheck_expr_with_type(&element_kgpc_type, symtab, element_expr, max_scope_lev, NO_MUTATE);
+            int element_type = UNKNOWN_TYPE;
+            semcheck_expr_legacy_tag(&element_type, symtab, element_expr, max_scope_lev, NO_MUTATE);
             cur_elem = cur_elem->next;
         }
         expr->array_element_type = ARRAY_OF_CONST_TYPE;
@@ -122,10 +122,9 @@ int semcheck_typecheck_array_literal(struct Expression *expr, SymTab_t *symtab,
             continue;
         }
 
-        KgpcType *element_kgpc_type = NULL;
-        error_count += semcheck_expr_with_type(&element_kgpc_type, symtab, element_expr,
+        int element_type = UNKNOWN_TYPE;
+        error_count += semcheck_expr_legacy_tag(&element_type, symtab, element_expr,
             max_scope_lev, NO_MUTATE);
-        int element_type = semcheck_tag_from_kgpc(element_kgpc_type);
 
         if (error_count == 0 && expected_type != UNKNOWN_TYPE &&
             element_type != expected_type)
@@ -236,8 +235,8 @@ int semcheck_prepare_array_literal_argument(Tree_t *formal_decl, struct Expressi
         while (cur_elem != NULL)
         {
             struct Expression *element_expr = (struct Expression *)cur_elem->cur;
-            KgpcType *element_kgpc_type = NULL;
-            semcheck_expr_with_type(&element_kgpc_type, symtab, element_expr,
+            int element_type = UNKNOWN_TYPE;
+            semcheck_expr_legacy_tag(&element_type, symtab, element_expr,
                 max_scope_lev, NO_MUTATE);
             cur_elem = cur_elem->next;
         }
@@ -606,8 +605,8 @@ int semcheck_typecheck_record_constructor(struct Expression *expr, SymTab_t *sym
             }
         }
 
-        KgpcType *value_kgpc_type = NULL;
-        error_count += semcheck_expr_with_type(&value_kgpc_type, symtab, field->value, max_scope_lev, NO_MUTATE);
+        int value_type = UNKNOWN_TYPE;
+        error_count += semcheck_expr_legacy_tag(&value_type, symtab, field->value, max_scope_lev, NO_MUTATE);
 
         int expected_owned = 1;
         KgpcType *expected_type = semcheck_field_expected_kgpc_type(symtab, field_desc);
