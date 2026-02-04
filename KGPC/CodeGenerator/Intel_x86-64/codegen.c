@@ -1957,11 +1957,12 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                 if (param_type != NULL && kgpc_type_is_array(param_type))
                 {
                     KgpcArrayDimensionInfo array_info;
-                    kgpc_type_get_array_dimension_info(param_type, symtab, &array_info);
+                    int dim_info_result = kgpc_type_get_array_dimension_info(param_type, symtab, &array_info);
 
                     int element_size = (int)array_info.element_size;
                     int array_start = (int)array_info.dim_lowers[0];
-                    long long total_size = kgpc_type_sizeof(param_type);
+                    /* Use total_size from array_info which is computed with symtab for constant resolution */
+                    long long total_size = (dim_info_result == 0) ? array_info.total_size : kgpc_type_sizeof(param_type);
                     int is_open_array = kgpc_type_is_dynamic_array(param_type);
 
                     if (is_open_array)

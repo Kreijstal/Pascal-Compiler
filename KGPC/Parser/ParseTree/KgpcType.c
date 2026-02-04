@@ -1438,11 +1438,11 @@ long long kgpc_type_sizeof(KgpcType *type)
         {
             if (kgpc_type_is_dynamic_array(type))
                 return 8;
-            KgpcArrayDimensionInfo info;
-            if (kgpc_type_get_array_dimension_info(type, NULL, &info) == 0)
-            {
-                return info.total_size;
-            }
+            /* Use the KgpcType's concrete start_index/end_index.
+             * Note: For multi-dimensional arrays defined via TypeAlias, the size computation
+             * might be incorrect here because element_type may not be nested arrays.
+             * Callers with access to symtab should use kgpc_type_get_array_dimension_info
+             * for accurate multi-dimensional array sizes. */
             long long element_size = kgpc_type_sizeof(type->info.array_info.element_type);
             if (element_size < 0)
                 return -1;
@@ -1640,9 +1640,14 @@ int kgpc_type_get_array_dimension_info(KgpcType *type, struct SymTab *symtab, Kg
                         left[left_len] = '\0';
                         info->dim_lowers[info->dim_count] = kgpc_parse_array_bound(symtab, left);
                         free(left);
+                        info->dim_uppers[info->dim_count] = kgpc_parse_array_bound(symtab, dotdot + 2);
+                        info->dim_sizes[info->dim_count] = info->dim_uppers[info->dim_count] - info->dim_lowers[info->dim_count] + 1;
                     }
-                    info->dim_uppers[info->dim_count] = kgpc_parse_array_bound(symtab, dotdot + 2);
-                    info->dim_sizes[info->dim_count] = info->dim_uppers[info->dim_count] - info->dim_lowers[info->dim_count] + 1;
+                    else
+                    {
+                        /* malloc failure: this is a critical error, but we return error from function */
+                        return -1;
+                    }
                 }
                 else if (pascal_identifier_equals(range_str, "Boolean"))
                 {
