@@ -59,9 +59,9 @@ typedef struct {
 
 typedef struct {
     int dim_count;
-    int dim_sizes[10];
-    int dim_lowers[10];
-    int dim_uppers[10];
+    long long dim_sizes[10];
+    long long dim_lowers[10];
+    long long dim_uppers[10];
     long long strides[10];
     long long element_size;
     long long total_size;

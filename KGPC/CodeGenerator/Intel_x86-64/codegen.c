@@ -1964,7 +1964,11 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                     int array_start;
                     long long total_size;
                     
-                    if (dim_info_result == 0 && array_info.dim_count > 0)
+                    if (dim_info_result == 0 && array_info.dim_count > 0 &&
+                        array_info.element_size > 0 &&
+                        array_info.element_size <= INT_MAX &&
+                        array_info.dim_lowers[0] >= INT_MIN &&
+                        array_info.dim_lowers[0] <= INT_MAX)
                     {
                         /* Use computed values from kgpc_type_get_array_dimension_info which handles
                          * multi-dimensional arrays and constant-based bounds correctly */

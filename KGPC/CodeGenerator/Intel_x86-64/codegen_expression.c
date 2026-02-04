@@ -3833,7 +3833,10 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
                 {
                     /* Fallback for when dimension info is not available or exceeded */
                     long long element_size_ll = 1;
-                    codegen_get_indexable_element_size(array_expr, ctx, &element_size_ll);
+                    int element_size_ok = codegen_get_indexable_element_size(array_expr, ctx, &element_size_ll);
+#ifndef NDEBUG
+                    assert(element_size_ok && "codegen_get_indexable_element_size failed in fallback stride computation");
+#endif
                     stride = element_size_ll;
                     extra_lower_bound = 1; /* Default to 1-based */
                 }
