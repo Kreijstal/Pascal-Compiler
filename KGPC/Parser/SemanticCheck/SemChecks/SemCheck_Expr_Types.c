@@ -28,8 +28,12 @@ int semcheck_typecast(int *type_return,
     int inner_type = UNKNOWN_TYPE;
 
     if (expr->expr_data.typecast_data.expr != NULL)
-        error_count += semcheck_expr_legacy_tag(&inner_type, symtab,
+    {
+        KgpcType *inner_kgpc_type = NULL;
+        error_count += semcheck_expr_with_type(&inner_kgpc_type, symtab,
             expr->expr_data.typecast_data.expr, max_scope_lev, NO_MUTATE);
+        inner_type = semcheck_tag_from_kgpc(inner_kgpc_type);
+    }
 
     int target_type = expr->expr_data.typecast_data.target_type;
     int builtin_mapped = semcheck_map_builtin_type_name(symtab,
@@ -207,7 +211,9 @@ int semcheck_is_expr(int *type_return,
     }
 
     int value_type = UNKNOWN_TYPE;
-    error_count += semcheck_expr_legacy_tag(&value_type, symtab, value_expr, max_scope_lev, NO_MUTATE);
+    KgpcType *value_kgpc_type_is = NULL;
+    error_count += semcheck_expr_with_type(&value_kgpc_type_is, symtab, value_expr, max_scope_lev, NO_MUTATE);
+    value_type = semcheck_tag_from_kgpc(value_kgpc_type_is);
 
     struct RecordType *value_record = value_expr->record_type;
     
@@ -287,7 +293,9 @@ int semcheck_as_expr(int *type_return,
     }
 
     int value_type = UNKNOWN_TYPE;
-    error_count += semcheck_expr_legacy_tag(&value_type, symtab, value_expr, max_scope_lev, NO_MUTATE);
+    KgpcType *value_kgpc_type_as = NULL;
+    error_count += semcheck_expr_with_type(&value_kgpc_type_as, symtab, value_expr, max_scope_lev, NO_MUTATE);
+    value_type = semcheck_tag_from_kgpc(value_kgpc_type_as);
 
     struct RecordType *value_record = value_expr->record_type;
     
@@ -389,8 +397,10 @@ int semcheck_pointer_deref(int *type_return,
 
     int error_count = 0;
     int pointer_type = UNKNOWN_TYPE;
-    error_count += semcheck_expr_legacy_tag(&pointer_type, symtab, pointer_expr,
+    KgpcType *pointer_kgpc_type = NULL;
+    error_count += semcheck_expr_with_type(&pointer_kgpc_type, symtab, pointer_expr,
         max_scope_lev, NO_MUTATE);
+    pointer_type = semcheck_tag_from_kgpc(pointer_kgpc_type);
 
     if (pointer_type != POINTER_TYPE)
     {
@@ -674,6 +684,7 @@ int semcheck_transform_property_getter_call(int *type_return,
     expr->array_element_record_type = NULL;
     expr->array_element_size = 0;
 
+    /* Keep legacy_tag here - expression is rewritten and needs re-checking with int type_return */
     return semcheck_expr_legacy_tag(type_return, symtab, expr, max_scope_lev, mutating);
 }
 
@@ -936,7 +947,9 @@ int semcheck_recordaccess(int *type_return,
 
     int error_count = 0;
     int record_type = UNKNOWN_TYPE;
-    error_count += semcheck_expr_legacy_tag(&record_type, symtab, record_expr, max_scope_lev, mutating);
+    KgpcType *record_kgpc_type = NULL;
+    error_count += semcheck_expr_with_type(&record_kgpc_type, symtab, record_expr, max_scope_lev, mutating);
+    record_type = semcheck_tag_from_kgpc(record_kgpc_type);
 
     if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
         fprintf(stderr, "[SemCheck] semcheck_recordaccess: field_id=%s, record_type=%d, record_expr->record_type=%p\n",
@@ -2163,6 +2176,7 @@ int semcheck_reinterpret_typecast_as_call(int *type_return, SymTab_t *symtab,
     if (arg_expr != NULL)
         expr->expr_data.function_call_data.args_expr = CreateListNode(arg_expr, LIST_EXPR);
 
+    /* Keep legacy_tag here - typecast reinterpreted as call needs re-checking */
     return semcheck_expr_legacy_tag(type_return, symtab, expr, max_scope_lev, NO_MUTATE);
 }
 
@@ -2233,7 +2247,11 @@ int semcheck_addressof(int *type_return,
     }
 
     if (!treated_as_proc_ref)
-        semcheck_expr_legacy_tag(&inner_type, symtab, inner, max_scope_lev, NO_MUTATE);
+    {
+        KgpcType *inner_kgpc_type = NULL;
+        semcheck_expr_with_type(&inner_kgpc_type, symtab, inner, max_scope_lev, NO_MUTATE);
+        inner_type = semcheck_tag_from_kgpc(inner_kgpc_type);
+    }
 
     /* Special case: address-of array expressions (array variables/fields). */
     if (inner_type == UNKNOWN_TYPE &&

@@ -373,9 +373,12 @@ int semcheck_arrayaccess(int *type_return,
     }
 
     int base_type = UNKNOWN_TYPE;
-    return_val += semcheck_expr_legacy_tag(&base_type, symtab, array_expr, max_scope_lev, mutating);
+    KgpcType *base_kgpc_type = NULL;
+    return_val += semcheck_expr_with_type(&base_kgpc_type, symtab, array_expr, max_scope_lev, mutating);
+    base_type = semcheck_tag_from_kgpc(base_kgpc_type);
 
-    /* Support TStringList indexing by converting obj[idx] to obj.FItems[idx] */
+    /* Support default indexed property access by converting obj[idx] to obj.field[idx].
+     * This handles classes like TStringList where obj[i] maps to obj.FItems[i]. */
     {
         KgpcType *rec_ptr_type = array_expr->resolved_kgpc_type;
         struct RecordType *rec = NULL;
@@ -389,38 +392,42 @@ int semcheck_arrayaccess(int *type_return,
             rec = kgpc_type_get_record(rec_ptr_type);
         }
 
-        int is_already_fitems = 0;
-        if (array_expr->type == EXPR_RECORD_ACCESS && array_expr->expr_data.record_access_data.field_id != NULL &&
-            pascal_identifier_equals(array_expr->expr_data.record_access_data.field_id, "FItems"))
+        /* Check if class has a default indexed property and we're not already accessing it */
+        if (rec != NULL && rec->default_indexed_property != NULL)
         {
-            is_already_fitems = 1;
-        }
-
-        if (!is_already_fitems)
-        {
-            if (rec != NULL && rec->type_id != NULL && pascal_identifier_equals(rec->type_id, "TStringList"))
+            int is_already_default_field = 0;
+            if (array_expr->type == EXPR_RECORD_ACCESS && array_expr->expr_data.record_access_data.field_id != NULL &&
+                pascal_identifier_equals(array_expr->expr_data.record_access_data.field_id, rec->default_indexed_property))
             {
-                /* Transform to lst.FItems[idx] */
-                struct Expression *fitems_access = (struct Expression *)calloc(1, sizeof(struct Expression));
-                fitems_access->line_num = array_expr->line_num;
-                fitems_access->type = EXPR_RECORD_ACCESS;
-                fitems_access->expr_data.record_access_data.record_expr = array_expr;
-                fitems_access->expr_data.record_access_data.field_id = strdup("FItems");
-                fitems_access->record_type = rec;
+                is_already_default_field = 1;
+            }
+
+            if (!is_already_default_field)
+            {
+                /* Transform to obj.default_indexed_property[idx] */
+                struct Expression *field_access = (struct Expression *)calloc(1, sizeof(struct Expression));
+                assert(field_access != NULL);
+                field_access->line_num = array_expr->line_num;
+                field_access->type = EXPR_RECORD_ACCESS;
+                field_access->expr_data.record_access_data.record_expr = array_expr;
+                field_access->expr_data.record_access_data.field_id = strdup(rec->default_indexed_property);
+                field_access->record_type = rec;
 
                 /* We need to semcheck this new expression so its array info is populated */
-                int fitems_type = UNKNOWN_TYPE;
-                semcheck_expr_legacy_tag(&fitems_type, symtab, fitems_access, max_scope_lev, mutating);
+                int field_type = UNKNOWN_TYPE;
+                KgpcType *field_kgpc_type = NULL;
+                semcheck_expr_with_type(&field_kgpc_type, symtab, field_access, max_scope_lev, mutating);
+                field_type = semcheck_tag_from_kgpc(field_kgpc_type);
 
-                expr->expr_data.array_access_data.array_expr = fitems_access;
-                array_expr = fitems_access;
-                base_type = fitems_type;
+                expr->expr_data.array_access_data.array_expr = field_access;
+                array_expr = field_access;
+                base_type = field_type;
                 /* Continue with the rest of semcheck using the new array_expr */
             }
         }
     }
 
-    int base_is_string = (is_string_type(base_type) && !array_expr->is_array_expr);
+    int base_is_string = (kgpc_type_is_string(base_kgpc_type) && !array_expr->is_array_expr);
     /* Only treat as pointer indexing if NOT an array expression - for arrays of pointers,
      * we want to go through the array path to properly handle element type info */
     int base_is_pointer = (base_type == POINTER_TYPE && !array_expr->is_array_expr);
@@ -576,7 +583,9 @@ int semcheck_arrayaccess(int *type_return,
         }
     }
 
-    return_val += semcheck_expr_legacy_tag(&index_type, symtab, access_expr, max_scope_lev, NO_MUTATE);
+    KgpcType *index_kgpc_type = NULL;
+    return_val += semcheck_expr_with_type(&index_kgpc_type, symtab, access_expr, max_scope_lev, NO_MUTATE);
+    index_type = semcheck_tag_from_kgpc(index_kgpc_type);
     if (!is_ordinal_type(index_type))
     {
         semcheck_error_with_context("Error on line %d, expected ordinal type (integer, char, boolean, or enum) in array index expression!\n\n",
@@ -598,7 +607,9 @@ int semcheck_arrayaccess(int *type_return,
             if (idx_expr != NULL)
             {
                 int extra_idx_type = UNKNOWN_TYPE;
-                return_val += semcheck_expr_legacy_tag(&extra_idx_type, symtab, idx_expr, max_scope_lev, NO_MUTATE);
+                KgpcType *extra_kgpc_type = NULL;
+                return_val += semcheck_expr_with_type(&extra_kgpc_type, symtab, idx_expr, max_scope_lev, NO_MUTATE);
+                extra_idx_type = semcheck_tag_from_kgpc(extra_kgpc_type);
                 if (!is_ordinal_type(extra_idx_type))
                 {
                     semcheck_error_with_context("Error on line %d, expected ordinal type (integer, char, boolean, or enum) in array index expression!\n\n",
@@ -1325,7 +1336,9 @@ int semcheck_funccall(int *type_return,
     {
         struct Expression *receiver_expr = (struct Expression *)args_given->cur;
         int recv_type = UNKNOWN_TYPE;
-        semcheck_expr_legacy_tag(&recv_type, symtab, receiver_expr, max_scope_lev, NO_MUTATE);
+        KgpcType *recv_kgpc_type = NULL;
+        semcheck_expr_with_type(&recv_kgpc_type, symtab, receiver_expr, max_scope_lev, NO_MUTATE);
+        recv_type = semcheck_tag_from_kgpc(recv_kgpc_type);
 
         struct RecordType *recv_record = NULL;
         if (recv_type == RECORD_TYPE)
@@ -1450,7 +1463,9 @@ int semcheck_funccall(int *type_return,
                             
                             int formal_type = resolve_param_type(formal_decl, symtab);
                             int actual_type = UNKNOWN_TYPE;
-                            semcheck_expr_legacy_tag(&actual_type, symtab, actual_expr, max_scope_lev, NO_MUTATE);
+                            KgpcType *actual_kgpc_type = NULL;
+                            semcheck_expr_with_type(&actual_kgpc_type, symtab, actual_expr, max_scope_lev, NO_MUTATE);
+                            actual_type = semcheck_tag_from_kgpc(actual_kgpc_type);
 
                             if (formal_type != UNKNOWN_TYPE && actual_type != UNKNOWN_TYPE &&
                                 formal_type != actual_type)
@@ -1562,7 +1577,9 @@ int semcheck_funccall(int *type_return,
 
         struct Expression *size_expr = (struct Expression *)args->cur;
         int size_type = UNKNOWN_TYPE;
-        int error_count = semcheck_expr_legacy_tag(&size_type, symtab, size_expr, max_scope_lev, NO_MUTATE);
+        KgpcType *size_kgpc_type = NULL;
+        int error_count = semcheck_expr_with_type(&size_kgpc_type, symtab, size_expr, max_scope_lev, NO_MUTATE);
+        size_type = semcheck_tag_from_kgpc(size_kgpc_type);
         if (error_count != 0)
         {
             *type_return = UNKNOWN_TYPE;
@@ -1642,7 +1659,10 @@ int semcheck_funccall(int *type_return,
         int error_count = 0;
         struct Expression *arg_expr = (struct Expression *)args->cur;
         int arg_type = UNKNOWN_TYPE;
-        error_count += semcheck_expr_legacy_tag(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
+        KgpcType *arg_kgpc_type = NULL;
+        error_count += semcheck_expr_with_type(&arg_kgpc_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
+        arg_type = semcheck_tag_from_kgpc(arg_kgpc_type);
+        (void)arg_type; /* Used for validation only */
         if (error_count != 0)
         {
             *type_return = UNKNOWN_TYPE;
@@ -1671,8 +1691,14 @@ int semcheck_funccall(int *type_return,
         struct Expression *reserve_expr = (struct Expression *)args->next->cur;
         int arr_type = UNKNOWN_TYPE;
         int reserve_type = UNKNOWN_TYPE;
-        error_count += semcheck_expr_legacy_tag(&arr_type, symtab, arr_expr, max_scope_lev, NO_MUTATE);
-        error_count += semcheck_expr_legacy_tag(&reserve_type, symtab, reserve_expr, max_scope_lev, NO_MUTATE);
+        KgpcType *arr_kgpc_type = NULL;
+        KgpcType *reserve_kgpc_type = NULL;
+        error_count += semcheck_expr_with_type(&arr_kgpc_type, symtab, arr_expr, max_scope_lev, NO_MUTATE);
+        error_count += semcheck_expr_with_type(&reserve_kgpc_type, symtab, reserve_expr, max_scope_lev, NO_MUTATE);
+        arr_type = semcheck_tag_from_kgpc(arr_kgpc_type);
+        reserve_type = semcheck_tag_from_kgpc(reserve_kgpc_type);
+        (void)arr_type; /* Used for validation only */
+        (void)reserve_type; /* Used for validation only */
         if (error_count != 0)
         {
             *type_return = UNKNOWN_TYPE;
@@ -1746,7 +1772,9 @@ int semcheck_funccall(int *type_return,
         {
             struct Expression *arg_expr = (struct Expression *)args->cur;
             int arg_type = UNKNOWN_TYPE;
-            int error_count = semcheck_expr_legacy_tag(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
+            KgpcType *arg_kgpc_type_uc = NULL;
+            int error_count = semcheck_expr_with_type(&arg_kgpc_type_uc, symtab, arg_expr, max_scope_lev, NO_MUTATE);
+            arg_type = semcheck_tag_from_kgpc(arg_kgpc_type_uc);
             if (error_count == 0 && arg_type == CHAR_TYPE)
             {
                 if (expr->expr_data.function_call_data.mangled_id != NULL)
@@ -1953,7 +1981,9 @@ int semcheck_funccall(int *type_return,
         {
             struct Expression *arg_expr = (struct Expression *)args->cur;
             int arg_type = UNKNOWN_TYPE;
-            int error_count = semcheck_expr_legacy_tag(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
+            KgpcType *arg_kgpc_type_upcase = NULL;
+            int error_count = semcheck_expr_with_type(&arg_kgpc_type_upcase, symtab, arg_expr, max_scope_lev, NO_MUTATE);
+            arg_type = semcheck_tag_from_kgpc(arg_kgpc_type_upcase);
             if (error_count == 0 && arg_type == CHAR_TYPE)
                 return semcheck_builtin_upcase(type_return, symtab, expr, max_scope_lev);
             if (error_count == 0 && arg_type == STRING_TYPE &&
@@ -2234,7 +2264,10 @@ int semcheck_funccall(int *type_return,
         }
         struct Expression *first_arg = (struct Expression *)args_given->cur;
         int first_arg_type_tag;
-        semcheck_expr_legacy_tag(&first_arg_type_tag, symtab, first_arg, max_scope_lev, NO_MUTATE);
+        KgpcType *first_arg_kgpc_type = NULL;
+        semcheck_expr_with_type(&first_arg_kgpc_type, symtab, first_arg, max_scope_lev, NO_MUTATE);
+        first_arg_type_tag = semcheck_tag_from_kgpc(first_arg_kgpc_type);
+        (void)first_arg_type_tag; /* Variable is used for potential debugging */
         
         if (first_arg->resolved_kgpc_type != NULL) {
             KgpcType *owner_type = first_arg->resolved_kgpc_type;
@@ -2494,7 +2527,10 @@ int semcheck_funccall(int *type_return,
         args_given != NULL) {
         struct Expression *first_arg = (struct Expression *)args_given->cur;
         int first_arg_type_tag;
-        semcheck_expr_legacy_tag(&first_arg_type_tag, symtab, first_arg, max_scope_lev, NO_MUTATE);
+        KgpcType *first_arg_kgpc_type_ctor = NULL;
+        semcheck_expr_with_type(&first_arg_kgpc_type_ctor, symtab, first_arg, max_scope_lev, NO_MUTATE);
+        first_arg_type_tag = semcheck_tag_from_kgpc(first_arg_kgpc_type_ctor);
+        (void)first_arg_type_tag; /* Variable is used for potential debugging */
         
         if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
              fprintf(stderr, "[SemCheck] semcheck_funccall: first_arg=%p type=%d id=%s record_type=%p resolved_kgpc_type=%p\n", 
@@ -2853,7 +2889,9 @@ int semcheck_funccall(int *type_return,
                 
                 int formal_type = resolve_param_type(formal_decl, symtab);
                 int actual_type = UNKNOWN_TYPE;
-                semcheck_expr_legacy_tag(&actual_type, symtab, actual_expr, max_scope_lev, NO_MUTATE);
+                KgpcType *actual_kgpc_type_proc = NULL;
+                semcheck_expr_with_type(&actual_kgpc_type_proc, symtab, actual_expr, max_scope_lev, NO_MUTATE);
+                actual_type = semcheck_tag_from_kgpc(actual_kgpc_type_proc);
                 
                 /* Simple type check - could be more sophisticated */
                 if (formal_type != actual_type && formal_type != UNKNOWN_TYPE && actual_type != UNKNOWN_TYPE)
@@ -3216,7 +3254,9 @@ method_call_resolved:
                 {
                     struct Expression *arg = (struct Expression *)cur->cur;
                     int tag = UNKNOWN_TYPE;
-                    semcheck_expr_legacy_tag(&tag, symtab, arg, max_scope_lev, NO_MUTATE);
+                    KgpcType *arg_kgpc_type_dbg = NULL;
+                    semcheck_expr_with_type(&arg_kgpc_type_dbg, symtab, arg, max_scope_lev, NO_MUTATE);
+                    tag = semcheck_tag_from_kgpc(arg_kgpc_type_dbg);
                     const char *type_name = semcheck_type_tag_name(tag);
                     
                     /* Also check for resolved_kgpc_type for better type info */
@@ -3673,7 +3713,9 @@ skip_overload_resolution:
                     {
                         struct Expression *named_value = current_arg_expr->expr_data.relop_data.right;
                         int rhs_type = UNKNOWN_TYPE;
-                        semcheck_expr_legacy_tag(&rhs_type, symtab, named_value, max_scope_lev, NO_MUTATE);
+                        KgpcType *rhs_kgpc_type = NULL;
+                        semcheck_expr_with_type(&rhs_kgpc_type, symtab, named_value, max_scope_lev, NO_MUTATE);
+                        rhs_type = semcheck_tag_from_kgpc(rhs_kgpc_type);
                         if (semcheck_named_arg_type_compatible(arg_decl, named_value, rhs_type, symtab))
                         {
                             struct Expression *named_left = current_arg_expr->expr_data.relop_data.left;
@@ -3719,8 +3761,10 @@ skip_overload_resolution:
                 arg_mutating = MUTATE;
             }
 
-            return_val += semcheck_expr_legacy_tag(&arg_type,
+            KgpcType *arg_kgpc_type_call = NULL;
+            return_val += semcheck_expr_with_type(&arg_kgpc_type_call,
                 symtab, current_arg_expr, max_scope_lev, arg_mutating);
+            arg_type = semcheck_tag_from_kgpc(arg_kgpc_type_call);
             if (named_arg_mismatch)
                 arg_type = UNKNOWN_TYPE;
             if (getenv("KGPC_DEBUG_CALL_TYPES") != NULL &&
@@ -3913,7 +3957,9 @@ skip_overload_resolution:
                                 /* Wrap in EXPR_ADDR */
                                 struct Expression *addr_expr = mk_addressof(current_arg_expr->line_num, current_arg_expr);
                                 int new_arg_type = UNKNOWN_TYPE;
-                                semcheck_expr_legacy_tag(&new_arg_type, symtab, addr_expr, max_scope_lev, NO_MUTATE);
+                                KgpcType *new_arg_kgpc_type = NULL;
+                                semcheck_expr_with_type(&new_arg_kgpc_type, symtab, addr_expr, max_scope_lev, NO_MUTATE);
+                                new_arg_type = semcheck_tag_from_kgpc(new_arg_kgpc_type);
                                 
                                 if (new_arg_type == POINTER_TYPE)
                                 {

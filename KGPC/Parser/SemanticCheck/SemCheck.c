@@ -4525,6 +4525,72 @@ static int ensure_class_storage_capacity(SymTab_t *symtab, struct RecordType *re
     return add_class_padding_field(record_info, padding_bytes);
 }
 
+/*
+ * Detect and populate default_indexed_property for a class.
+ * This enables array-like indexing (obj[i]) to be transformed to field access (obj.field[i]).
+ * 
+ * Detection rules:
+ * 1. If a class has an open array field (array_is_open == 1) and it's the only such field,
+ *    or specifically named "FItems" (Delphi convention), use it as the default indexed property.
+ * 2. Also inherit from parent class if parent has a default_indexed_property and child doesn't.
+ * 
+ * @param record_info The class RecordType to configure. Must not be NULL.
+ * @param parent_record The parent class RecordType, or NULL for base classes like TObject.
+ */
+static void detect_default_indexed_property(struct RecordType *record_info, const struct RecordType *parent_record)
+{
+    assert(record_info != NULL);
+    
+    /* Already set - don't override */
+    if (record_info->default_indexed_property != NULL)
+        return;
+    
+    /* First, try to detect from this class's fields */
+    struct RecordField *candidate = NULL;
+    ListNode_t *cur = record_info->fields;
+    while (cur != NULL)
+    {
+        if (cur->type == LIST_RECORD_FIELD)
+        {
+            struct RecordField *field = (struct RecordField *)cur->cur;
+            if (field != NULL && field->name != NULL && field->is_array && field->array_is_open)
+            {
+                /* Found an open array field - it's a candidate for default indexed property */
+                /* Prefer "FItems" if we find it (Delphi naming convention for list items) */
+                if (pascal_identifier_equals(field->name, "FItems"))
+                {
+                    candidate = field;
+                    break;  /* FItems is the preferred choice */
+                }
+                else if (candidate == NULL)
+                {
+                    /* First open array found - tentative candidate */
+                    candidate = field;
+                }
+            }
+        }
+        cur = cur->next;
+    }
+    
+    if (candidate != NULL)
+    {
+        record_info->default_indexed_property = strdup(candidate->name);
+        record_info->default_indexed_element_type = candidate->array_element_type;
+        record_info->default_indexed_element_type_id = candidate->array_element_type_id != NULL ?
+            strdup(candidate->array_element_type_id) : NULL;
+        return;
+    }
+    
+    /* Inherit from parent if available */
+    if (parent_record != NULL && parent_record->default_indexed_property != NULL)
+    {
+        record_info->default_indexed_property = strdup(parent_record->default_indexed_property);
+        record_info->default_indexed_element_type = parent_record->default_indexed_element_type;
+        record_info->default_indexed_element_type_id = parent_record->default_indexed_element_type_id != NULL ?
+            strdup(parent_record->default_indexed_element_type_id) : NULL;
+    }
+}
+
 /* Helper function to merge parent class fields into derived class */
 static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record_info, const char *class_name, int line_num)
 {
@@ -4674,6 +4740,9 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
         if (cloned_properties != NULL)
             record_info->properties = ConcatList(cloned_properties, record_info->properties);
     }
+
+    /* Detect default indexed property after merging parent fields */
+    detect_default_indexed_property(record_info, parent_record);
 
     if (parent_record != NULL)
     {
@@ -5178,6 +5247,11 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                         return_val += merge_result;
                         /* Continue processing other type declarations even if this one failed */
                     }
+                }
+                else if (record_info != NULL && record_info->is_class)
+                {
+                    /* Classes without parents (like TObject) still need default indexed property detection */
+                    detect_default_indexed_property(record_info, NULL);
                 }
                 
                 /* Process method templates and register them with class method bindings.
