@@ -4988,62 +4988,56 @@ double kgpc_random_real_upper(double upper)
     return kgpc_random_real() * upper;
 }
 
-static int64_t kgpc_random_longint(int64_t l)
+static uint64_t kgpc_random_u64_bounded(uint64_t bound)
 {
-    int64_t result = l;
-    if (l < 0)
-        result = -result - 1;
-
-    uint32_t bound = (uint32_t)result;
-    if (bound == 0u)
+    if (bound == 0)
         return 0;
 
-    uint64_t m = (uint64_t)kgpc_xsr128_u32rand() * (uint64_t)bound;
-    if ((uint32_t)m < bound)
+    /* For 32-bit bounds, use a faster path with 64-bit multiplication. */
+    if (bound <= 0xFFFFFFFFu)
     {
-        uint32_t t = (uint32_t)(0u - bound) % bound;
-        while ((uint32_t)m < t)
-            m = (uint64_t)kgpc_xsr128_u32rand() * (uint64_t)bound;
+        uint32_t b32 = (uint32_t)bound;
+        uint64_t m = (uint64_t)kgpc_xsr128_u32rand() * (uint64_t)b32;
+        if ((uint32_t)m < b32)
+        {
+            uint32_t t = (uint32_t)(0u - b32) % b32;
+            while ((uint32_t)m < t)
+                m = (uint64_t)kgpc_xsr128_u32rand() * (uint64_t)b32;
+        }
+        return m >> 32;
     }
 
-    result = (int64_t)(m >> 32);
-    if (l < -1)
-        result = -result - 1;
-    return result;
-}
-
-int64_t kgpc_random_int(int64_t upper)
-{
-    if (upper == (int64_t)(int32_t)upper)
-        return kgpc_random_longint(upper);
-
-    uint64_t ul = (uint64_t)upper;
-    if (upper < 0)
-        ul = ~ul;
-    if (ul == 0u)
-        return 0;
-
+    /* For larger bounds, use rejection sampling with 128-bit multiplication (Lemire's method). */
     uint32_t a = kgpc_xsr128_u32rand();
-    uint64_t high = 0;
     __uint128_t prod = ((__uint128_t)a << 32) | kgpc_xsr128_u32rand();
-    __uint128_t full = prod * ul;
+    __uint128_t full = prod * bound;
     uint64_t mLo = (uint64_t)full;
-    high = (uint64_t)(full >> 64);
+    uint64_t mHi = (uint64_t)(full >> 64);
 
-    if (mLo < ul)
+    if (mLo < bound)
     {
-        uint64_t t = (uint64_t)(0u - ul) % ul;
+        uint64_t t = (uint64_t)(0u - bound) % bound;
         while (mLo < t)
         {
             a = kgpc_xsr128_u32rand();
             prod = ((__uint128_t)a << 32) | kgpc_xsr128_u32rand();
-            full = prod * ul;
+            full = prod * bound;
             mLo = (uint64_t)full;
-            high = (uint64_t)(full >> 64);
+            mHi = (uint64_t)(full >> 64);
         }
     }
+    return mHi;
+}
 
-    int64_t result = (int64_t)high;
+int64_t kgpc_random_int(int64_t upper)
+{
+    uint64_t ul = (uint64_t)upper;
+    if (upper < 0)
+        ul = ~ul;
+
+    uint64_t res = kgpc_random_u64_bounded(ul);
+
+    int64_t result = (int64_t)res;
     if (upper < -1)
         result = -result - 1;
     return result;
@@ -5051,39 +5045,7 @@ int64_t kgpc_random_int(int64_t upper)
 
 int64_t kgpc_random_int64(int64_t upper)
 {
-    if (upper == (int64_t)(int32_t)upper)
-        return kgpc_random_longint(upper);
-
-    uint64_t ul = (uint64_t)upper;
-    if (upper < 0)
-        ul = ~ul;
-    if (ul == 0u)
-        return 0;
-
-    uint32_t a = kgpc_xsr128_u32rand();
-    uint64_t high = 0;
-    __uint128_t prod = ((__uint128_t)a << 32) | kgpc_xsr128_u32rand();
-    __uint128_t full = prod * ul;
-    uint64_t mLo = (uint64_t)full;
-    high = (uint64_t)(full >> 64);
-
-    if (mLo < ul)
-    {
-        uint64_t t = (uint64_t)(0u - ul) % ul;
-        while (mLo < t)
-        {
-            a = kgpc_xsr128_u32rand();
-            prod = ((__uint128_t)a << 32) | kgpc_xsr128_u32rand();
-            full = prod * ul;
-            mLo = (uint64_t)full;
-            high = (uint64_t)(full >> 64);
-        }
-    }
-
-    int64_t result = (int64_t)high;
-    if (upper < -1)
-        result = -result - 1;
-    return result;
+    return kgpc_random_int(upper);
 }
 
 int64_t kgpc_random_range(int64_t low, int64_t high)

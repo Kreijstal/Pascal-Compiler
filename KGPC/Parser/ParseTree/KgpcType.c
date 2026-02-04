@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <assert.h>
 #include <string.h>
+#include <ctype.h>
 #ifndef _WIN32
 #include <strings.h>
 #else
@@ -666,7 +667,7 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
 
 /* Helper function to check if a record type is a subclass of another */
 /* Helper to get RecordType from HashNode, handling pointer types (classes) */
-static struct RecordType* get_record_from_hashnode(HashNode_t *node) {
+static struct RecordType* get_record_type_from_hashnode(HashNode_t *node) {
     if (node == NULL || node->type == NULL)
         return NULL;
     
@@ -694,7 +695,7 @@ static int is_record_subclass(struct RecordType *subclass, struct RecordType *su
         /* Look up parent class in symbol table */
         HashNode_t *parent_node = NULL;
         if (FindIdent(&parent_node, symtab, current->parent_class_name) != -1 && parent_node != NULL) {
-            struct RecordType *parent_record = get_record_from_hashnode(parent_node);
+            struct RecordType *parent_record = get_record_type_from_hashnode(parent_node);
             if (parent_record == superclass)
                 return 1;
             current = parent_record;
@@ -1435,6 +1436,13 @@ long long kgpc_type_sizeof(KgpcType *type)
         
         case TYPE_KIND_ARRAY:
         {
+            if (kgpc_type_is_dynamic_array(type))
+                return 8;
+            KgpcArrayDimensionInfo info;
+            if (kgpc_type_get_array_dimension_info(type, NULL, &info) == 0)
+            {
+                return info.total_size;
+            }
             long long element_size = kgpc_type_sizeof(type->info.array_info.element_type);
             if (element_size < 0)
                 return -1;
@@ -1572,6 +1580,144 @@ KgpcType* kgpc_type_get_array_element_type(KgpcType *type)
     return type->info.array_info.element_type;
 }
 
+static int kgpc_parse_array_bound(struct SymTab *symtab, const char *token)
+{
+    if (token == NULL) return 0;
+    while (*token && isspace((unsigned char)*token)) token++;
+    if (*token == '\0') return 0;
+
+    char *endptr = NULL;
+    long val = strtol(token, &endptr, 10);
+    if (endptr != token && (*endptr == '\0' || isspace((unsigned char)*endptr)))
+        return (int)val;
+
+    if (symtab != NULL)
+    {
+        /* Trim the token for lookup */
+        char *trimmed = strdup(token);
+        if (trimmed != NULL)
+        {
+            char *end = trimmed + strlen(trimmed) - 1;
+            while (end >= trimmed && isspace((unsigned char)*end)) *end-- = '\0';
+
+            HashNode_t *node = NULL;
+            if (FindIdent(&node, symtab, trimmed) >= 0 && node != NULL &&
+                (node->hash_type == HASHTYPE_CONST || node->is_typed_const))
+            {
+                val = (long)node->const_int_value;
+            }
+            free(trimmed);
+        }
+    }
+    return (int)val;
+}
+
+int kgpc_type_get_array_dimension_info(KgpcType *type, struct SymTab *symtab, KgpcArrayDimensionInfo *info)
+{
+    if (type == NULL || info == NULL || type->kind != TYPE_KIND_ARRAY)
+        return -1;
+
+    memset(info, 0, sizeof(KgpcArrayDimensionInfo));
+    struct TypeAlias *alias = kgpc_type_get_type_alias(type);
+
+    if (alias != NULL && alias->array_dimensions != NULL)
+    {
+        /* Use dimensions metadata from TypeAlias */
+        ListNode_t *dim_node = alias->array_dimensions;
+        while (dim_node != NULL && info->dim_count < 10)
+        {
+            const char *range_str = (const char *)dim_node->cur;
+            if (range_str != NULL)
+            {
+                const char *dotdot = strstr(range_str, "..");
+                if (dotdot != NULL)
+                {
+                    size_t left_len = (size_t)(dotdot - range_str);
+                    char *left = (char *)malloc(left_len + 1);
+                    if (left != NULL)
+                    {
+                        memcpy(left, range_str, left_len);
+                        left[left_len] = '\0';
+                        info->dim_lowers[info->dim_count] = kgpc_parse_array_bound(symtab, left);
+                        free(left);
+                    }
+                    info->dim_uppers[info->dim_count] = kgpc_parse_array_bound(symtab, dotdot + 2);
+                    info->dim_sizes[info->dim_count] = info->dim_uppers[info->dim_count] - info->dim_lowers[info->dim_count] + 1;
+                }
+                else if (pascal_identifier_equals(range_str, "Boolean"))
+                {
+                    info->dim_lowers[info->dim_count] = 0;
+                    info->dim_uppers[info->dim_count] = 1;
+                    info->dim_sizes[info->dim_count] = 2;
+                }
+                else if (symtab != NULL)
+                {
+                    HashNode_t *type_node = NULL;
+                    if (FindIdent(&type_node, symtab, range_str) >= 0 &&
+                        type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+                    {
+                        struct TypeAlias *range_alias = hashnode_get_type_alias(type_node);
+                        if (range_alias != NULL)
+                        {
+                            if (range_alias->is_enum && range_alias->enum_literals != NULL)
+                            {
+                                info->dim_lowers[info->dim_count] = 0;
+                                info->dim_sizes[info->dim_count] = ListLength(range_alias->enum_literals);
+                                info->dim_uppers[info->dim_count] = info->dim_sizes[info->dim_count] - 1;
+                            }
+                            else if (range_alias->is_range && range_alias->range_known)
+                            {
+                                info->dim_lowers[info->dim_count] = (int)range_alias->range_start;
+                                info->dim_uppers[info->dim_count] = (int)range_alias->range_end;
+                                info->dim_sizes[info->dim_count] = info->dim_uppers[info->dim_count] - info->dim_lowers[info->dim_count] + 1;
+                            }
+                        }
+                    }
+                }
+            }
+            info->dim_count++;
+            dim_node = dim_node->next;
+        }
+
+        info->element_size = kgpc_type_get_array_element_size(type);
+        if (info->element_size <= 0 && alias->array_element_type_id != NULL && symtab != NULL)
+        {
+            HashNode_t *node = kgpc_find_type_node(symtab, alias->array_element_type_id);
+            if (node != NULL && node->type != NULL)
+                info->element_size = kgpc_type_sizeof(node->type);
+        }
+    }
+    else
+    {
+        /* Traverse nested KgpcType objects */
+        KgpcType *curr = type;
+        while (curr != NULL && curr->kind == TYPE_KIND_ARRAY && info->dim_count < 10)
+        {
+            info->dim_lowers[info->dim_count] = curr->info.array_info.start_index;
+            info->dim_uppers[info->dim_count] = curr->info.array_info.end_index;
+            info->dim_sizes[info->dim_count] = info->dim_uppers[info->dim_count] - info->dim_lowers[info->dim_count] + 1;
+            info->dim_count++;
+            curr = curr->info.array_info.element_type;
+        }
+        if (curr != NULL)
+            info->element_size = kgpc_type_sizeof(curr);
+    }
+
+    if (info->element_size <= 0)
+        info->element_size = 1;
+
+    /* Compute strides and total size */
+    info->total_size = info->element_size;
+    for (int i = info->dim_count - 1; i >= 0; i--)
+    {
+        info->strides[i] = info->total_size;
+        if (info->dim_sizes[i] > 0)
+            info->total_size *= info->dim_sizes[i];
+    }
+
+    return 0;
+}
+
 KgpcType* kgpc_type_get_array_element_type_resolved(KgpcType *type, SymTab_t *symtab)
 {
     if (type == NULL || type->kind != TYPE_KIND_ARRAY)
@@ -1589,8 +1735,10 @@ KgpcType* kgpc_type_get_array_element_type_resolved(KgpcType *type, SymTab_t *sy
             type->info.array_info.element_type = element_node->type;
             kgpc_type_retain(element_node->type);
             /* Free element_type_id since resolution is complete */
-            free(type->info.array_info.element_type_id);
-            type->info.array_info.element_type_id = NULL;
+            if (type->info.array_info.element_type_id != NULL) {
+                free(type->info.array_info.element_type_id);
+                type->info.array_info.element_type_id = NULL;
+            }
             return type->info.array_info.element_type;
         }
     }

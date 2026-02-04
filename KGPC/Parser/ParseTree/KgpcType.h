@@ -58,6 +58,16 @@ typedef struct {
 } ArrayTypeInfo;
 
 typedef struct {
+    int dim_count;
+    int dim_sizes[10];
+    int dim_lowers[10];
+    int dim_uppers[10];
+    long long strides[10];
+    long long element_size;
+    long long total_size;
+} KgpcArrayDimensionInfo;
+
+typedef struct {
     int element_size;
 } ArrayOfConstTypeInfo;
 
@@ -181,6 +191,11 @@ int kgpc_type_is_dynamic_array(const KgpcType *type);
 /* Get element size in bytes for an array type.
  * Returns the element size, or -1 if not an array or size cannot be determined. */
 long long kgpc_type_get_array_element_size(KgpcType *type);
+
+/* Compute dimension information for multi-dimensional arrays.
+ * Handles both nested KgpcType objects and array_dimensions metadata from TypeAlias.
+ * Returns 0 on success, -1 if not an array. */
+int kgpc_type_get_array_dimension_info(KgpcType *type, struct SymTab *symtab, KgpcArrayDimensionInfo *info);
 
 /* Get element size for an array-of-const helper structure (TVarRec). */
 long long kgpc_type_get_array_of_const_element_size(KgpcType *type);
