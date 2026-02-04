@@ -72,7 +72,7 @@ int semcheck_builtin_chr(int *type_return, SymTab_t *symtab,
     int arg_type = UNKNOWN_TYPE;
     int error_count = semcheck_expr_legacy_tag(&arg_type, symtab, arg_expr,
         max_scope_lev, NO_MUTATE);
-    if (error_count == 0 && arg_type != INT_TYPE && arg_type != LONGINT_TYPE)
+    if (error_count == 0 && !is_integer_type(arg_type))
     {
         semcheck_error_with_context("Error on line %d, Chr expects an integer argument.\\n",
             expr->line_num);
@@ -208,7 +208,7 @@ int semcheck_builtin_ord(int *type_return, SymTab_t *symtab,
 
         mangled_name = "kgpc_ord_longint";
     }
-    else if (arg_type == INT_TYPE || arg_type == LONGINT_TYPE)
+    else if (is_integer_type(arg_type))
     {
         mangled_name = "kgpc_ord_longint";
     }
@@ -946,20 +946,25 @@ int semcheck_builtin_abs(int *type_return, SymTab_t *symtab,
             mangled_name = "kgpc_abs_int";
             result_type = INT_TYPE;
         }
-        else if (arg_type == LONGINT_TYPE)
-        {
-            mangled_name = "kgpc_abs_longint";
-            result_type = LONGINT_TYPE;
-        }
         else if (arg_type == REAL_TYPE)
         {
             mangled_name = "kgpc_abs_real";
             result_type = REAL_TYPE;
         }
-        else if (arg_type == INT64_TYPE)
+        else if (arg_type == INT64_TYPE || arg_type == QWORD_TYPE)
         {
             mangled_name = "kgpc_abs_longint";
-            result_type = INT64_TYPE;
+            result_type = arg_type;
+        }
+        else if (arg_type == LONGINT_TYPE || arg_type == LONGWORD_TYPE)
+        {
+            mangled_name = "kgpc_abs_longint";
+            result_type = arg_type;
+        }
+        else if (is_integer_type(arg_type))
+        {
+            mangled_name = "kgpc_abs_int";
+            result_type = arg_type;
         }
         else
         {
@@ -1020,8 +1025,7 @@ int semcheck_builtin_unary_real(int *type_return, SymTab_t *symtab,
     int arg_type = UNKNOWN_TYPE;
     int error_count = semcheck_expr_legacy_tag(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
 
-    if (error_count == 0 && arg_type != REAL_TYPE &&
-        arg_type != INT_TYPE && arg_type != LONGINT_TYPE && arg_type != INT64_TYPE)
+    if (error_count == 0 && arg_type != REAL_TYPE && !is_integer_type(arg_type))
     {
         semcheck_error_with_context("Error on line %d, %s expects a real argument.\n",
             expr->line_num, display_name);
@@ -1075,8 +1079,7 @@ int semcheck_builtin_trunc(int *type_return, SymTab_t *symtab,
     int arg_type = UNKNOWN_TYPE;
     int error_count = semcheck_expr_legacy_tag(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
 
-    if (error_count == 0 && arg_type != REAL_TYPE &&
-        arg_type != INT_TYPE && arg_type != LONGINT_TYPE && arg_type != INT64_TYPE)
+    if (error_count == 0 && arg_type != REAL_TYPE && !is_integer_type(arg_type))
     {
         semcheck_error_with_context("Error on line %d, Trunc expects a real argument.\n",
             expr->line_num);
@@ -1485,7 +1488,7 @@ int semcheck_builtin_odd(int *type_return, SymTab_t *symtab,
     int arg_type = UNKNOWN_TYPE;
     int error_count = semcheck_expr_legacy_tag(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
 
-    if (error_count == 0 && arg_type != INT_TYPE && arg_type != LONGINT_TYPE)
+    if (error_count == 0 && !is_integer_type(arg_type))
     {
         semcheck_error_with_context("Error on line %d, Odd expects an integer argument.\n",
             expr->line_num);
@@ -1547,15 +1550,20 @@ int semcheck_builtin_sqr(int *type_return, SymTab_t *symtab,
             mangled_name = "kgpc_sqr_real";
             result_type = REAL_TYPE;
         }
-        else if (arg_type == LONGINT_TYPE)
+        else if (arg_type == INT64_TYPE || arg_type == QWORD_TYPE)
         {
             mangled_name = "kgpc_sqr_int64";
-            result_type = LONGINT_TYPE;
+            result_type = arg_type;
         }
-        else if (arg_type == INT_TYPE)
+        else if (arg_type == LONGINT_TYPE || arg_type == LONGWORD_TYPE)
+        {
+            mangled_name = "kgpc_sqr_int64";
+            result_type = arg_type;
+        }
+        else if (is_integer_type(arg_type))
         {
             mangled_name = "kgpc_sqr_int32";
-            result_type = INT_TYPE;
+            result_type = arg_type;
         }
         else
         {

@@ -620,6 +620,15 @@ static const char *reg_to_reg32(const char *reg_name, char *buffer, size_t buf_s
     return reg_name;
 }
 
+static const char *reg_to_reg64(const char *reg_name, char *buffer, size_t buf_size)
+{
+    if (reg_name == NULL)
+        return NULL;
+    if (reg_name[0] == '%' && (reg_name[1] == 'e' || (reg_name[1] == 'r' && strchr(reg_name, 'd') != NULL)))
+        return reg32_to_reg64(reg_name, buffer, buf_size);
+    return reg_name;
+}
+
 /*
  * Convert a 32-bit register name to its 8-bit equivalent.
  * Examples:
@@ -3075,6 +3084,14 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                         right_op = right;
                     else
                         right_op = reg_to_reg32(right, right32_buf, sizeof(right32_buf));
+                }
+                else if (arith_suffix == 'q')
+                {
+                    left_op = reg_to_reg64(left, left32_buf, sizeof(left32_buf));
+                    if (right != NULL && right[0] == '$')
+                        right_op = right;
+                    else
+                        right_op = reg_to_reg64(right, right32_buf, sizeof(right32_buf));
                 }
                 if (type == OR)
                 {
