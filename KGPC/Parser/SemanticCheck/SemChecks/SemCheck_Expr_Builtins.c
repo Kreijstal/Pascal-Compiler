@@ -949,25 +949,22 @@ int semcheck_builtin_abs(int *type_return, SymTab_t *symtab,
     if (error_count == 0)
     {
         int arg_type = semcheck_tag_from_kgpc(arg_kgpc_type);
-        if (arg_type == INT_TYPE)
-        {
-            mangled_name = "kgpc_abs_int";
-            result_type = INT_TYPE;
-        }
-        else if (arg_type == LONGINT_TYPE)
-        {
-            mangled_name = "kgpc_abs_longint";
-            result_type = LONGINT_TYPE;
-        }
-        else if (arg_type == REAL_TYPE)
+        if (arg_type == REAL_TYPE)
         {
             mangled_name = "kgpc_abs_real";
             result_type = REAL_TYPE;
         }
-        else if (arg_type == INT64_TYPE)
+        else if (is_64bit_integer_type(arg_type) || arg_type == LONGINT_TYPE || arg_type == LONGWORD_TYPE)
         {
+            /* 64-bit and 32-bit long types use the 64-bit abs helper */
             mangled_name = "kgpc_abs_longint";
-            result_type = INT64_TYPE;
+            result_type = arg_type;
+        }
+        else if (is_integer_type(arg_type))
+        {
+            /* Smaller integer types (INT_TYPE, BYTE_TYPE, WORD_TYPE) use 32-bit abs */
+            mangled_name = "kgpc_abs_int";
+            result_type = arg_type;
         }
         else
         {
@@ -1554,15 +1551,17 @@ int semcheck_builtin_sqr(int *type_return, SymTab_t *symtab,
             mangled_name = "kgpc_sqr_real";
             result_type = REAL_TYPE;
         }
-        else if (arg_type == LONGINT_TYPE)
+        else if (is_64bit_integer_type(arg_type) || arg_type == LONGINT_TYPE || arg_type == LONGWORD_TYPE)
         {
+            /* 64-bit and 32-bit long types use the 64-bit sqr helper */
             mangled_name = "kgpc_sqr_int64";
-            result_type = LONGINT_TYPE;
+            result_type = arg_type;
         }
-        else if (arg_type == INT_TYPE)
+        else if (is_integer_type(arg_type))
         {
+            /* Smaller integer types (INT_TYPE, BYTE_TYPE, WORD_TYPE) use 32-bit sqr */
             mangled_name = "kgpc_sqr_int32";
-            result_type = INT_TYPE;
+            result_type = arg_type;
         }
         else
         {
