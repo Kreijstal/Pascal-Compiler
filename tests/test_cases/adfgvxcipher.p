@@ -8,7 +8,7 @@ const
   ADFGVX = 'ADFGVX';
   ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
   MESSAGE = 'ATTACKAT1200AM';
-  FNAME = 'unixdict.txt';
+  FNAME = 'tests/test_cases/unixdict.txt';
 
 type
   //tPolybiusarr = array[1..6,1..6] of string;
