@@ -4096,8 +4096,9 @@ ListNode_t *codegen_array_access(struct Expression *expr, ListNode_t *inst_list,
     }
 
     char buffer[100];
-    if (expr_uses_qword_kgpctype(expr))
+    if (expr_uses_qword_kgpctype(expr) || element_size == 8)
     {
+        /* 8-byte elements (including pointers, int64, etc.) need 64-bit load */
         snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
     }
