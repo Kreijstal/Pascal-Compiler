@@ -954,15 +954,22 @@ int semcheck_builtin_abs(int *type_return, SymTab_t *symtab,
             mangled_name = "kgpc_abs_real";
             result_type = REAL_TYPE;
         }
-        else if (is_64bit_integer_type(arg_type) || arg_type == LONGINT_TYPE || arg_type == LONGWORD_TYPE)
+        else if (arg_type == QWORD_TYPE || arg_type == LONGWORD_TYPE || 
+                 arg_type == BYTE_TYPE || arg_type == WORD_TYPE)
         {
-            /* 64-bit and 32-bit long types use the 64-bit abs helper */
+            /* Unsigned types: abs is a no-op, use identity helper */
+            mangled_name = "kgpc_abs_unsigned";
+            result_type = arg_type;
+        }
+        else if (arg_type == INT64_TYPE || arg_type == LONGINT_TYPE)
+        {
+            /* 64-bit and 32-bit signed long types use the 64-bit abs helper */
             mangled_name = "kgpc_abs_longint";
             result_type = arg_type;
         }
         else if (is_integer_type(arg_type))
         {
-            /* Smaller integer types (INT_TYPE, BYTE_TYPE, WORD_TYPE) use 32-bit abs */
+            /* Smaller signed integer types (INT_TYPE) use 32-bit abs */
             mangled_name = "kgpc_abs_int";
             result_type = arg_type;
         }
