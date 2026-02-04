@@ -1627,6 +1627,7 @@ int kgpc_type_get_array_dimension_info(KgpcType *type, struct SymTab *symtab, Kg
         while (dim_node != NULL && info->dim_count < 10)
         {
             const char *range_str = (const char *)dim_node->cur;
+            int dim_parsed = 0;
             if (range_str != NULL)
             {
                 const char *dotdot = strstr(range_str, "..");
@@ -1638,10 +1639,17 @@ int kgpc_type_get_array_dimension_info(KgpcType *type, struct SymTab *symtab, Kg
                     {
                         memcpy(left, range_str, left_len);
                         left[left_len] = '\0';
-                        info->dim_lowers[info->dim_count] = kgpc_parse_array_bound(symtab, left);
+                        int lower = kgpc_parse_array_bound(symtab, left);
                         free(left);
-                        info->dim_uppers[info->dim_count] = kgpc_parse_array_bound(symtab, dotdot + 2);
-                        info->dim_sizes[info->dim_count] = info->dim_uppers[info->dim_count] - info->dim_lowers[info->dim_count] + 1;
+                        int upper = kgpc_parse_array_bound(symtab, dotdot + 2);
+                        int size = upper - lower + 1;
+                        if (size > 0)
+                        {
+                            info->dim_lowers[info->dim_count] = lower;
+                            info->dim_uppers[info->dim_count] = upper;
+                            info->dim_sizes[info->dim_count] = size;
+                            dim_parsed = 1;
+                        }
                     }
                     else
                     {
@@ -1654,6 +1662,7 @@ int kgpc_type_get_array_dimension_info(KgpcType *type, struct SymTab *symtab, Kg
                     info->dim_lowers[info->dim_count] = 0;
                     info->dim_uppers[info->dim_count] = 1;
                     info->dim_sizes[info->dim_count] = 2;
+                    dim_parsed = 1;
                 }
                 else if (symtab != NULL)
                 {
@@ -1669,18 +1678,28 @@ int kgpc_type_get_array_dimension_info(KgpcType *type, struct SymTab *symtab, Kg
                                 info->dim_lowers[info->dim_count] = 0;
                                 info->dim_sizes[info->dim_count] = ListLength(range_alias->enum_literals);
                                 info->dim_uppers[info->dim_count] = info->dim_sizes[info->dim_count] - 1;
+                                if (info->dim_sizes[info->dim_count] > 0)
+                                    dim_parsed = 1;
                             }
                             else if (range_alias->is_range && range_alias->range_known)
                             {
-                                info->dim_lowers[info->dim_count] = (int)range_alias->range_start;
-                                info->dim_uppers[info->dim_count] = (int)range_alias->range_end;
-                                info->dim_sizes[info->dim_count] = info->dim_uppers[info->dim_count] - info->dim_lowers[info->dim_count] + 1;
+                                int lower = (int)range_alias->range_start;
+                                int upper = (int)range_alias->range_end;
+                                int size = upper - lower + 1;
+                                if (size > 0)
+                                {
+                                    info->dim_lowers[info->dim_count] = lower;
+                                    info->dim_uppers[info->dim_count] = upper;
+                                    info->dim_sizes[info->dim_count] = size;
+                                    dim_parsed = 1;
+                                }
                             }
                         }
                     }
                 }
             }
-            info->dim_count++;
+            if (dim_parsed)
+                info->dim_count++;
             dim_node = dim_node->next;
         }
 

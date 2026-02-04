@@ -5864,6 +5864,26 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                     free_reg(get_reg_stack(), temp_reg);
                 continue;
             }
+            /* Simple integer/pointer arguments can be loaded directly from the
+             * spill slot into the destination register. This avoids grabbing a
+             * temporary argument register (e.g., %r8) that might already hold a
+             * later argument when emitting Windows calls. */
+            if (!pass_on_stack && arg_infos[i].assigned_class == ARG_CLASS_INT)
+            {
+                if (needs_int_to_long)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovslq\t-%d(%%rbp), %s\n",
+                        arg_infos[i].spill->offset, arg_reg_char);
+                }
+                else
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                        arg_infos[i].spill->offset, arg_reg_char);
+                }
+                inst_list = add_inst(inst_list, buffer);
+                continue;
+            }
+
             if (needs_int_to_long && arg_infos[i].assigned_class == ARG_CLASS_INT)
             {
                 temp_reg = get_free_reg(get_reg_stack(), &inst_list);
