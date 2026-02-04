@@ -69,10 +69,10 @@ int semcheck_builtin_chr(int *type_return, SymTab_t *symtab,
     }
 
     struct Expression *arg_expr = (struct Expression *)args->cur;
-    int arg_type = UNKNOWN_TYPE;
-    int error_count = semcheck_expr_legacy_tag(&arg_type, symtab, arg_expr,
+    KgpcType *arg_kgpc_type = NULL;
+    int error_count = semcheck_expr_with_type(&arg_kgpc_type, symtab, arg_expr,
         max_scope_lev, NO_MUTATE);
-    if (error_count == 0 && arg_type != INT_TYPE && arg_type != LONGINT_TYPE)
+    if (error_count == 0 && !kgpc_type_is_integer(arg_kgpc_type))
     {
         semcheck_error_with_context("Error on line %d, Chr expects an integer argument.\\n",
             expr->line_num);
@@ -123,8 +123,8 @@ int semcheck_builtin_ord(int *type_return, SymTab_t *symtab,
     }
 
     struct Expression *arg_expr = (struct Expression *)args->cur;
-    int arg_type = UNKNOWN_TYPE;
-    int error_count = semcheck_expr_legacy_tag(&arg_type, symtab, arg_expr,
+    KgpcType *arg_kgpc_type = NULL;
+    int error_count = semcheck_expr_with_type(&arg_kgpc_type, symtab, arg_expr,
         max_scope_lev, NO_MUTATE);
     if (error_count != 0)
     {
@@ -133,7 +133,7 @@ int semcheck_builtin_ord(int *type_return, SymTab_t *symtab,
     }
 
     const char *mangled_name = NULL;
-    if (arg_type == STRING_TYPE)
+    if (kgpc_type_is_string(arg_kgpc_type))
     {
         if (arg_expr != NULL && arg_expr->type == EXPR_STRING)
         {
@@ -178,7 +178,7 @@ int semcheck_builtin_ord(int *type_return, SymTab_t *symtab,
 
         mangled_name = "kgpc_ord_string";
     }
-    else if (arg_type == BOOL)
+    else if (kgpc_type_is_boolean(arg_kgpc_type))
     {
         /* Constant fold boolean literals */
         if (arg_expr != NULL && arg_expr->type == EXPR_BOOL)
@@ -208,16 +208,16 @@ int semcheck_builtin_ord(int *type_return, SymTab_t *symtab,
 
         mangled_name = "kgpc_ord_longint";
     }
-    else if (arg_type == INT_TYPE || arg_type == LONGINT_TYPE)
+    else if (kgpc_type_is_integer(arg_kgpc_type))
     {
         mangled_name = "kgpc_ord_longint";
     }
-    else if (arg_type == CHAR_TYPE)
+    else if (kgpc_type_is_char(arg_kgpc_type))
     {
         /* For char variables, Ord returns the character code */
         mangled_name = "kgpc_ord_longint";
     }
-    else if (arg_type == ENUM_TYPE)
+    else if (kgpc_type_equals_tag(arg_kgpc_type, ENUM_TYPE))
     {
         /* For enumerative types, Ord returns the ordinal value (0-based index) */
         mangled_name = "kgpc_ord_longint";
