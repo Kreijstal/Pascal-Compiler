@@ -7439,8 +7439,8 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
     // Get array type info from semantic check
     KgpcType *array_type = collection->resolved_kgpc_type;
     
-    // Check if this is a TFPGList (specialized generic list)
-    int is_fpglist = 0;
+    // Check if this is a list-like class with default indexed property
+    int is_list_class = 0;
     struct RecordType *record_info = NULL;
     KgpcType *record_candidate = array_type;
     if (array_type != NULL && array_type->kind == TYPE_KIND_POINTER)
@@ -7448,17 +7448,24 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
 
     if (record_candidate != NULL && record_candidate->kind == TYPE_KIND_RECORD) {
         record_info = kgpc_type_get_record(record_candidate);
-        if (record_info != NULL && record_info->type_id != NULL) {
-            const char *prefix = "TFPGList$";
-            size_t prefix_len = strlen(prefix);
-            if (strncasecmp(record_info->type_id, prefix, prefix_len) == 0 ||
-                pascal_identifier_equals(record_info->type_id, "TStringList")) {
-                is_fpglist = 1;
+        if (record_info != NULL) {
+            /* Check for TFPGList$ pattern (generic list) - element type is encoded in class name.
+             * This is kept separate from default_indexed_property for backwards compatibility. */
+            if (record_info->type_id != NULL) {
+                const char *prefix = "TFPGList$";
+                size_t prefix_len = strlen(prefix);
+                if (strncasecmp(record_info->type_id, prefix, prefix_len) == 0) {
+                    is_list_class = 1;
+                }
+            }
+            /* Check for default indexed property (handles TStringList and other classes with FItems) */
+            if (!is_list_class && record_info->default_indexed_property != NULL) {
+                is_list_class = 1;
             }
         }
     }
     
-    if (is_fpglist) {
+    if (is_list_class) {
         // Generate FOR-IN loop for TFPGList by accessing FItems and FCount directly
         // Structure: for Item in L do body
         // Becomes: for i := 0 to L.FCount-1 do Item := L.FItems[i]; body
