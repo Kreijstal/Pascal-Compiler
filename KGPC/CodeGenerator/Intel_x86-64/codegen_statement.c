@@ -182,14 +182,6 @@ static int expr_is_64bit_integer(const struct Expression *expr)
     if (expr_uses_qword_kgpctype(expr))
         return 1;
 
-    /* Check storage_size in KgpcType for Int64/QWord/UInt64 */
-    if (expr->resolved_kgpc_type != NULL)
-    {
-        struct TypeAlias *alias = kgpc_type_get_type_alias(expr->resolved_kgpc_type);
-        if (alias != NULL && alias->storage_size >= 8)
-            return 1;
-    }
-    
     /* Check for large integer literals that require 64 bits */
     if (expr->type == EXPR_INUM)
     {

@@ -155,6 +155,15 @@ static inline const char *select_register_name(const Register_t *reg,
     return select_register_name_tag(reg, fallback_tag);
 }
 
+static inline const char *select_divisor_temp_reg(const char *avoid_reg, int use_qword)
+{
+    const char *primary = use_qword ? "%r10" : "%r10d";
+    const char *fallback = use_qword ? "%r11" : "%r11d";
+    if (avoid_reg != NULL && strcmp(avoid_reg, primary) == 0)
+        return fallback;
+    return primary;
+}
+
 static void expr_tree_register_spill_handler(Register_t *reg, StackNode_t *spill_slot, void *context)
 {
     expr_node_t *node = (expr_node_t *)context;
@@ -1162,9 +1171,7 @@ ListNode_t *gencode_modulus(const char *left, const char *right, ListNode_t *ins
     }
     else // Divisor is a register
     {
-        const char *tmp_div = "%r10d";
-        if (strcmp(right, "%r10d") == 0)
-            tmp_div = "%r11d";
+        const char *tmp_div = select_divisor_temp_reg(right, 0);
         snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", left, tmp_div);
         inst_list = add_inst(inst_list, buffer);
         div_operand = tmp_div;
@@ -3239,9 +3246,11 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                     inst_list = add_inst(inst_list, buffer);
                     inst_list = add_inst(inst_list, "\tcqo\n");
 
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r10\n", op_right);
+                    const char *tmp_div = select_divisor_temp_reg(op_left, 1);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", op_right, tmp_div);
                     inst_list = add_inst(inst_list, buffer);
-                    inst_list = add_inst(inst_list, "\tidivq\t%r10\n");
+                    snprintf(buffer, sizeof(buffer), "\tidivq\t%s\n", tmp_div);
+                    inst_list = add_inst(inst_list, buffer);
 
                     snprintf(buffer, sizeof(buffer), "\tmovq\t%%rdx, %s\n", op_left);
                     inst_list = add_inst(inst_list, buffer);
@@ -3256,9 +3265,11 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                     inst_list = add_inst(inst_list, buffer);
                     inst_list = add_inst(inst_list, "\tcdq\n");
 
-                    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%r10d\n", mod_right);
+                    const char *tmp_div = select_divisor_temp_reg(mod_left, 0);
+                    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", mod_right, tmp_div);
                     inst_list = add_inst(inst_list, buffer);
-                    inst_list = add_inst(inst_list, "\tidivl\t%r10d\n");
+                    snprintf(buffer, sizeof(buffer), "\tidivl\t%s\n", tmp_div);
+                    inst_list = add_inst(inst_list, buffer);
 
                     snprintf(buffer, sizeof(buffer), "\tmovl\t%%edx, %s\n", mod_left);
                     inst_list = add_inst(inst_list, buffer);
@@ -3277,9 +3288,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
 
                 if (use_qword_op)
                 {
-                    const char *tmp_div = "%r10";
-                    if (strcmp(op_left, "%r10") == 0)
-                        tmp_div = "%r11";
+                    const char *tmp_div = select_divisor_temp_reg(op_left, 1);
 
                     snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", op_right, tmp_div);
                     inst_list = add_inst(inst_list, buffer);
@@ -3301,9 +3310,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                     const char *div_left = reg64_to_reg32(left, left32, sizeof(left32));
                     const char *div_right = reg64_to_reg32(right, right32, sizeof(right32));
 
-                    const char *tmp_div = "%r10d";
-                    if (strcmp(div_left, "%r10d") == 0)
-                        tmp_div = "%r11d";
+                    const char *tmp_div = select_divisor_temp_reg(div_left, 0);
 
                     snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", div_right, tmp_div);
                     inst_list = add_inst(inst_list, buffer);
