@@ -559,7 +559,9 @@ static int semcheck_resolve_arg_kgpc_type(struct Expression *arg_expr,
         return UNKNOWN_TYPE;
 
     int arg_tag = UNKNOWN_TYPE;
-    semcheck_expr_legacy_tag(&arg_tag, symtab, arg_expr, max_scope_lev, NO_MUTATE);
+    KgpcType *arg_kgpc_type = NULL;
+    semcheck_expr_with_type(&arg_kgpc_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
+    arg_tag = semcheck_tag_from_kgpc(arg_kgpc_type);
 
     KgpcType *arg_type = arg_expr->resolved_kgpc_type;
     if (arg_type != NULL && arg_tag != UNKNOWN_TYPE)
@@ -1233,7 +1235,9 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                     {
                         struct Expression *rhs_expr = arg_expr->expr_data.relop_data.right;
                         int rhs_type = UNKNOWN_TYPE;
-                        semcheck_expr_legacy_tag(&rhs_type, symtab, rhs_expr, max_scope_lev, NO_MUTATE);
+                        KgpcType *rhs_kgpc_type = NULL;
+                        semcheck_expr_with_type(&rhs_kgpc_type, symtab, rhs_expr, max_scope_lev, NO_MUTATE);
+                        rhs_type = semcheck_tag_from_kgpc(rhs_kgpc_type);
                         if (semcheck_named_arg_type_compatible(formal_decl, rhs_expr, rhs_type, symtab))
                             arg_expr = rhs_expr;
                     }
