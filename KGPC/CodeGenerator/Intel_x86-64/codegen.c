@@ -3506,6 +3506,12 @@ static int codegen_dynamic_array_element_size_from_type(CodeGenContext *ctx, Kgp
     {
         case TYPE_KIND_PRIMITIVE:
         {
+            if (element_type->type_alias != NULL &&
+                element_type->type_alias->storage_size > 0 &&
+                element_type->type_alias->storage_size <= INT_MAX)
+            {
+                return (int)element_type->type_alias->storage_size;
+            }
             int tag = kgpc_type_get_primitive_tag(element_type);
             switch (tag)
             {

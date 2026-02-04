@@ -542,7 +542,7 @@ static ListNode_t *codegen_expr_convert_int_like_to_real(ListNode_t *inst_list,
         return inst_list;
 
     char buffer[128];
-    if (source_type == LONGINT_TYPE)
+    if (source_type == LONGINT_TYPE || source_type == INT64_TYPE || source_type == QWORD_TYPE)
         snprintf(buffer, sizeof(buffer), "\tcvtsi2sdq\t%s, %%xmm0\n", value_reg->bit_64);
     else
         snprintf(buffer, sizeof(buffer), "\tcvtsi2sdl\t%s, %%xmm0\n", value_reg->bit_32);
@@ -559,10 +559,21 @@ static ListNode_t *codegen_expr_maybe_convert_int_like_to_real(int target_type,
         return inst_list;
 
     int source_type = expr_get_type_tag(source_expr);
-    if (target_type == REAL_TYPE &&
-        (source_type == INT_TYPE || source_type == LONGINT_TYPE))
+    int conversion_type = source_type;
+    if (target_type == REAL_TYPE && source_type == REAL_TYPE &&
+        source_expr->type == EXPR_TYPECAST &&
+        source_expr->expr_data.typecast_data.expr != NULL)
     {
-        inst_list = codegen_expr_convert_int_like_to_real(inst_list, value_reg, source_type);
+        int inner_type = expr_get_type_tag(source_expr->expr_data.typecast_data.expr);
+        if (inner_type == INT_TYPE || inner_type == LONGINT_TYPE ||
+            inner_type == INT64_TYPE || inner_type == QWORD_TYPE)
+            conversion_type = inner_type;
+    }
+    if (target_type == REAL_TYPE &&
+        (conversion_type == INT_TYPE || conversion_type == LONGINT_TYPE ||
+         conversion_type == INT64_TYPE || conversion_type == QWORD_TYPE))
+    {
+        inst_list = codegen_expr_convert_int_like_to_real(inst_list, value_reg, conversion_type);
     }
 
     return inst_list;
@@ -4599,7 +4610,8 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
 
 /* Code generation for passing arguments */
 ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
-    CodeGenContext *ctx, struct KgpcType *proc_type, const char *procedure_name, int arg_start_index)
+    CodeGenContext *ctx, struct KgpcType *proc_type, const char *procedure_name,
+    int arg_start_index, const struct Expression *call_expr)
 {
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
@@ -4757,6 +4769,12 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         int formal_is_open_array = formal_decl_is_open_array(formal_arg_decl);
         int formal_is_char_set = formal_decl_is_char_set(formal_arg_decl, ctx->symtab);
         int formal_is_dynarray = codegen_formal_is_dynamic_array(formal_arg_decl, ctx->symtab);
+        if (!formal_is_dynarray && arg_num == 0 && call_expr != NULL &&
+            call_expr->type == EXPR_FUNCTION_CALL &&
+            call_expr->expr_data.function_call_data.arg0_is_dynarray_descriptor)
+        {
+            formal_is_dynarray = 1;
+        }
         
         /* Also check if we're passing a static array argument (even if not declared as var param) */
         int is_array_arg = (arg_expr != NULL && arg_expr->is_array_expr && !arg_expr->array_is_dynamic);

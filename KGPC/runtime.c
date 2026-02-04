@@ -2837,6 +2837,16 @@ void kgpc_fillchar(void *dest, size_t count, int value)
     memset(dest, byte_value, count);
 }
 
+void kgpc_fillword(void *dest, size_t count, unsigned short value)
+{
+    if (dest == NULL || count == 0)
+        return;
+
+    unsigned short *ptr = (unsigned short *)dest;
+    for (size_t i = 0; i < count; ++i)
+        ptr[i] = value;
+}
+
 void kgpc_getmem(void **target, size_t size)
 {
     if (target == NULL)

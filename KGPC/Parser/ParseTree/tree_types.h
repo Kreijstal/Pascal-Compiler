@@ -240,6 +240,7 @@ struct Statement
             struct HashNode *procedural_var_symbol; /* Symbol for procedural var (if any) */
             struct Expression *procedural_var_expr; /* Expression yielding procedure pointer */
             int is_method_call_placeholder;  /* 1 if created from member access and needs method resolution */
+            int arg0_is_dynarray_descriptor; /* 1 if arg0 should be passed as dynarray descriptor */
         } procedure_call_data;
 
         /* Compound Statements */
@@ -470,6 +471,7 @@ struct Expression
             int is_virtual_call;                     /* 1 if this is a virtual method call (needs VMT dispatch) */
             int vmt_index;                           /* VMT index for virtual calls (-1 if not set) */
             char *self_class_name;                   /* Class name for VMT lookup in virtual calls */
+            int arg0_is_dynarray_descriptor;         /* 1 if arg0 should be passed as dynarray descriptor */
         } function_call_data;
 
         /* Integer number */

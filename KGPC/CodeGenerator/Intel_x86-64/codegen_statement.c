@@ -2468,7 +2468,7 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                             /* Pass remaining arguments starting from index 1 (skip class type argument) */
                             inst_list = codegen_pass_arguments(
                                 src_expr->expr_data.function_call_data.args_expr, inst_list, ctx,
-                                func_type, func_id, 1);
+                                func_type, func_id, 1, src_expr);
                             
                             /* Call the constructor */
                             snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", func_mangled_name);
@@ -2520,7 +2520,7 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                 inst_list = codegen_pass_arguments(
                     src_expr->expr_data.function_call_data.args_expr, inst_list, ctx,
                     func_type,
-                    src_expr->expr_data.function_call_data.id, 1);
+                    src_expr->expr_data.function_call_data.id, 1, src_expr);
 
                 snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
                     dest_save_slot->offset, ret_ptr_reg);
@@ -5796,7 +5796,7 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
         proc_name_hint = stmt->stmt_data.procedure_call_data.mangled_id;
 
     inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, NULL, 
-        proc_name_hint, 0);
+        proc_name_hint, 0, NULL);
     inst_list = codegen_vect_reg(inst_list, 0);
     const char *call_target = (proc_name != NULL) ? proc_name : stmt->stmt_data.procedure_call_data.id;
     if (call_target == NULL)
@@ -6891,6 +6891,8 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
             call_expr->expr_data.function_call_data.mangled_id =
                 strdup(stmt->stmt_data.procedure_call_data.mangled_id);
         }
+        call_expr->expr_data.function_call_data.arg0_is_dynarray_descriptor =
+            stmt->stmt_data.procedure_call_data.arg0_is_dynarray_descriptor;
         call_expr->expr_data.function_call_data.call_hash_type = call_hash_type;
         call_expr->expr_data.function_call_data.call_kgpc_type =
             stmt->stmt_data.procedure_call_data.call_kgpc_type;
@@ -7065,7 +7067,7 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         
         /* 4. Pass arguments as usual */
         inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, call_kgpc_type, 
-            unmangled_name, 0);
+            unmangled_name, 0, NULL);
         
         /* 5. Zero out %eax for varargs ABI compatibility */
         inst_list = codegen_vect_reg(inst_list, 0);
@@ -7178,7 +7180,7 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         /* When passing static link, shift arguments by 1 register position */
         int arg_start_index = should_pass_static_link ? 1 : 0;
         inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, call_kgpc_type, 
-            unmangled_name, arg_start_index);
+            unmangled_name, arg_start_index, NULL);
 
         if (should_pass_static_link)
         {

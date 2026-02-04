@@ -142,6 +142,7 @@ function FreeLibrary(LibHandle: NativeUInt): Boolean;
 procedure SetString(out S: AnsiString; Buffer: PAnsiChar; Len: Integer);
 function FileDateToDateTime(FileDate: LongInt): TDateTime;
 function StringToGUID(const S: AnsiString): TGUID;
+procedure FillWord(var X; Count: SizeInt; Value: Word);
 
 { String helper methods - these allow FPC-style S.Method() syntax }
 function Substring(const S: AnsiString; StartIndex: Integer): AnsiString;
@@ -196,6 +197,27 @@ begin
         Result := nil
     else
         Result := @S[1];
+end;
+
+procedure fillword_impl(var dest; count: longint; value: word);
+begin
+    assembler;
+    asm
+        call kgpc_fillword
+    end
+end;
+
+procedure FillWord(var X; Count: SizeInt; Value: Word);
+var
+    count_long: longint;
+begin
+    if Count <= 0 then
+        exit;
+    if Count > high(longint) then
+        count_long := high(longint)
+    else
+        count_long := Count;
+    fillword_impl(X, count_long, Value);
 end;
 
 function StrPas(P: PAnsiChar): AnsiString;

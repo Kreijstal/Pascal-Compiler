@@ -1656,7 +1656,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         }
 
         inst_list = codegen_pass_arguments(args_to_pass,
-            inst_list, ctx, func_type, proc_name_hint, arg_start_index);
+            inst_list, ctx, func_type, proc_name_hint, arg_start_index, expr);
 
         /* Invalidate static link cache after argument evaluation
          * because the static link register may have been clobbered
