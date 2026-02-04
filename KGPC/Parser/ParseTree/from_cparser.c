@@ -4341,6 +4341,9 @@ static struct RecordType *convert_class_type_ex(const char *class_name, ast_t *c
     record->generic_args = NULL;
     record->num_generic_args = 0;
     record->method_clones_emitted = 0;
+    record->default_indexed_property = NULL;
+    record->default_indexed_element_type = UNKNOWN_TYPE;
+    record->default_indexed_element_type_id = NULL;
 
     if (parent_class_name == NULL)
     {
@@ -4837,6 +4840,9 @@ static struct RecordType *convert_record_type_ex(ast_t *record_node, ListNode_t 
     record->generic_args = NULL;
     record->num_generic_args = 0;
     record->method_clones_emitted = 0;
+    record->default_indexed_property = NULL;
+    record->default_indexed_element_type = UNKNOWN_TYPE;
+    record->default_indexed_element_type_id = NULL;
     return record;
 }
 

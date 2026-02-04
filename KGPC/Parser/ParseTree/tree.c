@@ -1795,6 +1795,8 @@ void destroy_record_type(struct RecordType *record_type)
     record_type->generic_args = NULL;
     record_type->num_generic_args = 0;
     record_type->generic_decl = NULL;
+    free(record_type->default_indexed_property);
+    free(record_type->default_indexed_element_type_id);
     
     free(record_type);
 }
@@ -1834,6 +1836,12 @@ struct RecordType *clone_record_type(const struct RecordType *record_type)
                     strdup(record_type->generic_args[i]) : NULL;
         }
     }
+
+    clone->default_indexed_property = record_type->default_indexed_property ?
+        strdup(record_type->default_indexed_property) : NULL;
+    clone->default_indexed_element_type = record_type->default_indexed_element_type;
+    clone->default_indexed_element_type_id = record_type->default_indexed_element_type_id ?
+        strdup(record_type->default_indexed_element_type_id) : NULL;
 
     clone->fields = clone_member_list(record_type->fields);
     clone->properties = clone_property_list(record_type->properties);
