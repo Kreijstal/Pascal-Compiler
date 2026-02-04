@@ -948,6 +948,21 @@ void expr_print(struct Expression *expr, FILE *f, int num_indent)
           print_indent(f, num_indent);
           fprintf(f, "[INDEX]:\n");
           expr_print(expr->expr_data.array_access_data.index_expr, f, num_indent+1);
+
+          /* Print extra indices for multi-dimensional arrays */
+          if (expr->expr_data.array_access_data.extra_indices != NULL)
+          {
+              int idx_num = 2;
+              ListNode_t *idx = expr->expr_data.array_access_data.extra_indices;
+              while (idx != NULL)
+              {
+                  print_indent(f, num_indent);
+                  fprintf(f, "[INDEX_%d]:\n", idx_num++);
+                  if (idx->cur != NULL)
+                      expr_print((struct Expression *)idx->cur, f, num_indent+1);
+                  idx = idx->next;
+              }
+          }
           break;
 
         case EXPR_RECORD_ACCESS:
@@ -1519,6 +1534,31 @@ void destroy_expr(struct Expression *expr)
               destroy_expr(expr->expr_data.array_access_data.array_expr);
           if (expr->expr_data.array_access_data.index_expr != NULL)
               destroy_expr(expr->expr_data.array_access_data.index_expr);
+          /* Free extra indices for multi-dimensional arrays */
+          if (expr->expr_data.array_access_data.extra_indices != NULL)
+          {
+              ListNode_t *idx = expr->expr_data.array_access_data.extra_indices;
+              while (idx != NULL)
+              {
+                  ListNode_t *next = idx->next;
+                  if (idx->cur != NULL)
+                      destroy_expr((struct Expression *)idx->cur);
+                  free(idx);
+                  idx = next;
+              }
+          }
+          if (expr->expr_data.array_access_data.linear_strides != NULL)
+          {
+              free(expr->expr_data.array_access_data.linear_strides);
+              expr->expr_data.array_access_data.linear_strides = NULL;
+          }
+          if (expr->expr_data.array_access_data.linear_lowers != NULL)
+          {
+              free(expr->expr_data.array_access_data.linear_lowers);
+              expr->expr_data.array_access_data.linear_lowers = NULL;
+          }
+          expr->expr_data.array_access_data.linear_index_count = 0;
+          expr->expr_data.array_access_data.linear_info_valid = 0;
           break;
 
         case EXPR_RECORD_ACCESS:
@@ -2644,6 +2684,10 @@ static void init_expression(struct Expression *expr, int line_num, enum ExprType
     expr->expr_data.function_call_data.is_virtual_call = 0;
     expr->expr_data.function_call_data.vmt_index = -1;
     expr->expr_data.function_call_data.self_class_name = NULL;
+    expr->expr_data.array_access_data.linear_index_count = 0;
+    expr->expr_data.array_access_data.linear_strides = NULL;
+    expr->expr_data.array_access_data.linear_lowers = NULL;
+    expr->expr_data.array_access_data.linear_info_valid = 0;
 }
 
 struct Expression *mk_relop(int line_num, int type, struct Expression *left,
@@ -2724,6 +2768,11 @@ struct Expression *mk_arrayaccess(int line_num, struct Expression *array_expr, s
     init_expression(new_expr, line_num, EXPR_ARRAY_ACCESS);
     new_expr->expr_data.array_access_data.array_expr = array_expr;
     new_expr->expr_data.array_access_data.index_expr = index_expr;
+    new_expr->expr_data.array_access_data.extra_indices = NULL;
+    new_expr->expr_data.array_access_data.linear_index_count = 0;
+    new_expr->expr_data.array_access_data.linear_strides = NULL;
+    new_expr->expr_data.array_access_data.linear_lowers = NULL;
+    new_expr->expr_data.array_access_data.linear_info_valid = 0;
 
     return new_expr;
 }

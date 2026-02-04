@@ -430,6 +430,11 @@ struct Expression
         {
             struct Expression *array_expr;
             struct Expression *index_expr;
+            ListNode_t *extra_indices;  /* For multi-dimensional arrays: additional indices beyond the first */
+            int linear_index_count;      /* Total number of indices (first + extra_indices) */
+            long long *linear_strides;   /* Byte stride for each index (length linear_index_count) */
+            long long *linear_lowers;    /* Lower bounds for each index (length linear_index_count) */
+            int linear_info_valid;       /* 1 if stride/lower info has been computed */
         } array_access_data;
 
         /* Record field access */
