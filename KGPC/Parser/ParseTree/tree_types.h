@@ -478,7 +478,7 @@ struct Expression
         long long i_num;
 
         /* Real number */
-        float r_num;
+        double r_num;
 
         /* String literal */
         char *string;

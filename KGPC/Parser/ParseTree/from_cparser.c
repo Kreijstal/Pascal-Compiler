@@ -7350,7 +7350,7 @@ static struct Expression *convert_factor(ast_t *expr_node) {
         return mk_inum(expr_node->line, strtoll(num_str, NULL, base));
     }
     case PASCAL_T_REAL:
-        return mk_rnum(expr_node->line, strtof(expr_node->sym->name, NULL));
+        return mk_rnum(expr_node->line, strtod(expr_node->sym->name, NULL));
     case PASCAL_T_STRING:
         return mk_string(expr_node->line, dup_symbol(expr_node));
     case PASCAL_T_CHAR:

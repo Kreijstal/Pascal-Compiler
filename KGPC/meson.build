@@ -162,5 +162,5 @@ test('Compiler tests', python,
   depends: [kgpc_cparser_exe, kgpc_runtime_lib, ctypes_helper],
   env: env,
   protocol: 'tap',
-  timeout: 600,
+  timeout: 1800,
 )

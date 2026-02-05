@@ -21,6 +21,8 @@ type
     FSorted: boolean;
     constructor Create;
     procedure Add(const S: string); override;
+    procedure AddDelimitedText(const S: string; ADelimiter: Char; AStrictDelimiter: Boolean); overload;
+    procedure AddDelimitedText(const S: string); overload;
     procedure Delete(Index: integer);
     procedure Sort;
     procedure LoadFromFile(const FileName: string);
@@ -28,6 +30,89 @@ type
   end;
 
 implementation
+
+procedure TStringList_AddDelimitedText_Helper(List: TStringList; const S: string; ADelimiter: Char; AStrictDelimiter: Boolean);
+var
+  len, i, j: integer;
+  aNotFirst: boolean;
+  quoted: string;
+  unescaped: string;
+  idx: integer;
+  isQuoted: boolean;
+begin
+  i := 1;
+  j := 1;
+  aNotFirst := False;
+  len := Length(S);
+  if len = 0 then
+  begin
+    List.Add('');
+    exit;
+  end;
+  while i <= len do
+  begin
+    if aNotFirst and (i <= len) and (S[i] = ADelimiter) then
+      Inc(i);
+    if not AStrictDelimiter then
+      while (i <= len) and (Ord(S[i]) <= Ord(' ')) do
+        Inc(i);
+    if i > len then
+    begin
+      if aNotFirst then
+        List.Add('');
+    end
+    else
+    begin
+      isQuoted := (S[i] = List.FQuoteChar) and (List.FQuoteChar <> #0);
+      if isQuoted then
+      begin
+        j := i + 1;
+        while (j <= len) and
+              ((S[j] <> List.FQuoteChar) or
+              ((j + 1 <= len) and (S[j + 1] = List.FQuoteChar))) do
+        begin
+          if (S[j] = List.FQuoteChar) and (j + 1 <= len) and (S[j + 1] = List.FQuoteChar) then
+            Inc(j, 2)
+          else
+            Inc(j);
+        end;
+        quoted := Copy(S, i + 1, j - i - 1);
+        unescaped := '';
+        idx := 1;
+        while idx <= Length(quoted) do
+        begin
+          if (quoted[idx] = List.FQuoteChar) and (idx < Length(quoted)) and
+             (quoted[idx + 1] = List.FQuoteChar) then
+          begin
+            unescaped := unescaped + List.FQuoteChar;
+            Inc(idx, 2);
+          end
+          else
+          begin
+            unescaped := unescaped + quoted[idx];
+            Inc(idx);
+          end;
+        end;
+        List.Add(unescaped);
+        i := j + 1;
+      end
+      else
+      begin
+        j := i;
+        while (j <= len) and
+              (AStrictDelimiter or (Ord(S[j]) > Ord(' '))) and
+              (S[j] <> ADelimiter) do
+          Inc(j);
+        List.Add(Copy(S, i, j - i));
+        i := j;
+      end;
+    end;
+    if not AStrictDelimiter then
+      while (i <= len) and (Ord(S[i]) <= Ord(' ')) do
+        Inc(i);
+    aNotFirst := True;
+  end;
+end;
 
 constructor TStrings.Create;
 begin
@@ -41,101 +126,11 @@ begin
 end;
 
 procedure TStrings.AddDelimitedText(const S: string; ADelimiter: Char; AStrictDelimiter: Boolean);
-var
-  len, i, j: integer;
-  aNotFirst: boolean;
-  function UnescapeQuoted(const Str: string; QuoteChar: Char): string;
-  var
-    idx: integer;
-  begin
-    Result := '';
-    idx := 1;
-    while idx <= Length(Str) do
-    begin
-      if (Str[idx] = QuoteChar) and (idx < Length(Str)) and (Str[idx + 1] = QuoteChar) then
-      begin
-        Result := Result + QuoteChar;
-        Inc(idx, 2);
-      end
-      else
-      begin
-        Result := Result + Str[idx];
-        Inc(idx);
-      end;
-    end;
-  end;
-  procedure AddQuoted;
-  var
-    quoted: string;
-  begin
-    quoted := Copy(S, i + 1, j - i - 1);
-    Add(UnescapeQuoted(quoted, AQuoteChar));
-  end;
-  function CheckQuoted: Boolean;
-  begin
-    Result := (S[i] = AQuoteChar) and (AQuoteChar <> #0);
-    if not Result then
-      exit;
-    j := i + 1;
-    while (j <= len) and
-          ((S[j] <> AQuoteChar) or
-          ((j + 1 <= len) and (S[j + 1] = AQuoteChar))) do
-    begin
-      if (j <= len) and (S[j] = AQuoteChar) then
-        Inc(j, 2)
-      else
-        Inc(j);
-    end;
-    AddQuoted;
-    i := j + 1;
-  end;
-  procedure MaybeSkipSpaces; inline;
-  begin
-    if not AStrictDelimiter then
-      while (i <= len) and (Ord(S[i]) <= Ord(' ')) do
-        Inc(i);
-  end;
 begin
-  i := 1;
-  j := 1;
-  aNotFirst := False;
-  len := Length(S);
-  if len = 0 then
-  begin
-    Add('');
-    exit;
-  end;
-  while i <= len do
-  begin
-    if aNotFirst and (i <= len) and (S[i] = ADelimiter) then
-      Inc(i);
-    MaybeSkipSpaces;
-    if i > len then
-    begin
-      if aNotFirst then
-        Add('');
-    end
-    else
-    begin
-      if not CheckQuoted then
-      begin
-        j := i;
-        while (j <= len) and
-              (AStrictDelimiter or (Ord(S[j]) > Ord(' '))) and
-              (S[j] <> ADelimiter) do
-          Inc(j);
-        Add(Copy(S, i, j - i));
-        i := j;
-      end;
-    end;
-    MaybeSkipSpaces;
-    aNotFirst := True;
-  end;
 end;
 
 procedure TStrings.AddDelimitedText(const S: string);
 begin
-  AddDelimitedText(S, FDelimiter, FStrictDelimiter);
 end;
 
 constructor TStringList.Create;
@@ -149,6 +144,16 @@ begin
   SetLength(FItems, FCount + 1);
   FItems[FCount] := S;
   FCount := FCount + 1;
+end;
+
+procedure TStringList.AddDelimitedText(const S: string; ADelimiter: Char; AStrictDelimiter: Boolean);
+begin
+  TStringList_AddDelimitedText_Helper(Self, S, ADelimiter, AStrictDelimiter);
+end;
+
+procedure TStringList.AddDelimitedText(const S: string);
+begin
+  TStringList_AddDelimitedText_Helper(Self, S, FDelimiter, FStrictDelimiter);
 end;
 
 procedure TStringList.Delete(Index: integer);

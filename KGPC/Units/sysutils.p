@@ -920,7 +920,7 @@ end;
 
 function FloatToStr(Value: Real): AnsiString;
 begin
-    FloatToStr := Format('%.6f', [Value]);
+    FloatToStr := Format('%.6g', [Value]);
 end;
 
 function FloatToStrF(Value: Double; format: TFloatFormat; Precision, Digits: Integer): AnsiString;

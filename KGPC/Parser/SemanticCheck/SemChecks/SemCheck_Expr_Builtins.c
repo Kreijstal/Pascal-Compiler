@@ -1125,8 +1125,22 @@ int semcheck_builtin_trunc(int *type_return, SymTab_t *symtab,
         const char *mangled = "kgpc_trunc";
         
         /* Check if argument is Currency type - if so, use currency-specific trunc */
+        int is_currency = 0;
         if (arg_expr->resolved_kgpc_type != NULL &&
             semcheck_is_currency_kgpc_type(arg_expr->resolved_kgpc_type))
+            is_currency = 1;
+        if (!is_currency && arg_kgpc_type != NULL &&
+            semcheck_is_currency_kgpc_type(arg_kgpc_type))
+            is_currency = 1;
+        if (!is_currency && arg_expr->type == EXPR_VAR_ID && arg_expr->expr_data.id != NULL)
+        {
+            HashNode_t *node = NULL;
+            if (FindIdent(&node, symtab, arg_expr->expr_data.id) == 0 &&
+                node != NULL && node->type != NULL &&
+                semcheck_is_currency_kgpc_type(node->type))
+                is_currency = 1;
+        }
+        if (is_currency)
         {
             mangled = "kgpc_trunc_currency";
         }
@@ -1780,7 +1794,7 @@ int semcheck_builtin_default(int *type_return, SymTab_t *symtab,
             return 0;
         case REAL_TYPE:
             expr->type = EXPR_RNUM;
-            expr->expr_data.r_num = 0.0f;
+            expr->expr_data.r_num = 0.0;
             semcheck_expr_set_resolved_type(expr, REAL_TYPE);
             expr->resolved_kgpc_type = create_primitive_type(REAL_TYPE);
             *type_return = REAL_TYPE;
