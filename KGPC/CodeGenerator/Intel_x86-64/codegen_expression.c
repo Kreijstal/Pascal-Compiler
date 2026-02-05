@@ -1466,7 +1466,6 @@ int expr_is_char_set(const struct Expression *expr)
  * ctx parameter reserved for future use in computing complex type sizes */
 long long expr_get_array_element_size(const struct Expression *expr, CodeGenContext *ctx)
 {
-    (void)ctx; /* Reserved for future use */
     if (expr == NULL)
         return -1;
 
@@ -1479,6 +1478,16 @@ long long expr_get_array_element_size(const struct Expression *expr, CodeGenCont
         long long size = kgpc_type_get_array_element_size(expr->resolved_kgpc_type);
         if (size > 0)
             return size;
+        if (ctx != NULL && ctx->symtab != NULL)
+        {
+            KgpcType *elem_type = kgpc_type_get_array_element_type_resolved(expr->resolved_kgpc_type, ctx->symtab);
+            if (elem_type != NULL)
+            {
+                size = kgpc_type_sizeof(elem_type);
+                if (size > 0)
+                    return size;
+            }
+        }
     }
     
     /* Fall back to legacy field */
@@ -2006,6 +2015,8 @@ static int codegen_sizeof_record(CodeGenContext *ctx, struct RecordType *record,
         *size_out = 8 + members_size;
     else
         *size_out = members_size;
+    record->cached_size = *size_out;
+    record->has_cached_size = 1;
     
     return 0;
 }
@@ -3579,7 +3590,7 @@ static int codegen_get_indexable_element_size(struct Expression *array_expr,
 }
 
 
-static int expr_contains_function_call(const struct Expression *expr)
+int expr_contains_function_call(const struct Expression *expr)
 {
     if (expr == NULL)
         return 0;

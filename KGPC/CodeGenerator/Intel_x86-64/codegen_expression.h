@@ -65,6 +65,7 @@ int expr_has_type_tag(const struct Expression *expr, int type_tag);
 /* Check if expression uses qword (64-bit) operations, using KgpcType when available.
  * Returns 1 if qword, 0 otherwise. */
 int expr_uses_qword_kgpctype(const struct Expression *expr);
+int expr_contains_function_call(const struct Expression *expr);
 int expr_returns_sret(const struct Expression *expr);
 
 /* Helper to get array lower bound from expression, preferring resolved_kgpc_type.

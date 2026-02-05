@@ -1723,6 +1723,14 @@ void codegen_main(char *prgm_name, CodeGenContext *ctx)
     call_space = codegen_target_is_windows() ? g_stack_home_space_bytes : 32;
     if (call_space > 0)
         fprintf(ctx->output_file, "\tsubq\t$%d, %%rsp\n", call_space);
+    if (codegen_target_is_windows())
+    {
+        fprintf(ctx->output_file, "\tcall\tkgpc_init_args\n");
+    }
+    else
+    {
+        fprintf(ctx->output_file, "\tcall\tkgpc_init_args\n");
+    }
     fprintf(ctx->output_file, "\tcall\t%s\n", prgm_name);
     if (codegen_target_is_windows())
         fprintf(ctx->output_file, "\txor\t%%ecx, %%ecx\n");
@@ -1982,6 +1990,18 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                     {
                         /* Fallback: use simpler methods that work for basic array types */
                         element_size = (int)kgpc_type_get_array_element_size(param_type);
+                        if (element_size <= 0 && param_type != NULL &&
+                            param_type->info.array_info.element_type != NULL &&
+                            param_type->info.array_info.element_type->kind == TYPE_KIND_RECORD)
+                        {
+                            long long record_size = 0;
+                            if (codegen_sizeof_record_type(ctx,
+                                    param_type->info.array_info.element_type->info.record_info,
+                                    &record_size) == 0 && record_size > 0 && record_size <= INT_MAX)
+                            {
+                                element_size = (int)record_size;
+                            }
+                        }
                         if (element_size <= 0) element_size = 1;
                         array_start = param_type->info.array_info.start_index;
                         total_size = kgpc_type_sizeof(param_type);
@@ -2041,6 +2061,16 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                     long long element_size_ll = kgpc_type_get_array_element_size(array_type);
                     if (element_size_ll <= 0 && element_type != NULL)
                         element_size_ll = kgpc_type_sizeof(element_type);
+                    if (element_size_ll <= 0 && element_type != NULL &&
+                        element_type->kind == TYPE_KIND_RECORD)
+                    {
+                        long long record_size = 0;
+                        if (codegen_sizeof_record_type(ctx, element_type->info.record_info,
+                                &record_size) == 0 && record_size > 0)
+                        {
+                            element_size_ll = record_size;
+                        }
+                    }
                     if (element_size_ll <= 0)
                         element_size_ll = 4;
 

@@ -67,6 +67,7 @@ type
   TLineEndStr = string[3];
   TextBuf = array[0..255] of AnsiChar;
   TTextBuf = TextBuf;
+  PTextBuf = ^TextBuf;
 
   TObject = class
   end;
@@ -98,6 +99,8 @@ type
     Buffer: TextBuf;
     CodePage: TSystemCodePage;
   end;
+
+  TextFile = text;
 
   FileRec = record
     Handle: THandle;

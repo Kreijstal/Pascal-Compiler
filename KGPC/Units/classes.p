@@ -31,7 +31,7 @@ type
 
 implementation
 
-procedure TStringList_AddDelimitedText_Helper(List: TStringList; const S: string; ADelimiter: Char; AStrictDelimiter: Boolean);
+procedure TStrings_AddDelimitedText_Helper(List: TStrings; const S: string; ADelimiter: Char; AStrictDelimiter: Boolean);
 var
   len, i, j: integer;
   aNotFirst: boolean;
@@ -127,10 +127,12 @@ end;
 
 procedure TStrings.AddDelimitedText(const S: string; ADelimiter: Char; AStrictDelimiter: Boolean);
 begin
+  TStrings_AddDelimitedText_Helper(Self, S, ADelimiter, AStrictDelimiter);
 end;
 
 procedure TStrings.AddDelimitedText(const S: string);
 begin
+  TStrings_AddDelimitedText_Helper(Self, S, FDelimiter, FStrictDelimiter);
 end;
 
 constructor TStringList.Create;
@@ -148,12 +150,12 @@ end;
 
 procedure TStringList.AddDelimitedText(const S: string; ADelimiter: Char; AStrictDelimiter: Boolean);
 begin
-  TStringList_AddDelimitedText_Helper(Self, S, ADelimiter, AStrictDelimiter);
+  inherited AddDelimitedText(S, ADelimiter, AStrictDelimiter);
 end;
 
 procedure TStringList.AddDelimitedText(const S: string);
 begin
-  TStringList_AddDelimitedText_Helper(Self, S, FDelimiter, FStrictDelimiter);
+  inherited AddDelimitedText(S);
 end;
 
 procedure TStringList.Delete(Index: integer);
