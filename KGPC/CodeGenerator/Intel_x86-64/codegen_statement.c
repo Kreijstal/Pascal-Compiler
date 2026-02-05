@@ -2666,8 +2666,10 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
         return inst_list;
     }
 
-    int src_has_call = expr_contains_function_call(src_expr);
-    int dest_has_call = expr_contains_function_call(dest_expr);
+    int src_has_call = expr_contains_function_call(src_expr) ||
+        (src_expr != NULL && src_expr->type == EXPR_RECORD_CONSTRUCTOR);
+    int dest_has_call = expr_contains_function_call(dest_expr) ||
+        (dest_expr != NULL && dest_expr->type == EXPR_RECORD_CONSTRUCTOR);
     StackNode_t *dest_spill = NULL;
     StackNode_t *src_spill = NULL;
 

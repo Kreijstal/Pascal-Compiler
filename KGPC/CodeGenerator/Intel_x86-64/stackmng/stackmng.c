@@ -229,11 +229,11 @@ StackNode_t *add_l_x(char *label, int size)
     cur_scope->x_offset = align_up(cur_scope->x_offset, alignment);
     cur_scope->x_offset += aligned_size;
 
-    /* Locals are placed below the shadow space */
-    /* After prologue: RSP = RBP - 8, then we subtract frame_size */
-    /* Shadow space is at [RSP .. RSP+31] = [RBP-8-frame_size .. RBP-8-frame_size+31] */
-    /* Locals should be at offsets more negative than RBP-32 */
-    offset = cur_scope->z_offset + cur_scope->x_offset;
+    /* Locals are placed below the shadow space and must not overlap temp slots.
+     * After prologue: RSP = RBP - 8, then we subtract frame_size.
+     * Shadow space is at [RSP .. RSP+31] = [RBP-8-frame_size .. RBP-8-frame_size+31].
+     * Locals should be at offsets more negative than RBP-32. */
+    offset = cur_scope->z_offset + cur_scope->x_offset + cur_scope->t_offset;
 
     new_node = init_stack_node(offset, label, aligned_size);
     new_node->element_size = size;
@@ -265,11 +265,8 @@ StackNode_t *add_array(char *label, int total_size, int element_size, int lower_
 
     cur_scope->x_offset += total_size;
 
-    /* Locals are placed below the shadow space */
-    /* After prologue: RSP = RBP - 8, then we subtract frame_size */
-    /* Shadow space is at [RSP .. RSP+31] = [RBP-8-frame_size .. RBP-8-frame_size+31] */
-    /* Locals should be at offsets more negative than RBP-32 */
-    int offset = cur_scope->z_offset + cur_scope->x_offset;
+    /* Locals are placed below the shadow space and must not overlap temp slots. */
+    int offset = cur_scope->z_offset + cur_scope->x_offset + cur_scope->t_offset;
 
     StackNode_t *new_node = init_stack_node(offset, label, total_size);
     new_node->is_array = 1;
@@ -310,11 +307,8 @@ StackNode_t *add_dynamic_array(char *label, int element_size, int lower_bound,
     if (!use_static_storage)
         cur_scope->x_offset += descriptor_size;
 
-    /* Locals are placed below the shadow space */
-    /* After prologue: RSP = RBP - 8, then we subtract frame_size */
-    /* Shadow space is at [RSP .. RSP+31] = [RBP-8-frame_size .. RBP-8-frame_size+31] */
-    /* Locals should be at offsets more negative than RBP-32 */
-    int offset = cur_scope->z_offset + cur_scope->x_offset;
+    /* Locals are placed below the shadow space and must not overlap temp slots. */
+    int offset = cur_scope->z_offset + cur_scope->x_offset + cur_scope->t_offset;
     if (use_static_storage)
         offset = 0;
 

@@ -149,13 +149,93 @@ begin
 end;
 
 procedure TStringList.AddDelimitedText(const S: string; ADelimiter: Char; AStrictDelimiter: Boolean);
+var
+  len, i, j: integer;
+  aNotFirst: boolean;
+  quoted: string;
+  unescaped: string;
+  idx: integer;
+  isQuoted: boolean;
 begin
-  inherited AddDelimitedText(S, ADelimiter, AStrictDelimiter);
+  // Inline parsing to avoid relying on virtual dispatch through TStrings.Add
+  // which is not guaranteed to be dynamically dispatched by the compiler.
+    i := 1;
+    j := 1;
+    aNotFirst := False;
+    len := Length(S);
+    if len = 0 then
+    begin
+      Self.Add('');
+      exit;
+    end;
+    while i <= len do
+    begin
+      if aNotFirst and (i <= len) and (S[i] = ADelimiter) then
+        Inc(i);
+      if not AStrictDelimiter then
+        while (i <= len) and (Ord(S[i]) <= Ord(' ')) do
+          Inc(i);
+      if i > len then
+      begin
+        if aNotFirst then
+          Self.Add('');
+      end
+      else
+      begin
+        isQuoted := (S[i] = FQuoteChar) and (FQuoteChar <> #0);
+        if isQuoted then
+        begin
+          j := i + 1;
+          while (j <= len) and
+                ((S[j] <> FQuoteChar) or
+                ((j + 1 <= len) and (S[j + 1] = FQuoteChar))) do
+          begin
+            if (S[j] = FQuoteChar) and (j + 1 <= len) and (S[j + 1] = FQuoteChar) then
+              Inc(j, 2)
+            else
+              Inc(j);
+          end;
+          quoted := Copy(S, i + 1, j - i - 1);
+          unescaped := '';
+          idx := 1;
+          while idx <= Length(quoted) do
+          begin
+            if (quoted[idx] = FQuoteChar) and (idx < Length(quoted)) and
+               (quoted[idx + 1] = FQuoteChar) then
+            begin
+              unescaped := unescaped + FQuoteChar;
+              Inc(idx, 2);
+            end
+            else
+            begin
+              unescaped := unescaped + quoted[idx];
+              Inc(idx);
+            end;
+          end;
+          Self.Add(unescaped);
+          i := j + 1;
+        end
+        else
+        begin
+          j := i;
+          while (j <= len) and
+                (AStrictDelimiter or (Ord(S[j]) > Ord(' '))) and
+                (S[j] <> ADelimiter) do
+            Inc(j);
+          Self.Add(Copy(S, i, j - i));
+          i := j;
+        end;
+      end;
+      if not AStrictDelimiter then
+        while (i <= len) and (Ord(S[i]) <= Ord(' ')) do
+          Inc(i);
+      aNotFirst := True;
+    end;
 end;
 
 procedure TStringList.AddDelimitedText(const S: string);
 begin
-  inherited AddDelimitedText(S);
+  Self.AddDelimitedText(S, FDelimiter, FStrictDelimiter);
 end;
 
 procedure TStringList.Delete(Index: integer);
