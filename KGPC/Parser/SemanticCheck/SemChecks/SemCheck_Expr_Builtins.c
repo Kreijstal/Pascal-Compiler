@@ -2275,8 +2275,10 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
                     }
                     if (!used_target_size)
                     {
-                        if (alias != NULL && alias->storage_size <= 0 &&
-                            alias->target_type_id != NULL)
+                    if (alias != NULL && alias->storage_size <= 0 &&
+                        alias->target_type_id != NULL &&
+                        !alias->is_pointer && !alias->is_array && !alias->is_set &&
+                        !alias->is_enum && !alias->is_file)
                         {
                             HashNode_t *target_node = semcheck_find_preferred_type_node(symtab,
                                 alias->target_type_id);

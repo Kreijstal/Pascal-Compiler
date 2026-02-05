@@ -206,20 +206,27 @@ static ParseResult pascal_qualified_identifier_fn(input_t* in, void* args, char*
 
     int start_pos = in->start;
     char c = read1(in);
+    unsigned char uc = (unsigned char)c;
 
-    if (!(c == '_' || isalpha((unsigned char)c))) {
+    if (!(c == '_' || isalpha(uc) || uc >= 0x80)) {
         restore_input_state(in, &state);
         return make_failure_v2(in, parser_name, strdup("Expected identifier"), NULL);
     }
 
     while (true) {
-        while (isalnum(c) || c == '_') {
-            c = read1(in);
+        while (c != EOF) {
+            uc = (unsigned char)c;
+            if (isalnum(uc) || c == '_' || uc >= 0x80) {
+                c = read1(in);
+                continue;
+            }
+            break;
         }
 
         if (c == '.') {
             char next = read1(in);
-            if (!(next == '_' || isalpha((unsigned char)next))) {
+            unsigned char unext = (unsigned char)next;
+            if (!(next == '_' || isalpha(unext) || unext >= 0x80)) {
                 restore_input_state(in, &state);
                 return make_failure_v2(in, parser_name, strdup("Expected identifier segment after '.'"), NULL);
             }
@@ -259,7 +266,27 @@ combinator_t* pascal_qualified_identifier(tag_t tag) {
     return comb;
 }
 
+static ParseResult trace_fn(input_t* in, void* args, char* parser_name) {
+    char* msg = (char*)args;
+    // Log only if env var is set
+    if (getenv("KGPC_DEBUG_TRACE") != NULL) {
+        FILE* f = fopen("/tmp/parser_trace.log", "a");
+        if (f) {
+            fprintf(f, "TRACE: %s at line %d, col %d, next: '%.10s'\n", 
+                    msg, in ? in->line : 0, in ? in->col : 0, 
+                    (in && in->buffer) ? in->buffer + in->start : "NULL");
+            fclose(f);
+        }
+    }
+    return make_success(ast_nil);
+}
 
+combinator_t* trace(const char* msg) {
+    combinator_t* comb = new_combinator();
+    comb->fn = trace_fn;
+    comb->args = strdup(msg);
+    return comb;
+}
 
 const char* pascal_tag_to_string(tag_t tag) {
     switch (tag) {

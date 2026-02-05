@@ -36,15 +36,26 @@ static ParseResult pascal_identifier_fn(input_t* in, void* args, char* parser_na
 
     int start_pos = in->start;
     char c = read1(in);
+    unsigned char uc = (unsigned char)c;
 
-    // Must start with letter or underscore
-    if (c != '_' && !isalpha((unsigned char)c)) {
+    // Must start with letter, underscore, or non-ASCII (UTF-8 byte)
+    if (c == EOF) {
+        restore_input_state(in, &state);
+        return make_failure_v2(in, parser_name, strdup("Expected identifier"), NULL);
+    }
+    if (c != '_' && !(isalpha(uc) || uc >= 0x80)) {
         restore_input_state(in, &state);
         return make_failure_v2(in, parser_name, strdup("Expected identifier"), NULL);
     }
 
     // Continue with alphanumeric or underscore
-    while (isalnum((unsigned char)(c = read1(in))) || c == '_');
+    while ((c = read1(in)) != EOF) {
+        uc = (unsigned char)c;
+        if (isalnum(uc) || c == '_' || uc >= 0x80) {
+            continue;
+        }
+        break;
+    }
     if (c != EOF) in->start--;
 
     // Extract the identifier text
@@ -91,15 +102,26 @@ static ParseResult pascal_expression_identifier_fn(input_t* in, void* args, char
 
     int start_pos = in->start;
     char c = read1(in);
+    unsigned char uc = (unsigned char)c;
 
     // Must start with letter or underscore
-    if (c != '_' && !isalpha((unsigned char)c)) {
+    if (c == EOF) {
+        restore_input_state(in, &state);
+        return make_failure_v2(in, parser_name, strdup("Expected identifier"), NULL);
+    }
+    if (c != '_' && !(isalpha(uc) || uc >= 0x80)) {
         restore_input_state(in, &state);
         return make_failure_v2(in, parser_name, strdup("Expected identifier"), NULL);
     }
 
     // Continue with alphanumeric or underscore
-    while (isalnum((unsigned char)(c = read1(in))) || c == '_');
+    while ((c = read1(in)) != EOF) {
+        uc = (unsigned char)c;
+        if (isalnum(uc) || c == '_' || uc >= 0x80) {
+            continue;
+        }
+        break;
+    }
     if (c != EOF) in->start--;
 
     // Extract the identifier text
@@ -147,12 +169,17 @@ static ParseResult real_fn(input_t* in, void* args, char* parser_name) {
 
     // Parse integer part
     char c = read1(in);
-    if (!isdigit(c)) {
+    if (!isdigit((unsigned char)c)) {
         restore_input_state(in, &state);
         return make_failure_v2(in, parser_name, strdup("Expected digit"), NULL);
     }
 
-    while (isdigit((unsigned char)(c = read1(in))));
+    while ((c = read1(in)) != EOF) {
+        if (isdigit((unsigned char)c) || c == '_') {
+            continue;
+        }
+        break;
+    }
     if (c != EOF) in->start--; // Back up one if not EOF
 
     // Must have decimal point
@@ -163,12 +190,17 @@ static ParseResult real_fn(input_t* in, void* args, char* parser_name) {
 
     // Parse fractional part (at least one digit required)
     c = read1(in);
-    if (!isdigit(c)) {
+    if (!isdigit((unsigned char)c)) {
         restore_input_state(in, &state);
         return make_failure_v2(in, parser_name, strdup("Expected digit after decimal point"), NULL);
     }
 
-    while (isdigit((unsigned char)(c = read1(in))));
+    while ((c = read1(in)) != EOF) {
+        if (isdigit((unsigned char)c) || c == '_') {
+            continue;
+        }
+        break;
+    }
     if (c != EOF) in->start--; // Back up one if not EOF
 
     // Optional exponent part (e.g., E+10, e-5, E3)
@@ -181,13 +213,18 @@ static ParseResult real_fn(input_t* in, void* args, char* parser_name) {
         }
 
         // Must have at least one digit after E/e
-        if (!isdigit(c)) {
+        if (!isdigit((unsigned char)c)) {
             restore_input_state(in, &state);
             return make_failure_v2(in, parser_name, strdup("Expected digit after exponent"), NULL);
         }
 
         // Parse remaining exponent digits
-        while (isdigit((unsigned char)(c = read1(in))));
+        while ((c = read1(in)) != EOF) {
+            if (isdigit((unsigned char)c) || c == '_') {
+                continue;
+            }
+            break;
+        }
         if (c != EOF) in->start--; // Back up one if not EOF
     } else if (c != EOF) {
         in->start--; // Back up if we didn't find exponent
@@ -237,14 +274,34 @@ static ParseResult hex_integer_fn(input_t* in, void* args, char* parser_name) {
 
     // Must have at least one hex digit after $
     c = read1(in);
-    if (c == EOF || !isxdigit(c)) {
+    bool saw_hex_digit = false;
+    if (c == EOF) {
+        restore_input_state(in, &state);
+        return make_failure_v2(in, parser_name, strdup("Expected hex digit after '$'"), NULL);
+    }
+    if (isxdigit(c)) {
+        saw_hex_digit = true;
+    } else if (c != '_') {
         restore_input_state(in, &state);
         return make_failure_v2(in, parser_name, strdup("Expected hex digit after '$'"), NULL);
     }
 
-    // Continue reading hex digits
-    while ((c = read1(in)) != EOF && isxdigit(c));
+    // Continue reading hex digits (allow underscores)
+    while ((c = read1(in)) != EOF) {
+        if (isxdigit(c)) {
+            saw_hex_digit = true;
+            continue;
+        }
+        if (c == '_') {
+            continue;
+        }
+        break;
+    }
     if (c != EOF) in->start--;
+    if (!saw_hex_digit) {
+        restore_input_state(in, &state);
+        return make_failure_v2(in, parser_name, strdup("Expected hex digit after '$'"), NULL);
+    }
 
     // Extract the hex text (including the $)
     int len = in->start - start_pos;
@@ -291,14 +348,34 @@ static ParseResult binary_integer_fn(input_t* in, void* args, char* parser_name)
 
     // Must have at least one binary digit after %
     c = read1(in);
-    if (c == EOF || (c != '0' && c != '1')) {
+    bool saw_bin_digit = false;
+    if (c == EOF) {
+        restore_input_state(in, &state);
+        return make_failure_v2(in, parser_name, strdup("Expected binary digit after '%'"), NULL);
+    }
+    if (c == '0' || c == '1') {
+        saw_bin_digit = true;
+    } else if (c != '_') {
         restore_input_state(in, &state);
         return make_failure_v2(in, parser_name, strdup("Expected binary digit after '%'"), NULL);
     }
 
-    // Continue reading binary digits
-    while ((c = read1(in)) != EOF && (c == '0' || c == '1'));
+    // Continue reading binary digits (allow underscores)
+    while ((c = read1(in)) != EOF) {
+        if (c == '0' || c == '1') {
+            saw_bin_digit = true;
+            continue;
+        }
+        if (c == '_') {
+            continue;
+        }
+        break;
+    }
     if (c != EOF) in->start--;
+    if (!saw_bin_digit) {
+        restore_input_state(in, &state);
+        return make_failure_v2(in, parser_name, strdup("Expected binary digit after '%'"), NULL);
+    }
 
     // Extract the binary text (including the %)
     int len = in->start - start_pos;
@@ -405,6 +482,40 @@ static ParseResult char_fn(input_t* in, void* args, char* parser_name) {
     if (read1(in) != '\'') {
         restore_input_state(in, &state);
         return make_failure_v2(in, parser_name, strdup("Expected closing single quote"), NULL);
+    }
+
+    // Check for the escaped single-quote character literal: ''''
+    // This is 4 quotes: open-quote, quote-as-char (doubled), close-quote.
+    // After reading 3 quotes so far ('X' where X='), check if this is ''''.
+    if (char_value == '\'') {
+        // We read ' ' ' so far. If next is ' and the one after is NOT ',
+        // then this is '''' = char literal for single quote.
+        char next = read1(in);
+        if (next == '\'') {
+            // Check that the character after isn't another quote (which would
+            // make this part of a longer string literal).
+            char after = read1(in);
+            if (after != '\'') {
+                // This is '''' = single-quote char literal
+                if (after != EOF) {
+                    in->start--;
+                }
+                char text[2];
+                text[0] = '\'';
+                text[1] = '\0';
+                ast_t* ast = new_ast();
+                ast->typ = pargs->tag;
+                ast->sym = sym_lookup(text);
+                ast->child = NULL;
+                ast->next = NULL;
+                set_ast_position(ast, in);
+                return make_success(ast);
+            }
+            // 5+ quotes - not a char literal, fall through to fail
+        }
+        // Could not form a valid '''' literal
+        restore_input_state(in, &state);
+        return make_failure_v2(in, parser_name, strdup("Expected single character literal"), NULL);
     }
 
     // A doubled quote means we're looking at the start of a Pascal string
@@ -1156,11 +1267,17 @@ static ParseResult reject_shift_ops_fn(input_t* in, void* args, char* parser_nam
 void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser) {
     // Pascal identifier parser - use expression identifier that allows some keywords in expression contexts
     combinator_t* identifier = token(pascal_expression_identifier(PASCAL_T_IDENTIFIER));
+    // Function name: use a simple identifier and let member access handle dotted calls
+    combinator_t* func_name = identifier;
 
-    // Function name: use expression identifier parser that allows certain keywords as function names
-    combinator_t* func_name = token(pascal_expression_identifier(PASCAL_T_IDENTIFIER));
-
-    // Function call parser: function name followed by optional argument list
+    // Function call parser: function name (possibly qualified) followed by optional generic args and argument list
+    combinator_t* func_type_arg = token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER));
+    combinator_t* func_type_arg_list = seq(new_combinator(), PASCAL_T_TYPE_ARG_LIST,
+        token(match("<")),
+        sep_by1(func_type_arg, token(match(","))),
+        token(match(">")),
+        NULL
+    );
     combinator_t* arg_list = between(
         token(match("(")),
         token(match(")")),
@@ -1169,6 +1286,7 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
 
     combinator_t* func_call = seq(new_combinator(), PASCAL_T_FUNC_CALL,
         func_name,                        // function name (built-in or custom)
+        optional(func_type_arg_list),     // optional generic type arguments
         arg_list,
         NULL
     );
@@ -1231,7 +1349,7 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
     // Constructed type parser for expressions (e.g., TFoo<Integer>.Create)
     // Peek to ensure this looks like a generic type before committing
     // This prevents parsing '<>' (not-equal operator) as an empty generic type
-    combinator_t* type_arg = token(cident(PASCAL_T_TYPE_ARG));
+    combinator_t* type_arg = token(pascal_qualified_identifier(PASCAL_T_TYPE_ARG));
     combinator_t* type_arg_list = seq(new_combinator(), PASCAL_T_TYPE_ARG_LIST,
         token(match("<")),
         sep_by1(type_arg, token(match(","))),  // Require at least one type argument

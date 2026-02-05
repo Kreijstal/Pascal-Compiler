@@ -398,10 +398,12 @@ static ast_t* map_const_type_keyword(ast_t* ast) {
 // Helper function to create a type reference parser that supports both
 // simple identifiers and constructed types (like TFoo<Integer> or specialize TFoo<Integer>)
 static combinator_t* create_type_ref_parser(void) {
-    combinator_t* type_arg = token(cident(PASCAL_T_TYPE_ARG));
+    combinator_t** type_arg_ref = (combinator_t**)safe_malloc(sizeof(combinator_t*));
+    *type_arg_ref = new_combinator();
+
     combinator_t* type_arg_list = seq(new_combinator(), PASCAL_T_TYPE_ARG_LIST,
         token(match("<")),
-        sep_by(type_arg, token(match(","))),
+        sep_by(lazy(type_arg_ref), token(match(","))),
         token(match(">")),
         NULL
     );
@@ -409,6 +411,12 @@ static combinator_t* create_type_ref_parser(void) {
         optional(token(keyword_ci("specialize"))),
         token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
         type_arg_list,
+        NULL
+    );
+    combinator_t* simple_type_arg = token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER));
+    multi(*type_arg_ref, PASCAL_T_NONE,
+        constructed_type,
+        simple_type_arg,
         NULL
     );
     // Allow qualified identifiers like BU.stat and System.THandle as simple type refs.
@@ -437,10 +445,15 @@ static combinator_t* create_method_type_param_list(void) {
         token(keyword_ci("interface")),
         NULL
     );
+    combinator_t* constraint_item = multi(new_combinator(), PASCAL_T_TYPE_CONSTRAINT,
+        constraint_keyword,
+        create_type_ref_parser(),
+        NULL
+    );
     
     combinator_t* type_constraint = optional(seq(new_combinator(), PASCAL_T_NONE,
         token(match(":")),
-        constraint_keyword,
+        sep_by(constraint_item, token(match(","))),
         NULL
     ));
     
@@ -502,7 +515,7 @@ combinator_t* class_type(tag_t tag) {
         NULL
     );
 
-    combinator_t* procedure_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
+    combinator_t* procedure_decl_standard = seq(new_combinator(), PASCAL_T_METHOD_DECL,
         optional(token(keyword_ci("generic"))),
         optional(token(keyword_ci("class"))),
         token(keyword_ci("procedure")),
@@ -514,7 +527,7 @@ combinator_t* class_type(tag_t tag) {
         NULL
     );
 
-    combinator_t* function_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
+    combinator_t* function_decl_standard = seq(new_combinator(), PASCAL_T_METHOD_DECL,
         optional(token(keyword_ci("generic"))),
         optional(token(keyword_ci("class"))),
         token(keyword_ci("function")),
@@ -525,6 +538,43 @@ combinator_t* class_type(tag_t tag) {
         create_method_return_type_parser(),  // Wrap return type in PASCAL_T_RETURN_TYPE
         token(match(";")),
         create_class_method_directives(),  // Support virtual, override, reintroduce, etc.
+        NULL
+    );
+
+    // Interface method delegation inside class:
+    //   function TFunc<T1, TResult>.Invoke = Bind;
+    //   procedure IFoo.Bar = Baz;
+    combinator_t* procedure_delegation_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
+        token(keyword_ci("procedure")),
+        create_type_ref_parser(),
+        token(match(".")),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        token(match("=")),
+        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
+        token(match(";")),
+        NULL
+    );
+
+    combinator_t* function_delegation_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
+        token(keyword_ci("function")),
+        create_type_ref_parser(),
+        token(match(".")),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        token(match("=")),
+        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
+        token(match(";")),
+        NULL
+    );
+
+    combinator_t* procedure_decl = multi(new_combinator(), PASCAL_T_NONE,
+        procedure_delegation_decl,
+        procedure_decl_standard,
+        NULL
+    );
+
+    combinator_t* function_decl = multi(new_combinator(), PASCAL_T_NONE,
+        function_delegation_decl,
+        function_decl_standard,
         NULL
     );
 
@@ -557,8 +607,11 @@ combinator_t* class_type(tag_t tag) {
         token(keyword_ci("property")),
         token(cident(PASCAL_T_IDENTIFIER)), // property name
         property_indexer,
-        token(match(":")),
-        create_type_ref_parser(),  // Support both simple and constructed types
+        optional(seq(new_combinator(), PASCAL_T_NONE,
+            token(match(":")),
+            create_type_ref_parser(),  // Support both simple and constructed types
+            NULL
+        )),
         optional(seq(new_combinator(), PASCAL_T_NONE,
             token(keyword_ci("read")),
             token(cident(PASCAL_T_IDENTIFIER)), // read field/method
@@ -569,10 +622,26 @@ combinator_t* class_type(tag_t tag) {
             token(cident(PASCAL_T_IDENTIFIER)), // write field/method
             NULL
         )),
+        optional(seq(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("stored")),
+            token(cident(PASCAL_T_IDENTIFIER)),
+            NULL
+        )),
+        optional(seq(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("implements")),
+            sep_by(create_type_ref_parser(), token(match(","))),
+            NULL
+        )),
+        optional(seq(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("default")),
+            optional(token(integer(PASCAL_T_INTEGER))),
+            NULL
+        )),
         token(match(";")),
         // Optional trailing "default;" directive used in FGL-like properties
         optional(seq(new_combinator(), PASCAL_T_NONE,
             token(keyword_ci("default")),
+            optional(token(integer(PASCAL_T_INTEGER))),
             token(match(";")),
             NULL
         )),
@@ -630,10 +699,15 @@ combinator_t* class_type(tag_t tag) {
         token(keyword_ci("interface")),
         NULL
     );
+    combinator_t* nested_constraint_item = multi(new_combinator(), PASCAL_T_TYPE_CONSTRAINT,
+        nested_constraint_kw,
+        create_type_ref_parser(),
+        NULL
+    );
     
     combinator_t* nested_type_constraint = optional(seq(new_combinator(), PASCAL_T_NONE,
         token(match(":")),
-        nested_constraint_kw,
+        sep_by(nested_constraint_item, token(match(","))),
         NULL
     ));
     
@@ -893,6 +967,7 @@ combinator_t* class_type(tag_t tag) {
         parent_class,  // optional parent class
         class_body_parser,
         token(keyword_ci("end")),
+        optional(token(keyword_ci("experimental"))),
         NULL
     );
 
@@ -1137,6 +1212,7 @@ static combinator_t* create_record_method_directives(void) {
         token(create_keyword_parser("unimplemented", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("platform", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("library", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("experimental", PASCAL_T_IDENTIFIER)),
         NULL
     );
     combinator_t* record_method_directive = seq(new_combinator(), PASCAL_T_METHOD_DIRECTIVE,
@@ -1169,13 +1245,18 @@ static combinator_t* create_class_method_directives(void) {
         token(create_keyword_parser("unimplemented", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("platform", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("library", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("experimental", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("dynamic", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("message", PASCAL_T_IDENTIFIER)),
         NULL
     );
     combinator_t* class_method_directive = seq(new_combinator(), PASCAL_T_METHOD_DIRECTIVE,
         class_method_directive_keyword,
-        optional(token(pascal_string(PASCAL_T_STRING))),  // Some directives have string args
+        optional(multi(new_combinator(), PASCAL_T_NONE,
+            token(pascal_string(PASCAL_T_STRING)),
+            token(cident(PASCAL_T_IDENTIFIER)),
+            NULL
+        )),  // Some directives have string or identifier args (e.g., message WM_USER)
         token(match(";")),
         NULL
     );
@@ -1501,7 +1582,15 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
         NULL
     ));
     
+    combinator_t* field_attribute = many(seq(new_combinator(), PASCAL_T_NONE,
+        token(match("[")),
+        sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
+        token(match("]")),
+        NULL
+    ));
+
     combinator_t* field_decl = seq(new_combinator(), PASCAL_T_FIELD_DECL,
+        field_attribute,
         field_name_list,
         token(match(":")),
         field_type,
@@ -1553,8 +1642,11 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
             token(keyword_ci("operator")),
             token(operator_name(PASCAL_T_IDENTIFIER)),
             create_pascal_param_parser(),
-            token(match(":")),
-            create_type_ref_parser(),
+            optional(seq(new_combinator(), PASCAL_T_NONE,
+                token(match(":")),
+                create_type_ref_parser(),
+                NULL
+            )),
             token(match(";")),
             record_method_directives_for_operator,
             NULL
@@ -1608,6 +1700,7 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
 
     // Simple field declaration with trailing ';' and optional directives
     combinator_t* adv_field_decl = seq(new_combinator(), PASCAL_T_FIELD_DECL,
+        field_attribute,
         sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
         token(match(":")),
         create_record_field_type_spec(),
@@ -1661,8 +1754,11 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
         token(keyword_ci("operator")),
         token(operator_name(PASCAL_T_IDENTIFIER)),
         create_pascal_param_parser(),
-        token(match(":")),
-        create_type_ref_parser(),
+        optional(seq(new_combinator(), PASCAL_T_NONE,
+            token(match(":")),
+            create_type_ref_parser(),
+            NULL
+        )),
         token(match(";")),
         record_method_directives_for_operator_member,
         NULL
@@ -1886,6 +1982,7 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
         ));
 
         combinator_t* tail_field_decl = seq(new_combinator(), PASCAL_T_FIELD_DECL,
+            field_attribute,
             tail_field_name_list,
             token(match(":")),
             tail_field_type,
@@ -1954,7 +2051,21 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
     free_ast(end_res.value.ast);
     free_combinator(end_keyword);
 
-    // Do not consume beyond 'end' here; higher-level parsers will handle any following tokens
+    // Optional alignment clause: "end align <integer>"
+    combinator_t* align_clause = optional(seq(new_combinator(), PASCAL_T_NONE,
+        token(keyword_ci("align")),
+        token(integer(PASCAL_T_INTEGER)),
+        NULL
+    ));
+    ParseResult align_res = parse(in, align_clause);
+    if (align_res.is_success && align_res.value.ast != ast_nil) {
+        free_ast(align_res.value.ast);
+    } else if (!align_res.is_success) {
+        discard_failure(align_res);
+    }
+    free_combinator(align_clause);
+
+    // Do not consume beyond 'end' or optional align; higher-level parsers will handle any following tokens
 
     ast_t* record_ast = new_ast();
     record_ast->typ = pargs->tag;

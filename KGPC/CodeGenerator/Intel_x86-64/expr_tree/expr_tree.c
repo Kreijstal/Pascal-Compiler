@@ -69,8 +69,24 @@ static ListNode_t *codegen_builtin_dynarray_length(struct Expression *expr,
     if (array_expr == NULL)
         return inst_list;
 
+    int use_value = 0;
+    if (array_expr->type == EXPR_VAR_ID && ctx->symtab != NULL)
+    {
+        StackNode_t *stack_node = find_label(array_expr->expr_data.id);
+        if (stack_node != NULL && stack_node->is_reference)
+            use_value = 1;
+
+        HashNode_t *node = NULL;
+        if (!use_value &&
+            FindIdent(&node, ctx->symtab, array_expr->expr_data.id) >= 0 &&
+            node != NULL && node->is_var_parameter)
+        {
+            use_value = 1;
+        }
+    }
+
     Register_t *desc_reg = NULL;
-    if (codegen_expr_is_addressable(array_expr))
+    if (!use_value && codegen_expr_is_addressable(array_expr))
         inst_list = codegen_address_for_expr(array_expr, inst_list, ctx, &desc_reg);
     else
         inst_list = codegen_expr_with_result(array_expr, inst_list, ctx, &desc_reg);
@@ -905,6 +921,100 @@ static int leaf_expr_is_simple(const struct Expression *expr)
     }
 }
 
+static const char *expr_tree_register_name8(const Register_t *reg)
+{
+    if (reg == NULL || reg->bit_64 == NULL)
+        return NULL;
+
+    static const struct
+    {
+        const char *wide;
+        const char *byte;
+    } register_map[] = {
+        { "%rax", "%al" },
+        { "%rbx", "%bl" },
+        { "%rcx", "%cl" },
+        { "%rdx", "%dl" },
+        { "%rsi", "%sil" },
+        { "%rdi", "%dil" },
+        { "%rbp", "%bpl" },
+        { "%rsp", "%spl" },
+        { "%r8", "%r8b" },
+        { "%r9", "%r9b" },
+        { "%r10", "%r10b" },
+        { "%r11", "%r11b" },
+        { "%r12", "%r12b" },
+        { "%r13", "%r13b" },
+        { "%r14", "%r14b" },
+        { "%r15", "%r15b" },
+    };
+
+    size_t count = sizeof(register_map) / sizeof(register_map[0]);
+    for (size_t i = 0; i < count; ++i)
+    {
+        if (strcmp(reg->bit_64, register_map[i].wide) == 0)
+            return register_map[i].byte;
+    }
+
+    return NULL;
+}
+
+static ListNode_t *gencode_shortcircuit_bool(expr_node_t *node, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t *target_reg, int is_or)
+{
+    if (node == NULL || node->left_expr == NULL || node->right_expr == NULL ||
+        ctx == NULL || target_reg == NULL)
+        return inst_list;
+
+    char skip_label[32];
+    char done_label[32];
+    gen_label(skip_label, sizeof(skip_label), ctx);
+    gen_label(done_label, sizeof(done_label), ctx);
+
+    inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
+    if (codegen_had_error(ctx))
+        return inst_list;
+
+    const char *reg32 = target_reg->bit_32;
+    const char *reg8 = expr_tree_register_name8(target_reg);
+    if (reg32 == NULL || reg8 == NULL)
+    {
+        codegen_report_error(ctx, "ERROR: Unable to select register for short-circuit boolean.");
+        return inst_list;
+    }
+
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\tcmpl\t$0, %s\n", reg32);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\t%s\t%s\n", is_or ? "jne" : "je", skip_label);
+    inst_list = add_inst(inst_list, buffer);
+
+    inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, target_reg);
+    if (codegen_had_error(ctx))
+        return inst_list;
+
+    snprintf(buffer, sizeof(buffer), "\tcmpl\t$0, %s\n", reg32);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tsetne\t%s\n", reg8);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tmovzbl\t%s, %s\n", reg8, reg32);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tjmp\t%s\n", done_label);
+    inst_list = add_inst(inst_list, buffer);
+
+    snprintf(buffer, sizeof(buffer), "%s:\n", skip_label);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %s\n", is_or ? 1 : 0, reg32);
+    inst_list = add_inst(inst_list, buffer);
+
+    snprintf(buffer, sizeof(buffer), "%s:\n", done_label);
+    inst_list = add_inst(inst_list, buffer);
+
+    node->reg = target_reg;
+    register_set_spill_callback(target_reg, expr_tree_register_spill_handler, node);
+    return inst_list;
+}
+
 /* The famous gencode algorithm */
 ListNode_t *gencode_expr_tree(expr_node_t *node, ListNode_t *inst_list, CodeGenContext *ctx, Register_t *target_reg)
 {
@@ -942,6 +1052,22 @@ ListNode_t *gencode_expr_tree(expr_node_t *node, ListNode_t *inst_list, CodeGenC
             inst_list = add_inst(inst_list, buffer);
         }
         return inst_list;
+    }
+
+    /* Short-circuit boolean operators */
+    if (node->expr->type == EXPR_MULOP &&
+        expr_get_type_tag(node->expr) == BOOL &&
+        node->expr->expr_data.mulop_data.mulop_type == AND &&
+        node->left_expr != NULL && node->right_expr != NULL)
+    {
+        return gencode_shortcircuit_bool(node, inst_list, ctx, target_reg, 0);
+    }
+    if (node->expr->type == EXPR_ADDOP &&
+        expr_get_type_tag(node->expr) == BOOL &&
+        node->expr->expr_data.addop_data.addop_type == OR &&
+        node->left_expr != NULL && node->right_expr != NULL)
+    {
+        return gencode_shortcircuit_bool(node, inst_list, ctx, target_reg, 1);
     }
 
     /*if(node->label > get_num_registers_free(get_reg_stack()))

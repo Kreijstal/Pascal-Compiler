@@ -7025,6 +7025,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             value_reg, inst_list, &coerced_to_real);
         int use_qword = codegen_type_uses_qword(var_type_2);
         long long record_element_size = codegen_record_field_effective_size(var_expr, ctx);
+        if (!use_qword && record_element_size >= CODEGEN_POINTER_SIZE_BYTES)
+            use_qword = 1;
         int use_word = (!use_qword && record_element_size == 2);
         if (var_type_2 == STRING_TYPE)
         {

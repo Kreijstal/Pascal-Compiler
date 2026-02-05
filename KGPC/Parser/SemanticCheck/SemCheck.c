@@ -1466,6 +1466,163 @@ static HashNode_t *semcheck_find_preferred_type_node(SymTab_t *symtab, const cha
         return NULL;
 
     ListNode_t *matches = FindAllIdents(symtab, type_id);
+    if (matches == NULL && strchr(type_id, '$') != NULL)
+    {
+        /* On-demand generic specialization (e.g., TFPGListEnumerator$TMyRecord). */
+        char *base_name = NULL;
+        char **arg_types = NULL;
+        int arg_count = 0;
+        const char *cursor = type_id;
+        const char *dollar = strchr(cursor, '$');
+        if (dollar != NULL && dollar != cursor)
+        {
+            base_name = (char *)malloc((size_t)(dollar - cursor + 1));
+            if (base_name != NULL)
+            {
+                memcpy(base_name, cursor, (size_t)(dollar - cursor));
+                base_name[dollar - cursor] = '\0';
+            }
+        }
+
+        if (base_name != NULL)
+        {
+            const char *tmp = dollar;
+            while (tmp != NULL)
+            {
+                arg_count++;
+                tmp = strchr(tmp + 1, '$');
+            }
+            if (arg_count > 0)
+            {
+                arg_types = (char **)calloc((size_t)arg_count, sizeof(char *));
+                if (arg_types != NULL)
+                {
+                    int idx = 0;
+                    const char *seg = dollar + 1;
+                    while (seg != NULL && idx < arg_count)
+                    {
+                        const char *next = strchr(seg, '$');
+                        size_t seg_len = next ? (size_t)(next - seg) : strlen(seg);
+                        arg_types[idx] = (char *)malloc(seg_len + 1);
+                        if (arg_types[idx] == NULL)
+                            break;
+                        memcpy(arg_types[idx], seg, seg_len);
+                        arg_types[idx][seg_len] = '\0';
+                        idx++;
+                        if (next == NULL)
+                            break;
+                        seg = next + 1;
+                    }
+                    if (idx != arg_count)
+                    {
+                        for (int i = 0; i < arg_count; ++i)
+                            free(arg_types[i]);
+                        free(arg_types);
+                        arg_types = NULL;
+                        arg_count = 0;
+                    }
+                }
+            }
+        }
+
+        if (base_name != NULL && arg_types != NULL && arg_count > 0)
+        {
+            GenericTypeDecl *generic = generic_registry_find_decl(base_name);
+            if (generic != NULL && generic->record_template != NULL &&
+                generic->num_type_params == arg_count)
+            {
+                struct RecordType *record = clone_record_type(generic->record_template);
+                if (record != NULL)
+                {
+                    if (record->type_id != NULL)
+                        free(record->type_id);
+                    record->type_id = strdup(type_id);
+                    record->generic_decl = generic;
+                    record->num_generic_args = arg_count;
+                    record->generic_args = arg_types;
+                    arg_types = NULL;
+
+                    /* Substitute generic parameters in record fields/properties. */
+                    ListNode_t *field_node = record->fields;
+                    while (field_node != NULL)
+                    {
+                        if (field_node->type == LIST_RECORD_FIELD)
+                        {
+                            struct RecordField *field = (struct RecordField *)field_node->cur;
+                            if (field != NULL)
+                            {
+                                for (int i = 0; i < generic->num_type_params; ++i)
+                                {
+                                    const char *param = generic->type_parameters[i];
+                                    const char *arg = record->generic_args[i];
+                                    if (param != NULL && arg != NULL)
+                                    {
+                                        if (field->type_id != NULL &&
+                                            strcasecmp(field->type_id, param) == 0)
+                                        {
+                                            free(field->type_id);
+                                            field->type_id = strdup(arg);
+                                        }
+                                        if (field->array_element_type_id != NULL &&
+                                            strcasecmp(field->array_element_type_id, param) == 0)
+                                        {
+                                            free(field->array_element_type_id);
+                                            field->array_element_type_id = strdup(arg);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        field_node = field_node->next;
+                    }
+                    ListNode_t *prop_node = record->properties;
+                    while (prop_node != NULL)
+                    {
+                        if (prop_node->type == LIST_CLASS_PROPERTY)
+                        {
+                            struct ClassProperty *property = (struct ClassProperty *)prop_node->cur;
+                            if (property != NULL && property->type_id != NULL)
+                            {
+                                for (int i = 0; i < generic->num_type_params; ++i)
+                                {
+                                    const char *param = generic->type_parameters[i];
+                                    const char *arg = record->generic_args[i];
+                                    if (param != NULL && arg != NULL &&
+                                        strcasecmp(property->type_id, param) == 0)
+                                    {
+                                        free(property->type_id);
+                                        property->type_id = strdup(arg);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        prop_node = prop_node->next;
+                    }
+
+                    generic_registry_add_specialization(base_name, record->generic_args, arg_count);
+
+                    KgpcType *kgpc_type = create_record_type(record);
+                    if (record_type_is_class(record))
+                        kgpc_type = create_pointer_type(kgpc_type);
+                    if (kgpc_type != NULL)
+                    {
+                        PushTypeOntoScope_Typed(symtab, (char *)type_id, kgpc_type);
+                    }
+                }
+            }
+        }
+
+        if (arg_types != NULL)
+        {
+            for (int i = 0; i < arg_count; ++i)
+                free(arg_types[i]);
+            free(arg_types);
+        }
+        free(base_name);
+
+        matches = FindAllIdents(symtab, type_id);
+    }
     if (matches == NULL)
     {
         const char *base = semcheck_base_type_name(type_id);
@@ -1752,6 +1909,12 @@ HashNode_t *semcheck_find_type_node_with_kgpc_type(SymTab_t *symtab, const char 
 {
     if (symtab == NULL || type_id == NULL)
         return NULL;
+
+    /* Prefer the generic-aware lookup so we can instantiate types like
+     * TFPGListEnumerator$TMyRecord on demand for function return types. */
+    HashNode_t *preferred = semcheck_find_preferred_type_node(symtab, type_id);
+    if (preferred != NULL && preferred->type != NULL)
+        return preferred;
 
     HashNode_t *result = NULL;
     ListNode_t *all_nodes = FindAllIdents(symtab, type_id);

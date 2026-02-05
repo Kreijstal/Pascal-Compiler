@@ -1262,12 +1262,36 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                         formal_is_array_decl = 1;
                 }
             }
+            if (!formal_is_array_decl && formal_decl != NULL)
+            {
+                int owns_probe = 0;
+                KgpcType *probe = resolve_type_from_vardecl(formal_decl, symtab, &owns_probe);
+                if (probe != NULL && (kgpc_type_is_array(probe) || kgpc_type_is_array_of_const(probe)))
+                    formal_is_array_decl = 1;
+                if (owns_probe && probe != NULL)
+                    destroy_kgpc_type(probe);
+            }
 
-            if (formal_is_array_decl &&
-                arg_expr != NULL &&
+            int arg_is_array = 0;
+            if (arg_expr != NULL &&
                 (arg_expr->type == EXPR_SET || arg_expr->type == EXPR_ARRAY_LITERAL ||
                  arg_expr->array_element_type != UNKNOWN_TYPE ||
                  arg_expr->array_element_type_id != NULL))
+            {
+                arg_is_array = 1;
+            }
+            else if (arg_expr != NULL)
+            {
+                int owns_probe = 0;
+                KgpcType *arg_probe = NULL;
+                semcheck_resolve_arg_kgpc_type(arg_expr, symtab, max_scope_lev, &owns_probe, &arg_probe);
+                if (arg_probe != NULL && (kgpc_type_is_array(arg_probe) || kgpc_type_is_array_of_const(arg_probe)))
+                    arg_is_array = 1;
+                if (owns_probe && arg_probe != NULL)
+                    destroy_kgpc_type(arg_probe);
+            }
+
+            if (formal_is_array_decl && arg_is_array)
             {
                 MatchQuality quality = semcheck_make_quality(MATCH_PROMOTION);
                 int owns_formal = 0;
@@ -1318,6 +1342,18 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                             int tag = semcheck_array_elem_legacy_tag(arg_elem);
                             if (tag != UNKNOWN_TYPE)
                                 arg_elem_tag = tag;
+                            if (arg_elem_tag == UNKNOWN_TYPE && arg_elem != NULL)
+                                arg_elem_tag = semcheck_tag_from_kgpc(arg_elem);
+                        }
+                    }
+                    else if (arg_kgpc != NULL && arg_kgpc->kind == TYPE_KIND_ARRAY)
+                    {
+                        KgpcType *arg_elem = kgpc_type_get_array_element_type_resolved(arg_kgpc, symtab);
+                        if (arg_elem != NULL)
+                        {
+                            int elem_tag = semcheck_tag_from_kgpc(arg_elem);
+                            if (elem_tag == SHORTSTRING_TYPE && arg_elem_tag == CHAR_TYPE)
+                                arg_elem_tag = SHORTSTRING_TYPE;
                         }
                     }
 
@@ -1327,11 +1363,18 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                         int rank = -1;
                         if (formal_elem_tag != UNKNOWN_TYPE)
                         {
+                            if (arg_elem_tag != UNKNOWN_TYPE && arg_elem_tag == formal_elem_tag)
+                            {
+                                rank = 0;
+                            }
+                            else
+                            {
                             KgpcType *arg_elem = create_primitive_type(arg_elem_tag);
                             KgpcType *formal_elem_prim = create_primitive_type(formal_elem_tag);
                             rank = kgpc_type_conversion_rank(arg_elem, formal_elem_prim);
                             destroy_kgpc_type(arg_elem);
                             destroy_kgpc_type(formal_elem_prim);
+                            }
                         }
                         else
                         {
@@ -1339,6 +1382,24 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                             rank = kgpc_type_conversion_rank(arg_elem, formal_elem);
                             destroy_kgpc_type(arg_elem);
                         }
+                        if (rank < 0)
+                        {
+                            if (!arg_is_literal &&
+                                arg_elem_tag == SHORTSTRING_TYPE &&
+                                formal_elem_tag == CHAR_TYPE)
+                            {
+                                /* Allow ShortString arrays to match Char arrays,
+                                   but make it worse than exact to prefer real Char arrays. */
+                                rank = 1;
+                            }
+                            else if (!arg_is_literal &&
+                                arg_elem_tag == SHORTSTRING_TYPE &&
+                                formal_elem_tag == SHORTSTRING_TYPE)
+                            {
+                                rank = 1;
+                            }
+                        }
+
                         if (rank < 0 && formal_elem != NULL && arg_elem_tag == CHAR_TYPE &&
                             formal_elem->kind == TYPE_KIND_ARRAY &&
                             formal_elem->info.array_info.element_type != NULL &&
@@ -1371,6 +1432,7 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                         }
                         if (formal_elem_tag != UNKNOWN_TYPE && formal_elem_tag == arg_elem_tag)
                             quality.exact_array_elem = 1;
+
                     }
 
                     if (owns_arg && arg_kgpc != NULL)
@@ -1605,7 +1667,9 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
         int missing_args = total_params - given_count;
         if (getenv("KGPC_DEBUG_OVERLOAD_QUALITY") != NULL)
         {
-            fprintf(stderr, "[KGPC] candidate %s qualities:", candidate->id ? candidate->id : "<null>");
+            fprintf(stderr, "[KGPC] candidate %s (%s) qualities:",
+                candidate->id ? candidate->id : "<null>",
+                candidate->mangled_id ? candidate->mangled_id : "<null>");
             for (int qi = 0; qi < given_count; qi++)
                 fprintf(stderr, " (%d,%d,%d,%d,%d)", (int)qualities[qi].kind,
                     qualities[qi].exact_type_id, qualities[qi].exact_pointer_subtype,

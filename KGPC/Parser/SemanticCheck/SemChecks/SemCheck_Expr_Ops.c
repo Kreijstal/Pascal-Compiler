@@ -1728,7 +1728,7 @@ int semcheck_varid(int *type_return,
             force_shortstring = 1;
         }
 
-        if (force_shortstring)
+        if (force_shortstring && !node_is_array)
         {
             KgpcType *short_type = create_primitive_type(SHORTSTRING_TYPE);
             semcheck_expr_set_resolved_kgpc_type_shared(expr, short_type);

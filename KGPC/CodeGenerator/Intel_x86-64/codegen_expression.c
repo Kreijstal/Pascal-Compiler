@@ -538,9 +538,8 @@ static int codegen_param_expected_type(Tree_t *decl, SymTab_t *symtab)
     }
     if (decl->type == TREE_ARR_DECL)
     {
-        type_id = decl->tree_data.arr_decl_data.type_id;
-        if (decl->tree_data.arr_decl_data.type != UNKNOWN_TYPE)
-            return decl->tree_data.arr_decl_data.type;
+        /* Open array params should not be treated as their element type. */
+        return UNKNOWN_TYPE;
     }
 
     /* Special case: ShortString type identifier */
@@ -5277,7 +5276,8 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         }
         if (expected_type == UNKNOWN_TYPE && arg_expr != NULL &&
             arg_expr->type == EXPR_VAR_ID && arg_expr->expr_data.id != NULL &&
-            ctx != NULL && ctx->symtab != NULL)
+            ctx != NULL && ctx->symtab != NULL &&
+            !formal_is_open_array && !is_array_param)
         {
             HashNode_t *arg_node = NULL;
             if (FindIdent(&arg_node, ctx->symtab, arg_expr->expr_data.id) == 0 &&
@@ -5371,792 +5371,848 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             }
         }
 
-        if (formal_is_open_array && is_array_arg)
+        int arg_handled = 0;
+        if (formal_is_open_array && arg_expr != NULL)
         {
-            long long element_count = codegen_static_array_length(arg_expr);
-            if (element_count < 0)
+            KgpcType *arg_type = expr_get_kgpc_type(arg_expr);
+            int arg_is_open_array = (arg_expr->is_array_expr && arg_expr->array_is_dynamic) ||
+                (arg_type != NULL && kgpc_type_is_dynamic_array(arg_type));
+            if (arg_is_open_array)
             {
-                codegen_report_error(ctx,
-                    "ERROR: Unable to determine length for open array argument.");
-                return inst_list;
-            }
-
-            StackNode_t *desc_slot = codegen_alloc_temp_bytes("openarr_desc",
-                2 * CODEGEN_POINTER_SIZE_BYTES);
-            if (desc_slot == NULL)
-            {
-                codegen_report_error(ctx,
-                    "ERROR: Failed to allocate descriptor storage for open array argument.");
-                return inst_list;
-            }
-
-            if (!codegen_expr_is_addressable(arg_expr))
-            {
-                codegen_report_error(ctx,
-                    "ERROR: Unsupported expression type for open array argument.");
-                return inst_list;
-            }
-
-            Register_t *data_addr_reg = NULL;
-            inst_list = codegen_address_for_expr(arg_expr, inst_list, ctx, &data_addr_reg);
-            if (codegen_had_error(ctx) || data_addr_reg == NULL)
-                return inst_list;
-
-            Register_t *desc_addr_reg = get_free_reg(get_reg_stack(), &inst_list);
-            if (desc_addr_reg == NULL)
-            {
-                free_reg(get_reg_stack(), data_addr_reg);
-                codegen_report_error(ctx,
-                    "ERROR: Unable to allocate register for open array descriptor.");
-                return inst_list;
-            }
-
-            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
-                desc_slot->offset, desc_addr_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n",
-                data_addr_reg->bit_64, desc_addr_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-            free_reg(get_reg_stack(), data_addr_reg);
-
-            snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, 8(%s)\n",
-                element_count, desc_addr_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-
-            StackNode_t *arg_spill = add_l_t("arg_eval");
-            if (arg_spill != NULL && arg_infos != NULL)
-            {
-                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
-                    desc_addr_reg->bit_64, arg_spill->offset);
-                inst_list = add_inst(inst_list, buffer);
-                free_reg(get_reg_stack(), desc_addr_reg);
-                
-                arg_infos[arg_num].reg = NULL;
-                arg_infos[arg_num].spill = arg_spill;
-                arg_infos[arg_num].expr = arg_expr;
-            }
-            else if (arg_infos != NULL)
-            {
-                arginfo_assign_register(&arg_infos[arg_num], desc_addr_reg, arg_expr);
-            }
-        }
-        else if (formal_is_open_array && arg_expr != NULL && arg_expr->type == EXPR_STRING)
-        {
-            /* Handle string literal passed to open array of Char parameter.
-             * Create a descriptor: (pointer to string data, element count).
-             * The string is placed in read-only section. */
-            const char *str_data = arg_expr->expr_data.string;
-            int str_len = (str_data != NULL) ? (int)strlen(str_data) : 0;
-
-            const char *readonly_section = codegen_readonly_section_directive();
-            char label[64];
-            snprintf(label, sizeof(label), ".LC%d", ctx->write_label_counter++);
-
-            char escaped_str[CODEGEN_MAX_INST_BUF];
-            escape_string(escaped_str, str_data ? str_data : "", sizeof(escaped_str));
-            /* Use larger buffer for string literal embedding to avoid truncation */
-            char str_literal_buffer[CODEGEN_MAX_INST_BUF + 128];
-            snprintf(str_literal_buffer, sizeof(str_literal_buffer), "%s\n%s:\n\t.string \"%s\"\n\t.text\n",
-                     readonly_section, label, escaped_str);
-            inst_list = add_inst(inst_list, str_literal_buffer);
-
-            StackNode_t *desc_slot = codegen_alloc_temp_bytes("str_arr_desc",
-                2 * CODEGEN_POINTER_SIZE_BYTES);
-            if (desc_slot == NULL)
-            {
-                codegen_report_error(ctx,
-                    "ERROR: Unable to allocate descriptor for string literal to open array.");
-                return inst_list;
-            }
-
-            /* Get a register to hold the string address temporarily */
-            Register_t *data_addr_reg = get_free_reg(get_reg_stack(), &inst_list);
-            if (data_addr_reg == NULL)
-            {
-                codegen_report_error(ctx,
-                    "ERROR: Unable to allocate register for string literal address.");
-                return inst_list;
-            }
-
-            /* Get descriptor address register */
-            Register_t *desc_addr_reg = get_free_reg(get_reg_stack(), &inst_list);
-            if (desc_addr_reg == NULL)
-            {
-                free_reg(get_reg_stack(), data_addr_reg);
-                codegen_report_error(ctx,
-                    "ERROR: Unable to allocate register for open array descriptor.");
-                return inst_list;
-            }
-
-            /* Load descriptor slot address */
-            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
-                desc_slot->offset, desc_addr_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-
-            /* Load string address */
-            snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
-                     label, data_addr_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-
-            /* Store string pointer at descriptor[0] */
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n",
-                data_addr_reg->bit_64, desc_addr_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-            free_reg(get_reg_stack(), data_addr_reg);
-
-            /* Store element count at descriptor[1] (offset 8) */
-            snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, 8(%s)\n",
-                str_len, desc_addr_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-
-            StackNode_t *arg_spill = add_l_t("arg_eval");
-            if (arg_spill != NULL && arg_infos != NULL)
-            {
-                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
-                    desc_addr_reg->bit_64, arg_spill->offset);
-                inst_list = add_inst(inst_list, buffer);
-                free_reg(get_reg_stack(), desc_addr_reg);
-
-                arg_infos[arg_num].reg = NULL;
-                arg_infos[arg_num].spill = arg_spill;
-                arg_infos[arg_num].expr = arg_expr;
-            }
-            else if (arg_infos != NULL)
-            {
-                arginfo_assign_register(&arg_infos[arg_num], desc_addr_reg, arg_expr);
-            }
-        }
-        /* Handle ShortString parameter (by value): materialize a ShortString buffer
-         * matching the formal size and pass its address. */
-        else if (expected_type == SHORTSTRING_TYPE && arg_expr != NULL && !is_var_param)
-        {
-            int shortstr_size = codegen_formal_shortstring_size(formal_arg_decl, ctx->symtab);
-            if (shortstr_size < 2)
-                shortstr_size = 2;
-
-            StackNode_t *shortstr_buf = codegen_alloc_temp_bytes("shortstr_arg", shortstr_size);
-            if (shortstr_buf == NULL)
-            {
-                codegen_report_error(ctx,
-                    "ERROR: Unable to allocate ShortString buffer for argument.");
-                if (arg_infos != NULL) free(arg_infos);
-                return inst_list;
-            }
-
-            Register_t *buf_addr_reg = get_free_reg(get_reg_stack(), &inst_list);
-            if (buf_addr_reg == NULL)
-            {
-                codegen_report_error(ctx,
-                    "ERROR: Unable to allocate register for ShortString buffer.");
-                if (arg_infos != NULL) free(arg_infos);
-                return inst_list;
-            }
-
-            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
-                shortstr_buf->offset, buf_addr_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-
-            if (codegen_expr_is_shortstring_value_ctx(arg_expr, ctx))
-            {
-                Register_t *src_reg = NULL;
-                if (codegen_expr_is_addressable(arg_expr))
+                /* Open array argument already represented as a descriptor pointer (e.g., open array param). */
+                int use_address = 0;
+                if (arg_expr->type == EXPR_VAR_ID && ctx->symtab != NULL)
                 {
-                    inst_list = codegen_address_for_expr(arg_expr, inst_list, ctx, &src_reg);
-                }
-                else
-                {
-                    inst_list = codegen_expr_with_result(arg_expr, inst_list, ctx, &src_reg);
-                }
-                if (codegen_had_error(ctx) || src_reg == NULL)
-                {
-                    free_reg(get_reg_stack(), buf_addr_reg);
-                    if (arg_infos != NULL) free(arg_infos);
-                    return inst_list;
+                    StackNode_t *stack_node = find_label(arg_expr->expr_data.id);
+                    if (stack_node != NULL && !stack_node->is_reference)
+                        use_address = 1;
+
+                    HashNode_t *arg_symbol = NULL;
+                    if (FindIdent(&arg_symbol, ctx->symtab, arg_expr->expr_data.id) >= 0 &&
+                        arg_symbol != NULL && arg_symbol->is_var_parameter)
+                    {
+                        use_address = 0;
+                    }
                 }
 
-                if (codegen_target_is_windows())
-                {
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", buf_addr_reg->bit_64);
-                    inst_list = add_inst(inst_list, buffer);
-                    snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%edx\n", shortstr_size);
-                    inst_list = add_inst(inst_list, buffer);
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r8\n", src_reg->bit_64);
-                    inst_list = add_inst(inst_list, buffer);
-                }
-                else
-                {
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", buf_addr_reg->bit_64);
-                    inst_list = add_inst(inst_list, buffer);
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%rsi\n", shortstr_size);
-                    inst_list = add_inst(inst_list, buffer);
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", src_reg->bit_64);
-                    inst_list = add_inst(inst_list, buffer);
-                }
-
-                inst_list = add_inst(inst_list, "\tmovl\t$0, %eax\n");
-                inst_list = add_inst(inst_list, "\tcall\tkgpc_shortstring_to_shortstring\n");
-                free_arg_regs();
-                free_reg(get_reg_stack(), src_reg);
-            }
-            else if (codegen_expr_is_char_array_like_ctx(arg_expr, ctx))
-            {
-                long long array_len = 0;
-                if (!codegen_get_char_array_length(arg_expr, ctx, &array_len) || array_len <= 0)
-                {
-                    free_reg(get_reg_stack(), buf_addr_reg);
-                    if (arg_infos != NULL) free(arg_infos);
-                    return inst_list;
-                }
-
-                Register_t *src_reg = NULL;
-                if (!codegen_expr_is_addressable(arg_expr))
-                {
-                    codegen_report_error(ctx,
-                        "ERROR: Unsupported expression type for ShortString conversion.");
-                    free_reg(get_reg_stack(), buf_addr_reg);
-                    if (arg_infos != NULL) free(arg_infos);
-                    return inst_list;
-                }
-                inst_list = codegen_address_for_expr(arg_expr, inst_list, ctx, &src_reg);
-                if (codegen_had_error(ctx) || src_reg == NULL)
-                {
-                    free_reg(get_reg_stack(), buf_addr_reg);
-                    if (arg_infos != NULL) free(arg_infos);
-                    return inst_list;
-                }
-
-                if (codegen_target_is_windows())
-                {
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", buf_addr_reg->bit_64);
-                    inst_list = add_inst(inst_list, buffer);
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", src_reg->bit_64);
-                    inst_list = add_inst(inst_list, buffer);
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %%r8\n", array_len);
-                    inst_list = add_inst(inst_list, buffer);
-                    snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%r9d\n", shortstr_size);
-                    inst_list = add_inst(inst_list, buffer);
-                }
-                else
-                {
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", buf_addr_reg->bit_64);
-                    inst_list = add_inst(inst_list, buffer);
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", src_reg->bit_64);
-                    inst_list = add_inst(inst_list, buffer);
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %%rdx\n", array_len);
-                    inst_list = add_inst(inst_list, buffer);
-                    snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%ecx\n", shortstr_size);
-                    inst_list = add_inst(inst_list, buffer);
-                }
-
-                inst_list = add_inst(inst_list, "\tmovl\t$0, %eax\n");
-                inst_list = add_inst(inst_list, "\tcall\tkgpc_char_array_to_shortstring\n");
-                free_arg_regs();
-                free_reg(get_reg_stack(), src_reg);
-            }
-            else
-            {
                 Register_t *value_reg = NULL;
-                inst_list = codegen_expr_with_result(arg_expr, inst_list, ctx, &value_reg);
+                if (use_address && codegen_expr_is_addressable(arg_expr))
+                    inst_list = codegen_address_for_expr(arg_expr, inst_list, ctx, &value_reg);
+                else
+                    inst_list = codegen_expr_with_result(arg_expr, inst_list, ctx, &value_reg);
                 if (codegen_had_error(ctx) || value_reg == NULL)
+                    return inst_list;
+
+                StackNode_t *arg_spill = add_l_t("arg_eval");
+                if (arg_spill != NULL && arg_infos != NULL)
                 {
-                    free_reg(get_reg_stack(), buf_addr_reg);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                        value_reg->bit_64, arg_spill->offset);
+                    inst_list = add_inst(inst_list, buffer);
+                    free_reg(get_reg_stack(), value_reg);
+
+                    arg_infos[arg_num].reg = NULL;
+                    arg_infos[arg_num].spill = arg_spill;
+                    arg_infos[arg_num].expr = arg_expr;
+                    arg_infos[arg_num].is_pointer_like = 1;
+                }
+                else if (arg_infos != NULL)
+                {
+                    arginfo_assign_register(&arg_infos[arg_num], value_reg, arg_expr);
+                    arg_infos[arg_num].is_pointer_like = 1;
+                }
+                arg_handled = 1;
+            }
+            else if (is_array_arg)
+            {
+                long long element_count = codegen_static_array_length(arg_expr);
+                if (element_count < 0)
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Unable to determine length for open array argument.");
+                    return inst_list;
+                }
+
+                StackNode_t *desc_slot = codegen_alloc_temp_bytes("openarr_desc",
+                    2 * CODEGEN_POINTER_SIZE_BYTES);
+                if (desc_slot == NULL)
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Failed to allocate descriptor storage for open array argument.");
+                    return inst_list;
+                }
+
+                if (!codegen_expr_is_addressable(arg_expr))
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Unsupported expression type for open array argument.");
+                    return inst_list;
+                }
+
+                Register_t *data_addr_reg = NULL;
+                inst_list = codegen_address_for_expr(arg_expr, inst_list, ctx, &data_addr_reg);
+                if (codegen_had_error(ctx) || data_addr_reg == NULL)
+                    return inst_list;
+
+                Register_t *desc_addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                if (desc_addr_reg == NULL)
+                {
+                    free_reg(get_reg_stack(), data_addr_reg);
+                    codegen_report_error(ctx,
+                        "ERROR: Unable to allocate register for open array descriptor.");
+                    return inst_list;
+                }
+
+                snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                    desc_slot->offset, desc_addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n",
+                    data_addr_reg->bit_64, desc_addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                free_reg(get_reg_stack(), data_addr_reg);
+
+                snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, 8(%s)\n",
+                    element_count, desc_addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+
+                StackNode_t *arg_spill = add_l_t("arg_eval");
+                if (arg_spill != NULL && arg_infos != NULL)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                        desc_addr_reg->bit_64, arg_spill->offset);
+                    inst_list = add_inst(inst_list, buffer);
+                    free_reg(get_reg_stack(), desc_addr_reg);
+                    
+                    arg_infos[arg_num].reg = NULL;
+                    arg_infos[arg_num].spill = arg_spill;
+                    arg_infos[arg_num].expr = arg_expr;
+                }
+                else if (arg_infos != NULL)
+                {
+                    arginfo_assign_register(&arg_infos[arg_num], desc_addr_reg, arg_expr);
+                }
+                arg_handled = 1;
+            }
+        }
+        if (!arg_handled)
+        {
+            if (formal_is_open_array && arg_expr != NULL && arg_expr->type == EXPR_STRING)
+            {
+                /* Handle string literal passed to open array of Char parameter.
+                 * Create a descriptor: (pointer to string data, element count).
+                 * The string is placed in read-only section. */
+                const char *str_data = arg_expr->expr_data.string;
+                int str_len = (str_data != NULL) ? (int)strlen(str_data) : 0;
+
+                const char *readonly_section = codegen_readonly_section_directive();
+                char label[64];
+                snprintf(label, sizeof(label), ".LC%d", ctx->write_label_counter++);
+
+                char escaped_str[CODEGEN_MAX_INST_BUF];
+                escape_string(escaped_str, str_data ? str_data : "", sizeof(escaped_str));
+                /* Use larger buffer for string literal embedding to avoid truncation */
+                char str_literal_buffer[CODEGEN_MAX_INST_BUF + 128];
+                snprintf(str_literal_buffer, sizeof(str_literal_buffer), "%s\n%s:\n\t.string \"%s\"\n\t.text\n",
+                         readonly_section, label, escaped_str);
+                inst_list = add_inst(inst_list, str_literal_buffer);
+
+                StackNode_t *desc_slot = codegen_alloc_temp_bytes("str_arr_desc",
+                    2 * CODEGEN_POINTER_SIZE_BYTES);
+                if (desc_slot == NULL)
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Unable to allocate descriptor for string literal to open array.");
+                    return inst_list;
+                }
+
+                /* Get a register to hold the string address temporarily */
+                Register_t *data_addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                if (data_addr_reg == NULL)
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Unable to allocate register for string literal address.");
+                    return inst_list;
+                }
+
+                /* Get descriptor address register */
+                Register_t *desc_addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                if (desc_addr_reg == NULL)
+                {
+                    free_reg(get_reg_stack(), data_addr_reg);
+                    codegen_report_error(ctx,
+                        "ERROR: Unable to allocate register for open array descriptor.");
+                    return inst_list;
+                }
+
+                /* Load descriptor slot address */
+                snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                    desc_slot->offset, desc_addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+
+                /* Load string address */
+                snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                         label, data_addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+
+                /* Store string pointer at descriptor[0] */
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n",
+                    data_addr_reg->bit_64, desc_addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                free_reg(get_reg_stack(), data_addr_reg);
+
+                /* Store element count at descriptor[1] (offset 8) */
+                snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, 8(%s)\n",
+                    str_len, desc_addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+
+                StackNode_t *arg_spill = add_l_t("arg_eval");
+                if (arg_spill != NULL && arg_infos != NULL)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                        desc_addr_reg->bit_64, arg_spill->offset);
+                    inst_list = add_inst(inst_list, buffer);
+                    free_reg(get_reg_stack(), desc_addr_reg);
+
+                    arg_infos[arg_num].reg = NULL;
+                    arg_infos[arg_num].spill = arg_spill;
+                    arg_infos[arg_num].expr = arg_expr;
+                }
+                else if (arg_infos != NULL)
+                {
+                    arginfo_assign_register(&arg_infos[arg_num], desc_addr_reg, arg_expr);
+                }
+                arg_handled = 1;
+            }
+            /* Handle ShortString parameter (by value): materialize a ShortString buffer
+             * matching the formal size and pass its address. */
+            else if (expected_type == SHORTSTRING_TYPE && arg_expr != NULL && !is_var_param)
+            {
+                int shortstr_size = codegen_formal_shortstring_size(formal_arg_decl, ctx->symtab);
+                if (shortstr_size < 2)
+                    shortstr_size = 2;
+
+                StackNode_t *shortstr_buf = codegen_alloc_temp_bytes("shortstr_arg", shortstr_size);
+                if (shortstr_buf == NULL)
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Unable to allocate ShortString buffer for argument.");
                     if (arg_infos != NULL) free(arg_infos);
                     return inst_list;
                 }
 
-                if (codegen_target_is_windows())
-                {
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", buf_addr_reg->bit_64);
-                    inst_list = add_inst(inst_list, buffer);
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
-                    inst_list = add_inst(inst_list, buffer);
-                    snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%r8d\n", shortstr_size);
-                    inst_list = add_inst(inst_list, buffer);
-                }
-                else
-                {
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", buf_addr_reg->bit_64);
-                    inst_list = add_inst(inst_list, buffer);
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", value_reg->bit_64);
-                    inst_list = add_inst(inst_list, buffer);
-                    snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%edx\n", shortstr_size);
-                    inst_list = add_inst(inst_list, buffer);
-                }
-
-                inst_list = add_inst(inst_list, "\tmovl\t$0, %eax\n");
-                inst_list = add_inst(inst_list, "\tcall\tkgpc_string_to_shortstring\n");
-                free_arg_regs();
-                free_reg(get_reg_stack(), value_reg);
-            }
-
-            /* Reload buffer address after possible calls */
-            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
-                shortstr_buf->offset, buf_addr_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-
-            StackNode_t *arg_spill = add_l_t("arg_eval");
-            if (arg_spill != NULL && arg_infos != NULL)
-            {
-                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
-                    buf_addr_reg->bit_64, arg_spill->offset);
-                inst_list = add_inst(inst_list, buffer);
-                free_reg(get_reg_stack(), buf_addr_reg);
-
-                arg_infos[arg_num].reg = NULL;
-                arg_infos[arg_num].spill = arg_spill;
-                arg_infos[arg_num].expr = arg_expr;
-                arg_infos[arg_num].is_pointer_like = 1;
-            }
-            else if (arg_infos != NULL)
-            {
-                arginfo_assign_register(&arg_infos[arg_num], buf_addr_reg, arg_expr);
-                arg_infos[arg_num].is_pointer_like = 1;
-            }
-        }
-        else if(is_var_param || is_array_param || is_array_arg)
-        {
-            Register_t *addr_reg = NULL;
-            if (arg_expr != NULL && arg_expr->type == EXPR_ARRAY_LITERAL)
-            {
-                inst_list = codegen_materialize_array_literal(arg_expr, inst_list, ctx, &addr_reg);
-            }
-            else
-            {
-                if (!codegen_expr_is_addressable(arg_expr))
+                Register_t *buf_addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                if (buf_addr_reg == NULL)
                 {
                     codegen_report_error(ctx,
-                        "ERROR: Unsupported expression type for var parameter.");
+                        "ERROR: Unable to allocate register for ShortString buffer.");
+                    if (arg_infos != NULL) free(arg_infos);
                     return inst_list;
                 }
-                inst_list = codegen_address_for_expr(arg_expr, inst_list, ctx, &addr_reg);
-                
-                /* BUGFIX: For TRUE var parameters of class types, we pass the ADDRESS of the variable itself,
-                 * not the value it contains. This allows the callee to update the variable (e.g., FreeAndNil).
-                 * 
-                 * However, for class methods, Self (first parameter) needs to be dereferenced to pass the
-                 * instance pointer, even though it's technically a var parameter internally. */
-                 
-                if (getenv("KGPC_DEBUG_CODEGEN") != NULL) {
-                    fprintf(stderr, "[CodeGen] Checking var param arg %d: expr=%p, type=%d, record_type=%p\n", 
-                        arg_num, arg_expr, arg_expr ? arg_expr->type : -1, arg_expr ? arg_expr->record_type : NULL);
-                }
 
-                if (addr_reg != NULL && arg_expr != NULL && arg_expr->type != EXPR_AS &&
-                    arg_expr->record_type != NULL && record_type_is_class(arg_expr->record_type))
+                snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                    shortstr_buf->offset, buf_addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+
+                if (codegen_expr_is_shortstring_value_ctx(arg_expr, ctx))
                 {
-                    int is_class_method = 0;
-                    const char *mangled_name_hint = (procedure_name != NULL) ? procedure_name : "";
-
-                    /* Detect if this is a class method by checking for __ in the mangled name.
-                     * Class methods have mangled names like TClassName__MethodName. */
-                    if (strstr(mangled_name_hint, "__") != NULL)
-                        is_class_method = 1;
-
-                    /* Check if the argument expression is itself a var parameter variable.
-                     * If so, codegen_address_for_expr already loaded the instance pointer via movq,
-                     * so we should NOT dereference again. */
-                    int arg_is_var_param = 0;
-                    if (arg_expr->type == EXPR_VAR_ID && ctx->symtab != NULL)
+                    Register_t *src_reg = NULL;
+                    if (codegen_expr_is_addressable(arg_expr))
                     {
-                        HashNode_t *arg_symbol = NULL;
-                        if (FindIdent(&arg_symbol, ctx->symtab, arg_expr->expr_data.id) >= 0 &&
-                            arg_symbol != NULL && arg_symbol->is_var_parameter)
-                        {
-                            arg_is_var_param = 1;
-                        }
+                        inst_list = codegen_address_for_expr(arg_expr, inst_list, ctx, &src_reg);
+                    }
+                    else
+                    {
+                        inst_list = codegen_expr_with_result(arg_expr, inst_list, ctx, &src_reg);
+                    }
+                    if (codegen_had_error(ctx) || src_reg == NULL)
+                    {
+                        free_reg(get_reg_stack(), buf_addr_reg);
+                        if (arg_infos != NULL) free(arg_infos);
+                        return inst_list;
                     }
 
-                    /* For class methods, dereference the first argument (Self) to get instance pointer,
-                     * BUT only if Self was not already loaded by value (i.e., not a var param).
-                     * For non-methods with var parameters, don't dereference. */
-                    int should_dereference = 0;
-                    if (is_class_method && arg_num == 0 && !arg_is_var_param)
+                    if (codegen_target_is_windows())
                     {
-                        /* Class method Self from local variable: dereference to get instance pointer */
-                        should_dereference = 1;
-                    }
-                    else if (!is_var_param && !arg_is_var_param)
-                    {
-                        /* Non-var class parameter from local variable: dereference to get instance pointer */
-                        should_dereference = 1;
-                    }
-                    /* else: var parameter of class type OR argument is already a var param:
-                     * codegen_address_for_expr already loaded the value, don't dereference again */
-
-                    if (should_dereference)
-                    {
-                        snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
-                            addr_reg->bit_64, addr_reg->bit_64);
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", buf_addr_reg->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%edx\n", shortstr_size);
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r8\n", src_reg->bit_64);
                         inst_list = add_inst(inst_list, buffer);
                     }
+                    else
+                    {
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", buf_addr_reg->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%rsi\n", shortstr_size);
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", src_reg->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
+
+                    inst_list = add_inst(inst_list, "\tmovl\t$0, %eax\n");
+                    inst_list = add_inst(inst_list, "\tcall\tkgpc_shortstring_to_shortstring\n");
+                    free_arg_regs();
+                    free_reg(get_reg_stack(), src_reg);
+                }
+                else if (codegen_expr_is_char_array_like_ctx(arg_expr, ctx))
+                {
+                    long long array_len = 0;
+                    if (!codegen_get_char_array_length(arg_expr, ctx, &array_len) || array_len <= 0)
+                    {
+                        free_reg(get_reg_stack(), buf_addr_reg);
+                        if (arg_infos != NULL) free(arg_infos);
+                        return inst_list;
+                    }
+
+                    Register_t *src_reg = NULL;
+                    if (!codegen_expr_is_addressable(arg_expr))
+                    {
+                        codegen_report_error(ctx,
+                            "ERROR: Unsupported expression type for ShortString conversion.");
+                        free_reg(get_reg_stack(), buf_addr_reg);
+                        if (arg_infos != NULL) free(arg_infos);
+                        return inst_list;
+                    }
+                    inst_list = codegen_address_for_expr(arg_expr, inst_list, ctx, &src_reg);
+                    if (codegen_had_error(ctx) || src_reg == NULL)
+                    {
+                        free_reg(get_reg_stack(), buf_addr_reg);
+                        if (arg_infos != NULL) free(arg_infos);
+                        return inst_list;
+                    }
+
+                    if (codegen_target_is_windows())
+                    {
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", buf_addr_reg->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", src_reg->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %%r8\n", array_len);
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%r9d\n", shortstr_size);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
+                    else
+                    {
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", buf_addr_reg->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", src_reg->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %%rdx\n", array_len);
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%ecx\n", shortstr_size);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
+
+                    inst_list = add_inst(inst_list, "\tmovl\t$0, %eax\n");
+                    inst_list = add_inst(inst_list, "\tcall\tkgpc_char_array_to_shortstring\n");
+                    free_arg_regs();
+                    free_reg(get_reg_stack(), src_reg);
+                }
+                else
+                {
+                    Register_t *value_reg = NULL;
+                    inst_list = codegen_expr_with_result(arg_expr, inst_list, ctx, &value_reg);
+                    if (codegen_had_error(ctx) || value_reg == NULL)
+                    {
+                        free_reg(get_reg_stack(), buf_addr_reg);
+                        if (arg_infos != NULL) free(arg_infos);
+                        return inst_list;
+                    }
+
+                    if (codegen_target_is_windows())
+                    {
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", buf_addr_reg->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%r8d\n", shortstr_size);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
+                    else
+                    {
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", buf_addr_reg->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", value_reg->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%edx\n", shortstr_size);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
+
+                    inst_list = add_inst(inst_list, "\tmovl\t$0, %eax\n");
+                    inst_list = add_inst(inst_list, "\tcall\tkgpc_string_to_shortstring\n");
+                    free_arg_regs();
+                    free_reg(get_reg_stack(), value_reg);
+                }
+
+                /* Reload buffer address after possible calls */
+                snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                    shortstr_buf->offset, buf_addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+
+                StackNode_t *arg_spill = add_l_t("arg_eval");
+                if (arg_spill != NULL && arg_infos != NULL)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                        buf_addr_reg->bit_64, arg_spill->offset);
+                    inst_list = add_inst(inst_list, buffer);
+                    free_reg(get_reg_stack(), buf_addr_reg);
+
+                    arg_infos[arg_num].reg = NULL;
+                    arg_infos[arg_num].spill = arg_spill;
+                    arg_infos[arg_num].expr = arg_expr;
+                    arg_infos[arg_num].is_pointer_like = 1;
+                }
+                else if (arg_infos != NULL)
+                {
+                    arginfo_assign_register(&arg_infos[arg_num], buf_addr_reg, arg_expr);
+                    arg_infos[arg_num].is_pointer_like = 1;
                 }
             }
-            if (codegen_had_error(ctx) || addr_reg == NULL)
-                return inst_list;
+            else if (is_var_param || is_array_param || is_array_arg)
+            {
+                Register_t *addr_reg = NULL;
+                if (arg_expr != NULL && arg_expr->type == EXPR_ARRAY_LITERAL)
+                {
+                    inst_list = codegen_materialize_array_literal(arg_expr, inst_list, ctx, &addr_reg);
+                }
+                else
+                {
+                    if (!codegen_expr_is_addressable(arg_expr))
+                    {
+                        codegen_report_error(ctx,
+                            "ERROR: Unsupported expression type for var parameter.");
+                        return inst_list;
+                    }
+                    inst_list = codegen_address_for_expr(arg_expr, inst_list, ctx, &addr_reg);
 
-            /* ARCHITECTURAL FIX: Spill address to stack to prevent clobbering by nested calls */
-            StackNode_t *arg_spill = add_l_t("arg_eval");
-            if (arg_spill != NULL && arg_infos != NULL)
-            {
-                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", 
-                    addr_reg->bit_64, arg_spill->offset);
-                inst_list = add_inst(inst_list, buffer);
-                free_reg(get_reg_stack(), addr_reg);
-                
-                arg_infos[arg_num].reg = NULL;
-                arg_infos[arg_num].spill = arg_spill;
-                arg_infos[arg_num].expr = arg_expr;
+                    /* BUGFIX: For TRUE var parameters of class types, we pass the ADDRESS of the variable itself,
+                     * not the value it contains. This allows the callee to update the variable (e.g., FreeAndNil).
+                     *
+                     * However, for class methods, Self (first parameter) needs to be dereferenced to pass the
+                     * instance pointer, even though it's technically a var parameter internally. */
+                    if (getenv("KGPC_DEBUG_CODEGEN") != NULL) {
+                        fprintf(stderr, "[CodeGen] Checking var param arg %d: expr=%p, type=%d, record_type=%p\n",
+                            arg_num, arg_expr, arg_expr ? arg_expr->type : -1, arg_expr ? arg_expr->record_type : NULL);
+                    }
+
+                    if (addr_reg != NULL && arg_expr != NULL && arg_expr->type != EXPR_AS &&
+                        arg_expr->record_type != NULL && record_type_is_class(arg_expr->record_type))
+                    {
+                        int is_class_method = 0;
+                        const char *mangled_name_hint = (procedure_name != NULL) ? procedure_name : "";
+
+                        /* Detect if this is a class method by checking for __ in the mangled name.
+                         * Class methods have mangled names like TClassName__MethodName. */
+                        if (strstr(mangled_name_hint, "__") != NULL)
+                            is_class_method = 1;
+
+                        /* Check if the argument expression is itself a var parameter variable.
+                         * If so, codegen_address_for_expr already loaded the instance pointer via movq,
+                         * so we should NOT dereference again. */
+                        int arg_is_var_param = 0;
+                        if (arg_expr->type == EXPR_VAR_ID && ctx->symtab != NULL)
+                        {
+                            HashNode_t *arg_symbol = NULL;
+                            if (FindIdent(&arg_symbol, ctx->symtab, arg_expr->expr_data.id) >= 0 &&
+                                arg_symbol != NULL && arg_symbol->is_var_parameter)
+                            {
+                                arg_is_var_param = 1;
+                            }
+                        }
+
+                        /* For class methods, dereference the first argument (Self) to get instance pointer,
+                         * BUT only if Self was not already loaded by value (i.e., not a var param).
+                         * For non-methods with var parameters, don't dereference. */
+                        int should_dereference = 0;
+                        if (is_class_method && arg_num == 0 && !arg_is_var_param)
+                        {
+                            /* Class method Self from local variable: dereference to get instance pointer */
+                            should_dereference = 1;
+                        }
+                        else if (!is_var_param && !arg_is_var_param)
+                        {
+                            /* Non-var class parameter from local variable: dereference to get instance pointer */
+                            should_dereference = 1;
+                        }
+                        /* else: var parameter of class type OR argument is already a var param:
+                         * codegen_address_for_expr already loaded the value, don't dereference again */
+
+                        if (should_dereference)
+                        {
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
+                                addr_reg->bit_64, addr_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                        }
+                    }
+                }
+                if (codegen_had_error(ctx) || addr_reg == NULL)
+                    return inst_list;
+
+                /* ARCHITECTURAL FIX: Spill address to stack to prevent clobbering by nested calls */
+                StackNode_t *arg_spill = add_l_t("arg_eval");
+                if (arg_spill != NULL && arg_infos != NULL)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                        addr_reg->bit_64, arg_spill->offset);
+                    inst_list = add_inst(inst_list, buffer);
+                    free_reg(get_reg_stack(), addr_reg);
+
+                    arg_infos[arg_num].reg = NULL;
+                    arg_infos[arg_num].spill = arg_spill;
+                    arg_infos[arg_num].expr = arg_expr;
+                }
+                else if (arg_infos != NULL)
+                {
+                    arginfo_assign_register(&arg_infos[arg_num], addr_reg, arg_expr);
+                }
             }
-            else if (arg_infos != NULL)
+            else if (formal_is_char_set && arg_expr != NULL && expr_has_type_tag(arg_expr, SET_TYPE))
             {
-                arginfo_assign_register(&arg_infos[arg_num], addr_reg, arg_expr);
+                Register_t *addr_reg = NULL;
+                if (arg_expr->type == EXPR_SET)
+                {
+                    inst_list = codegen_set_literal(arg_expr, inst_list, ctx, &addr_reg, 1);
+                }
+                else
+                {
+                    if (!codegen_expr_is_addressable(arg_expr))
+                    {
+                        codegen_report_error(ctx,
+                            "ERROR: Unsupported expression type for set parameter.");
+                        return inst_list;
+                    }
+                    inst_list = codegen_address_for_expr(arg_expr, inst_list, ctx, &addr_reg);
+                }
+                if (codegen_had_error(ctx) || addr_reg == NULL)
+                    return inst_list;
+
+                StackNode_t *arg_spill = add_l_t("arg_eval");
+                if (arg_spill != NULL && arg_infos != NULL)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                        addr_reg->bit_64, arg_spill->offset);
+                    inst_list = add_inst(inst_list, buffer);
+                    free_reg(get_reg_stack(), addr_reg);
+
+                    arg_infos[arg_num].reg = NULL;
+                    arg_infos[arg_num].spill = arg_spill;
+                    arg_infos[arg_num].expr = arg_expr;
+                    arg_infos[arg_num].is_pointer_like = 1;
+                }
+                else if (arg_infos != NULL)
+                {
+                    arginfo_assign_register(&arg_infos[arg_num], addr_reg, arg_expr);
+                    arg_infos[arg_num].is_pointer_like = 1;
+                }
             }
-        }
-        else if (formal_is_char_set && arg_expr != NULL && expr_has_type_tag(arg_expr, SET_TYPE))
-        {
-            Register_t *addr_reg = NULL;
-            if (arg_expr->type == EXPR_SET)
+            else if (formal_is_dynarray && arg_expr != NULL &&
+                arg_expr->is_array_expr && arg_expr->array_is_dynamic)
             {
-                inst_list = codegen_set_literal(arg_expr, inst_list, ctx, &addr_reg, 1);
+                Register_t *addr_reg = NULL;
+                if (!codegen_expr_is_addressable(arg_expr))
+                {
+                    int descriptor_size = codegen_dynarray_descriptor_size(arg_expr);
+                    StackNode_t *temp_slot = codegen_alloc_temp_bytes("dynarray_arg", descriptor_size);
+                    if (temp_slot == NULL)
+                    {
+                        codegen_report_error(ctx,
+                            "ERROR: Unable to allocate temporary storage for dynamic array argument.");
+                        return inst_list;
+                    }
+
+                    Register_t *value_reg = NULL;
+                    inst_list = codegen_expr_with_result(arg_expr, inst_list, ctx, &value_reg);
+                    if (codegen_had_error(ctx) || value_reg == NULL)
+                    {
+                        if (value_reg != NULL)
+                            free_reg(get_reg_stack(), value_reg);
+                        return inst_list;
+                    }
+
+                    addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                    if (addr_reg == NULL)
+                    {
+                        free_reg(get_reg_stack(), value_reg);
+                        codegen_report_error(ctx,
+                            "ERROR: Unable to allocate register for dynamic array argument address.");
+                        return inst_list;
+                    }
+
+                    snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                        temp_slot->offset, addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+
+                    if (codegen_target_is_windows())
+                    {
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", addr_reg->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%r8d\n", descriptor_size);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
+                    else
+                    {
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", addr_reg->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", value_reg->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%edx\n", descriptor_size);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
+
+                    inst_list = codegen_vect_reg(inst_list, 0);
+                    inst_list = add_inst(inst_list, "\tcall\tkgpc_dynarray_assign_from_temp\n");
+                    free_arg_regs();
+                    free_reg(get_reg_stack(), value_reg);
+                    /* Reload address because the call may clobber caller-saved regs. */
+                    snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                        temp_slot->offset, addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+                else
+                {
+                    inst_list = codegen_address_for_expr(arg_expr, inst_list, ctx, &addr_reg);
+                }
+                if (codegen_had_error(ctx) || addr_reg == NULL)
+                    return inst_list;
+
+                StackNode_t *arg_spill = add_l_t("arg_eval");
+                if (arg_spill != NULL && arg_infos != NULL)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                        addr_reg->bit_64, arg_spill->offset);
+                    inst_list = add_inst(inst_list, buffer);
+                    free_reg(get_reg_stack(), addr_reg);
+
+                    arg_infos[arg_num].reg = NULL;
+                    arg_infos[arg_num].spill = arg_spill;
+                    arg_infos[arg_num].expr = arg_expr;
+                }
+                else if (arg_infos != NULL)
+                {
+                    arginfo_assign_register(&arg_infos[arg_num], addr_reg, arg_expr);
+                }
             }
-            else
+            else if (arg_expr != NULL && expr_has_type_tag(arg_expr, RECORD_TYPE))
             {
                 if (!codegen_expr_is_addressable(arg_expr))
                 {
                     codegen_report_error(ctx,
-                        "ERROR: Unsupported expression type for set parameter.");
+                        "ERROR: Unsupported record argument expression.");
                     return inst_list;
                 }
-                inst_list = codegen_address_for_expr(arg_expr, inst_list, ctx, &addr_reg);
-            }
-            if (codegen_had_error(ctx) || addr_reg == NULL)
-                return inst_list;
 
-            StackNode_t *arg_spill = add_l_t("arg_eval");
-            if (arg_spill != NULL && arg_infos != NULL)
-            {
-                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
-                    addr_reg->bit_64, arg_spill->offset);
-                inst_list = add_inst(inst_list, buffer);
-                free_reg(get_reg_stack(), addr_reg);
+                long long record_size = 0;
+                if (codegen_get_record_size(ctx, arg_expr, &record_size) != 0 || record_size < 0)
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Unable to determine record size for argument.");
+                    return inst_list;
+                }
+                if (record_size == 0)
+                    record_size = 1;
 
-                arg_infos[arg_num].reg = NULL;
-                arg_infos[arg_num].spill = arg_spill;
-                arg_infos[arg_num].expr = arg_expr;
-                arg_infos[arg_num].is_pointer_like = 1;
-            }
-            else if (arg_infos != NULL)
-            {
-                arginfo_assign_register(&arg_infos[arg_num], addr_reg, arg_expr);
-                arg_infos[arg_num].is_pointer_like = 1;
-            }
-        }
-        else if (formal_is_dynarray && arg_expr != NULL &&
-            arg_expr->is_array_expr && arg_expr->array_is_dynamic)
-        {
-            Register_t *addr_reg = NULL;
-            if (!codegen_expr_is_addressable(arg_expr))
-            {
-                int descriptor_size = codegen_dynarray_descriptor_size(arg_expr);
-                StackNode_t *temp_slot = codegen_alloc_temp_bytes("dynarray_arg", descriptor_size);
+                if (record_size > INT_MAX)
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Record argument size exceeds supported limits.");
+                    return inst_list;
+                }
+
+                StackNode_t *temp_slot = codegen_alloc_record_temp(record_size);
                 if (temp_slot == NULL)
                 {
                     codegen_report_error(ctx,
-                        "ERROR: Unable to allocate temporary storage for dynamic array argument.");
+                        "ERROR: Failed to allocate temporary storage for record argument.");
                     return inst_list;
                 }
 
-                Register_t *value_reg = NULL;
-                inst_list = codegen_expr_with_result(arg_expr, inst_list, ctx, &value_reg);
-                if (codegen_had_error(ctx) || value_reg == NULL)
-                {
-                    if (value_reg != NULL)
-                        free_reg(get_reg_stack(), value_reg);
+                Register_t *src_reg = NULL;
+                inst_list = codegen_address_for_expr(arg_expr, inst_list, ctx, &src_reg);
+                if (codegen_had_error(ctx) || src_reg == NULL)
                     return inst_list;
-                }
 
-                addr_reg = get_free_reg(get_reg_stack(), &inst_list);
-                if (addr_reg == NULL)
+                Register_t *size_reg = get_free_reg(get_reg_stack(), &inst_list);
+                if (size_reg == NULL)
                 {
-                    free_reg(get_reg_stack(), value_reg);
+                    free_reg(get_reg_stack(), src_reg);
                     codegen_report_error(ctx,
-                        "ERROR: Unable to allocate register for dynamic array argument address.");
+                        "ERROR: Unable to allocate register for record copy size.");
                     return inst_list;
                 }
 
-                snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
-                    temp_slot->offset, addr_reg->bit_64);
-                inst_list = add_inst(inst_list, buffer);
+                char copy_buffer[128];
+                snprintf(copy_buffer, sizeof(copy_buffer), "\tmovq\t$%lld, %s\n", record_size, size_reg->bit_64);
+                inst_list = add_inst(inst_list, copy_buffer);
 
                 if (codegen_target_is_windows())
                 {
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", addr_reg->bit_64);
-                    inst_list = add_inst(inst_list, buffer);
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
-                    inst_list = add_inst(inst_list, buffer);
-                    snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%r8d\n", descriptor_size);
-                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(copy_buffer, sizeof(copy_buffer), "\tmovq\t%s, %%rdx\n", src_reg->bit_64);
+                    inst_list = add_inst(inst_list, copy_buffer);
+                    snprintf(copy_buffer, sizeof(copy_buffer), "\tleaq\t-%d(%%rbp), %%rcx\n", temp_slot->offset);
+                    inst_list = add_inst(inst_list, copy_buffer);
+                    snprintf(copy_buffer, sizeof(copy_buffer), "\tmovq\t%s, %%r8\n", size_reg->bit_64);
+                    inst_list = add_inst(inst_list, copy_buffer);
                 }
                 else
                 {
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", addr_reg->bit_64);
-                    inst_list = add_inst(inst_list, buffer);
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", value_reg->bit_64);
-                    inst_list = add_inst(inst_list, buffer);
-                    snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%edx\n", descriptor_size);
-                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(copy_buffer, sizeof(copy_buffer), "\tmovq\t%s, %%rsi\n", src_reg->bit_64);
+                    inst_list = add_inst(inst_list, copy_buffer);
+                    snprintf(copy_buffer, sizeof(copy_buffer), "\tleaq\t-%d(%%rbp), %%rdi\n", temp_slot->offset);
+                    inst_list = add_inst(inst_list, copy_buffer);
+                    snprintf(copy_buffer, sizeof(copy_buffer), "\tmovq\t%s, %%rdx\n", size_reg->bit_64);
+                    inst_list = add_inst(inst_list, copy_buffer);
                 }
 
                 inst_list = codegen_vect_reg(inst_list, 0);
-                inst_list = add_inst(inst_list, "\tcall\tkgpc_dynarray_assign_from_temp\n");
+                inst_list = add_inst(inst_list, "\tcall\tkgpc_move\n");
                 free_arg_regs();
-                free_reg(get_reg_stack(), value_reg);
-                /* Reload address because the call may clobber caller-saved regs. */
-                snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
-                    temp_slot->offset, addr_reg->bit_64);
-                inst_list = add_inst(inst_list, buffer);
-            }
-            else
-            {
-                inst_list = codegen_address_for_expr(arg_expr, inst_list, ctx, &addr_reg);
-            }
-            if (codegen_had_error(ctx) || addr_reg == NULL)
-                return inst_list;
 
-            StackNode_t *arg_spill = add_l_t("arg_eval");
-            if (arg_spill != NULL && arg_infos != NULL)
-            {
-                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
-                    addr_reg->bit_64, arg_spill->offset);
-                inst_list = add_inst(inst_list, buffer);
-                free_reg(get_reg_stack(), addr_reg);
-                
-                arg_infos[arg_num].reg = NULL;
-                arg_infos[arg_num].spill = arg_spill;
-                arg_infos[arg_num].expr = arg_expr;
-            }
-            else if (arg_infos != NULL)
-            {
-                arginfo_assign_register(&arg_infos[arg_num], addr_reg, arg_expr);
-            }
-        }
-        else if (arg_expr != NULL && expr_has_type_tag(arg_expr, RECORD_TYPE))
-        {
-            if (!codegen_expr_is_addressable(arg_expr))
-            {
-                codegen_report_error(ctx,
-                    "ERROR: Unsupported record argument expression.");
-                return inst_list;
-            }
-
-            long long record_size = 0;
-            if (codegen_get_record_size(ctx, arg_expr, &record_size) != 0 || record_size < 0)
-            {
-                codegen_report_error(ctx,
-                    "ERROR: Unable to determine record size for argument.");
-                return inst_list;
-            }
-            if (record_size == 0)
-                record_size = 1;
-
-            if (record_size > INT_MAX)
-            {
-                codegen_report_error(ctx,
-                    "ERROR: Record argument size exceeds supported limits.");
-                return inst_list;
-            }
-
-            StackNode_t *temp_slot = codegen_alloc_record_temp(record_size);
-            if (temp_slot == NULL)
-            {
-                codegen_report_error(ctx,
-                    "ERROR: Failed to allocate temporary storage for record argument.");
-                return inst_list;
-            }
-
-            Register_t *src_reg = NULL;
-            inst_list = codegen_address_for_expr(arg_expr, inst_list, ctx, &src_reg);
-            if (codegen_had_error(ctx) || src_reg == NULL)
-                return inst_list;
-
-            Register_t *size_reg = get_free_reg(get_reg_stack(), &inst_list);
-            if (size_reg == NULL)
-            {
                 free_reg(get_reg_stack(), src_reg);
-                codegen_report_error(ctx,
-                    "ERROR: Unable to allocate register for record copy size.");
-                return inst_list;
-            }
+                free_reg(get_reg_stack(), size_reg);
 
-            char copy_buffer[128];
-            snprintf(copy_buffer, sizeof(copy_buffer), "\tmovq\t$%lld, %s\n", record_size, size_reg->bit_64);
-            inst_list = add_inst(inst_list, copy_buffer);
-
-            if (codegen_target_is_windows())
-            {
-                snprintf(copy_buffer, sizeof(copy_buffer), "\tmovq\t%s, %%rdx\n", src_reg->bit_64);
-                inst_list = add_inst(inst_list, copy_buffer);
-                snprintf(copy_buffer, sizeof(copy_buffer), "\tleaq\t-%d(%%rbp), %%rcx\n", temp_slot->offset);
-                inst_list = add_inst(inst_list, copy_buffer);
-                snprintf(copy_buffer, sizeof(copy_buffer), "\tmovq\t%s, %%r8\n", size_reg->bit_64);
-                inst_list = add_inst(inst_list, copy_buffer);
-            }
-            else
-            {
-                snprintf(copy_buffer, sizeof(copy_buffer), "\tmovq\t%s, %%rsi\n", src_reg->bit_64);
-                inst_list = add_inst(inst_list, copy_buffer);
-                snprintf(copy_buffer, sizeof(copy_buffer), "\tleaq\t-%d(%%rbp), %%rdi\n", temp_slot->offset);
-                inst_list = add_inst(inst_list, copy_buffer);
-                snprintf(copy_buffer, sizeof(copy_buffer), "\tmovq\t%s, %%rdx\n", size_reg->bit_64);
-                inst_list = add_inst(inst_list, copy_buffer);
-            }
-
-            inst_list = codegen_vect_reg(inst_list, 0);
-            inst_list = add_inst(inst_list, "\tcall\tkgpc_move\n");
-            free_arg_regs();
-
-            free_reg(get_reg_stack(), src_reg);
-            free_reg(get_reg_stack(), size_reg);
-
-            Register_t *result_reg = get_free_reg(get_reg_stack(), &inst_list);
-            if (result_reg == NULL)
-            {
-                codegen_report_error(ctx,
-                    "ERROR: Unable to allocate register for record argument pointer.");
-                return inst_list;
-            }
-
-            /* For external C functions (cdecl), small structs (≤8 bytes) are passed by VALUE,
-             * but Pascal passes them by reference (pointer). We automatically dereference
-             * the pointer here so Pascal code doesn't need to change.
-             * 
-             * Example: inet_ntoa(in_addr: TInAddr) where TInAddr is 4 bytes
-             * - Pascal passes pointer to TInAddr
-             * - C expects TInAddr value in register
-             * - We dereference: load the 4-byte value from the pointer
-             * 
-             * CRITICAL FIX: Check the KgpcType's procedure definition for cname_flag
-             * instead of checking if the procedure name contains "cdecl" or "external".
-             * The procedure name is just "inet_ntoa", not "inet_ntoa_cdecl_external".
-             */
-            if (is_external_c_function && record_size <= 8)
-            {
-                /* Load address of the record copy */
-                snprintf(copy_buffer, sizeof(copy_buffer), "\tleaq\t-%d(%%rbp), %s\n", 
-                    temp_slot->offset, result_reg->bit_64);
-                inst_list = add_inst(inst_list, copy_buffer);
-                
-                /* Dereference: load the value from the address */
-                if (record_size == 1)
+                Register_t *result_reg = get_free_reg(get_reg_stack(), &inst_list);
+                if (result_reg == NULL)
                 {
-                    snprintf(copy_buffer, sizeof(copy_buffer), "\tmovzbl\t(%s), %s\n", 
-                        result_reg->bit_64, result_reg->bit_32);
-                }
-                else if (record_size == 2)
-                {
-                    snprintf(copy_buffer, sizeof(copy_buffer), "\tmovzwl\t(%s), %s\n", 
-                        result_reg->bit_64, result_reg->bit_32);
-                }
-                else if (record_size <= 4)
-                {
-                    snprintf(copy_buffer, sizeof(copy_buffer), "\tmovl\t(%s), %s\n", 
-                        result_reg->bit_64, result_reg->bit_32);
-                }
-                else /* record_size <= 8 */
-                {
-                    snprintf(copy_buffer, sizeof(copy_buffer), "\tmovq\t(%s), %s\n", 
-                        result_reg->bit_64, result_reg->bit_64);
-                }
-                inst_list = add_inst(inst_list, copy_buffer);
-            }
-            else
-            {
-                /* Normal case: pass pointer to struct */
-                snprintf(copy_buffer, sizeof(copy_buffer), "\tleaq\t-%d(%%rbp), %s\n", temp_slot->offset, result_reg->bit_64);
-                inst_list = add_inst(inst_list, copy_buffer);
-            }
-
-            /* ARCHITECTURAL FIX: Spill address to stack to prevent clobbering by nested calls */
-            StackNode_t *arg_spill = add_l_t("arg_eval");
-            if (arg_spill != NULL && arg_infos != NULL)
-            {
-                snprintf(copy_buffer, sizeof(copy_buffer), "\tmovq\t%s, -%d(%%rbp)\n",
-                    result_reg->bit_64, arg_spill->offset);
-                inst_list = add_inst(inst_list, copy_buffer);
-                free_reg(get_reg_stack(), result_reg);
-                
-                arg_infos[arg_num].reg = NULL;
-                arg_infos[arg_num].spill = arg_spill;
-                arg_infos[arg_num].expr = arg_expr;
-            }
-            else if (arg_infos != NULL)
-            {
-                arginfo_assign_register(&arg_infos[arg_num], result_reg, arg_expr);
-            }
-        }
-        else
-        {
-            // Pass by value
-            if (arg_expr->type == EXPR_AS || arg_expr->type == EXPR_IS ||
-                arg_expr->type == EXPR_ARRAY_LITERAL ||
-                expr_has_type_tag(arg_expr, SET_TYPE))
-            {
-                Register_t *value_reg = NULL;
-                inst_list = codegen_expr_with_result(arg_expr, inst_list, ctx, &value_reg);
-                if (codegen_had_error(ctx) || value_reg == NULL)
-                {
-                    if (arg_infos != NULL)
-                        free(arg_infos);
-                    return inst_list;
-                }
-                top_reg = value_reg;
-            }
-            else
-            {
-                expr_tree = build_expr_tree(arg_expr);
-                top_reg = get_free_reg(get_reg_stack(), &inst_list);
-                if (top_reg == NULL)
-                {
-                    /* Try spilling to get a register */
-                    top_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
-                }
-                CODEGEN_DEBUG("DEBUG: top_reg at %p\n", top_reg);
-                if (top_reg == NULL)
-                {
-                    free_expr_tree(expr_tree);
                     codegen_report_error(ctx,
-                        "ERROR: Unable to allocate register for argument evaluation. "
-                        "Expression may be too complex for available registers.");
-                    if (arg_infos != NULL)
-                        free(arg_infos);
+                        "ERROR: Unable to allocate register for record argument pointer.");
                     return inst_list;
                 }
-                inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, top_reg);
-                free_expr_tree(expr_tree);
+
+                /* For external C functions (cdecl), small structs (<=8 bytes) are passed by VALUE,
+                 * but Pascal passes them by reference (pointer). We automatically dereference
+                 * the pointer here so Pascal code doesn't need to change.
+                 *
+                 * Example: inet_ntoa(in_addr: TInAddr) where TInAddr is 4 bytes
+                 * - Pascal passes pointer to TInAddr
+                 * - C expects TInAddr value in register
+                 * - We dereference: load the 4-byte value from the pointer
+                 *
+                 * CRITICAL FIX: Check the KgpcType's procedure definition for cname_flag
+                 * instead of checking if the procedure name contains "cdecl" or "external".
+                 * The procedure name is just "inet_ntoa", not "inet_ntoa_cdecl_external".
+                 */
+                if (is_external_c_function && record_size <= 8)
+                {
+                    /* Load address of the record copy */
+                    snprintf(copy_buffer, sizeof(copy_buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                        temp_slot->offset, result_reg->bit_64);
+                    inst_list = add_inst(inst_list, copy_buffer);
+
+                    /* Dereference: load the value from the address */
+                    if (record_size == 1)
+                    {
+                        snprintf(copy_buffer, sizeof(copy_buffer), "\tmovzbl\t(%s), %s\n",
+                            result_reg->bit_64, result_reg->bit_32);
+                    }
+                    else if (record_size == 2)
+                    {
+                        snprintf(copy_buffer, sizeof(copy_buffer), "\tmovzwl\t(%s), %s\n",
+                            result_reg->bit_64, result_reg->bit_32);
+                    }
+                    else if (record_size <= 4)
+                    {
+                        snprintf(copy_buffer, sizeof(copy_buffer), "\tmovl\t(%s), %s\n",
+                            result_reg->bit_64, result_reg->bit_32);
+                    }
+                    else /* record_size <= 8 */
+                    {
+                        snprintf(copy_buffer, sizeof(copy_buffer), "\tmovq\t(%s), %s\n",
+                            result_reg->bit_64, result_reg->bit_64);
+                    }
+                    inst_list = add_inst(inst_list, copy_buffer);
+                }
+                else
+                {
+                    /* Normal case: pass pointer to struct */
+                    snprintf(copy_buffer, sizeof(copy_buffer), "\tleaq\t-%d(%%rbp), %s\n", temp_slot->offset, result_reg->bit_64);
+                    inst_list = add_inst(inst_list, copy_buffer);
+                }
+
+                /* ARCHITECTURAL FIX: Spill address to stack to prevent clobbering by nested calls */
+                StackNode_t *arg_spill = add_l_t("arg_eval");
+                if (arg_spill != NULL && arg_infos != NULL)
+                {
+                    snprintf(copy_buffer, sizeof(copy_buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                        result_reg->bit_64, arg_spill->offset);
+                    inst_list = add_inst(inst_list, copy_buffer);
+                    free_reg(get_reg_stack(), result_reg);
+
+                    arg_infos[arg_num].reg = NULL;
+                    arg_infos[arg_num].spill = arg_spill;
+                    arg_infos[arg_num].expr = arg_expr;
+                }
+                else if (arg_infos != NULL)
+                {
+                    arginfo_assign_register(&arg_infos[arg_num], result_reg, arg_expr);
+                }
             }
-
-            if (expected_type == REAL_TYPE)
-                inst_list = codegen_expr_maybe_convert_int_like_to_real(expected_type,
-                    arg_expr, top_reg, inst_list);
-
-            /* Promote char arguments to strings when the formal parameter expects string. */
-            if ((formal_decl_expects_string(formal_arg_decl) ||
-                 builtin_arg_expects_string(procedure_name, arg_num)) &&
-                expr_has_type_tag(arg_expr, CHAR_TYPE))
+            else
             {
-                const char *arg_reg32 = codegen_target_is_windows() ? "%ecx" : "%edi";
-                snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", top_reg->bit_32, arg_reg32);
-                inst_list = add_inst(inst_list, buffer);
-                inst_list = add_inst(inst_list, "\tcall\tkgpc_char_to_string\n");
-                snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", top_reg->bit_64);
-                inst_list = add_inst(inst_list, buffer);
-            }
+                // Pass by value
+                if (arg_expr->type == EXPR_AS || arg_expr->type == EXPR_IS ||
+                    arg_expr->type == EXPR_ARRAY_LITERAL ||
+                    expr_has_type_tag(arg_expr, SET_TYPE))
+                {
+                    Register_t *value_reg = NULL;
+                    inst_list = codegen_expr_with_result(arg_expr, inst_list, ctx, &value_reg);
+                    if (codegen_had_error(ctx) || value_reg == NULL)
+                    {
+                        if (arg_infos != NULL)
+                            free(arg_infos);
+                        return inst_list;
+                    }
+                    top_reg = value_reg;
+                }
+                else
+                {
+                    expr_tree = build_expr_tree(arg_expr);
+                    top_reg = get_free_reg(get_reg_stack(), &inst_list);
+                    if (top_reg == NULL)
+                    {
+                        /* Try spilling to get a register */
+                        top_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+                    }
+                    CODEGEN_DEBUG("DEBUG: top_reg at %p\n", top_reg);
+                    if (top_reg == NULL)
+                    {
+                        free_expr_tree(expr_tree);
+                        codegen_report_error(ctx,
+                            "ERROR: Unable to allocate register for argument evaluation. "
+                            "Expression may be too complex for available registers.");
+                        if (arg_infos != NULL)
+                            free(arg_infos);
+                        return inst_list;
+                    }
+                    inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, top_reg);
+                    free_expr_tree(expr_tree);
+                }
 
-            /* ARCHITECTURAL FIX: Immediately spill argument to stack to prevent
-             * nested function calls from clobbering this value. This ensures that
-             * even if subsequent argument evaluations (which may include nested
-             * function calls) reuse registers, we can restore the correct value. */
+                if (expected_type == REAL_TYPE)
+                    inst_list = codegen_expr_maybe_convert_int_like_to_real(expected_type,
+                        arg_expr, top_reg, inst_list);
+
+                /* Promote char arguments to strings when the formal parameter expects string. */
+                if ((formal_decl_expects_string(formal_arg_decl) ||
+                     builtin_arg_expects_string(procedure_name, arg_num)) &&
+                    expr_has_type_tag(arg_expr, CHAR_TYPE))
+                {
+                    const char *arg_reg32 = codegen_target_is_windows() ? "%ecx" : "%edi";
+                    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", top_reg->bit_32, arg_reg32);
+                    inst_list = add_inst(inst_list, buffer);
+                    inst_list = add_inst(inst_list, "\tcall\tkgpc_char_to_string\n");
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", top_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+
+                /* ARCHITECTURAL FIX: Immediately spill argument to stack to prevent
+                 * nested function calls from clobbering this value. This ensures that
+                 * even if subsequent argument evaluations (which may include nested
+                 * function calls) reuse registers, we can restore the correct value. */
             StackNode_t *arg_spill = add_l_t("arg_eval");
             if (arg_spill != NULL && arg_infos != NULL)
             {
@@ -6196,6 +6252,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             else if (arg_infos != NULL)
             {
                 arginfo_assign_register(&arg_infos[arg_num], top_reg, arg_expr);
+            }
             }
         }
 

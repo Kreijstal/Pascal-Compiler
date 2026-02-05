@@ -3663,6 +3663,19 @@ skip_overload_resolution:
                             {
                                 if (are_types_compatible_for_assignment(expected_kgpc, arg_kgpc, symtab))
                                     type_compatible = 1;
+                                else
+                                {
+                                    KgpcType *expected_elem = expected_kgpc->info.array_info.element_type;
+                                    KgpcType *arg_elem = arg_kgpc->info.array_info.element_type;
+                                    if (expected_elem != NULL && arg_elem != NULL &&
+                                        expected_elem->kind == TYPE_KIND_PRIMITIVE &&
+                                        expected_elem->info.primitive_type_tag == CHAR_TYPE &&
+                                        kgpc_type_is_shortstring(arg_elem))
+                                    {
+                                        /* Allow ShortString elements to match Char arrays (FPC open-array behavior). */
+                                        type_compatible = 1;
+                                    }
+                                }
                             }
                             else if (current_arg_expr->is_array_expr)
                             {

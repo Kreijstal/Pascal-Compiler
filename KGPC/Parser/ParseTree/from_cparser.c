@@ -231,6 +231,19 @@ static inline bool is_safe_to_continue(VisitedSet *visited, ast_t *node) {
     return true;
 }
 
+static bool ast_chain_contains(ast_t *head, ast_t *target, int max_steps) {
+    if (head == NULL || target == NULL || max_steps <= 0) {
+        return false;
+    }
+    int steps = 0;
+    for (ast_t *cur = head; cur != NULL && steps < max_steps; cur = cur->next, steps++) {
+        if (cur == target) {
+            return true;
+        }
+    }
+    return false;
+}
+
 typedef struct {
     int is_array;
     int is_array_of_const;
@@ -10630,7 +10643,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                 fprintf(stderr, "ERROR: Failed to allocate visited set for implementation sections\n");
             } else {
                 ast_t *definition = implementation_node->child;
-                while (definition != NULL) {
+                while (definition != NULL && definition != ast_nil) {
                     /* Check for circular reference */
                     if (!is_safe_to_continue(visited_impl, definition)) {
                         fprintf(stderr, "ERROR: Circular reference detected in implementation sections, stopping traversal\n");
@@ -10646,8 +10659,14 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                             definition->line, definition->sym->name);
                     }
                     ast_t *node = unwrap_pascal_node(definition);
+                    bool iterate_child_chain = (definition->typ == PASCAL_T_NONE);
+                    if (iterate_child_chain && definition->child != NULL && definition->next != NULL) {
+                        if (ast_chain_contains(definition->child, definition->next, 100000)) {
+                            iterate_child_chain = false;
+                        }
+                    }
                     for (ast_t *node_cursor = node; node_cursor != NULL;
-                         node_cursor = (definition->typ == PASCAL_T_NONE) ? node_cursor->next : NULL) {
+                         node_cursor = iterate_child_chain ? node_cursor->next : NULL) {
                         if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
                             fprintf(stderr, "[KGPC] implementation section node typ=%d\n", node_cursor->typ);
                         }

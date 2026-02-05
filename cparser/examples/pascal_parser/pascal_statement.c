@@ -28,6 +28,43 @@ static bool peek_label_statement(input_t* in) {
     }
     const char* buffer = in->buffer;
     unsigned char ch = (unsigned char)buffer[pos];
+
+    // Character literal case labels: 'X': or 'X'..'Y':
+    if (ch == '\'') {
+        pos++;
+        if (pos >= length) return false;
+        pos++;  // skip the character
+        if (pos >= length || buffer[pos] != '\'') return false;
+        pos++;  // skip closing quote
+        int after = skip_pascal_layout_preview(in, pos);
+        if (after < length && buffer[after] == ':' &&
+            !(after + 1 < length && buffer[after + 1] == '=')) {
+            return true;
+        }
+        // Check for range: 'X'..'Y':
+        if (after + 1 < length && buffer[after] == '.' && buffer[after + 1] == '.') {
+            return true;
+        }
+        return false;
+    }
+
+    // Control char literals: #nn:
+    if (ch == '#') {
+        pos++;
+        while (pos < length && isdigit((unsigned char)buffer[pos])) {
+            pos++;
+        }
+        int after = skip_pascal_layout_preview(in, pos);
+        if (after < length && buffer[after] == ':' &&
+            !(after + 1 < length && buffer[after + 1] == '=')) {
+            return true;
+        }
+        if (after + 1 < length && buffer[after] == '.' && buffer[after + 1] == '.') {
+            return true;
+        }
+        return false;
+    }
+
     if (!(isalpha(ch) || ch == '_' || isdigit(ch))) {
         return false;
     }
@@ -57,6 +94,13 @@ static bool peek_assignment_operator(input_t* in) {
     int pos = skip_pascal_layout_preview(in, in->start);
     const int scan_limit = pos + 512 < length ? pos + 512 : length;
     bool in_string = false;
+    
+    // Trace peek
+    if (getenv("KGPC_DEBUG_TRACE") != NULL) {
+         FILE* f = fopen("/tmp/parser_trace.log", "a");
+         if (f) { fprintf(f, "TRACE: peek_assign at %d starting at '%.10s'\n", in ? in->line : 0, buffer + pos); fclose(f); }
+    }
+
     while (pos < scan_limit) {
         unsigned char ch = (unsigned char)buffer[pos];
         if (in_string) {
@@ -149,9 +193,28 @@ static bool peek_assignment_operator(input_t* in) {
 
 typedef struct {
     combinator_t **stmt_parser;
+    combinator_t *case_label_list;
 } case_stmt_list_args;
 
-static bool case_branch_should_stop(input_t* in) {
+static bool peek_colon_not_assign(input_t* in) {
+    if (in == NULL || in->buffer == NULL) {
+        return false;
+    }
+    int length = in->length > 0 ? in->length : (int)strlen(in->buffer);
+    int pos = skip_pascal_layout_preview(in, in->start);
+    if (pos >= length) {
+        return false;
+    }
+    if (in->buffer[pos] != ':') {
+        return false;
+    }
+    if ((pos + 1) < length && in->buffer[pos + 1] == '=') {
+        return false;
+    }
+    return true;
+}
+
+static bool case_branch_should_stop(input_t* in, combinator_t* case_label_list) {
     pascal_word_slice_t slice;
     if (pascal_peek_word(in, &slice)) {
         if (pascal_word_equals_ci(&slice, "else") ||
@@ -161,6 +224,23 @@ static bool case_branch_should_stop(input_t* in) {
     }
     if (peek_label_statement(in)) {
         return true;
+    }
+    if (case_label_list != NULL) {
+        InputState state;
+        save_input_state(in, &state);
+        ParseResult res = parse(in, case_label_list);
+        if (res.is_success) {
+            if (res.value.ast != ast_nil) {
+                free_ast(res.value.ast);
+            }
+            if (peek_colon_not_assign(in)) {
+                restore_input_state(in, &state);
+                return true;
+            }
+        } else if (res.value.error != NULL) {
+            free_error(res.value.error);
+        }
+        restore_input_state(in, &state);
     }
     return false;
 }
@@ -178,16 +258,14 @@ static ParseResult case_branch_stmt_list_fn(input_t* in, void* args, char* parse
     ast_t* last = NULL;
     int stmt_count = 0;
 
-    while (!case_branch_should_stop(in)) {
+    while (!case_branch_should_stop(in, clargs->case_label_list)) {
         ParseResult stmt_res = parse(in, *clargs->stmt_parser);
         if (!stmt_res.is_success) {
             if (stmt_res.value.error != NULL) {
                 free_error(stmt_res.value.error);
             }
-            if (stmt_count == 0) {
-                restore_input_state(in, &state);
-                return make_failure_v2(in, parser_name, strdup("Expected statement in case branch"), NULL);
-            }
+            // Allow empty case branch bodies (e.g., "1: ;" where body is empty).
+            // In Pascal, empty statements are valid in case branches.
             break;
         }
 
@@ -218,7 +296,7 @@ static ParseResult case_branch_stmt_list_fn(input_t* in, void* args, char* parse
         }
         free_ast(semi_res.value.ast);
 
-        if (case_branch_should_stop(in)) {
+        if (case_branch_should_stop(in, clargs->case_label_list)) {
             restore_input_state(in, &semi_state);
             break;
         }
@@ -241,9 +319,10 @@ static ParseResult case_branch_stmt_list_fn(input_t* in, void* args, char* parse
     return make_success(block);
 }
 
-static combinator_t* case_branch_stmt_list(combinator_t** stmt_parser) {
+static combinator_t* case_branch_stmt_list(combinator_t** stmt_parser, combinator_t* case_label_list) {
     case_stmt_list_args* args = (case_stmt_list_args*)safe_malloc(sizeof(case_stmt_list_args));
     args->stmt_parser = stmt_parser;
+    args->case_label_list = case_label_list;
     combinator_t* comb = new_combinator();
     comb->fn = case_branch_stmt_list_fn;
     comb->args = args;
@@ -422,6 +501,18 @@ static ParseResult statement_dispatch_fn(input_t* in, void* args, char* parser_n
         }
         memcpy(keyword_buf, slice, ident_len);
         keyword_buf[ident_len] = '\0';
+        
+        // TRACE dispatch
+        if (getenv("KGPC_DEBUG_TRACE") != NULL && in->line > 700) {
+             FILE* f = fopen("/tmp/parser_trace.log", "a");
+             if (f) { fprintf(f, "TRACE: stmt_dispatch seeing identifier '%s' at %d\n", keyword_buf, in ? in->line : 0); fclose(f); }
+        }
+
+        if (getenv("KGPC_DEBUG_TRACE") != NULL) {
+             FILE* f = fopen("/tmp/parser_trace.log", "a");
+             if (f) { fprintf(f, "TRACE: stmt_dispatch seeing identifier '%s' at %d\n", keyword_buf, in ? in->line : 0); fclose(f); }
+        }
+
         if (getenv("KGPC_DEBUG_STATEMENT_DISPATCH") != NULL) {
             fprintf(stderr, "[statement_dispatch] leading identifier '%s'\n", keyword_buf);
         }
@@ -874,19 +965,33 @@ void init_pascal_statement_parser(combinator_t** p) {
         NULL
     ), build_pointer_lvalue_chain);
 
+    // Function call lvalue: unaligned(PUint16(Dest)^) := 0
+    // Some FPC intrinsics (unaligned, etc.) return references that can be assigned to.
+    // Parse as identifier(expr) with optional suffixes.
+    combinator_t* funcall_lvalue = map(seq(new_combinator(), PASCAL_T_NONE,
+        typecast_base,               // identifier(expr) - reuses typecast_base
+        suffixes,                    // optional suffixes after the call
+        NULL
+    ), build_pointer_lvalue_chain);
+
     combinator_t* lvalue = multi(new_combinator(), PASCAL_T_NONE,
         typecast_lvalue_with_deref,  // Try typecast with deref first (PCardinal(@x)^)
         typecast_lvalue_with_suffixes, // Then typecast with field/array/pointer access
         typecast_lvalue_simple,      // Then simple typecast (Integer(x))
+        funcall_lvalue,              // Function call returning reference: unaligned(expr) := 0
         simple_lvalue,               // Finally simple identifier with optional suffixes
         NULL
     );
 
     // Assignment statement: support both ":=" and "+=" compound assignments
     combinator_t* simple_assignment = seq(new_combinator(), PASCAL_T_ASSIGNMENT,
+        trace("Enter simple_assignment"),
         lvalue,                                // left-hand side (identifier or member access)
+        trace("Matched lvalue"),
         token(match(":=")),                    // assignment operator
+        trace("Matched :="),
         lazy(expr_parser),                     // expression
+        trace("Matched expression"),
         NULL
     );
 
@@ -940,14 +1045,19 @@ void init_pascal_statement_parser(combinator_t** p) {
     combinator_t* begin_end_block = multi(new_combinator(), PASCAL_T_NONE,
         seq(new_combinator(), PASCAL_T_BEGIN_BLOCK,
             token(keyword_ci("begin")),
+            trace("Enter empty begin block"),
             token(keyword_ci("end")),
+            trace("Exit empty begin block"),
             NULL
         ),
         seq(new_combinator(), PASCAL_T_BEGIN_BLOCK,
             token(keyword_ci("begin")),
+            trace("Enter begin block"),
             leading_semicolons,
             stmt_list,
+            trace("About to match end of begin block"),
             token(keyword_ci("end")),
+            trace("Exit begin block"),
             NULL
         ),
         NULL
@@ -957,15 +1067,18 @@ void init_pascal_statement_parser(combinator_t** p) {
     // Once we see "if", commit to parsing an if statement
     combinator_t* if_stmt = seq(new_combinator(), PASCAL_T_IF_STMT,
         token(keyword_ci("if")),                     // if keyword (case-insensitive)
+        trace("Enter if_stmt"),
         commit(seq(new_combinator(), PASCAL_T_NONE,
             lazy(expr_parser),                         // condition
             token(keyword_ci("then")),                   // then keyword (case-insensitive)
+            trace("Parsing if_then statement"),
             stmt_or_empty,                         // then statement
             optional(seq(new_combinator(), PASCAL_T_ELSE,    // optional else part
                 token(keyword_ci("else")),               // else keyword (case-insensitive)
                 stmt_or_empty,
                 NULL
             )),
+            trace("Exit if_stmt"),
             NULL
         )),
         NULL
@@ -1022,10 +1135,12 @@ void init_pascal_statement_parser(combinator_t** p) {
     // While statement: while expression do statement
     combinator_t* while_stmt = seq(new_combinator(), PASCAL_T_WHILE_STMT,
         token(keyword_ci("while")),              // while keyword (case-insensitive)
+        trace("Enter while_stmt"),
         commit(seq(new_combinator(), PASCAL_T_NONE,
             lazy(expr_parser),                     // condition
             token(keyword_ci("do")),                 // do keyword (case-insensitive)
             stmt_or_empty,                     // body statement
+            trace("Exit while_stmt"),
             NULL
         )),
         NULL
@@ -1040,10 +1155,13 @@ void init_pascal_statement_parser(combinator_t** p) {
 
     combinator_t* repeat_stmt = seq(new_combinator(), PASCAL_T_REPEAT_STMT,
         token(keyword_ci("repeat")),           // repeat keyword (case-insensitive)
+        trace("Enter repeat_stmt"),
         commit(seq(new_combinator(), PASCAL_T_NONE,
             repeat_stmt_list,                      // repeated statements
+            trace("About to match until"),
             token(keyword_ci("until")),           // until keyword (case-insensitive)
             lazy(expr_parser),                     // termination expression
+            trace("Exit repeat_stmt"),
             NULL
         )),
         NULL
@@ -1088,6 +1206,8 @@ void init_pascal_statement_parser(combinator_t** p) {
 
     // Shared helper: list of statements allowing optional semicolons between entries
     combinator_t* try_statement_list = many(seq(new_combinator(), PASCAL_T_NONE,
+        pnot(peek(keyword_ci("except"))),
+        pnot(peek(keyword_ci("finally"))),
         lazy(stmt_parser),
         optional(token(match(";"))),
         NULL
@@ -1113,10 +1233,10 @@ void init_pascal_statement_parser(combinator_t** p) {
 
     // On-exception handler: "on <id>[:<type>] do <statement>"
     // Parse the variable name and optional type specification
-    combinator_t* exception_var = token(pascal_expression_identifier(PASCAL_T_IDENTIFIER));
+    combinator_t* exception_var = token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER));
     combinator_t* exception_type_spec = optional(seq(new_combinator(), PASCAL_T_NONE,
         token(match(":")),
-        token(pascal_expression_identifier(PASCAL_T_IDENTIFIER)),
+        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
         NULL
     ));
     
@@ -1132,18 +1252,30 @@ void init_pascal_statement_parser(combinator_t** p) {
     );
 
     // Try-except block: try statements except statements end
+    combinator_t* except_item = seq(new_combinator(), PASCAL_T_NONE,
+        pnot(peek(keyword_ci("else"))),
+        multi(new_combinator(), PASCAL_T_NONE,
+            on_exception_handler,
+            seq(new_combinator(), PASCAL_T_NONE,
+                stmt_or_empty,
+                optional(token(match(";"))),
+                NULL
+            ),
+            NULL
+        ),
+        NULL
+    );
+
     combinator_t* try_except = seq(new_combinator(), PASCAL_T_TRY_BLOCK,
         token(keyword_ci("try")),
         try_statement_list,
         seq(new_combinator(), PASCAL_T_EXCEPT_BLOCK,
             token(keyword_ci("except")),
-            many(multi(new_combinator(), PASCAL_T_NONE,
-                on_exception_handler,
-                seq(new_combinator(), PASCAL_T_NONE,
-                    stmt_or_empty,
-                    optional(token(match(";"))),
-                    NULL
-                ),
+            many(except_item),
+            optional(seq(new_combinator(), PASCAL_T_NONE,
+                token(keyword_ci("else")),
+                stmt_or_empty,
+                optional(token(match(";"))),
                 NULL
             )),
             NULL
@@ -1242,7 +1374,7 @@ void init_pascal_statement_parser(combinator_t** p) {
         NULL
     );
     
-    combinator_t* case_branch_body = case_branch_stmt_list(stmt_parser);
+    combinator_t* case_branch_body = case_branch_stmt_list(stmt_parser, case_label_list);
     combinator_t* case_branch = seq(new_combinator(), PASCAL_T_CASE_BRANCH,
         case_label_list,                       // case labels
         token(match(":")),                     // colon

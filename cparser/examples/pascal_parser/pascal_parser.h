@@ -195,5 +195,6 @@ combinator_t* token(combinator_t* p);  // Backward compatibility wrapper
 combinator_t* pascal_identifier(tag_t tag);  // Pascal identifier that excludes reserved keywords
 combinator_t* pascal_qualified_identifier(tag_t tag);
 combinator_t* compiler_directive(tag_t tag);
+combinator_t* trace(const char* msg);
 
 #endif // PASCAL_PARSER_H
