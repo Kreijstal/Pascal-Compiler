@@ -10,7 +10,7 @@ typedef enum {
 
 // --- Function Declarations ---
 void init_calculator_parser(combinator_t** p);
-long eval(ast_t *ast);
+bool eval(ast_t *ast, long *out);
 void print_calculator_ast(ast_t* ast);
 const char* calc_tag_to_string(tag_t tag);
 

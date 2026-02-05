@@ -818,6 +818,8 @@ Register_t *codegen_acquire_static_link(CodeGenContext *ctx, ListNode_t **inst_l
 
     Register_t *reg = get_free_reg(get_reg_stack(), inst_list);
     if (reg == NULL)
+        reg = get_reg_with_spill(get_reg_stack(), inst_list);
+    if (reg == NULL)
     {
         free(offsets);
         return NULL;
@@ -2622,11 +2624,19 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     int lexical_depth = proc->nesting_level;
     if (lexical_depth < 0)
         lexical_depth = codegen_get_lexical_depth(ctx) + 1;
+    else if (lexical_depth <= 0 && ctx->current_subprogram_lexical_depth >= 0 &&
+             ctx->current_subprogram_id != NULL)
+        lexical_depth = ctx->current_subprogram_lexical_depth + 1;
     int prev_depth = ctx->current_subprogram_lexical_depth;
     ctx->current_subprogram_lexical_depth = lexical_depth;
     /* A function is a class method if it has __ (ClassName__MethodName pattern) but is NOT
      * a nested function (which would have $ in the name like Parent$Nested). */
     int is_nested_function = (sub_id != NULL && strchr(sub_id, '$') != NULL);
+    if (lexical_depth <= 0 && is_nested_function)
+    {
+        lexical_depth = codegen_get_lexical_depth(ctx) + 1;
+        ctx->current_subprogram_lexical_depth = lexical_depth;
+    }
     int is_class_method = (sub_id != NULL && strstr(sub_id, "__") != NULL && !is_nested_function);
     StackNode_t *static_link = NULL;
 
@@ -2637,9 +2647,9 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     /* Process arguments first to allocate their stack space */
     /* Nested procedures always receive a static link so they can forward it to callees,
      * even if they don't themselves capture any outer scope state. Class methods still
-     * use the implicit `self` parameter instead. */
-    int will_need_static_link = (!is_class_method &&
-        proc->requires_static_link);
+     * use the implicit `self` parameter instead. Top-level procedures do not receive
+     * a static link. */
+    int will_need_static_link = (!is_class_method && lexical_depth > 1);
     
     /* If there are arguments and we'll need a static link, shift argument registers by 1 */
     int arg_start_index = (will_need_static_link && num_args > 0) ? 1 : 0;
@@ -2771,11 +2781,19 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     int lexical_depth = func->nesting_level;
     if (lexical_depth < 0)
         lexical_depth = codegen_get_lexical_depth(ctx) + 1;
+    else if (lexical_depth <= 0 && ctx->current_subprogram_lexical_depth >= 0 &&
+             ctx->current_subprogram_id != NULL)
+        lexical_depth = ctx->current_subprogram_lexical_depth + 1;
     int prev_depth = ctx->current_subprogram_lexical_depth;
     ctx->current_subprogram_lexical_depth = lexical_depth;
     /* A function is a class method if it has __ (ClassName__MethodName pattern) but is NOT
      * a nested function (which would have $ in the name like Parent$Nested). */
     int is_nested_function = (sub_id != NULL && strchr(sub_id, '$') != NULL);
+    if (lexical_depth <= 0 && is_nested_function)
+    {
+        lexical_depth = codegen_get_lexical_depth(ctx) + 1;
+        ctx->current_subprogram_lexical_depth = lexical_depth;
+    }
     int is_class_method = (sub_id != NULL && strstr(sub_id, "__") != NULL && !is_nested_function);
     StackNode_t *static_link = NULL;
 
@@ -3003,9 +3021,8 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
         }
     }
 
-    /* Only functions that close over variables need static links (excluding class methods). */
-    int will_need_static_link = (!is_class_method &&
-        func->requires_static_link);
+    /* Only nested functions receive static links (excluding class methods). */
+    int will_need_static_link = (!is_class_method && lexical_depth > 1);
     
     /* Calculate argument start index:
      * - If function returns record: use index 1 (record pointer in first arg)
@@ -3506,6 +3523,12 @@ static int codegen_dynamic_array_element_size_from_type(CodeGenContext *ctx, Kgp
     {
         case TYPE_KIND_PRIMITIVE:
         {
+            if (element_type->type_alias != NULL &&
+                element_type->type_alias->storage_size > 0 &&
+                element_type->type_alias->storage_size <= INT_MAX)
+            {
+                return (int)element_type->type_alias->storage_size;
+            }
             int tag = kgpc_type_get_primitive_tag(element_type);
             switch (tag)
             {
@@ -4096,8 +4119,10 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                          (inferred_type_tag == STRING_TYPE || inferred_type_tag == POINTER_TYPE ||
                           type == PROCEDURE ||
                           (inferred_type_tag == REAL_TYPE && real_storage_size > 4));
-                    int use_sse_reg = (!is_var_param && !is_array_type &&
-                        inferred_type_tag == REAL_TYPE);
+                    int use_sse_reg = 0;
+                    if (!is_var_param && !is_array_type && !is_shortstring_param &&
+                        inferred_type_tag == REAL_TYPE)
+                        use_sse_reg = 1;
                     arg_stack = use_64bit ? add_q_z((char *)arg_ids->cur) : add_l_z((char *)arg_ids->cur);
                     if (arg_stack != NULL && (symbol_is_var_param || is_array_type || is_shortstring_param))
                         arg_stack->is_reference = 1;

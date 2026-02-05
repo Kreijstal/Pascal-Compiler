@@ -335,8 +335,10 @@ void decrement_self_references(SymTab_t *symtab, struct Statement *stmt)
     {
         case STMT_VAR_ASSIGN:
             expr = stmt->stmt_data.var_assign_data.var;
-            assert(expr != NULL);
-            assert(expr->type == EXPR_VAR_ID);
+            if (expr == NULL)
+                break;
+            if (expr->type != EXPR_VAR_ID)
+                break;
             id = expr->expr_data.id;
 
             expr = stmt->stmt_data.var_assign_data.expr;

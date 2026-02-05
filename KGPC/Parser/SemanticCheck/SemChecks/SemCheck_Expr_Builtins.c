@@ -848,6 +848,7 @@ int semcheck_prepare_dynarray_high_call(int *type_return, SymTab_t *symtab,
     if (expr->expr_data.function_call_data.mangled_id != NULL)
         free(expr->expr_data.function_call_data.mangled_id);
     expr->expr_data.function_call_data.mangled_id = strdup("kgpc_dynarray_compute_high");
+    expr->expr_data.function_call_data.arg0_is_dynarray_descriptor = 1;
 
     /* Note: We don't call semcheck_reset_function_call_cache here because we want to 
      * mark this as fully resolved (is_call_info_valid=1) rather than reset it */
@@ -1032,11 +1033,36 @@ int semcheck_builtin_unary_real(int *type_return, SymTab_t *symtab,
     KgpcType *arg_kgpc_type = NULL;
     int error_count = semcheck_expr_with_type(&arg_kgpc_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
 
-    if (error_count == 0 && !kgpc_type_is_numeric(arg_kgpc_type))
+    if (error_count == 0)
     {
-        semcheck_error_with_context("Error on line %d, %s expects a real argument.\n",
-            expr->line_num, display_name);
-        ++error_count;
+        if (!kgpc_type_is_numeric(arg_kgpc_type))
+        {
+            semcheck_error_with_context("Error on line %d, %s expects a real argument.\n",
+                expr->line_num, display_name);
+            ++error_count;
+        }
+        else
+        {
+            int arg_type = semcheck_tag_from_kgpc(arg_kgpc_type);
+            if (arg_type != REAL_TYPE)
+            {
+                char *real_id = strdup("Real");
+                struct Expression *cast_expr = mk_typecast(expr->line_num, REAL_TYPE, real_id, arg_expr);
+                if (cast_expr == NULL)
+                {
+                    fprintf(stderr, "Error: failed to allocate typecast for %s.\n", display_name);
+                    ++error_count;
+                }
+                else
+                {
+                    args->cur = cast_expr;
+                    arg_expr = cast_expr;
+                    int cast_type = UNKNOWN_TYPE;
+                    error_count += semcheck_typecast(&cast_type, symtab, cast_expr,
+                        max_scope_lev, NO_MUTATE);
+                }
+            }
+        }
     }
 
     if (error_count == 0)
@@ -1098,8 +1124,22 @@ int semcheck_builtin_trunc(int *type_return, SymTab_t *symtab,
         const char *mangled = "kgpc_trunc";
         
         /* Check if argument is Currency type - if so, use currency-specific trunc */
+        int is_currency = 0;
         if (arg_expr->resolved_kgpc_type != NULL &&
             semcheck_is_currency_kgpc_type(arg_expr->resolved_kgpc_type))
+            is_currency = 1;
+        if (!is_currency && arg_kgpc_type != NULL &&
+            semcheck_is_currency_kgpc_type(arg_kgpc_type))
+            is_currency = 1;
+        if (!is_currency && arg_expr->type == EXPR_VAR_ID && arg_expr->expr_data.id != NULL)
+        {
+            HashNode_t *node = NULL;
+            if (FindIdent(&node, symtab, arg_expr->expr_data.id) == 0 &&
+                node != NULL && node->type != NULL &&
+                semcheck_is_currency_kgpc_type(node->type))
+                is_currency = 1;
+        }
+        if (is_currency)
         {
             mangled = "kgpc_trunc_currency";
         }
@@ -1495,11 +1535,21 @@ int semcheck_builtin_odd(int *type_return, SymTab_t *symtab,
     KgpcType *arg_kgpc_type = NULL;
     int error_count = semcheck_expr_with_type(&arg_kgpc_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
 
-    if (error_count == 0 && !kgpc_type_is_integer(arg_kgpc_type))
+    if (error_count == 0)
     {
-        semcheck_error_with_context("Error on line %d, Odd expects an integer argument.\n",
-            expr->line_num);
-        ++error_count;
+        int is_integer = kgpc_type_is_integer(arg_kgpc_type);
+        if (!is_integer)
+        {
+            struct TypeAlias *alias = kgpc_type_get_type_alias(arg_kgpc_type);
+            if (alias != NULL && alias->base_type != UNKNOWN_TYPE)
+                is_integer = is_integer_type(alias->base_type);
+        }
+        if (!is_integer)
+        {
+            semcheck_error_with_context("Error on line %d, Odd expects an integer argument.\n",
+                expr->line_num);
+            ++error_count;
+        }
     }
 
     if (error_count == 0)
@@ -1553,6 +1603,12 @@ int semcheck_builtin_sqr(int *type_return, SymTab_t *symtab,
     if (error_count == 0)
     {
         int arg_type = semcheck_tag_from_kgpc(arg_kgpc_type);
+        if (arg_type == UNKNOWN_TYPE)
+        {
+            struct TypeAlias *alias = kgpc_type_get_type_alias(arg_kgpc_type);
+            if (alias != NULL && alias->base_type != UNKNOWN_TYPE)
+                arg_type = alias->base_type;
+        }
         if (arg_type == REAL_TYPE)
         {
             mangled_name = "kgpc_sqr_real";
@@ -1737,7 +1793,7 @@ int semcheck_builtin_default(int *type_return, SymTab_t *symtab,
             return 0;
         case REAL_TYPE:
             expr->type = EXPR_RNUM;
-            expr->expr_data.r_num = 0.0f;
+            expr->expr_data.r_num = 0.0;
             semcheck_expr_set_resolved_type(expr, REAL_TYPE);
             expr->resolved_kgpc_type = create_primitive_type(REAL_TYPE);
             *type_return = REAL_TYPE;

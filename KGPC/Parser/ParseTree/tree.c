@@ -2692,6 +2692,7 @@ static void init_expression(struct Expression *expr, int line_num, enum ExprType
     expr->expr_data.function_call_data.is_virtual_call = 0;
     expr->expr_data.function_call_data.vmt_index = -1;
     expr->expr_data.function_call_data.self_class_name = NULL;
+    expr->expr_data.function_call_data.arg0_is_dynarray_descriptor = 0;
     expr->expr_data.array_access_data.linear_index_count = 0;
     expr->expr_data.array_access_data.linear_strides = NULL;
     expr->expr_data.array_access_data.linear_lowers = NULL;
@@ -2904,7 +2905,7 @@ struct Expression *mk_string(int line_num, char *string)
     return new_expr;
 }
 
-struct Expression *mk_rnum(int line_num, float r_num)
+struct Expression *mk_rnum(int line_num, double r_num)
 {
     struct Expression *new_expr;
     new_expr = (struct Expression *)malloc(sizeof(struct Expression));

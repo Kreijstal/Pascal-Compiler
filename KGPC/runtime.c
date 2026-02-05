@@ -942,6 +942,42 @@ static inline int64_t kgpc_double_to_bits(double value)
     return bits;
 }
 
+/* Cache extended-precision parses so default Write can preserve StrToFloat precision.
+ * This mirrors FPC's behavior where StrToFloat returns Extended on x86_64. */
+#define KGPC_REAL_CACHE_SIZE 64
+typedef struct
+{
+    int valid;
+    int64_t bits;
+    long double ext_value;
+} kgpc_real_cache_entry;
+
+static kgpc_real_cache_entry kgpc_real_cache[KGPC_REAL_CACHE_SIZE];
+static unsigned kgpc_real_cache_pos = 0;
+
+static void kgpc_real_cache_put(int64_t bits, long double ext_value)
+{
+    kgpc_real_cache[kgpc_real_cache_pos].valid = 1;
+    kgpc_real_cache[kgpc_real_cache_pos].bits = bits;
+    kgpc_real_cache[kgpc_real_cache_pos].ext_value = ext_value;
+    kgpc_real_cache_pos = (kgpc_real_cache_pos + 1) % KGPC_REAL_CACHE_SIZE;
+}
+
+static int kgpc_real_cache_get(int64_t bits, long double *out_value)
+{
+    if (out_value == NULL)
+        return 0;
+    for (int i = 0; i < KGPC_REAL_CACHE_SIZE; ++i)
+    {
+        if (kgpc_real_cache[i].valid && kgpc_real_cache[i].bits == bits)
+        {
+            *out_value = kgpc_real_cache[i].ext_value;
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static const char *kgpc_rtti_type_name(const kgpc_class_typeinfo *info)
 {
     if (info != NULL && info->class_name != NULL)
@@ -1864,12 +1900,13 @@ void kgpc_write_real(KGPCTextRec *file, int width, int precision, int64_t value_
 
     if (precision < 0)
     {
+        const int default_precision = 6;
         if (width > 0)
-            fprintf(dest, "%*g", width, value);
+            fprintf(dest, "%*.*g", width, default_precision, value);
         else if (width < 0)
-            fprintf(dest, "%-*g", -width, value);
+            fprintf(dest, "%-*.*g", -width, default_precision, value);
         else
-            fprintf(dest, "%g", value);
+            fprintf(dest, "%.*g", default_precision, value);
     }
     else
     {
@@ -2835,6 +2872,16 @@ void kgpc_fillchar(void *dest, size_t count, int value)
 
     unsigned char byte_value = (unsigned char)(value & 0xFF);
     memset(dest, byte_value, count);
+}
+
+void kgpc_fillword(void *dest, size_t count, unsigned short value)
+{
+    if (dest == NULL || count == 0)
+        return;
+
+    unsigned short *ptr = (unsigned short *)dest;
+    for (size_t i = 0; i < count; ++i)
+        ptr[i] = value;
 }
 
 void kgpc_getmem(void **target, size_t size)
@@ -4281,7 +4328,8 @@ int kgpc_string_to_real(const char *text, double *out_value)
     }
     char *endptr;
     errno = 0;
-    double val = strtod(text, &endptr);
+    long double ext_val = strtold(text, &endptr);
+    double val = (double)ext_val;
     if (kgpc_env_flag("KGPC_DEBUG_STRTOFLOAT"))
         fprintf(stderr, "[kgpc] string_to_real('%s') -> val=%g end=%p (err=%d)\n", text ? text : "(null)", val, (void*)endptr, errno);
     if (endptr == text || *endptr != '\0' || errno == ERANGE)
@@ -4291,6 +4339,7 @@ int kgpc_string_to_real(const char *text, double *out_value)
     }
     if (out_value != NULL)
         *out_value = val;
+    kgpc_real_cache_put(kgpc_double_to_bits(val), ext_val);
     return 1;
 }
 
@@ -4858,19 +4907,9 @@ long long kgpc_trunc(double value)
 }
 
 /* Trunc for Currency type - Currency stores values scaled by 10000.
- * The value is passed as a double (bit-pattern) because the code generator
- * passes it via xmm0 as if it were a real argument. We reinterpret the bits
- * as int64 and then perform the Currency-specific truncation. */
-long long kgpc_trunc_currency(double bits_as_double)
+ * The value is passed as a signed 64-bit integer. */
+long long kgpc_trunc_currency(long long currency_value)
 {
-    /* Reinterpret the double bits as int64 */
-    union {
-        double d;
-        long long ll;
-    } u;
-    u.d = bits_as_double;
-    long long currency_value = u.ll;
-
     /* Currency is stored as value * 10000, so divide by 10000 to get actual value */
     /* Truncate towards zero */
     if (currency_value >= 0)

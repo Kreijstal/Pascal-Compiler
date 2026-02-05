@@ -531,6 +531,9 @@ static int codegen_expected_type_for_builtin(const char *name)
     if (pascal_identifier_equals(name, "Ceil") ||
         pascal_identifier_equals(name, "Floor"))
         return REAL_TYPE;
+    if (pascal_identifier_equals(name, "FloatToStr") ||
+        pascal_identifier_equals(name, "floattostr_r"))
+        return REAL_TYPE;
 
     return UNKNOWN_TYPE;
 }
@@ -542,7 +545,7 @@ static ListNode_t *codegen_expr_convert_int_like_to_real(ListNode_t *inst_list,
         return inst_list;
 
     char buffer[128];
-    if (source_type == LONGINT_TYPE)
+    if (source_type == LONGINT_TYPE || source_type == INT64_TYPE || source_type == QWORD_TYPE)
         snprintf(buffer, sizeof(buffer), "\tcvtsi2sdq\t%s, %%xmm0\n", value_reg->bit_64);
     else
         snprintf(buffer, sizeof(buffer), "\tcvtsi2sdl\t%s, %%xmm0\n", value_reg->bit_32);
@@ -559,10 +562,21 @@ static ListNode_t *codegen_expr_maybe_convert_int_like_to_real(int target_type,
         return inst_list;
 
     int source_type = expr_get_type_tag(source_expr);
-    if (target_type == REAL_TYPE &&
-        (source_type == INT_TYPE || source_type == LONGINT_TYPE))
+    int conversion_type = source_type;
+    if (target_type == REAL_TYPE && source_type == REAL_TYPE &&
+        source_expr->type == EXPR_TYPECAST &&
+        source_expr->expr_data.typecast_data.expr != NULL)
     {
-        inst_list = codegen_expr_convert_int_like_to_real(inst_list, value_reg, source_type);
+        int inner_type = expr_get_type_tag(source_expr->expr_data.typecast_data.expr);
+        if (inner_type == INT_TYPE || inner_type == LONGINT_TYPE ||
+            inner_type == INT64_TYPE || inner_type == QWORD_TYPE)
+            conversion_type = inner_type;
+    }
+    if (target_type == REAL_TYPE &&
+        (conversion_type == INT_TYPE || conversion_type == LONGINT_TYPE ||
+         conversion_type == INT64_TYPE || conversion_type == QWORD_TYPE))
+    {
+        inst_list = codegen_expr_convert_int_like_to_real(inst_list, value_reg, conversion_type);
     }
 
     return inst_list;
@@ -4599,7 +4613,8 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
 
 /* Code generation for passing arguments */
 ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
-    CodeGenContext *ctx, struct KgpcType *proc_type, const char *procedure_name, int arg_start_index)
+    CodeGenContext *ctx, struct KgpcType *proc_type, const char *procedure_name,
+    int arg_start_index, const struct Expression *call_expr)
 {
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
@@ -4621,6 +4636,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         formal_args = proc_type->info.proc_info.params;
         CODEGEN_DEBUG("DEBUG: Using formal_args from KgpcType: %p\n", formal_args);
     }
+    int skip_formal_for_self = 0;
     if (formal_args != NULL)
     {
         int formal_count = ListLength(formal_args);
@@ -4634,6 +4650,17 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 const char *first_id = (ids != NULL) ? (const char *)ids->cur : NULL;
                 if (first_id != NULL && pascal_identifier_equals(first_id, "Self"))
                     formal_args = formal_args->next;
+            }
+        }
+        else if (formal_count + 1 == actual_count && args != NULL)
+        {
+            struct Expression *first_arg = (struct Expression *)args->cur;
+            if (first_arg != NULL && first_arg->type == EXPR_VAR_ID &&
+                first_arg->expr_data.id != NULL &&
+                pascal_identifier_equals(first_arg->expr_data.id, "Self"))
+            {
+                /* Actual args include implicit Self but formal params omit it. */
+                skip_formal_for_self = 1;
             }
         }
     }
@@ -4714,7 +4741,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         CODEGEN_DEBUG("DEBUG: arg_expr at %p, type %d\n", arg_expr, arg_expr->type);
 
         Tree_t *formal_arg_decl = NULL;
-        if(formal_args != NULL)
+        if(formal_args != NULL && !(skip_formal_for_self && arg_num == 0))
         {
             /* CRITICAL VALIDATION: Before dereferencing formal_args, verify it's not corrupted.
              * On Cygwin/MSYS, corrupted list nodes can cause segfaults when accessing ->cur.
@@ -4754,9 +4781,21 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         if (is_self_param && codegen_self_param_is_class(formal_arg_decl, ctx))
             is_var_param = 0;
         int is_array_param = (formal_arg_decl != NULL && formal_arg_decl->type == TREE_ARR_DECL);
-        int formal_is_open_array = formal_decl_is_open_array(formal_arg_decl);
-        int formal_is_char_set = formal_decl_is_char_set(formal_arg_decl, ctx->symtab);
-        int formal_is_dynarray = codegen_formal_is_dynamic_array(formal_arg_decl, ctx->symtab);
+        int formal_is_open_array = 0;
+        int formal_is_char_set = 0;
+        int formal_is_dynarray = 0;
+        if (formal_arg_decl != NULL)
+        {
+            formal_is_open_array = formal_decl_is_open_array(formal_arg_decl);
+            formal_is_char_set = formal_decl_is_char_set(formal_arg_decl, ctx->symtab);
+            formal_is_dynarray = codegen_formal_is_dynamic_array(formal_arg_decl, ctx->symtab);
+        }
+        if (!formal_is_dynarray && arg_num == 0 && call_expr != NULL &&
+            call_expr->type == EXPR_FUNCTION_CALL &&
+            call_expr->expr_data.function_call_data.arg0_is_dynarray_descriptor)
+        {
+            formal_is_dynarray = 1;
+        }
         
         /* Also check if we're passing a static array argument (even if not declared as var param) */
         int is_array_arg = (arg_expr != NULL && arg_expr->is_array_expr && !arg_expr->array_is_dynamic);
@@ -4776,6 +4815,12 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         int expected_type = codegen_param_expected_type(formal_arg_decl, ctx->symtab);
         if (expected_type == UNKNOWN_TYPE && procedure_name != NULL)
             expected_type = codegen_expected_type_for_builtin(procedure_name);
+        const char *call_mangled = NULL;
+        if (call_expr != NULL && call_expr->type == EXPR_FUNCTION_CALL)
+            call_mangled = call_expr->expr_data.function_call_data.mangled_id;
+        if ((procedure_name != NULL && strcmp(procedure_name, "kgpc_trunc_currency") == 0) ||
+            (call_mangled != NULL && strcmp(call_mangled, "kgpc_trunc_currency") == 0))
+            expected_type = INT64_TYPE;
         if (expected_type == UNKNOWN_TYPE && procedure_name != NULL &&
             pascal_identifier_equals(procedure_name, "Sqr"))
         {
@@ -4808,6 +4853,33 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             if (arg_type == REAL_TYPE)
                 expected_type = REAL_TYPE;
         }
+        if (expected_type == UNKNOWN_TYPE && arg_expr != NULL &&
+            arg_expr->type == EXPR_VAR_ID && arg_expr->expr_data.id != NULL &&
+            ctx != NULL && ctx->symtab != NULL)
+        {
+            HashNode_t *arg_node = NULL;
+            if (FindIdent(&arg_node, ctx->symtab, arg_expr->expr_data.id) == 0 &&
+                arg_node != NULL && arg_node->type != NULL)
+            {
+                int resolved = codegen_tag_from_kgpc(arg_node->type);
+                if (resolved != UNKNOWN_TYPE)
+                    expected_type = resolved;
+            }
+        }
+        /* Self for type helpers over real types is passed by value (not by reference). */
+        if (is_self_param && expected_type == REAL_TYPE)
+            is_var_param = 0;
+        /* If the actual argument is REAL, pass it via SSE even when formal metadata is missing. */
+        if (arg_expr != NULL &&
+            !((procedure_name != NULL && strcmp(procedure_name, "kgpc_trunc_currency") == 0) ||
+              (call_mangled != NULL && strcmp(call_mangled, "kgpc_trunc_currency") == 0)))
+        {
+            int arg_type = expr_get_type_tag(arg_expr);
+            if (arg_type == REAL_TYPE || arg_expr->type == EXPR_RNUM ||
+                (arg_expr->type == EXPR_TYPECAST &&
+                 arg_expr->expr_data.typecast_data.target_type == REAL_TYPE))
+                expected_type = REAL_TYPE;
+        }
         if (is_var_param && arg_num == 0 && arg_expr != NULL &&
             !codegen_expr_is_addressable(arg_expr))
         {
@@ -4837,6 +4909,8 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         }
 
         int is_pointer_like = (is_var_param || is_array_param || is_array_arg || formal_is_dynarray);
+        if (is_self_param && expected_type == REAL_TYPE)
+            is_pointer_like = 0;
 
         if (arg_infos != NULL)
         {
@@ -4850,14 +4924,29 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         if (arg_infos != NULL && expected_type == REAL_TYPE)
             arg_infos[arg_num].expected_real_size =
                 codegen_param_real_storage_size(formal_arg_decl, ctx->symtab);
-        if (arg_infos != NULL && expected_type == REAL_TYPE &&
-            (arg_infos[arg_num].expected_real_size == 0 ||
-             (is_self_param &&
-              arg_infos[arg_num].expected_real_size == 8 &&
-              codegen_expr_real_storage_size(arg_expr, ctx) == 4)))
+        if (arg_infos != NULL && expected_type == REAL_TYPE)
         {
-            arg_infos[arg_num].expected_real_size =
-                codegen_expr_real_storage_size(arg_expr, ctx);
+            int expr_is_real = 0;
+            if (arg_expr != NULL)
+            {
+                int arg_type = expr_get_type_tag(arg_expr);
+                expr_is_real = (arg_type == REAL_TYPE) ||
+                    arg_expr->type == EXPR_RNUM ||
+                    (arg_expr->type == EXPR_TYPECAST &&
+                     arg_expr->expr_data.typecast_data.target_type == REAL_TYPE);
+            }
+
+            if (arg_infos[arg_num].expected_real_size == 0 ||
+                (arg_infos[arg_num].expected_real_size == 8 &&
+                 (is_self_param || formal_arg_decl == NULL) && expr_is_real &&
+                 codegen_expr_real_storage_size(arg_expr, ctx) == 4))
+            {
+                if (expr_is_real)
+                {
+                    arg_infos[arg_num].expected_real_size =
+                        codegen_expr_real_storage_size(arg_expr, ctx);
+                }
+            }
         }
 
         if (formal_is_open_array && is_array_arg)
@@ -5573,9 +5662,33 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             StackNode_t *arg_spill = add_l_t("arg_eval");
             if (arg_spill != NULL && arg_infos != NULL)
             {
-                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", 
-                    top_reg->bit_64, arg_spill->offset);
-                inst_list = add_inst(inst_list, buffer);
+                int expected_real_size = arg_infos[arg_num].expected_real_size;
+                int is_real_arg = (expected_type == REAL_TYPE);
+                int is_xmm = (top_reg->bit_64 != NULL &&
+                              strncmp(top_reg->bit_64, "%xmm", 4) == 0);
+                if (is_real_arg && is_xmm)
+                {
+                    if (expected_real_size == 4)
+                    {
+                        snprintf(buffer, sizeof(buffer), "\tmovss\t%s, -%d(%%rbp)\n",
+                            top_reg->bit_64, arg_spill->offset);
+                        arg_infos[arg_num].spill_is_single = 1;
+                    }
+                    else
+                    {
+                        snprintf(buffer, sizeof(buffer), "\tmovsd\t%s, -%d(%%rbp)\n",
+                            top_reg->bit_64, arg_spill->offset);
+                        arg_infos[arg_num].spill_is_single = 0;
+                    }
+                    inst_list = add_inst(inst_list, buffer);
+                }
+                else
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                        top_reg->bit_64, arg_spill->offset);
+                    inst_list = add_inst(inst_list, buffer);
+                    arg_infos[arg_num].spill_is_single = 0;
+                }
                 free_reg(get_reg_stack(), top_reg);
                 
                 arg_infos[arg_num].reg = NULL;
@@ -5589,7 +5702,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         }
 
         args = args->next;
-        if(formal_args != NULL)
+        if(formal_args != NULL && !(skip_formal_for_self && arg_num == 0))
         {
             formal_args = formal_args->next;
             
@@ -5617,8 +5730,15 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
     {
         for (int i = 0; i < arg_num; ++i)
         {
-            int use_sse = (arg_infos[i].expected_type == REAL_TYPE &&
-                !arg_infos[i].is_pointer_like);
+            int actual_type = (arg_infos[i].expr != NULL)
+                ? expr_get_type_tag(arg_infos[i].expr) : UNKNOWN_TYPE;
+            int actual_is_real = (actual_type == REAL_TYPE) ||
+                (arg_infos[i].expr != NULL &&
+                 (arg_infos[i].expr->type == EXPR_RNUM ||
+                  (arg_infos[i].expr->type == EXPR_TYPECAST &&
+                   arg_infos[i].expr->expr_data.typecast_data.target_type == REAL_TYPE)));
+            int use_sse = ((arg_infos[i].expected_type == REAL_TYPE) || actual_is_real) &&
+                !arg_infos[i].is_pointer_like;
             if (g_current_codegen_abi == KGPC_TARGET_ABI_WINDOWS && is_external_c_function)
             {
                 /* Windows x64 C ABI: argument slots are positional across classes.
