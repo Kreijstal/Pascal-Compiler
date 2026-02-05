@@ -2656,16 +2656,63 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
 
                         /* If a parent exists, call the parent class method */
                         HashNode_t *parent_method_node = NULL;
+                        char parent_mangled[512];
+                        parent_mangled[0] = '\0';
                         if (parent_class_name != NULL && method_name != NULL)
                         {
-                            /* Look up the parent method in the symbol table */
-                            char parent_mangled[512];
+                            /* Build the parent method name */
                             snprintf(parent_mangled, sizeof(parent_mangled), "%s__%s",
                                 parent_class_name, method_name);
 
-                            if (FindIdent(&parent_method_node, symtab, parent_mangled) == -1)
+                            /* Prefer overload resolution by call-site signature */
+                            ListNode_t *parent_candidates = FindAllIdents(symtab, parent_mangled);
+                            if (parent_candidates != NULL)
                             {
-                                parent_method_node = NULL;
+                                /* Build temp args including Self to match method signatures */
+                                struct Expression *self_expr = mk_varid(stmt->line_num, strdup("Self"));
+                                ListNode_t *self_arg = CreateListNode(self_expr, LIST_EXPR);
+                                self_arg->next = call_expr->expr_data.function_call_data.args_expr;
+
+                                char *call_mangled = MangleFunctionNameFromCallSite(parent_mangled,
+                                    self_arg, symtab, INT_MAX);
+                                if (call_mangled != NULL)
+                                {
+                                    for (ListNode_t *cur = parent_candidates; cur != NULL; cur = cur->next)
+                                    {
+                                        HashNode_t *candidate = (HashNode_t *)cur->cur;
+                                        if (candidate != NULL && candidate->mangled_id != NULL &&
+                                            strcmp(candidate->mangled_id, call_mangled) == 0)
+                                        {
+                                            parent_method_node = candidate;
+                                            break;
+                                        }
+                                    }
+                                    free(call_mangled);
+                                }
+
+                                self_arg->next = NULL;
+                                destroy_expr(self_expr);
+                                free(self_arg);
+
+                                if (parent_method_node == NULL)
+                                {
+                                    int candidate_count = ListLength(parent_candidates);
+                                    semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index,
+                                        "Error on line %d, inherited call to %s has no matching overload: %d overloads found.\n\n",
+                                        stmt->line_num,
+                                        parent_mangled[0] != '\0' ? parent_mangled :
+                                            (method_name != NULL ? method_name : "(unknown)"),
+                                        candidate_count);
+                                    DestroyList(parent_candidates);
+                                    return ++return_val;
+                                }
+
+                                DestroyList(parent_candidates);
+                            }
+                            else
+                            {
+                                if (FindIdent(&parent_method_node, symtab, parent_mangled) == -1)
+                                    parent_method_node = NULL;
                             }
 
                             if (getenv("KGPC_DEBUG_INHERITED") != NULL)
@@ -2721,6 +2768,25 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                         }
                         temp_call.stmt_data.procedure_call_data.expr_args = temp_args;
                         temp_call.stmt_data.procedure_call_data.resolved_proc = NULL;
+
+                        if (parent_method_node != NULL && call_expr != NULL &&
+                            call_expr->type == EXPR_FUNCTION_CALL)
+                        {
+                            call_expr->expr_data.function_call_data.args_expr = temp_args;
+                            if (parent_method_node->id != NULL)
+                            {
+                                if (call_expr->expr_data.function_call_data.id != NULL)
+                                    free(call_expr->expr_data.function_call_data.id);
+                                call_expr->expr_data.function_call_data.id = strdup(parent_method_node->id);
+                            }
+                            if (parent_method_node->mangled_id != NULL)
+                            {
+                                if (call_expr->expr_data.function_call_data.mangled_id != NULL)
+                                    free(call_expr->expr_data.function_call_data.mangled_id);
+                                call_expr->expr_data.function_call_data.mangled_id =
+                                    strdup(parent_method_node->mangled_id);
+                            }
+                        }
 
                         return_val += semcheck_proccall(symtab, &temp_call, max_scope_lev);
 

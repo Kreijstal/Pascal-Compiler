@@ -3730,19 +3730,30 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
 
     char buffer[128];
 
-    if (!base_is_string && !base_is_pointer && array_expr->array_is_dynamic &&
-        !(array_stack_node != NULL && array_stack_node->is_array && !array_stack_node->is_dynamic))
-    {
-        snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", base_reg->bit_64, base_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-    }
-
     KgpcType *array_type = array_expr->resolved_kgpc_type;
     if (array_type == NULL && array_expr->type == EXPR_VAR_ID && ctx->symtab != NULL)
     {
         HashNode_t *node = NULL;
         if (FindIdent(&node, ctx->symtab, array_expr->expr_data.id) >= 0 && node != NULL)
             array_type = node->type;
+    }
+    int array_is_open_array = 0;
+    if (array_type != NULL && array_type->type_alias != NULL &&
+        array_type->type_alias->is_open_array)
+    {
+        array_is_open_array = 1;
+    }
+    else if (array_expr->resolved_kgpc_type != NULL &&
+        array_expr->resolved_kgpc_type->kind == TYPE_KIND_ARRAY_OF_CONST)
+    {
+        array_is_open_array = 1;
+    }
+
+    if (!base_is_string && !base_is_pointer && array_expr->array_is_dynamic &&
+        !(array_stack_node != NULL && array_stack_node->is_array && !array_stack_node->is_dynamic))
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", base_reg->bit_64, base_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
     }
 
     KgpcArrayDimensionInfo info;
@@ -3762,7 +3773,10 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
     }
     else
     {
-        first_lower_bound = base_is_pointer ? 0 : (base_is_string ? 1 : expr_get_array_lower_bound(array_expr));
+        if (array_is_open_array)
+            first_lower_bound = 0;
+        else
+            first_lower_bound = base_is_pointer ? 0 : (base_is_string ? 1 : expr_get_array_lower_bound(array_expr));
         long long element_size_ll = 1;
         if (codegen_get_indexable_element_size(array_expr, ctx, &element_size_ll))
             first_index_stride = element_size_ll;
