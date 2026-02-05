@@ -202,19 +202,8 @@ const
 {-------------------------------------------------------------------------}
 
 function LOWORD(v: ptruint): cuint16; inline;
-begin
-    LOWORD := cuint16(v and $FFFF);
-end;
-
 function HIWORD(v: ptruint): cuint16; inline;
-begin
-    HIWORD := cuint16((v shr 16) and $FFFF);
-end;
-
 procedure ZeroMemory(p: pointer; size: cuint32); inline;
-begin
-    { Stub for compilation; no-op }
-end;
 
 {-------------------------------------------------------------------------}
 { Minimal host helpers (existing)                                           }
@@ -232,6 +221,23 @@ procedure kgpc_sleep_ms(milliseconds: cint32); external;
 function kgpc_query_performance_counter: culonglong; external;
 function kgpc_query_performance_frequency: culonglong; external;
 function kgpc_is_debugger_present: BOOL; external;
+
+function LOWORD(v: ptruint): cuint16; inline;
+begin
+    LOWORD := cuint16(v and $FFFF);
+end;
+
+function HIWORD(v: ptruint): cuint16; inline;
+begin
+    HIWORD := cuint16((v shr 16) and $FFFF);
+end;
+
+procedure ZeroMemory(p: pointer; size: cuint32); inline;
+begin
+    if (p = nil) or (size = 0) then
+        exit;
+    FillChar(p^, longint(size), 0);
+end;
 
 function GetHostName: string;
 begin
