@@ -13,6 +13,24 @@
 
 #include "SemCheck_Expr_Internal.h"
 
+static int semcheck_expr_is_char_array_like(const struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+    KgpcType *kgpc = expr->resolved_kgpc_type;
+    if (kgpc == NULL)
+        return 0;
+    if (kgpc_type_is_shortstring(kgpc))
+        return 1;
+    if (kgpc->kind != TYPE_KIND_ARRAY)
+        return 0;
+    if (kgpc->info.array_info.element_type == NULL)
+        return 0;
+    if (kgpc->info.array_info.element_type->kind != TYPE_KIND_PRIMITIVE)
+        return 0;
+    return kgpc->info.array_info.element_type->info.primitive_type_tag == CHAR_TYPE;
+}
+
 /****** EXPR SEMCHECKS *******/
 
 /** RELOP **/
@@ -198,6 +216,16 @@ relop_fallback:
                                  is_type_ir(&type_first) && is_type_ir(&type_second);
                 int boolean_ok = (type_first == BOOL && type_second == BOOL);
                 int string_ok = (is_string_type(type_first) && is_string_type(type_second));
+                if (!string_ok && expr1 != NULL && expr2 != NULL)
+                {
+                    int left_char_array = semcheck_expr_is_char_array_like(expr1);
+                    int right_char_array = semcheck_expr_is_char_array_like(expr2);
+                    if ((is_string_type(type_first) || left_char_array) &&
+                        (is_string_type(type_second) || right_char_array))
+                    {
+                        string_ok = 1;
+                    }
+                }
                 int char_ok = (type_first == CHAR_TYPE && type_second == CHAR_TYPE);
                 /* Allow comparison of pointers AND procedures */
                 int pointer_ok = ((type_first == POINTER_TYPE || type_first == PROCEDURE) && 
@@ -303,6 +331,16 @@ relop_fallback:
                 int numeric_ok = types_numeric_compatible(type_first, type_second) &&
                                  is_type_ir(&type_first) && is_type_ir(&type_second);
                 int string_ok = (is_string_type(type_first) && is_string_type(type_second));
+                if (!string_ok && expr1 != NULL && expr2 != NULL)
+                {
+                    int left_char_array = semcheck_expr_is_char_array_like(expr1);
+                    int right_char_array = semcheck_expr_is_char_array_like(expr2);
+                    if ((is_string_type(type_first) || left_char_array) &&
+                        (is_string_type(type_second) || right_char_array))
+                    {
+                        string_ok = 1;
+                    }
+                }
                 int char_ok = (type_first == CHAR_TYPE && type_second == CHAR_TYPE);
                 /* Allow comparison of pointers AND procedures */
                 int pointer_ok = ((type_first == POINTER_TYPE || type_first == PROCEDURE) && 
@@ -497,8 +535,10 @@ int semcheck_addop(int *type_return,
             return return_val;
         }
 
-        int left_is_string_like = (is_string_type(type_first) || type_first == CHAR_TYPE);
-        int right_is_string_like = (is_string_type(type_second) || type_second == CHAR_TYPE);
+        int left_is_string_like = (is_string_type(type_first) || type_first == CHAR_TYPE ||
+                                   semcheck_expr_is_char_array_like(expr1));
+        int right_is_string_like = (is_string_type(type_second) || type_second == CHAR_TYPE ||
+                                    semcheck_expr_is_char_array_like(expr2));
 
         if (left_is_string_like && right_is_string_like)
         {
@@ -1677,7 +1717,27 @@ int semcheck_varid(int *type_return,
             semcheck_set_array_info_from_hashnode(expr, symtab, hash_return, expr->line_num);
         else
             semcheck_clear_array_info(expr);
-        semcheck_expr_set_resolved_kgpc_type_shared(expr, effective_type);
+        int force_shortstring = 0;
+        struct TypeAlias *node_alias = get_type_alias_from_node(hash_return);
+        if (node_alias != NULL && node_alias->is_shortstring)
+            force_shortstring = 1;
+        if (!force_shortstring && hash_return->type != NULL &&
+            hash_return->type->type_alias != NULL &&
+            hash_return->type->type_alias->is_shortstring)
+        {
+            force_shortstring = 1;
+        }
+
+        if (force_shortstring)
+        {
+            KgpcType *short_type = create_primitive_type(SHORTSTRING_TYPE);
+            semcheck_expr_set_resolved_kgpc_type_shared(expr, short_type);
+            destroy_kgpc_type(short_type);
+        }
+        else
+        {
+            semcheck_expr_set_resolved_kgpc_type_shared(expr, effective_type);
+        }
 
         if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
             fprintf(stderr, "[SemCheck] semcheck_varid: expr=%p, id=%s, type_return=%d\n", (void*)expr, id, *type_return);

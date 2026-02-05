@@ -9177,6 +9177,47 @@ next_identifier:
                             {
                                 compatible = 1;
                             }
+                            /* Allow string literal initializer for array of char or shortstring-like arrays */
+                            if (!compatible && current_var_type == HASHVAR_ARRAY && expr_tag == STRING_TYPE)
+                            {
+                                KgpcType *var_type = (var_node != NULL) ? var_node->type : NULL;
+                                if (var_type != NULL && var_type->kind == TYPE_KIND_ARRAY &&
+                                    var_type->info.array_info.element_type != NULL &&
+                                    var_type->info.array_info.element_type->kind == TYPE_KIND_PRIMITIVE &&
+                                    var_type->info.array_info.element_type->info.primitive_type_tag == CHAR_TYPE)
+                                {
+                                    char *string_value = NULL;
+                                    size_t string_len = 0;
+                                    if (init_expr != NULL && init_expr->type == EXPR_STRING &&
+                                        init_expr->expr_data.string != NULL)
+                                    {
+                                        string_len = strlen(init_expr->expr_data.string);
+                                    }
+                                    else if (evaluate_string_const_expr(symtab, init_expr, &string_value) == 0)
+                                    {
+                                        if (string_value != NULL)
+                                            string_len = strlen(string_value);
+                                    }
+                                    if (string_value != NULL)
+                                        free(string_value);
+
+                                    int array_size = var_type->info.array_info.end_index -
+                                                     var_type->info.array_info.start_index + 1;
+                                    if (array_size < 0)
+                                        array_size = 0;
+                                    if (string_len <= (size_t)array_size)
+                                    {
+                                        compatible = 1;
+                                    }
+                                    else
+                                    {
+                                        semcheck_error_with_context(
+                                            "Error on line %d, initializer string literal too long for %s (string length: %zu, array size: %d).\n",
+                                            tree->line_num, var_name, string_len, array_size);
+                                        ++return_val;
+                                    }
+                                }
+                            }
                             
                             /* Allow pointer type initializers (including nil) for pointer variables.
                              * Both the initializer expression type and the declared variable type must

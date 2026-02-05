@@ -92,6 +92,21 @@ static int codegen_expr_is_shortstring_value(const struct Expression *expr)
     if (codegen_expr_is_shortstring_array_local(expr))
         return 1;
 
+    if (expr_type != NULL && kgpc_type_is_array(expr_type))
+    {
+        KgpcType *elem_type = kgpc_type_get_array_element_type(expr_type);
+        if (elem_type != NULL &&
+            elem_type->kind == TYPE_KIND_PRIMITIVE &&
+            elem_type->info.primitive_type_tag == CHAR_TYPE)
+        {
+            int start = 0;
+            int end = -1;
+            if (kgpc_type_get_array_bounds(expr_type, &start, &end) == 0 &&
+                start == 0 && end >= 0 && end <= 255)
+                return 1;
+        }
+    }
+
     if (expr->is_array_expr &&
         expr->array_element_type == CHAR_TYPE &&
         expr_get_array_lower_bound(expr) == 0)
@@ -102,6 +117,150 @@ static int codegen_expr_is_shortstring_value(const struct Expression *expr)
     }
 
     return 0;
+}
+
+static int codegen_expr_is_char_array_like(const struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+    if (expr->is_array_expr && expr->array_element_type == CHAR_TYPE)
+        return 1;
+    KgpcType *expr_type = expr_get_kgpc_type(expr);
+    if (expr_type != NULL && kgpc_type_is_array(expr_type) &&
+        expr_type->info.array_info.element_type != NULL &&
+        expr_type->info.array_info.element_type->kind == TYPE_KIND_PRIMITIVE &&
+        expr_type->info.array_info.element_type->info.primitive_type_tag == CHAR_TYPE)
+        return 1;
+    return 0;
+}
+
+static int codegen_expr_is_shortstring_value_ctx(const struct Expression *expr, CodeGenContext *ctx)
+{
+    if (codegen_expr_is_shortstring_value(expr))
+        return 1;
+    if (expr != NULL && expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindIdent(&node, ctx->symtab, expr->expr_data.id) >= 0 && node != NULL && node->type != NULL)
+        {
+            if (kgpc_type_is_shortstring(node->type))
+                return 1;
+            struct TypeAlias *alias = kgpc_type_get_type_alias(node->type);
+            if (alias != NULL && alias->is_shortstring)
+                return 1;
+            if (kgpc_type_is_array(node->type))
+            {
+                KgpcType *elem = kgpc_type_get_array_element_type(node->type);
+                if (elem != NULL &&
+                    elem->kind == TYPE_KIND_PRIMITIVE &&
+                    elem->info.primitive_type_tag == CHAR_TYPE)
+                {
+                    int start = 0;
+                    int end = -1;
+                    if (kgpc_type_get_array_bounds(node->type, &start, &end) == 0 &&
+                        start == 0 && end >= 0 && end <= 255)
+                        return 1;
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+static int codegen_expr_is_char_array_like_ctx(const struct Expression *expr, CodeGenContext *ctx)
+{
+    if (codegen_expr_is_char_array_like(expr))
+        return 1;
+    if (expr != NULL && expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindIdent(&node, ctx->symtab, expr->expr_data.id) >= 0 && node != NULL && node->type != NULL)
+        {
+            if (kgpc_type_is_array(node->type))
+            {
+                KgpcType *elem = kgpc_type_get_array_element_type(node->type);
+                if (elem != NULL && elem->kind == TYPE_KIND_PRIMITIVE &&
+                    elem->info.primitive_type_tag == CHAR_TYPE)
+                    return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+static ListNode_t *codegen_promote_shortstring_reg(ListNode_t *inst_list, CodeGenContext *ctx,
+    Register_t *value_reg)
+{
+    if (inst_list == NULL || ctx == NULL || value_reg == NULL)
+        return inst_list;
+    const char *arg_reg64 = current_arg_reg64(0);
+    if (arg_reg64 == NULL)
+        return inst_list;
+
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", value_reg->bit_64, arg_reg64);
+    inst_list = add_inst(inst_list, buffer);
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = add_inst(inst_list, "\tcall\tkgpc_shortstring_to_string\n");
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", value_reg->bit_64);
+    inst_list = add_inst(inst_list, buffer);
+    free_arg_regs();
+    return inst_list;
+}
+
+static int codegen_get_char_array_length(const struct Expression *expr, CodeGenContext *ctx,
+    long long *out_len)
+{
+    if (out_len != NULL)
+        *out_len = 0;
+    if (expr == NULL)
+        return 0;
+
+    long long lower = 0;
+    long long upper = -1;
+    int found = 0;
+
+    if (expr->is_array_expr && expr->array_element_type == CHAR_TYPE)
+    {
+        lower = expr_get_array_lower_bound(expr);
+        upper = expr_get_array_upper_bound(expr);
+        found = 1;
+    }
+    else
+    {
+        KgpcType *kgpc = expr_get_kgpc_type(expr);
+        if (kgpc != NULL && kgpc_type_is_array(kgpc) &&
+            kgpc->info.array_info.element_type != NULL &&
+            kgpc->info.array_info.element_type->kind == TYPE_KIND_PRIMITIVE &&
+            kgpc->info.array_info.element_type->info.primitive_type_tag == CHAR_TYPE)
+        {
+            lower = kgpc->info.array_info.start_index;
+            upper = kgpc->info.array_info.end_index;
+            found = 1;
+        }
+        else if (expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL)
+        {
+            HashNode_t *node = NULL;
+            if (FindIdent(&node, ctx->symtab, expr->expr_data.id) >= 0 && node != NULL &&
+                node->type != NULL && kgpc_type_is_array(node->type) &&
+                node->type->info.array_info.element_type != NULL &&
+                node->type->info.array_info.element_type->kind == TYPE_KIND_PRIMITIVE &&
+                node->type->info.array_info.element_type->info.primitive_type_tag == CHAR_TYPE)
+            {
+                lower = node->type->info.array_info.start_index;
+                upper = node->type->info.array_info.end_index;
+                found = 1;
+            }
+        }
+    }
+
+    if (!found)
+        return 0;
+    if (upper < lower)
+        return 0;
+    if (out_len != NULL)
+        *out_len = (upper - lower + 1);
+    return 1;
 }
 
 static int codegen_array_access_targets_shortstring(const struct Expression *expr, CodeGenContext *ctx)
@@ -646,6 +805,67 @@ static int formal_decl_is_char_set(Tree_t *decl, SymTab_t *symtab)
     }
 
     return 0;
+}
+
+static int codegen_formal_shortstring_size(Tree_t *decl, SymTab_t *symtab)
+{
+    if (decl == NULL)
+        return 256;
+
+    if (decl->type == TREE_ARR_DECL)
+    {
+        struct Array *arr = &decl->tree_data.arr_decl_data;
+        if (arr->is_shortstring && arr->e_range >= arr->s_range && arr->e_range >= 0)
+            return arr->e_range - arr->s_range + 1;
+    }
+
+    if (decl->type == TREE_VAR_DECL)
+    {
+        struct TypeAlias *alias = decl->tree_data.var_decl_data.inline_type_alias;
+        if (alias != NULL && alias->is_shortstring &&
+            alias->array_end >= alias->array_start && alias->array_end >= 0)
+            return alias->array_end - alias->array_start + 1;
+
+        KgpcType *cached = decl->tree_data.var_decl_data.cached_kgpc_type;
+        if (cached != NULL)
+        {
+            struct TypeAlias *cached_alias = kgpc_type_get_type_alias(cached);
+            if (cached_alias != NULL && cached_alias->is_shortstring &&
+                cached_alias->array_end >= cached_alias->array_start && cached_alias->array_end >= 0)
+                return cached_alias->array_end - cached_alias->array_start + 1;
+            if (kgpc_type_is_array(cached))
+            {
+                int start = 0;
+                int end = -1;
+                if (kgpc_type_get_array_bounds(cached, &start, &end) == 0 &&
+                    end >= start && end >= 0)
+                    return end - start + 1;
+            }
+        }
+
+        if (decl->tree_data.var_decl_data.type_id != NULL && symtab != NULL)
+        {
+            HashNode_t *type_node = NULL;
+            if (FindIdent(&type_node, symtab, decl->tree_data.var_decl_data.type_id) >= 0 &&
+                type_node != NULL && type_node->type != NULL)
+            {
+                struct TypeAlias *type_alias = kgpc_type_get_type_alias(type_node->type);
+                if (type_alias != NULL && type_alias->is_shortstring &&
+                    type_alias->array_end >= type_alias->array_start && type_alias->array_end >= 0)
+                    return type_alias->array_end - type_alias->array_start + 1;
+                if (kgpc_type_is_array(type_node->type))
+                {
+                    int start = 0;
+                    int end = -1;
+                    if (kgpc_type_get_array_bounds(type_node->type, &start, &end) == 0 &&
+                        end >= start && end >= 0)
+                        return end - start + 1;
+                }
+            }
+        }
+    }
+
+    return 256;
 }
 
 static long long codegen_static_array_length(const struct Expression *expr)
@@ -4200,10 +4420,179 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
     if (left_reg == NULL || right_reg == NULL)
         return inst_list;
 
-    int left_is_string = (left_expr != NULL && expr_has_type_tag(left_expr, STRING_TYPE));
-    int right_is_string = (right_expr != NULL && expr_has_type_tag(right_expr, STRING_TYPE));
+    int left_is_shortstring = (left_expr != NULL && codegen_expr_is_shortstring_value_ctx(left_expr, ctx) &&
+        !expr_has_type_tag(left_expr, STRING_TYPE));
+    int right_is_shortstring = (right_expr != NULL && codegen_expr_is_shortstring_value_ctx(right_expr, ctx) &&
+        !expr_has_type_tag(right_expr, STRING_TYPE));
+    int left_is_char_array = (left_expr != NULL && codegen_expr_is_char_array_like_ctx(left_expr, ctx) &&
+        !left_is_shortstring);
+    int right_is_char_array = (right_expr != NULL && codegen_expr_is_char_array_like_ctx(right_expr, ctx) &&
+        !right_is_shortstring);
+
+    int left_is_string = (left_expr != NULL && (expr_has_type_tag(left_expr, STRING_TYPE) ||
+        left_is_shortstring || left_is_char_array));
+    int right_is_string = (right_expr != NULL && (expr_has_type_tag(right_expr, STRING_TYPE) ||
+        right_is_shortstring || right_is_char_array));
     int left_is_char_ptr = expr_is_char_pointer(left_expr);
     int right_is_char_ptr = expr_is_char_pointer(right_expr);
+
+    if ((left_is_char_array || right_is_char_array) &&
+        (left_is_string || right_is_string || left_is_char_ptr || right_is_char_ptr))
+    {
+        long long array_len = 0;
+        long long rhs_array_len = 0;
+        int invert_cmp = 0;
+        const char *cmp_func = "kgpc_char_array_compare";
+        int compare_full = ((left_is_char_array && right_is_string && !right_is_char_ptr) ||
+                            (right_is_char_array && left_is_string && !left_is_char_ptr));
+
+        if (left_is_char_array && right_is_char_array)
+        {
+            if (!codegen_get_char_array_length(left_expr, ctx, &array_len) ||
+                !codegen_get_char_array_length(right_expr, ctx, &rhs_array_len))
+            {
+                free_reg(get_reg_stack(), right_reg);
+                free_reg(get_reg_stack(), left_reg);
+                if (relop_type != NULL)
+                    *relop_type = relop_kind;
+                return inst_list;
+            }
+            cmp_func = "kgpc_char_array_compare_array";
+        }
+        else if (left_is_char_array)
+        {
+            if (!codegen_get_char_array_length(left_expr, ctx, &array_len))
+            {
+                free_reg(get_reg_stack(), right_reg);
+                free_reg(get_reg_stack(), left_reg);
+                if (relop_type != NULL)
+                    *relop_type = relop_kind;
+                return inst_list;
+            }
+        }
+        else
+        {
+            if (!codegen_get_char_array_length(right_expr, ctx, &array_len))
+            {
+                free_reg(get_reg_stack(), right_reg);
+                free_reg(get_reg_stack(), left_reg);
+                if (relop_type != NULL)
+                    *relop_type = relop_kind;
+                return inst_list;
+            }
+            invert_cmp = 1;
+        }
+
+        if (left_is_shortstring)
+        {
+            StackNode_t *right_preserve = NULL;
+            if (right_reg != NULL)
+            {
+                right_preserve = add_l_t("relop_right_preserve");
+                if (right_preserve != NULL)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                        right_reg->bit_64, right_preserve->offset);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+            }
+            inst_list = codegen_promote_shortstring_reg(inst_list, ctx, left_reg);
+            if (right_preserve != NULL)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                    right_preserve->offset, right_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+        }
+        if (right_is_shortstring)
+        {
+            StackNode_t *left_preserve = NULL;
+            if (left_reg != NULL)
+            {
+                left_preserve = add_l_t("relop_left_preserve");
+                if (left_preserve != NULL)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                        left_reg->bit_64, left_preserve->offset);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+            }
+            inst_list = codegen_promote_shortstring_reg(inst_list, ctx, right_reg);
+            if (left_preserve != NULL)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                    left_preserve->offset, left_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+        }
+
+        const char *arg0 = current_arg_reg64(0);
+        const char *arg1 = current_arg_reg64(1);
+        const char *arg2 = current_arg_reg64(2);
+        const char *arg3 = current_arg_reg64(3);
+        if (arg0 == NULL || arg1 == NULL || (strcmp(cmp_func, "kgpc_char_array_compare_array") == 0 &&
+            (arg2 == NULL || arg3 == NULL)))
+        {
+            free_reg(get_reg_stack(), right_reg);
+            free_reg(get_reg_stack(), left_reg);
+            if (relop_type != NULL)
+                *relop_type = relop_kind;
+            return inst_list;
+        }
+
+        if (strcmp(cmp_func, "kgpc_char_array_compare_array") == 0)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", left_reg->bit_64, arg0);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n", array_len, arg1);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", right_reg->bit_64, arg2);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n", rhs_array_len, arg3);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else if (!invert_cmp)
+        {
+            if (compare_full)
+                cmp_func = "kgpc_char_array_compare_full";
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", left_reg->bit_64, arg0);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n", array_len, arg1);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", right_reg->bit_64, arg2);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else
+        {
+            if (compare_full)
+                cmp_func = "kgpc_char_array_compare_full";
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", right_reg->bit_64, arg0);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n", array_len, arg1);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", left_reg->bit_64, arg2);
+            inst_list = add_inst(inst_list, buffer);
+        }
+
+        inst_list = codegen_vect_reg(inst_list, 0);
+        snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", cmp_func);
+        inst_list = add_inst(inst_list, buffer);
+        if (invert_cmp)
+            inst_list = add_inst(inst_list, "\tnegl\t%eax\n");
+        snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", RETURN_REG_32, left_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+        free_arg_regs();
+
+        free_reg(get_reg_stack(), right_reg);
+        snprintf(buffer, sizeof(buffer), "\tcmpl\t$0, %s\n", left_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+        free_reg(get_reg_stack(), left_reg);
+
+        if (relop_type != NULL)
+            *relop_type = relop_kind;
+        return inst_list;
+    }
+
     if ((left_is_string && right_is_string) ||
         (left_is_string && right_is_char_ptr) ||
         (right_is_string && left_is_char_ptr))
@@ -4218,6 +4607,11 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
                 *relop_type = relop_kind;
             return inst_list;
         }
+
+        if (left_is_shortstring)
+            inst_list = codegen_promote_shortstring_reg(inst_list, ctx, left_reg);
+        if (right_is_shortstring)
+            inst_list = codegen_promote_shortstring_reg(inst_list, ctx, right_reg);
 
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", right_reg->bit_64, rhs_arg);
         inst_list = add_inst(inst_list, buffer);
@@ -5131,17 +5525,15 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 arginfo_assign_register(&arg_infos[arg_num], desc_addr_reg, arg_expr);
             }
         }
-        /* Handle string literal passed to ShortString parameter.
-         * ShortStrings use Pascal format: length byte at index 0, followed by string data.
-         * We need to convert the C string literal to a ShortString in a stack buffer. */
-        else if (expected_type == SHORTSTRING_TYPE && arg_expr != NULL && arg_expr->type == EXPR_STRING)
+        /* Handle ShortString parameter (by value): materialize a ShortString buffer
+         * matching the formal size and pass its address. */
+        else if (expected_type == SHORTSTRING_TYPE && arg_expr != NULL && !is_var_param)
         {
-            const char *str_data = arg_expr->expr_data.string;
-            int str_len = (str_data != NULL) ? (int)strlen(str_data) : 0;
-            if (str_len > 255) str_len = 255;  /* ShortString max length */
-            
-            /* Allocate 256 bytes on stack for ShortString buffer */
-            StackNode_t *shortstr_buf = codegen_alloc_temp_bytes("shortstr_arg", 256);
+            int shortstr_size = codegen_formal_shortstring_size(formal_arg_decl, ctx->symtab);
+            if (shortstr_size < 2)
+                shortstr_size = 2;
+
+            StackNode_t *shortstr_buf = codegen_alloc_temp_bytes("shortstr_arg", shortstr_size);
             if (shortstr_buf == NULL)
             {
                 codegen_report_error(ctx,
@@ -5149,21 +5541,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 if (arg_infos != NULL) free(arg_infos);
                 return inst_list;
             }
-            
-            /* Put string literal in rodata section */
-            const char *readonly_section = codegen_readonly_section_directive();
-            char label[64];
-            snprintf(label, sizeof(label), ".LC%d", ctx->write_label_counter++);
-            
-            char escaped_str[CODEGEN_MAX_INST_BUF];
-            escape_string(escaped_str, str_data ? str_data : "", sizeof(escaped_str));
-            /* Use larger buffer for string literal embedding to avoid truncation */
-            char str_literal_buffer[CODEGEN_MAX_INST_BUF + 128];
-            snprintf(str_literal_buffer, sizeof(str_literal_buffer), "%s\n%s:\n\t.string \"%s\"\n\t.text\n",
-                     readonly_section, label, escaped_str);
-            inst_list = add_inst(inst_list, str_literal_buffer);
-            
-            /* Get register for buffer address */
+
             Register_t *buf_addr_reg = get_free_reg(get_reg_stack(), &inst_list);
             if (buf_addr_reg == NULL)
             {
@@ -5172,57 +5550,149 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 if (arg_infos != NULL) free(arg_infos);
                 return inst_list;
             }
-            
-            /* Get register for string literal address */
-            Register_t *str_addr_reg = get_free_reg(get_reg_stack(), &inst_list);
-            if (str_addr_reg == NULL)
-            {
-                free_reg(get_reg_stack(), buf_addr_reg);
-                codegen_report_error(ctx,
-                    "ERROR: Unable to allocate register for string literal address.");
-                if (arg_infos != NULL) free(arg_infos);
-                return inst_list;
-            }
-            
-            /* Load buffer address */
+
             snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
                 shortstr_buf->offset, buf_addr_reg->bit_64);
             inst_list = add_inst(inst_list, buffer);
-            
-            /* Load string literal address */
-            snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
-                label, str_addr_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-            
-            /* Call kgpc_string_to_shortstring(dest, src, max_len) */
-            if (codegen_target_is_windows())
+
+            if (codegen_expr_is_shortstring_value_ctx(arg_expr, ctx))
             {
-                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", buf_addr_reg->bit_64);
-                inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", str_addr_reg->bit_64);
-                inst_list = add_inst(inst_list, buffer);
-                inst_list = add_inst(inst_list, "\tmovl\t$256, %r8d\n");
+                Register_t *src_reg = NULL;
+                if (codegen_expr_is_addressable(arg_expr))
+                {
+                    inst_list = codegen_address_for_expr(arg_expr, inst_list, ctx, &src_reg);
+                }
+                else
+                {
+                    inst_list = codegen_expr_with_result(arg_expr, inst_list, ctx, &src_reg);
+                }
+                if (codegen_had_error(ctx) || src_reg == NULL)
+                {
+                    free_reg(get_reg_stack(), buf_addr_reg);
+                    if (arg_infos != NULL) free(arg_infos);
+                    return inst_list;
+                }
+
+                if (codegen_target_is_windows())
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", buf_addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%edx\n", shortstr_size);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r8\n", src_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+                else
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", buf_addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%rsi\n", shortstr_size);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", src_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+
+                inst_list = add_inst(inst_list, "\tmovl\t$0, %eax\n");
+                inst_list = add_inst(inst_list, "\tcall\tkgpc_shortstring_to_shortstring\n");
+                free_arg_regs();
+                free_reg(get_reg_stack(), src_reg);
+            }
+            else if (codegen_expr_is_char_array_like_ctx(arg_expr, ctx))
+            {
+                long long array_len = 0;
+                if (!codegen_get_char_array_length(arg_expr, ctx, &array_len) || array_len <= 0)
+                {
+                    free_reg(get_reg_stack(), buf_addr_reg);
+                    if (arg_infos != NULL) free(arg_infos);
+                    return inst_list;
+                }
+
+                Register_t *src_reg = NULL;
+                if (!codegen_expr_is_addressable(arg_expr))
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Unsupported expression type for ShortString conversion.");
+                    free_reg(get_reg_stack(), buf_addr_reg);
+                    if (arg_infos != NULL) free(arg_infos);
+                    return inst_list;
+                }
+                inst_list = codegen_address_for_expr(arg_expr, inst_list, ctx, &src_reg);
+                if (codegen_had_error(ctx) || src_reg == NULL)
+                {
+                    free_reg(get_reg_stack(), buf_addr_reg);
+                    if (arg_infos != NULL) free(arg_infos);
+                    return inst_list;
+                }
+
+                if (codegen_target_is_windows())
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", buf_addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", src_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %%r8\n", array_len);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%r9d\n", shortstr_size);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+                else
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", buf_addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", src_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %%rdx\n", array_len);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%ecx\n", shortstr_size);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+
+                inst_list = add_inst(inst_list, "\tmovl\t$0, %eax\n");
+                inst_list = add_inst(inst_list, "\tcall\tkgpc_char_array_to_shortstring\n");
+                free_arg_regs();
+                free_reg(get_reg_stack(), src_reg);
             }
             else
             {
-                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", buf_addr_reg->bit_64);
-                inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", str_addr_reg->bit_64);
-                inst_list = add_inst(inst_list, buffer);
-                inst_list = add_inst(inst_list, "\tmovl\t$256, %edx\n");
+                Register_t *value_reg = NULL;
+                inst_list = codegen_expr_with_result(arg_expr, inst_list, ctx, &value_reg);
+                if (codegen_had_error(ctx) || value_reg == NULL)
+                {
+                    free_reg(get_reg_stack(), buf_addr_reg);
+                    if (arg_infos != NULL) free(arg_infos);
+                    return inst_list;
+                }
+
+                if (codegen_target_is_windows())
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", buf_addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%r8d\n", shortstr_size);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+                else
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", buf_addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", value_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%edx\n", shortstr_size);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+
+                inst_list = add_inst(inst_list, "\tmovl\t$0, %eax\n");
+                inst_list = add_inst(inst_list, "\tcall\tkgpc_string_to_shortstring\n");
+                free_arg_regs();
+                free_reg(get_reg_stack(), value_reg);
             }
-            
-            free_reg(get_reg_stack(), str_addr_reg);
-            
-            inst_list = add_inst(inst_list, "\tmovl\t$0, %eax\n");
-            inst_list = add_inst(inst_list, "\tcall\tkgpc_string_to_shortstring\n");
-            
-            /* Reload buffer address after the call (it may have been clobbered) */
+
+            /* Reload buffer address after possible calls */
             snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
                 shortstr_buf->offset, buf_addr_reg->bit_64);
             inst_list = add_inst(inst_list, buffer);
-            
-            /* Save buffer address to arg_infos for later use in argument passing */
+
             StackNode_t *arg_spill = add_l_t("arg_eval");
             if (arg_spill != NULL && arg_infos != NULL)
             {
@@ -5230,16 +5700,16 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                     buf_addr_reg->bit_64, arg_spill->offset);
                 inst_list = add_inst(inst_list, buffer);
                 free_reg(get_reg_stack(), buf_addr_reg);
-                
+
                 arg_infos[arg_num].reg = NULL;
                 arg_infos[arg_num].spill = arg_spill;
                 arg_infos[arg_num].expr = arg_expr;
-                arg_infos[arg_num].is_pointer_like = 1;  /* Pass as pointer */
+                arg_infos[arg_num].is_pointer_like = 1;
             }
             else if (arg_infos != NULL)
             {
                 arginfo_assign_register(&arg_infos[arg_num], buf_addr_reg, arg_expr);
-                arg_infos[arg_num].is_pointer_like = 1;  /* Pass as pointer */
+                arg_infos[arg_num].is_pointer_like = 1;
             }
         }
         else if(is_var_param || is_array_param || is_array_arg)

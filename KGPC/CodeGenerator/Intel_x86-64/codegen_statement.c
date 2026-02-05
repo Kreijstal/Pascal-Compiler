@@ -1621,6 +1621,78 @@ static ListNode_t *codegen_call_string_to_char_array(ListNode_t *inst_list, Code
     return inst_list;
 }
 
+/* Call kgpc_shortstring_to_char_array(dest, src, size) */
+static ListNode_t *codegen_call_shortstring_to_char_array(ListNode_t *inst_list, CodeGenContext *ctx,
+    Register_t *addr_reg, Register_t *value_reg, int array_size)
+{
+    if (inst_list == NULL || ctx == NULL || addr_reg == NULL || value_reg == NULL)
+        return inst_list;
+
+    char buffer[128];
+    if (codegen_target_is_windows())
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", addr_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%r8\n", array_size);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", addr_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", value_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%rdx\n", array_size);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = add_inst(inst_list, "\tcall\tkgpc_shortstring_to_char_array\n");
+    free_arg_regs();
+    return inst_list;
+}
+
+/* Call kgpc_char_array_to_shortstring(dest, src, src_len, dest_size) */
+static ListNode_t *codegen_call_char_array_to_shortstring(ListNode_t *inst_list, CodeGenContext *ctx,
+    Register_t *addr_reg, Register_t *value_reg, int src_len, int dest_size)
+{
+    if (inst_list == NULL || ctx == NULL || addr_reg == NULL || value_reg == NULL)
+        return inst_list;
+
+    char buffer[128];
+    if (codegen_target_is_windows())
+    {
+        /* Windows x64 ABI: rcx, rdx, r8, r9 */
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", addr_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%r8\n", src_len);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%r9\n", dest_size);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else
+    {
+        /* System V ABI: rdi, rsi, rdx, rcx */
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", addr_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", value_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%rdx\n", src_len);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%rcx\n", dest_size);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = add_inst(inst_list, "\tcall\tkgpc_char_array_to_shortstring\n");
+    free_arg_regs();
+    return inst_list;
+}
+
 /* Check if an array access expression targets a shortstring element.
  * This handles cases like Names[0] where Names is array[...] of ShortString. */
 static int codegen_array_access_targets_shortstring(const struct Expression *expr, CodeGenContext *ctx)
@@ -1704,6 +1776,100 @@ static int codegen_expr_is_shortstring_array(const struct Expression *expr)
     return 0;
 }
 
+static int codegen_expr_is_shortstring_value_local(const struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+    if (expr_get_type_tag(expr) == SHORTSTRING_TYPE)
+        return 1;
+    if (expr->resolved_kgpc_type != NULL)
+    {
+        struct TypeAlias *alias = kgpc_type_get_type_alias(expr->resolved_kgpc_type);
+        if (kgpc_type_is_shortstring(expr->resolved_kgpc_type) ||
+            (alias != NULL && alias->is_shortstring))
+            return 1;
+    }
+    return 0;
+}
+
+static int codegen_get_char_array_bounds(const struct Expression *expr, CodeGenContext *ctx,
+    int *lower_out, int *upper_out, int *is_shortstring_out)
+{
+    if (lower_out != NULL) *lower_out = 0;
+    if (upper_out != NULL) *upper_out = -1;
+    if (is_shortstring_out != NULL) *is_shortstring_out = 0;
+    if (expr == NULL)
+        return 0;
+
+    int found = 0;
+    int lower = 0;
+    int upper = -1;
+
+    if (expr->is_array_expr && expr->array_element_type == CHAR_TYPE)
+    {
+        lower = expr_get_array_lower_bound(expr);
+        upper = expr_get_array_upper_bound(expr);
+        found = 1;
+    }
+    else
+    {
+        KgpcType *kgpc = expr_get_kgpc_type(expr);
+        if (kgpc != NULL && kgpc_type_is_array(kgpc) &&
+            kgpc->info.array_info.element_type != NULL &&
+            kgpc->info.array_info.element_type->kind == TYPE_KIND_PRIMITIVE &&
+            kgpc->info.array_info.element_type->info.primitive_type_tag == CHAR_TYPE)
+        {
+            lower = kgpc->info.array_info.start_index;
+            upper = kgpc->info.array_info.end_index;
+            found = 1;
+        }
+        else if (expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL)
+        {
+            HashNode_t *node = NULL;
+            if (FindIdent(&node, ctx->symtab, expr->expr_data.id) >= 0 && node != NULL &&
+                node->type != NULL && kgpc_type_is_array(node->type) &&
+                node->type->info.array_info.element_type != NULL &&
+                node->type->info.array_info.element_type->kind == TYPE_KIND_PRIMITIVE &&
+                node->type->info.array_info.element_type->info.primitive_type_tag == CHAR_TYPE)
+            {
+                lower = node->type->info.array_info.start_index;
+                upper = node->type->info.array_info.end_index;
+                found = 1;
+                if (is_shortstring_out != NULL &&
+                    node->type->type_alias != NULL &&
+                    node->type->type_alias->is_shortstring)
+                {
+                    *is_shortstring_out = 1;
+                }
+            }
+        }
+    }
+
+    if (!found)
+        return 0;
+
+    if (lower_out != NULL) *lower_out = lower;
+    if (upper_out != NULL) *upper_out = upper;
+
+    if (is_shortstring_out != NULL)
+    {
+        int is_short = (*is_shortstring_out != 0);
+        if (!is_short)
+            is_short = codegen_expr_is_shortstring_array(expr);
+        if (!is_short)
+        {
+            KgpcType *kgpc = expr_get_kgpc_type(expr);
+            if (kgpc != NULL && kgpc->type_alias != NULL && kgpc->type_alias->is_shortstring)
+                is_short = 1;
+        }
+        if (!is_short && lower == 0 && upper == 255)
+            is_short = 1;
+        *is_shortstring_out = is_short;
+    }
+
+    return 1;
+}
+
 static int codegen_get_shortstring_capacity(const struct Expression *expr, CodeGenContext *ctx)
 {
     if (expr != NULL)
@@ -1713,7 +1879,30 @@ static int codegen_get_shortstring_capacity(const struct Expression *expr, CodeG
             expr_type->kind == TYPE_KIND_PRIMITIVE &&
             expr_type->info.primitive_type_tag == SHORTSTRING_TYPE)
         {
+            struct TypeAlias *alias = kgpc_type_get_type_alias(expr_type);
+            if (alias != NULL && alias->array_end >= alias->array_start && alias->array_end >= 0)
+                return alias->array_end - alias->array_start + 1;
             return 256;
+        }
+        if (expr_type != NULL)
+        {
+            struct TypeAlias *alias = kgpc_type_get_type_alias(expr_type);
+            if (alias != NULL && alias->is_shortstring &&
+                alias->array_end >= alias->array_start && alias->array_end >= 0)
+            {
+                return alias->array_end - alias->array_start + 1;
+            }
+            if (kgpc_type_is_array(expr_type) &&
+                expr_type->type_alias != NULL && expr_type->type_alias->is_shortstring)
+            {
+                int start = 0;
+                int end = -1;
+                if (kgpc_type_get_array_bounds(expr_type, &start, &end) == 0 &&
+                    end >= start && end >= 0)
+                {
+                    return end - start + 1;
+                }
+            }
         }
     }
 
@@ -1872,6 +2061,61 @@ static ListNode_t *codegen_assign_static_array(struct Expression *dest_expr,
 {
     if (dest_expr == NULL || src_expr == NULL || ctx == NULL)
         return inst_list;
+
+    int dest_lower = 0, dest_upper = -1, dest_is_shortstring = 0;
+    int src_lower = 0, src_upper = -1, src_is_shortstring = 0;
+    int dest_is_char_array = codegen_get_char_array_bounds(dest_expr, ctx,
+        &dest_lower, &dest_upper, &dest_is_shortstring);
+    int src_is_char_array = codegen_get_char_array_bounds(src_expr, ctx,
+        &src_lower, &src_upper, &src_is_shortstring);
+    int src_is_shortstring_value = codegen_expr_is_shortstring_value_local(src_expr);
+    int dest_is_shortstring_value = codegen_expr_is_shortstring_value_local(dest_expr);
+
+    if ((dest_is_shortstring || dest_is_shortstring_value) && src_is_char_array && !src_is_shortstring)
+    {
+        Register_t *dest_reg = NULL;
+        Register_t *src_reg = NULL;
+        inst_list = codegen_address_for_expr(dest_expr, inst_list, ctx, &dest_reg);
+        inst_list = codegen_address_for_expr(src_expr, inst_list, ctx, &src_reg);
+        if (codegen_had_error(ctx) || dest_reg == NULL || src_reg == NULL)
+        {
+            if (dest_reg != NULL) free_reg(get_reg_stack(), dest_reg);
+            if (src_reg != NULL) free_reg(get_reg_stack(), src_reg);
+            return inst_list;
+        }
+
+        int src_len = src_upper - src_lower + 1;
+        int dest_size = dest_upper - dest_lower + 1;
+        if (src_len < 0) src_len = 0;
+        if (dest_size < 0) dest_size = 0;
+        inst_list = codegen_call_char_array_to_shortstring(inst_list, ctx,
+            dest_reg, src_reg, src_len, dest_size);
+        free_reg(get_reg_stack(), dest_reg);
+        free_reg(get_reg_stack(), src_reg);
+        return inst_list;
+    }
+
+    if (dest_is_char_array && !dest_is_shortstring && (src_is_shortstring || src_is_shortstring_value))
+    {
+        Register_t *dest_reg = NULL;
+        Register_t *src_reg = NULL;
+        inst_list = codegen_address_for_expr(dest_expr, inst_list, ctx, &dest_reg);
+        inst_list = codegen_address_for_expr(src_expr, inst_list, ctx, &src_reg);
+        if (codegen_had_error(ctx) || dest_reg == NULL || src_reg == NULL)
+        {
+            if (dest_reg != NULL) free_reg(get_reg_stack(), dest_reg);
+            if (src_reg != NULL) free_reg(get_reg_stack(), src_reg);
+            return inst_list;
+        }
+
+        int dest_size = dest_upper - dest_lower + 1;
+        if (dest_size < 0) dest_size = 0;
+        inst_list = codegen_call_shortstring_to_char_array(inst_list, ctx,
+            dest_reg, src_reg, dest_size);
+        free_reg(get_reg_stack(), dest_reg);
+        free_reg(get_reg_stack(), src_reg);
+        return inst_list;
+    }
 
     /* Calculate array size: (upper - lower + 1) * element_size */
     long long lower_bound = expr_get_array_lower_bound(dest_expr);
@@ -6100,11 +6344,12 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             return inst_list;
         }
         
-        /* Handle string literal assignment to char arrays */
-        if (var_type == CHAR_TYPE &&
-            var_expr->is_array_expr &&
-            var_expr->array_element_type == CHAR_TYPE &&
-            expr_get_type_tag(assign_expr) == STRING_TYPE)
+        /* Handle shortstring assignment to char arrays */
+        int array_lower = 0;
+        int array_upper = -1;
+        int array_is_shortstring = 0;
+        if (codegen_get_char_array_bounds(var_expr, ctx, &array_lower, &array_upper, &array_is_shortstring) &&
+            codegen_expr_is_shortstring_value_local(assign_expr))
         {
             Register_t *addr_reg = NULL;
             inst_list = codegen_address_for_expr(var_expr, inst_list, ctx, &addr_reg);
@@ -6116,12 +6361,38 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                 return inst_list;
             }
 
-            int array_size = expr_get_array_upper_bound(var_expr) - expr_get_array_lower_bound(var_expr) + 1;
+            int array_size = array_upper - array_lower + 1;
+            if (array_size < 0)
+                array_size = 0;
+
+            inst_list = codegen_call_shortstring_to_char_array(inst_list, ctx, addr_reg, value_reg, array_size);
+            free_reg(get_reg_stack(), value_reg);
+            free_reg(get_reg_stack(), addr_reg);
+            return inst_list;
+        }
+
+        /* Handle string literal assignment to char arrays */
+        array_lower = 0;
+        array_upper = -1;
+        array_is_shortstring = 0;
+        if (expr_get_type_tag(assign_expr) == STRING_TYPE &&
+            codegen_get_char_array_bounds(var_expr, ctx, &array_lower, &array_upper, &array_is_shortstring))
+        {
+            Register_t *addr_reg = NULL;
+            inst_list = codegen_address_for_expr(var_expr, inst_list, ctx, &addr_reg);
+            if (codegen_had_error(ctx) || addr_reg == NULL)
+            {
+                free_reg(get_reg_stack(), value_reg);
+                if (addr_reg != NULL)
+                    free_reg(get_reg_stack(), addr_reg);
+                return inst_list;
+            }
+
+            int array_size = array_upper - array_lower + 1;
+            if (array_size < 0)
+                array_size = 0;
             
-            /* Check if this is a ShortString-like array (length byte at index 0) */
-            int is_shortstring = codegen_expr_is_shortstring_array(var_expr);
-            
-            if (is_shortstring)
+            if (array_is_shortstring)
             {
                 /* Use ShortString-specific copy that sets length byte at index 0 */
                 inst_list = codegen_call_string_to_shortstring(inst_list, ctx, addr_reg, value_reg, array_size);
@@ -6151,9 +6422,47 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             fprintf(stderr, "\n");
         }
         if ((var_type == SHORTSTRING_TYPE || codegen_expr_is_shortstring_array(var_expr) ||
-             targets_shortstring) &&
-            expr_get_type_tag(assign_expr) == STRING_TYPE)
+             targets_shortstring))
         {
+            int rhs_lower = 0;
+            int rhs_upper = -1;
+            int rhs_is_shortstring = 0;
+            int lhs_lower = 0;
+            int lhs_upper = -1;
+            int lhs_is_shortstring = 0;
+
+            if (codegen_get_char_array_bounds(assign_expr, ctx, &rhs_lower, &rhs_upper, &rhs_is_shortstring) &&
+                !rhs_is_shortstring &&
+                codegen_get_char_array_bounds(var_expr, ctx, &lhs_lower, &lhs_upper, &lhs_is_shortstring))
+            {
+                Register_t *addr_reg = NULL;
+                inst_list = codegen_address_for_expr(var_expr, inst_list, ctx, &addr_reg);
+                if (codegen_had_error(ctx) || addr_reg == NULL)
+                {
+                    free_reg(get_reg_stack(), value_reg);
+                    if (addr_reg != NULL)
+                        free_reg(get_reg_stack(), addr_reg);
+                    return inst_list;
+                }
+
+                int src_len = rhs_upper - rhs_lower + 1;
+                int dest_size = lhs_upper - lhs_lower + 1;
+                if (src_len < 0) src_len = 0;
+                if (dest_size < 0) dest_size = 0;
+
+                inst_list = codegen_call_char_array_to_shortstring(inst_list, ctx, addr_reg, value_reg,
+                    src_len, dest_size);
+                free_reg(get_reg_stack(), value_reg);
+                free_reg(get_reg_stack(), addr_reg);
+                return inst_list;
+            }
+
+            if (expr_get_type_tag(assign_expr) != STRING_TYPE)
+            {
+                /* Fall through to default handling if RHS is not a string literal/value. */
+            }
+            else
+            {
             Register_t *addr_reg = NULL;
             inst_list = codegen_address_for_expr(var_expr, inst_list, ctx, &addr_reg);
             if (codegen_had_error(ctx) || addr_reg == NULL)
@@ -6174,6 +6483,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             free_reg(get_reg_stack(), value_reg);
             free_reg(get_reg_stack(), addr_reg);
             return inst_list;
+            }
         }
 
         /* Handle ShortString-to-ShortString assignment (copy 256-byte record). */

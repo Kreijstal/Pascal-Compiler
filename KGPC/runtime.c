@@ -2614,6 +2614,51 @@ void kgpc_string_to_shortstring(char *dest, const char *src, size_t dest_size)
         memset(dest + 1 + copy_len, 0, dest_size - 1 - copy_len);
 }
 
+void kgpc_char_array_to_shortstring(char *dest, const char *src, size_t src_len, size_t dest_size)
+{
+    if (dest == NULL || src == NULL || dest_size < 2)
+        return;
+
+    size_t max_chars = (dest_size - 1 < 255) ? (dest_size - 1) : 255;
+    size_t copy_len = (src_len < max_chars) ? src_len : max_chars;
+
+    dest[0] = (char)copy_len;
+    if (copy_len > 0)
+        memcpy(dest + 1, src, copy_len);
+    if (copy_len + 1 < dest_size)
+        memset(dest + 1 + copy_len, 0, dest_size - 1 - copy_len);
+}
+
+void kgpc_shortstring_to_char_array(char *dest, const char *src, size_t dest_size)
+{
+    if (dest == NULL || src == NULL || dest_size == 0)
+        return;
+
+    unsigned char src_len = (unsigned char)src[0];
+    size_t copy_len = (src_len < dest_size) ? src_len : dest_size;
+
+    if (copy_len > 0)
+        memcpy(dest, src + 1, copy_len);
+    if (copy_len < dest_size)
+        memset(dest + copy_len, 0, dest_size - copy_len);
+}
+
+void kgpc_shortstring_to_shortstring(char *dest, size_t dest_size, const char *src)
+{
+    if (dest == NULL || src == NULL || dest_size < 2)
+        return;
+
+    unsigned char src_len = (unsigned char)src[0];
+    size_t max_chars = (dest_size - 1 < 255) ? (dest_size - 1) : 255;
+    size_t copy_len = (src_len < max_chars) ? src_len : max_chars;
+
+    dest[0] = (char)copy_len;
+    if (copy_len > 0)
+        memcpy(dest + 1, src + 1, copy_len);
+    if (copy_len + 1 < dest_size)
+        memset(dest + 1 + copy_len, 0, dest_size - 1 - copy_len);
+}
+
 void kgpc_shortstring_setlength(char *target, int64_t new_length)
 {
     if (target == NULL)
@@ -3269,6 +3314,92 @@ int64_t kgpc_string_compare(const char *lhs, const char *rhs)
     if (lhs_len < rhs_len)
         return -1;
     if (lhs_len > rhs_len)
+        return 1;
+    return 0;
+}
+
+static size_t kgpc_char_array_bounded_length(const char *value, size_t max_len)
+{
+    if (value == NULL || max_len == 0)
+        return 0;
+    const void *pos = memchr(value, '\0', max_len);
+    if (pos == NULL)
+        return max_len;
+    return (size_t)((const char *)pos - value);
+}
+
+int64_t kgpc_char_array_compare(const char *array_value, size_t array_len, const char *rhs)
+{
+    if (array_value == NULL)
+        array_value = "";
+    if (rhs == NULL)
+        rhs = "";
+
+    size_t lhs_len = kgpc_char_array_bounded_length(array_value, array_len);
+    size_t rhs_len = kgpc_string_known_length(rhs);
+    size_t min_len = (lhs_len < rhs_len) ? lhs_len : rhs_len;
+
+    if (min_len > 0)
+    {
+        int cmp = memcmp(array_value, rhs, min_len);
+        if (cmp != 0)
+            return (int64_t)cmp;
+    }
+
+    if (lhs_len < rhs_len)
+        return -1;
+    if (lhs_len > rhs_len)
+        return 1;
+    return 0;
+}
+
+int64_t kgpc_char_array_compare_full(const char *array_value, size_t array_len, const char *rhs)
+{
+    if (array_value == NULL)
+        array_value = "";
+    if (rhs == NULL)
+        rhs = "";
+
+    size_t lhs_len = array_len;
+    size_t rhs_len = kgpc_string_known_length(rhs);
+    size_t min_len = (lhs_len < rhs_len) ? lhs_len : rhs_len;
+
+    if (min_len > 0)
+    {
+        int cmp = memcmp(array_value, rhs, min_len);
+        if (cmp != 0)
+            return (int64_t)cmp;
+    }
+
+    if (lhs_len < rhs_len)
+        return -1;
+    if (lhs_len > rhs_len)
+        return 1;
+    return 0;
+}
+
+int64_t kgpc_char_array_compare_array(const char *lhs, size_t lhs_len,
+    const char *rhs, size_t rhs_len)
+{
+    if (lhs == NULL)
+        lhs = "";
+    if (rhs == NULL)
+        rhs = "";
+
+    size_t lhs_eff = kgpc_char_array_bounded_length(lhs, lhs_len);
+    size_t rhs_eff = kgpc_char_array_bounded_length(rhs, rhs_len);
+    size_t min_len = (lhs_eff < rhs_eff) ? lhs_eff : rhs_eff;
+
+    if (min_len > 0)
+    {
+        int cmp = memcmp(lhs, rhs, min_len);
+        if (cmp != 0)
+            return (int64_t)cmp;
+    }
+
+    if (lhs_eff < rhs_eff)
+        return -1;
+    if (lhs_eff > rhs_eff)
         return 1;
     return 0;
 }

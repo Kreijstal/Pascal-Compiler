@@ -1030,15 +1030,107 @@ static ListNode_t *promote_char_operand_to_string(expr_node_t *node, ListNode_t 
     return inst_list;
 }
 
+static int expr_is_shortstring_storage(const struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+    if (expr_get_type_tag(expr) == SHORTSTRING_TYPE)
+        return 1;
+    if (expr->resolved_kgpc_type != NULL)
+    {
+        struct TypeAlias *alias = kgpc_type_get_type_alias(expr->resolved_kgpc_type);
+        if (kgpc_type_is_shortstring(expr->resolved_kgpc_type) ||
+            (alias != NULL && alias->is_shortstring))
+            return 1;
+    }
+    if (expr->is_array_expr && expr->array_element_type == CHAR_TYPE)
+    {
+        int lower = expr_get_array_lower_bound(expr);
+        int upper = expr_get_array_upper_bound(expr);
+        if (lower == 0 && upper == 255)
+            return 1;
+    }
+    return 0;
+}
+
+static int expr_is_char_array_expr(const struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+    if (expr->is_array_expr && expr->array_element_type == CHAR_TYPE)
+        return 1;
+    if (expr->resolved_kgpc_type != NULL &&
+        expr->resolved_kgpc_type->kind == TYPE_KIND_ARRAY &&
+        expr->resolved_kgpc_type->info.array_info.element_type != NULL &&
+        expr->resolved_kgpc_type->info.array_info.element_type->kind == TYPE_KIND_PRIMITIVE &&
+        expr->resolved_kgpc_type->info.array_info.element_type->info.primitive_type_tag == CHAR_TYPE)
+    {
+        return 1;
+    }
+    return 0;
+}
+
+static int expr_get_char_array_length_expr(const struct Expression *expr, CodeGenContext *ctx,
+    long long *out_len)
+{
+    if (out_len != NULL)
+        *out_len = 0;
+    if (expr == NULL)
+        return 0;
+
+    long long lower = 0;
+    long long upper = -1;
+    int found = 0;
+
+    if (expr->is_array_expr && expr->array_element_type == CHAR_TYPE)
+    {
+        lower = expr_get_array_lower_bound(expr);
+        upper = expr_get_array_upper_bound(expr);
+        found = 1;
+    }
+    else if (expr->resolved_kgpc_type != NULL &&
+        kgpc_type_is_array(expr->resolved_kgpc_type))
+    {
+        KgpcType *elem = kgpc_type_get_array_element_type(expr->resolved_kgpc_type);
+        if (elem != NULL && elem->kind == TYPE_KIND_PRIMITIVE &&
+            elem->info.primitive_type_tag == CHAR_TYPE)
+        {
+            lower = expr->resolved_kgpc_type->info.array_info.start_index;
+            upper = expr->resolved_kgpc_type->info.array_info.end_index;
+            found = 1;
+        }
+    }
+    else if (expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindIdent(&node, ctx->symtab, expr->expr_data.id) >= 0 &&
+            node != NULL && node->type != NULL && kgpc_type_is_array(node->type))
+        {
+            KgpcType *elem = kgpc_type_get_array_element_type(node->type);
+            if (elem != NULL && elem->kind == TYPE_KIND_PRIMITIVE &&
+                elem->info.primitive_type_tag == CHAR_TYPE)
+            {
+                lower = node->type->info.array_info.start_index;
+                upper = node->type->info.array_info.end_index;
+                found = 1;
+            }
+        }
+    }
+
+    if (!found || upper < lower)
+        return 0;
+    if (out_len != NULL)
+        *out_len = upper - lower + 1;
+    return 1;
+}
+
 static ListNode_t *promote_shortstring_operand_to_string(expr_node_t *node, ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t *value_reg)
 {
     if (node == NULL || node->expr == NULL || ctx == NULL || value_reg == NULL)
         return inst_list;
 
-    int is_shortstring = (expr_get_type_tag(node->expr) == SHORTSTRING_TYPE) ||
-        is_shortstring_array(expr_get_type_tag(node->expr), node->expr->is_array_expr);
-    if (!is_shortstring)
+    if (!expr_is_shortstring_storage(node->expr))
         return inst_list;
 
     const char *arg_reg64 = current_arg_reg64(0);
@@ -1055,6 +1147,41 @@ static ListNode_t *promote_shortstring_operand_to_string(expr_node_t *node, List
     inst_list = add_inst(inst_list, buffer);
     free_arg_regs();
     return inst_list;
+}
+
+static ListNode_t *promote_shortstring_reg_operand(ListNode_t *inst_list, CodeGenContext *ctx,
+    const char *value_reg)
+{
+    if (inst_list == NULL || ctx == NULL || value_reg == NULL)
+        return inst_list;
+    if (value_reg[0] != '%')
+        return inst_list;
+
+    const char *arg_reg64 = current_arg_reg64(0);
+    if (arg_reg64 == NULL)
+        return inst_list;
+
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", value_reg, arg_reg64);
+    inst_list = add_inst(inst_list, buffer);
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = add_inst(inst_list, "\tcall\tkgpc_shortstring_to_string\n");
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", value_reg);
+    inst_list = add_inst(inst_list, buffer);
+    free_arg_regs();
+    return inst_list;
+}
+
+static ListNode_t *emit_move_ptr_operand(ListNode_t *inst_list, const char *src, const char *dst)
+{
+    if (inst_list == NULL || src == NULL || dst == NULL)
+        return inst_list;
+    char buffer[128];
+    if (src[0] == '%' || src[0] == '$')
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", src, dst);
+    else
+        snprintf(buffer, sizeof(buffer), "\tleaq\t%s, %s\n", src, dst);
+    return add_inst(inst_list, buffer);
 }
 
 static ListNode_t *gencode_string_concat(expr_node_t *node, ListNode_t *inst_list,
@@ -2330,9 +2457,8 @@ cleanup_constructor:
             return inst_list;
         }
 
-        int is_shortstring = (expr_get_type_tag(expr) == SHORTSTRING_TYPE) ||
-            is_shortstring_array(expr_get_type_tag(expr), expr->is_array_expr);
-        if (is_shortstring)
+        int is_shortstring = expr_is_shortstring_storage(expr);
+        if (is_shortstring || expr_is_char_array_expr(expr))
         {
             if (buf_leaf[0] != '$')
             {
@@ -3458,6 +3584,237 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                 break;
             }
 
+            {
+                int left_is_shortstring = (left_expr != NULL && expr_is_shortstring_storage(left_expr) &&
+                    !expr_has_type_tag(left_expr, STRING_TYPE));
+                int right_is_shortstring = (right_expr != NULL && expr_is_shortstring_storage(right_expr) &&
+                    !expr_has_type_tag(right_expr, STRING_TYPE));
+                int left_is_char_array = (left_expr != NULL && expr_is_char_array_expr(left_expr) &&
+                    !left_is_shortstring);
+                int right_is_char_array = (right_expr != NULL && expr_is_char_array_expr(right_expr) &&
+                    !right_is_shortstring);
+
+                int left_is_string = (left_expr != NULL && (expr_has_type_tag(left_expr, STRING_TYPE) ||
+                    left_is_shortstring || left_is_char_array));
+                int right_is_string = (right_expr != NULL && (expr_has_type_tag(right_expr, STRING_TYPE) ||
+                    right_is_shortstring || right_is_char_array));
+
+                if ((left_is_char_array || right_is_char_array) && (left_is_string || right_is_string))
+                {
+                    long long array_len = 0;
+                    long long rhs_array_len = 0;
+                    int invert_cmp = 0;
+                    const char *cmp_func = "kgpc_char_array_compare";
+                    int compare_full = ((left_is_char_array && right_is_string) ||
+                                        (right_is_char_array && left_is_string));
+
+                    if (left_is_char_array && right_is_char_array)
+                    {
+                        if (!expr_get_char_array_length_expr(left_expr, ctx, &array_len) ||
+                            !expr_get_char_array_length_expr(right_expr, ctx, &rhs_array_len))
+                            break;
+                        cmp_func = "kgpc_char_array_compare_array";
+                    }
+                    else if (left_is_char_array)
+                    {
+                        if (!expr_get_char_array_length_expr(left_expr, ctx, &array_len))
+                            break;
+                    }
+                    else
+                    {
+                        if (!expr_get_char_array_length_expr(right_expr, ctx, &array_len))
+                            break;
+                        invert_cmp = 1;
+                    }
+
+                    StackNode_t *spill_other = NULL;
+                    if (left_is_shortstring && right != NULL && right[0] == '%')
+                    {
+                        spill_other = add_l_t("relop_rhs_preserve");
+                        if (spill_other != NULL)
+                        {
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                                right, spill_other->offset);
+                            inst_list = add_inst(inst_list, buffer);
+                        }
+                    }
+                    if (left_is_shortstring)
+                        inst_list = promote_shortstring_reg_operand(inst_list, ctx, left);
+                    if (spill_other != NULL)
+                    {
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                            spill_other->offset, right);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
+
+                    spill_other = NULL;
+                    if (right_is_shortstring && left != NULL && left[0] == '%')
+                    {
+                        spill_other = add_l_t("relop_lhs_preserve");
+                        if (spill_other != NULL)
+                        {
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                                left, spill_other->offset);
+                            inst_list = add_inst(inst_list, buffer);
+                        }
+                    }
+                    if (right_is_shortstring)
+                        inst_list = promote_shortstring_reg_operand(inst_list, ctx, right);
+                    if (spill_other != NULL)
+                    {
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                            spill_other->offset, left);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
+
+                    const char *arg0 = current_arg_reg64(0);
+                    const char *arg1 = current_arg_reg64(1);
+                    const char *arg2 = current_arg_reg64(2);
+                    const char *arg3 = current_arg_reg64(3);
+                    if (arg0 == NULL || arg1 == NULL ||
+                        (strcmp(cmp_func, "kgpc_char_array_compare_array") == 0 &&
+                            (arg2 == NULL || arg3 == NULL)))
+                        break;
+
+                    if (strcmp(cmp_func, "kgpc_char_array_compare_array") == 0)
+                    {
+                        inst_list = emit_move_ptr_operand(inst_list, left, arg0);
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n", array_len, arg1);
+                        inst_list = add_inst(inst_list, buffer);
+                        inst_list = emit_move_ptr_operand(inst_list, right, arg2);
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n", rhs_array_len, arg3);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
+                    else if (!invert_cmp)
+                    {
+                        if (compare_full)
+                            cmp_func = "kgpc_char_array_compare_full";
+                        inst_list = emit_move_ptr_operand(inst_list, left, arg0);
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n", array_len, arg1);
+                        inst_list = add_inst(inst_list, buffer);
+                        inst_list = emit_move_ptr_operand(inst_list, right, arg2);
+                    }
+                    else
+                    {
+                        if (compare_full)
+                            cmp_func = "kgpc_char_array_compare_full";
+                        inst_list = emit_move_ptr_operand(inst_list, right, arg0);
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n", array_len, arg1);
+                        inst_list = add_inst(inst_list, buffer);
+                        inst_list = emit_move_ptr_operand(inst_list, left, arg2);
+                    }
+
+                    inst_list = codegen_vect_reg(inst_list, 0);
+                    snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", cmp_func);
+                    inst_list = add_inst(inst_list, buffer);
+                    if (invert_cmp)
+                        inst_list = add_inst(inst_list, "\tnegl\t%eax\n");
+                    inst_list = add_inst(inst_list, "\tcmpl\t$0, %eax\n");
+                    free_arg_regs();
+
+                    char left32_buf[16];
+                    char left8_buf[16];
+                    const char *left32 = reg_to_reg32(left, left32_buf, sizeof(left32_buf));
+                    const char *left8 = reg32_to_reg8(left32, left8_buf, sizeof(left8_buf));
+                    const char *set_instr = NULL;
+                    switch (relop_kind)
+                    {
+                        case EQ: set_instr = "sete"; break;
+                        case NE: set_instr = "setne"; break;
+                        case LT: set_instr = "setl"; break;
+                        case LE: set_instr = "setle"; break;
+                        case GT: set_instr = "setg"; break;
+                        case GE: set_instr = "setge"; break;
+                        default: break;
+                    }
+                    if (left32 != NULL && left8 != NULL && set_instr != NULL)
+                    {
+                        snprintf(buffer, sizeof(buffer), "\t%s\t%s\n", set_instr, left8);
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\tmovzbl\t%s, %s\n", left8, left32);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
+                    break;
+                }
+                if (left_is_string && right_is_string)
+                {
+                    StackNode_t *spill_other = NULL;
+                    if (left_is_shortstring && right != NULL && right[0] == '%')
+                    {
+                        spill_other = add_l_t("relop_rhs_preserve");
+                        if (spill_other != NULL)
+                        {
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                                right, spill_other->offset);
+                            inst_list = add_inst(inst_list, buffer);
+                        }
+                    }
+                    if (left_is_shortstring)
+                        inst_list = promote_shortstring_reg_operand(inst_list, ctx, left);
+                    if (spill_other != NULL)
+                    {
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                            spill_other->offset, right);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
+
+                    spill_other = NULL;
+                    if (right_is_shortstring && left != NULL && left[0] == '%')
+                    {
+                        spill_other = add_l_t("relop_lhs_preserve");
+                        if (spill_other != NULL)
+                        {
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                                left, spill_other->offset);
+                            inst_list = add_inst(inst_list, buffer);
+                        }
+                    }
+                    if (right_is_shortstring)
+                        inst_list = promote_shortstring_reg_operand(inst_list, ctx, right);
+                    if (spill_other != NULL)
+                    {
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                            spill_other->offset, left);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
+
+                    const char *arg0 = current_arg_reg64(0);
+                    const char *arg1 = current_arg_reg64(1);
+                    if (arg0 == NULL || arg1 == NULL)
+                        break;
+                    inst_list = emit_move_ptr_operand(inst_list, left, arg0);
+                    inst_list = emit_move_ptr_operand(inst_list, right, arg1);
+                    inst_list = codegen_vect_reg(inst_list, 0);
+                    inst_list = add_inst(inst_list, "\tcall\tkgpc_string_compare\n");
+                    inst_list = add_inst(inst_list, "\tcmpl\t$0, %eax\n");
+                    free_arg_regs();
+
+                    char left32_buf[16];
+                    char left8_buf[16];
+                    const char *left32 = reg_to_reg32(left, left32_buf, sizeof(left32_buf));
+                    const char *left8 = reg32_to_reg8(left32, left8_buf, sizeof(left8_buf));
+                    const char *set_instr = NULL;
+                    switch (relop_kind)
+                    {
+                        case EQ: set_instr = "sete"; break;
+                        case NE: set_instr = "setne"; break;
+                        case LT: set_instr = "setl"; break;
+                        case LE: set_instr = "setle"; break;
+                        case GT: set_instr = "setg"; break;
+                        case GE: set_instr = "setge"; break;
+                        default: break;
+                    }
+                    if (left32 != NULL && left8 != NULL && set_instr != NULL)
+                    {
+                        snprintf(buffer, sizeof(buffer), "\t%s\t%s\n", set_instr, left8);
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\tmovzbl\t%s, %s\n", left8, left32);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
+                    break;
+                }
+            }
+
             if (left_expr != NULL && expr_get_type_tag(left_expr) == REAL_TYPE)
             {
                 char left32_buf[16];
@@ -3646,6 +4003,15 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                     const char *right64 = reg32_to_reg64(right_candidate, right64_buf, sizeof(right64_buf));
                     if (right64 != NULL)
                         cmp_right = right64;
+                }
+                else
+                {
+                    const char *left32 = reg_to_reg32(left, left32_buf, sizeof(left32_buf));
+                    if (left32 != NULL)
+                        cmp_left = left32;
+                    const char *right32 = reg_to_reg32(right, right32_buf, sizeof(right32_buf));
+                    if (right32 != NULL)
+                        cmp_right = right32;
                 }
 
                 if (use_qword && cmp_right != NULL && cmp_right[0] == '$')
