@@ -595,6 +595,13 @@ static int expr_is_static_array_like(const struct Expression *expr, CodeGenConte
     if (expr_is_dynamic_array(expr))
         return 0;
 
+    /* ShortStrings should NOT be treated as static arrays for assignment.
+     * They have special handling via kgpc_string_to_shortstring. */
+    if (expr_get_type_tag(expr) == SHORTSTRING_TYPE)
+        return 0;
+    if (expr->resolved_kgpc_type != NULL && kgpc_type_is_shortstring(expr->resolved_kgpc_type))
+        return 0;
+
     if (expr->is_array_expr)
         return 1;
 
@@ -3613,10 +3620,29 @@ static ListNode_t *codegen_builtin_setlength_string(struct Statement *stmt, List
         return inst_list;
     }
 
+    /* Check if length expression contains a function call.
+     * If so, we need to spill addr_reg to the stack because
+     * the function call will clobber caller-saved registers. */
+    int len_has_function_call = expr_contains_function_call(len_expr);
+    StackNode_t *addr_spill_slot = NULL;
+    char buffer[128];
+
     Register_t *addr_reg = NULL;
     inst_list = codegen_address_for_expr(target_expr, inst_list, ctx, &addr_reg);
     if (codegen_had_error(ctx) || addr_reg == NULL)
         return inst_list;
+
+    /* Spill addr_reg to stack if len_expr contains a function call */
+    if (len_has_function_call)
+    {
+        addr_spill_slot = add_l_t("setlength_addr_spill");
+        if (addr_spill_slot != NULL)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                addr_reg->bit_64, addr_spill_slot->offset);
+            inst_list = add_inst(inst_list, buffer);
+        }
+    }
 
     Register_t *length_reg = NULL;
     inst_list = codegen_expr_with_result(len_expr, inst_list, ctx, &length_reg);
@@ -3628,10 +3654,17 @@ static ListNode_t *codegen_builtin_setlength_string(struct Statement *stmt, List
         return inst_list;
     }
 
+    /* Reload addr_reg from spill slot if we spilled it */
+    if (addr_spill_slot != NULL)
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+            addr_spill_slot->offset, addr_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
     if (!expr_uses_qword_kgpctype(len_expr))
         inst_list = codegen_sign_extend32_to64(inst_list, length_reg->bit_32, length_reg->bit_64);
 
-    char buffer[128];
     const char *arg0 = current_arg_reg64(0);  /* First argument: %rcx (Win) / %rdi (SysV) */
     const char *arg1 = current_arg_reg64(1);  /* Second argument: %rdx (Win) / %rsi (SysV) */
     
