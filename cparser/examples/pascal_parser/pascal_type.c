@@ -651,7 +651,7 @@ combinator_t* class_type(tag_t tag) {
     );
     
     // Nested class type (simplified - just empty class for now)
-    combinator_t* nested_field_decl = seq(new_combinator(), PASCAL_T_NONE,
+    combinator_t* nested_field_decl = seq(new_combinator(), PASCAL_T_FIELD_DECL,
         sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
         token(match(":")),
         create_type_ref_parser(),
@@ -660,7 +660,7 @@ combinator_t* class_type(tag_t tag) {
     );
 
     // Nested method declarations inside nested classes
-    combinator_t* nested_proc_decl = seq(new_combinator(), PASCAL_T_NONE,
+    combinator_t* nested_proc_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
         optional(token(keyword_ci("class"))),
         token(keyword_ci("procedure")),
         token(cident(PASCAL_T_IDENTIFIER)),
@@ -670,7 +670,7 @@ combinator_t* class_type(tag_t tag) {
         NULL
     );
 
-    combinator_t* nested_func_decl = seq(new_combinator(), PASCAL_T_NONE,
+    combinator_t* nested_func_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
         optional(token(keyword_ci("class"))),
         token(keyword_ci("function")),
         token(cident(PASCAL_T_IDENTIFIER)),
@@ -682,7 +682,7 @@ combinator_t* class_type(tag_t tag) {
         NULL
     );
 
-    combinator_t* nested_constructor_decl = seq(new_combinator(), PASCAL_T_NONE,
+    combinator_t* nested_constructor_decl = seq(new_combinator(), PASCAL_T_CONSTRUCTOR_DECL,
         optional(token(keyword_ci("class"))),
         token(keyword_ci("constructor")),
         token(cident(PASCAL_T_IDENTIFIER)),
@@ -692,7 +692,7 @@ combinator_t* class_type(tag_t tag) {
         NULL
     );
 
-    combinator_t* nested_destructor_decl = seq(new_combinator(), PASCAL_T_NONE,
+    combinator_t* nested_destructor_decl = seq(new_combinator(), PASCAL_T_DESTRUCTOR_DECL,
         optional(token(keyword_ci("class"))),
         token(keyword_ci("destructor")),
         token(cident(PASCAL_T_IDENTIFIER)),
@@ -1619,12 +1619,22 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
     // Method directives for advanced record members (e.g., overload; static; inline;)
     combinator_t* record_method_directives = create_record_method_directives();
 
+    // Pre-semicolon directives: FPC allows directives like "static" to appear
+    // before the terminating semicolon (e.g., "class function Foo: T static;")
+    combinator_t* pre_semi_directive = multi(new_combinator(), PASCAL_T_NONE,
+        token(create_keyword_parser("static", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("overload", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("inline", PASCAL_T_IDENTIFIER)),
+        NULL
+    );
+
     // Simple procedure header inside a record (with optional class prefix and method directives)
     combinator_t* adv_proc_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
         optional(token(keyword_ci("class"))),
         token(keyword_ci("procedure")),
         token(cident(PASCAL_T_IDENTIFIER)),
         create_pascal_param_parser(),
+        many(pre_semi_directive),
         token(match(";")),
         record_method_directives,
         NULL
@@ -1638,6 +1648,7 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
         create_pascal_param_parser(),
         token(match(":")),
         create_type_ref_parser(),
+        many(pre_semi_directive),
         token(match(";")),
         record_method_directives,
         NULL

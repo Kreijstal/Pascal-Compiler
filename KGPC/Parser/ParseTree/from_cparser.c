@@ -9319,44 +9319,53 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     ast_t *class_node = qualified->child;
     if (class_node == NULL)
         return NULL;
-    
-    // Skip over the optional type parameter list (PASCAL_T_TYPE_PARAM_LIST) if present
-    // The structure is: class_node [type_params] . method_id_node
-    ast_t *cursor = class_node->next;
-    if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
-        fprintf(stderr, "[KGPC] convert_method_impl: class_node->typ=%d\n", class_node->typ);
-        if (class_node->sym && class_node->sym->name)
-            fprintf(stderr, "[KGPC]   class_node->name=%s\n", class_node->sym->name);
-        if (cursor) {
-            fprintf(stderr, "[KGPC]   cursor->typ=%d\n", cursor->typ);
-            if (cursor->sym && cursor->sym->name)
-                fprintf(stderr, "[KGPC]   cursor->name=%s\n", cursor->sym->name);
-        }
-    }
-    
-    // Skip type parameter list if present
-    if (cursor != NULL && cursor->typ == PASCAL_T_TYPE_PARAM_LIST) {
-        cursor = cursor->next;
-        if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL && cursor) {
-            fprintf(stderr, "[KGPC]   after type_params cursor->typ=%d\n", cursor->typ);
-            if (cursor->sym && cursor->sym->name)
-                fprintf(stderr, "[KGPC]   after type_params cursor->name=%s\n", cursor->sym->name);
-        }
-    }
-    
-    // Skip the dot token if present (it may be wrapped)
-    while (cursor != NULL && cursor->typ != PASCAL_T_IDENTIFIER) {
-        cursor = cursor->next;
-        if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL && cursor) {
-            fprintf(stderr, "[KGPC]   skipping non-identifier cursor->typ=%d\n", cursor->typ);
-        }
-    }
-    
-    ast_t *method_id_node = cursor;
-    if (method_id_node == NULL)
-        return NULL;
 
-    char *class_name = dup_symbol(class_node);
+    // Collect all IDENTIFIER nodes from the qualified name.
+    // The grammar produces: IDENTIFIER [TYPE_PARAM_LIST] IDENTIFIER [IDENTIFIER]*
+    // For "Class.Method" we get 2 identifiers, for "Class.Inner.Method" we get 3, etc.
+    // The LAST identifier is always the method name; all preceding ones form the class path.
+    ast_t *ident_nodes[32];  // more than enough for any reasonable nesting depth
+    int ident_count = 0;
+
+    for (ast_t *cursor = class_node; cursor != NULL; cursor = cursor->next) {
+        if (cursor->typ == PASCAL_T_IDENTIFIER && ident_count < 32) {
+            ident_nodes[ident_count++] = cursor;
+        }
+        if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
+            fprintf(stderr, "[KGPC] convert_method_impl: child typ=%d (%s) name=%s\n",
+                    cursor->typ, pascal_tag_to_string(cursor->typ),
+                    (cursor->sym && cursor->sym->name) ? cursor->sym->name : "<null>");
+        }
+    }
+
+    if (ident_count < 2)
+        return NULL;  // Need at least ClassName and MethodName
+
+    ast_t *method_id_node = ident_nodes[ident_count - 1];  // last identifier = method name
+
+    // Build class_name by joining all identifiers except the last with "."
+    size_t class_name_len = 0;
+    for (int i = 0; i < ident_count - 1; i++) {
+        char *seg = dup_symbol(ident_nodes[i]);
+        if (seg != NULL) {
+            class_name_len += strlen(seg) + 1;  // +1 for '.' or '\0'
+            free(seg);
+        }
+    }
+
+    char *class_name = (char *)malloc(class_name_len);
+    if (class_name == NULL)
+        return NULL;
+    class_name[0] = '\0';
+    for (int i = 0; i < ident_count - 1; i++) {
+        char *seg = dup_symbol(ident_nodes[i]);
+        if (seg != NULL) {
+            if (i > 0) strcat(class_name, ".");
+            strcat(class_name, seg);
+            free(seg);
+        }
+    }
+
     char *method_name = dup_symbol(method_id_node);
     if (method_name == NULL) {
         free(class_name);
