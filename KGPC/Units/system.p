@@ -92,6 +92,7 @@ type
   TLineEndStr = string[3];
   TextBuf = array[0..255] of AnsiChar;
   TTextBuf = TextBuf;
+  PTextBuf = ^TextBuf;
 
   { Unicode/Ansi string manager hook types (FPC compatibility) }
   TWide2AnsiMoveProc = procedure(source: PWideChar; var dest: RawByteString; cp: TSystemCodePage; len: SizeInt);
@@ -191,6 +192,8 @@ type
     Buffer: TextBuf;
     CodePage: TSystemCodePage;
   end;
+
+  TextFile = text;
 
   FileRec = record
     Handle: THandle;
@@ -545,6 +548,7 @@ procedure kgpc_text_rewrite(var f: text); cdecl; external name 'kgpc_text_rewrit
 procedure kgpc_text_reset(var f: text); cdecl; external name 'kgpc_text_reset';
 procedure kgpc_text_close(var f: text); cdecl; external name 'kgpc_text_close';
 procedure kgpc_text_app(var f: text); cdecl; external name 'kgpc_text_app';
+procedure kgpc_text_setbuf(var f: text; buf: Pointer; size: LongInt); cdecl; external name 'kgpc_text_setbuf';
 procedure kgpc_tfile_assign(var f: file; filename: PAnsiChar); cdecl; external name 'kgpc_tfile_assign';
 procedure kgpc_tfile_rewrite(var f: file); cdecl; external name 'kgpc_tfile_rewrite';
 procedure kgpc_tfile_reset(var f: file); cdecl; external name 'kgpc_tfile_reset';
@@ -561,6 +565,9 @@ procedure kgpc_tfile_filepos(var f: file; var position: int64); cdecl; external 
 procedure kgpc_tfile_seek(var f: file; index: longint); cdecl; external name 'kgpc_tfile_seek';
 procedure kgpc_tfile_truncate_current(var f: file); cdecl; external name 'kgpc_tfile_truncate_current';
 procedure kgpc_tfile_truncate(var f: file; length: longint); cdecl; external name 'kgpc_tfile_truncate';
+procedure kgpc_init_args(argc: longint; argv: Pointer); cdecl; external name 'kgpc_init_args';
+function kgpc_param_count: longint; cdecl; external name 'kgpc_param_count';
+function kgpc_param_str(index: longint): AnsiString; cdecl; external name 'kgpc_param_str';
 
 function InterlockedExchangeAdd(var target: integer; value: integer): integer; overload;
 var
@@ -624,6 +631,16 @@ begin
     end;
 end;
 
+function ParamCount: longint;
+begin
+    ParamCount := kgpc_param_count;
+end;
+
+function ParamStr(index: longint): AnsiString;
+begin
+    ParamStr := kgpc_param_str(index);
+end;
+
 function file_is_text(var f: file): longint;
 begin
     assembler;
@@ -671,6 +688,14 @@ begin
 .Lhalt_call:
         call exit
     end
+end;
+
+procedure SetTextBuf(var f: text; var buf: array of byte); overload;
+begin
+    if Length(buf) > 0 then
+        kgpc_text_setbuf(f, @buf[0], Length(buf))
+    else
+        kgpc_text_setbuf(f, nil, 0);
 end;
 
 

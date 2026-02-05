@@ -97,7 +97,7 @@ if not host_machine.system().startswith('windows')
   runtime_sources += 'runtime_unix.c'
 endif
 runtime_deps = []
-runtime_c_args = []
+runtime_c_args = ['-O2']
 
 if gmp_dep.found()
   runtime_sources += ['runtime_gmp.c']

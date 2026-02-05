@@ -2267,12 +2267,15 @@ void init_pascal_unit_parser(combinator_t** p) {
         NULL
     ));
 
-    // Method implementations with qualified names (Class.Method or Class<T>.Method)
+    // Method implementations with qualified names:
+    //   Class.Method, Class<T>.Method, or Class.InnerType.Method (nested types)
     combinator_t* method_name_with_class = seq(new_combinator(), PASCAL_T_QUALIFIED_IDENTIFIER,
-        token(cident(PASCAL_T_IDENTIFIER)),          // class name
+        token(cident(PASCAL_T_IDENTIFIER)),          // class name (or outer type)
         class_generic_type_params,                   // optional generic type params for class
         token(match(".")),                           // dot
-        token(cident(PASCAL_T_IDENTIFIER)),          // method name
+        token(cident(PASCAL_T_IDENTIFIER)),          // inner type or method name
+        many(right(token(match(".")),                // zero or more additional .Name segments
+                   token(cident(PASCAL_T_IDENTIFIER)))),  // for nested types like Class.Inner.Method
         NULL
     );
 
@@ -2350,7 +2353,10 @@ void init_pascal_unit_parser(combinator_t** p) {
 
     // Method procedure implementation (with required body)
     combinator_t* method_procedure_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
-        optional(token(keyword_ci("class"))),        // optional class modifier
+        optional(multi(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("class")),
+            token(keyword_ci("generic")),
+            NULL)),                                  // optional class/generic modifier
         token(keyword_ci("procedure")),              // procedure keyword
         method_name_with_class,                      // ClassName.MethodName
         method_type_params,                          // optional type parameters <T, U>
@@ -2365,7 +2371,10 @@ void init_pascal_unit_parser(combinator_t** p) {
 
     // Method function implementation (with required body)
     combinator_t* method_function_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
-        optional(token(keyword_ci("class"))),        // optional class modifier
+        optional(multi(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("class")),
+            token(keyword_ci("generic")),
+            NULL)),                                  // optional class/generic modifier
         token(keyword_ci("function")),               // function keyword
         method_name_with_class,                      // ClassName.MethodName
         method_type_params,                          // optional type parameters <T, U>
@@ -2789,12 +2798,15 @@ void init_pascal_method_implementation_parser(combinator_t** p) {
         NULL
     ));
 
-    // Method name with class: ClassName.MethodName or ClassName<T>.MethodName
+    // Method name with class: ClassName.MethodName, ClassName<T>.MethodName,
+    // or ClassName.InnerType.MethodName (nested types)
     combinator_t* method_name_with_class = seq(new_combinator(), PASCAL_T_QUALIFIED_IDENTIFIER,
-        token(cident(PASCAL_T_IDENTIFIER)),      // class name
+        token(cident(PASCAL_T_IDENTIFIER)),      // class name (or outer type)
         class_generic_type_params,               // optional generic type params for class
         token(match(".")),                       // dot
-        token(cident(PASCAL_T_IDENTIFIER)),      // method name
+        token(cident(PASCAL_T_IDENTIFIER)),      // inner type or method name
+        many(right(token(match(".")),            // zero or more additional .Name segments
+                   token(cident(PASCAL_T_IDENTIFIER)))),  // for nested types
         NULL
     );
 
@@ -3609,10 +3621,12 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     ));
 
     combinator_t* method_name_with_class = seq(new_combinator(), PASCAL_T_QUALIFIED_IDENTIFIER,
-        token(cident(PASCAL_T_IDENTIFIER)),          // class name
+        token(cident(PASCAL_T_IDENTIFIER)),          // class name (or outer type)
         class_generic_type_params,                   // optional generic type params for class
         token(match(".")),                           // dot
-        token(cident(PASCAL_T_IDENTIFIER)),          // method name
+        token(cident(PASCAL_T_IDENTIFIER)),          // inner type or method name
+        many(right(token(match(".")),                // zero or more additional .Name segments
+                   token(cident(PASCAL_T_IDENTIFIER)))),  // for nested types
         NULL
     );
 
@@ -3642,7 +3656,10 @@ void init_pascal_complete_program_parser(combinator_t** p) {
 
     combinator_t* method_procedure_param_list = create_simple_param_list();
     combinator_t* procedure_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
-        optional(token(keyword_ci("class"))),        // optional class keyword
+        optional(multi(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("class")),
+            token(keyword_ci("generic")),
+            NULL)),                                  // optional class/generic keyword
         token(keyword_ci("procedure")),              // procedure keyword (with word boundary check)
         method_name_with_class,                      // ClassName.MethodName
         method_procedure_param_list,                 // optional parameter list
@@ -3655,7 +3672,10 @@ void init_pascal_complete_program_parser(combinator_t** p) {
 
     combinator_t* method_function_param_list = create_simple_param_list();
     combinator_t* method_function_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
-        optional(token(keyword_ci("class"))),        // optional class keyword
+        optional(multi(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("class")),
+            token(keyword_ci("generic")),
+            NULL)),                                  // optional class/generic keyword
         token(keyword_ci("function")),               // function keyword (with word boundary check)
         method_name_with_class,                      // ClassName.MethodName
         method_function_param_list,                  // optional parameter list

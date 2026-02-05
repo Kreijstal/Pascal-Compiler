@@ -778,8 +778,7 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
     file_to_parse = (char *)path;
 
     ParseResult result = parse(input, parser);
-    if (getenv("KGPC_DEBUG_TFPG_AST") != NULL && result.is_success && result.value.ast != NULL &&
-        path != NULL && (strstr(path, "fgl.p") != NULL || strstr(path, "FGL.p") != NULL))
+    if (getenv("KGPC_DEBUG_TFPG_AST") != NULL && result.is_success && result.value.ast != NULL)
     {
         fprintf(stderr, "==== Raw cparser AST for %s ====\n", path);
         print_pascal_ast(result.value.ast);
