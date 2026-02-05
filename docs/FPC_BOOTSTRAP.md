@@ -59,6 +59,7 @@ cp -f sysutils_flat.pp sysutils_indexofany.pp
 
 ### Interestingness test and cvise (example)
 Create a small interestingness script locally (example below), then run cvise against the flattened file.
+Do not use the `--timeout` flag with `cvise`.
 
 ```bash
 cat > /tmp/cvise_indexofany.sh <<'EOF'
