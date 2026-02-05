@@ -1131,6 +1131,7 @@ int codegen_type_is_signed(int type_tag)
     {
         case INT_TYPE:
         case LONGINT_TYPE:
+        case INT64_TYPE:
             return 1;
         default:
             return 0;
