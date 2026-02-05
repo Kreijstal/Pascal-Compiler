@@ -1880,8 +1880,16 @@ static int codegen_get_shortstring_capacity(const struct Expression *expr, CodeG
             expr_type->info.primitive_type_tag == SHORTSTRING_TYPE)
         {
             struct TypeAlias *alias = kgpc_type_get_type_alias(expr_type);
-            if (alias != NULL && alias->array_end >= alias->array_start && alias->array_end >= 0)
-                return alias->array_end - alias->array_start + 1;
+            if (alias != NULL)
+            {
+                if ((alias->is_shortstring || alias->is_array) &&
+                    alias->array_end >= alias->array_start && alias->array_end >= 0)
+                {
+                    return alias->array_end - alias->array_start + 1;
+                }
+                if (alias->storage_size > 1)
+                    return alias->storage_size;
+            }
             return 256;
         }
         if (expr_type != NULL)
