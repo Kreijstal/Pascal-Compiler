@@ -157,6 +157,9 @@ static inline const char *select_register_name(const Register_t *reg,
 
 static inline const char *select_divisor_temp_reg(const char *avoid_reg, int use_qword)
 {
+    /* NOTE: We currently reserve %r10/%r11 as scratch temporaries for div/mod sequences.
+     * This assumes the surrounding code does not rely on these registers holding live values.
+     * If this changes, integrate with the register allocator to avoid clobbering. */
     const char *primary = use_qword ? "%r10" : "%r10d";
     const char *fallback = use_qword ? "%r11" : "%r11d";
     if (avoid_reg != NULL && strcmp(avoid_reg, primary) == 0)

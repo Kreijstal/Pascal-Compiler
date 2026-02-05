@@ -2633,7 +2633,10 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
      * a nested function (which would have $ in the name like Parent$Nested). */
     int is_nested_function = (sub_id != NULL && strchr(sub_id, '$') != NULL);
     if (lexical_depth <= 0 && is_nested_function)
+    {
         lexical_depth = codegen_get_lexical_depth(ctx) + 1;
+        ctx->current_subprogram_lexical_depth = lexical_depth;
+    }
     int is_class_method = (sub_id != NULL && strstr(sub_id, "__") != NULL && !is_nested_function);
     StackNode_t *static_link = NULL;
 
@@ -2787,7 +2790,10 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
      * a nested function (which would have $ in the name like Parent$Nested). */
     int is_nested_function = (sub_id != NULL && strchr(sub_id, '$') != NULL);
     if (lexical_depth <= 0 && is_nested_function)
+    {
         lexical_depth = codegen_get_lexical_depth(ctx) + 1;
+        ctx->current_subprogram_lexical_depth = lexical_depth;
+    }
     int is_class_method = (sub_id != NULL && strstr(sub_id, "__") != NULL && !is_nested_function);
     StackNode_t *static_link = NULL;
 

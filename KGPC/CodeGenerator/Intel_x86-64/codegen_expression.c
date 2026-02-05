@@ -4781,9 +4781,15 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         if (is_self_param && codegen_self_param_is_class(formal_arg_decl, ctx))
             is_var_param = 0;
         int is_array_param = (formal_arg_decl != NULL && formal_arg_decl->type == TREE_ARR_DECL);
-        int formal_is_open_array = formal_decl_is_open_array(formal_arg_decl);
-        int formal_is_char_set = formal_decl_is_char_set(formal_arg_decl, ctx->symtab);
-        int formal_is_dynarray = codegen_formal_is_dynamic_array(formal_arg_decl, ctx->symtab);
+        int formal_is_open_array = 0;
+        int formal_is_char_set = 0;
+        int formal_is_dynarray = 0;
+        if (formal_arg_decl != NULL)
+        {
+            formal_is_open_array = formal_decl_is_open_array(formal_arg_decl);
+            formal_is_char_set = formal_decl_is_char_set(formal_arg_decl, ctx->symtab);
+            formal_is_dynarray = codegen_formal_is_dynamic_array(formal_arg_decl, ctx->symtab);
+        }
         if (!formal_is_dynarray && arg_num == 0 && call_expr != NULL &&
             call_expr->type == EXPR_FUNCTION_CALL &&
             call_expr->expr_data.function_call_data.arg0_is_dynarray_descriptor)
@@ -4918,14 +4924,29 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         if (arg_infos != NULL && expected_type == REAL_TYPE)
             arg_infos[arg_num].expected_real_size =
                 codegen_param_real_storage_size(formal_arg_decl, ctx->symtab);
-        if (arg_infos != NULL && expected_type == REAL_TYPE &&
-            (arg_infos[arg_num].expected_real_size == 0 ||
-             (arg_infos[arg_num].expected_real_size == 8 &&
-              (is_self_param || formal_arg_decl == NULL) &&
-              codegen_expr_real_storage_size(arg_expr, ctx) == 4)))
+        if (arg_infos != NULL && expected_type == REAL_TYPE)
         {
-            arg_infos[arg_num].expected_real_size =
-                codegen_expr_real_storage_size(arg_expr, ctx);
+            int expr_is_real = 0;
+            if (arg_expr != NULL)
+            {
+                int arg_type = expr_get_type_tag(arg_expr);
+                expr_is_real = (arg_type == REAL_TYPE) ||
+                    arg_expr->type == EXPR_RNUM ||
+                    (arg_expr->type == EXPR_TYPECAST &&
+                     arg_expr->expr_data.typecast_data.target_type == REAL_TYPE);
+            }
+
+            if (arg_infos[arg_num].expected_real_size == 0 ||
+                (arg_infos[arg_num].expected_real_size == 8 &&
+                 (is_self_param || formal_arg_decl == NULL) && expr_is_real &&
+                 codegen_expr_real_storage_size(arg_expr, ctx) == 4))
+            {
+                if (expr_is_real)
+                {
+                    arg_infos[arg_num].expected_real_size =
+                        codegen_expr_real_storage_size(arg_expr, ctx);
+                }
+            }
         }
 
         if (formal_is_open_array && is_array_arg)
