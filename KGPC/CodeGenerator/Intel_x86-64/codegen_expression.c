@@ -1473,8 +1473,10 @@ long long expr_get_array_element_size(const struct Expression *expr, CodeGenCont
         return (long long)sizeof(kgpc_tvarrec);
     
     /* Prefer KgpcType if available */
-    if (expr->resolved_kgpc_type != NULL && kgpc_type_is_array(expr->resolved_kgpc_type))
+    if (expr->resolved_kgpc_type != NULL && (kgpc_type_is_array(expr->resolved_kgpc_type) || kgpc_type_is_shortstring(expr->resolved_kgpc_type)))
     {
+        if (kgpc_type_is_shortstring(expr->resolved_kgpc_type))
+            return 1;
         long long size = kgpc_type_get_array_element_size(expr->resolved_kgpc_type);
         if (size > 0)
             return size;
@@ -3452,7 +3454,7 @@ static int codegen_resolve_is_array(struct Expression *array_expr, CodeGenContex
 
     KgpcType *base_type = expr_get_kgpc_type(array_expr);
     int base_is_array = (array_expr->is_array_expr ||
-        (base_type != NULL && kgpc_type_is_array(base_type)));
+        (base_type != NULL && (kgpc_type_is_array(base_type) || kgpc_type_is_shortstring(base_type))));
     if (!base_is_array && ctx->symtab != NULL && array_expr->type == EXPR_VAR_ID)
     {
         HashNode_t *array_node = NULL;
@@ -3482,7 +3484,7 @@ static int codegen_get_indexable_element_size(struct Expression *array_expr,
 
     StackNode_t *array_stack_node = NULL;
     int base_is_array = codegen_resolve_is_array(array_expr, ctx, &array_stack_node);
-    int base_is_string = (expr_has_type_tag(array_expr, STRING_TYPE) && !base_is_array);
+    int base_is_string = (is_string_type(expr_get_type_tag(array_expr)) && !base_is_array);
     int base_is_pointer = (expr_has_type_tag(array_expr, POINTER_TYPE) && !base_is_array);
     long long element_size_ll = 1;
 
@@ -3673,7 +3675,7 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
 
     StackNode_t *array_stack_node = NULL;
     int base_is_array = codegen_resolve_is_array(array_expr, ctx, &array_stack_node);
-    int base_is_string = (expr_has_type_tag(array_expr, STRING_TYPE) && !base_is_array);
+    int base_is_string = (is_string_type(expr_get_type_tag(array_expr)) && !base_is_array);
     int base_is_pointer = (expr_has_type_tag(array_expr, POINTER_TYPE) && !base_is_array);
 
     if (!base_is_array && !base_is_string && !base_is_pointer)

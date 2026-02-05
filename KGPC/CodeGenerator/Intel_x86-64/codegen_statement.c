@@ -1349,7 +1349,7 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
         if (target_type == UNKNOWN_TYPE)
             target_type = expr_get_type_tag(expr);
         if (inner != NULL &&
-            (target_type == RECORD_TYPE || target_type == FILE_TYPE || target_type == TEXT_TYPE))
+            (target_type == RECORD_TYPE || target_type == FILE_TYPE || target_type == TEXT_TYPE || target_type == SHORTSTRING_TYPE))
         {
             inst_list = codegen_address_for_expr(inner, inst_list, ctx, out_reg);
             goto cleanup;

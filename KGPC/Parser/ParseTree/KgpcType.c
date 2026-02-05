@@ -1507,16 +1507,38 @@ int kgpc_type_is_char(const KgpcType *type)
 
 int kgpc_type_is_string(const KgpcType *type)
 {
-    return (type != NULL &&
-        type->kind == TYPE_KIND_PRIMITIVE &&
-        type->info.primitive_type_tag == STRING_TYPE);
+    if (type == NULL)
+        return 0;
+    if (type->kind == TYPE_KIND_PRIMITIVE &&
+        (type->info.primitive_type_tag == STRING_TYPE ||
+         type->info.primitive_type_tag == SHORTSTRING_TYPE))
+    {
+        return 1;
+    }
+    /* Also treat ShortString arrays as strings */
+    if (type->kind == TYPE_KIND_ARRAY && type->type_alias != NULL &&
+        type->type_alias->is_shortstring)
+    {
+        return 1;
+    }
+    return 0;
 }
 
 int kgpc_type_is_shortstring(const KgpcType *type)
 {
-    return (type != NULL &&
-        type->kind == TYPE_KIND_PRIMITIVE &&
-        type->info.primitive_type_tag == SHORTSTRING_TYPE);
+    if (type == NULL)
+        return 0;
+    if (type->kind == TYPE_KIND_PRIMITIVE &&
+        type->info.primitive_type_tag == SHORTSTRING_TYPE)
+    {
+        return 1;
+    }
+    if (type->kind == TYPE_KIND_ARRAY && type->type_alias != NULL &&
+        type->type_alias->is_shortstring)
+    {
+        return 1;
+    }
+    return 0;
 }
 
 int kgpc_type_is_integer(const KgpcType *type)

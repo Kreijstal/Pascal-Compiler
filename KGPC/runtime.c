@@ -3280,6 +3280,82 @@ char *kgpc_strpas(const char *p)
     return kgpc_string_duplicate(p);
 }
 
+int64_t kgpc_string_pos_sa(const char *substr, const char *value)
+{
+    if (value == NULL)
+        value = "";
+    if (substr == NULL)
+        return 1;
+
+    size_t hay_len = kgpc_string_known_length(value);
+    size_t needle_len = (size_t)(unsigned char)substr[0];
+
+    if (needle_len == 0)
+        return 1;
+    if (needle_len > hay_len)
+        return 0;
+
+    const char *needle_data = substr + 1;
+    for (size_t i = 0; i + needle_len <= hay_len; ++i)
+    {
+        if (memcmp(value + i, needle_data, needle_len) == 0)
+            return (int64_t)(i + 1);
+    }
+
+    return 0;
+}
+
+int64_t kgpc_string_pos_as(const char *substr, const char *value)
+{
+    if (value == NULL)
+        return 0;
+    if (substr == NULL)
+        return 1;
+
+    size_t hay_len = (size_t)(unsigned char)value[0];
+    size_t needle_len = kgpc_string_known_length(substr);
+
+    if (needle_len == 0)
+        return 1;
+    if (needle_len > hay_len)
+        return 0;
+
+    const char *hay_data = value + 1;
+    for (size_t i = 0; i + needle_len <= hay_len; ++i)
+    {
+        if (memcmp(hay_data + i, substr, needle_len) == 0)
+            return (int64_t)(i + 1);
+    }
+
+    return 0;
+}
+
+int64_t kgpc_string_pos_ss(const char *substr, const char *value)
+{
+    if (value == NULL)
+        return 0;
+    if (substr == NULL)
+        return 1;
+
+    size_t hay_len = (size_t)(unsigned char)value[0];
+    size_t needle_len = (size_t)(unsigned char)substr[0];
+
+    if (needle_len == 0)
+        return 1;
+    if (needle_len > hay_len)
+        return 0;
+
+    const char *hay_data = value + 1;
+    const char *needle_data = substr + 1;
+    for (size_t i = 0; i + needle_len <= hay_len; ++i)
+    {
+        if (memcmp(hay_data + i, needle_data, needle_len) == 0)
+            return (int64_t)(i + 1);
+    }
+
+    return 0;
+}
+
 int64_t kgpc_string_pos(const char *substr, const char *value)
 {
     if (value == NULL)

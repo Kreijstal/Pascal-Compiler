@@ -571,7 +571,22 @@ int semcheck_builtin_pos(int *type_return, SymTab_t *symtab,
             free(expr->expr_data.function_call_data.mangled_id);
             expr->expr_data.function_call_data.mangled_id = NULL;
         }
-        expr->expr_data.function_call_data.mangled_id = strdup("kgpc_string_pos");
+
+        /* Determine which runtime overload to use based on ShortString layout */
+        int substr_is_short = kgpc_type_is_shortstring(substr_kgpc_type) ||
+                              is_shortstring_array(semcheck_tag_from_kgpc(substr_kgpc_type), substr_expr->is_array_expr);
+        int value_is_short = kgpc_type_is_shortstring(value_kgpc_type) ||
+                             is_shortstring_array(semcheck_tag_from_kgpc(value_kgpc_type), value_expr->is_array_expr);
+
+        const char *mangled_name = "kgpc_string_pos";
+        if (substr_is_short && value_is_short)
+            mangled_name = "kgpc_string_pos_ss";
+        else if (substr_is_short)
+            mangled_name = "kgpc_string_pos_sa";
+        else if (value_is_short)
+            mangled_name = "kgpc_string_pos_as";
+
+        expr->expr_data.function_call_data.mangled_id = strdup(mangled_name);
         if (expr->expr_data.function_call_data.mangled_id == NULL)
         {
             fprintf(stderr, "Error: failed to allocate mangled name for Pos.\n");
