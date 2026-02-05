@@ -7347,8 +7347,7 @@ static struct Expression *convert_factor(ast_t *expr_node) {
             base = 8;
             num_str++;  /* Skip the & prefix */
         }
-        /* Use strtoull to correctly handle unsigned 64-bit values (up to $FFFFFFFFFFFFFFFF) */
-        return mk_inum(expr_node->line, (long long)strtoull(num_str, NULL, base));
+        return mk_inum(expr_node->line, strtoll(num_str, NULL, base));
     }
     case PASCAL_T_REAL:
         return mk_rnum(expr_node->line, strtod(expr_node->sym->name, NULL));
