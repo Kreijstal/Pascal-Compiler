@@ -135,7 +135,7 @@ static inline int is_string_type(int type_tag)
  */
 static inline int is_shortstring_array(int type_tag, int is_array_expr)
 {
-    return is_array_expr && type_tag == CHAR_TYPE;
+    return is_array_expr && (type_tag == CHAR_TYPE || type_tag == SHORTSTRING_TYPE);
 }
 
 /**
