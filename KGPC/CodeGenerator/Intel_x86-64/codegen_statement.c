@@ -461,7 +461,7 @@ static ListNode_t *codegen_convert_int_like_to_real(ListNode_t *inst_list,
         return inst_list;
 
     char buffer[128];
-    if (source_type == LONGINT_TYPE)
+    if (is_64bit_integer_type(source_type) || source_type == LONGINT_TYPE)
         snprintf(buffer, sizeof(buffer), "\tcvtsi2sdq\t%s, %%xmm0\n", value_reg->bit_64);
     else
         snprintf(buffer, sizeof(buffer), "\tcvtsi2sdl\t%s, %%xmm0\n", value_reg->bit_32);
@@ -482,8 +482,7 @@ static ListNode_t *codegen_maybe_convert_int_like_to_real(int target_type,
         return inst_list;
 
     int source_type = expr_get_type_tag(source_expr);
-    if (target_type == REAL_TYPE &&
-        (source_type == INT_TYPE || source_type == LONGINT_TYPE))
+    if (target_type == REAL_TYPE && is_integer_type(source_type))
     {
         inst_list = codegen_convert_int_like_to_real(inst_list, value_reg, source_type);
         if (coerced_to_real != NULL)

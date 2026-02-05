@@ -105,6 +105,15 @@ static inline int is_integer_type(int type_tag)
 }
 
 /**
+ * Check if a type tag represents an unsigned integer type.
+ */
+static inline int is_unsigned_integer_type(int type_tag)
+{
+    return (type_tag == BYTE_TYPE || type_tag == WORD_TYPE || type_tag == LONGWORD_TYPE ||
+            type_tag == QWORD_TYPE);
+}
+
+/**
  * Check if a type tag represents a string type.
  * String types include:
  * - STRING_TYPE (dynamic string/AnsiString)

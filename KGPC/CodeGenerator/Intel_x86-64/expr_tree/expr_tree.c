@@ -3243,16 +3243,20 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
             }
             else if(type == MOD)
             {
+                int is_unsigned = is_unsigned_integer_type(expr_get_type_tag(expr));
                 if (use_qword_op)
                 {
                     snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rax\n", op_left);
                     inst_list = add_inst(inst_list, buffer);
-                    inst_list = add_inst(inst_list, "\tcqo\n");
+                    if (is_unsigned)
+                        inst_list = add_inst(inst_list, "\txorq\t%%rdx, %%rdx\n");
+                    else
+                        inst_list = add_inst(inst_list, "\tcqo\n");
 
                     const char *tmp_div = select_divisor_temp_reg(op_left, 1);
                     snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", op_right, tmp_div);
                     inst_list = add_inst(inst_list, buffer);
-                    snprintf(buffer, sizeof(buffer), "\tidivq\t%s\n", tmp_div);
+                    snprintf(buffer, sizeof(buffer), "\t%s\t%s\n", is_unsigned ? "divq" : "idivq", tmp_div);
                     inst_list = add_inst(inst_list, buffer);
 
                     snprintf(buffer, sizeof(buffer), "\tmovq\t%%rdx, %s\n", op_left);
@@ -3266,12 +3270,15 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                     const char *mod_right = reg64_to_reg32(right, right32, sizeof(right32));
                     snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%eax\n", mod_left);
                     inst_list = add_inst(inst_list, buffer);
-                    inst_list = add_inst(inst_list, "\tcdq\n");
+                    if (is_unsigned)
+                        inst_list = add_inst(inst_list, "\txorl\t%%edx, %%edx\n");
+                    else
+                        inst_list = add_inst(inst_list, "\tcdq\n");
 
                     const char *tmp_div = select_divisor_temp_reg(mod_left, 0);
                     snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", mod_right, tmp_div);
                     inst_list = add_inst(inst_list, buffer);
-                    snprintf(buffer, sizeof(buffer), "\tidivl\t%s\n", tmp_div);
+                    snprintf(buffer, sizeof(buffer), "\t%s\t%s\n", is_unsigned ? "divl" : "idivl", tmp_div);
                     inst_list = add_inst(inst_list, buffer);
 
                     snprintf(buffer, sizeof(buffer), "\tmovl\t%%edx, %s\n", mod_left);
@@ -3284,6 +3291,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
 #ifdef DEBUG_CODEGEN
             CODEGEN_DEBUG("DEBUG: gencode_op: left = %s, right = %s\n", left, right);
 #endif
+            int is_unsigned = is_unsigned_integer_type(expr_get_type_tag(expr));
             // left is the dividend, right is the divisor
             snprintf(buffer, sizeof(buffer), "\tpushq\t%%rdx\n");
             inst_list = add_inst(inst_list, buffer);
@@ -3298,9 +3306,12 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
 
                     snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rax\n", op_left);
                     inst_list = add_inst(inst_list, buffer);
-                    inst_list = add_inst(inst_list, "\tcqo\n");
+                    if (is_unsigned)
+                        inst_list = add_inst(inst_list, "\txorq\t%%rdx, %%rdx\n");
+                    else
+                        inst_list = add_inst(inst_list, "\tcqo\n");
 
-                    snprintf(buffer, sizeof(buffer), "\tidivq\t%s\n", tmp_div);
+                    snprintf(buffer, sizeof(buffer), "\t%s\t%s\n", is_unsigned ? "divq" : "idivq", tmp_div);
                     inst_list = add_inst(inst_list, buffer);
 
                     snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", op_left);
@@ -3320,9 +3331,12 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
 
                     snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%eax\n", div_left);
                     inst_list = add_inst(inst_list, buffer);
-                    inst_list = add_inst(inst_list, "\tcdq\n");
+                    if (is_unsigned)
+                        inst_list = add_inst(inst_list, "\txorl\t%%edx, %%edx\n");
+                    else
+                        inst_list = add_inst(inst_list, "\tcdq\n");
 
-                    snprintf(buffer, sizeof(buffer), "\tidivl\t%s\n", tmp_div);
+                    snprintf(buffer, sizeof(buffer), "\t%s\t%s\n", is_unsigned ? "divl" : "idivl", tmp_div);
                     inst_list = add_inst(inst_list, buffer);
 
                     snprintf(buffer, sizeof(buffer), "\tmovl\t%%eax, %s\n", div_left);
@@ -3331,10 +3345,6 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
 
                 snprintf(buffer, sizeof(buffer), "\tpopq\t%%rdx\n");
                 inst_list = add_inst(inst_list, buffer);
-            }
-            else if(type == MOD)
-            {
-                inst_list = gencode_modulus(left, right, inst_list);
             }
             else if(type == XOR)
             {
