@@ -917,6 +917,7 @@ int semcheck_mulop(int *type_return,
             {
                 case STAR: op_suffix = "op_mul"; break;
                 case SLASH: op_suffix = "op_div"; break;
+                case POWER: op_suffix = "op_pow"; break;
                 default: break;
             }
             

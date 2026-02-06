@@ -1500,6 +1500,8 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
     // Precedence 3: Multiplicative operators (*, /, div, mod, and, shl, shr)
     // FPC supports both Pascal keywords (shl, shr) and C-style operators (<<, >>)
     expr_insert(*p, 3, PASCAL_T_MUL, EXPR_INFIX, ASSOC_LEFT, token(match("*")));
+    // ** must be added after * via expr_altern so it is tried first (prepended)
+    expr_altern(*p, 3, PASCAL_T_POWER, token(match("**")));
     expr_altern(*p, 3, PASCAL_T_DIV, token(match("/")));
     expr_altern(*p, 3, PASCAL_T_INTDIV, token(keyword_ci("div")));
     expr_altern(*p, 3, PASCAL_T_MOD, token(keyword_ci("mod")));

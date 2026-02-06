@@ -7592,6 +7592,7 @@ static int map_mulop_tag(int tag) {
     case PASCAL_T_DIV: return SLASH;
     case PASCAL_T_INTDIV: return DIV;
     case PASCAL_T_MOD: return MOD;
+    case PASCAL_T_POWER: return POWER;
     case PASCAL_T_AND: return AND;
     case PASCAL_T_XOR: return XOR;
     case PASCAL_T_SHL: return SHL;
@@ -7955,6 +7956,7 @@ static struct Expression *convert_binary_expr(ast_t *node, int type) {
         case PASCAL_T_DIV:
         case PASCAL_T_INTDIV:
         case PASCAL_T_MOD:
+        case PASCAL_T_POWER:
         case PASCAL_T_AND:
         case PASCAL_T_XOR:
         case PASCAL_T_SHL:
@@ -7977,6 +7979,7 @@ static struct Expression *convert_binary_expr(ast_t *node, int type) {
     case PASCAL_T_DIV:
     case PASCAL_T_INTDIV:
     case PASCAL_T_MOD:
+    case PASCAL_T_POWER:
     case PASCAL_T_AND:
     case PASCAL_T_XOR:
     case PASCAL_T_SHL:

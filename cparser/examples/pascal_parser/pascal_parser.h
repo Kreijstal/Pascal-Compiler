@@ -25,6 +25,7 @@ typedef enum {
     PASCAL_T_DIV,
     PASCAL_T_INTDIV,
     PASCAL_T_MOD,
+    PASCAL_T_POWER,     // ** operator (overloadable; e.g. scalar product)
     PASCAL_T_NEG,
     PASCAL_T_POS,
     PASCAL_T_EQ,

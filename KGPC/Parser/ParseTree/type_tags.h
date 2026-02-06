@@ -64,6 +64,9 @@
 /* Set membership */
 #define IN                  33
 
+/* Arithmetic operators (extended) */
+#define POWER               43  /* ** operator (overloadable; e.g. scalar product) */
+
 /*
  * Type classification utilities
  */
