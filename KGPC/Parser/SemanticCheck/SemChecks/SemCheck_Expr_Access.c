@@ -2105,10 +2105,17 @@ int semcheck_funccall(int *type_return,
         first_arg_type_tag = semcheck_tag_from_kgpc(first_arg_kgpc_type);
         (void)first_arg_type_tag; /* Variable is used for potential debugging */
         
+        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+            fprintf(stderr, "[SemCheck] method-placeholder: resolved_kgpc_type=%p first_arg_kgpc_type=%p\n",
+                (void*)first_arg->resolved_kgpc_type, (void*)first_arg_kgpc_type);
+            if (first_arg_kgpc_type != NULL)
+                fprintf(stderr, "[SemCheck] method-placeholder: first_arg_kgpc_type->kind=%d\n",
+                    first_arg_kgpc_type->kind);
+        }
         if (first_arg->resolved_kgpc_type != NULL) {
             KgpcType *owner_type = first_arg->resolved_kgpc_type;
             struct RecordType *record_info = NULL;
-            
+
             if (owner_type->kind == TYPE_KIND_RECORD) {
                 record_info = owner_type->info.record_info;
             } else if (owner_type->kind == TYPE_KIND_POINTER &&
@@ -2116,7 +2123,21 @@ int semcheck_funccall(int *type_return,
                 owner_type->info.points_to->kind == TYPE_KIND_RECORD) {
                 record_info = owner_type->info.points_to->info.record_info;
             }
-            
+            if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                fprintf(stderr, "[SemCheck] method-placeholder: owner_type->kind=%d record_info=%p\n",
+                    owner_type->kind, (void*)record_info);
+                if (owner_type->kind == TYPE_KIND_POINTER) {
+                    fprintf(stderr, "[SemCheck] method-placeholder: points_to=%p\n",
+                        (void*)owner_type->info.points_to);
+                    if (owner_type->info.points_to != NULL)
+                        fprintf(stderr, "[SemCheck] method-placeholder: points_to->kind=%d\n",
+                            owner_type->info.points_to->kind);
+                }
+                if (record_info != NULL)
+                    fprintf(stderr, "[SemCheck] method-placeholder: record_info->type_id=%s\n",
+                        record_info->type_id ? record_info->type_id : "(null)");
+            }
+
             if (record_info != NULL && record_info->type_id != NULL) {
                 const char *method_name = id;
                 if (method_name != NULL && strncmp(method_name, "__", 2) == 0)

@@ -327,6 +327,27 @@ static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab
                         {
                             record_type_id = type_node->type->info.record_info->type_id;
                         }
+                        /* For class/interface types (pointer to record), include the
+                         * record type_id so overloads with different class params
+                         * get distinct mangled names. Skip for "Self" parameters
+                         * since methods are already distinguished by ClassName__ prefix
+                         * and including Self's class type breaks inherited calls. */
+                        {
+                            int is_self_param = 0;
+                            if (ids != NULL && ids->cur != NULL)
+                                is_self_param = (strcasecmp((const char *)ids->cur, "Self") == 0);
+                            if (!is_self_param &&
+                                resolved_type == HASHVAR_POINTER &&
+                                type_node->type != NULL &&
+                                type_node->type->kind == TYPE_KIND_POINTER &&
+                                type_node->type->info.points_to != NULL &&
+                                type_node->type->info.points_to->kind == TYPE_KIND_RECORD &&
+                                type_node->type->info.points_to->info.record_info != NULL &&
+                                type_node->type->info.points_to->info.record_info->type_id != NULL)
+                            {
+                                record_type_id = type_node->type->info.points_to->info.record_info->type_id;
+                            }
+                        }
                     }
                 }
             } else {
@@ -431,7 +452,7 @@ static char* MangleNameFromTypeList(const char* original_name, ListNode_t* type_
     ListNode_t* cur = type_list;
     while (cur != NULL) {
         MangleType *mt = (MangleType *)cur->cur;
-        if (mt != NULL && mt->kind == HASHVAR_RECORD && mt->type_id != NULL)
+        if (mt != NULL && (mt->kind == HASHVAR_RECORD || mt->kind == HASHVAR_POINTER) && mt->type_id != NULL)
         {
             char *sanitized = sanitize_type_id(mt->type_id);
             size_t extra = sanitized != NULL ? strlen(sanitized) : 0;
@@ -474,7 +495,7 @@ static char* MangleNameFromTypeList(const char* original_name, ListNode_t* type_
                 case HASHVAR_RECORD:  type_suffix = "_au"; break;   /* array of Record */
                 default:              type_suffix = "_a"; break;    /* array of unknown */
             }
-        } else if (type == HASHVAR_RECORD && mt != NULL && mt->type_id != NULL) {
+        } else if ((type == HASHVAR_RECORD || type == HASHVAR_POINTER) && mt != NULL && mt->type_id != NULL) {
             char *sanitized = sanitize_type_id(mt->type_id);
             if (sanitized != NULL)
             {
@@ -586,7 +607,28 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
                         record_type_id = kgpc_type->info.record_info->type_id;
                 }
                 else if (kgpc_type->kind == TYPE_KIND_POINTER)
+                {
                     resolved_type = HASHVAR_POINTER;
+                    /* For class/interface types (pointer to record), include the
+                     * record type_id in mangling to distinguish overloads like
+                     * Describe(TAnimal) vs Describe(TCat).
+                     * Skip for "Self" arguments since methods are distinguished
+                     * by ClassName__ prefix and including Self's class type
+                     * breaks inherited calls. */
+                    int is_self_arg = 0;
+                    if (arg_expr != NULL && arg_expr->type == EXPR_VAR_ID &&
+                        arg_expr->expr_data.id != NULL &&
+                        strcasecmp(arg_expr->expr_data.id, "Self") == 0)
+                        is_self_arg = 1;
+                    if (!is_self_arg)
+                    {
+                        KgpcType *points_to = kgpc_type->info.points_to;
+                        if (points_to != NULL && points_to->kind == TYPE_KIND_RECORD &&
+                            points_to->info.record_info != NULL &&
+                            points_to->info.record_info->type_id != NULL)
+                            record_type_id = points_to->info.record_info->type_id;
+                    }
+                }
                 else if (kgpc_type->kind == TYPE_KIND_PROCEDURE)
                     resolved_type = HASHVAR_PROCEDURE;
                 /* Check type_alias for STRING_TYPE to distinguish between
