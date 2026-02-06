@@ -5414,6 +5414,38 @@ void test_pascal_unit_advanced_record_nested_type_array(void) {
     free_input(input);
 }
 
+// Regression: case labels with qualified enum identifiers (THorzRectAlign.Left)
+void test_case_qualified_enum_labels(void) {
+    combinator_t* p = get_program_parser();
+    input_t* input = new_input();
+    const char* src =
+        "program P;\n"
+        "{$mode objfpc}\n"
+        "{$scopedenums on}\n"
+        "type\n"
+        "  TAlign = (Left, Center, Right);\n"
+        "procedure Test(A: TAlign);\n"
+        "begin\n"
+        "  case A of\n"
+        "    TAlign.Left: WriteLn('L');\n"
+        "    TAlign.Center: WriteLn('C');\n"
+        "    TAlign.Right: WriteLn('R');\n"
+        "  end;\n"
+        "end;\n"
+        "begin end.";
+    input->buffer = strdup(src);
+    input->length = (int)strlen(src);
+    ParseResult res = parse(input, p);
+    if (!res.is_success) {
+        printf("Parse error: %s\n", res.value.error->message);
+        free_error(res.value.error);
+    }
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) free_ast(res.value.ast);
+    free(input->buffer);
+    free_input(input);
+}
+
 
 TEST_LIST = {
     { "test_pascal_integer_parsing", test_pascal_integer_parsing },
@@ -5595,5 +5627,6 @@ TEST_LIST = {
     { "test_library_header_and_exports", test_library_header_and_exports },
     { "test_fpc_system_comment_keywords", test_fpc_system_comment_keywords },
     { "test_delphi_form_unit", test_delphi_form_unit },
+    { "test_case_qualified_enum_labels", test_case_qualified_enum_labels },
     { NULL, NULL }
 };

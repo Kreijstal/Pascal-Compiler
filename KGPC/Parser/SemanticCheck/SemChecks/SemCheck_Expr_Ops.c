@@ -1241,6 +1241,110 @@ int semcheck_varid(int *type_return,
                 scope_return = class_const_scope;
             }
         }
+        /* Qualified identifier resolution: split dotted identifiers like
+         * THorzRectAlign.Left into prefix (type) + suffix (member).
+         * This handles scoped enum values and unit-qualified constants
+         * in contexts where the parser produces a single flat identifier
+         * (e.g. case labels). */
+        if (scope_return == -1)
+        {
+            const char *dot = strchr(id, '.');
+            if (dot != NULL && dot[1] != '\0')
+            {
+                size_t prefix_len = (size_t)(dot - id);
+                char *prefix = (char *)malloc(prefix_len + 1);
+                const char *suffix = dot + 1;
+                assert(prefix != NULL);
+                memcpy(prefix, id, prefix_len);
+                prefix[prefix_len] = '\0';
+
+                HashNode_t *prefix_node = NULL;
+                int prefix_scope = FindIdent(&prefix_node, symtab, prefix);
+                if (prefix_scope >= 0 && prefix_node != NULL &&
+                    prefix_node->hash_type == HASHTYPE_TYPE)
+                {
+                    struct TypeAlias *type_alias = get_type_alias_from_node(prefix_node);
+                    if (type_alias != NULL && type_alias->is_enum &&
+                        type_alias->enum_literals != NULL)
+                    {
+                        int ordinal = 0;
+                        ListNode_t *literal_node = type_alias->enum_literals;
+                        while (literal_node != NULL)
+                        {
+                            if (literal_node->cur != NULL)
+                            {
+                                char *literal_name = (char *)literal_node->cur;
+                                if (strcasecmp(literal_name, suffix) == 0)
+                                {
+                                    free(prefix);
+                                    expr->type = EXPR_INUM;
+                                    expr->expr_data.i_num = ordinal;
+                                    semcheck_expr_set_resolved_type(expr, ENUM_TYPE);
+                                    if (type_alias->kgpc_type != NULL)
+                                        semcheck_expr_set_resolved_kgpc_type_shared(expr, type_alias->kgpc_type);
+                                    *type_return = ENUM_TYPE;
+                                    return 0;
+                                }
+                            }
+                            ++ordinal;
+                            literal_node = literal_node->next;
+                        }
+                    }
+                    /* Also check for class constants: Type.ConstName */
+                    char mangled_qid[512];
+                    snprintf(mangled_qid, sizeof(mangled_qid), "%s__%s", prefix, suffix);
+                    HashNode_t *class_const_node = NULL;
+                    int cc_scope = FindIdent(&class_const_node, symtab, mangled_qid);
+                    if (cc_scope >= 0 && class_const_node != NULL &&
+                        class_const_node->hash_type == HASHTYPE_CONST)
+                    {
+                        free(prefix);
+                        if (expr->expr_data.id != NULL)
+                            free(expr->expr_data.id);
+                        expr->expr_data.id = strdup(mangled_qid);
+                        id = expr->expr_data.id;
+                        hash_return = class_const_node;
+                        scope_return = cc_scope;
+                        goto resolved;
+                    }
+                }
+                else if (prefix_scope == -1)
+                {
+                    /* Prefix not found - might be a unit qualifier.
+                     * Try looking up the suffix directly. */
+                    HashNode_t *field_node = NULL;
+                    if (FindIdent(&field_node, symtab, suffix) >= 0 && field_node != NULL)
+                    {
+                        if (field_node->hash_type == HASHTYPE_CONST)
+                        {
+                            free(prefix);
+                            expr->type = EXPR_INUM;
+                            expr->expr_data.i_num = field_node->const_int_value;
+                            semcheck_expr_set_resolved_type(expr, LONGINT_TYPE);
+                            if (field_node->type != NULL)
+                                semcheck_expr_set_resolved_kgpc_type_shared(expr, field_node->type);
+                            *type_return = LONGINT_TYPE;
+                            return 0;
+                        }
+                        else if (field_node->hash_type == HASHTYPE_VAR ||
+                                 field_node->hash_type == HASHTYPE_ARRAY)
+                        {
+                            free(prefix);
+                            char *field_copy = strdup(suffix);
+                            assert(field_copy != NULL);
+                            if (expr->expr_data.id != NULL)
+                                free(expr->expr_data.id);
+                            expr->expr_data.id = field_copy;
+                            id = expr->expr_data.id;
+                            scope_return = FindIdent(&hash_return, symtab, id);
+                            goto resolved;
+                        }
+                    }
+                }
+                free(prefix);
+            }
+        }
+resolved:;
     }
     if (getenv("KGPC_DEBUG_RESULT") != NULL && id != NULL &&
         pascal_identifier_equals(id, "Result"))
