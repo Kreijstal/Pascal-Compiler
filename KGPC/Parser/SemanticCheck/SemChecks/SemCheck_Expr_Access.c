@@ -733,8 +733,8 @@ int semcheck_funccall(int *type_return,
                     }
                 }
             }
-            if (is_unit_qualifier)
-            {
+    if (is_unit_qualifier)
+    {
                 if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
                 {
                     fprintf(stderr, "[SemCheck] funccall unit-qual strip: receiver=%s id=%s\n",
@@ -756,6 +756,31 @@ int semcheck_funccall(int *type_return,
                 if (typecast_result != 0 || expr->type == EXPR_TYPECAST)
                     return typecast_result;
             }
+        }
+    }
+
+    /* Normalize @array[idx] precedence for CompareMem.
+     * If the parser produced ARRAY_ACCESS(ADDR(array), idx), rewrite it to
+     * ADDR(ARRAY_ACCESS(array, idx)) so pointer arguments resolve correctly. */
+    if (id != NULL && pascal_identifier_equals(id, "CompareMem") && args_given != NULL)
+    {
+        ListNode_t *arg_node = args_given;
+        while (arg_node != NULL)
+        {
+            struct Expression *arg_expr = (struct Expression *)arg_node->cur;
+            if (arg_expr != NULL &&
+                arg_expr->type == EXPR_ARRAY_ACCESS &&
+                arg_expr->expr_data.array_access_data.array_expr != NULL &&
+                arg_expr->expr_data.array_access_data.array_expr->type == EXPR_ADDR)
+            {
+                struct Expression *addr_expr = arg_expr->expr_data.array_access_data.array_expr;
+                struct Expression *addr_inner = addr_expr->expr_data.addr_data.expr;
+                /* Rewire: @ (array[idx]) */
+                arg_expr->expr_data.array_access_data.array_expr = addr_inner;
+                addr_expr->expr_data.addr_data.expr = arg_expr;
+                arg_node->cur = addr_expr;
+            }
+            arg_node = arg_node->next;
         }
     }
 
@@ -792,10 +817,10 @@ int semcheck_funccall(int *type_return,
                         if (current_owner != NULL)
                         {
                             struct RecordType *owner_record = semcheck_lookup_record_type(symtab, current_owner);
-                            if (owner_record != NULL && owner_record->is_type_helper)
+                            if (owner_record != NULL)
                             {
                                 self_record = owner_record;
-                                self_is_helper = 1;
+                                self_is_helper = owner_record->is_type_helper ? 1 : 0;
                             }
                         }
                     }
@@ -2360,6 +2385,14 @@ int semcheck_funccall(int *type_return,
                     owner_type = type_node->type;
             }
         }
+
+        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+            fprintf(stderr,
+                "[SemCheck] ctor resolve: record_info=%s owner_type=%p kind=%d\n",
+                (record_info != NULL && record_info->type_id != NULL) ? record_info->type_id : "<null>",
+                (void*)owner_type,
+                owner_type != NULL ? owner_type->kind : -1);
+        }
         
         if (record_info != NULL && record_info->type_id != NULL) {
             /* Ensure owner_type represents the class instance pointer for constructors. */
@@ -2556,15 +2589,48 @@ int semcheck_funccall(int *type_return,
                         fprintf(stderr, "[SemCheck] semcheck_funccall: Setting up return type for constructor %s\n", method_name);
                     }
                     
-                    /* Return type is the class itself (pointer to record) */
-                    semcheck_expr_set_resolved_kgpc_type_shared(expr, owner_type);
-                    *type_return = semcheck_tag_from_kgpc(owner_type);
-                    if (owner_type->kind == TYPE_KIND_POINTER && owner_type->info.points_to != NULL &&
-                        owner_type->info.points_to->kind == TYPE_KIND_RECORD) {
-                        expr->record_type = owner_type->info.points_to->info.record_info;
-                    } else if (owner_type->kind == TYPE_KIND_RECORD) {
-                        expr->record_type = owner_type->info.record_info;
+                    /* Return type is the static class reference used at the call site,
+                     * even if the constructor is inherited from a base class. */
+                    KgpcType *ctor_return_type = NULL;
+                    int return_type_owned = 0;
+                    if (record_info != NULL && record_type_is_class(record_info))
+                    {
+                        KgpcType *rec_type = create_record_type(record_info);
+                        if (rec_type != NULL)
+                        {
+                            ctor_return_type = create_pointer_type(rec_type);
+                            if (ctor_return_type != NULL)
+                            {
+                                return_type_owned = 1;
+                            }
+                            else
+                            {
+                                destroy_kgpc_type(rec_type);
+                            }
+                        }
                     }
+                    if (ctor_return_type == NULL)
+                        ctor_return_type = owner_type;
+
+                    semcheck_expr_set_resolved_kgpc_type_shared(expr, ctor_return_type);
+                    *type_return = semcheck_tag_from_kgpc(ctor_return_type);
+                    if (ctor_return_type != NULL &&
+                        ctor_return_type->kind == TYPE_KIND_POINTER &&
+                        ctor_return_type->info.points_to != NULL &&
+                        ctor_return_type->info.points_to->kind == TYPE_KIND_RECORD) {
+                        expr->record_type = ctor_return_type->info.points_to->info.record_info;
+                    } else if (ctor_return_type != NULL &&
+                               ctor_return_type->kind == TYPE_KIND_RECORD) {
+                        expr->record_type = ctor_return_type->info.record_info;
+                    }
+                    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                        fprintf(stderr,
+                            "[SemCheck] ctor return set: kind=%d record=%s\n",
+                            expr->resolved_kgpc_type != NULL ? expr->resolved_kgpc_type->kind : -1,
+                            (expr->record_type != NULL && expr->record_type->type_id != NULL) ? expr->record_type->type_id : "<null>");
+                    }
+                    if (return_type_owned && ctor_return_type != NULL)
+                        destroy_kgpc_type(ctor_return_type);
                 }
                 
                 free(mangled_method_name);
@@ -3278,7 +3344,22 @@ skip_overload_resolution:
                     fprintf(stderr, "[SemCheck] Overwriting resolved_kgpc_type from hash_return return_type\n");
                     fprintf(stderr, "[SemCheck]   return_type kind=%d\n", return_type->kind);
                 }
-                semcheck_expr_set_resolved_kgpc_type_shared(expr, return_type);
+                int skip_override_for_ctor = 0;
+                if (expr->expr_data.function_call_data.id != NULL)
+                {
+                    const char *sep = strstr(expr->expr_data.function_call_data.id, "__");
+                    const char *method_name = (sep != NULL) ? sep + 2 : expr->expr_data.function_call_data.id;
+                    if (method_name != NULL && strncasecmp(method_name, "Create", 6) == 0)
+                    {
+                        if (expr->resolved_kgpc_type != NULL &&
+                            expr->resolved_kgpc_type->kind == TYPE_KIND_POINTER)
+                        {
+                            skip_override_for_ctor = 1;
+                        }
+                    }
+                }
+                if (!skip_override_for_ctor)
+                    semcheck_expr_set_resolved_kgpc_type_shared(expr, return_type);
                 if (return_type->kind == TYPE_KIND_ARRAY)
                     semcheck_set_array_info_from_kgpctype(expr, symtab, return_type, expr->line_num);
                 else
@@ -3551,6 +3632,23 @@ skip_overload_resolution:
                 if (current_arg_expr != NULL)
                     semcheck_debug_expr_brief(current_arg_expr, "call arg");
             }
+            if (getenv("KGPC_DEBUG_COMPAREMEM") != NULL &&
+                id != NULL && pascal_identifier_equals(id, "CompareMem"))
+            {
+                const char *kgpc_str = "<null>";
+                if (current_arg_expr != NULL && current_arg_expr->resolved_kgpc_type != NULL)
+                    kgpc_str = kgpc_type_to_string(current_arg_expr->resolved_kgpc_type);
+                fprintf(stderr,
+                    "[KGPC_DEBUG_COMPAREMEM] arg=%d expr_type=%d tag=%d kgpc_kind=%d kgpc=%s\n",
+                    cur_arg,
+                    current_arg_expr != NULL ? current_arg_expr->type : -1,
+                    arg_type,
+                    (current_arg_expr != NULL && current_arg_expr->resolved_kgpc_type != NULL) ?
+                        current_arg_expr->resolved_kgpc_type->kind : -1,
+                    kgpc_str);
+                if (current_arg_expr != NULL)
+                    semcheck_debug_expr_brief(current_arg_expr, "comparemem arg");
+            }
             if (arg_decl->type == TREE_VAR_DECL)
                 true_arg_ids = arg_decl->tree_data.var_decl_data.ids;
             else
@@ -3718,6 +3816,38 @@ skip_overload_resolution:
                                 current_arg_expr ? current_arg_expr->type : -1,
                                 (current_arg_expr != NULL && current_arg_expr->resolved_kgpc_type != NULL) ?
                                     current_arg_expr->resolved_kgpc_type->kind : -1);
+                        }
+                        /* CompareMem expects pointers; if an array element or record field element was
+                         * passed without a recognized address-of, auto-wrap with @. */
+                        if (!type_compatible &&
+                            expected_type == POINTER_TYPE &&
+                            id != NULL && pascal_identifier_equals(id, "CompareMem") &&
+                            current_arg_expr != NULL &&
+                            current_arg_expr->type != EXPR_ADDR &&
+                            (current_arg_expr->type == EXPR_ARRAY_ACCESS ||
+                             current_arg_expr->type == EXPR_RECORD_ACCESS ||
+                             current_arg_expr->is_array_expr))
+                        {
+                            struct Expression *addr_expr = mk_addressof(current_arg_expr->line_num, current_arg_expr);
+                            int new_arg_type = UNKNOWN_TYPE;
+                            KgpcType *new_arg_kgpc_type = NULL;
+                            semcheck_expr_with_type(&new_arg_kgpc_type, symtab, addr_expr, max_scope_lev, NO_MUTATE);
+                            new_arg_type = semcheck_tag_from_kgpc(new_arg_kgpc_type);
+
+                            if (new_arg_type == POINTER_TYPE)
+                            {
+                                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+                                    fprintf(stderr, "[SemCheck] Auto-fixing missing @ for CompareMem argument\n");
+                                args_to_validate->cur = addr_expr;
+                                current_arg_expr = addr_expr;
+                                arg_type = new_arg_type;
+                                type_compatible = 1;
+                            }
+                            else
+                            {
+                                addr_expr->expr_data.addr_data.expr = NULL;
+                                free(addr_expr);
+                            }
                         }
                         /* Check for Char -> PChar mismatch (workaround for missing @ parser issue) */
                         if (!type_compatible && expected_type == POINTER_TYPE && arg_type == CHAR_TYPE)

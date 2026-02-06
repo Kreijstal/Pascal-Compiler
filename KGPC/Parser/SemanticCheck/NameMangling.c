@@ -91,6 +91,13 @@ static enum VarType ConvertParserTypeToVarType(int parser_type)
             return HASHVAR_LONGINT;
         case INT64_TYPE:
             return HASHVAR_INT64;
+        case BYTE_TYPE:
+        case WORD_TYPE:
+            return HASHVAR_INTEGER;
+        case LONGWORD_TYPE:
+            return HASHVAR_LONGINT;
+        case QWORD_TYPE:
+            return HASHVAR_INT64;
         case REAL_TYPE:
             return HASHVAR_REAL;
         case STRING_TYPE:

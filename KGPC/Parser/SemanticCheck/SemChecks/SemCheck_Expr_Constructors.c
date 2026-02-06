@@ -9,6 +9,29 @@
 */
 
 #include "SemCheck_Expr_Internal.h"
+#include <limits.h>
+
+static int integer_literal_fits_type(long long value, int expected_type)
+{
+    switch (expected_type)
+    {
+        case BYTE_TYPE:
+            return value >= 0 && value <= 255;
+        case WORD_TYPE:
+            return value >= 0 && value <= 65535;
+        case LONGWORD_TYPE:
+            return value >= 0 && value <= 4294967295LL;
+        case QWORD_TYPE:
+            return value >= 0;
+        case INT_TYPE:
+        case LONGINT_TYPE:
+            return value >= INT_MIN && value <= INT_MAX;
+        case INT64_TYPE:
+            return value >= LLONG_MIN && value <= LLONG_MAX;
+        default:
+            return 0;
+    }
+}
 
 int semcheck_convert_set_literal_to_array_literal(struct Expression *expr)
 {
@@ -89,6 +112,15 @@ int semcheck_typecheck_array_literal(struct Expression *expr, SymTab_t *symtab,
     if (expr == NULL || expr->type != EXPR_ARRAY_LITERAL)
         return 0;
 
+    if (getenv("KGPC_DEBUG_ARRAY_LITERAL") != NULL)
+    {
+        fprintf(stderr,
+            "[KGPC] typecheck array literal @ line %d: expected_type=%d expected_id=%s\n",
+            line_num,
+            expected_type,
+            expected_type_id != NULL ? expected_type_id : "<null>");
+    }
+
     if (expected_type == ARRAY_OF_CONST_TYPE)
     {
         ListNode_t *cur_elem = expr->expr_data.array_literal_data.elements;
@@ -122,6 +154,24 @@ int semcheck_typecheck_array_literal(struct Expression *expr, SymTab_t *symtab,
             continue;
         }
 
+        if (element_expr->type == EXPR_ARRAY_LITERAL)
+        {
+            if (expected_type != UNKNOWN_TYPE)
+            {
+                if (element_expr->array_element_type == UNKNOWN_TYPE)
+                    element_expr->array_element_type = expected_type;
+                if (element_expr->array_element_type_id == NULL && expected_type_id != NULL)
+                    element_expr->array_element_type_id = strdup(expected_type_id);
+            }
+            int nested_err = semcheck_typecheck_array_literal(element_expr, symtab, max_scope_lev,
+                expected_type, expected_type_id, line_num);
+            if (nested_err != 0)
+                error_count += nested_err;
+            ++index;
+            cur = cur->next;
+            continue;
+        }
+
         KgpcType *element_kgpc_type = NULL;
         error_count += semcheck_expr_with_type(&element_kgpc_type, symtab, element_expr,
             max_scope_lev, NO_MUTATE);
@@ -131,14 +181,39 @@ int semcheck_typecheck_array_literal(struct Expression *expr, SymTab_t *symtab,
             element_type != expected_type)
         {
             int compatible = 0;
-            if ((expected_type == LONGINT_TYPE && element_type == INT_TYPE) ||
-                (expected_type == INT_TYPE && element_type == LONGINT_TYPE))
+            if (is_integer_type(expected_type) && is_integer_type(element_type))
+            {
+                if (element_expr->type == EXPR_INUM)
+                {
+                    if (integer_literal_fits_type(element_expr->expr_data.i_num, expected_type))
+                        compatible = 1;
+                }
+                else
+                {
+                    compatible = 1;
+                }
+            }
+            else if (expected_type == REAL_TYPE && is_integer_type(element_type))
+            {
                 compatible = 1;
+            }
             else if (expected_type == STRING_TYPE && element_type == CHAR_TYPE)
+            {
                 compatible = 1;
+            }
 
             if (!compatible)
             {
+                if (getenv("KGPC_DEBUG_ARRAY_LITERAL") != NULL)
+                {
+                    fprintf(stderr,
+                        "[KGPC] array literal mismatch @ line %d index %d: expected=%d (%s) got=%d\n",
+                        line_num,
+                        index,
+                        expected_type,
+                        expected_type_id != NULL ? expected_type_id : "<null>",
+                        element_type);
+                }
                 semcheck_error_with_context("Error on line %d, element %d of array literal "
                     "does not match expected type.\n", line_num, index);
                 ++error_count;
@@ -213,6 +288,18 @@ int semcheck_prepare_array_literal_argument(Tree_t *formal_decl, struct Expressi
         }
         if (owns_expected && expected_kgpc != NULL)
             destroy_kgpc_type(expected_kgpc);
+    }
+
+    if (getenv("KGPC_DEBUG_ARRAY_LITERAL") != NULL && arg_expr->type == EXPR_ARRAY_LITERAL)
+    {
+        fprintf(stderr,
+            "[KGPC] array literal @ line %d: formal_decl=%s expected_type=%d expected_id=%s array_of_const=%d\n",
+            line_num,
+            formal_decl->type == TREE_ARR_DECL ? "ARR_DECL" :
+            (formal_decl->type == TREE_VAR_DECL ? "VAR_DECL" : "OTHER"),
+            expected_type,
+            expected_type_id != NULL ? expected_type_id : "<null>",
+            expected_is_array_of_const);
     }
 
     if (arg_expr->type == EXPR_SET)

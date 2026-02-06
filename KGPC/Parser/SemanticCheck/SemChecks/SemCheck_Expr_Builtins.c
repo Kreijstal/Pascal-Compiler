@@ -526,9 +526,10 @@ int semcheck_builtin_pos(int *type_return, SymTab_t *symtab,
     assert(expr->type == EXPR_FUNCTION_CALL);
 
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
-    if (args == NULL || args->next == NULL || args->next->next != NULL)
+    if (args == NULL || args->next == NULL ||
+        (args->next->next != NULL && args->next->next->next != NULL))
     {
-        semcheck_error_with_context("Error on line %d, Pos expects exactly two arguments.\n", expr->line_num);
+        semcheck_error_with_context("Error on line %d, Pos expects two or three arguments.\n", expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
     }
@@ -536,6 +537,13 @@ int semcheck_builtin_pos(int *type_return, SymTab_t *symtab,
     int error_count = 0;
     struct Expression *substr_expr = (struct Expression *)args->cur;
     struct Expression *value_expr = (struct Expression *)args->next->cur;
+    struct Expression *start_expr = NULL;
+    int has_start = 0;
+    if (args->next->next != NULL)
+    {
+        has_start = 1;
+        start_expr = (struct Expression *)args->next->next->cur;
+    }
 
     KgpcType *substr_kgpc_type = NULL;
     error_count += semcheck_expr_with_type(&substr_kgpc_type, symtab, substr_expr, max_scope_lev, NO_MUTATE);
@@ -563,6 +571,17 @@ int semcheck_builtin_pos(int *type_return, SymTab_t *symtab,
         semcheck_error_with_context("Error on line %d, Pos target must be a string.\n", expr->line_num);
         ++error_count;
     }
+    if (error_count == 0 && has_start)
+    {
+        KgpcType *start_kgpc_type = NULL;
+        error_count += semcheck_expr_with_type(&start_kgpc_type, symtab, start_expr, max_scope_lev, NO_MUTATE);
+        if (error_count == 0 && !kgpc_type_is_integer(start_kgpc_type))
+        {
+            semcheck_error_with_context("Error on line %d, Pos start index must be an integer.\n",
+                expr->line_num);
+            ++error_count;
+        }
+    }
 
     if (error_count == 0)
     {
@@ -578,13 +597,13 @@ int semcheck_builtin_pos(int *type_return, SymTab_t *symtab,
         int value_is_short = kgpc_type_is_shortstring(value_kgpc_type) ||
                              is_shortstring_array(semcheck_tag_from_kgpc(value_kgpc_type), value_expr->is_array_expr);
 
-        const char *mangled_name = "kgpc_string_pos";
+        const char *mangled_name = has_start ? "kgpc_string_pos_from" : "kgpc_string_pos";
         if (substr_is_short && value_is_short)
-            mangled_name = "kgpc_string_pos_ss";
+            mangled_name = has_start ? "kgpc_string_pos_ss_from" : "kgpc_string_pos_ss";
         else if (substr_is_short)
-            mangled_name = "kgpc_string_pos_sa";
+            mangled_name = has_start ? "kgpc_string_pos_sa_from" : "kgpc_string_pos_sa";
         else if (value_is_short)
-            mangled_name = "kgpc_string_pos_as";
+            mangled_name = has_start ? "kgpc_string_pos_as_from" : "kgpc_string_pos_as";
 
         expr->expr_data.function_call_data.mangled_id = strdup(mangled_name);
         if (expr->expr_data.function_call_data.mangled_id == NULL)
@@ -1934,6 +1953,12 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
                         high = 4294967295LL;
                         have_bounds = 1;
                         result_type = INT64_TYPE;
+                    } else if (pascal_identifier_equals(target_name, "QWord") ||
+                               pascal_identifier_equals(target_name, "UInt64")) {
+                        low = 0;
+                        high = (long long)0xFFFFFFFFFFFFFFFFULL;
+                        have_bounds = 1;
+                        result_type = INT64_TYPE;
                     }
                 }
             }
@@ -1949,6 +1974,24 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
             {
                 low = 0;
                 high = (long long)0xFFFFFFFFFFFFFFFFULL;
+                have_bounds = 1;
+                result_type = INT64_TYPE;
+            }
+            else if (pascal_identifier_equals(type_name, "NativeUInt") ||
+                     pascal_identifier_equals(type_name, "SizeUInt") ||
+                     pascal_identifier_equals(type_name, "PtrUInt"))
+            {
+                low = 0;
+                high = (long long)0xFFFFFFFFFFFFFFFFULL;
+                have_bounds = 1;
+                result_type = INT64_TYPE;
+            }
+            else if (pascal_identifier_equals(type_name, "NativeInt") ||
+                     pascal_identifier_equals(type_name, "SizeInt") ||
+                     pascal_identifier_equals(type_name, "PtrInt"))
+            {
+                low = (-9223372036854775807LL - 1);
+                high = 9223372036854775807LL;
                 have_bounds = 1;
                 result_type = INT64_TYPE;
             }
@@ -2623,6 +2666,47 @@ int semcheck_builtin_aligned(int *type_return, SymTab_t *symtab,
     assert(expr->type == EXPR_FUNCTION_CALL);
 
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    if (args != NULL && args->next == NULL)
+    {
+        /* One-argument Aligned(Value) is an FPC intrinsic used to ensure alignment of
+         * untyped parameters. Treat it as a no-op identity expression. */
+        struct Expression *arg_expr = (struct Expression *)args->cur;
+        if (arg_expr == NULL)
+        {
+            semcheck_error_with_context("Error on line %d, Aligned requires an argument.\n",
+                expr->line_num);
+            *type_return = UNKNOWN_TYPE;
+            return 1;
+        }
+
+        if (expr->expr_data.function_call_data.id != NULL)
+        {
+            free(expr->expr_data.function_call_data.id);
+            expr->expr_data.function_call_data.id = NULL;
+        }
+        if (expr->expr_data.function_call_data.mangled_id != NULL)
+        {
+            free(expr->expr_data.function_call_data.mangled_id);
+            expr->expr_data.function_call_data.mangled_id = NULL;
+        }
+        if (expr->expr_data.function_call_data.args_expr != NULL)
+        {
+            DestroyList(expr->expr_data.function_call_data.args_expr);
+            expr->expr_data.function_call_data.args_expr = NULL;
+        }
+        if (expr->resolved_kgpc_type != NULL)
+        {
+            destroy_kgpc_type(expr->resolved_kgpc_type);
+            expr->resolved_kgpc_type = NULL;
+        }
+
+        struct Expression tmp = *arg_expr;
+        *expr = tmp;
+        free(arg_expr);
+
+        return semcheck_expr_legacy_tag(type_return, symtab, expr, max_scope_lev, NO_MUTATE);
+    }
+
     if (args == NULL || args->next == NULL || args->next->next != NULL)
     {
         semcheck_error_with_context("Error on line %d, Aligned expects exactly two arguments: pointer and alignment.\n",

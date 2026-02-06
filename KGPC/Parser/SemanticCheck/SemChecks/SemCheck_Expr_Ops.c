@@ -1185,6 +1185,32 @@ int semcheck_varid(int *type_return,
     }
 
     scope_return = FindIdent(&hash_return, symtab, id);
+    if (scope_return == -1 && id != NULL)
+    {
+        const char *owner = semcheck_get_current_method_owner();
+        if (owner != NULL)
+        {
+            char mangled[256];
+            snprintf(mangled, sizeof(mangled), "%s__%s", owner, id);
+            HashNode_t *class_const = NULL;
+            int class_const_scope = FindIdent(&class_const, symtab, mangled);
+            if (getenv("KGPC_DEBUG_CLASS_CONST") != NULL)
+            {
+                fprintf(stderr, "[KGPC] class const lookup %s -> scope=%d node=%p\n",
+                    mangled, class_const_scope, (void*)class_const);
+            }
+            if (class_const_scope >= 0 && class_const != NULL &&
+                class_const->hash_type == HASHTYPE_CONST)
+            {
+                if (expr->expr_data.id != NULL)
+                    free(expr->expr_data.id);
+                expr->expr_data.id = strdup(mangled);
+                id = expr->expr_data.id;
+                hash_return = class_const;
+                scope_return = class_const_scope;
+            }
+        }
+    }
     if (getenv("KGPC_DEBUG_RESULT") != NULL && id != NULL &&
         pascal_identifier_equals(id, "Result"))
     {

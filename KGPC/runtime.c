@@ -3511,6 +3511,139 @@ int64_t kgpc_string_pos(const char *substr, const char *value)
     return 0;
 }
 
+static int64_t kgpc_pos_empty_result(int64_t start_index, size_t hay_len)
+{
+    if (start_index < 1)
+        start_index = 1;
+    if ((size_t)start_index > hay_len + 1)
+        return 0;
+    return start_index;
+}
+
+int64_t kgpc_string_pos_sa_from(const char *substr, const char *value, int64_t start_index)
+{
+    if (value == NULL)
+        value = "";
+    if (substr == NULL)
+        return 1;
+
+    size_t hay_len = kgpc_string_known_length(value);
+    size_t needle_len = (size_t)(unsigned char)substr[0];
+
+    if (needle_len == 0)
+        return kgpc_pos_empty_result(start_index, hay_len);
+    if (needle_len > hay_len)
+        return 0;
+
+    if (start_index < 1)
+        start_index = 1;
+    size_t start = (size_t)(start_index - 1);
+    if (start >= hay_len)
+        return 0;
+
+    const char *needle_data = substr + 1;
+    for (size_t i = start; i + needle_len <= hay_len; ++i)
+    {
+        if (memcmp(value + i, needle_data, needle_len) == 0)
+            return (int64_t)(i + 1);
+    }
+
+    return 0;
+}
+
+int64_t kgpc_string_pos_as_from(const char *substr, const char *value, int64_t start_index)
+{
+    if (value == NULL)
+        return 0;
+    if (substr == NULL)
+        return 1;
+
+    size_t hay_len = (size_t)(unsigned char)value[0];
+    size_t needle_len = kgpc_string_known_length(substr);
+
+    if (needle_len == 0)
+        return kgpc_pos_empty_result(start_index, hay_len);
+    if (needle_len > hay_len)
+        return 0;
+
+    if (start_index < 1)
+        start_index = 1;
+    size_t start = (size_t)(start_index - 1);
+    if (start >= hay_len)
+        return 0;
+
+    const char *hay_data = value + 1;
+    for (size_t i = start; i + needle_len <= hay_len; ++i)
+    {
+        if (memcmp(hay_data + i, substr, needle_len) == 0)
+            return (int64_t)(i + 1);
+    }
+
+    return 0;
+}
+
+int64_t kgpc_string_pos_ss_from(const char *substr, const char *value, int64_t start_index)
+{
+    if (value == NULL)
+        return 0;
+    if (substr == NULL)
+        return 1;
+
+    size_t hay_len = (size_t)(unsigned char)value[0];
+    size_t needle_len = (size_t)(unsigned char)substr[0];
+
+    if (needle_len == 0)
+        return kgpc_pos_empty_result(start_index, hay_len);
+    if (needle_len > hay_len)
+        return 0;
+
+    if (start_index < 1)
+        start_index = 1;
+    size_t start = (size_t)(start_index - 1);
+    if (start >= hay_len)
+        return 0;
+
+    const char *hay_data = value + 1;
+    const char *needle_data = substr + 1;
+    for (size_t i = start; i + needle_len <= hay_len; ++i)
+    {
+        if (memcmp(hay_data + i, needle_data, needle_len) == 0)
+            return (int64_t)(i + 1);
+    }
+
+    return 0;
+}
+
+int64_t kgpc_string_pos_from(const char *substr, const char *value, int64_t start_index)
+{
+    if (value == NULL)
+        value = "";
+    if (substr == NULL)
+        substr = "";
+
+    size_t hay_len = kgpc_string_known_length(value);
+    size_t needle_len = kgpc_string_known_length(substr);
+
+    if (needle_len == 0)
+        return kgpc_pos_empty_result(start_index, hay_len);
+    if (needle_len > hay_len)
+        return 0;
+
+    if (start_index < 1)
+        start_index = 1;
+    size_t start = (size_t)(start_index - 1);
+    if (start >= hay_len)
+        return 0;
+
+    for (size_t i = start; i + needle_len <= hay_len; ++i)
+    {
+        if (memcmp(value + i, substr, needle_len) == 0)
+            return (int64_t)(i + 1);
+    }
+
+    return 0;
+}
+
 static int kgpc_is_path_delim_char(char ch)
 {
     return ch == '/' || ch == '\\';

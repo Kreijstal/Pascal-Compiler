@@ -1347,9 +1347,39 @@ static combinator_t* create_helper_body_parser(void) {
         NULL
     );
 
+    combinator_t* helper_property_indexer = optional(seq(new_combinator(), PASCAL_T_PARAM_LIST,
+        between(
+            token(match("[")),
+            token(match("]")),
+            sep_by(seq(new_combinator(), PASCAL_T_PARAM,
+                sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
+                token(match(":")),
+                token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
+                NULL
+            ), token(match(";")))
+        ),
+        NULL
+    ));
     combinator_t* helper_property_decl = seq(new_combinator(), PASCAL_T_PROPERTY_DECL,
+        optional(token(keyword_ci("class"))),
         token(keyword_ci("property")),
-        until(token(match(";")), PASCAL_T_NONE),
+        token(cident(PASCAL_T_IDENTIFIER)), // property name
+        helper_property_indexer,
+        optional(seq(new_combinator(), PASCAL_T_NONE,
+            token(match(":")),
+            token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)), // type name
+            NULL
+        )),
+        optional(seq(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("read")),
+            token(cident(PASCAL_T_IDENTIFIER)), // read accessor
+            NULL
+        )),
+        optional(seq(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("write")),
+            token(cident(PASCAL_T_IDENTIFIER)), // write accessor
+            NULL
+        )),
         token(match(";")),
         NULL
     );

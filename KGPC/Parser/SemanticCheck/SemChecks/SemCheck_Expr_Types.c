@@ -1052,10 +1052,48 @@ int semcheck_recordaccess(int *type_return,
         }
         struct RecordType *helper_record = semcheck_lookup_type_helper(symtab, record_type,
             alias_type_name != NULL ? alias_type_name : expr_type_name);
+        if (helper_record == NULL && record_type == REAL_TYPE)
+        {
+            const char *helper_base = alias_type_name != NULL ? alias_type_name : expr_type_name;
+            if (helper_base != NULL)
+            {
+                char helper_name[256];
+                snprintf(helper_name, sizeof(helper_name), "T%sHelper", helper_base);
+                helper_record = semcheck_lookup_record_type(symtab, helper_name);
+            }
+        }
         if (helper_record != NULL)
         {
             record_type = RECORD_TYPE;
             record_info = helper_record;
+        }
+        else if (record_type == REAL_TYPE && field_id != NULL &&
+                 pascal_identifier_equals(field_id, "IsNan"))
+        {
+            /* FPC allows Float.IsNan via type helpers. If helpers weren't registered,
+             * fall back to a simple NaN check (x <> x). */
+            struct Expression *left_expr = record_expr;
+            struct Expression *right_expr = clone_expression(record_expr);
+            if (right_expr == NULL)
+            {
+                semcheck_error_with_context("Error on line %d, failed to allocate IsNan expression.\n\n",
+                    expr->line_num);
+                *type_return = UNKNOWN_TYPE;
+                return error_count + 1;
+            }
+            if (expr->expr_data.record_access_data.field_id != NULL)
+            {
+                free(expr->expr_data.record_access_data.field_id);
+                expr->expr_data.record_access_data.field_id = NULL;
+            }
+
+            expr->type = EXPR_RELOP;
+            memset(&expr->expr_data.relop_data, 0, sizeof(expr->expr_data.relop_data));
+            expr->expr_data.relop_data.type = NE;
+            expr->expr_data.relop_data.left = left_expr;
+            expr->expr_data.relop_data.right = right_expr;
+
+            return semcheck_expr_legacy_tag(type_return, symtab, expr, max_scope_lev, mutating);
         }
         /* FPC string helper methods: Transform S.Trim into Trim(S), S.Substring(i) into Substring(S, i) etc.
          * This provides FPC-compatible string method syntax without full type helper infrastructure. */
@@ -1146,7 +1184,8 @@ int semcheck_recordaccess(int *type_return,
     if (resolve_record_field(symtab, record_info, field_id, &field_desc,
             &field_offset, expr->line_num, silent_mode) != 0 || field_desc == NULL)
     {
-        {   /* Check properties and methods for all record types (classes, type helpers, and plain records) */
+        if (record_type_is_class(record_info) || record_info->is_type_helper)
+        {
             struct RecordType *property_owner = NULL;
             struct ClassProperty *property = semcheck_find_class_property(symtab,
                 record_info, field_id, &property_owner);
@@ -1405,6 +1444,7 @@ int semcheck_recordaccess(int *type_return,
                     expr->type = EXPR_FUNCTION_CALL;
                     memset(&expr->expr_data.function_call_data, 0,
                         sizeof(expr->expr_data.function_call_data));
+                    expr->expr_data.function_call_data.is_method_call_placeholder = 1;
                     expr->expr_data.function_call_data.id = method_id;
                     if (method_node->mangled_id != NULL)
                         expr->expr_data.function_call_data.mangled_id =
@@ -1567,6 +1607,7 @@ int semcheck_recordaccess(int *type_return,
                     expr->type = EXPR_FUNCTION_CALL;
                     memset(&expr->expr_data.function_call_data, 0,
                         sizeof(expr->expr_data.function_call_data));
+                    expr->expr_data.function_call_data.is_method_call_placeholder = 1;
                     expr->expr_data.function_call_data.id = method_id;
                     if (method_node->mangled_id != NULL)
                         expr->expr_data.function_call_data.mangled_id =
@@ -1713,6 +1754,45 @@ int semcheck_recordaccess(int *type_return,
                         return semcheck_funccall(type_return, symtab, expr, max_scope_lev, mutating);
                     }
                     free(func_id);
+                }
+            }
+        }
+
+        /* Check record_properties for plain records (Delphi advanced records) */
+        if (record_info != NULL && record_info->record_properties != NULL)
+        {
+            struct ClassProperty *property = NULL;
+            /* Search record_properties list */
+            ListNode_t *pnode = record_info->record_properties;
+            while (pnode != NULL)
+            {
+                if (pnode->type == LIST_CLASS_PROPERTY && pnode->cur != NULL)
+                {
+                    struct ClassProperty *p = (struct ClassProperty *)pnode->cur;
+                    if (p->name != NULL && pascal_identifier_equals(p->name, field_id))
+                    {
+                        property = p;
+                        break;
+                    }
+                }
+                pnode = pnode->next;
+            }
+            if (property != NULL)
+            {
+                const char *accessor = (mutating != NO_MUTATE) ? property->write_accessor : property->read_accessor;
+                if (accessor != NULL)
+                {
+                    /* Resolve property to its backing field */
+                    if (resolve_record_field(symtab, record_info, accessor,
+                            &field_desc, &field_offset, expr->line_num, 1) == 0 && field_desc != NULL)
+                    {
+                        if (!pascal_identifier_equals(field_id, accessor))
+                        {
+                            free(expr->expr_data.record_access_data.field_id);
+                            expr->expr_data.record_access_data.field_id = strdup(accessor);
+                        }
+                        goto FIELD_RESOLVED;
+                    }
                 }
             }
         }
@@ -1951,6 +2031,8 @@ FIELD_RESOLVED:
                     pointer_subtype = kgpc_type_get_pointer_subtype_tag(type_node->type);
             }
         }
+        if (pointer_subtype_id == NULL && field_desc->type_id != NULL)
+            pointer_subtype_id = field_desc->type_id;
         semcheck_set_pointer_info(expr, pointer_subtype, pointer_subtype_id);
         if (expr->resolved_kgpc_type != NULL &&
             expr->resolved_kgpc_type->kind != TYPE_KIND_POINTER)
@@ -1979,6 +2061,19 @@ FIELD_RESOLVED:
                 destroy_kgpc_type(ptr_type);
             }
         }
+
+        struct RecordType *pointer_record = NULL;
+        if (expr->resolved_kgpc_type != NULL &&
+            expr->resolved_kgpc_type->kind == TYPE_KIND_POINTER)
+        {
+            KgpcType *points_to = expr->resolved_kgpc_type->info.points_to;
+            if (points_to != NULL && points_to->kind == TYPE_KIND_RECORD)
+                pointer_record = points_to->info.record_info;
+        }
+        if (pointer_record == NULL && pointer_subtype_id != NULL)
+            pointer_record = semcheck_lookup_record_type(symtab, pointer_subtype_id);
+        if (pointer_record != NULL && record_type_is_class(pointer_record))
+            expr->record_type = pointer_record;
     }
     if (getenv("KGPC_DEBUG_BUFPTR") != NULL &&
         field_id != NULL && pascal_identifier_equals(field_id, "bufptr"))
@@ -2075,15 +2170,17 @@ int semcheck_try_reinterpret_as_typecast(int *type_return,
     int target_type = UNKNOWN_TYPE;
     if (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
         set_type_from_hashtype(&target_type, type_node);
-    if (target_type == UNKNOWN_TYPE && type_node != NULL && type_node->type != NULL &&
-        kgpc_type_is_record(type_node->type))
+    if (target_type == UNKNOWN_TYPE && type_node != NULL &&
+        type_node->hash_type == HASHTYPE_TYPE &&
+        type_node->type != NULL && kgpc_type_is_record(type_node->type))
     {
         target_type = RECORD_TYPE;
     }
     if (type_node == NULL)
         FindIdent(&type_node, symtab, id);
-    if (target_type == UNKNOWN_TYPE && type_node != NULL && type_node->type != NULL &&
-        kgpc_type_is_record(type_node->type))
+    if (target_type == UNKNOWN_TYPE && type_node != NULL &&
+        type_node->hash_type == HASHTYPE_TYPE &&
+        type_node->type != NULL && kgpc_type_is_record(type_node->type))
     {
         target_type = RECORD_TYPE;
     }
@@ -2092,7 +2189,6 @@ int semcheck_try_reinterpret_as_typecast(int *type_return,
 
     int is_type_identifier =
         (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE) ||
-        (type_node != NULL && type_node->type != NULL && kgpc_type_is_record(type_node->type)) ||
         (target_type != UNKNOWN_TYPE);
     if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
     {

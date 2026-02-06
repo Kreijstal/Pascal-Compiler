@@ -34,6 +34,8 @@
 
 /* Forward declaration from SemCheck_Expr_Resolve.c */
 const char *semcheck_type_tag_name(int type_tag);
+int semcheck_typecheck_array_literal(struct Expression *expr, SymTab_t *symtab,
+    int max_scope_lev, int expected_type, const char *expected_type_id, int line_num);
 
 #define SEMSTMT_TIMINGS_ENABLED() (getenv("KGPC_DEBUG_SEMSTMT_TIMINGS") != NULL)
 
@@ -1577,9 +1579,9 @@ static int semcheck_builtin_inc(SymTab_t *symtab, struct Statement *stmt, int ma
     int target_type = UNKNOWN_TYPE;
     return_val += semcheck_stmt_expr_tag(&target_type, symtab, target_expr, max_scope_lev, MUTATE);
     int target_is_pointer = (target_type == POINTER_TYPE);
-    if (!is_integer_type(target_type) && !target_is_pointer)
+    if (!is_ordinal_type(target_type) && !target_is_pointer)
     {
-        semcheck_error_with_context("Error on line %d, Inc target must be an integer or pointer variable.\n", stmt->line_num);
+        semcheck_error_with_context("Error on line %d, Inc target must be an ordinal or pointer variable.\n", stmt->line_num);
         ++return_val;
     }
 
@@ -3097,6 +3099,34 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                 goto assignment_types_ok;
             }
         }
+        if (expr != NULL && expr->type == EXPR_ARRAY_LITERAL &&
+            kgpc_type_is_array(lhs_kgpctype))
+        {
+            KgpcType *lhs_elem = lhs_kgpctype->info.array_info.element_type;
+            int elem_tag = semcheck_tag_from_kgpc(lhs_elem);
+            const char *elem_type_id = NULL;
+            if (lhs_elem != NULL && lhs_elem->kind == TYPE_KIND_RECORD &&
+                lhs_elem->info.record_info != NULL &&
+                lhs_elem->info.record_info->type_id != NULL)
+            {
+                elem_type_id = lhs_elem->info.record_info->type_id;
+            }
+            if (getenv("KGPC_DEBUG_ARRAY_ASSIGN") != NULL)
+            {
+                fprintf(stderr,
+                    "[KGPC] array assign @ line %d: elem_tag=%d elem_id=%s\n",
+                    stmt->line_num,
+                    elem_tag,
+                    elem_type_id != NULL ? elem_type_id : "<null>");
+            }
+            if (expr->array_element_type == UNKNOWN_TYPE)
+                expr->array_element_type = elem_tag;
+            if (expr->array_element_type_id == NULL && elem_type_id != NULL)
+                expr->array_element_type_id = strdup(elem_type_id);
+            semcheck_typecheck_array_literal(expr, symtab, INT_MAX,
+                elem_tag, elem_type_id, stmt->line_num);
+            goto assignment_types_ok;
+        }
 
         if (!are_types_compatible_for_assignment(lhs_kgpctype, rhs_kgpctype, symtab))
         {
@@ -3636,7 +3666,9 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
             if (self_record != NULL)
             {
                 HashNode_t *method_node = semcheck_find_class_method(symtab, self_record, proc_id, NULL);
-                if (method_node != NULL && method_node->hash_type == HASHTYPE_PROCEDURE)
+                if (method_node != NULL &&
+                    (method_node->hash_type == HASHTYPE_PROCEDURE ||
+                     method_node->hash_type == HASHTYPE_FUNCTION))
                 {
                     /* Prepend Self to arguments */
                     struct Expression *self_expr = mk_varid(stmt->line_num, strdup("Self"));
@@ -4925,6 +4957,28 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                 /* ALWAYS resolve both sides to KgpcType for proper type checking */
                 int expected_type_owned = 0;
                 KgpcType *expected_kgpc_type = resolve_type_from_vardecl(arg_decl, symtab, &expected_type_owned);
+                if (getenv("KGPC_DEBUG_FMTSTR") != NULL && proc_id != NULL &&
+                    strcasecmp(proc_id, "FmtStr") == 0)
+                {
+                    if (arg_decl->type == TREE_VAR_DECL)
+                    {
+                        fprintf(stderr,
+                            "[KGPC_DEBUG_FMTSTR] param %d VAR_DECL type=%d type_id=%s\n",
+                            cur_arg,
+                            arg_decl->tree_data.var_decl_data.type,
+                            arg_decl->tree_data.var_decl_data.type_id ?
+                                arg_decl->tree_data.var_decl_data.type_id : "<null>");
+                    }
+                    else if (arg_decl->type == TREE_ARR_DECL)
+                    {
+                        fprintf(stderr,
+                            "[KGPC_DEBUG_FMTSTR] param %d ARR_DECL elem_type=%d elem_type_id=%s\n",
+                            cur_arg,
+                            arg_decl->tree_data.arr_decl_data.type,
+                            arg_decl->tree_data.arr_decl_data.type_id ?
+                                arg_decl->tree_data.arr_decl_data.type_id : "<null>");
+                    }
+                }
                 
                 /* For var/out parameters, we need to mark the argument as mutated.
                  * This is important for tracking whether Result was assigned in a function. */
@@ -4955,6 +5009,15 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                 if (arg_kgpc_type == NULL)
                 {
                     arg_kgpc_type = semcheck_resolve_expression_kgpc_type(symtab, arg_expr, INT_MAX, mutate_flag, &arg_type_owned);
+                }
+                if (getenv("KGPC_DEBUG_FMTSTR") != NULL && proc_id != NULL &&
+                    strcasecmp(proc_id, "FmtStr") == 0)
+                {
+                    fprintf(stderr,
+                        "[KGPC_DEBUG_FMTSTR] param %d expected=%s arg=%s\n",
+                        cur_arg,
+                        expected_kgpc_type ? kgpc_type_to_string(expected_kgpc_type) : "<null>",
+                        arg_kgpc_type ? kgpc_type_to_string(arg_kgpc_type) : "<null>");
                 }
                 int param_is_untyped = semcheck_var_decl_is_untyped(arg_decl);
 

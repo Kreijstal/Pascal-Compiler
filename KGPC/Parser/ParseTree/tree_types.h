@@ -161,6 +161,7 @@ struct RecordType
     char *default_indexed_property; /* Field name for default indexed access (e.g., "FItems" for array-like classes) */
     int default_indexed_element_type; /* Type tag for elements of the default indexed property */
     char *default_indexed_element_type_id; /* Type identifier for elements of the default indexed property */
+    ListNode_t *record_properties; /* Properties on plain records (Delphi advanced records), not checked by record_type_is_class */
 };
 
 static inline int record_type_is_class(const struct RecordType *record)
@@ -169,7 +170,7 @@ static inline int record_type_is_class(const struct RecordType *record)
         return 0;
     if (record->is_class)
         return 1;
-    return record->is_type_helper;
+    return (record->properties != NULL);
 }
 
 static inline int record_field_is_hidden(const struct RecordField *field)

@@ -77,12 +77,27 @@ struct RecordType *semcheck_lookup_type_helper(SymTab_t *symtab,
     int base_type_tag, const char *type_name)
 {
     (void)symtab;
+    if (getenv("KGPC_DEBUG_TYPE_HELPER") != NULL)
+    {
+        fprintf(stderr,
+            "[KGPC] lookup_type_helper: base_type_tag=%d type_name=%s\n",
+            base_type_tag,
+            type_name != NULL ? type_name : "<null>");
+    }
     ListNode_t *cur = type_helper_entries;
     while (cur != NULL)
     {
         TypeHelperEntry *entry = (TypeHelperEntry *)cur->cur;
         if (entry != NULL)
         {
+            if (getenv("KGPC_DEBUG_TYPE_HELPER") != NULL)
+            {
+                fprintf(stderr,
+                    "[KGPC]   helper_entry: base_type_tag=%d base_type_id=%s helper=%s\n",
+                    entry->base_type_tag,
+                    entry->base_type_id != NULL ? entry->base_type_id : "<null>",
+                    entry->helper_record && entry->helper_record->type_id ? entry->helper_record->type_id : "<null>");
+            }
             if (base_type_tag != UNKNOWN_TYPE && entry->base_type_tag == base_type_tag)
                 return entry->helper_record;
             if (type_name != NULL && entry->base_type_id != NULL &&

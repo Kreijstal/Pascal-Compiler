@@ -1807,7 +1807,19 @@ void destroy_record_type(struct RecordType *record_type)
     record_type->generic_decl = NULL;
     free(record_type->default_indexed_property);
     free(record_type->default_indexed_element_type_id);
-    
+    if (record_type->record_properties != NULL)
+    {
+        ListNode_t *cur = record_type->record_properties;
+        while (cur != NULL)
+        {
+            struct ClassProperty *property = (struct ClassProperty *)cur->cur;
+            destroy_class_property(property);
+            ListNode_t *next = cur->next;
+            free(cur);
+            cur = next;
+        }
+    }
+
     free(record_type);
 }
 
@@ -1855,6 +1867,7 @@ struct RecordType *clone_record_type(const struct RecordType *record_type)
 
     clone->fields = clone_member_list(record_type->fields);
     clone->properties = clone_property_list(record_type->properties);
+    clone->record_properties = clone_property_list(record_type->record_properties);
 
     return clone;
 }

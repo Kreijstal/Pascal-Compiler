@@ -214,6 +214,16 @@ HashNode_t *semcheck_find_class_method(SymTab_t *symtab,
                         DestroyList(all_methods);
                 }
 
+                if (method_node->hash_type != HASHTYPE_FUNCTION &&
+                    method_node->hash_type != HASHTYPE_PROCEDURE &&
+                    method_node->hash_type != HASHTYPE_BUILTIN_PROCEDURE)
+                {
+                    method_node = NULL;
+                }
+
+                if (method_node == NULL)
+                    goto next_class;
+
                 if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                     fprintf(stderr, "[SemCheck] semcheck_find_class_method: Found '%s' in class '%s'\n", 
                         method_name, current->type_id);
@@ -223,7 +233,7 @@ HashNode_t *semcheck_find_class_method(SymTab_t *symtab,
                 return method_node;
             }
         }
-        
+    next_class:
         /* For type helpers, walk up the helper parent chain */
         if (current->is_type_helper && current->helper_parent_id != NULL)
         {
@@ -247,4 +257,3 @@ HashNode_t *semcheck_find_class_method(SymTab_t *symtab,
     }
     return NULL;
 }
-

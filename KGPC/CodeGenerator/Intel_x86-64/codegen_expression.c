@@ -2005,9 +2005,15 @@ static long long codegen_sizeof_type_tag(int type_tag)
         case ENUM_TYPE:
             return 4;
         case INT64_TYPE:
+        case QWORD_TYPE:
             return 8;
         case LONGINT_TYPE:
-            return 4;  // Match FPC's 32-bit LongInt
+        case LONGWORD_TYPE:
+            return 4;  // Match FPC's 32-bit LongInt/LongWord
+        case WORD_TYPE:
+            return 2;
+        case BYTE_TYPE:
+            return 1;
         case REAL_TYPE:
             return 8;
         case STRING_TYPE:

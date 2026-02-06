@@ -957,7 +957,7 @@ static void apply_builtin_integer_alias_metadata(struct TypeAlias *alias, const 
 
     if (pascal_identifier_equals(type_name, "Byte"))
     {
-        alias->base_type = INT_TYPE;
+        alias->base_type = BYTE_TYPE;
         alias->is_range = 1;
         alias->range_known = 1;
         alias->range_start = 0;
@@ -975,7 +975,7 @@ static void apply_builtin_integer_alias_metadata(struct TypeAlias *alias, const 
     }
     else if (pascal_identifier_equals(type_name, "Word"))
     {
-        alias->base_type = INT_TYPE;
+        alias->base_type = WORD_TYPE;
         alias->is_range = 1;
         alias->range_known = 1;
         alias->range_start = 0;
@@ -995,12 +995,22 @@ static void apply_builtin_integer_alias_metadata(struct TypeAlias *alias, const 
              pascal_identifier_equals(type_name, "LongWord") ||
              pascal_identifier_equals(type_name, "DWord"))
     {
-        alias->base_type = LONGINT_TYPE;
+        alias->base_type = LONGWORD_TYPE;
         alias->is_range = 1;
         alias->range_known = 1;
         alias->range_start = 0;
         alias->range_end = 4294967295LL;
         alias->storage_size = 4;
+    }
+    else if (pascal_identifier_equals(type_name, "QWord") ||
+             pascal_identifier_equals(type_name, "UInt64"))
+    {
+        alias->base_type = QWORD_TYPE;
+        alias->is_range = 1;
+        alias->range_known = 1;
+        alias->range_start = 0;
+        alias->range_end = LLONG_MAX;
+        alias->storage_size = 8;
     }
 }
 
@@ -1711,6 +1721,10 @@ static inline enum VarType get_var_type_from_node(HashNode_t *node)
                 case INT_TYPE: return HASHVAR_INTEGER;
                 case LONGINT_TYPE: return HASHVAR_LONGINT;
                 case INT64_TYPE: return HASHVAR_INT64;
+                case BYTE_TYPE: return HASHVAR_INTEGER;
+                case WORD_TYPE: return HASHVAR_INTEGER;
+                case LONGWORD_TYPE: return HASHVAR_LONGINT;
+                case QWORD_TYPE: return HASHVAR_INT64;
                 case REAL_TYPE: return HASHVAR_REAL;
                 case BOOL: return HASHVAR_BOOLEAN;
                 case CHAR_TYPE: return HASHVAR_CHAR;
@@ -1856,11 +1870,15 @@ static ListNode_t *collect_typed_const_decls_filtered(SymTab_t *symtab, ListNode
         if (cur->type == LIST_TREE && cur->cur != NULL)
         {
             Tree_t *tree = (Tree_t *)cur->cur;
-            if (tree->type == TREE_VAR_DECL &&
-                tree->tree_data.var_decl_data.is_typed_const)
+            if ((tree->type == TREE_VAR_DECL &&
+                tree->tree_data.var_decl_data.is_typed_const) ||
+                (tree->type == TREE_ARR_DECL &&
+                tree->tree_data.arr_decl_data.is_typed_const))
             {
                 /* Filter by origin */
-                int is_from_unit = tree->tree_data.var_decl_data.defined_in_unit;
+                int is_from_unit = (tree->type == TREE_VAR_DECL) ?
+                    tree->tree_data.var_decl_data.defined_in_unit :
+                    tree->tree_data.arr_decl_data.defined_in_unit;
                 if ((from_unit_only && !is_from_unit) || (!from_unit_only && is_from_unit))
                 {
                     cur = cur->next;
@@ -1868,7 +1886,19 @@ static ListNode_t *collect_typed_const_decls_filtered(SymTab_t *symtab, ListNode
                 }
                 
                 int allow = 1;
-                const char *type_id = tree->tree_data.var_decl_data.type_id;
+                const char *type_id = NULL;
+                int type_tag = UNKNOWN_TYPE;
+                if (tree->type == TREE_VAR_DECL)
+                {
+                    type_id = tree->tree_data.var_decl_data.type_id;
+                    type_tag = tree->tree_data.var_decl_data.type;
+                }
+                else
+                {
+                    type_id = tree->tree_data.arr_decl_data.type_id;
+                    type_tag = tree->tree_data.arr_decl_data.type;
+                }
+
                 if (type_id != NULL)
                 {
                     HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, type_id);
@@ -1878,19 +1908,25 @@ static ListNode_t *collect_typed_const_decls_filtered(SymTab_t *symtab, ListNode
                         allow = 0;
                     }
                 }
-                else if (tree->tree_data.var_decl_data.type == UNKNOWN_TYPE)
+                else if (type_tag == UNKNOWN_TYPE)
                 {
                     allow = 0;
                 }
 
                 if (getenv("KGPC_DEBUG_SEMCHECK") != NULL && tree->tree_data.var_decl_data.ids != NULL)
                 {
-                    const char *first_id = tree->tree_data.var_decl_data.ids->cur ?
-                        (const char *)tree->tree_data.var_decl_data.ids->cur : "<null>";
+                    const char *first_id = NULL;
+                    if (tree->type == TREE_VAR_DECL)
+                        first_id = tree->tree_data.var_decl_data.ids->cur ?
+                            (const char *)tree->tree_data.var_decl_data.ids->cur : "<null>";
+                    else
+                        first_id = tree->tree_data.arr_decl_data.ids->cur ?
+                            (const char *)tree->tree_data.arr_decl_data.ids->cur : "<null>";
                     fprintf(stderr, "[SemCheck] collect_typed_const: id=%s type_id=%s type=%d allow=%d inline_alias=%p\n",
                         first_id, type_id ? type_id : "<null>",
-                        tree->tree_data.var_decl_data.type, allow,
-                        (void*)tree->tree_data.var_decl_data.inline_type_alias);
+                        type_tag, allow,
+                        (tree->type == TREE_VAR_DECL) ?
+                            (void*)tree->tree_data.var_decl_data.inline_type_alias : NULL);
                 }
 
                 if (allow)
@@ -1911,6 +1947,42 @@ static ListNode_t *collect_typed_const_decls_filtered(SymTab_t *symtab, ListNode
         }
         cur = cur->next;
     }
+    return head;
+}
+
+/* Collect non-typed var/array declarations (skip typed consts). */
+static ListNode_t *collect_non_typed_var_decls(ListNode_t *decls)
+{
+    ListNode_t *head = NULL;
+    ListNode_t *tail = NULL;
+    ListNode_t *cur = decls;
+
+    while (cur != NULL)
+    {
+        if (cur->type == LIST_TREE && cur->cur != NULL)
+        {
+            Tree_t *tree = (Tree_t *)cur->cur;
+            int skip = 0;
+            if (tree->type == TREE_VAR_DECL)
+                skip = tree->tree_data.var_decl_data.is_typed_const;
+            else if (tree->type == TREE_ARR_DECL)
+                skip = tree->tree_data.arr_decl_data.is_typed_const;
+            else
+                skip = 1;
+
+            if (!skip)
+            {
+                ListNode_t *node = CreateListNode(tree, LIST_TREE);
+                if (head == NULL)
+                    head = node;
+                else
+                    tail->next = node;
+                tail = node;
+            }
+        }
+        cur = cur->next;
+    }
+
     return head;
 }
 
@@ -2882,17 +2954,29 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                 if (strcasecmp(id, "Byte") == 0 || strcasecmp(id, "Word") == 0 ||
                     strcasecmp(id, "Integer") == 0 || strcasecmp(id, "ShortInt") == 0 ||
                     strcasecmp(id, "SmallInt") == 0)
-                    target_type = INT_TYPE;
+                {
+                    if (strcasecmp(id, "Byte") == 0)
+                        target_type = BYTE_TYPE;
+                    else if (strcasecmp(id, "Word") == 0)
+                        target_type = WORD_TYPE;
+                    else
+                        target_type = INT_TYPE;
+                }
                 else if (strcasecmp(id, "LongInt") == 0)
                     target_type = LONGINT_TYPE;
                 else if (strcasecmp(id, "Cardinal") == 0 || strcasecmp(id, "LongWord") == 0 ||
                          strcasecmp(id, "DWord") == 0)
-                    target_type = INT_TYPE;
+                    target_type = LONGWORD_TYPE;
                 else if (strcasecmp(id, "Int64") == 0 || strcasecmp(id, "UInt64") == 0 ||
                          strcasecmp(id, "QWord") == 0 ||
                          strcasecmp(id, "SizeInt") == 0 || strcasecmp(id, "SizeUInt") == 0 ||
                          strcasecmp(id, "NativeInt") == 0 || strcasecmp(id, "NativeUInt") == 0)
-                    target_type = INT64_TYPE;
+                {
+                    if (strcasecmp(id, "QWord") == 0 || strcasecmp(id, "UInt64") == 0)
+                        target_type = QWORD_TYPE;
+                    else
+                        target_type = INT64_TYPE;
+                }
                 else if (strcasecmp(id, "Pointer") == 0)
                     target_type = POINTER_TYPE;
                 else if (strcasecmp(id, "Char") == 0)
@@ -2919,16 +3003,6 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                 case LONGINT_TYPE:
                     if (id != NULL)
                     {
-                        if (strcasecmp(id, "Byte") == 0)
-                        {
-                            *out_value = (unsigned char)inner_value;
-                            return 0;
-                        }
-                        if (strcasecmp(id, "Word") == 0)
-                        {
-                            *out_value = (uint16_t)inner_value;
-                            return 0;
-                        }
                         if (strcasecmp(id, "ShortInt") == 0)
                         {
                             *out_value = (int8_t)inner_value;
@@ -2939,15 +3013,20 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                             *out_value = (int16_t)inner_value;
                             return 0;
                         }
-                        if (strcasecmp(id, "Cardinal") == 0 ||
-                            strcasecmp(id, "LongWord") == 0 ||
-                            strcasecmp(id, "DWord") == 0)
-                        {
-                            *out_value = (uint32_t)inner_value;
-                            return 0;
-                        }
                     }
                     *out_value = (int32_t)inner_value;
+                    return 0;
+                case BYTE_TYPE:
+                    *out_value = (uint8_t)inner_value;
+                    return 0;
+                case WORD_TYPE:
+                    *out_value = (uint16_t)inner_value;
+                    return 0;
+                case LONGWORD_TYPE:
+                    *out_value = (uint32_t)inner_value;
+                    return 0;
+                case QWORD_TYPE:
+                    *out_value = (uint64_t)inner_value;
                     return 0;
                 case INT64_TYPE:
                     if (id != NULL &&
@@ -6299,6 +6378,15 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
     assert(tree->type == TREE_CONST_DECL);
 
     struct Expression *value_expr = tree->tree_data.const_decl_data.value;
+    if (getenv("KGPC_DEBUG_CLASS_CONST") != NULL &&
+        tree->tree_data.const_decl_data.id != NULL &&
+        strstr(tree->tree_data.const_decl_data.id, "DefaultCapacity") != NULL)
+    {
+        fprintf(stderr, "[KGPC] const decl %s value_expr=%p type=%d\n",
+            tree->tree_data.const_decl_data.id,
+            (void *)value_expr,
+            value_expr ? value_expr->type : -1);
+    }
         
         /* Determine the type of constant by checking the expression */
         int is_string_const = expression_is_string(symtab, value_expr);
@@ -6328,6 +6416,11 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                     HashNode_t *const_node = NULL;
                     if (FindIdent(&const_node, symtab, tree->tree_data.const_decl_data.id) != -1 && const_node != NULL)
                     {
+                        if (getenv("KGPC_DEBUG_CLASS_CONST") != NULL)
+                        {
+                            fprintf(stderr, "[KGPC] const pushed: %s\n",
+                                tree->tree_data.const_decl_data.id);
+                        }
                         mark_hashnode_unit_info(const_node,
                             tree->tree_data.const_decl_data.defined_in_unit,
                             tree->tree_data.const_decl_data.unit_is_public);
@@ -6614,6 +6707,14 @@ static int semcheck_const_decls_imported(SymTab_t *symtab, ListNode_t *const_dec
         assert(cur->type == LIST_TREE);
         Tree_t *tree = (Tree_t *)cur->cur;
         assert(tree->type == TREE_CONST_DECL);
+        if (getenv("KGPC_DEBUG_CLASS_CONST") != NULL &&
+            tree->tree_data.const_decl_data.id != NULL &&
+            strstr(tree->tree_data.const_decl_data.id, "DefaultCapacity") != NULL)
+        {
+            fprintf(stderr, "[KGPC] imported const seen: %s (defined_in_unit=%d)\n",
+                tree->tree_data.const_decl_data.id,
+                tree->tree_data.const_decl_data.defined_in_unit);
+        }
         if (tree->tree_data.const_decl_data.defined_in_unit)
             return_val += semcheck_single_const_decl(symtab, tree);
         cur = cur->next;
@@ -6630,6 +6731,14 @@ static int semcheck_const_decls_local(SymTab_t *symtab, ListNode_t *const_decls)
         assert(cur->type == LIST_TREE);
         Tree_t *tree = (Tree_t *)cur->cur;
         assert(tree->type == TREE_CONST_DECL);
+        if (getenv("KGPC_DEBUG_CLASS_CONST") != NULL &&
+            tree->tree_data.const_decl_data.id != NULL &&
+            strstr(tree->tree_data.const_decl_data.id, "DefaultCapacity") != NULL)
+        {
+            fprintf(stderr, "[KGPC] local const seen: %s (defined_in_unit=%d)\n",
+                tree->tree_data.const_decl_data.id,
+                tree->tree_data.const_decl_data.defined_in_unit);
+        }
         if (!tree->tree_data.const_decl_data.defined_in_unit)
             return_val += semcheck_single_const_decl(symtab, tree);
         cur = cur->next;
@@ -6862,11 +6971,18 @@ void semcheck_add_builtins(SymTab_t *symtab)
         {
             tobject->is_class = 1;
             tobject->type_id = strdup("TObject");
-            KgpcType *tobject_type = create_record_type(tobject);
+            KgpcType *tobject_rec = create_record_type(tobject);
+            KgpcType *tobject_type = NULL;
+            if (tobject_rec != NULL)
+                tobject_type = create_pointer_type(tobject_rec);
             if (tobject_type != NULL)
             {
                 AddBuiltinType_Typed(symtab, strdup("TObject"), tobject_type);
                 destroy_kgpc_type(tobject_type);
+            }
+            else if (tobject_rec != NULL)
+            {
+                destroy_kgpc_type(tobject_rec);
             }
         }
 
@@ -6876,31 +6992,38 @@ void semcheck_add_builtins(SymTab_t *symtab)
             tinterfaced->is_class = 1;
             tinterfaced->type_id = strdup("TInterfacedObject");
             tinterfaced->parent_class_name = strdup("TObject");
-            KgpcType *tinterfaced_type = create_record_type(tinterfaced);
+            KgpcType *tinterfaced_rec = create_record_type(tinterfaced);
+            KgpcType *tinterfaced_type = NULL;
+            if (tinterfaced_rec != NULL)
+                tinterfaced_type = create_pointer_type(tinterfaced_rec);
             if (tinterfaced_type != NULL)
             {
                 AddBuiltinType_Typed(symtab, strdup("TInterfacedObject"), tinterfaced_type);
                 destroy_kgpc_type(tinterfaced_type);
             }
+            else if (tinterfaced_rec != NULL)
+            {
+                destroy_kgpc_type(tinterfaced_rec);
+            }
         }
     }
 
     /* Common ordinal aliases (match KGPC system.p sizes) */
-    add_builtin_type_owned(symtab, "Byte", create_primitive_type_with_size(INT_TYPE, 1));
+    add_builtin_type_owned(symtab, "Byte", create_primitive_type_with_size(BYTE_TYPE, 1));
     add_builtin_type_owned(symtab, "ShortInt", create_primitive_type_with_size(INT_TYPE, 1));
     add_builtin_type_owned(symtab, "SmallInt", create_primitive_type_with_size(INT_TYPE, 2));
-    add_builtin_type_owned(symtab, "Word", create_primitive_type_with_size(INT_TYPE, 2));
-    add_builtin_type_owned(symtab, "LongWord", create_primitive_type_with_size(INT_TYPE, 4));
-    add_builtin_type_owned(symtab, "Cardinal", create_primitive_type_with_size(INT_TYPE, 4));
-    add_builtin_type_owned(symtab, "DWord", create_primitive_type_with_size(INT_TYPE, 4));
-    add_builtin_type_owned(symtab, "QWord", create_primitive_type_with_size(INT64_TYPE, 8));
-    add_builtin_type_owned(symtab, "UInt64", create_primitive_type_with_size(INT64_TYPE, 8));
+    add_builtin_type_owned(symtab, "Word", create_primitive_type_with_size(WORD_TYPE, 2));
+    add_builtin_type_owned(symtab, "LongWord", create_primitive_type_with_size(LONGWORD_TYPE, 4));
+    add_builtin_type_owned(symtab, "Cardinal", create_primitive_type_with_size(LONGWORD_TYPE, 4));
+    add_builtin_type_owned(symtab, "DWord", create_primitive_type_with_size(LONGWORD_TYPE, 4));
+    add_builtin_type_owned(symtab, "QWord", create_primitive_type_with_size(QWORD_TYPE, 8));
+    add_builtin_type_owned(symtab, "UInt64", create_primitive_type_with_size(QWORD_TYPE, 8));
     add_builtin_type_owned(symtab, "Int8", create_primitive_type_with_size(INT_TYPE, 1));
-    add_builtin_type_owned(symtab, "UInt8", create_primitive_type_with_size(INT_TYPE, 1));
+    add_builtin_type_owned(symtab, "UInt8", create_primitive_type_with_size(BYTE_TYPE, 1));
     add_builtin_type_owned(symtab, "Int16", create_primitive_type_with_size(INT_TYPE, 2));
-    add_builtin_type_owned(symtab, "UInt16", create_primitive_type_with_size(INT_TYPE, 2));
+    add_builtin_type_owned(symtab, "UInt16", create_primitive_type_with_size(WORD_TYPE, 2));
     add_builtin_type_owned(symtab, "Int32", create_primitive_type_with_size(INT_TYPE, 4));
-    add_builtin_type_owned(symtab, "UInt32", create_primitive_type_with_size(INT_TYPE, 4));
+    add_builtin_type_owned(symtab, "UInt32", create_primitive_type_with_size(LONGWORD_TYPE, 4));
     add_builtin_type_owned(symtab, "Single", create_primitive_type_with_size(REAL_TYPE, 4));
     add_builtin_type_owned(symtab, "Double", create_primitive_type_with_size(REAL_TYPE, 8));
     add_builtin_type_owned(symtab, "Extended", create_primitive_type_with_size(REAL_TYPE, 8));
@@ -7826,7 +7949,12 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after types: %d\n", return_val);
 #endif
 
-    return_val += semcheck_decls(symtab, tree->tree_data.program_data.var_declaration);
+    ListNode_t *program_vars = collect_non_typed_var_decls(tree->tree_data.program_data.var_declaration);
+    if (program_vars != NULL)
+    {
+        return_val += semcheck_decls(symtab, program_vars);
+        DestroyList(program_vars);
+    }
     semcheck_timing_step("var decls", &t0);
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after vars: %d\n", return_val);
@@ -8006,7 +8134,12 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
         fprintf(stderr, "[SemCheck] interface types +%d (total %d)\n",
                 return_val - before, return_val);
     before = return_val;
-    return_val += semcheck_decls(symtab, tree->tree_data.unit_data.interface_var_decls);
+    ListNode_t *iface_vars = collect_non_typed_var_decls(tree->tree_data.unit_data.interface_var_decls);
+    if (iface_vars != NULL)
+    {
+        return_val += semcheck_decls(symtab, iface_vars);
+        DestroyList(iface_vars);
+    }
     if (debug_steps != NULL && return_val != before)
         fprintf(stderr, "[SemCheck] interface vars +%d (total %d)\n",
                 return_val - before, return_val);
@@ -8054,7 +8187,12 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
         fprintf(stderr, "[SemCheck] impl types +%d (total %d)\n",
                 return_val - before, return_val);
     before = return_val;
-    return_val += semcheck_decls(symtab, tree->tree_data.unit_data.implementation_var_decls);
+    ListNode_t *impl_vars = collect_non_typed_var_decls(tree->tree_data.unit_data.implementation_var_decls);
+    if (impl_vars != NULL)
+    {
+        return_val += semcheck_decls(symtab, impl_vars);
+        DestroyList(impl_vars);
+    }
     if (debug_steps != NULL && return_val != before)
         fprintf(stderr, "[SemCheck] impl vars +%d (total %d)\n",
                 return_val - before, return_val);
@@ -9258,6 +9396,19 @@ next_identifier:
                                 inferred_var_type = HASHVAR_INTEGER;
                                 normalized_type = (expr_tag == LONGINT_TYPE) ? LONGINT_TYPE : INT_TYPE;
                                 break;
+                            case BYTE_TYPE:
+                            case WORD_TYPE:
+                                inferred_var_type = HASHVAR_INTEGER;
+                                normalized_type = expr_tag;
+                                break;
+                            case LONGWORD_TYPE:
+                                inferred_var_type = HASHVAR_LONGINT;
+                                normalized_type = LONGWORD_TYPE;
+                                break;
+                            case QWORD_TYPE:
+                                inferred_var_type = HASHVAR_INT64;
+                                normalized_type = QWORD_TYPE;
+                                break;
                             case INT64_TYPE:
                                 inferred_var_type = HASHVAR_INT64;
                                 normalized_type = INT64_TYPE;
@@ -9335,6 +9486,16 @@ next_identifier:
                             {
                                 if ((inferred_var_type == HASHVAR_INTEGER || inferred_var_type == HASHVAR_LONGINT) &&
                                     (current_var_type == HASHVAR_INTEGER || current_var_type == HASHVAR_LONGINT))
+                                {
+                                    compatible = 1;
+                                }
+                            }
+                            if (!compatible)
+                            {
+                                if (current_var_type == HASHVAR_REAL &&
+                                    (inferred_var_type == HASHVAR_INTEGER ||
+                                     inferred_var_type == HASHVAR_LONGINT ||
+                                     inferred_var_type == HASHVAR_INT64))
                                 {
                                     compatible = 1;
                                 }

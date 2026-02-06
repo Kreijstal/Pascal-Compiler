@@ -527,6 +527,13 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
     int var_type_tag = var_decl->tree_data.var_decl_data.type;
     const char *type_id = var_decl->tree_data.var_decl_data.type_id;
 
+    if (var_type_tag == ARRAY_OF_CONST_TYPE)
+    {
+        if (owns_type != NULL)
+            *owns_type = 1;
+        return create_array_of_const_type();
+    }
+
     if (var_type_tag == POINTER_TYPE && type_id != NULL)
     {
         KgpcType *pointee_type = NULL;
@@ -1152,6 +1159,8 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
             
             return 0;
         }
+        case TYPE_KIND_ARRAY_OF_CONST:
+            return 1;
 
         case TYPE_KIND_RECORD:
             /* Records are compatible if they are the same record type 
@@ -1344,6 +1353,8 @@ const char* kgpc_type_to_string(KgpcType *type) {
                 type->info.array_info.end_index,
                 kgpc_type_to_string(type->info.array_info.element_type));
             return buffer;
+        case TYPE_KIND_ARRAY_OF_CONST:
+            return "array of const";
         case TYPE_KIND_RECORD:
             return "record";
         case TYPE_KIND_PROCEDURE:
