@@ -3443,6 +3443,10 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
         case STMT_PROCEDURE_CALL:
             inst_list = codegen_proc_call(stmt, inst_list, ctx, symtab);
             break;
+        case STMT_EXPR:
+            if (stmt->stmt_data.expr_stmt_data.expr != NULL)
+                inst_list = codegen_expr(stmt->stmt_data.expr_stmt_data.expr, inst_list, ctx);
+            break;
         case STMT_COMPOUND_STATEMENT:
             inst_list = codegen_compound_stmt(stmt, inst_list, ctx, symtab);
             break;

@@ -1146,8 +1146,7 @@ int semcheck_recordaccess(int *type_return,
     if (resolve_record_field(symtab, record_info, field_id, &field_desc,
             &field_offset, expr->line_num, silent_mode) != 0 || field_desc == NULL)
     {
-        if (record_type_is_class(record_info) || record_info->is_type_helper)
-        {
+        {   /* Check properties and methods for all record types (classes, type helpers, and plain records) */
             struct RecordType *property_owner = NULL;
             struct ClassProperty *property = semcheck_find_class_property(symtab,
                 record_info, field_id, &property_owner);
@@ -1719,6 +1718,19 @@ int semcheck_recordaccess(int *type_return,
         }
 
         semcheck_error_with_context("Error on line %d, record field %s not found.\n", expr->line_num, field_id);
+        if (getenv("KGPC_DEBUG_FIELD") != NULL)
+        {
+            struct Expression *rec_expr = expr->expr_data.record_access_data.record_expr;
+            const char *rec_type_name = (record_info && record_info->type_id) ? record_info->type_id : "<null>";
+            int rec_expr_type = rec_expr ? rec_expr->type : -1;
+            fprintf(stderr,
+                "[SemCheck] field '%s' not found on record '%s' (expr_type=%d, record_type=%d) at line %d\n",
+                field_id ? field_id : "<null>",
+                rec_type_name,
+                rec_expr_type,
+                record_type,
+                expr->line_num);
+        }
         *type_return = UNKNOWN_TYPE;
         return error_count + 1;
     }

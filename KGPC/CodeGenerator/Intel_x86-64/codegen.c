@@ -314,6 +314,11 @@ static void codegen_add_class_vars_for_static_method(const char *mangled_name,
         free(class_name);
         return;
     }
+    if (record_info->is_type_helper)
+    {
+        free(class_name);
+        return;
+    }
     
     /* Use the original class name from the type definition to match the CLASSVAR label.
      * The mangled name may have different casing, but the CLASSVAR label uses the original type_id. */
@@ -336,6 +341,11 @@ static void codegen_add_class_vars_for_static_method(const char *mangled_name,
     
     while (field_node != NULL)
     {
+        if (field_node->type != LIST_RECORD_FIELD)
+        {
+            field_node = field_node->next;
+            continue;
+        }
         struct RecordField *field = (struct RecordField *)field_node->cur;
         if (field != NULL && field->name != NULL && field->name[0] != '\0')
         {

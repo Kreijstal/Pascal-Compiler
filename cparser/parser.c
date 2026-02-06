@@ -1042,6 +1042,11 @@ static ParseResult cident_fn(input_t * in, void * args, char* parser_name) {
    int start_pos_ws = in->start;
    char c = read1(in);
    unsigned char uc = (unsigned char)c;
+   if (c == '&') {
+       start_pos_ws = in->start;
+       c = read1(in);
+       uc = (unsigned char)c;
+   }
    if (c == EOF) {
        restore_input_state(in, &state);
        return make_failure_v2(in, parser_name, strdup("Expected identifier."), NULL);

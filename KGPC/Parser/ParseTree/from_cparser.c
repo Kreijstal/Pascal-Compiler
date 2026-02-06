@@ -72,6 +72,10 @@ struct TypeHelperMapping
 };
 
 static ListNode_t *type_helper_mappings = NULL;
+static ast_t *g_interface_type_section_ast = NULL;
+static ast_t *g_implementation_type_section_ast = NULL;
+static ast_t *g_interface_section_ast = NULL;
+static ast_t *g_implementation_section_ast = NULL;
 
 static void register_type_helper_mapping(const char *helper_id, const char *base_type_id)
 {
@@ -508,6 +512,8 @@ static int resolve_const_int_from_ast(const char *identifier, ast_t *const_secti
 static int evaluate_simple_const_expr(const char *expr, ast_t *const_section, int *result);
 static int resolve_enum_ordinal_from_ast(const char *identifier, ast_t *type_section);
 static int resolve_enum_type_range_from_ast(const char *type_name, ast_t *type_section, int *out_start, int *out_end);
+static int resolve_enum_type_range_with_fallback(const char *type_name, ast_t *type_section,
+                                                 int *out_start, int *out_end);
 static int resolve_enum_literal_in_type(const char *type_name, const char *literal, ast_t *type_section);
 static ast_t *find_type_decl_in_section(ast_t *type_section, const char *type_name);
 static int resolve_array_type_info_from_ast(const char *type_name, ast_t *type_section, TypeInfo *out_info, int depth);
@@ -618,6 +624,10 @@ static int is_method_static(const char *class_name, const char *method_name) {
 /* Public wrapper for is_method_static */
 int from_cparser_is_method_static(const char *class_name, const char *method_name) {
     return is_method_static(class_name, method_name);
+}
+
+int from_cparser_is_type_helper(const char *helper_id) {
+    return lookup_type_helper_base(helper_id) != NULL;
 }
 
 /* Check if a method is virtual (needs VMT dispatch) */
@@ -2171,6 +2181,38 @@ static int resolve_const_int_in_node(const char *identifier, ast_t *node,
     return -1;
 }
 
+static int resolve_enum_type_range_in_section_chain(const char *type_name, ast_t *section_root,
+                                                    int *out_start, int *out_end) {
+    if (type_name == NULL || section_root == NULL || out_start == NULL || out_end == NULL)
+        return -1;
+
+    ast_t *section = section_root->child;
+    while (section != NULL) {
+        ast_t *node = unwrap_pascal_node(section);
+        for (ast_t *cursor = node; cursor != NULL;
+             cursor = (section->typ == PASCAL_T_NONE) ? cursor->next : NULL) {
+            if (cursor->typ == PASCAL_T_TYPE_SECTION) {
+                if (resolve_enum_type_range_from_ast(type_name, cursor, out_start, out_end) == 0)
+                    return 0;
+            }
+        }
+        section = section->next;
+    }
+
+    return -1;
+}
+
+static int resolve_enum_type_range_with_fallback(const char *type_name, ast_t *type_section,
+                                                 int *out_start, int *out_end) {
+    if (resolve_enum_type_range_from_ast(type_name, type_section, out_start, out_end) == 0)
+        return 0;
+    if (resolve_enum_type_range_in_section_chain(type_name, g_interface_section_ast, out_start, out_end) == 0)
+        return 0;
+    if (resolve_enum_type_range_in_section_chain(type_name, g_implementation_section_ast, out_start, out_end) == 0)
+        return 0;
+    return -1;
+}
+
 static ast_t *find_type_decl_in_section(ast_t *type_section, const char *type_name) {
     if (type_section == NULL || type_name == NULL)
         return NULL;
@@ -2296,7 +2338,7 @@ static void resolve_array_bounds(TypeInfo *info, ast_t *type_section, ast_t *con
         }
     } else {
         int enum_start, enum_end;
-        if (resolve_enum_type_range_from_ast(range_str, type_section, &enum_start, &enum_end) == 0) {
+        if (resolve_enum_type_range_with_fallback(range_str, type_section, &enum_start, &enum_end) == 0) {
             info->start = enum_start;
             info->end = enum_end;
         } else if (id_for_error != NULL) {
@@ -3618,7 +3660,7 @@ static ListNode_t *convert_identifier_list(ast_t **cursor) {
 }
 
 static ListNode_t *convert_field_decl(ast_t *field_decl_node);
-static void convert_record_members(ast_t *node, ListBuilder *builder);
+static void convert_record_members(ast_t *node, ListBuilder *builder, ListBuilder *property_builder);
 static struct VariantPart *convert_variant_part(ast_t *variant_node, ListNode_t **out_tag_fields);
 static struct VariantBranch *convert_variant_branch(ast_t *branch_node);
 
@@ -4553,7 +4595,7 @@ static struct VariantBranch *convert_variant_branch(ast_t *branch_node) {
 
     ListBuilder members_builder;
     list_builder_init(&members_builder);
-    convert_record_members(cursor, &members_builder);
+    convert_record_members(cursor, &members_builder, NULL);
     branch->members = list_builder_finish(&members_builder);
 
     return branch;
@@ -4647,7 +4689,7 @@ static struct VariantPart *convert_variant_part(ast_t *variant_node, ListNode_t 
     return variant;
 }
 
-static void convert_record_members(ast_t *node, ListBuilder *builder) {
+static void convert_record_members(ast_t *node, ListBuilder *builder, ListBuilder *property_builder) {
     for (ast_t *cur = node; cur != NULL; cur = cur->next) {
         if (cur->typ == PASCAL_T_FIELD_DECL) {
             ListNode_t *fields = convert_field_decl(cur);
@@ -4662,6 +4704,10 @@ static void convert_record_members(ast_t *node, ListBuilder *builder) {
             /* Store method declaration as a special marker node for operator overloading */
             /* We'll handle this during semantic check when we know the record type name */
             list_builder_append(builder, cur, LIST_UNSPECIFIED);
+        } else if (cur->typ == PASCAL_T_PROPERTY_DECL && property_builder != NULL) {
+            struct ClassProperty *property = convert_property_decl(cur);
+            if (property != NULL)
+                list_builder_append(property_builder, property, LIST_CLASS_PROPERTY);
         }
     }
 }
@@ -4829,16 +4875,19 @@ static struct RecordType *convert_record_type_ex(ast_t *record_node, ListNode_t 
         destroy_list(nested_type_builder.head);
 
     ListBuilder fields_builder;
+    ListBuilder property_builder;
     list_builder_init(&fields_builder);
-    convert_record_members(record_node->child, &fields_builder);
+    list_builder_init(&property_builder);
+    convert_record_members(record_node->child, &fields_builder, &property_builder);
 
     struct RecordType *record = (struct RecordType *)malloc(sizeof(struct RecordType));
     if (record == NULL) {
         destroy_list(fields_builder.head);
+        destroy_list(property_builder.head);
         return NULL;
     }
     record->fields = list_builder_finish(&fields_builder);
-    record->properties = NULL;
+    record->properties = list_builder_finish(&property_builder);
     record->parent_class_name = NULL;  /* Regular records don't have parent classes */
     record->methods = NULL;  /* Regular records don't have methods */
     record->method_templates = NULL;
@@ -8635,7 +8684,6 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
             fprintf(stderr, "[KGPC] convert_statement: stmt_node NULL after unwrap\n");
         return NULL;
     }
-
     switch (stmt_node->typ) {
     case PASCAL_T_ASSIGNMENT:
         return convert_assignment(stmt_node);
@@ -8679,6 +8727,11 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
             struct Statement *method_stmt = convert_method_call_statement(inner, NULL);
             if (method_stmt != NULL)
                 return method_stmt;
+        }
+        {
+            struct Expression *expr = convert_expression(inner);
+            if (expr != NULL)
+                return mk_exprstmt(stmt_node->line, stmt_node->col, expr);
         }
         return convert_statement(inner);
     }
@@ -10133,6 +10186,8 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
         return NULL;
 
     reset_const_sections();
+    g_interface_type_section_ast = NULL;
+    g_implementation_type_section_ast = NULL;
 
     ast_t *cur = program_ast;
     if (cur->typ == PASCAL_T_NONE)
@@ -10523,6 +10578,9 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
         
         visited_set_destroy(visited_unit);
 
+        g_interface_section_ast = interface_node;
+        g_implementation_section_ast = implementation_node;
+
         if (interface_node != NULL && interface_node->typ == PASCAL_T_INTERFACE_SECTION) {
             /* Create visited set for interface sections */
             VisitedSet *visited_if = visited_set_create();
@@ -10556,6 +10614,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                                 fprintf(stderr, "[KGPC] interface TYPE_SECTION at line=%d\n", node_cursor->line);
                             }
                             interface_type_section_ast = node_cursor;  /* Save for const array enum resolution */
+                            g_interface_type_section_ast = node_cursor;
                             append_type_decls_from_section(node_cursor, &interface_type_decls,
                                 NULL, &interface_const_decls, &interface_var_builder);
                             break;
@@ -10676,6 +10735,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                             break;
                         case PASCAL_T_TYPE_SECTION:
                             implementation_type_section_ast = node_cursor;  /* Save for const array enum resolution */
+                            g_implementation_type_section_ast = node_cursor;
                             append_type_decls_from_section(node_cursor, &implementation_type_decls,
                                 &subprograms, &implementation_const_decls, &implementation_var_builder);
                             break;

@@ -17,7 +17,7 @@ struct GenericTypeDecl;
 struct RecordType;
 
 /* Enums for readability with types */
-enum StmtType{STMT_VAR_ASSIGN, STMT_PROCEDURE_CALL, STMT_COMPOUND_STATEMENT,
+enum StmtType{STMT_VAR_ASSIGN, STMT_PROCEDURE_CALL, STMT_EXPR, STMT_COMPOUND_STATEMENT,
     STMT_LABEL, STMT_GOTO, STMT_IF_THEN, STMT_WHILE, STMT_REPEAT, STMT_FOR, STMT_FOR_VAR,
     STMT_FOR_ASSIGN_VAR, STMT_FOR_IN, STMT_ASM_BLOCK, STMT_EXIT, STMT_BREAK, STMT_CONTINUE, STMT_CASE, STMT_WITH,
     STMT_TRY_FINALLY, STMT_TRY_EXCEPT, STMT_RAISE, STMT_INHERITED};
@@ -169,7 +169,7 @@ static inline int record_type_is_class(const struct RecordType *record)
         return 0;
     if (record->is_class)
         return 1;
-    return (record->properties != NULL);
+    return record->is_type_helper;
 }
 
 static inline int record_field_is_hidden(const struct RecordField *field)
@@ -242,6 +242,12 @@ struct Statement
             int is_method_call_placeholder;  /* 1 if created from member access and needs method resolution */
             int arg0_is_dynarray_descriptor; /* 1 if arg0 should be passed as dynarray descriptor */
         } procedure_call_data;
+
+        /* Expression statement */
+        struct ExpressionStatement
+        {
+            struct Expression *expr;
+        } expr_stmt_data;
 
         /* Compound Statements */
         ListNode_t *compound_statement;

@@ -1154,6 +1154,12 @@ static void add_class_vars_to_method_scope(SymTab_t *symtab, const char *method_
         return;
     }
 
+    if (from_cparser_is_type_helper(class_name))
+    {
+        free(class_name);
+        return;
+    }
+
     /* Extract method name */
     const char *method_name = sep + 2;
     if (method_name[0] == '\0')
@@ -1186,8 +1192,15 @@ static void add_class_vars_to_method_scope(SymTab_t *symtab, const char *method_
         return;
     }
 
-    /* Only process class types, not regular records */
-    if (!record_type_is_class(record_info))
+    /* Skip type helpers entirely; they do not expose class vars like real classes. */
+    if (record_info->is_type_helper)
+    {
+        free(class_name);
+        return;
+    }
+
+    /* Only process real class types, not regular records */
+    if (!record_info->is_class)
     {
         free(class_name);
         return;
@@ -1199,6 +1212,11 @@ static void add_class_vars_to_method_scope(SymTab_t *symtab, const char *method_
     ListNode_t *field_node = record_info->fields;
     while (field_node != NULL)
     {
+        if (field_node->type != LIST_RECORD_FIELD)
+        {
+            field_node = field_node->next;
+            continue;
+        }
         struct RecordField *field = (struct RecordField *)field_node->cur;
         if (field != NULL && field->name != NULL && field->name[0] != '\0')
         {
@@ -1282,6 +1300,27 @@ static void add_class_vars_to_method_scope(SymTab_t *symtab, const char *method_
     }
 
     free(class_name);
+}
+
+static int method_id_is_type_helper(const char *method_id)
+{
+    if (method_id == NULL)
+        return 0;
+
+    const char *sep = strstr(method_id, "__");
+    if (sep == NULL || sep == method_id)
+        return 0;
+
+    size_t class_name_len = (size_t)(sep - method_id);
+    char *class_name = (char *)malloc(class_name_len + 1);
+    if (class_name == NULL)
+        return 0;
+    memcpy(class_name, method_id, class_name_len);
+    class_name[class_name_len] = '\0';
+
+    int is_helper = from_cparser_is_type_helper(class_name);
+    free(class_name);
+    return is_helper;
 }
 
 /**
@@ -9702,7 +9741,8 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         PushScope(symtab);
         
         /* For method implementations, add class vars to scope */
-        add_class_vars_to_method_scope(symtab, subprogram->tree_data.subprogram_data.id);
+        // NOTE: Temporarily disabled due to crashes in helper method resolution.
+        // add_class_vars_to_method_scope(symtab, subprogram->tree_data.subprogram_data.id);
         
         if (existing_decl != NULL && existing_decl->type != NULL)
         {
@@ -9807,7 +9847,8 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                 subprogram->tree_data.subprogram_data.id);
 
         /* For method implementations, add class vars to scope */
-        add_class_vars_to_method_scope(symtab, subprogram->tree_data.subprogram_data.id);
+        // NOTE: Temporarily disabled due to crashes in helper method resolution.
+        // add_class_vars_to_method_scope(symtab, subprogram->tree_data.subprogram_data.id);
 
         // **THIS IS THE FIX FOR THE RETURN VALUE**:
         // Use the ORIGINAL name for the internal return variable with KgpcType

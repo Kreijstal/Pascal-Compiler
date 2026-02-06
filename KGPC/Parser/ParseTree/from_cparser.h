@@ -41,6 +41,7 @@ void get_class_methods(const char *class_name, ListNode_t **methods_out, int *co
  * Returns 1 if static, 0 otherwise.
  */
 int from_cparser_is_method_static(const char *class_name, const char *method_name);
+int from_cparser_is_type_helper(const char *helper_id);
 
 /* Check if a method is virtual (needs VMT dispatch).
  * Returns 1 if virtual or override, 0 otherwise.

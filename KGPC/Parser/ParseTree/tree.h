@@ -239,6 +239,7 @@ struct Statement *mk_label(int line_num, char *label, struct Statement *stmt);
 struct Statement *mk_goto(int line_num, char *label);
 
 struct Statement *mk_procedurecall(int line_num, char *id, ListNode_t *expr_args);
+struct Statement *mk_exprstmt(int line_num, int col_num, struct Expression *expr);
 
 struct Statement *mk_compoundstatement(int line_num, ListNode_t *compound_statement);
 

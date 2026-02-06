@@ -425,6 +425,7 @@ static int remove_mutation_statement_set(SymTab_t *symtab, const IdSet *ids, str
             return remove_mutation_compound_statement_set(symtab, ids, stmt);
 
         case STMT_PROCEDURE_CALL:
+        case STMT_EXPR:
             return 0;
 
         default:
@@ -507,6 +508,10 @@ void simplify_stmt_expr(struct Statement *stmt)
         case STMT_VAR_ASSIGN:
             simplify_expr(&stmt->stmt_data.var_assign_data.expr);
 
+            break;
+
+        case STMT_EXPR:
+            simplify_expr(&stmt->stmt_data.expr_stmt_data.expr);
             break;
 
         case STMT_COMPOUND_STATEMENT:

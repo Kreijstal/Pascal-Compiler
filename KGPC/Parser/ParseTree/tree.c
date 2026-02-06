@@ -682,6 +682,11 @@ void stmt_print(struct Statement *stmt, FILE *f, int num_indent)
           list_print(stmt->stmt_data.procedure_call_data.expr_args, f, num_indent+1);
           break;
 
+        case STMT_EXPR:
+          fprintf(f, "[EXPR_STMT]:\n");
+          expr_print(stmt->stmt_data.expr_stmt_data.expr, f, num_indent+1);
+          break;
+
         case STMT_COMPOUND_STATEMENT:
           fprintf(f, "[COMPOUND_STMT]:\n");
           list_print(stmt->stmt_data.compound_statement, f, num_indent+1);
@@ -1360,6 +1365,11 @@ void destroy_stmt(struct Statement *stmt)
               destroy_kgpc_type(stmt->stmt_data.procedure_call_data.call_kgpc_type);
               stmt->stmt_data.procedure_call_data.call_kgpc_type = NULL;
           }
+          break;
+
+        case STMT_EXPR:
+          if (stmt->stmt_data.expr_stmt_data.expr != NULL)
+              destroy_expr(stmt->stmt_data.expr_stmt_data.expr);
           break;
 
         case STMT_COMPOUND_STATEMENT:
@@ -2410,6 +2420,20 @@ struct Statement *mk_procedurecall(int line_num, char *id, ListNode_t *expr_args
     new_stmt->stmt_data.procedure_call_data.is_procedural_var_call = 0;
     new_stmt->stmt_data.procedure_call_data.procedural_var_symbol = NULL;
     new_stmt->stmt_data.procedure_call_data.procedural_var_expr = NULL;
+
+    return new_stmt;
+}
+
+struct Statement *mk_exprstmt(int line_num, int col_num, struct Expression *expr)
+{
+    struct Statement *new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    assert(new_stmt != NULL);
+
+    new_stmt->line_num = line_num;
+    new_stmt->col_num = col_num;
+    new_stmt->source_index = -1;
+    new_stmt->type = STMT_EXPR;
+    new_stmt->stmt_data.expr_stmt_data.expr = expr;
 
     return new_stmt;
 }

@@ -156,6 +156,48 @@ Historically, these were **not** the `until` combinator failing to find its deli
 
 **Conclusion:** if you see a giant `[UNTIL]` span in `sysutils.pp`, treat it as evidence of a *real* parse error earlier in that declaration. The `until` combinator is doing what it was asked to do; the fix is to resolve the underlying parse mismatch.
 
+## Case Labels With Char-Code Literals (sysutils FNMatch)
+
+`sysutils.pp` uses `case` labels with char-code literals in `FNMatch`:
+```
+case Pattern[i] of
+  #128..#255: ...
+```
+
+The case-label parser only accepted integer/char literals and identifiers, so `#NNN` was rejected. That caused the entire `FNMatch` implementation to fail parsing, which then made the unit parser stop and report `Expected keyword 'end'` at the next top-level declaration.
+
+**Fix:** allow `char_code_literal` (`#NNN` / `#$NN`) as a valid `case` label expression.
+
+## Case Labels Must Be Constant Expressions (No Calls)
+
+FPC rejects function calls as `case` labels (they are not constant expressions):
+```
+case x of
+  func(): ...  // invalid
+end;
+```
+
+The parser previously accepted this form because labels were parsed as generic expressions.
+That caused statement parsing to succeed when it should fail and masked real errors.
+
+**Fix:** guard case-label parsing so ordinary function calls reject the label, but
+allow compile-time builtins (`Low`, `High`, `Ord`, `Chr`, `Succ`, `Pred`, `Length`).
+This matches FPC and keeps `case` parsing deterministic while still permitting
+common constant expressions like `Low(A)..High(A)`.
+
+## Expression Statements Must Parse (FNMatch)
+
+`sysutils.pp` contains standalone expression statements that are not procedure calls. Example in `FNMatch`:
+```
+{UTF8:=StringCodePage}(Name)=CP_UTF8;
+```
+After comment stripping, this is a bare relational expression statement. FPC accepts it, but the parser
+had been tightened to only allow expression statements that were procedure calls. That made the parser
+reject this line and misreport a later `Expected keyword 'end'` at the next top-level declaration.
+
+**Fix:** accept full expression statements again and represent them as a distinct statement kind.
+Expression statements now typecheck and codegen by evaluating the expression and discarding the result.
+
 ## Nested Routine Bodies Misparsed (fmtflt.inc)
 
 `fmtflt.inc` contains nested procedures/functions inside `IntFloatToTextFmt`, followed by the **real** function `begin` at line 318. The parse error shows up at line 138 (`Function GetSections`) because the parser is effectively treating an **inner** `begin` (from a nested routine) as the **outer** function body. That causes the outer function to end early and leaves the remaining nested routines as “unexpected content before final '.'”.
@@ -184,6 +226,51 @@ Unexpected content before final '.'
 **Root cause:** the parser originally treated the **first** `begin` it saw as the outer function body, even when nested routine headers appeared first. In `fmtflt.inc`, the first `begin` belongs to `procedure InitVars`, so the outer function body started too early and the remaining nested routines were left unparsed.
 
 **Implication:** This is not an `until` bug. It was a function-body recovery bug in `program_function_body` that has now been removed; nested routine headers are consumed as declarations, and the parser hard-errors instead of skipping to the next `begin`.
+
+## Proc-Type Cast Call Chaining (objpas.inc)
+
+`objpas.inc` uses a common FPC pattern to invoke a procedure variable after casting:
+```
+TDispProc(DispCallByIDProc)(Result,IDispatch(Dispatch),DispDesc,Params);
+```
+
+The expression parser only allowed function calls on identifiers (e.g. `foo(x)`), not **call chaining** where the result of a cast/call is invoked immediately (`expr(...)(...)`). That caused the `begin...end` block inside `fpc_dispatch_by_id` to fail, and the parser then reported `Expected keyword 'end'` at the next top‑level declaration.
+
+**Fix:** allow `call` as a postfix suffix in the expression parser, so any expression (including typecasts) can be followed by an argument list.
+
+## Inherited Used As Expression (objpas.inc)
+
+`objpas.inc` assigns the result of an inherited method call:
+```
+NewInstance := inherited NewInstance;
+```
+
+The expression parser previously rejected `inherited` as a valid expression starter (only statements supported it), so the assignment RHS failed to parse and the method body never closed.
+
+**Fix:** allow `inherited <identifier>` in expression contexts by parsing it as a function call expression.
+
+## Preprocessor Macros Default On (Compiler Tests)
+
+FPC treats macro expansion as enabled by default; `{$macro off}` explicitly disables it.
+The compiler test `preprocessor_macro_default_on.p` relies on this behavior:
+```
+{$define MYTYPE:=ShortString}
+type
+  TMy = MYTYPE;
+```
+
+**Fix:** set `macro_enabled` default to `true` in the preprocessor to match FPC.
+
+## `specialize` Typecasts in Assignments (objpas.inc)
+
+`TMarshal.FixArray` uses `specialize` as a typecast on the LHS:
+```
+specialize TArray<T>(Result) := Arr;
+```
+
+The lvalue parser did not understand `specialize` typecasts, so the assignment failed to parse and the method body never closed.
+
+**Fix:** support `specialize <generic-type>(expr)` as a typecast in both expression and lvalue parsing.
 
 ## Units with Compilation Errors
 

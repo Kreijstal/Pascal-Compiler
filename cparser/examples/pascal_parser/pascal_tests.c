@@ -834,6 +834,75 @@ void test_pascal_function_call_with_escaped_quote(void) {
 
 }
 
+void test_pascal_call_chaining_proc_cast(void) {
+    combinator_t* p = create_expression_parser();
+    input_t* input = new_input();
+    const char* expr = "TDispProc(DispCallByIDProc)(Result,Dispatch,DispDesc,Params)";
+    input->buffer = strdup(expr);
+    input->length = strlen(expr);
+
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    TEST_ASSERT(input->start == input->length);
+
+    if (res.is_success) {
+        TEST_ASSERT(res.value.ast->typ == PASCAL_T_FUNC_CALL);
+        TEST_ASSERT(res.value.ast->child != NULL);
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+
+    free(input->buffer);
+    free_input(input);
+}
+
+void test_pascal_inherited_expression(void) {
+    combinator_t* p = create_expression_parser();
+    input_t* input = new_input();
+    const char* expr = "inherited NewInstance";
+    input->buffer = strdup(expr);
+    input->length = strlen(expr);
+
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    TEST_ASSERT(input->start == input->length);
+
+    if (res.is_success) {
+        TEST_ASSERT(res.value.ast->typ == PASCAL_T_FUNC_CALL);
+        TEST_ASSERT(res.value.ast->child != NULL);
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+
+    free(input->buffer);
+    free_input(input);
+}
+
+void test_pascal_specialize_typecast_expression(void) {
+    combinator_t* p = create_expression_parser();
+    input_t* input = new_input();
+    const char* expr = "specialize TArray<Integer>(Result)";
+    input->buffer = strdup(expr);
+    input->length = strlen(expr);
+
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    TEST_ASSERT(input->start == input->length);
+
+    if (res.is_success) {
+        TEST_ASSERT(res.value.ast->typ == PASCAL_T_TYPECAST);
+        TEST_ASSERT(res.value.ast->child != NULL);
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+
+    free(input->buffer);
+    free_input(input);
+}
+
 void test_pascal_string_literal(void) {
     combinator_t* p = create_expression_parser();
     input_t* input = new_input();
@@ -3252,6 +3321,26 @@ void test_pascal_case_invalid_expression_labels(void) {
     free_input(input);
 }
 
+// Test case labels that use compile-time builtins like Low/High (should succeed)
+void test_pascal_case_labels_allow_low_high(void) {
+    combinator_t* p = create_statement_parser();
+    input_t* input = new_input();
+    input->buffer = strdup("case x of Low(A)..High(A): writeln() end");
+    input->length = strlen(input->buffer);
+
+    ParseResult res = parse(input, p);
+
+    TEST_ASSERT(res.is_success);
+
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+    free(input->buffer);
+    free_input(input);
+}
+
 // Test pointer dereference operator (basic support)
 void test_pascal_pointer_dereference(void) {
     combinator_t* p = create_expression_parser();
@@ -5308,6 +5397,9 @@ TEST_LIST = {
     { "test_pascal_preprocessor_numeric_comparisons", test_pascal_preprocessor_numeric_comparisons },
     { "test_pascal_function_call", test_pascal_function_call },
     { "test_pascal_function_call_with_escaped_quote", test_pascal_function_call_with_escaped_quote },
+    { "test_pascal_call_chaining_proc_cast", test_pascal_call_chaining_proc_cast },
+    { "test_pascal_inherited_expression", test_pascal_inherited_expression },
+    { "test_pascal_specialize_typecast_expression", test_pascal_specialize_typecast_expression },
     { "test_pascal_string_literal", test_pascal_string_literal },
     { "test_pascal_function_call_no_args", test_pascal_function_call_no_args },
     { "test_pascal_function_call_with_args", test_pascal_function_call_with_args },
@@ -5383,6 +5475,7 @@ TEST_LIST = {
     { "test_pascal_case_expression_labels", test_pascal_case_expression_labels },
     { "test_pascal_case_statement_char_labels", test_pascal_case_statement_char_labels },
     { "test_pascal_case_invalid_expression_labels", test_pascal_case_invalid_expression_labels },
+    { "test_pascal_case_labels_allow_low_high", test_pascal_case_labels_allow_low_high },
     { "test_pascal_paren_star_comment", test_pascal_paren_star_comment },
     { "test_pascal_hex_literal", test_pascal_hex_literal },
     { "test_pascal_case_range_label", test_pascal_case_range_label },

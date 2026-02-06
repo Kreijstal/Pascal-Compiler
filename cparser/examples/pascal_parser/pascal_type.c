@@ -2113,6 +2113,22 @@ static ParseResult object_type_fn(input_t* in, void* args, char* parser_name) {
     free_ast(object_res.value.ast);
     free_combinator(object_keyword);
 
+    // Optional base type: object(BaseType)
+    combinator_t* base_type = optional(seq(new_combinator(), PASCAL_T_NONE,
+        token(match("(")),
+        create_type_ref_parser(),
+        token(match(")")),
+        NULL
+    ));
+    ParseResult base_res = parse(in, base_type);
+    if (base_res.is_success) {
+        if (base_res.value.ast != NULL && base_res.value.ast != ast_nil)
+            free_ast(base_res.value.ast);
+    } else {
+        discard_failure(base_res);
+    }
+    free_combinator(base_type);
+
     // Field declaration: identifier_list : type
     combinator_t* field_name_list = sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(",")));
     combinator_t* field_type = create_record_field_type_spec();
@@ -2126,41 +2142,38 @@ static ParseResult object_type_fn(input_t* in, void* args, char* parser_name) {
     set_combinator_name(field_decl, "object_field_decl");
 
     // Method declarations (procedure/function headers in object definition)
+    combinator_t* method_directive = seq(new_combinator(), PASCAL_T_METHOD_DIRECTIVE,
+        multi(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("virtual")),
+            token(keyword_ci("override")),
+            token(keyword_ci("static")),
+            token(keyword_ci("inline")),
+            NULL
+        ),
+        optional(token(match(";"))),
+        NULL
+    );
+    combinator_t* method_directives = many(method_directive);
+
     combinator_t* method_procedure_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
+        optional(token(keyword_ci("class"))),
         token(keyword_ci("procedure")),
         token(cident(PASCAL_T_IDENTIFIER)),
         create_pascal_param_parser(),
         token(match(";")),
-        optional(seq(new_combinator(), PASCAL_T_METHOD_DIRECTIVE,
-            multi(new_combinator(), PASCAL_T_NONE,
-                token(keyword_ci("virtual")),
-                token(keyword_ci("override")),
-                token(keyword_ci("static")),
-                NULL
-            ),
-            optional(token(match(";"))),
-            NULL
-        )),
+        method_directives,
         NULL
     );
 
     combinator_t* method_function_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
+        optional(token(keyword_ci("class"))),
         token(keyword_ci("function")),
         token(cident(PASCAL_T_IDENTIFIER)),
         create_pascal_param_parser(),
         token(match(":")),
         create_type_ref_parser(),
         token(match(";")),
-        optional(seq(new_combinator(), PASCAL_T_METHOD_DIRECTIVE,
-            multi(new_combinator(), PASCAL_T_NONE,
-                token(keyword_ci("virtual")),
-                token(keyword_ci("override")),
-                token(keyword_ci("static")),
-                NULL
-            ),
-            optional(token(match(";"))),
-            NULL
-        )),
+        method_directives,
         NULL
     );
 
@@ -2204,9 +2217,90 @@ static ParseResult object_type_fn(input_t* in, void* args, char* parser_name) {
         NULL
     );
 
-    // Object member can be field, method, or visibility section
+    // Nested type section inside object
+    combinator_t* nested_type_spec = multi(new_combinator(), PASCAL_T_TYPE_SPEC,
+        object_type(PASCAL_T_OBJECT_TYPE),
+        record_type(PASCAL_T_RECORD_TYPE),
+        enumerated_type(PASCAL_T_ENUMERATED_TYPE),
+        pointer_type(PASCAL_T_POINTER_TYPE),
+        array_type(PASCAL_T_ARRAY_TYPE),
+        set_type(PASCAL_T_SET),
+        range_type(PASCAL_T_RANGE_TYPE),
+        file_type(PASCAL_T_FILE_TYPE),
+        function_type(PASCAL_T_FUNCTION_TYPE),
+        procedure_type(PASCAL_T_PROCEDURE_TYPE),
+        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
+        NULL
+    );
+
+    combinator_t* nested_type_decl = seq(new_combinator(), PASCAL_T_TYPE_DECL,
+        optional(token(keyword_ci("generic"))),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        token(match("=")),
+        nested_type_spec,
+        optional(token(match(";"))),
+        NULL
+    );
+
+    combinator_t* nested_type_section = seq(new_combinator(), PASCAL_T_NESTED_TYPE_SECTION,
+        token(keyword_ci("type")),
+        many(nested_type_decl),
+        NULL
+    );
+
+    // Const section inside object (parse expressions)
+    combinator_t** object_const_expr_parser = (combinator_t**)safe_malloc(sizeof(combinator_t*));
+    *object_const_expr_parser = new_combinator();
+    init_pascal_expression_parser(object_const_expr_parser, NULL);
+
+    combinator_t* const_name = token(cident(PASCAL_T_IDENTIFIER));
+    combinator_t* const_type = optional(seq(new_combinator(), PASCAL_T_NONE,
+        token(match(":")),
+        create_type_ref_parser(),
+        NULL
+    ));
+    combinator_t* const_decl = seq(new_combinator(), PASCAL_T_CONST_DECL,
+        const_name,
+        const_type,
+        token(match("=")),
+        lazy(object_const_expr_parser),
+        optional(token(match(";"))),
+        NULL
+    );
+    combinator_t* const_section = seq(new_combinator(), PASCAL_T_CONST_SECTION,
+        token(keyword_ci("const")),
+        many(const_decl),
+        NULL
+    );
+    const_section->extra_to_free = object_const_expr_parser;
+
+    combinator_t* var_section = seq(new_combinator(), PASCAL_T_VAR_SECTION,
+        token(keyword_ci("var")),
+        many(field_decl),
+        NULL
+    );
+
+    combinator_t* class_var_section = seq(new_combinator(), PASCAL_T_VAR_SECTION,
+        token(keyword_ci("class")),
+        token(keyword_ci("var")),
+        many(field_decl),
+        NULL
+    );
+
+    combinator_t* class_threadvar_section = seq(new_combinator(), PASCAL_T_VAR_SECTION,
+        token(keyword_ci("class")),
+        token(keyword_ci("threadvar")),
+        many(field_decl),
+        NULL
+    );
+
     combinator_t* object_member = multi(new_combinator(), PASCAL_T_NONE,
         visibility_keyword,
+        nested_type_section,
+        const_section,
+        var_section,
+        class_var_section,
+        class_threadvar_section,
         constructor_decl,
         destructor_decl,
         method_procedure_decl,

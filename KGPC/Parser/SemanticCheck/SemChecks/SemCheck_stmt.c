@@ -2343,6 +2343,15 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             return_val += semcheck_proccall(symtab, stmt, max_scope_lev);
             break;
 
+        case STMT_EXPR:
+            if (stmt->stmt_data.expr_stmt_data.expr != NULL)
+            {
+                int expr_type;
+                return_val += semcheck_stmt_expr_tag(&expr_type, symtab,
+                    stmt->stmt_data.expr_stmt_data.expr, max_scope_lev, 0);
+            }
+            break;
+
         case STMT_COMPOUND_STATEMENT:
             return_val += semcheck_compoundstmt(symtab, stmt, max_scope_lev);
             break;

@@ -356,6 +356,87 @@ static combinator_t* with_context_comma_guard(void) {
     return comb;
 }
 
+static bool case_call_name_allowed(const char* name) {
+    if (name == NULL) {
+        return false;
+    }
+    return strcasecmp(name, "low") == 0 ||
+           strcasecmp(name, "high") == 0 ||
+           strcasecmp(name, "ord") == 0 ||
+           strcasecmp(name, "chr") == 0 ||
+           strcasecmp(name, "succ") == 0 ||
+           strcasecmp(name, "pred") == 0 ||
+           strcasecmp(name, "length") == 0;
+}
+
+static const char* case_call_name(ast_t* call_node) {
+    if (call_node == NULL || call_node == ast_nil || call_node->typ != PASCAL_T_FUNC_CALL) {
+        return NULL;
+    }
+    ast_t* base = call_node->child;
+    if (base == NULL || base == ast_nil) {
+        return NULL;
+    }
+    if (base->typ == PASCAL_T_IDENTIFIER && base->sym != NULL) {
+        return base->sym->name;
+    }
+    return NULL;
+}
+
+static bool case_label_has_disallowed_call(ast_t* node) {
+    if (node == NULL || node == ast_nil) {
+        return false;
+    }
+    if (node->typ == PASCAL_T_FUNC_CALL) {
+        const char* name = case_call_name(node);
+        if (!case_call_name_allowed(name)) {
+            return true;
+        }
+        // Allowed function call: still validate argument expressions.
+        ast_t* base = node->child;
+        ast_t* arg = base ? base->next : NULL;
+        while (arg != NULL && arg != ast_nil) {
+            if (case_label_has_disallowed_call(arg)) {
+                return true;
+            }
+            arg = arg->next;
+        }
+        return false;
+    }
+    if (case_label_has_disallowed_call(node->child)) {
+        return true;
+    }
+    return case_label_has_disallowed_call(node->next);
+}
+
+static ParseResult case_label_guard_fn(input_t* in, void* args, char* parser_name) {
+    combinator_t* inner = (combinator_t*)args;
+    if (inner == NULL) {
+        return make_failure_v2(in, parser_name, strdup("Internal case label guard error"), NULL);
+    }
+    int start = in->start;
+    ParseResult res = parse(in, inner);
+    if (!res.is_success) {
+        return res;
+    }
+    if (case_label_has_disallowed_call(res.value.ast)) {
+        free_ast(res.value.ast);
+        in->start = start;
+        return make_failure_v2(in, parser_name,
+            strdup("Function calls are not valid case labels"), NULL);
+    }
+    return res;
+}
+
+static combinator_t* case_label_guard(combinator_t* inner) {
+    combinator_t* comb = new_combinator();
+    comb->type = COMB_LABEL_GUARD;
+    comb->fn = case_label_guard_fn;
+    comb->args = inner;
+    comb->name = strdup("case_label_guard");
+    return comb;
+}
+
 static ast_t* wrap_with_contexts(ast_t* contexts) {
     if (contexts == NULL || contexts == ast_nil) {
         return ast_nil;
@@ -369,6 +450,45 @@ static ast_t* discard_ast_stmt(ast_t* ast) {
         free_ast(ast);
     }
     return ast_nil;
+}
+
+static combinator_t* make_case_expression(combinator_t** expr_parser) {
+    // Note: boolean literals (true/false) must come BEFORE cident to avoid being
+    // parsed as identifiers.
+    combinator_t* case_func_call = seq(new_combinator(), PASCAL_T_FUNC_CALL,
+        cident(PASCAL_T_IDENTIFIER),
+        between(token(match("(")), token(match(")")),
+            optional(sep_by(lazy(expr_parser), token(match(","))))
+        ),
+        NULL
+    );
+    combinator_t* const_expr_factor = multi(new_combinator(), PASCAL_T_NONE,
+        hex_integer(PASCAL_T_INTEGER),
+        binary_integer(PASCAL_T_INTEGER),
+        octal_integer(PASCAL_T_INTEGER),
+        integer(PASCAL_T_INTEGER),
+        char_literal(PASCAL_T_CHAR),
+        control_char_literal(PASCAL_T_CHAR),
+        char_code_literal(PASCAL_T_CHAR_CODE),
+        token(create_keyword_parser("true", PASCAL_T_BOOLEAN)),   // Boolean true
+        token(create_keyword_parser("false", PASCAL_T_BOOLEAN)),  // Boolean false
+        case_func_call,
+        cident(PASCAL_T_IDENTIFIER),
+        between(token(match("(")), token(match(")")), lazy(expr_parser)), // parenthesized expressions
+        NULL);
+
+    // Allow simple arithmetic in case labels like (CONST + 1) or -5
+    return multi(new_combinator(), PASCAL_T_NONE,
+        seq(new_combinator(), PASCAL_T_NEG,
+            token(match("-")),
+            const_expr_factor,
+            NULL),
+        seq(new_combinator(), PASCAL_T_POS,
+            token(match("+")),
+            const_expr_factor,
+            NULL),
+        const_expr_factor,
+        NULL);
 }
 
 static bool slice_matches_keyword_ci(const char* slice, size_t len, const char* keyword) {
@@ -503,9 +623,13 @@ static ParseResult statement_dispatch_fn(input_t* in, void* args, char* parser_n
         keyword_buf[ident_len] = '\0';
         
         // TRACE dispatch
-        if (getenv("KGPC_DEBUG_TRACE") != NULL && in->line > 700) {
+        if (getenv("KGPC_DEBUG_TRACE") != NULL) {
              FILE* f = fopen("/tmp/parser_trace.log", "a");
              if (f) { fprintf(f, "TRACE: stmt_dispatch seeing identifier '%s' at %d\n", keyword_buf, in ? in->line : 0); fclose(f); }
+        }
+
+        if (getenv("KGPC_DEBUG_STATEMENT_DISPATCH") != NULL) {
+            // fprintf(stderr, "[statement_dispatch] leading identifier '%s'\n", keyword_buf);
         }
 
         if (getenv("KGPC_DEBUG_TRACE") != NULL) {
@@ -940,6 +1064,26 @@ void init_pascal_statement_parser(combinator_t** p) {
         between(token(match("(")), token(match(")")), lazy(expr_parser)),
         NULL
     );
+
+    // specialize TypeName<T>(expr) typecast lvalues
+    combinator_t* lvalue_type_arg = token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER));
+    combinator_t* lvalue_type_arg_list = seq(new_combinator(), PASCAL_T_TYPE_ARG_LIST,
+        token(match("<")),
+        sep_by1(lvalue_type_arg, token(match(","))),
+        token(match(">")),
+        NULL
+    );
+    combinator_t* specialize_type_base = seq(new_combinator(), PASCAL_T_CONSTRUCTED_TYPE,
+        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
+        lvalue_type_arg_list,
+        NULL
+    );
+    combinator_t* specialize_typecast_base = seq(new_combinator(), PASCAL_T_TYPECAST,
+        token(keyword_ci("specialize")),
+        specialize_type_base,
+        between(token(match("(")), token(match(")")), lazy(expr_parser)),
+        NULL
+    );
     // Require pointer suffix followed by optional additional suffixes
     combinator_t* required_pointer_suffix = seq(new_combinator(), PASCAL_T_NONE,
         pointer_suffix,
@@ -955,6 +1099,19 @@ void init_pascal_statement_parser(combinator_t** p) {
     // Typecast lvalue with member/array/pointer suffix: TFoo(obj).Field := 1
     combinator_t* typecast_lvalue_with_suffixes = map(seq(new_combinator(), PASCAL_T_NONE,
         typecast_base,
+        required_suffixes,
+        NULL
+    ), build_pointer_lvalue_chain);
+
+    combinator_t* specialize_lvalue_simple = seq(new_combinator(), PASCAL_T_TYPECAST,
+        token(keyword_ci("specialize")),
+        specialize_type_base,
+        between(token(match("(")), token(match(")")), lazy(expr_parser)),
+        NULL
+    );
+
+    combinator_t* specialize_lvalue_with_suffixes = map(seq(new_combinator(), PASCAL_T_NONE,
+        specialize_typecast_base,
         required_suffixes,
         NULL
     ), build_pointer_lvalue_chain);
@@ -977,7 +1134,9 @@ void init_pascal_statement_parser(combinator_t** p) {
     combinator_t* lvalue = multi(new_combinator(), PASCAL_T_NONE,
         typecast_lvalue_with_deref,  // Try typecast with deref first (PCardinal(@x)^)
         typecast_lvalue_with_suffixes, // Then typecast with field/array/pointer access
+        specialize_lvalue_with_suffixes, // specialize T<T>(x).Field := 1
         typecast_lvalue_simple,      // Then simple typecast (Integer(x))
+        specialize_lvalue_simple,    // specialize T<T>(x) := value
         funcall_lvalue,              // Function call returning reference: unaligned(expr) := 0
         simple_lvalue,               // Finally simple identifier with optional suffixes
         NULL
@@ -1026,7 +1185,7 @@ void init_pascal_statement_parser(combinator_t** p) {
 
     // Simple expression statement: expression (no semicolon here)
     combinator_t* expr_stmt = seq(new_combinator(), PASCAL_T_STATEMENT,
-        lazy(expr_parser),                     // expression
+        lazy(expr_parser),
         NULL
     );
 
@@ -1193,12 +1352,23 @@ void init_pascal_statement_parser(combinator_t** p) {
         NULL
     );
 
-    // ASM block: asm ... end
+    // ASM block: asm ... end [reglist]
+    combinator_t* asm_reg = multi(new_combinator(), PASCAL_T_NONE,
+        token(pascal_string(PASCAL_T_STRING)),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        NULL
+    );
+    combinator_t* asm_reglist = optional(between(
+        token(match("[")),
+        token(match("]")),
+        sep_by(asm_reg, token(match(",")))
+    ));
     combinator_t* asm_stmt = seq(new_combinator(), PASCAL_T_ASM_BLOCK,
         token(match("asm")),                   // asm keyword
         commit(seq(new_combinator(), PASCAL_T_NONE,
             asm_body(PASCAL_T_NONE),               // asm body content
             token(match("end")),                   // end keyword
+            asm_reglist,                           // optional register list
             NULL
         )),
         NULL
@@ -1329,43 +1499,20 @@ void init_pascal_statement_parser(combinator_t** p) {
     // Case statement: case expression of label1: stmt1; label2: stmt2; [else stmt;] end
     // Case labels should handle constant expressions, not just simple values
     
-    // Constant expressions for case labels - more flexible than simple values
-    // but restricted to avoid conflicts with statement parsing
-    // Note: boolean literals (true/false) must come BEFORE cident to avoid being
-    // parsed as identifiers
-    combinator_t* const_expr_factor = multi(new_combinator(), PASCAL_T_NONE,
-        integer(PASCAL_T_INTEGER),
-        char_literal(PASCAL_T_CHAR),
-        control_char_literal(PASCAL_T_CHAR),
-        token(create_keyword_parser("true", PASCAL_T_BOOLEAN)),   // Boolean true
-        token(create_keyword_parser("false", PASCAL_T_BOOLEAN)),  // Boolean false
-        cident(PASCAL_T_IDENTIFIER),
-        between(token(match("(")), token(match(")")), lazy(expr_parser)), // parenthesized expressions
-        NULL);
-    
-    // Allow simple arithmetic in case labels like (CONST + 1) or -5
-    combinator_t* case_expression = multi(new_combinator(), PASCAL_T_NONE,
-        seq(new_combinator(), PASCAL_T_NEG,
-            token(match("-")),
-            const_expr_factor,
-            NULL),
-        seq(new_combinator(), PASCAL_T_POS,
-            token(match("+")),
-            const_expr_factor,
-            NULL),
-        const_expr_factor,
-        NULL);
-    
+    combinator_t* case_expression_start = make_case_expression(expr_parser);
+    combinator_t* case_expression_end = make_case_expression(expr_parser);
+    combinator_t* case_expression_single = make_case_expression(expr_parser);
+
     // Range case label: expression..expression
     combinator_t* range_case_label = seq(new_combinator(), PASCAL_T_RANGE,
-        case_expression,
+        case_label_guard(case_expression_start),
         token(match("..")),
-        case_expression,
+        case_label_guard(case_expression_end),
         NULL);
     
     combinator_t* case_label = multi(new_combinator(), PASCAL_T_CASE_LABEL,
         token(range_case_label),    // Try range first
-        token(case_expression),     // Then single expressions
+        token(case_label_guard(case_expression_single)),     // Then single expressions
         NULL
     );
     
