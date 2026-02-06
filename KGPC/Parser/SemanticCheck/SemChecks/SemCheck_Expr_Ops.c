@@ -1248,6 +1248,7 @@ int semcheck_varid(int *type_return,
          * (e.g. case labels). */
         if (scope_return == -1)
         {
+            assert(id != NULL);
             const char *dot = strchr(id, '.');
             if (dot != NULL && dot[1] != '\0')
             {
@@ -1291,8 +1292,10 @@ int semcheck_varid(int *type_return,
                         }
                     }
                     /* Also check for class constants: Type.ConstName */
-                    char mangled_qid[512];
-                    snprintf(mangled_qid, sizeof(mangled_qid), "%s__%s", prefix, suffix);
+                    size_t mangled_len = prefix_len + 2 + strlen(suffix) + 1;
+                    char *mangled_qid = (char *)malloc(mangled_len);
+                    assert(mangled_qid != NULL);
+                    snprintf(mangled_qid, mangled_len, "%s__%s", prefix, suffix);
                     HashNode_t *class_const_node = NULL;
                     int cc_scope = FindIdent(&class_const_node, symtab, mangled_qid);
                     if (cc_scope >= 0 && class_const_node != NULL &&
@@ -1302,11 +1305,13 @@ int semcheck_varid(int *type_return,
                         if (expr->expr_data.id != NULL)
                             free(expr->expr_data.id);
                         expr->expr_data.id = strdup(mangled_qid);
+                        free(mangled_qid);
                         id = expr->expr_data.id;
                         hash_return = class_const_node;
                         scope_return = cc_scope;
                         goto resolved;
                     }
+                    free(mangled_qid);
                 }
                 else if (prefix_scope == -1)
                 {

@@ -51,7 +51,7 @@ git clone https://github.com/fpc/FPCSource
   -I./FPCSource/packages/rtl-objpas/src/inc
 ```
 
-### types.pp (0 errors)
+### types.pp (parse error - generic class procedures)
 ```bash
 ./build/KGPC/kgpc ./FPCSource/rtl/objpas/types.pp /tmp/types.s \
   --no-stdlib \
@@ -65,27 +65,25 @@ git clone https://github.com/fpc/FPCSource
 
 ### math.pp (blocked by types.pp)
 
-math.pp depends on `types` which fails to parse function declarations with
-qualified default parameter values (e.g. `THorzRectAlign.Center`).
+types.pp now parses past the `TRectF.PlaceInto` qualified-default-parameter
+issue but fails on `generic class procedure TBitConverter.From<T>(...)` —
+a generic class procedure syntax the parser does not yet support.
 
-#### Next blocker: qualified enum default parameters in types.pp
+#### Next blocker: generic class procedures in types.pp
 
 ```
-function TRectF.PlaceInto(
-    const Dest: TRectF;
-    const AHorzAlign: THorzRectAlign = THorzRectAlign.Center;
-    const AVertAlign: TVertRectAlign = TVertRectAlign.Center): TRectF;
+generic class procedure TBitConverter.From<T>(const ASrcValue: T; var ADestination: Array of Byte; AOffset: Integer = 0);
 ```
 
-The parser does not yet support dotted identifiers (`Type.Member`) as
-default parameter values.
+The parser does not yet support the `generic class procedure` combined
+modifier sequence with inline generic type parameters.
 
 ## Units with Compilation Errors
 
 - `baseunix.pp` - **0 errors**
 - `sysutils.pp` - **0 errors** (with `--no-stdlib`)
 - `classes.pp` - **0 errors**
-- `types.pp` - **parse error** (qualified default parameter values unsupported)
+- `types.pp` - **parse error** (generic class procedures unsupported)
 - `math.pp` - **blocked** by types.pp
 - `fgl.pp` - **0 errors**
 - `sysconst.pp` - **0 errors**
@@ -108,6 +106,11 @@ All 3 Pos(char, string) test failures fixed by:
 
 The `**` (power/dot-product) operator is now supported in the expression parser,
 unblocking types.pp up to the qualified-default-parameter issue.
+
+Qualified identifiers in case labels (`THorzRectAlign.Left:`) now parse and
+resolve correctly. Fixed by using `pascal_qualified_identifier()` in the
+case expression parser and adding dot-split resolution in `semcheck_varid()`
+for scoped enum values and unit-qualified constants.
 
 ## Error Reduction with C-Vise (Flatten-Only Preprocessor)
 
