@@ -5446,6 +5446,69 @@ void test_case_qualified_enum_labels(void) {
     free_input(input);
 }
 
+// Regression: generic class procedure inside record type
+void test_generic_class_procedure_in_record(void) {
+    combinator_t* p = get_unit_parser();
+    input_t* input = new_input();
+    const char* src =
+        "unit U;\n"
+        "{$mode objfpc}\n"
+        "interface\n"
+        "type\n"
+        "  TFoo = record\n"
+        "    generic class procedure A<T>(const X: T); static;\n"
+        "    generic class function B<T>(const X: T): T; static;\n"
+        "  end;\n"
+        "implementation\n"
+        "generic class procedure TFoo.A<T>(const X: T);\n"
+        "begin end;\n"
+        "generic class function TFoo.B<T>(const X: T): T;\n"
+        "begin end;\n"
+        "end.";
+    input->buffer = strdup(src);
+    input->length = (int)strlen(src);
+    ParseResult res = parse(input, p);
+    if (!res.is_success) {
+        printf("Parse error: %s\n", res.value.error->message);
+        free_error(res.value.error);
+    }
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) free_ast(res.value.ast);
+    free(input->buffer);
+    free_input(input);
+}
+
+// Regression: specialize call with multiple arguments
+void test_specialize_multi_arg(void) {
+    combinator_t* p = get_unit_parser();
+    input_t* input = new_input();
+    const char* src =
+        "unit U;\n"
+        "{$mode objfpc}\n"
+        "interface\n"
+        "type\n"
+        "  TFoo = record\n"
+        "    generic class procedure A<T>(const X: T; var D: Array of Byte); static;\n"
+        "  end;\n"
+        "implementation\n"
+        "generic class procedure TFoo.A<T>(const X: T; var D: Array of Byte);\n"
+        "begin\n"
+        "  TFoo.specialize A<T>(X, D);\n"
+        "end;\n"
+        "end.";
+    input->buffer = strdup(src);
+    input->length = (int)strlen(src);
+    ParseResult res = parse(input, p);
+    if (!res.is_success) {
+        printf("Parse error: %s\n", res.value.error->message);
+        free_error(res.value.error);
+    }
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) free_ast(res.value.ast);
+    free(input->buffer);
+    free_input(input);
+}
+
 
 TEST_LIST = {
     { "test_pascal_integer_parsing", test_pascal_integer_parsing },
@@ -5628,5 +5691,7 @@ TEST_LIST = {
     { "test_fpc_system_comment_keywords", test_fpc_system_comment_keywords },
     { "test_delphi_form_unit", test_delphi_form_unit },
     { "test_case_qualified_enum_labels", test_case_qualified_enum_labels },
+    { "test_generic_class_procedure_in_record", test_generic_class_procedure_in_record },
+    { "test_specialize_multi_arg", test_specialize_multi_arg },
     { NULL, NULL }
 };
