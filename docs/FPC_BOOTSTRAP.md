@@ -51,7 +51,7 @@ git clone https://github.com/fpc/FPCSource
   -I./FPCSource/packages/rtl-objpas/src/inc
 ```
 
-### types.pp (parse error)
+### types.pp (0 errors)
 ```bash
 ./build/KGPC/kgpc ./FPCSource/rtl/objpas/types.pp /tmp/types.s \
   --no-stdlib \
@@ -63,36 +63,17 @@ git clone https://github.com/fpc/FPCSource
   -I./FPCSource/rtl/x86_64
 ```
 
-**Blocker:** The parser fails on `TPoint3D` in types.pp because its advanced record body starts with a nested `Type` section inside a `public` visibility block:
-```pascal
-TPoint3D = packed record
-  public
-    Type TSingle3Array = array[0..2] of single;  // <-- nested Type after public
-    constructor Create(const ax,ay,az:single);
-    ...
-  end;
-```
-The record parser does not support a bare `Type` keyword introducing a nested type section after a visibility modifier in advanced records. Minimal reproducer:
-```pascal
-unit t; interface type
-  TPoint3D = packed record
-  public
-    Type TSingle3Array = array[0..2] of single;
-  end;
-implementation end.
-```
+### math.pp (unblocked)
 
-### math.pp (blocked by types.pp)
-
-math.pp uses `types` unit which fails to parse. Once types.pp is fixed, math.pp should compile.
+math.pp uses `types` unit which now parses successfully.
 
 ## Units with Compilation Errors
 
 - `baseunix.pp` - **0 errors**
 - `sysutils.pp` - **0 errors** (with `--no-stdlib`)
 - `classes.pp` - **0 errors**
-- `types.pp` - **parse error** (nested `Type` section in advanced record after visibility modifier)
-- `math.pp` - **blocked** by types.pp parse error
+- `types.pp` - **0 errors** (nested `Type` section in advanced record now supported)
+- `math.pp` - **unblocked** by types.pp fix
 - `fgl.pp` - **0 errors**
 - `sysconst.pp` - **0 errors**
 - `rtlconsts.pp` - **0 errors**
@@ -104,6 +85,8 @@ Failing compiler invocations dropped from **58 to 7** after fixing:
 1. `codegen_sizeof_type_tag` missing `BYTE_TYPE` (1 byte), `WORD_TYPE` (2 bytes), `LONGWORD_TYPE` (4 bytes), `QWORD_TYPE` (8 bytes)
 2. `PASCAL_T_NONE` empty statements reaching `convert_statement` and hitting the unsupported default case
 3. Plain record properties (Delphi advanced records) triggering `record_type_is_class` heuristic
+
+Additionally, `kgpc_type_sizeof` was missing cases for `BYTE_TYPE`, `WORD_TYPE`, `LONGWORD_TYPE`, and `QWORD_TYPE`, causing SizeOf to fail for arrays of these types (e.g., `array[0..3] of Byte`).
 
 ## Error Reduction with C-Vise (Flatten-Only Preprocessor)
 

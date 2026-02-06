@@ -5387,6 +5387,33 @@ void test_delphi_form_unit(void) {
     free_input(input);
 }
 
+void test_pascal_unit_advanced_record_nested_type_array(void) {
+    combinator_t* p = get_unit_parser();
+    input_t* input = new_input();
+    char* program = load_pascal_snippet("advanced_record_nested_type_array.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free_input(input);
+        return;
+    }
+    input->buffer = program;
+    input->length = strlen(program);
+    ParseResult res = parse(input, p);
+    if (!res.is_success) {
+        printf("Parse error in advanced_record_nested_type_array: %s\n", res.value.error->message);
+        free_error(res.value.error);
+    }
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        ast_t* ast = res.value.ast;
+        TEST_ASSERT(ast != NULL);
+        TEST_ASSERT(ast->typ == PASCAL_T_UNIT_DECL);
+        free_ast(res.value.ast);
+    }
+    free(input->buffer);
+    free_input(input);
+}
+
 
 TEST_LIST = {
     { "test_pascal_integer_parsing", test_pascal_integer_parsing },
@@ -5529,6 +5556,7 @@ TEST_LIST = {
     { "test_include_file", test_include_file },
     { "test_pascal_unit_include_routines", test_pascal_unit_include_routines },
     { "test_pascal_unit_advanced_record_public_type", test_pascal_unit_advanced_record_public_type },
+    { "test_pascal_unit_advanced_record_nested_type_array", test_pascal_unit_advanced_record_nested_type_array },
     { "test_pascal_unit_type_helper_inheritance", test_pascal_unit_type_helper_inheritance },
     { "test_pascal_unit_bitpacked_variant_record", test_pascal_unit_bitpacked_variant_record },
     { "test_managed_records", test_managed_records },

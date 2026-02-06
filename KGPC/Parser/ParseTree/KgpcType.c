@@ -1439,7 +1439,14 @@ long long kgpc_type_sizeof(KgpcType *type)
                         return type->size_in_bytes;
                     return 632;
                 case CHAR_TYPE:
+                case BYTE_TYPE:
                     return 1;
+                case WORD_TYPE:
+                    return 2;
+                case LONGWORD_TYPE:
+                    return 4;
+                case QWORD_TYPE:
+                    return 8;
                 default:
                     return -1;
             }
