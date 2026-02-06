@@ -1773,7 +1773,7 @@ int semcheck_builtin_default(int *type_return, SymTab_t *symtab,
         if (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
         {
             set_type_from_hashtype(&target_type, type_node);
-            record_type = get_record_type_from_node(type_node);
+            record_type = hashnode_get_record_type_extended(type_node);
             target_kgpc_type = type_node->type;
             if (target_kgpc_type != NULL)
                 kgpc_type_retain(target_kgpc_type);
@@ -1943,7 +1943,7 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
         HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, type_name);
         if (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
         {
-            struct TypeAlias *alias = get_type_alias_from_node(type_node);
+            struct TypeAlias *alias = hashnode_get_type_alias(type_node);
             long long low = 0;
             long long high = 0;
             int have_bounds = 0;
@@ -1963,7 +1963,7 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
                     alias->target_type_id);
                 if (target_node != NULL && target_node->hash_type == HASHTYPE_TYPE)
                 {
-                    struct TypeAlias *target_alias = get_type_alias_from_node(target_node);
+                    struct TypeAlias *target_alias = hashnode_get_type_alias(target_node);
                     if (target_alias != NULL && target_alias->is_range && target_alias->range_known)
                     {
                         low = target_alias->range_start;
@@ -2342,7 +2342,7 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
 
                 if (error_count == 0)
                 {
-                    struct TypeAlias *alias = get_type_alias_from_node(node);
+                    struct TypeAlias *alias = hashnode_get_type_alias(node);
                     int used_target_size = 0;
                     if (alias != NULL && alias->target_type_id != NULL)
                     {

@@ -1265,7 +1265,7 @@ int semcheck_varid(int *type_return,
         HashNode_t *self_node = NULL;
         if (FindIdent(&self_node, symtab, "Self") == 0 && self_node != NULL)
         {
-            struct RecordType *self_record = get_record_type_from_node(self_node);
+            struct RecordType *self_record = hashnode_get_record_type_extended(self_node);
             if (self_record == NULL)
             {
                 int self_type_tag = UNKNOWN_TYPE;
@@ -1333,7 +1333,7 @@ int semcheck_varid(int *type_return,
     int helper_context = 0;
     if (FindIdent(&helper_self_node, symtab, "Self") == 0 && helper_self_node != NULL)
     {
-        helper_self_record = get_record_type_from_node(helper_self_node);
+        helper_self_record = hashnode_get_record_type_extended(helper_self_node);
         if (helper_self_record == NULL)
         {
             helper_self_record = semcheck_resolve_helper_self_record(symtab,
@@ -1511,7 +1511,7 @@ int semcheck_varid(int *type_return,
                 HashNode_t *self_node = NULL;
                 if (FindIdent(&self_node, symtab, "Self") == 0 && self_node != NULL)
                 {
-                    struct RecordType *self_record = get_record_type_from_node(self_node);
+                    struct RecordType *self_record = hashnode_get_record_type_extended(self_node);
                     if (self_record == NULL)
                     {
                         int self_type_tag = UNKNOWN_TYPE;
@@ -1701,7 +1701,7 @@ int semcheck_varid(int *type_return,
         /* Interface type identifiers can be used as GUIDs (FPC behavior). */
         if (hash_return->hash_type == HASHTYPE_TYPE && mutating == NO_MUTATE)
         {
-            struct RecordType *type_record = get_record_type_from_node(hash_return);
+            struct RecordType *type_record = hashnode_get_record_type_extended(hash_return);
             if (type_record != NULL && type_record->is_interface)
             {
                 HashNode_t *tguid_node = semcheck_find_type_node_with_kgpc_type(symtab, "TGUID");
@@ -1791,7 +1791,7 @@ int semcheck_varid(int *type_return,
         else
             semcheck_clear_array_info(expr);
         int force_shortstring = 0;
-        struct TypeAlias *node_alias = get_type_alias_from_node(hash_return);
+        struct TypeAlias *node_alias = hashnode_get_type_alias(hash_return);
         if (node_alias != NULL && node_alias->is_shortstring)
             force_shortstring = 1;
         if (!force_shortstring && hash_return->type != NULL &&
@@ -1820,7 +1820,7 @@ int semcheck_varid(int *type_return,
         {
             int subtype = UNKNOWN_TYPE;
             const char *type_id = NULL;
-            struct TypeAlias *alias = get_type_alias_from_node(hash_return);
+            struct TypeAlias *alias = hashnode_get_type_alias(hash_return);
             if (alias != NULL && alias->is_pointer)
             {
                 subtype = alias->pointer_type;
@@ -1866,7 +1866,7 @@ int semcheck_varid(int *type_return,
             {
                 HashNode_t *target_node = NULL;
                 if (FindIdent(&target_node, symtab, expr->pointer_subtype_id) != -1 && target_node != NULL)
-                    expr->record_type = get_record_type_from_node(target_node);
+                    expr->record_type = hashnode_get_record_type_extended(target_node);
             }
             else if (hash_return->type != NULL && kgpc_type_is_pointer(hash_return->type))
             {
@@ -1888,7 +1888,7 @@ int semcheck_varid(int *type_return,
         }
         if (*type_return == RECORD_TYPE)
         {
-            expr->record_type = get_record_type_from_node(hash_return);
+            expr->record_type = hashnode_get_record_type_extended(hash_return);
         }
         else if (*type_return != POINTER_TYPE)
             expr->record_type = NULL;

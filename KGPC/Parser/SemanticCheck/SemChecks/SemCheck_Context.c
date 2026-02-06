@@ -170,7 +170,7 @@ struct RecordType *resolve_record_type_for_with(SymTab_t *symtab,
             HashNode_t *target_node = NULL;
             if (FindIdent(&target_node, symtab, context_expr->pointer_subtype_id) != -1 &&
                 target_node != NULL)
-                record_info = get_record_type_from_node(target_node);
+                record_info = hashnode_get_record_type_extended(target_node);
         }
         return record_info;
     }

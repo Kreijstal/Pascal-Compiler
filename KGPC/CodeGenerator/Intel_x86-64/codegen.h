@@ -235,6 +235,23 @@ void codegen_begin_expression(CodeGenContext *ctx);
 void codegen_end_expression(CodeGenContext *ctx);
 Register_t *codegen_acquire_static_link(CodeGenContext *ctx, ListNode_t **inst_list, int levels_to_traverse);
 
+/* Assembly emission helpers */
+ListNode_t *emit_movq(ListNode_t *inst_list, const char *src, const char *dst);
+ListNode_t *emit_movq_reg_to_stack(ListNode_t *inst_list, const char *reg, int offset);
+ListNode_t *emit_movq_stack_to_reg(ListNode_t *inst_list, int offset, const char *reg);
+ListNode_t *emit_movl(ListNode_t *inst_list, const char *src, const char *dst);
+ListNode_t *emit_leaq(ListNode_t *inst_list, const char *src, const char *dst);
+ListNode_t *emit_addq(ListNode_t *inst_list, const char *src, const char *dst);
+ListNode_t *emit_subq(ListNode_t *inst_list, const char *src, const char *dst);
+ListNode_t *emit_pushq(ListNode_t *inst_list, const char *reg);
+ListNode_t *emit_popq(ListNode_t *inst_list, const char *reg);
+ListNode_t *emit_call(ListNode_t *inst_list, const char *target);
+ListNode_t *emit_jmp(ListNode_t *inst_list, const char *label);
+ListNode_t *emit_label(ListNode_t *inst_list, const char *label);
+ListNode_t *emit_cmpq(ListNode_t *inst_list, const char *src, const char *dst);
+ListNode_t *emit_cmpl(ListNode_t *inst_list, const char *src, const char *dst);
+ListNode_t *emit_testl(ListNode_t *inst_list, const char *src, const char *dst);
+
 char * codegen_program(Tree_t *, CodeGenContext *ctx, SymTab_t *symtab);
 void codegen_function_locals(ListNode_t *, CodeGenContext *ctx, SymTab_t *symtab);
 ListNode_t *codegen_vect_reg(ListNode_t *, int);

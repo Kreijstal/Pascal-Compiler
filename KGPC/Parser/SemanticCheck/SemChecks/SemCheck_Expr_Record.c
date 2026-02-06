@@ -9,32 +9,7 @@
 
 #include "SemCheck_Expr_Internal.h"
 
-struct RecordType* get_record_type_from_node(HashNode_t *node)
-{
-    if (node == NULL) return NULL;
-    
-    /* Use hashnode helper which handles NULL KgpcType */
-    struct RecordType *record = hashnode_get_record_type(node);
-    if (record != NULL)
-        return record;
-        
-    /* If not a direct record, check if it's a pointer to a record (Class types are pointers) */
-    if (node->type != NULL && kgpc_type_is_pointer(node->type))
-    {
-        KgpcType *pointed_to = node->type->info.points_to;
-        if (pointed_to != NULL && kgpc_type_is_record(pointed_to))
-        {
-            return kgpc_type_get_record(pointed_to);
-        }
-    }
-    
-    return NULL;
-}
 
-struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
-{
-    return hashnode_get_type_alias(node);
-}
 
 int node_is_record_type(HashNode_t *node)
 {
@@ -53,7 +28,7 @@ struct RecordType *semcheck_lookup_parent_record(SymTab_t *symtab,
         parent_node == NULL)
         return NULL;
 
-    return get_record_type_from_node(parent_node);
+    return hashnode_get_record_type_extended(parent_node);
 }
 
 struct ClassProperty *semcheck_find_class_property(SymTab_t *symtab,
@@ -240,7 +215,7 @@ HashNode_t *semcheck_find_class_method(SymTab_t *symtab,
             HashNode_t *parent_node = NULL;
             if (FindIdent(&parent_node, symtab, current->helper_parent_id) != -1 && parent_node != NULL)
             {
-                struct RecordType *parent_helper = get_record_type_from_node(parent_node);
+                struct RecordType *parent_helper = hashnode_get_record_type_extended(parent_node);
                 if (parent_helper != NULL && parent_helper->is_type_helper)
                 {
                     if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {

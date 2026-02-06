@@ -215,6 +215,27 @@ static inline struct RecordType* hashnode_get_record_type(const HashNode_t *node
     return NULL;
 }
 
+/* Extended helper function to get RecordType from HashNode, also handling pointers to records (classes) */
+static inline struct RecordType* hashnode_get_record_type_extended(const HashNode_t *node)
+{
+    if (node == NULL) return NULL;
+
+    /* Use hashnode helper which handles NULL KgpcType */
+    struct RecordType *record = hashnode_get_record_type(node);
+    if (record != NULL)
+        return record;
+
+    /* If not a direct record, check if it's a pointer to a record (Class types are pointers) */
+    if (node->type != NULL && kgpc_type_is_pointer(node->type))
+    {
+        KgpcType *pointed_to = node->type->info.points_to;
+        if (pointed_to != NULL && kgpc_type_is_record(pointed_to))
+            return kgpc_type_get_record(pointed_to);
+    }
+
+    return NULL;
+}
+
 /* Get type alias from node */
 static inline struct TypeAlias* hashnode_get_type_alias(const HashNode_t *node)
 {

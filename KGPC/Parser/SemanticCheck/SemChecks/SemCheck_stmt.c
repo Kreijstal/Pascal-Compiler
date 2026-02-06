@@ -57,7 +57,7 @@ static int semcheck_stmt_expr_tag(int *type_return, SymTab_t *symtab,
     return result;
 }
 
-static inline struct RecordType* semcheck_stmt_get_record_type_from_node(HashNode_t *node)
+static inline struct RecordType* semcheck_stmt_hashnode_get_record_type_extended(HashNode_t *node)
 {
     if (node == NULL)
         return NULL;
@@ -568,10 +568,6 @@ static struct RecordType *resolve_tfpglist_record_from_lhs(SymTab_t *symtab,
     return record;
 }
 
-static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
-{
-    return hashnode_get_type_alias(node);
-}
 
 static HashNode_t *lookup_hashnode(SymTab_t *symtab, const char *id)
 {
@@ -598,7 +594,7 @@ static const char *resolve_tfpglist_specialized_id_from_typename(SymTab_t *symta
     if (record != NULL && is_tfpglist_type_id(record->type_id))
         return record->type_id;
 
-    struct TypeAlias *alias = get_type_alias_from_node(type_node);
+    struct TypeAlias *alias = hashnode_get_type_alias(type_node);
     if (alias != NULL && alias->target_type_id != NULL &&
         is_tfpglist_type_id(alias->target_type_id))
         return alias->target_type_id;
@@ -780,7 +776,7 @@ static int semcheck_expr_is_char_set(SymTab_t *symtab, struct Expression *expr)
         HashNode_t *node = NULL;
         if (FindIdent(&node, symtab, expr->expr_data.id) >= 0 && node != NULL)
         {
-            struct TypeAlias *alias = get_type_alias_from_node(node);
+            struct TypeAlias *alias = hashnode_get_type_alias(node);
             if (alias != NULL && alias->is_set &&
                 (alias->set_element_type == CHAR_TYPE ||
                  (alias->set_element_type_id != NULL &&
@@ -838,7 +834,7 @@ static int semcheck_expr_is_widechar(SymTab_t *symtab, struct Expression *expr)
             }
 
             /* Check TypeAlias from node directly (fallback) */
-            struct TypeAlias *alias = get_type_alias_from_node(node);
+            struct TypeAlias *alias = hashnode_get_type_alias(node);
             if (semcheck_alias_is_widechar(alias))
                 return 1;
         }
@@ -2702,7 +2698,7 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                             {
                                 HashNode_t *owner_node = NULL;
                                 if (FindIdent(&owner_node, symtab, owner_id) != -1 && owner_node != NULL)
-                                    current_class = semcheck_stmt_get_record_type_from_node(owner_node);
+                                    current_class = semcheck_stmt_hashnode_get_record_type_extended(owner_node);
                                 if (current_class != NULL)
                                     parent_class_name = current_class->parent_class_name;
                             }
@@ -2777,7 +2773,7 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                                         parent_node != NULL)
                                     {
                                         struct RecordType *parent_record =
-                                            semcheck_stmt_get_record_type_from_node(parent_node);
+                                            semcheck_stmt_hashnode_get_record_type_extended(parent_node);
                                         search_parent = parent_record ? parent_record->parent_class_name : NULL;
                                     }
                                     else
@@ -3736,7 +3732,7 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
         HashNode_t *self_node = NULL;
         if (FindIdent(&self_node, symtab, "Self") == 0 && self_node != NULL)
         {
-            struct RecordType *self_record = semcheck_stmt_get_record_type_from_node(self_node);
+            struct RecordType *self_record = semcheck_stmt_hashnode_get_record_type_extended(self_node);
             if (self_record != NULL)
             {
                 HashNode_t *method_node = semcheck_find_class_method(symtab, self_record, proc_id, NULL);
@@ -3965,7 +3961,7 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                 if (FindIdent(&recv_node, symtab, receiver_expr->expr_data.id) == 0 &&
                     recv_node != NULL)
                 {
-                    recv_record = semcheck_stmt_get_record_type_from_node(recv_node);
+                    recv_record = semcheck_stmt_hashnode_get_record_type_extended(recv_node);
                     if (recv_record == NULL && recv_node->type != NULL &&
                         recv_node->type->kind == TYPE_KIND_POINTER &&
                         recv_node->type->info.points_to != NULL &&
