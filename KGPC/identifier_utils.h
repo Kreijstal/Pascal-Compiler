@@ -40,4 +40,35 @@ static inline int pascal_identifier_equals(const char *lhs, const char *rhs)
     return *lhs == '\0' && *rhs == '\0';
 }
 
+/* Case-insensitive strstr - finds needle in haystack ignoring case */
+static inline const char *pascal_strcasestr(const char *haystack, const char *needle)
+{
+    if (haystack == NULL || needle == NULL)
+        return NULL;
+    
+    if (needle[0] == '\0')
+        return haystack;
+    
+    for (; *haystack != '\0'; ++haystack)
+    {
+        if (tolower((unsigned char)*haystack) == tolower((unsigned char)*needle))
+        {
+            /* Potential match, check the rest */
+            const char *h = haystack;
+            const char *n = needle;
+            while (*n != '\0' && *h != '\0')
+            {
+                if (tolower((unsigned char)*h) != tolower((unsigned char)*n))
+                    break;
+                ++h;
+                ++n;
+            }
+            if (*n == '\0')
+                return haystack;
+        }
+    }
+    
+    return NULL;
+}
+
 #endif /* KGPC_IDENTIFIER_UTILS_H */

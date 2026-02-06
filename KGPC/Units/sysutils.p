@@ -20,6 +20,20 @@ type
     Byte = 0..255;
     TBytes = array of Byte;
 
+    TFloatFormat = (ffGeneral, ffExponent, ffFixed, ffNumber, ffCurrency);
+
+    TFormatSettings = record
+        DecimalSeparator: Char;
+        ThousandSeparator: Char;
+    end;
+
+    TSearchRec = record
+        Name: AnsiString;
+        Attr: Longint;
+        Size: Int64;
+        Time: Longint;
+    end;
+
     Exception = class
     private
         FMessage: AnsiString;
@@ -37,6 +51,8 @@ type
         class function GetSystemEncoding: TEncoding; static;
         class property SystemEncoding: TEncoding read GetSystemEncoding;
         function GetBytes(const S: AnsiString): TBytes; virtual;
+        function GetAnsiBytes(const S: AnsiString): TBytes; overload; virtual;
+        function GetAnsiBytes(const S: AnsiString; Index, Count: Integer): TBytes; overload; virtual;
         function GetString(const Bytes: TBytes): AnsiString; virtual;
         function GetString(const Bytes: TBytes; Index, Count: Integer): AnsiString; overload; virtual;
         function GetAnsiString(const Bytes: TBytes): AnsiString; virtual;
@@ -51,8 +67,22 @@ const
     PathDelim = '/';
     AltPathDelim = '\';
     CP_UTF8 = 65001;
+
+    faReadOnly = $00000001;
+    faHidden = $00000002;
+    faSysFile = $00000004;
+    faVolumeId = $00000008;
+    faDirectory = $00000010;
+    faArchive = $00000020;
+    faAnyFile = $0000003F;
     
     AlphaNum: set of char = ['A'..'Z', 'a'..'z', '0'..'9'];
+
+var
+    DefaultFormatSettings: TFormatSettings = (
+        DecimalSeparator: '.';
+        ThousandSeparator: ','
+    );
 
 procedure Sleep(milliseconds: integer);
 function GetTickCount64: longint;
@@ -79,10 +109,13 @@ procedure FmtStr(var Res: AnsiString; const Fmt: AnsiString; const Args: array o
 function IsDelimiter(const Delimiters, S: AnsiString; Index: Integer): Boolean;
 function StrPas(P: PAnsiChar): AnsiString;
 function StrPas(P: PChar): AnsiString;
+function StrPas(P: PAnsiChar; Len: SizeInt): AnsiString;
+function StrPas(P: PChar; Len: SizeInt): AnsiString;
 function StrLen(P: PAnsiChar): SizeInt;
 function StrPos(Str1, Str2: PAnsiChar): PAnsiChar;
 function StrRScan(P: PAnsiChar; C: AnsiChar): PAnsiChar;
 function FloatToStr(Value: Real): AnsiString;
+function FloatToStrF(Value: Double; format: TFloatFormat; Precision, Digits: Integer): AnsiString; overload;
 function StrToInt(const S: AnsiString): longint;
 function StrToFloat(const S: AnsiString): Real;
 function TryStrToFloat(const S: AnsiString; out Value: Real): Boolean;
@@ -93,6 +126,8 @@ function ExtractFileExt(const FileName: AnsiString): AnsiString;
 function ChangeFileExt(const FileName, Extension: AnsiString): AnsiString;
 function IncludeTrailingPathDelimiter(const Dir: AnsiString): AnsiString;
 function ExcludeTrailingPathDelimiter(const Dir: AnsiString): AnsiString;
+function FindFirst(const Path: AnsiString; Attr: Longint; var F: TSearchRec): Longint;
+procedure FindClose(var F: TSearchRec);
 function FileExists(const FileName: AnsiString): Boolean;
 function DeleteFile(const FileName: AnsiString): Boolean;
 function DirectoryExists(const DirName: AnsiString): Boolean;
@@ -109,6 +144,7 @@ function FreeLibrary(LibHandle: NativeUInt): Boolean;
 procedure SetString(out S: AnsiString; Buffer: PAnsiChar; Len: Integer);
 function FileDateToDateTime(FileDate: LongInt): TDateTime;
 function StringToGUID(const S: AnsiString): TGUID;
+procedure FillWord(var X; Count: SizeInt; Value: Word);
 
 { String helper methods - these allow FPC-style S.Method() syntax }
 function Substring(const S: AnsiString; StartIndex: Integer): AnsiString;
@@ -156,6 +192,7 @@ function kgpc_load_library(path: PChar): NativeUInt; external;
 function kgpc_get_proc_address(handle: NativeUInt; symbol: PChar): NativeUInt; external;
 function kgpc_free_library(handle: NativeUInt): Integer; external;
 function kgpc_strpas(p: PAnsiChar): AnsiString; external;
+function kgpc_strpas_len(p: PAnsiChar; Len: SizeInt): AnsiString; external;
 
 function ToPChar(const S: AnsiString): PChar;
 begin
@@ -163,6 +200,27 @@ begin
         Result := nil
     else
         Result := @S[1];
+end;
+
+procedure fillword_impl(var dest; count: longint; value: word);
+begin
+    assembler;
+    asm
+        call kgpc_fillword
+    end
+end;
+
+procedure FillWord(var X; Count: SizeInt; Value: Word);
+var
+    count_long: longint;
+begin
+    if Count <= 0 then
+        exit;
+    if Count > high(longint) then
+        count_long := high(longint)
+    else
+        count_long := Count;
+    fillword_impl(X, count_long, Value);
 end;
 
 function StrPas(P: PAnsiChar): AnsiString;
@@ -179,6 +237,22 @@ begin
         StrPas := ''
     else
         StrPas := kgpc_strpas(PAnsiChar(P));
+end;
+
+function StrPas(P: PAnsiChar; Len: SizeInt): AnsiString;
+begin
+    if (P = nil) or (Len <= 0) then
+        StrPas := ''
+    else
+        StrPas := kgpc_strpas_len(P, Len);
+end;
+
+function StrPas(P: PChar; Len: SizeInt): AnsiString;
+begin
+    if (P = nil) or (Len <= 0) then
+        StrPas := ''
+    else
+        StrPas := kgpc_strpas_len(PAnsiChar(P), Len);
 end;
 
 function StrLen(P: PAnsiChar): SizeInt;
@@ -283,6 +357,34 @@ begin
     for i := 1 to Length(S) do
         bytes[i - 1] := Ord(S[i]) and $FF;
     GetBytes := bytes;
+end;
+
+function TEncoding.GetAnsiBytes(const S: AnsiString): TBytes;
+begin
+    GetAnsiBytes := GetBytes(S);
+end;
+
+function TEncoding.GetAnsiBytes(const S: AnsiString; Index, Count: Integer): TBytes;
+var
+    bytes: TBytes;
+    i: Integer;
+    max_count: Integer;
+    start_index: Integer;
+begin
+    if Index < 0 then
+        Index := 0;
+    if Count < 0 then
+        Count := 0;
+    max_count := Length(S) - Index;
+    if max_count < 0 then
+        max_count := 0;
+    if Count > max_count then
+        Count := max_count;
+    SetLength(bytes, Count);
+    start_index := Index + 1;
+    for i := 0 to Count - 1 do
+        bytes[i] := Ord(S[start_index + i]) and $FF;
+    GetAnsiBytes := bytes;
 end;
 
 function TEncoding.GetString(const Bytes: TBytes): AnsiString;
@@ -821,9 +923,47 @@ begin
     Res := Format(Fmt, Args);
 end;
 
+function FindFirst(const Path: AnsiString; Attr: Longint; var F: TSearchRec): Longint;
+begin
+    F.Name := '';
+    F.Attr := Attr;
+    F.Size := 0;
+    F.Time := 0;
+    FindFirst := 1;
+end;
+
+procedure FindClose(var F: TSearchRec);
+begin
+    F.Name := '';
+end;
+
 function FloatToStr(Value: Real): AnsiString;
 begin
-    FloatToStr := Format('%.6f', [Value]);
+    FloatToStr := Format('%.6g', [Value]);
+end;
+
+function FloatToStrF(Value: Double; format: TFloatFormat; Precision, Digits: Integer): AnsiString;
+var
+    fmt: AnsiString;
+    raw: AnsiString;
+    i: Integer;
+begin
+    if format = ffFixed then
+        fmt := '%.' + IntToStr(Digits) + 'f'
+    else if format = ffExponent then
+        fmt := '%.' + IntToStr(Precision) + 'e'
+    else if (format = ffNumber) or (format = ffCurrency) or (format = ffGeneral) then
+        fmt := '%.' + IntToStr(Precision) + 'g'
+    else
+        fmt := '%.' + IntToStr(Precision) + 'g';
+    raw := Format(fmt, [Value]);
+    if DefaultFormatSettings.DecimalSeparator <> '.' then
+    begin
+        for i := 1 to Length(raw) do
+            if raw[i] = '.' then
+                raw[i] := DefaultFormatSettings.DecimalSeparator;
+    end;
+    FloatToStrF := raw;
 end;
 
 function TryStrToInt(const S: AnsiString; out Value: Longint): Boolean;
@@ -1084,6 +1224,5 @@ begin
         idx := idx + 2;
     end;
 end;
-
 
 end.

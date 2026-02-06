@@ -111,6 +111,7 @@ static void print_usage(const char *prog_name)
     fprintf(stderr, "    --dump-ast=<file>     Write the parsed AST to <file>\n");
     fprintf(stderr, "    --time-passes         Print timing information for major compiler stages\n");
     fprintf(stderr, "    --asm-debug           Annotate emitted assembly with semantic/codegen info\n");
+    fprintf(stderr, "    --disable-dce         Emit unused subprograms (debugging)\n");
     fprintf(stderr, "    -I<path>              Add include path for preprocessor\n");
     fprintf(stderr, "    -Fu<path>             Add unit search path (FPC compatible)\n");
     fprintf(stderr, "    --no-vendor-units     Disable built-in KGPC vendor units\n");
@@ -450,6 +451,11 @@ static void set_flags(char **optional_args, int count)
         {
             fprintf(stderr, "Assembly debug comments enabled.\n\n");
             set_asm_debug_flag();
+        }
+        else if (strcmp(arg, "--disable-dce") == 0 || strcmp(arg, "--no-dce") == 0)
+        {
+            fprintf(stderr, "Dead-code elimination disabled (emit unused subprograms).\n\n");
+            set_disable_dce_flag();
         }
         else if (arg[0] == '-' && arg[1] == 'I' && arg[2] != '\0')
         {

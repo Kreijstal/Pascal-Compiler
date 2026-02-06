@@ -53,4 +53,5 @@ fpc_bootstrap_failing/fpc_pas_extension_test
 test_output.txt
 utf8_output.txt
 fpc-source/
-FPCSource
+FPCSource/
+build/

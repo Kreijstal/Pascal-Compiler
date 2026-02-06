@@ -106,7 +106,11 @@ int main(int argc, char *argv[]) {
             parser_walk_ast(result.value.ast, count_nodes_visitor, &node_count);
             printf("AST contains %d nodes.\n", node_count);
         }
-        long final_result = eval(result.value.ast);
+        long final_result = 0;
+        if (!eval(result.value.ast, &final_result)) {
+            free_ast(result.value.ast);
+            return 1;
+        }
         printf("%ld\n", final_result);
         free_ast(result.value.ast);
     } else {

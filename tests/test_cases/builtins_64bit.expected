@@ -1,0 +1,11 @@
+q_sqr=100
+i64_sqr=400
+q_odd=FALSE
+i64_odd=FALSE
+q_chr=10
+i64_chr=65
+q_ord=10
+i64_ord=-20
+i64_abs=20
+trunc=1
+round=2

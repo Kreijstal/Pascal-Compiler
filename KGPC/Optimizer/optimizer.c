@@ -335,8 +335,10 @@ void decrement_self_references(SymTab_t *symtab, struct Statement *stmt)
     {
         case STMT_VAR_ASSIGN:
             expr = stmt->stmt_data.var_assign_data.var;
-            assert(expr != NULL);
-            assert(expr->type == EXPR_VAR_ID);
+            if (expr == NULL)
+                break;
+            if (expr->type != EXPR_VAR_ID)
+                break;
             id = expr->expr_data.id;
 
             expr = stmt->stmt_data.var_assign_data.expr;
@@ -423,6 +425,7 @@ static int remove_mutation_statement_set(SymTab_t *symtab, const IdSet *ids, str
             return remove_mutation_compound_statement_set(symtab, ids, stmt);
 
         case STMT_PROCEDURE_CALL:
+        case STMT_EXPR:
             return 0;
 
         default:
@@ -505,6 +508,10 @@ void simplify_stmt_expr(struct Statement *stmt)
         case STMT_VAR_ASSIGN:
             simplify_expr(&stmt->stmt_data.var_assign_data.expr);
 
+            break;
+
+        case STMT_EXPR:
+            simplify_expr(&stmt->stmt_data.expr_stmt_data.expr);
             break;
 
         case STMT_COMPOUND_STATEMENT:
@@ -767,7 +774,7 @@ void set_vars_lists(SymTab_t *symtab, ListNode_t *vars, ListNode_t **vars_to_che
 
             while(ids != NULL)
             {
-                assert(FindIdent(&node, symtab, (char *)ids->cur) == 0);
+                assert(FindIdent(&node, symtab, ids->cur) == 0);
                 assert(node != NULL);
                 if (node->defined_in_unit)
                 {

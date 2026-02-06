@@ -4,6 +4,7 @@ interface
 
 const
     Pi = 3.14159265358979323846;
+    MaxDouble = 1.7976931348623157e308;
 
 function Sqrt(Value: Real): Real;
 function Sin(Value: Real): Real;

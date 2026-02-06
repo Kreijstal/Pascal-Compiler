@@ -834,6 +834,75 @@ void test_pascal_function_call_with_escaped_quote(void) {
 
 }
 
+void test_pascal_call_chaining_proc_cast(void) {
+    combinator_t* p = create_expression_parser();
+    input_t* input = new_input();
+    const char* expr = "TDispProc(DispCallByIDProc)(Result,Dispatch,DispDesc,Params)";
+    input->buffer = strdup(expr);
+    input->length = strlen(expr);
+
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    TEST_ASSERT(input->start == input->length);
+
+    if (res.is_success) {
+        TEST_ASSERT(res.value.ast->typ == PASCAL_T_FUNC_CALL);
+        TEST_ASSERT(res.value.ast->child != NULL);
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+
+    free(input->buffer);
+    free_input(input);
+}
+
+void test_pascal_inherited_expression(void) {
+    combinator_t* p = create_expression_parser();
+    input_t* input = new_input();
+    const char* expr = "inherited NewInstance";
+    input->buffer = strdup(expr);
+    input->length = strlen(expr);
+
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    TEST_ASSERT(input->start == input->length);
+
+    if (res.is_success) {
+        TEST_ASSERT(res.value.ast->typ == PASCAL_T_FUNC_CALL);
+        TEST_ASSERT(res.value.ast->child != NULL);
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+
+    free(input->buffer);
+    free_input(input);
+}
+
+void test_pascal_specialize_typecast_expression(void) {
+    combinator_t* p = create_expression_parser();
+    input_t* input = new_input();
+    const char* expr = "specialize TArray<Integer>(Result)";
+    input->buffer = strdup(expr);
+    input->length = strlen(expr);
+
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    TEST_ASSERT(input->start == input->length);
+
+    if (res.is_success) {
+        TEST_ASSERT(res.value.ast->typ == PASCAL_T_TYPECAST);
+        TEST_ASSERT(res.value.ast->child != NULL);
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+
+    free(input->buffer);
+    free_input(input);
+}
+
 void test_pascal_string_literal(void) {
     combinator_t* p = create_expression_parser();
     input_t* input = new_input();
@@ -3116,11 +3185,9 @@ void test_pascal_case_statement_with_else(void) {
     TEST_ASSERT(else_clause != NULL);
     TEST_ASSERT(else_clause->typ == PASCAL_T_ELSE);
     
-    // Check else statement (case else body is wrapped in a begin block)
+    // Check else statement
     ast_t* else_stmt = else_clause->child;
-    TEST_ASSERT(else_stmt->typ == PASCAL_T_BEGIN_BLOCK);
-    TEST_ASSERT(else_stmt->child != NULL);
-    TEST_ASSERT(else_stmt->child->typ == PASCAL_T_ASSIGNMENT);
+    TEST_ASSERT(else_stmt->typ == PASCAL_T_ASSIGNMENT);
 
     free_ast(res.value.ast);    free(input->buffer);
     free_input(input);
@@ -3249,6 +3316,26 @@ void test_pascal_case_invalid_expression_labels(void) {
         free_error(res.value.error);
     } else {
         free_ast(res.value.ast);
+    }
+    free(input->buffer);
+    free_input(input);
+}
+
+// Test case labels that use compile-time builtins like Low/High (should succeed)
+void test_pascal_case_labels_allow_low_high(void) {
+    combinator_t* p = create_statement_parser();
+    input_t* input = new_input();
+    input->buffer = strdup("case x of Low(A)..High(A): writeln() end");
+    input->length = strlen(input->buffer);
+
+    ParseResult res = parse(input, p);
+
+    TEST_ASSERT(res.is_success);
+
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
     }
     free(input->buffer);
     free_input(input);
@@ -5300,6 +5387,33 @@ void test_delphi_form_unit(void) {
     free_input(input);
 }
 
+void test_pascal_unit_advanced_record_nested_type_array(void) {
+    combinator_t* p = get_unit_parser();
+    input_t* input = new_input();
+    char* program = load_pascal_snippet("advanced_record_nested_type_array.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free_input(input);
+        return;
+    }
+    input->buffer = program;
+    input->length = strlen(program);
+    ParseResult res = parse(input, p);
+    if (!res.is_success) {
+        printf("Parse error in advanced_record_nested_type_array: %s\n", res.value.error->message);
+        free_error(res.value.error);
+    }
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        ast_t* ast = res.value.ast;
+        TEST_ASSERT(ast != NULL);
+        TEST_ASSERT(ast->typ == PASCAL_T_UNIT_DECL);
+        free_ast(res.value.ast);
+    }
+    free(input->buffer);
+    free_input(input);
+}
+
 
 TEST_LIST = {
     { "test_pascal_integer_parsing", test_pascal_integer_parsing },
@@ -5310,6 +5424,9 @@ TEST_LIST = {
     { "test_pascal_preprocessor_numeric_comparisons", test_pascal_preprocessor_numeric_comparisons },
     { "test_pascal_function_call", test_pascal_function_call },
     { "test_pascal_function_call_with_escaped_quote", test_pascal_function_call_with_escaped_quote },
+    { "test_pascal_call_chaining_proc_cast", test_pascal_call_chaining_proc_cast },
+    { "test_pascal_inherited_expression", test_pascal_inherited_expression },
+    { "test_pascal_specialize_typecast_expression", test_pascal_specialize_typecast_expression },
     { "test_pascal_string_literal", test_pascal_string_literal },
     { "test_pascal_function_call_no_args", test_pascal_function_call_no_args },
     { "test_pascal_function_call_with_args", test_pascal_function_call_with_args },
@@ -5385,6 +5502,7 @@ TEST_LIST = {
     { "test_pascal_case_expression_labels", test_pascal_case_expression_labels },
     { "test_pascal_case_statement_char_labels", test_pascal_case_statement_char_labels },
     { "test_pascal_case_invalid_expression_labels", test_pascal_case_invalid_expression_labels },
+    { "test_pascal_case_labels_allow_low_high", test_pascal_case_labels_allow_low_high },
     { "test_pascal_paren_star_comment", test_pascal_paren_star_comment },
     { "test_pascal_hex_literal", test_pascal_hex_literal },
     { "test_pascal_case_range_label", test_pascal_case_range_label },
@@ -5438,6 +5556,7 @@ TEST_LIST = {
     { "test_include_file", test_include_file },
     { "test_pascal_unit_include_routines", test_pascal_unit_include_routines },
     { "test_pascal_unit_advanced_record_public_type", test_pascal_unit_advanced_record_public_type },
+    { "test_pascal_unit_advanced_record_nested_type_array", test_pascal_unit_advanced_record_nested_type_array },
     { "test_pascal_unit_type_helper_inheritance", test_pascal_unit_type_helper_inheritance },
     { "test_pascal_unit_bitpacked_variant_record", test_pascal_unit_bitpacked_variant_record },
     { "test_managed_records", test_managed_records },

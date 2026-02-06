@@ -53,8 +53,19 @@ typedef struct {
     KgpcType *element_type;
     int start_index;
     int end_index;
-    // Can be extended with more dimension info if needed.
+    // Deferred resolution: store element type ID if element_type is NULL
+    char *element_type_id;
 } ArrayTypeInfo;
+
+typedef struct {
+    int dim_count;
+    long long dim_sizes[10];
+    long long dim_lowers[10];
+    long long dim_uppers[10];
+    long long strides[10];
+    long long element_size;
+    long long total_size;
+} KgpcArrayDimensionInfo;
 
 typedef struct {
     int element_size;
@@ -124,14 +135,25 @@ KgpcType* resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
 long long kgpc_type_sizeof(KgpcType *type);
 
 /* Check if a type is an array type. */
-int kgpc_type_is_array(KgpcType *type);
-int kgpc_type_is_array_of_const(KgpcType *type);
+int kgpc_type_is_array(const KgpcType *type);
+int kgpc_type_is_array_of_const(const KgpcType *type);
+int kgpc_type_is_pointer(const KgpcType *type);
+int kgpc_type_is_record(const KgpcType *type);
+int kgpc_type_is_procedure(const KgpcType *type);
+
+int kgpc_type_is_char(const KgpcType *type);
+int kgpc_type_is_string(const KgpcType *type);
+int kgpc_type_is_shortstring(const KgpcType *type);
+int kgpc_type_is_integer(const KgpcType *type);
+int kgpc_type_is_real(const KgpcType *type);
+int kgpc_type_is_numeric(const KgpcType *type);
+int kgpc_type_is_boolean(const KgpcType *type);
 
 /* Check if a type is a record type. */
-int kgpc_type_is_record(KgpcType *type);
+int kgpc_type_is_record(const KgpcType *type);
 
 /* Check if a type is a procedure type. */
-int kgpc_type_is_procedure(KgpcType *type);
+int kgpc_type_is_procedure(const KgpcType *type);
 
 /* Get array bounds. Returns 0 on success, -1 if not an array.
  * start_out and end_out may be NULL if not needed. */
@@ -149,6 +171,11 @@ int kgpc_type_get_primitive_tag(KgpcType *type);
  * Returns NULL if not an array type. */
 KgpcType* kgpc_type_get_array_element_type(KgpcType *type);
 
+/* Get the element type of an array, resolving deferred types if needed.
+ * If the element_type is NULL but element_type_id is set, tries to resolve it.
+ * Returns NULL if not an array or if resolution fails. */
+KgpcType* kgpc_type_get_array_element_type_resolved(KgpcType *type, struct SymTab *symtab);
+
 /* Get formal parameters from a procedure/function type.
  * Returns NULL if not a procedure type. */
 ListNode_t* kgpc_type_get_procedure_params(KgpcType *type);
@@ -159,11 +186,16 @@ KgpcType* kgpc_type_get_return_type(KgpcType *type);
 
 /* Check if an array type is a dynamic/open array.
  * Returns 1 if it is a dynamic array, 0 otherwise. */
-int kgpc_type_is_dynamic_array(KgpcType *type);
+int kgpc_type_is_dynamic_array(const KgpcType *type);
 
 /* Get element size in bytes for an array type.
  * Returns the element size, or -1 if not an array or size cannot be determined. */
 long long kgpc_type_get_array_element_size(KgpcType *type);
+
+/* Compute dimension information for multi-dimensional arrays.
+ * Handles both nested KgpcType objects and array_dimensions metadata from TypeAlias.
+ * Returns 0 on success, -1 if not an array. */
+int kgpc_type_get_array_dimension_info(KgpcType *type, struct SymTab *symtab, KgpcArrayDimensionInfo *info);
 
 /* Get element size for an array-of-const helper structure (TVarRec). */
 long long kgpc_type_get_array_of_const_element_size(KgpcType *type);
@@ -184,16 +216,9 @@ struct TypeAlias* kgpc_type_get_type_alias(KgpcType *type);
  * The TypeAlias is owned by the AST, not by KgpcType. */
 void kgpc_type_set_type_alias(KgpcType *type, struct TypeAlias *alias);
 
-/* Get the legacy type tag from a KgpcType for compatibility with codegen.
- * This is a migration helper that allows code to work with both old and new type systems.
- * Returns a type tag (INT_TYPE, REAL_TYPE, etc.) for primitives, or specialized tags
- * like RECORD_TYPE, POINTER_TYPE, PROCEDURE for complex types.
- * Returns UNKNOWN_TYPE if the type cannot be mapped. */
-int kgpc_type_get_legacy_tag(KgpcType *type);
-
 /* Check if a KgpcType represents a pointer type.
  * Returns 1 if it's a pointer, 0 otherwise. */
-int kgpc_type_is_pointer(KgpcType *type);
+int kgpc_type_is_pointer(const KgpcType *type);
 
 /* For pointer types, get the type tag of what it points to.
  * Returns UNKNOWN_TYPE if not a pointer or if the pointed-to type is complex. */
@@ -207,12 +232,22 @@ int kgpc_type_uses_qword(KgpcType *type);
 /* Check if a KgpcType represents a signed integer type.
  * Returns 1 if signed, 0 otherwise.
  * This replaces codegen_type_is_signed() for KgpcType-based code. */
-int kgpc_type_is_signed(KgpcType *type);
+int kgpc_type_is_signed(const KgpcType *type);
 
 /* Check if a KgpcType matches a specific legacy type tag.
  * This is a helper for transitioning code that compares types.
  * Returns 1 if the type matches the tag, 0 otherwise. */
 int kgpc_type_equals_tag(KgpcType *type, int type_tag);
+
+/* Compare two KgpcType instances for identity. */
+int kgpc_type_equals(KgpcType *a, KgpcType *b);
+
+/* Determine conversion rank from 'from' to 'to'.
+ * Returns -1 if incompatible. */
+int kgpc_type_conversion_rank(KgpcType *from, KgpcType *to);
+
+/* Check if two pointer types are compatible. */
+int kgpc_type_pointers_compatible(KgpcType *ptr_a, KgpcType *ptr_b);
 
 /* Build the function return type from inline alias/type-id/primitive specification.
  * This consolidates the logic used by semantic checking for both forward declarations
@@ -221,5 +256,16 @@ KgpcType* kgpc_type_build_function_return(struct TypeAlias *inline_alias,
                                         struct HashNode *resolved_type_node,
                                         int primitive_tag,
                                         struct SymTab *symtab);
+
+/* Check if a type identified by name uses 64-bit operations.
+ * This resolves the type by name through the symbol table, then checks if it uses qword.
+ * Returns 1 if the type uses 64-bit operations, 0 otherwise.
+ * If symtab is NULL or type cannot be resolved, uses heuristics based on naming conventions
+ * (e.g., names starting with 'P' followed by uppercase letter are likely pointers). */
+int kgpc_type_id_uses_qword(const char *type_id, struct SymTab *symtab);
+
+/* Convert a legacy type tag (INT_TYPE, REAL_TYPE, etc.) to a human-readable string.
+ * Returns a static string, no need to free. */
+const char* type_tag_to_string(int type_tag);
 
 #endif // KGPC_TYPE_H

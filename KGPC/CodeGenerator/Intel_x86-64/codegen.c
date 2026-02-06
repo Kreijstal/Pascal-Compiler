@@ -30,6 +30,27 @@
 #include "../../Parser/SemanticCheck/SemChecks/SemCheck_expr.h"
 #include "../../identifier_utils.h"
 
+int codegen_tag_from_kgpc(const KgpcType *type)
+{
+    if (type == NULL)
+        return UNKNOWN_TYPE;
+    if (type->kind == TYPE_KIND_PRIMITIVE)
+        return type->info.primitive_type_tag;
+    if (kgpc_type_is_array_of_const(type))
+        return ARRAY_OF_CONST_TYPE;
+    if (kgpc_type_is_array(type) &&
+        type->type_alias != NULL &&
+        type->type_alias->is_shortstring)
+        return SHORTSTRING_TYPE;
+    if (kgpc_type_is_record(type))
+        return RECORD_TYPE;
+    if (kgpc_type_is_pointer(type))
+        return POINTER_TYPE;
+    if (kgpc_type_is_procedure(type))
+        return PROCEDURE;
+    return UNKNOWN_TYPE;
+}
+
 #define CODEGEN_POINTER_SIZE_BYTES 8
 #define CODEGEN_LABEL_BUFFER_SIZE 256
 
@@ -62,6 +83,14 @@ static int codegen_self_param_is_class(Tree_t *arg_decl, SymTab_t *symtab)
 
     return 0;
 }
+
+typedef struct RecordParamWork {
+    const char *id;
+    int size;
+    int stack_arg_offset;
+    int has_stack_arg;
+    const char *arg_reg;
+} RecordParamWork;
 
 /* Escape a string for use in assembly .string directive */
 void escape_string(char *dest, const char *src, size_t dest_size)
@@ -285,16 +314,26 @@ static void codegen_add_class_vars_for_static_method(const char *mangled_name,
         free(class_name);
         return;
     }
+    if (record_info->is_type_helper)
+    {
+        free(class_name);
+        return;
+    }
+    
+    /* Use the original class name from the type definition to match the CLASSVAR label.
+     * The mangled name may have different casing, but the CLASSVAR label uses the original type_id. */
+    const char *original_class_name = (record_info != NULL && record_info->type_id != NULL) ?
+        record_info->type_id : class_name;
     
     /* Build the class var storage label */
-    size_t label_len = strlen(class_name) + strlen("_CLASSVAR") + 1;
+    size_t label_len = strlen(original_class_name) + strlen("_CLASSVAR") + 1;
     char *classvar_label = (char *)malloc(label_len);
     if (classvar_label == NULL)
     {
         free(class_name);
         return;
     }
-    snprintf(classvar_label, label_len, "%s_CLASSVAR", class_name);
+    snprintf(classvar_label, label_len, "%s_CLASSVAR", original_class_name);
     
     /* Iterate over fields and register each as a static var with proper offset */
     ListNode_t *field_node = record_info->fields;
@@ -302,6 +341,11 @@ static void codegen_add_class_vars_for_static_method(const char *mangled_name,
     
     while (field_node != NULL)
     {
+        if (field_node->type != LIST_RECORD_FIELD)
+        {
+            field_node = field_node->next;
+            continue;
+        }
         struct RecordField *field = (struct RecordField *)field_node->cur;
         if (field != NULL && field->name != NULL && field->name[0] != '\0')
         {
@@ -473,8 +517,13 @@ static inline int get_var_storage_size(HashNode_t *node)
         {
             /* Honor explicit storage overrides from type aliases (e.g., Int64/QWord) */
             struct TypeAlias *alias = kgpc_type_get_type_alias(node->type);
-            if (alias != NULL && alias->storage_size > 0)
-                return (int)alias->storage_size;
+            if (alias != NULL)
+            {
+                if (alias->is_shortstring)
+                    return 256;
+                if (alias->storage_size > 0)
+                    return (int)alias->storage_size;
+            }
 
             int tag = kgpc_type_get_primitive_tag(node->type);
             switch (tag)
@@ -488,6 +537,8 @@ static inline int get_var_storage_size(HashNode_t *node)
                 case POINTER_TYPE:
                 case PROCEDURE:
                     return 8;
+                case SHORTSTRING_TYPE:
+                    return 256;
                 case FILE_TYPE:
                 case TEXT_TYPE:
                 {
@@ -776,6 +827,8 @@ Register_t *codegen_acquire_static_link(CodeGenContext *ctx, ListNode_t **inst_l
     }
 
     Register_t *reg = get_free_reg(get_reg_stack(), inst_list);
+    if (reg == NULL)
+        reg = get_reg_with_spill(get_reg_stack(), inst_list);
     if (reg == NULL)
     {
         free(offsets);
@@ -1296,6 +1349,7 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
     g_current_codegen_abi = ctx->target_abi;
     g_stack_home_space_bytes = (ctx->target_abi == KGPC_TARGET_ABI_WINDOWS) ? 32 : 0;
     ctx->pending_stack_arg_bytes = 0;
+    ctx->emitted_subprograms = NULL;
 
     ctx->symtab = symtab;
 
@@ -1314,6 +1368,12 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
     codegen_main(prgm_name, ctx);
 
     codegen_program_footer(ctx);
+
+    if (ctx->emitted_subprograms != NULL)
+    {
+        DestroyList(ctx->emitted_subprograms);
+        ctx->emitted_subprograms = NULL;
+    }
 
     free_stackmng();
     codegen_reset_loop_stack(ctx);
@@ -1341,6 +1401,7 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
     g_current_codegen_abi = ctx->target_abi;
     g_stack_home_space_bytes = (ctx->target_abi == KGPC_TARGET_ABI_WINDOWS) ? 32 : 0;
     ctx->pending_stack_arg_bytes = 0;
+    ctx->emitted_subprograms = NULL;
 
     ctx->symtab = symtab;
 
@@ -1405,6 +1466,12 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
     }
 
     codegen_program_footer(ctx);
+
+    if (ctx->emitted_subprograms != NULL)
+    {
+        DestroyList(ctx->emitted_subprograms);
+        ctx->emitted_subprograms = NULL;
+    }
 
     free_stackmng();
     codegen_reset_loop_stack(ctx);
@@ -1666,6 +1733,14 @@ void codegen_main(char *prgm_name, CodeGenContext *ctx)
     call_space = codegen_target_is_windows() ? g_stack_home_space_bytes : 32;
     if (call_space > 0)
         fprintf(ctx->output_file, "\tsubq\t$%d, %%rsp\n", call_space);
+    if (codegen_target_is_windows())
+    {
+        fprintf(ctx->output_file, "\tcall\tkgpc_init_args\n");
+    }
+    else
+    {
+        fprintf(ctx->output_file, "\tcall\tkgpc_init_args\n");
+    }
     fprintf(ctx->output_file, "\tcall\t%s\n", prgm_name);
     if (codegen_target_is_windows())
         fprintf(ctx->output_file, "\txor\t%%ecx, %%ecx\n");
@@ -1887,71 +1962,64 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                     fallback_type_node = &cached_type_node;
                 }
                 if (symtab != NULL)
-                    FindIdent(&var_info, symtab, (char *)id_list->cur);
+                    FindIdent(&var_info, symtab, id_list->cur);
 
                 HashNode_t *effective_type_node = type_node;
                 if (effective_type_node == NULL)
                     effective_type_node = fallback_type_node;
 
-                struct TypeAlias *alias = get_type_alias_from_node(effective_type_node);
-                if (alias == NULL && var_info != NULL)
-                    alias = get_type_alias_from_node(var_info);
-                if (alias != NULL && alias->is_array)
+                KgpcType *param_type = NULL;
+                if (effective_type_node != NULL)
+                    param_type = effective_type_node->type;
+                if (param_type == NULL && var_info != NULL)
+                    param_type = var_info->type;
+
+                if (param_type != NULL && kgpc_type_is_array(param_type))
                 {
-                    long long computed_size = 0;
-                    int element_size = 0;
-                    struct RecordType *element_record = NULL;
-
-                    if (alias->array_element_type == RECORD_TYPE && ctx != NULL && ctx->symtab != NULL &&
-                        alias->array_element_type_id != NULL)
+                    KgpcArrayDimensionInfo array_info;
+                    int dim_info_result = kgpc_type_get_array_dimension_info(param_type, symtab, &array_info);
+                    
+                    /* If dimension info lookup succeeded, use its values; otherwise fall back to simpler methods */
+                    int element_size;
+                    int array_start;
+                    long long total_size;
+                    
+                    if (dim_info_result == 0 && array_info.dim_count > 0 &&
+                        array_info.element_size > 0 &&
+                        array_info.element_size <= INT_MAX &&
+                        array_info.dim_lowers[0] >= INT_MIN &&
+                        array_info.dim_lowers[0] <= INT_MAX)
                     {
-                        HashNode_t *element_node = NULL;
-                        if (FindIdent(&element_node, ctx->symtab, alias->array_element_type_id) >= 0 &&
-                            element_node != NULL)
-                            element_record = get_record_type_from_node(element_node);
+                        /* Use computed values from kgpc_type_get_array_dimension_info which handles
+                         * multi-dimensional arrays and constant-based bounds correctly */
+                        element_size = (int)array_info.element_size;
+                        array_start = (int)array_info.dim_lowers[0];
+                        total_size = array_info.total_size;
                     }
-
-                    if (codegen_sizeof_type_reference(ctx, alias->array_element_type,
-                            alias->array_element_type_id, element_record, &computed_size) == 0 &&
-                        computed_size > 0 && computed_size <= INT_MAX)
+                    else
                     {
-                        element_size = (int)computed_size;
-                    }
-
-                    if (element_size <= 0)
-                    {
-                        switch (alias->array_element_type)
+                        /* Fallback: use simpler methods that work for basic array types */
+                        element_size = (int)kgpc_type_get_array_element_size(param_type);
+                        if (element_size <= 0 && param_type != NULL &&
+                            param_type->info.array_info.element_type != NULL &&
+                            param_type->info.array_info.element_type->kind == TYPE_KIND_RECORD)
                         {
-                            case LONGINT_TYPE:
-                                element_size = 4;  // Match FPC's 32-bit LongInt
-                                break;
-                            case REAL_TYPE:
-                            case STRING_TYPE:
-                            case POINTER_TYPE:
-                                element_size = 8;
-                                break;
-                            case FILE_TYPE:
-                                element_size = 368;
-                                break;
-                            case TEXT_TYPE:
-                                element_size = 632;
-                                break;
-                            case CHAR_TYPE:
-                                element_size = 1;
-                                break;
-                            case INT_TYPE:
-                            case BOOL:
-                            case SET_TYPE:
-                            case ENUM_TYPE:
-                                element_size = 4;
-                                break;
-                            default:
-                                element_size = 4;
-                                break;
+                            long long record_size = 0;
+                            if (codegen_sizeof_record_type(ctx,
+                                    param_type->info.array_info.element_type->info.record_info,
+                                    &record_size) == 0 && record_size > 0 && record_size <= INT_MAX)
+                            {
+                                element_size = (int)record_size;
+                            }
                         }
+                        if (element_size <= 0) element_size = 1;
+                        array_start = param_type->info.array_info.start_index;
+                        total_size = kgpc_type_sizeof(param_type);
                     }
+                    
+                    int is_open_array = kgpc_type_is_dynamic_array(param_type);
 
-                    if (alias->is_open_array)
+                    if (is_open_array)
                     {
                         char *static_label = NULL;
                         if (is_program_scope)
@@ -1966,18 +2034,15 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                             }
                         }
                         add_dynamic_array((char *)id_list->cur, element_size,
-                            alias->array_start, is_program_scope, static_label);
+                            array_start, is_program_scope, static_label);
                         if (static_label != NULL)
                             free(static_label);
                     }
                     else
                     {
-                        int length = alias->array_end - alias->array_start + 1;
-                        if (length < 0)
-                            length = 0;
-                        long long total_size = (long long)length * (long long)element_size;
                         if (total_size <= 0)
                             total_size = element_size;
+
                         if (is_program_scope)
                         {
                             char *static_label = codegen_make_program_var_label(ctx, (char *)id_list->cur);
@@ -1988,14 +2053,14 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                                     static_label, (int)total_size, alignment);
                             }
                             add_static_array((char *)id_list->cur, (int)total_size, element_size,
-                                alias->array_start, static_label);
+                                array_start, static_label);
                             if (static_label != NULL)
                                 free(static_label);
                         }
                         else
                         {
                             add_array((char *)id_list->cur, (int)total_size, element_size,
-                                alias->array_start);
+                                array_start);
                         }
                     }
                 }
@@ -2006,6 +2071,16 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                     long long element_size_ll = kgpc_type_get_array_element_size(array_type);
                     if (element_size_ll <= 0 && element_type != NULL)
                         element_size_ll = kgpc_type_sizeof(element_type);
+                    if (element_size_ll <= 0 && element_type != NULL &&
+                        element_type->kind == TYPE_KIND_RECORD)
+                    {
+                        long long record_size = 0;
+                        if (codegen_sizeof_record_type(ctx, element_type->info.record_info,
+                                &record_size) == 0 && record_size > 0)
+                        {
+                            element_size_ll = record_size;
+                        }
+                    }
                     if (element_size_ll <= 0)
                         element_size_ll = 4;
 
@@ -2070,7 +2145,7 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                     
                     if (symtab != NULL)
                     {
-                        if (FindIdent(&var_info, symtab, (char *)id_list->cur) >= 0 && var_info != NULL)
+                        if (FindIdent(&var_info, symtab, id_list->cur) >= 0 && var_info != NULL)
                             size_node = var_info;
                     }
                     /* Use type_node if we don't have specific var_info */
@@ -2339,6 +2414,9 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                         case TEXT_TYPE:
                             element_size = 8;
                             break;
+                        case SHORTSTRING_TYPE:
+                            element_size = 256;
+                            break;
                         case BOOL:
                         case CHAR_TYPE:
                             element_size = 1;
@@ -2381,6 +2459,21 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                 int total_size = length * element_size;
                 if (total_size <= 0)
                     total_size = element_size;
+
+                /* For multi-dimensional arrays, the variable should have a KgpcType
+                 * with the correct total size. Look up by variable name. */
+                if (id_list != NULL && symtab != NULL) {
+                    const char *var_name = (const char *)id_list->cur;
+                    HashNode_t *var_node = NULL;
+                    int find_result = FindIdent(&var_node, symtab, var_name);
+                    if (find_result >= 0 && var_node != NULL && var_node->type != NULL) {
+                        long long kgpc_size = kgpc_type_sizeof(var_node->type);
+                        if (kgpc_size > total_size) {
+                            /* KgpcType gives larger size - this is likely a multi-dimensional array */
+                            total_size = (int)kgpc_size;
+                        }
+                    }
+                }
 
                 int use_static_storage = arr->has_static_storage || is_program_scope;
                 if (arr->has_static_storage)
@@ -2471,17 +2564,48 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
         assert(sub != NULL);
         assert(sub->type == TREE_SUBPROGRAM);
 
+        const char *mangled_id = sub->tree_data.subprogram_data.mangled_id;
+        if (mangled_id != NULL && ctx->emitted_subprograms != NULL)
+        {
+            ListNode_t *seen = ctx->emitted_subprograms;
+            int already_emitted = 0;
+            while (seen != NULL)
+            {
+                if (seen->type == LIST_STRING && seen->cur != NULL &&
+                    strcmp((const char *)seen->cur, mangled_id) == 0)
+                {
+                    already_emitted = 1;
+                    break;
+                }
+                seen = seen->next;
+            }
+            if (already_emitted)
+            {
+                sub_list = sub_list->next;
+                continue;
+            }
+        }
+
         if (sub->tree_data.subprogram_data.statement_list == NULL)
         {
             sub_list = sub_list->next;
             continue;
         }
 
-        /* Skip unused functions (dead code elimination / reachability pass) */
-        if (!sub->tree_data.subprogram_data.is_used)
+        /* Skip unused functions (dead code elimination / reachability pass). */
+        if (!disable_dce_flag() && !sub->tree_data.subprogram_data.is_used)
         {
             sub_list = sub_list->next;
             continue;
+        }
+
+        if (mangled_id != NULL)
+        {
+            ListNode_t *node = CreateListNode((void *)mangled_id, LIST_STRING);
+            if (ctx->emitted_subprograms == NULL)
+                ctx->emitted_subprograms = node;
+            else
+                ctx->emitted_subprograms = PushListNodeBack(ctx->emitted_subprograms, node);
         }
 
         switch(sub->tree_data.subprogram_data.sub_type)
@@ -2540,11 +2664,18 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     int lexical_depth = proc->nesting_level;
     if (lexical_depth < 0)
         lexical_depth = codegen_get_lexical_depth(ctx) + 1;
+    else if (lexical_depth <= 0 && ctx->current_subprogram_lexical_depth >= 0 &&
+             ctx->current_subprogram_id != NULL)
+        lexical_depth = ctx->current_subprogram_lexical_depth + 1;
     int prev_depth = ctx->current_subprogram_lexical_depth;
-    ctx->current_subprogram_lexical_depth = lexical_depth;
     /* A function is a class method if it has __ (ClassName__MethodName pattern) but is NOT
      * a nested function (which would have $ in the name like Parent$Nested). */
     int is_nested_function = (sub_id != NULL && strchr(sub_id, '$') != NULL);
+    if (lexical_depth <= 0 && is_nested_function)
+    {
+        lexical_depth = codegen_get_lexical_depth(ctx) + 1;
+    }
+    ctx->current_subprogram_lexical_depth = lexical_depth;
     int is_class_method = (sub_id != NULL && strstr(sub_id, "__") != NULL && !is_nested_function);
     StackNode_t *static_link = NULL;
 
@@ -2555,9 +2686,9 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     /* Process arguments first to allocate their stack space */
     /* Nested procedures always receive a static link so they can forward it to callees,
      * even if they don't themselves capture any outer scope state. Class methods still
-     * use the implicit `self` parameter instead. */
-    int will_need_static_link = (!is_class_method &&
-        proc->requires_static_link);
+     * use the implicit `self` parameter instead. Top-level procedures do not receive
+     * a static link. */
+    int will_need_static_link = (!is_class_method && lexical_depth > 1);
     
     /* If there are arguments and we'll need a static link, shift argument registers by 1 */
     int arg_start_index = (will_need_static_link && num_args > 0) ? 1 : 0;
@@ -2594,7 +2725,7 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
      * Constructors receive Self in the first parameter and should return it
      * to allow constructor chaining and assignment. */
     int is_constructor = 0;
-    if (sub_id != NULL && strstr(sub_id, "__Create") != NULL)
+    if (sub_id != NULL && pascal_strcasestr(sub_id, "__create") != NULL)
         is_constructor = 1;
     
     if (is_constructor && num_args > 0)
@@ -2689,11 +2820,18 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     int lexical_depth = func->nesting_level;
     if (lexical_depth < 0)
         lexical_depth = codegen_get_lexical_depth(ctx) + 1;
+    else if (lexical_depth <= 0 && ctx->current_subprogram_lexical_depth >= 0 &&
+             ctx->current_subprogram_id != NULL)
+        lexical_depth = ctx->current_subprogram_lexical_depth + 1;
     int prev_depth = ctx->current_subprogram_lexical_depth;
-    ctx->current_subprogram_lexical_depth = lexical_depth;
     /* A function is a class method if it has __ (ClassName__MethodName pattern) but is NOT
      * a nested function (which would have $ in the name like Parent$Nested). */
     int is_nested_function = (sub_id != NULL && strchr(sub_id, '$') != NULL);
+    if (lexical_depth <= 0 && is_nested_function)
+    {
+        lexical_depth = codegen_get_lexical_depth(ctx) + 1;
+    }
+    ctx->current_subprogram_lexical_depth = lexical_depth;
     int is_class_method = (sub_id != NULL && strstr(sub_id, "__") != NULL && !is_nested_function);
     StackNode_t *static_link = NULL;
 
@@ -2911,9 +3049,18 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
         }
     }
 
-    /* Only functions that close over variables need static links (excluding class methods). */
-    int will_need_static_link = (!is_class_method &&
-        func->requires_static_link);
+    if (!has_record_return && func_node != NULL && func_node->type != NULL)
+    {
+        KgpcType *return_type = kgpc_type_get_return_type(func_node->type);
+        if (return_type != NULL && kgpc_type_is_shortstring(return_type))
+        {
+            has_record_return = 1;
+            record_return_size = 256;
+        }
+    }
+
+    /* Only nested functions receive static links (excluding class methods). */
+    int will_need_static_link = (!is_class_method && lexical_depth > 1);
     
     /* Calculate argument start index:
      * - If function returns record: use index 1 (record pointer in first arg)
@@ -2946,10 +3093,15 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     }
     
     int return_size = DOUBLEWORD;
+    /* Check for Single type (4 bytes) return by checking return_type_id */
+    int is_single_return = (func->return_type_id != NULL && 
+                           pascal_identifier_equals(func->return_type_id, "Single"));
     if (returns_dynamic_array)
         return_size = dynamic_array_descriptor_size;
     else if (has_record_return)
         return_size = (int)record_return_size;
+    else if (is_single_return)
+        return_size = 4;  /* Single is 4 bytes */
     else if (func_node != NULL && func_node->type != NULL &&
              func_node->type->kind == TYPE_KIND_PROCEDURE)
     {
@@ -2959,88 +3111,17 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
         {
             int tag = kgpc_type_get_primitive_tag(return_type);
             struct TypeAlias *alias = kgpc_type_get_type_alias(return_type);
-            int size_override = 0;
-            if (func_tree != NULL)
-            {
-                struct TypeAlias *inline_alias = func_tree->tree_data.subprogram_data.inline_return_type;
-                if (inline_alias != NULL && inline_alias->storage_size > 0)
-                {
-                    return_size = (int)inline_alias->storage_size;
-                    size_override = 1;
-                }
-                else if (func_tree->tree_data.subprogram_data.return_type_id != NULL && symtab != NULL)
-                {
-                    if (pascal_identifier_equals(func_tree->tree_data.subprogram_data.return_type_id, "Single"))
-                    {
-                        return_size = 4;
-                        size_override = 1;
-                    }
-                    HashNode_t *return_type_node = NULL;
-                    if (FindIdent(&return_type_node, symtab,
-                        func_tree->tree_data.subprogram_data.return_type_id) >= 0 &&
-                        return_type_node != NULL && return_type_node->type != NULL)
-                    {
-                        long long size = kgpc_type_sizeof(return_type_node->type);
-                        if (size > 0 && size <= INT_MAX)
-                        {
-                            return_size = (int)size;
-                            size_override = 1;
-                        }
-                    }
-                }
-            }
-            if (!size_override && func_node != NULL && func_node->type != NULL &&
-                func_node->type->kind == TYPE_KIND_PROCEDURE &&
-                func_node->type->info.proc_info.return_type_id != NULL && symtab != NULL)
-            {
-                if (pascal_identifier_equals(func_node->type->info.proc_info.return_type_id, "Single"))
-                {
-                    return_size = 4;
-                    size_override = 1;
-                }
-                HashNode_t *return_type_node = NULL;
-                if (FindIdent(&return_type_node, symtab,
-                    func_node->type->info.proc_info.return_type_id) >= 0 &&
-                    return_type_node != NULL && return_type_node->type != NULL)
-                {
-                    long long size = kgpc_type_sizeof(return_type_node->type);
-                    if (size > 0 && size <= INT_MAX)
-                    {
-                        return_size = (int)size;
-                        size_override = 1;
-                    }
-                }
-            }
-            if (!size_override && func != NULL && func->id != NULL && symtab != NULL)
-            {
-                ListNode_t *matches = FindAllIdents(symtab, func->id);
-                for (ListNode_t *cur = matches; cur != NULL; cur = cur->next)
-                {
-                    HashNode_t *candidate = (HashNode_t *)cur->cur;
-                    if (candidate != NULL && candidate->hash_type == HASHTYPE_FUNCTION_RETURN &&
-                        candidate->type != NULL)
-                    {
-                        long long size = kgpc_type_sizeof(candidate->type);
-                        if (size > 0 && size <= INT_MAX)
-                        {
-                            return_size = (int)size;
-                            size_override = 1;
-                            break;
-                        }
-                    }
-                }
-            }
-            if (!size_override && return_type->size_in_bytes > 0)
-            {
-                return_size = return_type->size_in_bytes;
-                size_override = 1;
-            }
-
-            if (!size_override && alias != NULL && alias->storage_size > 0)
+            if (alias != NULL && alias->storage_size > 0)
             {
                 return_size = (int)alias->storage_size;
             }
-            else if (!size_override) switch (tag)
+            /* Check for Single type (4 bytes) by type_id */
+            else if (alias != NULL && alias->target_type_id != NULL &&
+                     pascal_identifier_equals(alias->target_type_id, "Single"))
+            {
+                return_size = 4;  /* Single is 4 bytes */
+            }
+            else switch (tag)
             {
                 case LONGINT_TYPE:
                     return_size = DOUBLEWORD;  /* 32-bit FPC-compatible LongInt */
@@ -3059,22 +3140,6 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
                 default:
                     return_size = DOUBLEWORD;
                     break;
-            }
-            if (tag == REAL_TYPE)
-            {
-                if (func_node != NULL && func_node->type != NULL &&
-                    func_node->type->kind == TYPE_KIND_PROCEDURE &&
-                    func_node->type->info.proc_info.return_type_id != NULL &&
-                    pascal_identifier_equals(func_node->type->info.proc_info.return_type_id, "Single"))
-                {
-                    return_size = 4;
-                }
-                else if (func_tree != NULL &&
-                    func_tree->tree_data.subprogram_data.return_type_id != NULL &&
-                    pascal_identifier_equals(func_tree->tree_data.subprogram_data.return_type_id, "Single"))
-                {
-                    return_size = 4;
-                }
             }
         }
         else if (return_type != NULL && return_type->kind == TYPE_KIND_POINTER)
@@ -3300,15 +3365,13 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
                 is_real_return = 1;
         }
         
-        /* Use movss for Single, movsd for Double (return in xmm0), movq/movl for others. */
-        if (is_real_return)
-        {
-            int real_size = (return_var->element_size > 0) ? return_var->element_size : return_var->size;
-            if (real_size == 4)
-                snprintf(buffer, 50, "\tmovss\t-%d(%%rbp), %%xmm0\n", return_var->offset);
-            else
-                snprintf(buffer, 50, "\tmovsd\t-%d(%%rbp), %%xmm0\n", return_var->offset);
-        }
+        /* Use movss for Single (4-byte), movsd for Double/Real (8-byte), return in xmm0.
+         * Check element_size which stores the unaligned size, not size which may be padded. */
+        long long unaligned_return_size = return_var->element_size > 0 ? return_var->element_size : return_var->size;
+        if (is_real_return && unaligned_return_size <= 4)
+            snprintf(buffer, 50, "\tmovss\t-%d(%%rbp), %%xmm0\n", return_var->offset);
+        else if (is_real_return)
+            snprintf(buffer, 50, "\tmovsd\t-%d(%%rbp), %%xmm0\n", return_var->offset);
         else if (return_var->size >= 8)
             snprintf(buffer, 50, "\tmovq\t-%d(%%rbp), %s\n", return_var->offset, RETURN_REG_64);
         else
@@ -3498,6 +3561,12 @@ static int codegen_dynamic_array_element_size_from_type(CodeGenContext *ctx, Kgp
     {
         case TYPE_KIND_PRIMITIVE:
         {
+            if (element_type->type_alias != NULL &&
+                element_type->type_alias->storage_size > 0 &&
+                element_type->type_alias->storage_size <= INT_MAX)
+            {
+                return (int)element_type->type_alias->storage_size;
+            }
             int tag = kgpc_type_get_primitive_tag(element_type);
             switch (tag)
             {
@@ -3507,6 +3576,8 @@ static int codegen_dynamic_array_element_size_from_type(CodeGenContext *ctx, Kgp
                 case STRING_TYPE:
                 case POINTER_TYPE:
                     return 8;
+                case SHORTSTRING_TYPE:
+                    return 256;
                 case CHAR_TYPE:
                 case BOOL:
                     return 1;
@@ -3644,18 +3715,14 @@ void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx, SymT
                          anon->return_type == INT64_TYPE);
         if (uses_qword)
         {
-            if (anon->return_type == REAL_TYPE)
-            {
-                int real_size = (return_var->element_size > 0) ? return_var->element_size : return_var->size;
-                if (real_size == 4)
-                    snprintf(buffer, sizeof(buffer), "\tmovss\t-%d(%%rbp), %%xmm0\n", return_var->offset);
-                else
-                    snprintf(buffer, sizeof(buffer), "\tmovsd\t-%d(%%rbp), %%xmm0\n", return_var->offset);
-            }
+            /* Check element_size which stores the unaligned size */
+            long long unaligned_return_size = return_var->element_size > 0 ? return_var->element_size : return_var->size;
+            if (anon->return_type == REAL_TYPE && unaligned_return_size <= 4)
+                snprintf(buffer, sizeof(buffer), "\tmovss\t-%d(%%rbp), %%xmm0\n", return_var->offset);
+            else if (anon->return_type == REAL_TYPE)
+                snprintf(buffer, sizeof(buffer), "\tmovsd\t-%d(%%rbp), %%xmm0\n", return_var->offset);
             else
-            {
                 snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rax\n", return_var->offset);
-            }
         }
         else
         {
@@ -3701,6 +3768,7 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
      * System V: 16(%rbp) is the first stack arg (after saved rbp + return addr).
      * Windows x64: 48(%rbp) is the first stack arg (after saved rbp + return addr + 32-byte shadow space). */
     int stack_arg_offset = codegen_target_is_windows() ? 48 : 16;
+    ListNode_t *record_param_queue = NULL;
 
     assert(ctx != NULL);
 
@@ -3801,93 +3869,6 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
      * and save registers to their final locations before processing starts. */
     if (has_record_or_dynarray && param_count_for_alloc > 0)
     {
-        /* Pre-allocate stack slots for non-record params so locals use final z_offset. */
-        args_scan = args;
-        while(args_scan != NULL)
-        {
-            Tree_t *scan_decl = (Tree_t *)args_scan->cur;
-            if (scan_decl->type == TREE_VAR_DECL)
-            {
-                ListNode_t *scan_ids = scan_decl->tree_data.var_decl_data.ids;
-                int scan_type = scan_decl->tree_data.var_decl_data.type;
-                KgpcType *scan_cached_type = scan_decl->tree_data.var_decl_data.cached_kgpc_type;
-                int scan_is_var = scan_decl->tree_data.var_decl_data.is_var_param;
-                HashNode_t *scan_type_node = NULL;
-
-                if (scan_type == UNKNOWN_TYPE &&
-                    scan_decl->tree_data.var_decl_data.type_id != NULL && symtab != NULL)
-                {
-                    FindIdent(&scan_type_node, symtab, scan_decl->tree_data.var_decl_data.type_id);
-                }
-
-                while(scan_ids != NULL)
-                {
-                    int needs_local_copy = 0;
-                    if (!scan_is_var)
-                    {
-                        struct RecordType *rec = NULL;
-                        if (scan_type_node != NULL)
-                            rec = get_record_type_from_node(scan_type_node);
-                        if (rec == NULL && scan_cached_type != NULL)
-                        {
-                            HashNode_t cached_node;
-                            memset(&cached_node, 0, sizeof(cached_node));
-                            cached_node.type = scan_cached_type;
-                            rec = get_record_type_from_node(&cached_node);
-                        }
-
-                        if (rec != NULL)
-                        {
-                            needs_local_copy = 1;
-                        }
-                        else if (scan_cached_type != NULL &&
-                                 scan_cached_type->kind == TYPE_KIND_ARRAY &&
-                                 kgpc_type_is_dynamic_array(scan_cached_type))
-                        {
-                            needs_local_copy = 1;
-                        }
-                        else if (scan_type_node != NULL && scan_type_node->type != NULL &&
-                                 scan_type_node->type->kind == TYPE_KIND_ARRAY &&
-                                 kgpc_type_is_dynamic_array(scan_type_node->type))
-                        {
-                            needs_local_copy = 1;
-                        }
-                        else
-                        {
-                            KgpcType *param_type = NULL;
-                            if (scan_type_node != NULL)
-                                param_type = scan_type_node->type;
-                            else if (scan_cached_type != NULL)
-                                param_type = scan_cached_type;
-                            if (param_type != NULL &&
-                                param_type->kind == TYPE_KIND_PRIMITIVE &&
-                                kgpc_type_get_primitive_tag(param_type) == SET_TYPE &&
-                                kgpc_type_sizeof(param_type) > 4)
-                            {
-                                needs_local_copy = 1;
-                            }
-                        }
-                    }
-
-                    if (!needs_local_copy && find_label((char *)scan_ids->cur) == NULL)
-                        add_q_z((char *)scan_ids->cur);
-
-                    scan_ids = scan_ids->next;
-                }
-            }
-            else if (scan_decl->type == TREE_ARR_DECL)
-            {
-                ListNode_t *scan_ids = scan_decl->tree_data.arr_decl_data.ids;
-                while(scan_ids != NULL)
-                {
-                    if (find_label((char *)scan_ids->cur) == NULL)
-                        add_q_z((char *)scan_ids->cur);
-                    scan_ids = scan_ids->next;
-                }
-            }
-            args_scan = args_scan->next;
-        }
-
         args_scan = args;
         int scan_gpr_index = arg_start_index;
         while(args_scan != NULL)
@@ -3963,9 +3944,9 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                 if (inferred_type_tag == UNKNOWN_TYPE)
                 {
                     if (resolved_type_node != NULL && resolved_type_node->type != NULL)
-                        inferred_type_tag = kgpc_type_get_legacy_tag(resolved_type_node->type);
+                        inferred_type_tag = codegen_tag_from_kgpc(resolved_type_node->type);
                     else if (cached_arg_type != NULL)
-                        inferred_type_tag = kgpc_type_get_legacy_tag(cached_arg_type);
+                        inferred_type_tag = codegen_tag_from_kgpc(cached_arg_type);
                 }
 
                 while(arg_ids != NULL)
@@ -3998,15 +3979,15 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                             (void *)resolved_type_node, (void *)cached_arg_type);
                         if (resolved_type_node != NULL && resolved_type_node->type != NULL)
                         {
-                            fprintf(stderr, "[CODEGEN]   resolved_type_node->type kind=%d legacy=%d\n",
+                            fprintf(stderr, "[CODEGEN]   resolved_type_node->type kind=%d tag=%d\n",
                                 resolved_type_node->type->kind,
-                                kgpc_type_get_legacy_tag(resolved_type_node->type));
+                                codegen_tag_from_kgpc(resolved_type_node->type));
                         }
                         if (cached_arg_type != NULL)
                         {
-                            fprintf(stderr, "[CODEGEN]   cached_arg_type kind=%d legacy=%d\n",
+                            fprintf(stderr, "[CODEGEN]   cached_arg_type kind=%d tag=%d\n",
                                 cached_arg_type->kind,
-                                kgpc_type_get_legacy_tag(cached_arg_type));
+                                codegen_tag_from_kgpc(cached_arg_type));
                         }
                     }
                     if (!symbol_is_var_param)
@@ -4088,101 +4069,38 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                             return inst_list;
                         }
 
-                        StackNode_t *record_slot = add_l_x((char *)arg_ids->cur, (int)record_size);
-                        if (record_slot == NULL)
+                        RecordParamWork *work = (RecordParamWork *)malloc(sizeof(RecordParamWork));
+                        if (work == NULL)
                         {
-                            codegen_report_error(ctx,
-                                "ERROR: Failed to allocate storage for record parameter %s.",
-                                (char *)arg_ids->cur);
+                            codegen_report_error(ctx, "ERROR: Unable to allocate record param work.");
                             return inst_list;
                         }
 
-                        arg_reg = alloc_integer_arg_reg(1, &next_gpr_index);
-                        Register_t *stack_value_reg = NULL;
-                        
-                        /* Load parameter from presaved slot that was saved in pre-pass */
-                        char presaved_name[64];
-                        snprintf(presaved_name, sizeof(presaved_name), "__presaved_%s__", (char *)arg_ids->cur);
-                        StackNode_t *presaved_slot = find_label(presaved_name);
-                        
-                        const char *record_src_reg = NULL;
-                        Register_t *loaded_param_reg = NULL;
-                        
-                        if (presaved_slot != NULL)
+                        work->id = (const char *)arg_ids->cur;
+                        work->size = (int)record_size;
+                        work->stack_arg_offset = 0;
+                        work->has_stack_arg = 0;
+                        work->arg_reg = alloc_integer_arg_reg(1, &next_gpr_index);
+
+                        if (work->arg_reg == NULL)
                         {
-                            /* Load from presaved slot */
-                            loaded_param_reg = get_free_reg(get_reg_stack(), &inst_list);
-                            if (loaded_param_reg != NULL)
-                            {
-                                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-                                    presaved_slot->offset, loaded_param_reg->bit_64);
-                                inst_list = add_inst(inst_list, buffer);
-                                record_src_reg = loaded_param_reg->bit_64;
-                            }
-                        }
-                        else if (arg_reg != NULL)
-                        {
-                            /* Fallback to register (shouldn't happen if pre-pass worked) */
-                            record_src_reg = arg_reg;
-                        }
-                        
-                        if (record_src_reg == NULL)
-                        {
-                            stack_value_reg = get_free_reg(get_reg_stack(), &inst_list);
-                            if (stack_value_reg == NULL)
-                            {
-                                codegen_report_error(ctx,
-                                    "ERROR: Unable to allocate register for record parameter %s.",
-                                    (char *)arg_ids->cur);
-                                return inst_list;
-                            }
-                            snprintf(buffer, sizeof(buffer), "\tmovq\t%d(%%rbp), %s\n",
-                                stack_arg_offset, stack_value_reg->bit_64);
-                            inst_list = add_inst(inst_list, buffer);
+                            work->stack_arg_offset = stack_arg_offset;
+                            work->has_stack_arg = 1;
                             stack_arg_offset += CODEGEN_POINTER_SIZE_BYTES;
-                            record_src_reg = stack_value_reg->bit_64;
                         }
 
-                        Register_t *size_reg = get_free_reg(get_reg_stack(), &inst_list);
-                        if (size_reg == NULL)
-                            size_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
-                        if (size_reg == NULL)
+                        ListNode_t *work_node = CreateListNode(work, LIST_UNSPECIFIED);
+                        if (work_node == NULL)
                         {
-                            codegen_report_error(ctx,
-                                "ERROR: Unable to allocate register for record parameter size.");
+                            free(work);
+                            codegen_report_error(ctx, "ERROR: Unable to enqueue record param.");
                             return inst_list;
                         }
 
-                        snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n", record_size, size_reg->bit_64);
-                        inst_list = add_inst(inst_list, buffer);
-
-                        if (codegen_target_is_windows())
-                        {
-                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", record_src_reg);
-                            inst_list = add_inst(inst_list, buffer);
-                            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %%rcx\n", record_slot->offset);
-                            inst_list = add_inst(inst_list, buffer);
-                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r8\n", size_reg->bit_64);
-                            inst_list = add_inst(inst_list, buffer);
-                        }
+                        if (record_param_queue == NULL)
+                            record_param_queue = work_node;
                         else
-                        {
-                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", record_src_reg);
-                            inst_list = add_inst(inst_list, buffer);
-                            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %%rdi\n", record_slot->offset);
-                            inst_list = add_inst(inst_list, buffer);
-                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", size_reg->bit_64);
-                            inst_list = add_inst(inst_list, buffer);
-                        }
-
-                        inst_list = codegen_vect_reg(inst_list, 0);
-                        inst_list = add_inst(inst_list, "\tcall\tkgpc_move\n");
-                        free_arg_regs();
-                        free_reg(get_reg_stack(), size_reg);
-                        if (stack_value_reg != NULL)
-                            free_reg(get_reg_stack(), stack_value_reg);
-                        if (loaded_param_reg != NULL)
-                            free_reg(get_reg_stack(), loaded_param_reg);
+                            record_param_queue = PushListNodeBack(record_param_queue, work_node);
 
                         arg_ids = arg_ids->next;
                         continue;
@@ -4195,6 +4113,7 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     int is_array_type = 0;
                     int type_requires_qword = 0;
                     int real_storage_size = 8;
+                    int is_shortstring_param = 0;
                     
                     /* Determine if parameter is an array type via resolved type only */
                     if (resolved_type_node != NULL && resolved_type_node->type != NULL &&
@@ -4202,6 +4121,10 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     {
                         is_array_type = 1;
                         type_requires_qword = kgpc_type_uses_qword(resolved_type_node->type);
+                        struct TypeAlias *alias = kgpc_type_get_type_alias(resolved_type_node->type);
+                        if (kgpc_type_is_shortstring(resolved_type_node->type) ||
+                            (alias != NULL && alias->is_shortstring))
+                            is_shortstring_param = 1;
                     }
                     else if (cached_arg_type != NULL &&
                         kgpc_type_is_array(cached_arg_type))
@@ -4212,10 +4135,18 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     else if (resolved_type_node != NULL && resolved_type_node->type != NULL)
                     {
                         type_requires_qword = kgpc_type_uses_qword(resolved_type_node->type);
+                        struct TypeAlias *alias = kgpc_type_get_type_alias(resolved_type_node->type);
+                        if (kgpc_type_is_shortstring(resolved_type_node->type) ||
+                            (alias != NULL && alias->is_shortstring))
+                            is_shortstring_param = 1;
                     }
                     else if (cached_arg_type != NULL)
                     {
                         type_requires_qword = kgpc_type_uses_qword(cached_arg_type);
+                        struct TypeAlias *alias = kgpc_type_get_type_alias(cached_arg_type);
+                        if (kgpc_type_is_shortstring(cached_arg_type) ||
+                            (alias != NULL && alias->is_shortstring))
+                            is_shortstring_param = 1;
                     }
 
                     if (inferred_type_tag == REAL_TYPE)
@@ -4226,14 +4157,12 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                          (inferred_type_tag == STRING_TYPE || inferred_type_tag == POINTER_TYPE ||
                           type == PROCEDURE ||
                           (inferred_type_tag == REAL_TYPE && real_storage_size > 4));
-                    int use_sse_reg = (!is_var_param && !is_array_type &&
-                        inferred_type_tag == REAL_TYPE);
-                    arg_stack = NULL;
-                    if (has_record_or_dynarray)
-                        arg_stack = find_label((char *)arg_ids->cur);
-                    if (arg_stack == NULL)
-                        arg_stack = use_64bit ? add_q_z((char *)arg_ids->cur) : add_l_z((char *)arg_ids->cur);
-                    if (arg_stack != NULL && (symbol_is_var_param || is_array_type))
+                    int use_sse_reg = 0;
+                    if (!is_var_param && !is_array_type && !is_shortstring_param &&
+                        inferred_type_tag == REAL_TYPE)
+                        use_sse_reg = 1;
+                    arg_stack = use_64bit ? add_q_z((char *)arg_ids->cur) : add_l_z((char *)arg_ids->cur);
+                    if (arg_stack != NULL && (symbol_is_var_param || is_array_type || is_shortstring_param))
                         arg_stack->is_reference = 1;
                     if (use_sse_reg)
                     {
@@ -4351,11 +4280,7 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                 while(arg_ids != NULL)
                 {
                     arg_reg = alloc_integer_arg_reg(1, &next_gpr_index);
-                    arg_stack = NULL;
-                    if (has_record_or_dynarray)
-                        arg_stack = find_label((char *)arg_ids->cur);
-                    if (arg_stack == NULL)
-                        arg_stack = add_q_z((char *)arg_ids->cur);
+                    arg_stack = add_q_z((char *)arg_ids->cur);
                     if (arg_stack != NULL)
                         arg_stack->is_reference = 1;
                     Register_t *stack_value_reg = NULL;
@@ -4389,6 +4314,132 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
         }
         args = args->next;
     }
+
+    if (record_param_queue != NULL)
+    {
+        ListNode_t *rec_node = record_param_queue;
+        while (rec_node != NULL)
+        {
+            RecordParamWork *work = (RecordParamWork *)rec_node->cur;
+            StackNode_t *record_slot = add_l_x((char *)work->id, work->size);
+            if (record_slot == NULL)
+            {
+                codegen_report_error(ctx,
+                    "ERROR: Failed to allocate storage for record parameter %s.",
+                    work->id != NULL ? work->id : "(null)");
+                free(work);
+                rec_node = rec_node->next;
+                continue;
+            }
+
+            Register_t *stack_value_reg = NULL;
+            char presaved_name[64];
+            snprintf(presaved_name, sizeof(presaved_name), "__presaved_%s__", work->id);
+            StackNode_t *presaved_slot = find_label(presaved_name);
+            const char *record_src_reg = NULL;
+            Register_t *loaded_param_reg = NULL;
+
+            if (presaved_slot != NULL)
+            {
+                loaded_param_reg = get_free_reg(get_reg_stack(), &inst_list);
+                if (loaded_param_reg != NULL)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                        presaved_slot->offset, loaded_param_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    record_src_reg = loaded_param_reg->bit_64;
+                }
+            }
+            else if (work->arg_reg != NULL)
+            {
+                record_src_reg = work->arg_reg;
+            }
+
+            if (record_src_reg == NULL)
+            {
+                if (!work->has_stack_arg)
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Unable to locate record parameter %s.",
+                        work->id != NULL ? work->id : "(null)");
+                    if (loaded_param_reg != NULL)
+                        free_reg(get_reg_stack(), loaded_param_reg);
+                    free(work);
+                    rec_node = rec_node->next;
+                    continue;
+                }
+
+                stack_value_reg = get_free_reg(get_reg_stack(), &inst_list);
+                if (stack_value_reg == NULL)
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Unable to allocate register for record parameter %s.",
+                        work->id != NULL ? work->id : "(null)");
+                    if (loaded_param_reg != NULL)
+                        free_reg(get_reg_stack(), loaded_param_reg);
+                    free(work);
+                    rec_node = rec_node->next;
+                    continue;
+                }
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%d(%%rbp), %s\n",
+                    work->stack_arg_offset, stack_value_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                record_src_reg = stack_value_reg->bit_64;
+            }
+
+            Register_t *size_reg = get_free_reg(get_reg_stack(), &inst_list);
+            if (size_reg == NULL)
+                size_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+            if (size_reg == NULL)
+            {
+                codegen_report_error(ctx,
+                    "ERROR: Unable to allocate register for record parameter size.");
+                if (stack_value_reg != NULL)
+                    free_reg(get_reg_stack(), stack_value_reg);
+                if (loaded_param_reg != NULL)
+                    free_reg(get_reg_stack(), loaded_param_reg);
+                free(work);
+                rec_node = rec_node->next;
+                continue;
+            }
+
+            snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %s\n", work->size, size_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+
+            if (codegen_target_is_windows())
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", record_src_reg);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %%rcx\n", record_slot->offset);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r8\n", size_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", record_src_reg);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %%rdi\n", record_slot->offset);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", size_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+
+            inst_list = codegen_vect_reg(inst_list, 0);
+            inst_list = add_inst(inst_list, "\tcall\tkgpc_move\n");
+            free_arg_regs();
+            free_reg(get_reg_stack(), size_reg);
+            if (stack_value_reg != NULL)
+                free_reg(get_reg_stack(), stack_value_reg);
+            if (loaded_param_reg != NULL)
+                free_reg(get_reg_stack(), loaded_param_reg);
+
+            free(work);
+            rec_node = rec_node->next;
+        }
+        DestroyList(record_param_queue);
+    }
+
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
@@ -4465,7 +4516,7 @@ static ListNode_t *codegen_store_class_typeinfo(ListNode_t *inst_list,
         }
         inst_list = add_inst(inst_list, buffer);
     }
-    
+
     return inst_list;
 }
 
@@ -4551,7 +4602,7 @@ static int codegen_resolve_file_component(const struct TypeAlias *alias, SymTab_
     HashNode_t *type_node = NULL;
     if (parser_tag == UNKNOWN_TYPE && alias->file_type_id != NULL && symtab != NULL)
     {
-        if (FindIdent(&type_node, symtab, (char *)alias->file_type_id) >= 0 && type_node != NULL)
+        if (FindIdent(&type_node, symtab, alias->file_type_id) >= 0 && type_node != NULL)
         {
             if (type_node->type != NULL)
                 parser_tag = kgpc_type_get_primitive_tag(type_node->type);

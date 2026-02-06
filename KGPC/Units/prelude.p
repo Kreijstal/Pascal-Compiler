@@ -67,6 +67,7 @@ type
   TLineEndStr = string[3];
   TextBuf = array[0..255] of AnsiChar;
   TTextBuf = TextBuf;
+  PTextBuf = ^TextBuf;
 
   TObject = class
   end;
@@ -99,6 +100,8 @@ type
     CodePage: TSystemCodePage;
   end;
 
+  TextFile = text;
+
   FileRec = record
     Handle: THandle;
     Mode: LongInt;
@@ -120,7 +123,7 @@ type
   Currency = Int64;
   PCurrency = ^Currency;
 
-  Variant = Pointer;
+  Variant = String;
   PVariant = ^Variant;
 
 const

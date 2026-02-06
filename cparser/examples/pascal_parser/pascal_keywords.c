@@ -32,11 +32,12 @@ const char* pascal_reserved_keywords[] = {
 };
 
 static const char* expression_identifier_keywords[] = {
-    "procedure", "function", "program", "unit",
+    "program", "unit",
     "record", "array", "set", "packed",
     "object", "class",
     "integer", "real", "boolean", "char", "string",
     "byte", "word", "longint",
+    "procedure",
     // Object-oriented helpers that must be usable as identifiers in expressions
     "self",
     // Boolean literals - needed for scoped enums like TUseBoolStrs.False

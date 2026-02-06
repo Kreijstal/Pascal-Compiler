@@ -3,6 +3,7 @@
 #include "pascal_keywords.h"
 #include "pascal_type.h"
 #include "pascal_declaration.h"
+#include "pascal_peek.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,6 +16,7 @@
 
 static ast_t* wrap_pointer_suffix(ast_t* parsed);
 static ast_t* wrap_array_suffix(ast_t* parsed);
+static ast_t* wrap_call_suffix(ast_t* parsed);
 static ast_t* build_array_or_pointer_chain(ast_t* parsed);
 static ast_t* wrap_nil_literal(ast_t* parsed);
 static ast_t* wrap_true_literal(ast_t* parsed);
@@ -36,15 +38,34 @@ static ParseResult pascal_identifier_fn(input_t* in, void* args, char* parser_na
 
     int start_pos = in->start;
     char c = read1(in);
+    unsigned char uc = (unsigned char)c;
+    bool escaped = false;
 
-    // Must start with letter or underscore
-    if (c != '_' && !isalpha((unsigned char)c)) {
+    if (c == '&') {
+        escaped = true;
+        start_pos = in->start;
+        c = read1(in);
+        uc = (unsigned char)c;
+    }
+
+    // Must start with letter, underscore, or non-ASCII (UTF-8 byte)
+    if (c == EOF) {
+        restore_input_state(in, &state);
+        return make_failure_v2(in, parser_name, strdup("Expected identifier"), NULL);
+    }
+    if (c != '_' && !(isalpha(uc) || uc >= 0x80)) {
         restore_input_state(in, &state);
         return make_failure_v2(in, parser_name, strdup("Expected identifier"), NULL);
     }
 
     // Continue with alphanumeric or underscore
-    while (isalnum((unsigned char)(c = read1(in))) || c == '_');
+    while ((c = read1(in)) != EOF) {
+        uc = (unsigned char)c;
+        if (isalnum(uc) || c == '_' || uc >= 0x80) {
+            continue;
+        }
+        break;
+    }
     if (c != EOF) in->start--;
 
     // Extract the identifier text
@@ -53,8 +74,8 @@ static ParseResult pascal_identifier_fn(input_t* in, void* args, char* parser_na
     strncpy(text, in->buffer + start_pos, len);
     text[len] = '\0';
 
-    // Check if it's a reserved keyword
-    if (is_pascal_keyword(text)) {
+    // Check if it's a reserved keyword (allow escaped identifiers like &with)
+    if (!escaped && is_pascal_keyword(text)) {
         free(text);
         restore_input_state(in, &state);
         return make_failure_v2(in, parser_name, strdup("Identifier cannot be a reserved keyword"), NULL);
@@ -91,15 +112,34 @@ static ParseResult pascal_expression_identifier_fn(input_t* in, void* args, char
 
     int start_pos = in->start;
     char c = read1(in);
+    unsigned char uc = (unsigned char)c;
+    bool escaped = false;
+
+    if (c == '&') {
+        escaped = true;
+        start_pos = in->start;
+        c = read1(in);
+        uc = (unsigned char)c;
+    }
 
     // Must start with letter or underscore
-    if (c != '_' && !isalpha((unsigned char)c)) {
+    if (c == EOF) {
+        restore_input_state(in, &state);
+        return make_failure_v2(in, parser_name, strdup("Expected identifier"), NULL);
+    }
+    if (c != '_' && !(isalpha(uc) || uc >= 0x80)) {
         restore_input_state(in, &state);
         return make_failure_v2(in, parser_name, strdup("Expected identifier"), NULL);
     }
 
     // Continue with alphanumeric or underscore
-    while (isalnum((unsigned char)(c = read1(in))) || c == '_');
+    while ((c = read1(in)) != EOF) {
+        uc = (unsigned char)c;
+        if (isalnum(uc) || c == '_' || uc >= 0x80) {
+            continue;
+        }
+        break;
+    }
     if (c != EOF) in->start--;
 
     // Extract the identifier text
@@ -108,8 +148,8 @@ static ParseResult pascal_expression_identifier_fn(input_t* in, void* args, char
     strncpy(text, in->buffer + start_pos, len);
     text[len] = '\0';
 
-    // Check if it's a reserved keyword that's NOT allowed in expressions
-    if (is_pascal_keyword(text) && !pascal_keyword_allowed_in_expression(text)) {
+    // Check if it's a reserved keyword that's NOT allowed in expressions (allow escaped)
+    if (!escaped && is_pascal_keyword(text) && !pascal_keyword_allowed_in_expression(text)) {
         free(text);
         restore_input_state(in, &state);
         return make_failure_v2(in, parser_name, strdup("Identifier cannot be a reserved keyword"), NULL);
@@ -147,50 +187,85 @@ static ParseResult real_fn(input_t* in, void* args, char* parser_name) {
 
     // Parse integer part
     char c = read1(in);
-    if (!isdigit(c)) {
+    if (!isdigit((unsigned char)c)) {
         restore_input_state(in, &state);
         return make_failure_v2(in, parser_name, strdup("Expected digit"), NULL);
     }
 
-    while (isdigit((unsigned char)(c = read1(in))));
+    while ((c = read1(in)) != EOF) {
+        if (isdigit((unsigned char)c) || c == '_') {
+            continue;
+        }
+        break;
+    }
     if (c != EOF) in->start--; // Back up one if not EOF
 
-    // Must have decimal point
-    if (read1(in) != '.') {
-        restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected decimal point"), NULL);
-    }
-
-    // Parse fractional part (at least one digit required)
+    // Next must be decimal point or exponent (e.g., 1.0 or 1e3)
     c = read1(in);
-    if (!isdigit(c)) {
-        restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected digit after decimal point"), NULL);
-    }
+    if (c == '.') {
+        // Parse fractional part (at least one digit required)
+        c = read1(in);
+        if (!isdigit((unsigned char)c)) {
+            restore_input_state(in, &state);
+            return make_failure_v2(in, parser_name, strdup("Expected digit after decimal point"), NULL);
+        }
 
-    while (isdigit((unsigned char)(c = read1(in))));
-    if (c != EOF) in->start--; // Back up one if not EOF
+        while ((c = read1(in)) != EOF) {
+            if (isdigit((unsigned char)c) || c == '_') {
+                continue;
+            }
+            break;
+        }
+        if (c != EOF) in->start--; // Back up one if not EOF
 
-    // Optional exponent part (e.g., E+10, e-5, E3)
-    c = read1(in);
-    if (c == 'e' || c == 'E') {
-        // Parse optional sign
+        // Optional exponent part (e.g., E+10, e-5, E3)
+        c = read1(in);
+        if (c == 'e' || c == 'E') {
+            // Parse optional sign
+            c = read1(in);
+            if (c == '+' || c == '-') {
+                c = read1(in);
+            }
+
+            // Must have at least one digit after E/e
+            if (!isdigit((unsigned char)c)) {
+                restore_input_state(in, &state);
+                return make_failure_v2(in, parser_name, strdup("Expected digit after exponent"), NULL);
+            }
+
+            // Parse remaining exponent digits
+            while ((c = read1(in)) != EOF) {
+                if (isdigit((unsigned char)c) || c == '_') {
+                    continue;
+                }
+                break;
+            }
+            if (c != EOF) in->start--; // Back up one if not EOF
+        } else if (c != EOF) {
+            in->start--; // Back up if we didn't find exponent
+        }
+    } else if (c == 'e' || c == 'E') {
+        // Exponent without fractional part (e.g., 1e3)
         c = read1(in);
         if (c == '+' || c == '-') {
             c = read1(in);
         }
 
-        // Must have at least one digit after E/e
-        if (!isdigit(c)) {
+        if (!isdigit((unsigned char)c)) {
             restore_input_state(in, &state);
             return make_failure_v2(in, parser_name, strdup("Expected digit after exponent"), NULL);
         }
 
-        // Parse remaining exponent digits
-        while (isdigit((unsigned char)(c = read1(in))));
+        while ((c = read1(in)) != EOF) {
+            if (isdigit((unsigned char)c) || c == '_') {
+                continue;
+            }
+            break;
+        }
         if (c != EOF) in->start--; // Back up one if not EOF
-    } else if (c != EOF) {
-        in->start--; // Back up if we didn't find exponent
+    } else {
+        restore_input_state(in, &state);
+        return make_failure_v2(in, parser_name, strdup("Expected decimal point or exponent"), NULL);
     }
 
     // Create AST node with the real number value
@@ -237,14 +312,34 @@ static ParseResult hex_integer_fn(input_t* in, void* args, char* parser_name) {
 
     // Must have at least one hex digit after $
     c = read1(in);
-    if (c == EOF || !isxdigit(c)) {
+    bool saw_hex_digit = false;
+    if (c == EOF) {
+        restore_input_state(in, &state);
+        return make_failure_v2(in, parser_name, strdup("Expected hex digit after '$'"), NULL);
+    }
+    if (isxdigit(c)) {
+        saw_hex_digit = true;
+    } else if (c != '_') {
         restore_input_state(in, &state);
         return make_failure_v2(in, parser_name, strdup("Expected hex digit after '$'"), NULL);
     }
 
-    // Continue reading hex digits
-    while ((c = read1(in)) != EOF && isxdigit(c));
+    // Continue reading hex digits (allow underscores)
+    while ((c = read1(in)) != EOF) {
+        if (isxdigit(c)) {
+            saw_hex_digit = true;
+            continue;
+        }
+        if (c == '_') {
+            continue;
+        }
+        break;
+    }
     if (c != EOF) in->start--;
+    if (!saw_hex_digit) {
+        restore_input_state(in, &state);
+        return make_failure_v2(in, parser_name, strdup("Expected hex digit after '$'"), NULL);
+    }
 
     // Extract the hex text (including the $)
     int len = in->start - start_pos;
@@ -291,14 +386,34 @@ static ParseResult binary_integer_fn(input_t* in, void* args, char* parser_name)
 
     // Must have at least one binary digit after %
     c = read1(in);
-    if (c == EOF || (c != '0' && c != '1')) {
+    bool saw_bin_digit = false;
+    if (c == EOF) {
+        restore_input_state(in, &state);
+        return make_failure_v2(in, parser_name, strdup("Expected binary digit after '%'"), NULL);
+    }
+    if (c == '0' || c == '1') {
+        saw_bin_digit = true;
+    } else if (c != '_') {
         restore_input_state(in, &state);
         return make_failure_v2(in, parser_name, strdup("Expected binary digit after '%'"), NULL);
     }
 
-    // Continue reading binary digits
-    while ((c = read1(in)) != EOF && (c == '0' || c == '1'));
+    // Continue reading binary digits (allow underscores)
+    while ((c = read1(in)) != EOF) {
+        if (c == '0' || c == '1') {
+            saw_bin_digit = true;
+            continue;
+        }
+        if (c == '_') {
+            continue;
+        }
+        break;
+    }
     if (c != EOF) in->start--;
+    if (!saw_bin_digit) {
+        restore_input_state(in, &state);
+        return make_failure_v2(in, parser_name, strdup("Expected binary digit after '%'"), NULL);
+    }
 
     // Extract the binary text (including the %)
     int len = in->start - start_pos;
@@ -407,6 +522,40 @@ static ParseResult char_fn(input_t* in, void* args, char* parser_name) {
         return make_failure_v2(in, parser_name, strdup("Expected closing single quote"), NULL);
     }
 
+    // Check for the escaped single-quote character literal: ''''
+    // This is 4 quotes: open-quote, quote-as-char (doubled), close-quote.
+    // After reading 3 quotes so far ('X' where X='), check if this is ''''.
+    if (char_value == '\'') {
+        // We read ' ' ' so far. If next is ' and the one after is NOT ',
+        // then this is '''' = char literal for single quote.
+        char next = read1(in);
+        if (next == '\'') {
+            // Check that the character after isn't another quote (which would
+            // make this part of a longer string literal).
+            char after = read1(in);
+            if (after != '\'') {
+                // This is '''' = single-quote char literal
+                if (after != EOF) {
+                    in->start--;
+                }
+                char text[2];
+                text[0] = '\'';
+                text[1] = '\0';
+                ast_t* ast = new_ast();
+                ast->typ = pargs->tag;
+                ast->sym = sym_lookup(text);
+                ast->child = NULL;
+                ast->next = NULL;
+                set_ast_position(ast, in);
+                return make_success(ast);
+            }
+            // 5+ quotes - not a char literal, fall through to fail
+        }
+        // Could not form a valid '''' literal
+        restore_input_state(in, &state);
+        return make_failure_v2(in, parser_name, strdup("Expected single character literal"), NULL);
+    }
+
     // A doubled quote means we're looking at the start of a Pascal string
     // literal rather than a standalone character literal (e.g. 'I''m ...').
     // In that situation we should fail here so that the string parser gets a
@@ -502,11 +651,6 @@ static ParseResult char_code_fn(input_t* in, void* args, char* parser_name) {
 
     int literal_start = state.start;
     
-    // Buffer to accumulate multiple consecutive character codes
-    char* result = NULL;
-    int result_len = 0;
-    int result_capacity = 0;
-    
     // Parse first char code (we already consumed the '#')
     char c = read1(in);
     int value = 0;
@@ -538,98 +682,18 @@ static ParseResult char_code_fn(input_t* in, void* args, char* parser_name) {
         in->start--;
     }
     
-    // Store first character value
-    if (result_capacity == 0) {
-        result_capacity = 256;  // Start with reasonable capacity
-        result = (char*)safe_malloc(result_capacity);
-    }
-    if (result_len >= result_capacity) {
-        result_capacity *= 2;
-        result = (char*)realloc(result, result_capacity);
-    }
-    result[result_len++] = (char)(value & 0xFF);
-    
-    // Try to consume additional consecutive character codes
-    while (1) {
-        InputState char_state;
-        save_input_state(in, &char_state);
-        
-        // Skip whitespace (Pascal allows it between char codes)
-        while ((c = read1(in)) != EOF && isspace((unsigned char)c));
-        
-        if (c != '#') {
-            // Not another char code, restore and break
-            restore_input_state(in, &char_state);
-            break;
-        }
-        
-        // Parse the next char code value
-        c = read1(in);
-        value = 0;
-        
-        if (c == '$') {
-            c = read1(in);
-            if (c == EOF || !isxdigit((unsigned char)c)) {
-                // Invalid char code, restore and break
-                restore_input_state(in, &char_state);
-                break;
-            }
-            value = (isdigit(c) ? c - '0' : tolower(c) - 'a' + 10);
-            while ((c = read1(in)) != EOF && isxdigit((unsigned char)c)) {
-                value = value * 16 + (isdigit(c) ? c - '0' : tolower(c) - 'a' + 10);
-            }
-        } else if (c != EOF && isdigit((unsigned char)c)) {
-            value = c - '0';
-            do {
-                c = read1(in);
-                if (c != EOF && isdigit((unsigned char)c)) {
-                    value = value * 10 + (c - '0');
-                }
-            } while (c != EOF && isdigit((unsigned char)c));
-        } else {
-            // Invalid char code, restore and break
-            restore_input_state(in, &char_state);
-            break;
-        }
-        
-        if (c != EOF && in->start > 0) {
-            in->start--;
-        }
-        
-        // Add this character to result
-        if (result_len >= result_capacity) {
-            result_capacity *= 2;
-            result = (char*)realloc(result, result_capacity);
-        }
-        result[result_len++] = (char)(value & 0xFF);
-    }
-
-    // Create AST node with the combined string
-    // For a string of char codes, we store it as a STRING type rather than CHAR_CODE
+    // Create AST node for a single character code. Implicit concatenation
+    // will handle sequences like #65#66 and preserve embedded #0 values.
     ast_t* ast = new_ast();
-    if (result_len == 1) {
-        // Single character - use original CHAR_CODE type
-        ast->typ = pargs->tag;
-        char* text = (char*)safe_malloc(in->start - literal_start + 1);
-        memcpy(text, in->buffer + literal_start, in->start - literal_start);
-        text[in->start - literal_start] = '\0';
-        ast->sym = sym_lookup(text);
-        free(text);
-    } else {
-        // Multiple characters - store as a STRING
-        // Need to create a null-terminated copy
-        char* str_copy = (char*)safe_malloc(result_len + 1);
-        memcpy(str_copy, result, result_len);
-        str_copy[result_len] = '\0';
-        ast->typ = PASCAL_T_STRING;
-        ast->sym = sym_lookup(str_copy);
-        free(str_copy);
-    }
+    ast->typ = pargs->tag;
+    char* text = (char*)safe_malloc(in->start - literal_start + 1);
+    memcpy(text, in->buffer + literal_start, in->start - literal_start);
+    text[in->start - literal_start] = '\0';
+    ast->sym = sym_lookup(text);
+    free(text);
     ast->child = NULL;
     ast->next = NULL;
     set_ast_position(ast, in);
-
-    free(result);
     return make_success(ast);
 }
 
@@ -696,17 +760,14 @@ static ParseResult set_fn(input_t* in, void* args, char* parser_name) {
     set_node->next = NULL;
     set_ast_position(set_node, in);
 
-    // Skip whitespace manually
-    char c;
-    while (isspace((unsigned char)(c = read1(in))));
-    if (c != EOF) in->start--;
+    // Skip layout (whitespace/comments/directives)
+    in->start = skip_pascal_layout_preview(in, in->start);
 
     // Check for empty set
-    c = read1(in);
-    if (c == ']') {
+    if (in->start < in->length && in->buffer[in->start] == ']') {
+        in->start++;
         return make_success(set_node);
     }
-    if (c != EOF) in->start--; // Back up
 
     // Parse set elements using the provided expression parser
     combinator_t* expr_parser = lazy(sargs->expr_parser);
@@ -716,9 +777,8 @@ static ParseResult set_fn(input_t* in, void* args, char* parser_name) {
     ast_t* current_element = NULL;
 
     while (true) {
-        // Skip whitespace
-        while (isspace((unsigned char)(c = read1(in))));
-        if (c != EOF) in->start--;
+        // Skip layout
+        in->start = skip_pascal_layout_preview(in, in->start);
 
         ParseResult elem_result = parse(in, expr_parser);
         if (!elem_result.is_success) {
@@ -738,12 +798,11 @@ static ParseResult set_fn(input_t* in, void* args, char* parser_name) {
             current_element = elem_result.value.ast;
         }
 
-        // Skip whitespace
-        while (isspace((unsigned char)(c = read1(in))));
-        if (c != EOF) in->start--;
+        // Skip layout
+        in->start = skip_pascal_layout_preview(in, in->start);
 
         // Check for comma or closing bracket
-        c = read1(in);
+        char c = read1(in);
         if (c == ']') {
             break;
         } else if (c == ',') {
@@ -790,17 +849,14 @@ static ParseResult record_constructor_fn(input_t* in, void* args, char* parser_n
     record_node->next = NULL;
     set_ast_position(record_node, in);
 
-    // Skip whitespace manually
-    char c;
-    while (isspace((unsigned char)(c = read1(in))));
-    if (c != EOF) in->start--;
+    // Skip layout (whitespace/comments/directives)
+    in->start = skip_pascal_layout_preview(in, in->start);
 
     // Check for empty record constructor
-    c = read1(in);
-    if (c == ')') {
+    if (in->start < in->length && in->buffer[in->start] == ')') {
+        in->start++;
         return make_success(record_node);
     }
-    if (c != EOF) in->start--; // Back up
 
     // Parse field assignments using the provided expression parser
     combinator_t* expr_parser = lazy(rargs->expr_parser);
@@ -810,9 +866,8 @@ static ParseResult record_constructor_fn(input_t* in, void* args, char* parser_n
     ast_t* current_field = NULL;
 
     while (true) {
-        // Skip whitespace
-        while (isspace((unsigned char)(c = read1(in))));
-        if (c != EOF) in->start--;
+        // Skip layout
+        in->start = skip_pascal_layout_preview(in, in->start);
 
         // Parse field name (identifier)
         combinator_t* field_name_parser = token(pascal_identifier(PASCAL_T_IDENTIFIER));
@@ -825,9 +880,8 @@ static ParseResult record_constructor_fn(input_t* in, void* args, char* parser_n
             return make_failure_v2(in, parser_name, strdup("Expected field name"), NULL);
         }
 
-        // Skip whitespace
-        while (isspace((unsigned char)(c = read1(in))));
-        if (c != EOF) in->start--;
+        // Skip layout
+        in->start = skip_pascal_layout_preview(in, in->start);
 
         // Expect colon after field name
         if (read1(in) != ':') {
@@ -838,10 +892,8 @@ static ParseResult record_constructor_fn(input_t* in, void* args, char* parser_n
             restore_input_state(in, &state);
             return make_failure_v2(in, parser_name, strdup("Expected ':' after field name"), NULL);
         }
-
-        // Skip whitespace
-        while (isspace((unsigned char)(c = read1(in))));
-        if (c != EOF) in->start--;
+        // Skip layout
+        in->start = skip_pascal_layout_preview(in, in->start);
 
         // Parse field value expression
         ParseResult value_result = parse(in, expr_parser);
@@ -875,23 +927,20 @@ static ParseResult record_constructor_fn(input_t* in, void* args, char* parser_n
 
         free_combinator(field_name_parser);
 
-        // Skip whitespace
-        while (isspace((unsigned char)(c = read1(in))));
-        if (c != EOF) in->start--;
+        // Skip layout
+        in->start = skip_pascal_layout_preview(in, in->start);
 
         // Check for semicolon or closing parenthesis
-        c = read1(in);
+        char c = read1(in);
         if (c == ')') {
             break;
         } else if (c == ';') {
             /* Allow an optional trailing semicolon before ')' */
-            while (isspace((unsigned char)(c = read1(in))));
-            if (c != EOF) in->start--;
-            c = read1(in);
-            if (c == ')') {
+            in->start = skip_pascal_layout_preview(in, in->start);
+            if (in->start < in->length && in->buffer[in->start] == ')') {
+                in->start++;
                 break;
             }
-            if (c != EOF) in->start--; /* Put back the non-')' character */
             continue; // Parse next field
         } else {
             free_ast(record_node);
@@ -1241,11 +1290,17 @@ static ParseResult reject_shift_ops_fn(input_t* in, void* args, char* parser_nam
 void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser) {
     // Pascal identifier parser - use expression identifier that allows some keywords in expression contexts
     combinator_t* identifier = token(pascal_expression_identifier(PASCAL_T_IDENTIFIER));
+    // Function name: use a simple identifier and let member access handle dotted calls
+    combinator_t* func_name = identifier;
 
-    // Function name: use expression identifier parser that allows certain keywords as function names
-    combinator_t* func_name = token(pascal_expression_identifier(PASCAL_T_IDENTIFIER));
-
-    // Function call parser: function name followed by optional argument list
+    // Function call parser: function name (possibly qualified) followed by optional generic args and argument list
+    combinator_t* func_type_arg = token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER));
+    combinator_t* func_type_arg_list = seq(new_combinator(), PASCAL_T_TYPE_ARG_LIST,
+        token(match("<")),
+        sep_by1(func_type_arg, token(match(","))),
+        token(match(">")),
+        NULL
+    );
     combinator_t* arg_list = between(
         token(match("(")),
         token(match(")")),
@@ -1254,6 +1309,7 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
 
     combinator_t* func_call = seq(new_combinator(), PASCAL_T_FUNC_CALL,
         func_name,                        // function name (built-in or custom)
+        optional(func_type_arg_list),     // optional generic type arguments
         arg_list,
         NULL
     );
@@ -1302,6 +1358,19 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
     combinator_t* boolean_true = map(token(keyword_ci("true")), wrap_true_literal);
     combinator_t* boolean_false = map(token(keyword_ci("false")), wrap_false_literal);
 
+    // Inherited expression: inherited MethodName [ (args) ]
+    combinator_t* inherited_arg_list = between(
+        token(match("(")),
+        token(match(")")),
+        optional(sep_by(lazy(p), token(match(","))))
+    );
+    combinator_t* inherited_expr = seq(new_combinator(), PASCAL_T_FUNC_CALL,
+        token(keyword_ci("inherited")),
+        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
+        optional(inherited_arg_list),
+        NULL
+    );
+
     // Tuple constructor: (expr, expr, ...) - for nested array constants like ((1,2),(3,4))
     combinator_t* tuple = seq(new_combinator(), PASCAL_T_TUPLE,
         token(match("(")),
@@ -1316,7 +1385,7 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
     // Constructed type parser for expressions (e.g., TFoo<Integer>.Create)
     // Peek to ensure this looks like a generic type before committing
     // This prevents parsing '<>' (not-equal operator) as an empty generic type
-    combinator_t* type_arg = token(cident(PASCAL_T_TYPE_ARG));
+    combinator_t* type_arg = token(pascal_qualified_identifier(PASCAL_T_TYPE_ARG));
     combinator_t* type_arg_list = seq(new_combinator(), PASCAL_T_TYPE_ARG_LIST,
         token(match("<")),
         sep_by1(type_arg, token(match(","))),  // Require at least one type argument
@@ -1329,6 +1398,24 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
         type_arg_list,                          // Now parse the full type argument list
         NULL
     );
+
+    // specialize TypeName<T>(expr) - generic typecast
+    combinator_t* specialize_type = seq(new_combinator(), PASCAL_T_CONSTRUCTED_TYPE,
+        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
+        type_arg_list,
+        NULL
+    );
+    combinator_t* specialize_typecast = seq(new_combinator(), PASCAL_T_TYPECAST,
+        token(keyword_ci("specialize")),
+        specialize_type,
+        between(token(match("(")), token(match(")")), lazy(p)),
+        NULL
+    );
+    combinator_t* specialize_typecast_with_suffixes = map(seq(new_combinator(), PASCAL_T_NONE,
+        specialize_typecast,
+        suffixes,
+        NULL
+    ), build_array_or_pointer_chain);
 
     combinator_t *factor = multi(new_combinator(), PASCAL_T_NONE,
         token(anonymous_function(PASCAL_T_ANONYMOUS_FUNCTION, p, stmt_parser)),  // Anonymous functions
@@ -1343,7 +1430,10 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
         token(boolean_true),                      // Boolean true
         token(boolean_false),                     // Boolean false
         nil_literal,                              // Nil literal
+        inherited_expr,                           // inherited MethodName
         typecast_with_suffixes,                   // Type casts with suffixes (e.g., shortstring(x)[1])
+        specialize_typecast_with_suffixes,        // specialize T<T>(x) with suffixes
+        specialize_typecast,                      // specialize T<T>(x) without suffixes
         typecast_any_with_suffixes,               // Identifier casts with suffixes (e.g., PAnsiChar(x)^)
         typecast,                                 // Type casts Integer(x) - try before func_call
         array_access,                             // Array access (supports pointer dereference)
@@ -1410,6 +1500,8 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
     // Precedence 3: Multiplicative operators (*, /, div, mod, and, shl, shr)
     // FPC supports both Pascal keywords (shl, shr) and C-style operators (<<, >>)
     expr_insert(*p, 3, PASCAL_T_MUL, EXPR_INFIX, ASSOC_LEFT, token(match("*")));
+    // ** must be added after * via expr_altern so it is tried first (prepended)
+    expr_altern(*p, 3, PASCAL_T_POWER, token(match("**")));
     expr_altern(*p, 3, PASCAL_T_DIV, token(match("/")));
     expr_altern(*p, 3, PASCAL_T_INTDIV, token(keyword_ci("div")));
     expr_altern(*p, 3, PASCAL_T_MOD, token(keyword_ci("mod")));
@@ -1462,7 +1554,15 @@ static combinator_t* create_suffix_choice(combinator_t** expr_parser_ref) {
     );
     combinator_t* array_suffix = map(index_list, wrap_array_suffix);
 
+    combinator_t* call_args = between(
+        token(match("(")),
+        token(match(")")),
+        optional(sep_by(lazy(expr_parser_ref), token(match(","))))
+    );
+    combinator_t* call_suffix = map(call_args, wrap_call_suffix);
+
     combinator_t* choice = multi(new_combinator(), PASCAL_T_NONE,
+        call_suffix,
         array_suffix,
         pointer_suffix,
         NULL
@@ -1485,6 +1585,14 @@ static ast_t* wrap_pointer_suffix(ast_t* parsed) {
 static ast_t* wrap_array_suffix(ast_t* parsed) {
     ast_t* node = new_ast();
     node->typ = PASCAL_T_ARRAY_ACCESS;
+    node->child = (parsed == ast_nil) ? NULL : parsed;
+    node->next = NULL;
+    return node;
+}
+
+static ast_t* wrap_call_suffix(ast_t* parsed) {
+    ast_t* node = new_ast();
+    node->typ = PASCAL_T_FUNC_CALL;
     node->child = (parsed == ast_nil) ? NULL : parsed;
     node->next = NULL;
     return node;
@@ -1531,6 +1639,25 @@ static ast_t* build_array_or_pointer_chain(ast_t* parsed) {
                         tail = tail->next;
                     }
                     tail->next = indices;
+                }
+
+                current = suffix;
+                break;
+            }
+            case PASCAL_T_FUNC_CALL: {
+                ast_t* args = suffix->child;
+                suffix->child = current;
+
+                if (args == ast_nil) {
+                    args = NULL;
+                }
+
+                if (args != NULL) {
+                    ast_t* tail = current;
+                    while (tail->next != NULL) {
+                        tail = tail->next;
+                    }
+                    tail->next = args;
                 }
 
                 current = suffix;

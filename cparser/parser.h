@@ -39,6 +39,7 @@ struct ast_t {
    sym_t * sym;
    int line;
    int col;
+   int index;  /* Byte offset in preprocessed buffer for accurate error context */
 };
 
 // Input stream

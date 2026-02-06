@@ -246,7 +246,7 @@ int PushSetConstOntoScope(SymTab_t *symtab, char *id, const unsigned char *data,
 /* Returns -1 and sets hash_return to NULL if not found */
 /* Returns >= 0 tells what scope level it was found at */
 /* Mutating tells whether it's being referenced in an assignment context */
-int FindIdent(HashNode_t **hash_return, SymTab_t *symtab, char *id)
+int FindIdent(HashNode_t **hash_return, SymTab_t *symtab, const char *id)
 {
     int return_val = 0;
     assert(symtab != NULL);
@@ -287,7 +287,7 @@ int FindIdent(HashNode_t **hash_return, SymTab_t *symtab, char *id)
 /* Searches for all instances of an identifier and returns a list of HashNode_t* */
 /* Returns NULL if not found */
 /* FIXED: Now searches ALL scopes and returns ALL matches for proper overload resolution */
-ListNode_t *FindAllIdents(SymTab_t *symtab, char *id)
+ListNode_t *FindAllIdents(SymTab_t *symtab, const char *id)
 {
     ListNode_t *cur_scope;
     ListNode_t *all_found_nodes = NULL;
@@ -502,7 +502,7 @@ int AddBuiltinRealConst(SymTab_t *symtab, const char *id, double value)
     int result = AddIdentToTable(symtab->builtins, (char *)id, NULL, HASHTYPE_CONST, type);
     if (result == 0)
     {
-        HashNode_t *node = FindIdentInTable(symtab->builtins, (char *)id);
+        HashNode_t *node = FindIdentInTable(symtab->builtins, id);
         if (node != NULL)
         {
             node->is_constant = 1;
@@ -529,7 +529,7 @@ int AddBuiltinStringConst(SymTab_t *symtab, const char *id, const char *value)
     int result = AddIdentToTable(symtab->builtins, (char *)id, NULL, HASHTYPE_CONST, type);
     if (result == 0)
     {
-        HashNode_t *node = FindIdentInTable(symtab->builtins, (char *)id);
+        HashNode_t *node = FindIdentInTable(symtab->builtins, id);
         if (node != NULL)
         {
             node->is_constant = 1;
@@ -564,7 +564,7 @@ int AddBuiltinIntConst(SymTab_t *symtab, const char *id, long long value)
     int result = AddIdentToTable(symtab->builtins, (char *)id, NULL, HASHTYPE_CONST, type);
     if (result == 0)
     {
-        HashNode_t *node = FindIdentInTable(symtab->builtins, (char *)id);
+        HashNode_t *node = FindIdentInTable(symtab->builtins, id);
         if (node != NULL)
         {
             node->is_constant = 1;
@@ -590,7 +590,7 @@ int AddBuiltinCharConst(SymTab_t *symtab, const char *id, unsigned char value)
     int result = AddIdentToTable(symtab->builtins, (char *)id, NULL, HASHTYPE_CONST, type);
     if (result == 0)
     {
-        HashNode_t *node = FindIdentInTable(symtab->builtins, (char *)id);
+        HashNode_t *node = FindIdentInTable(symtab->builtins, id);
         if (node != NULL)
         {
             node->is_constant = 1;

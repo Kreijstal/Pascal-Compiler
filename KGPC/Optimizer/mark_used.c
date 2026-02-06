@@ -370,6 +370,10 @@ static void mark_stmt_calls(struct Statement *stmt, SubprogramMap *map) {
             mark_expr_calls(stmt->stmt_data.var_assign_data.var, map);
             mark_expr_calls(stmt->stmt_data.var_assign_data.expr, map);
             break;
+
+        case STMT_EXPR:
+            mark_expr_calls(stmt->stmt_data.expr_stmt_data.expr, map);
+            break;
             
         case STMT_COMPOUND_STATEMENT: {
             ListNode_t *stmts = stmt->stmt_data.compound_statement;

@@ -95,11 +95,11 @@ int AddBuiltinCharConst(SymTab_t *symtab, const char *id, unsigned char value);
 /* Searches for an identifier and sets the hash_return that contains the id and type information */
 /* Returns -1 and sets hash_return to NULL if not found */
 /* Returns >= 0 tells what scope level it was found at */
-int FindIdent(HashNode_t ** hash_return, SymTab_t *symtab, char *id);
+int FindIdent(HashNode_t ** hash_return, SymTab_t *symtab, const char *id);
 
 /* Searches for all instances of an identifier and returns a list of HashNode_t* */
 /* Returns NULL if not found */
-ListNode_t *FindAllIdents(SymTab_t *symtab, char *id);
+ListNode_t *FindAllIdents(SymTab_t *symtab, const char *id);
 
 /* Pops the current scope */
 void PopScope(SymTab_t *symtab);
