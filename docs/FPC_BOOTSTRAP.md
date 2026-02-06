@@ -1,25 +1,29 @@
 # FPC Bootstrap Analysis
 
-## Status: BLOCKED - Compiler Bugs/Limitations
+## Status: sysutils.pp compiles with 0 errors
 
-The FPC RTL cannot be fully compiled because kgpc has bugs and missing features that need to be fixed.
+## Prerequisites
 
-## Known Issues to Fix
+Clone the FPC source code:
+```bash
+git clone https://github.com/fpc/FPCSource
+```
 
-1. **Type Helper Issues**
-   - IndexOfAny/IndexOfAnyUnQuoted overload resolution in type helpers
-   - TGUIDHelper.Create type mismatch with type casts
+## Build Commands
 
-2. **Forward References**
-   - SysBeep used before declaration (forward reference support needed)
-   - Some procedure overloads not found due to forward reference issues
+### baseunix.pp (0 errors)
+```bash
+./build/KGPC/kgpc ./FPCSource/rtl/unix/baseunix.pp /tmp/baseunix.s \
+  --no-stdlib \
+  -I./FPCSource/rtl/unix \
+  -I./FPCSource/rtl/objpas \
+  -I./FPCSource/rtl/inc \
+  -I./FPCSource/rtl/linux \
+  -I./FPCSource/rtl/linux/x86_64 \
+  -I./FPCSource/rtl/x86_64
+```
 
-3. **Overload Resolution**
-   - Some procedure overloads not matched (InitInternational, InitExceptions, etc.)
-
-## Build Command
-
-### sysutils.pp (16 errors as of 2025-01-22)
+### sysutils.pp (0 errors)
 ```bash
 ./build/KGPC/kgpc ./FPCSource/rtl/unix/sysutils.pp /tmp/sysutils.s \
   --no-stdlib \
@@ -33,17 +37,83 @@ The FPC RTL cannot be fully compiled because kgpc has bugs and missing features 
   -I./FPCSource/packages/rtl-objpas/src/inc
 ```
 
+### classes.pp (0 errors)
+```bash
+./build/KGPC/kgpc ./FPCSource/rtl/unix/classes.pp /tmp/classes.s \
+  --no-stdlib \
+  -I./FPCSource/rtl/unix \
+  -I./FPCSource/rtl/objpas \
+  -I./FPCSource/rtl/objpas/sysutils \
+  -I./FPCSource/rtl/inc \
+  -I./FPCSource/rtl/linux \
+  -I./FPCSource/rtl/linux/x86_64 \
+  -I./FPCSource/rtl/x86_64 \
+  -I./FPCSource/packages/rtl-objpas/src/inc
+```
+
+### types.pp (0 errors)
+```bash
+./build/KGPC/kgpc ./FPCSource/rtl/objpas/types.pp /tmp/types.s \
+  --no-stdlib \
+  -I./FPCSource/rtl/unix \
+  -I./FPCSource/rtl/objpas \
+  -I./FPCSource/rtl/inc \
+  -I./FPCSource/rtl/linux \
+  -I./FPCSource/rtl/linux/x86_64 \
+  -I./FPCSource/rtl/x86_64
+```
+
+### math.pp (blocked by types.pp)
+
+math.pp depends on `types` which fails to parse function declarations with
+qualified default parameter values (e.g. `THorzRectAlign.Center`).
+
+#### Next blocker: qualified enum default parameters in types.pp
+
+```
+function TRectF.PlaceInto(
+    const Dest: TRectF;
+    const AHorzAlign: THorzRectAlign = THorzRectAlign.Center;
+    const AVertAlign: TVertRectAlign = TVertRectAlign.Center): TRectF;
+```
+
+The parser does not yet support dotted identifiers (`Type.Member`) as
+default parameter values.
+
+## Units with Compilation Errors
+
+- `baseunix.pp` - **0 errors**
+- `sysutils.pp` - **0 errors** (with `--no-stdlib`)
+- `classes.pp` - **0 errors**
+- `types.pp` - **parse error** (qualified default parameter values unsupported)
+- `math.pp` - **blocked** by types.pp
+- `fgl.pp` - **0 errors**
+- `sysconst.pp` - **0 errors**
+- `rtlconsts.pp` - **0 errors**
+- `typinfo.pp` - **0 errors**
+
+## Meson Test Suite
+
+Failing compiler invocations dropped from **58 to 7** after fixing:
+1. `codegen_sizeof_type_tag` missing `BYTE_TYPE` (1 byte), `WORD_TYPE` (2 bytes), `LONGWORD_TYPE` (4 bytes), `QWORD_TYPE` (8 bytes)
+2. `PASCAL_T_NONE` empty statements reaching `convert_statement` and hitting the unsupported default case
+3. Plain record properties (Delphi advanced records) triggering `record_type_is_class` heuristic
+
+Additionally, `kgpc_type_sizeof` was missing cases for `BYTE_TYPE`, `WORD_TYPE`, `LONGWORD_TYPE`, and `QWORD_TYPE`, causing SizeOf to fail for arrays of these types (e.g., `array[0..3] of Byte`).
+
+All 3 Pos(char, string) test failures fixed by:
+1. Removing Pos from `builtin_arg_expects_string()` (semcheck already dispatches to typed overloads)
+2. Adding `mangled_call_expects_char()` to suppress spurious char-to-string promotion
+3. Swapping `_ca`/`_cs` runtime signatures to consistent `(ch, value)` argument order
+
+The `**` (power/dot-product) operator is now supported in the expression parser,
+unblocking types.pp up to the qualified-default-parameter issue.
+
 ## Error Reduction with C-Vise (Flatten-Only Preprocessor)
 
-The `--flatten-only` mode expands `{$I ...}` include directives into a single file while keeping compiler directives (`{$IFDEF}`, `{$DEFINE}`, etc.) intact. This is useful for c-vise reduction because:
+When minimizing failures, use the preprocessor's `--flatten-only` mode to expand `{$i ...}` includes into a single file while keeping compiler directives intact for FPC to evaluate. This avoids corrupting conditional branches during reduction.
 
-1. **Single file**: Easier to reduce than multiple include files
-2. **Preserves conditionals**: FPC can still verify the reduced file compiles correctly
-3. **Keeps `uses` clauses**: External units are NOT inlined - you still need `-I` paths
-
-**Important**: Flattening only expands `{$I ...}` includes. The `uses` clause still references external units (sysconst, baseunix, unix, etc.) that must be resolved via `-I` paths when compiling.
-
-### Flatten sysutils.pp
+### Flatten a unit
 ```bash
 ./build/kgpc-preprocess --flatten-only \
   -I./FPCSource/rtl/unix \
@@ -56,116 +126,21 @@ The `--flatten-only` mode expands `{$I ...}` include directives into a single fi
   ./FPCSource/rtl/unix/sysutils.pp sysutils_flat.pp
 ```
 
-### Compile the flattened file (still needs -I paths for units)
-```bash
-./build/KGPC/kgpc sysutils_flat.pp /tmp/sysutils.s --no-stdlib \
-  -I./FPCSource/rtl/unix \
-  -I./FPCSource/rtl/objpas \
-  -I./FPCSource/rtl/objpas/sysutils \
-  -I./FPCSource/rtl/inc \
-  -I./FPCSource/rtl/linux \
-  -I./FPCSource/rtl/linux/x86_64 \
-  -I./FPCSource/rtl/x86_64 \
-  -I./FPCSource/packages/rtl-objpas/src/inc
+## FPC RTL Build Order (from make -n)
+
+The FPC RTL builds from `FPCSource/rtl/linux/` with these flags:
+```
+ppcx64 -Fi../inc -Fi../x86_64 -Fi../unix -Fix86_64 -FE. -FU../../rtl/units/x86_64-linux
 ```
 
-### Interestingness test and cvise (example)
-Create an interestingness script that:
-1. Verifies the reduced file still compiles with FPC (to avoid invalid reductions)
-2. Checks that kgpc still produces the target error
-
-Both FPC and kgpc need `-I` paths to resolve units from the `uses` clause.
-
-```bash
-cat > /tmp/cvise_indexofany.sh <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-
-input="sysutils_indexofany.pp"
-root="/home/kreijstal/git/Pascal-Compiler"
-
-tmpdir="$(mktemp -d)"
-trap 'rm -rf "$tmpdir"' EXIT
-cp -f "$input" "$tmpdir/sysutils.pp"
-
-(
-  cd "$tmpdir"
-  fpc \
-    "-Fi$root/FPCSource/rtl/inc" \
-    "-Fi$root/FPCSource/rtl/unix" \
-    "-Fi$root/FPCSource/rtl/linux" \
-    "-Fi$root/FPCSource/rtl/linux/x86_64" \
-    "-Fi$root/FPCSource/rtl/objpas/sysutils" \
-    "-Fi$root/FPCSource/rtl/x86_64" \
-    "-Fu$root/FPCSource/rtl/unix" \
-    "-Fu$root/FPCSource/rtl/objpas" \
-    "-Fu$root/FPCSource/rtl/objpas/sysutils" \
-    "-Fu$root/FPCSource/rtl/inc" \
-    "-Fu$root/FPCSource/rtl/linux" \
-    "-Fu$root/FPCSource/rtl/linux/x86_64" \
-    "-Fu$root/FPCSource/rtl/x86_64" \
-    "-Fu$root/FPCSource/packages/rtl-objpas/src/inc" \
-    sysutils.pp >/dev/null 2>&1 || exit 1
-)
-
-output="$("$root/build/KGPC/kgpc" "$tmpdir/sysutils.pp" /tmp/sysutils_indexofany.s \
-  --no-stdlib \
-  "-I$root/FPCSource/rtl/unix" \
-  "-I$root/FPCSource/rtl/objpas" \
-  "-I$root/FPCSource/rtl/objpas/sysutils" \
-  "-I$root/FPCSource/rtl/inc" \
-  "-I$root/FPCSource/rtl/linux" \
-  "-I$root/FPCSource/rtl/linux/x86_64" \
-  "-I$root/FPCSource/rtl/x86_64" \
-  "-I$root/FPCSource/packages/rtl-objpas/src/inc" 2>&1 || true)"
-
-if echo "$output" | rg -q "IndexOfAnyUnQuoted does not match any available overload|IndexOfAny does not match any available overload|GetAnsiString, not enough arguments"; then
-  exit 0
-fi
-exit 1
-EOF
-chmod +x /tmp/cvise_indexofany.sh
-
-cvise --timeout 7200 /tmp/cvise_indexofany.sh sysutils_indexofany.pp
-```
-
-### Error categories (16 total as of 2025-01-22):
-| Count | Error | Root Cause |
-|-------|-------|------------|
-| 6 | TGUIDHelper.Create argument type mismatch | Type casts in type helper |
-| 4 | procedure overload not found (InitExceptions, etc.) | Forward reference issues |
-| 3 | ShortString S assignment | Type compatibility |
-| 2 | SysBeep undeclared | Forward reference support needed |
-| 1 | OnBeep assignment type mismatch | Forward reference |
-| 1 | Result real type mismatch | Cascading |
-
-## Compiles Successfully (RTL Units)
-
-- `system.pp` - Core system unit
-- `linux.pp` - Linux unit
-- `unix.pp` - Unix unit
-- `baseunix.pp` - Base Unix functions
-- `objpas.pp` - Object Pascal RTL
-- `strings.pp` - String handling
-- `ctypes.pp` - C types
-- `sysconst.pp` - System constants
-- `types.pp` - Type helpers
-- `cpu.pp` - CPU types (x86_64)
-- `errors.pp` - Unix errors
-- `rtlconsts.pp` - RTL constants
-- `dl.pp` - Dynamic loading
-- `fpintres.pp`, `si_prc.pp`, `si_c.pp`, `si_g.pp`, `si_dll.pp` - Startup units
-
-## Units with Compilation Errors
-
-- `sysutils.pp` - **16 errors** (with `--no-stdlib`, as of 2025-01-22)
-- `math.pp` - Depends on sysutils
-- `cthreads.pp` - Missing ThreadingAlreadyUsed
-- `charset.pp` - Type incompatibilities
-- `unixcp.pp` - Missing CP_* constants
-- `intrinsics.pp` - Missing fpc_in_cpu_first
-- `character.pas` - Needs unicodedata unit
-- `getopts.pp` - Missing argv from system
-- `ports.pp` - x86-specific, not x86_64
-- `cmem.pp` - Needs system unit types
-- `si_uc.pp` - Missing si_uc.inc for x86_64
+Build order (relevant units):
+1. system.pp
+2. unixtype.pp
+3. ctypes.pp
+4. baseunix.pp
+5. objpas.pp
+6. sysconst.pp
+7. unix.pp
+8. sysutils.pp (with `-Fi../objpas/sysutils`)
+9. math.pp
+10. types.pp

@@ -97,10 +97,38 @@ void list_print(ListNode_t *list, FILE *f, int num_indent)
             case LIST_VARIANT_BRANCH:
                 print_variant_branch((struct VariantBranch *)cur->cur, f, num_indent);
                 break;
-            default:
+            case LIST_CASE_BRANCH: {
+                struct CaseBranch *branch = (struct CaseBranch *)cur->cur;
                 print_indent(f, num_indent);
-                fprintf(f, "[LIST_UNSUPPORTED type=%d]\n", cur->type);
+                fprintf(f, "[CASE_BRANCH]\n");
+                if (branch != NULL) {
+                    if (branch->labels != NULL) {
+                        print_indent(f, num_indent + 1);
+                        fprintf(f, "[LABELS]:\n");
+                        list_print(branch->labels, f, num_indent + 2);
+                    }
+                    if (branch->stmt != NULL) {
+                        print_indent(f, num_indent + 1);
+                        fprintf(f, "[STMT]:\n");
+                        stmt_print(branch->stmt, f, num_indent + 2);
+                    }
+                }
                 break;
+            }
+            case LIST_METHOD_TEMPLATE: {
+                struct MethodTemplate *method = (struct MethodTemplate *)cur->cur;
+                print_indent(f, num_indent);
+                fprintf(f, "[METHOD_TEMPLATE:%s]\n",
+                    method != NULL && method->name != NULL ? method->name : "<unnamed>");
+                break;
+            }
+            case LIST_UNSPECIFIED:
+                print_indent(f, num_indent);
+                fprintf(f, "[UNSPECIFIED_LIST_ENTRY]\n");
+                break;
+            default:
+                fprintf(stderr, "BAD TYPE IN list_print!\n");
+                exit(1);
         }
         cur = cur->next;
     }
@@ -330,6 +358,10 @@ static void destroy_record_field(struct RecordField *field)
         free(field->type_id);
     if (field->array_element_type_id != NULL)
         free(field->array_element_type_id);
+    if (field->pointer_type_id != NULL)
+        free(field->pointer_type_id);
+    if (field->proc_type != NULL)
+        kgpc_type_release(field->proc_type);
     destroy_record_type(field->nested_record);
     free(field);
 }
@@ -650,6 +682,11 @@ void stmt_print(struct Statement *stmt, FILE *f, int num_indent)
           list_print(stmt->stmt_data.procedure_call_data.expr_args, f, num_indent+1);
           break;
 
+        case STMT_EXPR:
+          fprintf(f, "[EXPR_STMT]:\n");
+          expr_print(stmt->stmt_data.expr_stmt_data.expr, f, num_indent+1);
+          break;
+
         case STMT_COMPOUND_STATEMENT:
           fprintf(f, "[COMPOUND_STMT]:\n");
           list_print(stmt->stmt_data.compound_statement, f, num_indent+1);
@@ -838,14 +875,22 @@ void stmt_print(struct Statement *stmt, FILE *f, int num_indent)
                 expr_print(stmt->stmt_data.inherited_data.call_expr, f, num_indent + 1);
             break;
 
-          default:
-            fprintf(stderr, "BAD TYPE IN stmt_print!\n");
-            exit(1);
+        default:
+          fprintf(stderr, "BAD TYPE IN stmt_print! type=%d\n", stmt->type);
+          print_indent(f, num_indent);
+          fprintf(f, "[STMT:unknown type=%d]\n", stmt->type);
+          return;
     }
 }
 
 void expr_print(struct Expression *expr, FILE *f, int num_indent)
 {
+    if (expr == NULL)
+    {
+        print_indent(f, num_indent);
+        fprintf(f, "[EXPR:null]\n");
+        return;
+    }
     print_indent(f, num_indent);
     switch(expr->type)
     {
@@ -908,6 +953,21 @@ void expr_print(struct Expression *expr, FILE *f, int num_indent)
           print_indent(f, num_indent);
           fprintf(f, "[INDEX]:\n");
           expr_print(expr->expr_data.array_access_data.index_expr, f, num_indent+1);
+
+          /* Print extra indices for multi-dimensional arrays */
+          if (expr->expr_data.array_access_data.extra_indices != NULL)
+          {
+              int idx_num = 2;
+              ListNode_t *idx = expr->expr_data.array_access_data.extra_indices;
+              while (idx != NULL)
+              {
+                  print_indent(f, num_indent);
+                  fprintf(f, "[INDEX_%d]:\n", idx_num++);
+                  if (idx->cur != NULL)
+                      expr_print((struct Expression *)idx->cur, f, num_indent+1);
+                  idx = idx->next;
+              }
+          }
           break;
 
         case EXPR_RECORD_ACCESS:
@@ -1056,8 +1116,10 @@ void expr_print(struct Expression *expr, FILE *f, int num_indent)
           break;
 
         default:
-          fprintf(stderr, "BAD TYPE IN expr_print!\n");
-          exit(1);
+          fprintf(stderr, "BAD TYPE IN expr_print! type=%d\n", expr->type);
+          print_indent(f, num_indent);
+          fprintf(f, "[EXPR:unknown type=%d]\n", expr->type);
+          return;
     }
 }
 
@@ -1305,6 +1367,11 @@ void destroy_stmt(struct Statement *stmt)
           }
           break;
 
+        case STMT_EXPR:
+          if (stmt->stmt_data.expr_stmt_data.expr != NULL)
+              destroy_expr(stmt->stmt_data.expr_stmt_data.expr);
+          break;
+
         case STMT_COMPOUND_STATEMENT:
           destroy_list(stmt->stmt_data.compound_statement);
           break;
@@ -1477,6 +1544,31 @@ void destroy_expr(struct Expression *expr)
               destroy_expr(expr->expr_data.array_access_data.array_expr);
           if (expr->expr_data.array_access_data.index_expr != NULL)
               destroy_expr(expr->expr_data.array_access_data.index_expr);
+          /* Free extra indices for multi-dimensional arrays */
+          if (expr->expr_data.array_access_data.extra_indices != NULL)
+          {
+              ListNode_t *idx = expr->expr_data.array_access_data.extra_indices;
+              while (idx != NULL)
+              {
+                  ListNode_t *next = idx->next;
+                  if (idx->cur != NULL)
+                      destroy_expr((struct Expression *)idx->cur);
+                  free(idx);
+                  idx = next;
+              }
+          }
+          if (expr->expr_data.array_access_data.linear_strides != NULL)
+          {
+              free(expr->expr_data.array_access_data.linear_strides);
+              expr->expr_data.array_access_data.linear_strides = NULL;
+          }
+          if (expr->expr_data.array_access_data.linear_lowers != NULL)
+          {
+              free(expr->expr_data.array_access_data.linear_lowers);
+              expr->expr_data.array_access_data.linear_lowers = NULL;
+          }
+          expr->expr_data.array_access_data.linear_index_count = 0;
+          expr->expr_data.array_access_data.linear_info_valid = 0;
           break;
 
         case EXPR_RECORD_ACCESS:
@@ -1713,7 +1805,21 @@ void destroy_record_type(struct RecordType *record_type)
     record_type->generic_args = NULL;
     record_type->num_generic_args = 0;
     record_type->generic_decl = NULL;
-    
+    free(record_type->default_indexed_property);
+    free(record_type->default_indexed_element_type_id);
+    if (record_type->record_properties != NULL)
+    {
+        ListNode_t *cur = record_type->record_properties;
+        while (cur != NULL)
+        {
+            struct ClassProperty *property = (struct ClassProperty *)cur->cur;
+            destroy_class_property(property);
+            ListNode_t *next = cur->next;
+            free(cur);
+            cur = next;
+        }
+    }
+
     free(record_type);
 }
 
@@ -1730,6 +1836,7 @@ struct RecordType *clone_record_type(const struct RecordType *record_type)
     clone->methods = NULL;  /* Methods list copied during semantic checking if needed */
     clone->method_templates = clone_method_template_list(record_type->method_templates);
     clone->is_class = record_type->is_class;
+    clone->is_interface = record_type->is_interface;
     clone->is_type_helper = record_type->is_type_helper;
     clone->helper_base_type_id = record_type->helper_base_type_id ?
         strdup(record_type->helper_base_type_id) : NULL;
@@ -1753,8 +1860,15 @@ struct RecordType *clone_record_type(const struct RecordType *record_type)
         }
     }
 
+    clone->default_indexed_property = record_type->default_indexed_property ?
+        strdup(record_type->default_indexed_property) : NULL;
+    clone->default_indexed_element_type = record_type->default_indexed_element_type;
+    clone->default_indexed_element_type_id = record_type->default_indexed_element_type_id ?
+        strdup(record_type->default_indexed_element_type_id) : NULL;
+
     clone->fields = clone_member_list(record_type->fields);
     clone->properties = clone_property_list(record_type->properties);
+    clone->record_properties = clone_property_list(record_type->record_properties);
 
     return clone;
 }
@@ -1770,6 +1884,9 @@ static struct RecordField *clone_record_field(const struct RecordField *field)
     clone->type = field->type;
     clone->type_id = field->type_id != NULL ? strdup(field->type_id) : NULL;
     clone->nested_record = clone_record_type(field->nested_record);
+    clone->proc_type = field->proc_type;
+    if (clone->proc_type != NULL)
+        kgpc_type_retain(clone->proc_type);
     clone->is_array = field->is_array;
     clone->array_start = field->array_start;
     clone->array_end = field->array_end;
@@ -1778,6 +1895,10 @@ static struct RecordField *clone_record_field(const struct RecordField *field)
         strdup(field->array_element_type_id) : NULL;
     clone->array_is_open = field->array_is_open;
     clone->is_hidden = field->is_hidden;
+    clone->is_pointer = field->is_pointer;
+    clone->pointer_type = field->pointer_type;
+    clone->pointer_type_id = field->pointer_type_id != NULL ?
+        strdup(field->pointer_type_id) : NULL;
     return clone;
 }
 
@@ -2068,6 +2189,7 @@ Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type, char *type_id,
     new_tree->tree_data.var_decl_data.type = type;
     new_tree->tree_data.var_decl_data.type_id = type_id;
     new_tree->tree_data.var_decl_data.is_var_param = is_var_param;
+    new_tree->tree_data.var_decl_data.is_untyped_param = 0;
     new_tree->tree_data.var_decl_data.inferred_type = inferred_type;
     new_tree->tree_data.var_decl_data.initializer = initializer;
     new_tree->tree_data.var_decl_data.is_typed_const = 0;
@@ -2206,6 +2328,7 @@ struct Statement *mk_varassign(int line_num, int col_num, struct Expression *var
 
     new_stmt->line_num = line_num;
     new_stmt->col_num = col_num;
+    new_stmt->source_index = -1;
     new_stmt->type = STMT_VAR_ASSIGN;
     new_stmt->stmt_data.var_assign_data.var = var;
     new_stmt->stmt_data.var_assign_data.expr = expr;
@@ -2220,6 +2343,7 @@ struct Statement *mk_label(int line_num, char *label, struct Statement *stmt)
 
     new_stmt->line_num = line_num;
     new_stmt->col_num = 0;
+    new_stmt->source_index = -1;
     new_stmt->type = STMT_LABEL;
     new_stmt->stmt_data.label_data.label = label;
     new_stmt->stmt_data.label_data.stmt = stmt;
@@ -2234,6 +2358,7 @@ struct Statement *mk_goto(int line_num, char *label)
 
     new_stmt->line_num = line_num;
     new_stmt->col_num = 0;
+    new_stmt->source_index = -1;
     new_stmt->type = STMT_GOTO;
     new_stmt->stmt_data.goto_data.label = label;
 
@@ -2247,6 +2372,7 @@ struct Statement *mk_break(int line_num)
 
     new_stmt->line_num = line_num;
     new_stmt->col_num = 0;
+    new_stmt->source_index = -1;
     new_stmt->type = STMT_BREAK;
     memset(&new_stmt->stmt_data, 0, sizeof(new_stmt->stmt_data));
 
@@ -2260,6 +2386,7 @@ struct Statement *mk_continue(int line_num)
 
     new_stmt->line_num = line_num;
     new_stmt->col_num = 0;
+    new_stmt->source_index = -1;
     new_stmt->type = STMT_CONTINUE;
     memset(&new_stmt->stmt_data, 0, sizeof(new_stmt->stmt_data));
 
@@ -2279,6 +2406,7 @@ struct Statement *mk_exit_with_value(int line_num, struct Expression *return_exp
 
     new_stmt->line_num = line_num;
     new_stmt->col_num = 0;
+    new_stmt->source_index = -1;
     new_stmt->type = STMT_EXIT;
     memset(&new_stmt->stmt_data, 0, sizeof(new_stmt->stmt_data));
     new_stmt->stmt_data.exit_data.return_expr = return_expr;
@@ -2294,6 +2422,7 @@ struct Statement *mk_procedurecall(int line_num, char *id, ListNode_t *expr_args
 
     new_stmt->line_num = line_num;
     new_stmt->col_num = 0;
+    new_stmt->source_index = -1;
     new_stmt->type = STMT_PROCEDURE_CALL;
     new_stmt->stmt_data.procedure_call_data.id = id;
     new_stmt->stmt_data.procedure_call_data.mangled_id = NULL;
@@ -2309,6 +2438,20 @@ struct Statement *mk_procedurecall(int line_num, char *id, ListNode_t *expr_args
     return new_stmt;
 }
 
+struct Statement *mk_exprstmt(int line_num, int col_num, struct Expression *expr)
+{
+    struct Statement *new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    assert(new_stmt != NULL);
+
+    new_stmt->line_num = line_num;
+    new_stmt->col_num = col_num;
+    new_stmt->source_index = -1;
+    new_stmt->type = STMT_EXPR;
+    new_stmt->stmt_data.expr_stmt_data.expr = expr;
+
+    return new_stmt;
+}
+
 struct Statement *mk_compoundstatement(int line_num, ListNode_t *compound_statement)
 {
     struct Statement *new_stmt;
@@ -2317,6 +2460,7 @@ struct Statement *mk_compoundstatement(int line_num, ListNode_t *compound_statem
 
     new_stmt->line_num = line_num;
     new_stmt->col_num = 0;
+    new_stmt->source_index = -1;
     new_stmt->type = STMT_COMPOUND_STATEMENT;
     new_stmt->stmt_data.compound_statement = compound_statement;
 
@@ -2332,6 +2476,7 @@ struct Statement *mk_ifthen(int line_num, struct Expression *eval_relop, struct 
 
     new_stmt->line_num = line_num;
     new_stmt->col_num = 0;
+    new_stmt->source_index = -1;
     new_stmt->type = STMT_IF_THEN;
     new_stmt->stmt_data.if_then_data.relop_expr = eval_relop;
     new_stmt->stmt_data.if_then_data.if_stmt = if_stmt;
@@ -2349,6 +2494,7 @@ struct Statement *mk_while(int line_num, struct Expression *eval_relop,
 
     new_stmt->line_num = line_num;
     new_stmt->col_num = 0;
+    new_stmt->source_index = -1;
     new_stmt->type = STMT_WHILE;
     new_stmt->stmt_data.while_data.relop_expr = eval_relop;
     new_stmt->stmt_data.while_data.while_stmt = while_stmt;
@@ -2364,6 +2510,7 @@ struct Statement *mk_repeat(int line_num, ListNode_t *body_list,
 
     new_stmt->line_num = line_num;
     new_stmt->col_num = 0;
+    new_stmt->source_index = -1;
     new_stmt->type = STMT_REPEAT;
     new_stmt->stmt_data.repeat_data.body_list = body_list;
     new_stmt->stmt_data.repeat_data.until_expr = until_expr;
@@ -2380,6 +2527,7 @@ struct Statement *mk_forassign(int line_num, struct Statement *for_assign, struc
 
    new_stmt->line_num = line_num;
     new_stmt->col_num = 0;
+   new_stmt->source_index = -1;
    new_stmt->type = STMT_FOR;
    new_stmt->stmt_data.for_data.for_assign_type = STMT_FOR_ASSIGN_VAR;
 
@@ -2401,6 +2549,7 @@ struct Statement *mk_forvar(int line_num, struct Expression *for_var, struct Exp
 
   new_stmt->line_num = line_num;
     new_stmt->col_num = 0;
+  new_stmt->source_index = -1;
   new_stmt->type = STMT_FOR;
   new_stmt->stmt_data.for_data.for_assign_type = STMT_FOR_VAR;
 
@@ -2422,6 +2571,7 @@ struct Statement *mk_for_in(int line_num, struct Expression *loop_var, struct Ex
 
     new_stmt->line_num = line_num;
     new_stmt->col_num = 0;
+    new_stmt->source_index = -1;
     new_stmt->type = STMT_FOR_IN;
     new_stmt->stmt_data.for_in_data.loop_var = loop_var;
     new_stmt->stmt_data.for_in_data.collection = collection;
@@ -2438,6 +2588,7 @@ struct Statement *mk_asmblock(int line_num, char *code)
 
     new_stmt->line_num = line_num;
     new_stmt->col_num = 0;
+    new_stmt->source_index = -1;
     new_stmt->type = STMT_ASM_BLOCK;
     new_stmt->stmt_data.asm_block_data.code = code;
 
@@ -2452,6 +2603,7 @@ struct Statement *mk_case(int line_num, struct Expression *selector, ListNode_t 
 
     new_stmt->line_num = line_num;
     new_stmt->col_num = 0;
+    new_stmt->source_index = -1;
     new_stmt->type = STMT_CASE;
     new_stmt->stmt_data.case_data.selector_expr = selector;
     new_stmt->stmt_data.case_data.branches = branches;
@@ -2467,6 +2619,7 @@ struct Statement *mk_with(int line_num, struct Expression *context, struct State
 
     new_stmt->line_num = line_num;
     new_stmt->col_num = 0;
+    new_stmt->source_index = -1;
     new_stmt->type = STMT_WITH;
     new_stmt->stmt_data.with_data.context_expr = context;
     new_stmt->stmt_data.with_data.body_stmt = body;
@@ -2481,6 +2634,7 @@ struct Statement *mk_tryfinally(int line_num, ListNode_t *try_stmts, ListNode_t 
 
     new_stmt->line_num = line_num;
     new_stmt->col_num = 0;
+    new_stmt->source_index = -1;
     new_stmt->type = STMT_TRY_FINALLY;
     new_stmt->stmt_data.try_finally_data.try_statements = try_stmts;
     new_stmt->stmt_data.try_finally_data.finally_statements = finally_stmts;
@@ -2496,6 +2650,7 @@ struct Statement *mk_tryexcept(int line_num, ListNode_t *try_stmts, ListNode_t *
 
     new_stmt->line_num = line_num;
     new_stmt->col_num = 0;
+    new_stmt->source_index = -1;
     new_stmt->type = STMT_TRY_EXCEPT;
     new_stmt->stmt_data.try_except_data.try_statements = try_stmts;
     new_stmt->stmt_data.try_except_data.except_statements = except_stmts;
@@ -2513,6 +2668,7 @@ struct Statement *mk_raise(int line_num, struct Expression *expr)
 
     new_stmt->line_num = line_num;
     new_stmt->col_num = 0;
+    new_stmt->source_index = -1;
     new_stmt->type = STMT_RAISE;
     new_stmt->stmt_data.raise_data.exception_expr = expr;
 
@@ -2526,6 +2682,7 @@ struct Statement *mk_inherited(int line_num, struct Expression *expr)
 
     new_stmt->line_num = line_num;
     new_stmt->col_num = 0;
+    new_stmt->source_index = -1;
     new_stmt->type = STMT_INHERITED;
     new_stmt->stmt_data.inherited_data.call_expr = expr;
 
@@ -2538,10 +2695,10 @@ static void init_expression(struct Expression *expr, int line_num, enum ExprType
     assert(expr != NULL);
     expr->line_num = line_num;
     expr->col_num = 0;  /* Initialize to 0 - not tracked for expressions yet */
+    expr->source_index = -1;  /* -1 indicates unknown byte offset */
     expr->type = type;
     expr->field_width = NULL;
     expr->field_precision = NULL;
-    expr->resolved_type = UNKNOWN_TYPE;
     expr->resolved_kgpc_type = NULL;
     expr->is_default_initializer = 0;
     expr->pointer_subtype = UNKNOWN_TYPE;
@@ -2573,6 +2730,11 @@ static void init_expression(struct Expression *expr, int line_num, enum ExprType
     expr->expr_data.function_call_data.is_virtual_call = 0;
     expr->expr_data.function_call_data.vmt_index = -1;
     expr->expr_data.function_call_data.self_class_name = NULL;
+    expr->expr_data.function_call_data.arg0_is_dynarray_descriptor = 0;
+    expr->expr_data.array_access_data.linear_index_count = 0;
+    expr->expr_data.array_access_data.linear_strides = NULL;
+    expr->expr_data.array_access_data.linear_lowers = NULL;
+    expr->expr_data.array_access_data.linear_info_valid = 0;
 }
 
 struct Expression *mk_relop(int line_num, int type, struct Expression *left,
@@ -2653,6 +2815,11 @@ struct Expression *mk_arrayaccess(int line_num, struct Expression *array_expr, s
     init_expression(new_expr, line_num, EXPR_ARRAY_ACCESS);
     new_expr->expr_data.array_access_data.array_expr = array_expr;
     new_expr->expr_data.array_access_data.index_expr = index_expr;
+    new_expr->expr_data.array_access_data.extra_indices = NULL;
+    new_expr->expr_data.array_access_data.linear_index_count = 0;
+    new_expr->expr_data.array_access_data.linear_strides = NULL;
+    new_expr->expr_data.array_access_data.linear_lowers = NULL;
+    new_expr->expr_data.array_access_data.linear_info_valid = 0;
 
     return new_expr;
 }
@@ -2776,7 +2943,7 @@ struct Expression *mk_string(int line_num, char *string)
     return new_expr;
 }
 
-struct Expression *mk_rnum(int line_num, float r_num)
+struct Expression *mk_rnum(int line_num, double r_num)
 {
     struct Expression *new_expr;
     new_expr = (struct Expression *)malloc(sizeof(struct Expression));

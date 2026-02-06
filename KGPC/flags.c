@@ -21,6 +21,7 @@ int FLAG_PARSE_ONLY = 0;
 static char *FLAG_DUMP_AST_PATH = NULL;
 static int FLAG_TIME_PASSES = 0;
 static int FLAG_ASM_DEBUG_COMMENTS = 0;
+static int FLAG_DISABLE_DCE = 0;
 static int FLAG_STDLIB_LOADED = 0;
 
 /* Flag for compiling the System unit (FPC -Us flag) */
@@ -65,6 +66,11 @@ void set_time_passes_flag(void)
 void set_asm_debug_flag(void)
 {
     FLAG_ASM_DEBUG_COMMENTS = 1;
+}
+
+void set_disable_dce_flag(void)
+{
+    FLAG_DISABLE_DCE = 1;
 }
 
 void set_stdlib_loaded_flag(int loaded)
@@ -122,6 +128,11 @@ int time_passes_flag(void)
 int asm_debug_flag(void)
 {
     return FLAG_ASM_DEBUG_COMMENTS;
+}
+
+int disable_dce_flag(void)
+{
+    return FLAG_DISABLE_DCE;
 }
 
 int stdlib_loaded_flag(void)

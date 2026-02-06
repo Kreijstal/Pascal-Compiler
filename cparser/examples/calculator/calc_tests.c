@@ -15,7 +15,9 @@ void test_calc_valid_expression(void) {
     ParseResult res = parse(input, p);
 
     TEST_ASSERT(res.is_success);
-    TEST_ASSERT(eval(res.value.ast) == 3);
+    long value = 0;
+    TEST_ASSERT(eval(res.value.ast, &value));
+    TEST_ASSERT(value == 3);
 
     free_ast(res.value.ast);
     free_combinator(p);

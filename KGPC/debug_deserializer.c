@@ -18,7 +18,6 @@ struct Expression *deserialize_expression(FILE *fp) {
     expr->line_num = -1; // Not serialized
     expr->field_width = NULL;
     expr->field_precision = NULL;
-    expr->resolved_type = UNKNOWN_TYPE;
 
     switch (type) {
         case EXPR_VAR_ID: {

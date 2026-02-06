@@ -762,59 +762,6 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
         }
     }
 
-    // Early semantic of dialect: reject C-style shift operators '<<' and '>>'
-    // Scan preprocessed buffer while skipping strings and comments.
-    {
-        int line = 1, col = 1;
-        const char* cur = buffer;
-        const char* end = buffer + length;
-        while (cur < end) {
-            unsigned char ch = (unsigned char)*cur;
-            if (ch == '\'' ) {
-                // String literal with doubled quotes escaping
-                ++cur; ++col;
-                while (cur < end) {
-                    if (*cur == '\'' && (cur + 1) < end && cur[1] == '\'') {
-                        cur += 2; col += 2; // escaped quote
-                        continue;
-                    }
-                    if (*cur == '\'') { ++cur; ++col; break; }
-                    if (*cur == '\n') { ++line; col = 1; ++cur; }
-                    else { ++cur; ++col; }
-                }
-                continue;
-            }
-            if (ch == '{') {
-                ++cur; ++col;
-                while (cur < end && *cur != '}') {
-                    if (*cur == '\n') { ++line; col = 1; ++cur; }
-                    else { ++cur; ++col; }
-                }
-                if (cur < end) { ++cur; ++col; }
-                continue;
-            }
-            if (ch == '(' && (cur + 1) < end && cur[1] == '*') {
-                cur += 2; col += 2;
-                while ((cur + 1) < end && !(cur[0] == '*' && cur[1] == ')')) {
-                    if (*cur == '\n') { ++line; col = 1; ++cur; }
-                    else { ++cur; ++col; }
-                }
-                if ((cur + 1) < end) { cur += 2; col += 2; }
-                else { cur = end; }
-                continue;
-            }
-            if (ch == '/' && (cur + 1) < end && cur[1] == '/') {
-                cur += 2; col += 2;
-                while (cur < end && *cur != '\n') { ++cur; ++col; }
-                continue;
-            }
-            // Note: FPC supports C-style shift operators << and >> as aliases for shl and shr
-            // They are parsed by the expression parser at precedence level 6
-            if (*cur == '\n') { ++line; col = 1; ++cur; }
-            else { ++cur; ++col; }
-        }
-    }
-
     bool is_unit = buffer_starts_with_unit(buffer, length);
     combinator_t *parser = is_unit ? get_or_create_unit_parser() : get_or_create_program_parser();
 
@@ -831,8 +778,7 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
     file_to_parse = (char *)path;
 
     ParseResult result = parse(input, parser);
-    if (getenv("KGPC_DEBUG_TFPG_AST") != NULL && result.is_success && result.value.ast != NULL &&
-        path != NULL && (strstr(path, "fgl.p") != NULL || strstr(path, "FGL.p") != NULL))
+    if (getenv("KGPC_DEBUG_TFPG_AST") != NULL && result.is_success && result.value.ast != NULL)
     {
         fprintf(stderr, "==== Raw cparser AST for %s ====\n", path);
         print_pascal_ast(result.value.ast);

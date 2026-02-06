@@ -647,6 +647,7 @@ ast_t * new_ast() {
     ast->sym = NULL;
     ast->line = 0;
     ast->col = 0;
+    ast->index = -1;  /* -1 indicates unknown position */
     g_parser_stats.ast_nodes_created++;
     return ast;
 }
@@ -656,6 +657,7 @@ void set_ast_position(ast_t* ast, input_t* in) {
     if (ast != NULL && in != NULL) {
         ast->line = in->line;
         ast->col = in->col;
+        ast->index = in->start;  /* Store byte offset for accurate error context */
     }
 }
 
@@ -666,6 +668,7 @@ ast_t* ast1(tag_t typ, ast_t* a1) {
     if (a1 != NULL) {
         ast->line = a1->line;
         ast->col = a1->col;
+        ast->index = a1->index;
     }
     return ast;
 }
@@ -678,6 +681,7 @@ ast_t* copy_ast(ast_t* orig) {
     new->typ = orig->typ;
     new->line = orig->line;
     new->col = orig->col;
+    new->index = orig->index;
     new->sym = orig->sym ? sym_lookup(orig->sym->name) : NULL;
     new->child = copy_ast(orig->child);
     new->next = copy_ast(orig->next);
@@ -691,6 +695,7 @@ ast_t* ast2(tag_t typ, ast_t* a1, ast_t* a2) {
     if (a1 != NULL) {
         ast->line = a1->line;
         ast->col = a1->col;
+        ast->index = a1->index;
     }
     return ast;
 }
@@ -1013,7 +1018,12 @@ static ParseResult integer_fn(input_t * in, void * args, char* parser_name) {
        char* unexpected = strndup(in->buffer + state.start, 10);
        return make_failure_v2(in, parser_name, strdup("Expected a digit."), unexpected);
    }
-   while (isdigit((unsigned char)(c = read1(in)))) ;
+   while ((c = read1(in)) != EOF) {
+       if (isdigit((unsigned char)c) || c == '_') {
+           continue;
+       }
+       break;
+   }
    if (c != EOF) in->start--;
    int len = in->start - start_pos_ws;
    char * text = (char*)safe_malloc(len + 1);
@@ -1031,12 +1041,28 @@ static ParseResult cident_fn(input_t * in, void * args, char* parser_name) {
    InputState state; save_input_state(in, &state);
    int start_pos_ws = in->start;
    char c = read1(in);
-   if (c != '_' && !isalpha((unsigned char)c)) {
+   unsigned char uc = (unsigned char)c;
+   if (c == '&') {
+       start_pos_ws = in->start;
+       c = read1(in);
+       uc = (unsigned char)c;
+   }
+   if (c == EOF) {
+       restore_input_state(in, &state);
+       return make_failure_v2(in, parser_name, strdup("Expected identifier."), NULL);
+   }
+   if (c != '_' && !(isalpha(uc) || uc >= 0x80)) {
        restore_input_state(in, &state);
        char* unexpected = strndup(in->buffer + state.start, 10);
        return make_failure_v2(in, parser_name, strdup("Expected identifier."), unexpected);
    }
-   while (isalnum((unsigned char)(c = read1(in))) || c == '_') ;
+   while ((c = read1(in)) != EOF) {
+       uc = (unsigned char)c;
+       if (isalnum(uc) || c == '_' || uc >= 0x80) {
+           continue;
+       }
+       break;
+   }
    if (c != EOF) in->start--;
    int len = in->start - start_pos_ws;
    char * text = (char*)safe_malloc(len + 1);
@@ -1173,11 +1199,11 @@ static bool skip_one_pascal_element(input_t* in) {
 
     // Skip entire identifiers to avoid matching keywords that appear as suffixes
     // (e.g., don't match 'exports' in 'myexports')
-    if (c == '_' || isalpha((unsigned char)c)) {
+    if (c == '_' || isalpha((unsigned char)c) || ((unsigned char)c) >= 0x80) {
         in->start++;
         while (in->start < in->length) {
-            char ch = buffer[in->start];
-            if (!isalnum((unsigned char)ch) && ch != '_') break;
+            unsigned char ch = (unsigned char)buffer[in->start];
+            if (!isalnum(ch) && ch != '_' && ch < 0x80) break;
             in->start++;
         }
         return true;
@@ -1226,6 +1252,13 @@ static ParseResult until_fn(input_t* in, void* args, char* parser_name) {
     char* text = (char*)safe_malloc(len + 1);
     strncpy(text, in->buffer + start_offset, len);
     text[len] = '\0';
+    if (getenv("KGPC_DEBUG_UNTIL") != NULL && len > 0) {
+        int preview = len < 120 ? len : 120;
+        const char* delim_name = (uargs->delimiter && uargs->delimiter->name) ? uargs->delimiter->name : "unknown";
+        int delim_type = (uargs->delimiter) ? (int)uargs->delimiter->type : -1;
+        fprintf(stderr, "[UNTIL] tag=%d line=%d len=%d delim=%s delim_type=%d: %.*s\n",
+                uargs->tag, in->line, len, delim_name, delim_type, preview, text);
+    }
     ast_t* ast = new_ast();
     ast->typ = uargs->tag; ast->sym = sym_lookup(text); free(text);
     set_ast_position(ast, in);

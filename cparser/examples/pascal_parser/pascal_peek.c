@@ -89,14 +89,14 @@ static bool read_word_at(const input_t* in, int pos, pascal_word_slice_t* slice)
     }
     const char* buffer = in->buffer;
     unsigned char ch = (unsigned char)buffer[pos];
-    if (!(isalpha(ch) || ch == '_')) {
+    if (!(isalpha(ch) || ch == '_' || ch >= 0x80)) {
         return false;
     }
     int start = pos;
     pos++;
     while (pos < length) {
         unsigned char next = (unsigned char)buffer[pos];
-        if (!(isalnum(next) || next == '_')) {
+        if (!(isalnum(next) || next == '_' || next >= 0x80)) {
             break;
         }
         pos++;

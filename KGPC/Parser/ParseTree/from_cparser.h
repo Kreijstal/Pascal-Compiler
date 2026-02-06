@@ -22,8 +22,6 @@ typedef struct {
     int is_virtual;
     int is_override;
     int is_static;   /* 1 if method is static (no Self parameter) */
-    int param_count; /* Number of explicit parameters (excludes implicit Self), -1 if unknown */
-    char *param_sig; /* Comma-separated parameter type names, or NULL if unknown */
 } ClassMethodBinding;
 
 /* Convert an AST type specification to a KgpcType object.
@@ -32,6 +30,10 @@ typedef struct {
  * The caller owns the returned KgpcType and must free it with destroy_kgpc_type().
  */
 KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab);
+
+/* Build a procedure type from a method template (used for interface method declarations). */
+KgpcType *from_cparser_method_template_to_proctype(struct MethodTemplate *method_template,
+    struct RecordType *record, struct SymTab *symtab);
 
 /* Get method information for a class.
  * Returns a list of ClassMethodBinding for the given class.
@@ -43,6 +45,7 @@ void get_class_methods(const char *class_name, ListNode_t **methods_out, int *co
  * Returns 1 if static, 0 otherwise.
  */
 int from_cparser_is_method_static(const char *class_name, const char *method_name);
+int from_cparser_is_type_helper(const char *helper_id);
 
 /* Check if a method is virtual (needs VMT dispatch).
  * Returns 1 if virtual or override, 0 otherwise.
@@ -68,7 +71,7 @@ ListNode_t *from_cparser_convert_params_ast(ast_t *params_ast);
  * This is used by the semantic checker to ensure method templates are findable.
  */
 void from_cparser_register_method_template(const char *class_name, const char *method_name,
-    int is_virtual, int is_override, int is_static, int param_count, const char *param_sig);
+    int is_virtual, int is_override, int is_static);
 
 /* Find all class names that have a method with the given name.
  * Returns a list of class names (caller must free each string and the list).

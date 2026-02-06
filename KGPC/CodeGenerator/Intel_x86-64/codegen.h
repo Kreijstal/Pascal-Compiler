@@ -130,6 +130,7 @@ static inline const char *codegen_readonly_section_directive(void)
 #include "../../Parser/List/List.h"
 #include "../../Parser/ParseTree/tree.h"
 #include "../../Parser/ParseTree/tree_types.h"
+#include "../../Parser/ParseTree/KgpcType.h"
 #include "../../Parser/SemanticCheck/SymTab/SymTab.h"
 
 /*
@@ -190,6 +191,7 @@ typedef struct {
     int static_link_reg_level;
     StackNode_t *static_link_spill_slot;
     int pending_stack_arg_bytes;
+    ListNode_t *emitted_subprograms;
 } CodeGenContext;
 
 /* Generates a label */
@@ -216,6 +218,11 @@ void codegen_inst_list(ListNode_t *, CodeGenContext *ctx);
 
 void codegen_report_error(CodeGenContext *ctx, const char *fmt, ...);
 int codegen_had_error(const CodeGenContext *ctx);
+
+/* Convert a KgpcType to a legacy type tag.
+ * This provides a centralized mapping from the new type system to the legacy tags
+ * used throughout the code generator. */
+int codegen_tag_from_kgpc(const KgpcType *type);
 
 /* Lexical depth management for static links */
 int codegen_get_lexical_depth(const CodeGenContext *ctx);

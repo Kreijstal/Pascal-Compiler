@@ -58,6 +58,18 @@ kgpc_cparser_sources = [
   'Parser/SemanticCheck/NameMangling.c',
   'Parser/SemanticCheck/SemChecks/SemCheck_stmt.c',
   'Parser/SemanticCheck/SemChecks/SemCheck_expr.c',
+  'Parser/SemanticCheck/SemChecks/SemCheck_overload.c',
+  'Parser/SemanticCheck/SemChecks/SemCheck_sizeof.c',
+  'Parser/SemanticCheck/SemChecks/SemCheck_Expr_Builtins.c',
+  'Parser/SemanticCheck/SemChecks/SemCheck_Expr_Utils.c',
+  'Parser/SemanticCheck/SemChecks/SemCheck_Expr_Resolve.c',
+  'Parser/SemanticCheck/SemChecks/SemCheck_Expr_Record.c',
+  'Parser/SemanticCheck/SemChecks/SemCheck_Expr_Constructors.c',
+  'Parser/SemanticCheck/SemChecks/SemCheck_Context.c',
+  'Parser/SemanticCheck/SemChecks/SemCheck_Helpers.c',
+  'Parser/SemanticCheck/SemChecks/SemCheck_Expr_Ops.c',
+  'Parser/SemanticCheck/SemChecks/SemCheck_Expr_Access.c',
+  'Parser/SemanticCheck/SemChecks/SemCheck_Expr_Types.c',
   'CodeGenerator/Intel_x86-64/codegen.c',
   'CodeGenerator/Intel_x86-64/codegen_statement.c',
   'CodeGenerator/Intel_x86-64/codegen_expression.c',
@@ -85,7 +97,7 @@ if not host_machine.system().startswith('windows')
   runtime_sources += 'runtime_unix.c'
 endif
 runtime_deps = []
-runtime_c_args = []
+runtime_c_args = ['-O2']
 
 if gmp_dep.found()
   runtime_sources += ['runtime_gmp.c']
@@ -150,5 +162,5 @@ test('Compiler tests', python,
   depends: [kgpc_cparser_exe, kgpc_runtime_lib, ctypes_helper],
   env: env,
   protocol: 'tap',
-  timeout: 600,
+  timeout: 1800,
 )

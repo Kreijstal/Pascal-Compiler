@@ -16,6 +16,7 @@
 #include <string.h>
 #include <limits.h>
 #include <stdint.h>
+#include <time.h>
 #ifndef _WIN32
 #include <strings.h>
 #else
@@ -49,131 +50,7 @@ static char *g_semcheck_current_unit_name = NULL;
 static char *g_semcheck_source_path = NULL;
 static char *g_semcheck_source_buffer = NULL;
 static size_t g_semcheck_source_length = 0;
-
-static int semcheck_is_param_modifier_name(const char *name)
-{
-    if (name == NULL)
-        return 0;
-    return strcasecmp(name, "var") == 0 ||
-        strcasecmp(name, "out") == 0 ||
-        strcasecmp(name, "const") == 0 ||
-        strcasecmp(name, "constref") == 0;
-}
-
-static int semcheck_count_param_identifiers(ast_t *params_ast)
-{
-    if (params_ast == NULL)
-        return 0;
-
-    int count = 0;
-    ast_t *param = params_ast;
-    if (param->typ == PASCAL_T_PARAM_LIST)
-        param = param->child;
-
-    while (param != NULL && param->typ == PASCAL_T_PARAM)
-    {
-        ast_t *child = param->child;
-        if (child != NULL && child->sym != NULL &&
-            semcheck_is_param_modifier_name(child->sym->name))
-            child = child->next;
-
-        while (child != NULL && child->typ == PASCAL_T_IDENTIFIER)
-        {
-            count++;
-            child = child->next;
-        }
-        param = param->next;
-    }
-
-    return count;
-}
-
-static const char *semcheck_qualified_identifier_last_name(ast_t *node)
-{
-    const char *name = NULL;
-    if (node == NULL)
-        return NULL;
-    ast_t *cur = node->child;
-    while (cur != NULL)
-    {
-        if (cur->sym != NULL && cur->sym->name != NULL)
-            name = cur->sym->name;
-        cur = cur->next;
-    }
-    return name;
-}
-
-static const char *semcheck_extract_type_name(ast_t *type_node)
-{
-    if (type_node == NULL)
-        return NULL;
-    if (type_node->typ == PASCAL_T_TYPE_SPEC && type_node->child != NULL)
-        type_node = type_node->child;
-
-    if (type_node->typ == PASCAL_T_IDENTIFIER && type_node->sym != NULL)
-        return type_node->sym->name;
-    if (type_node->typ == PASCAL_T_QUALIFIED_IDENTIFIER)
-        return semcheck_qualified_identifier_last_name(type_node);
-    return NULL;
-}
-
-static char *semcheck_build_param_signature(ast_t *params_ast)
-{
-    if (params_ast == NULL)
-        return NULL;
-
-    const char *types[64];
-    int count = 0;
-
-    ast_t *param = params_ast;
-    if (param->typ == PASCAL_T_PARAM_LIST)
-        param = param->child;
-
-    while (param != NULL && param->typ == PASCAL_T_PARAM)
-    {
-        ast_t *child = param->child;
-        if (child != NULL && child->sym != NULL &&
-            semcheck_is_param_modifier_name(child->sym->name))
-            child = child->next;
-
-        int id_count = 0;
-        ast_t *id_cursor = child;
-        while (id_cursor != NULL && id_cursor->typ == PASCAL_T_IDENTIFIER)
-        {
-            id_count++;
-            id_cursor = id_cursor->next;
-        }
-
-        if (id_count > 0)
-        {
-            const char *type_name = semcheck_extract_type_name(id_cursor);
-            if (type_name == NULL)
-                return NULL;
-            for (int i = 0; i < id_count && count < 64; i++)
-                types[count++] = type_name;
-        }
-        param = param->next;
-    }
-
-    if (count == 0)
-        return NULL;
-
-    size_t total_len = 0;
-    for (int i = 0; i < count; i++)
-        total_len += strlen(types[i]) + (i > 0 ? 1 : 0);
-
-    char *sig = (char *)malloc(total_len + 1);
-    if (sig == NULL)
-        return NULL;
-    sig[0] = '\0';
-    for (int i = 0; i < count; i++)
-    {
-        if (i > 0)
-            strcat(sig, ",");
-        strcat(sig, types[i]);
-    }
-    return sig;
-}
+static int g_semcheck_warning_count = 0;
 
 void semcheck_set_source_path(const char *path)
 {
@@ -364,22 +241,25 @@ static int semcheck_map_builtin_type_name_local(const char *id)
         pascal_identifier_equals(id, "Extended"))
         return REAL_TYPE;
     if (pascal_identifier_equals(id, "Byte") ||
-        pascal_identifier_equals(id, "ShortInt") ||
-        pascal_identifier_equals(id, "SmallInt") ||
-        pascal_identifier_equals(id, "Word") ||
-        pascal_identifier_equals(id, "LongWord") ||
+        pascal_identifier_equals(id, "UInt8"))
+        return BYTE_TYPE;
+    if (pascal_identifier_equals(id, "Word") ||
+        pascal_identifier_equals(id, "UInt16"))
+        return WORD_TYPE;
+    if (pascal_identifier_equals(id, "LongWord") ||
         pascal_identifier_equals(id, "Cardinal") ||
         pascal_identifier_equals(id, "DWord") ||
-        pascal_identifier_equals(id, "Int8") ||
-        pascal_identifier_equals(id, "UInt8") ||
-        pascal_identifier_equals(id, "Int16") ||
-        pascal_identifier_equals(id, "UInt16") ||
-        pascal_identifier_equals(id, "Int32") ||
         pascal_identifier_equals(id, "UInt32"))
-        return INT_TYPE;
+        return LONGWORD_TYPE;
     if (pascal_identifier_equals(id, "QWord") ||
         pascal_identifier_equals(id, "UInt64"))
-        return INT64_TYPE;
+        return QWORD_TYPE;
+    if (pascal_identifier_equals(id, "ShortInt") ||
+        pascal_identifier_equals(id, "SmallInt") ||
+        pascal_identifier_equals(id, "Int8") ||
+        pascal_identifier_equals(id, "Int16") ||
+        pascal_identifier_equals(id, "Int32"))
+        return INT_TYPE;
     if (pascal_identifier_equals(id, "String") ||
         pascal_identifier_equals(id, "AnsiString") ||
         pascal_identifier_equals(id, "RawByteString") ||
@@ -472,13 +352,13 @@ static int semcheck_find_ident_with_qualified_fallback(HashNode_t **out, SymTab_
     if (out == NULL || symtab == NULL || id == NULL)
         return -1;
 
-    int found = FindIdent(out, symtab, (char *)id);
+    int found = FindIdent(out, symtab, id);
     if (found >= 0 && out != NULL && *out != NULL)
         return found;
 
     const char *dot = strrchr(id, '.');
     if (dot != NULL && dot[1] != '\0')
-        return FindIdent(out, symtab, (char *)(dot + 1));
+        return FindIdent(out, symtab, dot + 1);
 
     return found;
 }
@@ -489,12 +369,12 @@ static HashNode_t *semcheck_find_type_excluding_alias(SymTab_t *symtab, const ch
     if (symtab == NULL || type_id == NULL)
         return NULL;
 
-    ListNode_t *matches = FindAllIdents(symtab, (char *)type_id);
+    ListNode_t *matches = FindAllIdents(symtab, type_id);
     if (matches == NULL)
     {
         const char *base = semcheck_base_type_name(type_id);
         if (base != NULL && base != type_id)
-            matches = FindAllIdents(symtab, (char *)base);
+            matches = FindAllIdents(symtab, base);
     }
     ListNode_t *cur = matches;
     while (cur != NULL)
@@ -622,8 +502,8 @@ static ListNode_t *semcheck_create_builtin_param_var(const char *name, int type_
 /* Adds built-in functions */
 void semcheck_add_builtins(SymTab_t *symtab);
 
-/* Helper function to print semantic error with source code context */
-void semantic_error(int line_num, int col_num, const char *format, ...)
+/* Internal helper to print context using either offset or line-based search */
+static void print_error_context(int line_num, int col_num, int source_index)
 {
     const char *file_path = (file_to_parse != NULL && *file_to_parse != '\0')
                                 ? file_to_parse
@@ -634,6 +514,222 @@ void semantic_error(int line_num, int col_num, const char *format, ...)
     size_t context_len = preprocessed_length;
     if (context_len == 0 && preprocessed_source != NULL)
         context_len = strlen(preprocessed_source);
+
+    if (line_num > 0) {
+        const char *context_buf = preprocessed_source;
+        size_t context_buf_len = context_len;
+        if (context_buf == NULL || context_buf_len == 0)
+        {
+            context_buf = g_semcheck_source_buffer;
+            context_buf_len = g_semcheck_source_length;
+        }
+        if (getenv("KGPC_DEBUG_SEM_CONTEXT") != NULL)
+        {
+            fprintf(stderr,
+                "[SemCheck] context file=%s pre_len=%zu buf_len=%zu line=%d col=%d offset=%d\n",
+                file_path != NULL ? file_path : "<null>",
+                context_len,
+                context_buf_len,
+                line_num,
+                col_num,
+                source_index);
+        }
+        /* Use offset-based context if available, otherwise fall back to line-based */
+        int printed = print_source_context_at_offset(context_buf, context_buf_len, source_index, line_num, col_num, 2);
+        if (!printed)
+            printed = semcheck_print_context_from_file(file_path, line_num, col_num, 2);
+        if (!printed && file_path != NULL)
+            print_source_context(file_path, line_num, col_num, 2);
+    }
+
+    fprintf(stderr, "\n");
+}
+
+static int semcheck_parse_line_directive(const char *line, size_t len)
+{
+    if (len < 8)
+        return -1;
+    if (line[0] != '{' || line[1] != '#')
+        return -1;
+    if (len < 7 || strncasecmp(line + 2, "line", 4) != 0)
+        return -1;
+
+    size_t pos = 6;
+    while (pos < len && (line[pos] == ' ' || line[pos] == '\t'))
+        ++pos;
+
+    int line_num = 0;
+    while (pos < len && line[pos] >= '0' && line[pos] <= '9')
+    {
+        line_num = line_num * 10 + (line[pos] - '0');
+        ++pos;
+    }
+
+    return line_num > 0 ? line_num : -1;
+}
+
+static int semcheck_line_from_source_offset(const char *buffer, size_t length, int source_offset)
+{
+    if (buffer == NULL || length == 0 || source_offset < 0 || (size_t)source_offset >= length)
+        return -1;
+
+    int current_line_at_offset = 1;
+    int scan_pos = source_offset;
+    while (scan_pos > 0)
+    {
+        int line_start = scan_pos;
+        while (line_start > 0 && buffer[line_start - 1] != '\n')
+            --line_start;
+
+        size_t line_len = 0;
+        int temp_pos = line_start;
+        while ((size_t)temp_pos < length && buffer[temp_pos] != '\n')
+        {
+            ++temp_pos;
+            ++line_len;
+        }
+
+        int directive_line = semcheck_parse_line_directive(buffer + line_start, line_len);
+        if (directive_line >= 0)
+        {
+            int lines_after_directive = 0;
+            int pos = line_start;
+            while ((size_t)pos < length && buffer[pos] != '\n')
+                ++pos;
+            if ((size_t)pos < length && buffer[pos] == '\n')
+                ++pos;
+            while (pos < source_offset)
+            {
+                if (buffer[pos] == '\n')
+                    ++lines_after_directive;
+                ++pos;
+            }
+            current_line_at_offset = directive_line + lines_after_directive;
+            break;
+        }
+
+        if (line_start > 0)
+            scan_pos = line_start - 1;
+        else
+            break;
+    }
+
+    return current_line_at_offset;
+}
+
+static int g_semcheck_error_line = 0;
+static int g_semcheck_error_col = 0;
+static int g_semcheck_error_source_index = -1;
+
+void semcheck_set_error_context(int line_num, int col_num, int source_index)
+{
+    g_semcheck_error_line = line_num;
+    g_semcheck_error_col = col_num;
+    g_semcheck_error_source_index = source_index;
+}
+
+void semcheck_clear_error_context(void)
+{
+    g_semcheck_error_line = 0;
+    g_semcheck_error_col = 0;
+    g_semcheck_error_source_index = -1;
+}
+
+int semcheck_tag_from_kgpc(const KgpcType *type)
+{
+    if (type == NULL)
+        return UNKNOWN_TYPE;
+    if (type->kind == TYPE_KIND_PRIMITIVE)
+        return type->info.primitive_type_tag;
+    if (kgpc_type_is_array_of_const((KgpcType *)type))
+        return ARRAY_OF_CONST_TYPE;
+    /* Check for ShortString: array[0..255] of Char or explicit is_shortstring flag */
+    if (kgpc_type_is_array((KgpcType *)type)) {
+        /* Check explicit shortstring flag */
+        if (type->type_alias != NULL && type->type_alias->is_shortstring)
+            return SHORTSTRING_TYPE;
+        /* Check for ShortString-like array: bounds [0..255] with char element type */
+        if (type->info.array_info.start_index == 0 &&
+            type->info.array_info.end_index == 255) {
+            KgpcType *elem = type->info.array_info.element_type;
+            if (elem == NULL) {
+                /* array[0..255] with NULL element_type is treated as ShortString */
+                return SHORTSTRING_TYPE;
+            }
+            if (elem->kind == TYPE_KIND_PRIMITIVE &&
+                elem->info.primitive_type_tag == CHAR_TYPE) {
+                return SHORTSTRING_TYPE;
+            }
+        }
+    }
+    if (kgpc_type_is_record((KgpcType *)type))
+    {
+        struct RecordType *rec = kgpc_type_get_record((KgpcType *)type);
+        if (rec != NULL && rec->is_interface)
+            return POINTER_TYPE;
+        return RECORD_TYPE;
+    }
+    if (kgpc_type_is_pointer((KgpcType *)type))
+        return POINTER_TYPE;
+    if (kgpc_type_is_procedure((KgpcType *)type))
+        return PROCEDURE;
+    return UNKNOWN_TYPE;
+}
+
+/* Helper function to print semantic error with source code context */
+void semantic_error(int line_num, int col_num, const char *format, ...)
+{
+    int effective_line = line_num;
+    int effective_col = col_num;
+    int effective_source_index = g_semcheck_error_source_index;
+
+    if (effective_source_index >= 0)
+    {
+        const char *context_buf = preprocessed_source;
+        size_t context_buf_len = preprocessed_length;
+        if (context_buf == NULL || context_buf_len == 0)
+        {
+            context_buf = g_semcheck_source_buffer;
+            context_buf_len = g_semcheck_source_length;
+        }
+        int computed_line = semcheck_line_from_source_offset(context_buf, context_buf_len, effective_source_index);
+        if (computed_line > 0)
+            effective_line = computed_line;
+        if (effective_col <= 0 && g_semcheck_error_col > 0)
+            effective_col = g_semcheck_error_col;
+    }
+
+    fprintf(stderr, "Error on line %d", effective_line);
+    if (effective_col > 0) {
+        fprintf(stderr, ", column %d", effective_col);
+    }
+    fprintf(stderr, ": ");
+
+    va_list args;
+    va_start(args, format);
+    vfprintf(stderr, format, args);
+    va_end(args);
+    fprintf(stderr, "\n");
+
+    print_error_context(effective_line, effective_col, effective_source_index);
+}
+
+/* Helper function to print semantic error with accurate source context using byte offset */
+void semantic_error_at(int line_num, int col_num, int source_index, const char *format, ...)
+{
+    if (source_index >= 0)
+    {
+        const char *context_buf = preprocessed_source;
+        size_t context_buf_len = preprocessed_length;
+        if (context_buf == NULL || context_buf_len == 0)
+        {
+            context_buf = g_semcheck_source_buffer;
+            context_buf_len = g_semcheck_source_length;
+        }
+        int computed_line = semcheck_line_from_source_offset(context_buf, context_buf_len, source_index);
+        if (computed_line > 0)
+            line_num = computed_line;
+    }
 
     fprintf(stderr, "Error on line %d", line_num);
     if (col_num > 0) {
@@ -647,7 +743,62 @@ void semantic_error(int line_num, int col_num, const char *format, ...)
     va_end(args);
     fprintf(stderr, "\n");
 
-    if (line_num > 0) {
+    print_error_context(line_num, col_num, source_index);
+}
+
+void semcheck_error_with_context_at(int line_num, int col_num, int source_index,
+    const char *format, ...)
+{
+    const char *file_path = (file_to_parse != NULL && *file_to_parse != '\0')
+                                ? file_to_parse
+                                : ((preprocessed_path != NULL && *preprocessed_path != '\0') ? preprocessed_path
+                                                                                              : pascal_frontend_current_path());
+    if (file_path == NULL)
+        file_path = g_semcheck_source_path;
+    size_t context_len = preprocessed_length;
+    if (context_len == 0 && preprocessed_source != NULL)
+        context_len = strlen(preprocessed_source);
+
+    int effective_line = line_num;
+    int effective_col = col_num;
+    if (source_index >= 0)
+    {
+        const char *context_buf = preprocessed_source;
+        size_t context_buf_len = context_len;
+        if (context_buf == NULL || context_buf_len == 0)
+        {
+            context_buf = g_semcheck_source_buffer;
+            context_buf_len = g_semcheck_source_length;
+        }
+        int computed_line = semcheck_line_from_source_offset(context_buf, context_buf_len, source_index);
+        if (computed_line > 0)
+            effective_line = computed_line;
+        if (effective_col <= 0 && g_semcheck_error_col > 0)
+            effective_col = g_semcheck_error_col;
+    }
+
+    va_list args;
+    va_start(args, format);
+    if (format != NULL && strncmp(format, "Error on line %d", 16) == 0)
+    {
+        int original_line = va_arg(args, int);
+        (void)original_line;
+        fprintf(stderr, "Error on line %d", effective_line);
+        const char *rest = format + 16;
+        vfprintf(stderr, rest, args);
+    }
+    else
+    {
+        vfprintf(stderr, format, args);
+    }
+    va_end(args);
+
+    size_t len = format ? strlen(format) : 0;
+    if (len == 0 || format[len - 1] != '\n') {
+        fprintf(stderr, "\n");
+    }
+
+    if (effective_line > 0) {
         const char *context_buf = preprocessed_source;
         size_t context_buf_len = context_len;
         if (context_buf == NULL || context_buf_len == 0)
@@ -658,18 +809,20 @@ void semantic_error(int line_num, int col_num, const char *format, ...)
         if (getenv("KGPC_DEBUG_SEM_CONTEXT") != NULL)
         {
             fprintf(stderr,
-                "[SemCheck] context file=%s pre_len=%zu buf_len=%zu line=%d col=%d\n",
+                "[SemCheck] context file=%s pre_len=%zu buf_len=%zu line=%d col=%d offset=%d\n",
                 file_path != NULL ? file_path : "<null>",
                 context_len,
                 context_buf_len,
-                line_num,
-                col_num);
+                effective_line,
+                effective_col,
+                source_index);
         }
-        int printed = print_source_context_from_buffer(context_buf, context_buf_len, line_num, col_num, 2);
+        int printed = print_source_context_at_offset(context_buf, context_buf_len,
+            source_index, effective_line, effective_col, 2);
         if (!printed)
-            printed = semcheck_print_context_from_file(file_path, line_num, col_num, 2);
+            printed = semcheck_print_context_from_file(file_path, effective_line, effective_col, 2);
         if (!printed && file_path != NULL)
-            print_source_context(file_path, line_num, col_num, 2);
+            print_source_context(file_path, effective_line, effective_col, 2);
     }
 
     fprintf(stderr, "\n");
@@ -688,6 +841,9 @@ void semcheck_error_with_context(const char *format, ...)
     if (context_len == 0 && preprocessed_source != NULL)
         context_len = strlen(preprocessed_source);
     int line_num = 0;
+    int effective_line = 0;
+    int effective_col = 0;
+    int effective_source_index = g_semcheck_error_source_index;
 
     va_list args;
     va_start(args, format);
@@ -697,7 +853,37 @@ void semcheck_error_with_context(const char *format, ...)
     line_num = va_arg(args_copy, int);
     va_end(args_copy);
 
-    vfprintf(stderr, format, args);
+    if (effective_source_index >= 0)
+    {
+        const char *context_buf = preprocessed_source;
+        size_t context_buf_len = preprocessed_length;
+        if (context_buf == NULL || context_buf_len == 0)
+        {
+            context_buf = g_semcheck_source_buffer;
+            context_buf_len = g_semcheck_source_length;
+        }
+        int computed_line = semcheck_line_from_source_offset(context_buf, context_buf_len, effective_source_index);
+        if (computed_line > 0)
+            effective_line = computed_line;
+        if (g_semcheck_error_col > 0)
+            effective_col = g_semcheck_error_col;
+    }
+    if (effective_line <= 0)
+        effective_line = line_num;
+
+    /* If the format starts with "Error on line %d", rewrite that part to use the effective line. */
+    if (format != NULL && strncmp(format, "Error on line %d", 16) == 0)
+    {
+        int original_line = va_arg(args, int);
+        (void)original_line;
+        fprintf(stderr, "Error on line %d", effective_line);
+        const char *rest = format + 16;
+        vfprintf(stderr, rest, args);
+    }
+    else
+    {
+        vfprintf(stderr, format, args);
+    }
     va_end(args);
 
     size_t len = format ? strlen(format) : 0;
@@ -705,7 +891,7 @@ void semcheck_error_with_context(const char *format, ...)
         fprintf(stderr, "\n");
     }
 
-    if (line_num > 0) {
+    if (effective_line > 0) {
         const char *context_buf = preprocessed_source;
         size_t context_buf_len = context_len;
         if (context_buf == NULL || context_buf_len == 0)
@@ -720,14 +906,15 @@ void semcheck_error_with_context(const char *format, ...)
                 file_path != NULL ? file_path : "<null>",
                 context_len,
                 context_buf_len,
-                line_num,
-                0);
+                effective_line,
+                effective_col);
         }
-        int printed = print_source_context_from_buffer(context_buf, context_buf_len, line_num, 0, 2);
+        int printed = print_source_context_at_offset(context_buf, context_buf_len,
+            effective_source_index, effective_line, effective_col, 2);
         if (!printed)
-            printed = semcheck_print_context_from_file(file_path, line_num, 0, 2);
+            printed = semcheck_print_context_from_file(file_path, effective_line, effective_col, 2);
         if (!printed && file_path != NULL)
-            print_source_context(file_path, line_num, 0, 2);
+            print_source_context(file_path, effective_line, effective_col, 2);
     }
 
     fprintf(stderr, "\n");
@@ -750,7 +937,7 @@ static void semcheck_update_symbol_alias(SymTab_t *symtab, const char *id, const
         return;
 
     HashNode_t *node = NULL;
-    if (FindIdent(&node, symtab, (char *)id) != -1 && node != NULL)
+    if (FindIdent(&node, symtab, id) != -1 && node != NULL)
     {
         if (node->mangled_id != NULL)
             free(node->mangled_id);
@@ -775,7 +962,7 @@ static void apply_builtin_integer_alias_metadata(struct TypeAlias *alias, const 
 
     if (pascal_identifier_equals(type_name, "Byte"))
     {
-        alias->base_type = INT_TYPE;
+        alias->base_type = BYTE_TYPE;
         alias->is_range = 1;
         alias->range_known = 1;
         alias->range_start = 0;
@@ -793,7 +980,7 @@ static void apply_builtin_integer_alias_metadata(struct TypeAlias *alias, const 
     }
     else if (pascal_identifier_equals(type_name, "Word"))
     {
-        alias->base_type = INT_TYPE;
+        alias->base_type = WORD_TYPE;
         alias->is_range = 1;
         alias->range_known = 1;
         alias->range_start = 0;
@@ -813,12 +1000,22 @@ static void apply_builtin_integer_alias_metadata(struct TypeAlias *alias, const 
              pascal_identifier_equals(type_name, "LongWord") ||
              pascal_identifier_equals(type_name, "DWord"))
     {
-        alias->base_type = LONGINT_TYPE;
+        alias->base_type = LONGWORD_TYPE;
         alias->is_range = 1;
         alias->range_known = 1;
         alias->range_start = 0;
         alias->range_end = 4294967295LL;
         alias->storage_size = 4;
+    }
+    else if (pascal_identifier_equals(type_name, "QWord") ||
+             pascal_identifier_equals(type_name, "UInt64"))
+    {
+        alias->base_type = QWORD_TYPE;
+        alias->is_range = 1;
+        alias->range_known = 1;
+        alias->range_start = 0;
+        alias->range_end = LLONG_MAX;
+        alias->storage_size = 8;
     }
 }
 
@@ -951,6 +1148,9 @@ static void add_class_vars_to_method_scope(SymTab_t *symtab, const char *method_
     if (symtab == NULL || method_id == NULL)
         return;
 
+    if (getenv("KGPC_DEBUG_CLASS_VAR") != NULL)
+        fprintf(stderr, "[KGPC_DEBUG_CLASS_VAR] method_id=%s\n", method_id ? method_id : "<null>");
+
     /* Check if this is a method (contains "__") */
     const char *sep = strstr(method_id, "__");
     if (sep == NULL || sep == method_id)
@@ -967,6 +1167,12 @@ static void add_class_vars_to_method_scope(SymTab_t *symtab, const char *method_
     /* For generic types (containing < or >), skip this lookup as
      * the type resolution is handled differently for generics. */
     if (strchr(class_name, '<') != NULL || strchr(class_name, '>') != NULL)
+    {
+        free(class_name);
+        return;
+    }
+
+    if (from_cparser_is_type_helper(class_name))
     {
         free(class_name);
         return;
@@ -1004,8 +1210,15 @@ static void add_class_vars_to_method_scope(SymTab_t *symtab, const char *method_
         return;
     }
 
-    /* Only process class types, not regular records */
-    if (!record_type_is_class(record_info))
+    /* Skip type helpers entirely; they do not expose class vars like real classes. */
+    if (record_info->is_type_helper)
+    {
+        free(class_name);
+        return;
+    }
+
+    /* Only process real class types, not regular records */
+    if (!record_info->is_class)
     {
         free(class_name);
         return;
@@ -1017,9 +1230,25 @@ static void add_class_vars_to_method_scope(SymTab_t *symtab, const char *method_
     ListNode_t *field_node = record_info->fields;
     while (field_node != NULL)
     {
+        if (field_node->type != LIST_RECORD_FIELD)
+        {
+            field_node = field_node->next;
+            continue;
+        }
         struct RecordField *field = (struct RecordField *)field_node->cur;
         if (field != NULL && field->name != NULL && field->name[0] != '\0')
         {
+            if (getenv("KGPC_DEBUG_CLASS_VAR") != NULL &&
+                pascal_identifier_equals(field->name, "FStandardEncodings"))
+            {
+                fprintf(stderr,
+                    "[KGPC_DEBUG_CLASS_VAR] class=%s field=%s is_array=%d elem_type=%d elem_type_id=%s\n",
+                    class_name ? class_name : "<null>",
+                    field->name,
+                    field->is_array,
+                    field->array_element_type,
+                    field->array_element_type_id ? field->array_element_type_id : "<null>");
+            }
             /* Check if already defined in scope */
             HashNode_t *existing = NULL;
             if (FindIdent(&existing, symtab, field->name) == -1)
@@ -1036,8 +1265,60 @@ static void add_class_vars_to_method_scope(SymTab_t *symtab, const char *method_
                         kgpc_type_retain(field_type);
                     }
                 }
+                else if (field->is_array)
+                {
+                    KgpcType *elem_type = NULL;
+                    if (field->array_element_type_id != NULL)
+                    {
+                        HashNode_t *elem_node = NULL;
+                        if (FindIdent(&elem_node, symtab, field->array_element_type_id) != -1 &&
+                            elem_node != NULL && elem_node->type != NULL)
+                        {
+                            elem_type = elem_node->type;
+                            kgpc_type_retain(elem_type);
+                        }
+                        else if (getenv("KGPC_DEBUG_CLASS_VAR") != NULL &&
+                            pascal_identifier_equals(field->name, "FStandardEncodings"))
+                        {
+                            fprintf(stderr,
+                                "[KGPC_DEBUG_CLASS_VAR] element type lookup failed for %s (node=%p type=%p)\n",
+                                field->array_element_type_id ? field->array_element_type_id : "<null>",
+                                (void *)elem_node,
+                                elem_node ? (void *)elem_node->type : NULL);
+                        }
+                        else if (elem_node != NULL)
+                        {
+                            struct RecordType *elem_record = get_record_type_from_node(elem_node);
+                            if (elem_record != NULL)
+                                elem_type = create_record_type(elem_record);
+                        }
+                    }
+                    else if (field->array_element_type != UNKNOWN_TYPE)
+                    {
+                        elem_type = create_primitive_type(field->array_element_type);
+                    }
+                    if (elem_type != NULL)
+                    {
+                        if (getenv("KGPC_DEBUG_CLASS_VAR") != NULL &&
+                            pascal_identifier_equals(field->name, "FStandardEncodings"))
+                        {
+                            fprintf(stderr,
+                                "[KGPC_DEBUG_CLASS_VAR] resolved elem kgpc=%s kind=%d\n",
+                                kgpc_type_to_string(elem_type),
+                                elem_type ? elem_type->kind : -1);
+                        }
+                        field_type = create_array_type(elem_type, field->array_start, field->array_end);
+                    }
+                }
                 
                 /* Push onto scope - using typed variant */
+                if (getenv("KGPC_DEBUG_CLASS_VAR") != NULL &&
+                    pascal_identifier_equals(field->name, "FStandardEncodings"))
+                {
+                    fprintf(stderr,
+                        "[KGPC_DEBUG_CLASS_VAR] field_type=%s\n",
+                        field_type ? kgpc_type_to_string(field_type) : "<null>");
+                }
                 PushVarOntoScope_Typed(symtab, field->name, field_type);
                 
                 /* Release our ref if we retained it */
@@ -1283,12 +1564,169 @@ static HashNode_t *semcheck_find_preferred_type_node(SymTab_t *symtab, const cha
     if (symtab == NULL || type_id == NULL)
         return NULL;
 
-    ListNode_t *matches = FindAllIdents(symtab, (char *)type_id);
+    ListNode_t *matches = FindAllIdents(symtab, type_id);
+    if (matches == NULL && strchr(type_id, '$') != NULL)
+    {
+        /* On-demand generic specialization (e.g., TFPGListEnumerator$TMyRecord). */
+        char *base_name = NULL;
+        char **arg_types = NULL;
+        int arg_count = 0;
+        const char *cursor = type_id;
+        const char *dollar = strchr(cursor, '$');
+        if (dollar != NULL && dollar != cursor)
+        {
+            base_name = (char *)malloc((size_t)(dollar - cursor + 1));
+            if (base_name != NULL)
+            {
+                memcpy(base_name, cursor, (size_t)(dollar - cursor));
+                base_name[dollar - cursor] = '\0';
+            }
+        }
+
+        if (base_name != NULL)
+        {
+            const char *tmp = dollar;
+            while (tmp != NULL)
+            {
+                arg_count++;
+                tmp = strchr(tmp + 1, '$');
+            }
+            if (arg_count > 0)
+            {
+                arg_types = (char **)calloc((size_t)arg_count, sizeof(char *));
+                if (arg_types != NULL)
+                {
+                    int idx = 0;
+                    const char *seg = dollar + 1;
+                    while (seg != NULL && idx < arg_count)
+                    {
+                        const char *next = strchr(seg, '$');
+                        size_t seg_len = next ? (size_t)(next - seg) : strlen(seg);
+                        arg_types[idx] = (char *)malloc(seg_len + 1);
+                        if (arg_types[idx] == NULL)
+                            break;
+                        memcpy(arg_types[idx], seg, seg_len);
+                        arg_types[idx][seg_len] = '\0';
+                        idx++;
+                        if (next == NULL)
+                            break;
+                        seg = next + 1;
+                    }
+                    if (idx != arg_count)
+                    {
+                        for (int i = 0; i < arg_count; ++i)
+                            free(arg_types[i]);
+                        free(arg_types);
+                        arg_types = NULL;
+                        arg_count = 0;
+                    }
+                }
+            }
+        }
+
+        if (base_name != NULL && arg_types != NULL && arg_count > 0)
+        {
+            GenericTypeDecl *generic = generic_registry_find_decl(base_name);
+            if (generic != NULL && generic->record_template != NULL &&
+                generic->num_type_params == arg_count)
+            {
+                struct RecordType *record = clone_record_type(generic->record_template);
+                if (record != NULL)
+                {
+                    if (record->type_id != NULL)
+                        free(record->type_id);
+                    record->type_id = strdup(type_id);
+                    record->generic_decl = generic;
+                    record->num_generic_args = arg_count;
+                    record->generic_args = arg_types;
+                    arg_types = NULL;
+
+                    /* Substitute generic parameters in record fields/properties. */
+                    ListNode_t *field_node = record->fields;
+                    while (field_node != NULL)
+                    {
+                        if (field_node->type == LIST_RECORD_FIELD)
+                        {
+                            struct RecordField *field = (struct RecordField *)field_node->cur;
+                            if (field != NULL)
+                            {
+                                for (int i = 0; i < generic->num_type_params; ++i)
+                                {
+                                    const char *param = generic->type_parameters[i];
+                                    const char *arg = record->generic_args[i];
+                                    if (param != NULL && arg != NULL)
+                                    {
+                                        if (field->type_id != NULL &&
+                                            strcasecmp(field->type_id, param) == 0)
+                                        {
+                                            free(field->type_id);
+                                            field->type_id = strdup(arg);
+                                        }
+                                        if (field->array_element_type_id != NULL &&
+                                            strcasecmp(field->array_element_type_id, param) == 0)
+                                        {
+                                            free(field->array_element_type_id);
+                                            field->array_element_type_id = strdup(arg);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        field_node = field_node->next;
+                    }
+                    ListNode_t *prop_node = record->properties;
+                    while (prop_node != NULL)
+                    {
+                        if (prop_node->type == LIST_CLASS_PROPERTY)
+                        {
+                            struct ClassProperty *property = (struct ClassProperty *)prop_node->cur;
+                            if (property != NULL && property->type_id != NULL)
+                            {
+                                for (int i = 0; i < generic->num_type_params; ++i)
+                                {
+                                    const char *param = generic->type_parameters[i];
+                                    const char *arg = record->generic_args[i];
+                                    if (param != NULL && arg != NULL &&
+                                        strcasecmp(property->type_id, param) == 0)
+                                    {
+                                        free(property->type_id);
+                                        property->type_id = strdup(arg);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        prop_node = prop_node->next;
+                    }
+
+                    generic_registry_add_specialization(base_name, record->generic_args, arg_count);
+
+                    KgpcType *kgpc_type = create_record_type(record);
+                    if (record_type_is_class(record))
+                        kgpc_type = create_pointer_type(kgpc_type);
+                    if (kgpc_type != NULL)
+                    {
+                        PushTypeOntoScope_Typed(symtab, (char *)type_id, kgpc_type);
+                    }
+                }
+            }
+        }
+
+        if (arg_types != NULL)
+        {
+            for (int i = 0; i < arg_count; ++i)
+                free(arg_types[i]);
+            free(arg_types);
+        }
+        free(base_name);
+
+        matches = FindAllIdents(symtab, type_id);
+    }
     if (matches == NULL)
     {
         const char *base = semcheck_base_type_name(type_id);
         if (base != NULL && base != type_id)
-            matches = FindAllIdents(symtab, (char *)base);
+            matches = FindAllIdents(symtab, base);
     }
     HashNode_t *best = NULL;
     ListNode_t *cur = matches;
@@ -1315,7 +1753,7 @@ static HashNode_t *semcheck_find_type_node_with_unit_flag(SymTab_t *symtab,
     if (symtab == NULL || type_id == NULL)
         return NULL;
 
-    ListNode_t *matches = FindAllIdents(symtab, (char *)type_id);
+    ListNode_t *matches = FindAllIdents(symtab, type_id);
     HashNode_t *best = NULL;
     ListNode_t *cur = matches;
     while (cur != NULL)
@@ -1354,6 +1792,10 @@ static inline enum VarType get_var_type_from_node(HashNode_t *node)
                 case INT_TYPE: return HASHVAR_INTEGER;
                 case LONGINT_TYPE: return HASHVAR_LONGINT;
                 case INT64_TYPE: return HASHVAR_INT64;
+                case BYTE_TYPE: return HASHVAR_INTEGER;
+                case WORD_TYPE: return HASHVAR_INTEGER;
+                case LONGWORD_TYPE: return HASHVAR_LONGINT;
+                case QWORD_TYPE: return HASHVAR_INT64;
                 case REAL_TYPE: return HASHVAR_REAL;
                 case BOOL: return HASHVAR_BOOLEAN;
                 case CHAR_TYPE: return HASHVAR_CHAR;
@@ -1386,6 +1828,51 @@ static inline void mark_hashnode_unit_info(HashNode_t *node, int defined_in_unit
 }
 
 static Tree_t *g_semcheck_current_subprogram = NULL;
+
+const char *semcheck_get_current_subprogram_id(void)
+{
+    if (g_semcheck_current_subprogram == NULL)
+        return NULL;
+    return g_semcheck_current_subprogram->tree_data.subprogram_data.id;
+}
+
+KgpcType *semcheck_get_current_subprogram_return_kgpc_type(SymTab_t *symtab, int *owns_type)
+{
+    if (owns_type != NULL)
+        *owns_type = 0;
+    if (g_semcheck_current_subprogram == NULL || symtab == NULL)
+        return NULL;
+
+    const char *rt_id = g_semcheck_current_subprogram->tree_data.subprogram_data.return_type_id;
+    if (rt_id != NULL)
+    {
+        HashNode_t *type_node = semcheck_find_type_node_with_kgpc_type(symtab, rt_id);
+        if (type_node != NULL && type_node->type != NULL)
+        {
+            if (owns_type != NULL)
+                *owns_type = 0;
+            return type_node->type;
+        }
+
+        int builtin_tag = semcheck_map_builtin_type_name_local(rt_id);
+        if (builtin_tag != UNKNOWN_TYPE)
+        {
+            if (owns_type != NULL)
+                *owns_type = 1;
+            return create_primitive_type(builtin_tag);
+        }
+    }
+
+    int rt_tag = g_semcheck_current_subprogram->tree_data.subprogram_data.return_type;
+    if (rt_tag != UNKNOWN_TYPE)
+    {
+        if (owns_type != NULL)
+            *owns_type = 1;
+        return create_primitive_type(rt_tag);
+    }
+
+    return NULL;
+}
 
 void semcheck_mark_static_link_needed(int scope_level, HashNode_t *node)
 {
@@ -1454,11 +1941,15 @@ static ListNode_t *collect_typed_const_decls_filtered(SymTab_t *symtab, ListNode
         if (cur->type == LIST_TREE && cur->cur != NULL)
         {
             Tree_t *tree = (Tree_t *)cur->cur;
-            if (tree->type == TREE_VAR_DECL &&
-                tree->tree_data.var_decl_data.is_typed_const)
+            if ((tree->type == TREE_VAR_DECL &&
+                tree->tree_data.var_decl_data.is_typed_const) ||
+                (tree->type == TREE_ARR_DECL &&
+                tree->tree_data.arr_decl_data.is_typed_const))
             {
                 /* Filter by origin */
-                int is_from_unit = tree->tree_data.var_decl_data.defined_in_unit;
+                int is_from_unit = (tree->type == TREE_VAR_DECL) ?
+                    tree->tree_data.var_decl_data.defined_in_unit :
+                    tree->tree_data.arr_decl_data.defined_in_unit;
                 if ((from_unit_only && !is_from_unit) || (!from_unit_only && is_from_unit))
                 {
                     cur = cur->next;
@@ -1466,7 +1957,19 @@ static ListNode_t *collect_typed_const_decls_filtered(SymTab_t *symtab, ListNode
                 }
                 
                 int allow = 1;
-                const char *type_id = tree->tree_data.var_decl_data.type_id;
+                const char *type_id = NULL;
+                int type_tag = UNKNOWN_TYPE;
+                if (tree->type == TREE_VAR_DECL)
+                {
+                    type_id = tree->tree_data.var_decl_data.type_id;
+                    type_tag = tree->tree_data.var_decl_data.type;
+                }
+                else
+                {
+                    type_id = tree->tree_data.arr_decl_data.type_id;
+                    type_tag = tree->tree_data.arr_decl_data.type;
+                }
+
                 if (type_id != NULL)
                 {
                     HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, type_id);
@@ -1476,19 +1979,25 @@ static ListNode_t *collect_typed_const_decls_filtered(SymTab_t *symtab, ListNode
                         allow = 0;
                     }
                 }
-                else if (tree->tree_data.var_decl_data.type == UNKNOWN_TYPE)
+                else if (type_tag == UNKNOWN_TYPE)
                 {
                     allow = 0;
                 }
 
                 if (getenv("KGPC_DEBUG_SEMCHECK") != NULL && tree->tree_data.var_decl_data.ids != NULL)
                 {
-                    const char *first_id = tree->tree_data.var_decl_data.ids->cur ?
-                        (const char *)tree->tree_data.var_decl_data.ids->cur : "<null>";
+                    const char *first_id = NULL;
+                    if (tree->type == TREE_VAR_DECL)
+                        first_id = tree->tree_data.var_decl_data.ids->cur ?
+                            (const char *)tree->tree_data.var_decl_data.ids->cur : "<null>";
+                    else
+                        first_id = tree->tree_data.arr_decl_data.ids->cur ?
+                            (const char *)tree->tree_data.arr_decl_data.ids->cur : "<null>";
                     fprintf(stderr, "[SemCheck] collect_typed_const: id=%s type_id=%s type=%d allow=%d inline_alias=%p\n",
                         first_id, type_id ? type_id : "<null>",
-                        tree->tree_data.var_decl_data.type, allow,
-                        (void*)tree->tree_data.var_decl_data.inline_type_alias);
+                        type_tag, allow,
+                        (tree->type == TREE_VAR_DECL) ?
+                            (void*)tree->tree_data.var_decl_data.inline_type_alias : NULL);
                 }
 
                 if (allow)
@@ -1512,6 +2021,42 @@ static ListNode_t *collect_typed_const_decls_filtered(SymTab_t *symtab, ListNode
     return head;
 }
 
+/* Collect non-typed var/array declarations (skip typed consts). */
+static ListNode_t *collect_non_typed_var_decls(ListNode_t *decls)
+{
+    ListNode_t *head = NULL;
+    ListNode_t *tail = NULL;
+    ListNode_t *cur = decls;
+
+    while (cur != NULL)
+    {
+        if (cur->type == LIST_TREE && cur->cur != NULL)
+        {
+            Tree_t *tree = (Tree_t *)cur->cur;
+            int skip = 0;
+            if (tree->type == TREE_VAR_DECL)
+                skip = tree->tree_data.var_decl_data.is_typed_const;
+            else if (tree->type == TREE_ARR_DECL)
+                skip = tree->tree_data.arr_decl_data.is_typed_const;
+            else
+                skip = 1;
+
+            if (!skip)
+            {
+                ListNode_t *node = CreateListNode(tree, LIST_TREE);
+                if (head == NULL)
+                    head = node;
+                else
+                    tail->next = node;
+                tail = node;
+            }
+        }
+        cur = cur->next;
+    }
+
+    return head;
+}
+
 static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls);
 static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls);
 static int predeclare_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scope_lev, Tree_t *parent_subprogram);
@@ -1526,8 +2071,14 @@ HashNode_t *semcheck_find_type_node_with_kgpc_type(SymTab_t *symtab, const char 
     if (symtab == NULL || type_id == NULL)
         return NULL;
 
+    /* Prefer the generic-aware lookup so we can instantiate types like
+     * TFPGListEnumerator$TMyRecord on demand for function return types. */
+    HashNode_t *preferred = semcheck_find_preferred_type_node(symtab, type_id);
+    if (preferred != NULL && preferred->type != NULL)
+        return preferred;
+
     HashNode_t *result = NULL;
-    ListNode_t *all_nodes = FindAllIdents(symtab, (char *)type_id);
+    ListNode_t *all_nodes = FindAllIdents(symtab, type_id);
     ListNode_t *cur = all_nodes;
     while (cur != NULL)
     {
@@ -1583,21 +2134,7 @@ static KgpcType *build_function_return_type(Tree_t *subprogram, SymTab_t *symtab
             else
             {
                 subprogram->tree_data.subprogram_data.return_type = builtin_type;
-                if (builtin_type == REAL_TYPE && type_id != NULL)
-                {
-                    if (pascal_identifier_equals(type_id, "Single"))
-                        builtin_return = create_primitive_type_with_size(REAL_TYPE, 4);
-                    else if (pascal_identifier_equals(type_id, "Double") ||
-                             pascal_identifier_equals(type_id, "Extended") ||
-                             pascal_identifier_equals(type_id, "Real"))
-                        builtin_return = create_primitive_type_with_size(REAL_TYPE, 8);
-                    else
-                        builtin_return = create_primitive_type(builtin_type);
-                }
-                else
-                {
-                    builtin_return = create_primitive_type(builtin_type);
-                }
+                builtin_return = create_primitive_type(builtin_type);
             }
         }
     }
@@ -1606,13 +2143,17 @@ static KgpcType *build_function_return_type(Tree_t *subprogram, SymTab_t *symtab
     {
         const char *rt_id = subprogram->tree_data.subprogram_data.return_type_id;
         int primitive_tag = subprogram->tree_data.subprogram_data.return_type;
+        const char *resolved_type = (type_node != NULL && type_node->type != NULL)
+            ? kgpc_type_to_string(type_node->type)
+            : "<null>";
         fprintf(stderr,
-            "[KGPC] build_function_return_type: subprogram=%s return_type_id=%s primitive=%d type_node=%p kind=%d\n",
+            "[KGPC] build_function_return_type: subprogram=%s return_type_id=%s primitive=%d type_node=%p kind=%d resolved=%s\n",
             subprogram->tree_data.subprogram_data.id ? subprogram->tree_data.subprogram_data.id : "<anon>",
             rt_id ? rt_id : "<null>",
             primitive_tag,
             (void *)type_node,
-            (type_node != NULL && type_node->type != NULL) ? type_node->type->kind : -1);
+            (type_node != NULL && type_node->type != NULL) ? type_node->type->kind : -1,
+            resolved_type);
     }
 
     if (builtin_return != NULL)
@@ -1746,6 +2287,52 @@ static int resolve_scoped_enum_literal(SymTab_t *symtab, const char *type_name,
     const char *literal_name, long long *out_value);
 static char *build_qualified_identifier_from_expr(struct Expression *expr);
 
+static int expression_is_set_const_expr(SymTab_t *symtab, struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+
+    if (expr->type == EXPR_SET)
+        return 1;
+
+    if (expr->type == EXPR_VAR_ID && expr->expr_data.id != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindIdent(&node, symtab, expr->expr_data.id) != -1 &&
+            node != NULL && node->const_set_value != NULL)
+            return 1;
+    }
+
+    if (expr->type == EXPR_RECORD_ACCESS &&
+        expr->expr_data.record_access_data.field_id != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindIdent(&node, symtab, expr->expr_data.record_access_data.field_id) != -1 &&
+            node != NULL && node->const_set_value != NULL)
+            return 1;
+    }
+
+    if (expr->type == EXPR_ADDOP)
+    {
+        int op = expr->expr_data.addop_data.addop_type;
+        if ((op == PLUS || op == MINUS) &&
+            expression_is_set_const_expr(symtab, expr->expr_data.addop_data.left_expr) &&
+            expression_is_set_const_expr(symtab, expr->expr_data.addop_data.right_term))
+            return 1;
+    }
+
+    if (expr->type == EXPR_MULOP)
+    {
+        int op = expr->expr_data.mulop_data.mulop_type;
+        if ((op == STAR || op == AND) &&
+            expression_is_set_const_expr(symtab, expr->expr_data.mulop_data.left_term) &&
+            expression_is_set_const_expr(symtab, expr->expr_data.mulop_data.right_factor))
+            return 1;
+    }
+
+    return 0;
+}
+
 /* Evaluate a set literal into a byte array (supports up to 0..255) */
 static int evaluate_set_const_bytes(SymTab_t *symtab, struct Expression *expr,
     unsigned char *out_bytes, size_t out_bytes_size, size_t *out_size,
@@ -1755,6 +2342,120 @@ static int evaluate_set_const_bytes(SymTab_t *symtab, struct Expression *expr,
         return 1;
 
     memset(out_bytes, 0, out_bytes_size);
+
+    if (expr->type == EXPR_VAR_ID && expr->expr_data.id != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindIdent(&node, symtab, expr->expr_data.id) != -1 &&
+            node != NULL && node->const_set_value != NULL)
+        {
+            size_t size = (size_t)node->const_set_size;
+            if (size > out_bytes_size)
+                return 1;
+            memcpy(out_bytes, node->const_set_value, size);
+            if (out_size != NULL)
+                *out_size = size;
+            if (out_mask != NULL && size <= sizeof(long long))
+            {
+                long long mask = 0;
+                for (size_t i = 0; i < size; ++i)
+                    mask |= ((long long)out_bytes[i]) << (i * 8);
+                *out_mask = mask;
+            }
+            if (is_char_set != NULL)
+                *is_char_set = (size > 4);
+            return 0;
+        }
+        return 1;
+    }
+
+    if (expr->type == EXPR_RECORD_ACCESS &&
+        expr->expr_data.record_access_data.field_id != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindIdent(&node, symtab, expr->expr_data.record_access_data.field_id) != -1 &&
+            node != NULL && node->const_set_value != NULL)
+        {
+            size_t size = (size_t)node->const_set_size;
+            if (size > out_bytes_size)
+                return 1;
+            memcpy(out_bytes, node->const_set_value, size);
+            if (out_size != NULL)
+                *out_size = size;
+            if (out_mask != NULL && size <= sizeof(long long))
+            {
+                long long mask = 0;
+                for (size_t i = 0; i < size; ++i)
+                    mask |= ((long long)out_bytes[i]) << (i * 8);
+                *out_mask = mask;
+            }
+            if (is_char_set != NULL)
+                *is_char_set = (size > 4);
+            return 0;
+        }
+        return 1;
+    }
+
+    if (expr->type == EXPR_ADDOP || expr->type == EXPR_MULOP)
+    {
+        unsigned char left_bytes[32];
+        unsigned char right_bytes[32];
+        size_t left_size = 0;
+        size_t right_size = 0;
+        int left_char = 0;
+        int right_char = 0;
+        int op = (expr->type == EXPR_ADDOP) ?
+            expr->expr_data.addop_data.addop_type :
+            expr->expr_data.mulop_data.mulop_type;
+        struct Expression *left_expr = (expr->type == EXPR_ADDOP) ?
+            expr->expr_data.addop_data.left_expr :
+            expr->expr_data.mulop_data.left_term;
+        struct Expression *right_expr = (expr->type == EXPR_ADDOP) ?
+            expr->expr_data.addop_data.right_term :
+            expr->expr_data.mulop_data.right_factor;
+
+        if (evaluate_set_const_bytes(symtab, left_expr, left_bytes, sizeof(left_bytes),
+                &left_size, NULL, &left_char) != 0)
+            return 1;
+        if (evaluate_set_const_bytes(symtab, right_expr, right_bytes, sizeof(right_bytes),
+                &right_size, NULL, &right_char) != 0)
+            return 1;
+
+        size_t used = (left_size > right_size) ? left_size : right_size;
+        if (used == 0)
+            used = 4;
+
+        for (size_t i = 0; i < used; ++i)
+        {
+            unsigned char l = (i < left_size) ? left_bytes[i] : 0;
+            unsigned char r = (i < right_size) ? right_bytes[i] : 0;
+            if (expr->type == EXPR_ADDOP && op == PLUS)
+                out_bytes[i] = (unsigned char)(l | r);
+            else if (expr->type == EXPR_ADDOP && op == MINUS)
+                out_bytes[i] = (unsigned char)(l & (unsigned char)(~r));
+            else if (expr->type == EXPR_MULOP && (op == STAR || op == AND))
+                out_bytes[i] = (unsigned char)(l & r);
+            else
+                return 1;
+        }
+
+        if (out_size != NULL)
+            *out_size = used;
+        if (out_mask != NULL && used <= sizeof(long long))
+        {
+            long long mask = 0;
+            for (size_t i = 0; i < used; ++i)
+                mask |= ((long long)out_bytes[i]) << (i * 8);
+            *out_mask = mask;
+        }
+        if (is_char_set != NULL)
+            *is_char_set = (left_char || right_char || used > 4);
+        return 0;
+    }
+
+    if (expr->type != EXPR_SET)
+        return 1;
+
     size_t used = 0;
     long long mask = 0;
     long long max_value = 0;
@@ -2099,7 +2800,7 @@ static const char *resolve_type_to_base_name(SymTab_t *symtab, const char *type_
         const char *lookup_name = type_name;
         
         /* Handle qualified type names like "UnixType.culong" - try full name first */
-        int found = FindIdent(&type_node, symtab, (char *)lookup_name);
+        int found = FindIdent(&type_node, symtab, lookup_name);
         
         if (getenv("KGPC_DEBUG_RESOLVE_TYPE") != NULL)
         {
@@ -2114,7 +2815,7 @@ static const char *resolve_type_to_base_name(SymTab_t *symtab, const char *type_
             if (dot != NULL && dot[1] != '\0')
             {
                 lookup_name = dot + 1;  /* Skip past the dot to get unqualified name */
-                found = FindIdent(&type_node, symtab, (char *)lookup_name);
+                found = FindIdent(&type_node, symtab, lookup_name);
                 if (getenv("KGPC_DEBUG_RESOLVE_TYPE") != NULL)
                 {
                     fprintf(stderr, "[resolve_type] '%s' unqualified '%s' found=%d node=%p\n",
@@ -2324,17 +3025,29 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                 if (strcasecmp(id, "Byte") == 0 || strcasecmp(id, "Word") == 0 ||
                     strcasecmp(id, "Integer") == 0 || strcasecmp(id, "ShortInt") == 0 ||
                     strcasecmp(id, "SmallInt") == 0)
-                    target_type = INT_TYPE;
+                {
+                    if (strcasecmp(id, "Byte") == 0)
+                        target_type = BYTE_TYPE;
+                    else if (strcasecmp(id, "Word") == 0)
+                        target_type = WORD_TYPE;
+                    else
+                        target_type = INT_TYPE;
+                }
                 else if (strcasecmp(id, "LongInt") == 0)
                     target_type = LONGINT_TYPE;
                 else if (strcasecmp(id, "Cardinal") == 0 || strcasecmp(id, "LongWord") == 0 ||
                          strcasecmp(id, "DWord") == 0)
-                    target_type = INT_TYPE;
+                    target_type = LONGWORD_TYPE;
                 else if (strcasecmp(id, "Int64") == 0 || strcasecmp(id, "UInt64") == 0 ||
                          strcasecmp(id, "QWord") == 0 ||
                          strcasecmp(id, "SizeInt") == 0 || strcasecmp(id, "SizeUInt") == 0 ||
                          strcasecmp(id, "NativeInt") == 0 || strcasecmp(id, "NativeUInt") == 0)
-                    target_type = INT64_TYPE;
+                {
+                    if (strcasecmp(id, "QWord") == 0 || strcasecmp(id, "UInt64") == 0)
+                        target_type = QWORD_TYPE;
+                    else
+                        target_type = INT64_TYPE;
+                }
                 else if (strcasecmp(id, "Pointer") == 0)
                     target_type = POINTER_TYPE;
                 else if (strcasecmp(id, "Char") == 0)
@@ -2361,16 +3074,6 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                 case LONGINT_TYPE:
                     if (id != NULL)
                     {
-                        if (strcasecmp(id, "Byte") == 0)
-                        {
-                            *out_value = (unsigned char)inner_value;
-                            return 0;
-                        }
-                        if (strcasecmp(id, "Word") == 0)
-                        {
-                            *out_value = (uint16_t)inner_value;
-                            return 0;
-                        }
                         if (strcasecmp(id, "ShortInt") == 0)
                         {
                             *out_value = (int8_t)inner_value;
@@ -2381,15 +3084,20 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                             *out_value = (int16_t)inner_value;
                             return 0;
                         }
-                        if (strcasecmp(id, "Cardinal") == 0 ||
-                            strcasecmp(id, "LongWord") == 0 ||
-                            strcasecmp(id, "DWord") == 0)
-                        {
-                            *out_value = (uint32_t)inner_value;
-                            return 0;
-                        }
                     }
                     *out_value = (int32_t)inner_value;
+                    return 0;
+                case BYTE_TYPE:
+                    *out_value = (uint8_t)inner_value;
+                    return 0;
+                case WORD_TYPE:
+                    *out_value = (uint16_t)inner_value;
+                    return 0;
+                case LONGWORD_TYPE:
+                    *out_value = (uint32_t)inner_value;
+                    return 0;
+                case QWORD_TYPE:
+                    *out_value = (uint64_t)inner_value;
                     return 0;
                 case INT64_TYPE:
                     if (id != NULL &&
@@ -2581,7 +3289,7 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                 const char *base_id = semcheck_base_type_name(id);
                 if (!found_type && base_id != NULL && base_id != id)
                 {
-                    found_type = (FindIdent(&type_node, symtab, (char *)base_id) >= 0 &&
+                    found_type = (FindIdent(&type_node, symtab, base_id) >= 0 &&
                         type_node != NULL && type_node->hash_type == HASHTYPE_TYPE);
                 }
 
@@ -3128,7 +3836,7 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                 HashNode_t *type_node = NULL;
                 if (FindIdent(&type_node, symtab, id) >= 0 && type_node != NULL && type_node->type != NULL)
                 {
-                    int legacy_tag = kgpc_type_get_legacy_tag(type_node->type);
+                    int legacy_tag = semcheck_tag_from_kgpc(type_node->type);
                     if (legacy_tag == UNKNOWN_TYPE && type_node->type->type_alias != NULL)
                         legacy_tag = type_node->type->type_alias->base_type;
                     if (legacy_tag != UNKNOWN_TYPE)
@@ -3232,9 +3940,13 @@ SymTab_t *start_semcheck(Tree_t *parse_tree, int *sem_result)
 {
     SymTab_t *symtab;
     int return_val;
+    double t0 = 0.0;
 
     assert(parse_tree != NULL);
     assert(sem_result != NULL);
+
+    /* Reset warning counter at start of semantic check */
+    g_semcheck_warning_count = 0;
 
     if (g_semcheck_source_path != NULL)
         file_to_parse = g_semcheck_source_path;
@@ -3248,19 +3960,37 @@ SymTab_t *start_semcheck(Tree_t *parse_tree, int *sem_result)
 
     symtab = InitSymTab();
     PushScope(symtab);  /* Push global scope for built-in constants and types */
+    if (getenv("KGPC_DEBUG_TIMINGS") != NULL)
+        t0 = (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC;
     semcheck_add_builtins(symtab);
+    if (getenv("KGPC_DEBUG_TIMINGS") != NULL) {
+        double t1 = (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC;
+        fprintf(stderr, "[timing] semcheck_add_builtins: %.2f ms\n", t1 - t0);
+    }
     /*PrintSymTab(symtab, stderr, 0);*/
 
+    if (getenv("KGPC_DEBUG_TIMINGS") != NULL)
+        t0 = (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC;
     if (parse_tree->type == TREE_UNIT) {
         return_val = semcheck_unit(symtab, parse_tree);
     } else {
         return_val = semcheck_program(symtab, parse_tree);
     }
+    if (getenv("KGPC_DEBUG_TIMINGS") != NULL) {
+        double t1 = (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC;
+        fprintf(stderr, "[timing] semcheck_program/unit: %.2f ms\n", t1 - t0);
+    }
 
     if(return_val > 0)
         fprintf(stderr, "\nCheck failed with %d error(s)!\n\n", return_val);
+    else if (g_semcheck_warning_count > 0)
+        fprintf(stderr, "\nCheck successful with %d warning(s)!\n\n", g_semcheck_warning_count);
     else
         fprintf(stderr, "\nCheck successful!\n\n");
+
+    /* Return -1 if there were warnings but no errors (per SemCheck.h API) */
+    if (return_val == 0 && g_semcheck_warning_count > 0)
+        return_val = -1;
 
     *sem_result = return_val;
     return symtab;
@@ -3462,7 +4192,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                 
                 /* Check if already declared (e.g., from a previous pass or builtin) */
                 HashNode_t *existing = NULL;
-                int scope_level = FindIdent(&existing, symtab, (char *)type_id);
+                int scope_level = FindIdent(&existing, symtab, type_id);
                 if (scope_level == 0 && existing != NULL)
                 {
                     /* Allow local types to shadow imported unit types */
@@ -3533,7 +4263,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             alias->inline_record_type->type_id = strdup(type_id);
                         const char *record_name = alias->inline_record_type->type_id;
                         HashNode_t *existing_inline = NULL;
-                        int inline_scope = FindIdent(&existing_inline, symtab, (char *)record_name);
+                        int inline_scope = FindIdent(&existing_inline, symtab, record_name);
                         if (inline_scope != 0 || existing_inline == NULL)
                         {
                             KgpcType *inline_kgpc = create_record_type(alias->inline_record_type);
@@ -3729,6 +4459,16 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                     /* Only pre-declare simple primitive type aliases */
                     KgpcType *kgpc_type = NULL;
                     int created_new_type = 0;
+
+                    /* WideChar/UnicodeChar should be treated as 2-byte CHAR_TYPE, even if aliased to Word. */
+                    if (type_id != NULL &&
+                        (pascal_identifier_equals(type_id, "WideChar") ||
+                         pascal_identifier_equals(type_id, "UnicodeChar")))
+                    {
+                        kgpc_type = create_primitive_type_with_size(CHAR_TYPE, 2);
+                        if (kgpc_type != NULL)
+                            created_new_type = 1;
+                    }
                     
                     /* Case 1: Direct primitive type tag (e.g., MyInt = Integer where base_type is set)
                      * Exclude PROCEDURE - procedure types are NOT primitive and need special handling.
@@ -3737,7 +4477,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                      * WideChar aliases would get 4 bytes (INT_TYPE) instead of 2 bytes. */
                     int skip_case1_for_widechar = (alias->target_type_id != NULL &&
                         pascal_identifier_equals(alias->target_type_id, "WideChar"));
-                    if (!skip_case1_for_widechar &&
+                    if (kgpc_type == NULL && !skip_case1_for_widechar &&
                         alias->base_type != UNKNOWN_TYPE && alias->base_type != 0 &&
                         alias->base_type != PROCEDURE)
                     {
@@ -3750,7 +4490,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             created_new_type = 1;
                     }
                     /* Case 2: Reference to a known primitive type name */
-                    else if (alias->target_type_id != NULL)
+                    else if (kgpc_type == NULL && alias->target_type_id != NULL)
                     {
                         /* Check if target is a known builtin primitive type */
                         const char *target = alias->target_type_id;
@@ -3827,14 +4567,14 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             int has_dot = (dot != NULL && dot[1] != '\0');
                             
                             /* Handle qualified type names like "UnixType.culong" */
-                            int found = FindIdent(&target_node, symtab, (char *)lookup_target);
+                            int found = FindIdent(&target_node, symtab, lookup_target);
                             if (found < 0 || target_node == NULL)
                             {
                                 /* Try unqualified name if it contains a dot */
                                 if (has_dot)
                                 {
                                     lookup_target = dot + 1;
-                                    found = FindIdent(&target_node, symtab, (char *)lookup_target);
+                                    found = FindIdent(&target_node, symtab, lookup_target);
                                 }
                             }
                             if (found >= 0 && target_node != NULL && has_dot &&
@@ -4052,7 +4792,7 @@ static int check_circular_inheritance(SymTab_t *symtab, const char *class_name, 
     
     /* Look up parent class */
     HashNode_t *parent_node = NULL;
-    if (FindIdent(&parent_node, symtab, (char *)parent_name) == -1 || parent_node == NULL)
+    if (FindIdent(&parent_node, symtab, parent_name) == -1 || parent_node == NULL)
         return 0;  /* Parent not found yet, not necessarily circular */
     
     struct RecordType *parent_record = get_record_type_from_node(parent_node);
@@ -4116,6 +4856,72 @@ static int ensure_class_storage_capacity(SymTab_t *symtab, struct RecordType *re
     return add_class_padding_field(record_info, padding_bytes);
 }
 
+/*
+ * Detect and populate default_indexed_property for a class.
+ * This enables array-like indexing (obj[i]) to be transformed to field access (obj.field[i]).
+ * 
+ * Detection rules:
+ * 1. If a class has an open array field (array_is_open == 1) and it's the only such field,
+ *    or specifically named "FItems" (Delphi convention), use it as the default indexed property.
+ * 2. Also inherit from parent class if parent has a default_indexed_property and child doesn't.
+ * 
+ * @param record_info The class RecordType to configure. Must not be NULL.
+ * @param parent_record The parent class RecordType, or NULL for base classes like TObject.
+ */
+static void detect_default_indexed_property(struct RecordType *record_info, const struct RecordType *parent_record)
+{
+    assert(record_info != NULL);
+    
+    /* Already set - don't override */
+    if (record_info->default_indexed_property != NULL)
+        return;
+    
+    /* First, try to detect from this class's fields */
+    struct RecordField *candidate = NULL;
+    ListNode_t *cur = record_info->fields;
+    while (cur != NULL)
+    {
+        if (cur->type == LIST_RECORD_FIELD)
+        {
+            struct RecordField *field = (struct RecordField *)cur->cur;
+            if (field != NULL && field->name != NULL && field->is_array && field->array_is_open)
+            {
+                /* Found an open array field - it's a candidate for default indexed property */
+                /* Prefer "FItems" if we find it (Delphi naming convention for list items) */
+                if (pascal_identifier_equals(field->name, "FItems"))
+                {
+                    candidate = field;
+                    break;  /* FItems is the preferred choice */
+                }
+                else if (candidate == NULL)
+                {
+                    /* First open array found - tentative candidate */
+                    candidate = field;
+                }
+            }
+        }
+        cur = cur->next;
+    }
+    
+    if (candidate != NULL)
+    {
+        record_info->default_indexed_property = strdup(candidate->name);
+        record_info->default_indexed_element_type = candidate->array_element_type;
+        record_info->default_indexed_element_type_id = candidate->array_element_type_id != NULL ?
+            strdup(candidate->array_element_type_id) : NULL;
+        return;
+    }
+    
+    /* Inherit from parent if available */
+    if (parent_record != NULL && parent_record->default_indexed_property != NULL)
+    {
+        record_info->default_indexed_property = strdup(parent_record->default_indexed_property);
+        record_info->default_indexed_element_type = parent_record->default_indexed_element_type;
+        record_info->default_indexed_element_type_id = parent_record->default_indexed_element_type_id != NULL ?
+            strdup(parent_record->default_indexed_element_type_id) : NULL;
+    }
+}
+
 /* Helper function to merge parent class fields into derived class */
 static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record_info, const char *class_name, int line_num)
 {
@@ -4175,6 +4981,8 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
                     free(field->name);
                     free(field->type_id);
                     free(field->array_element_type_id);
+                    if (field->proc_type != NULL)
+                        kgpc_type_release(field->proc_type);
                     free(field);
                     free(temp);
                 }
@@ -4185,6 +4993,9 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
             cloned_field->type = original_field->type;
             cloned_field->type_id = original_field->type_id ? strdup(original_field->type_id) : NULL;
             cloned_field->nested_record = original_field->nested_record;  /* Share the nested record */
+            cloned_field->proc_type = original_field->proc_type;
+            if (cloned_field->proc_type != NULL)
+                kgpc_type_retain(cloned_field->proc_type);
             cloned_field->is_array = original_field->is_array;
             cloned_field->array_start = original_field->array_start;
             cloned_field->array_end = original_field->array_end;
@@ -4193,6 +5004,10 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
                 strdup(original_field->array_element_type_id) : NULL;
             cloned_field->array_is_open = original_field->array_is_open;
             cloned_field->is_hidden = original_field->is_hidden;
+            cloned_field->is_pointer = original_field->is_pointer;
+            cloned_field->pointer_type = original_field->pointer_type;
+            cloned_field->pointer_type_id = original_field->pointer_type_id ?
+                strdup(original_field->pointer_type_id) : NULL;
             
             /* Create list node for cloned field */
             ListNode_t *new_node = (ListNode_t *)malloc(sizeof(ListNode_t));
@@ -4201,6 +5016,8 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
                 free(cloned_field->name);
                 free(cloned_field->type_id);
                 free(cloned_field->array_element_type_id);
+                if (cloned_field->proc_type != NULL)
+                    kgpc_type_release(cloned_field->proc_type);
                 free(cloned_field);
                 
                 /* Clean up previously allocated fields */
@@ -4212,6 +5029,8 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
                     free(field->name);
                     free(field->type_id);
                     free(field->array_element_type_id);
+                    if (field->proc_type != NULL)
+                        kgpc_type_release(field->proc_type);
                     free(field);
                     free(temp);
                 }
@@ -4252,6 +5071,9 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
         if (cloned_properties != NULL)
             record_info->properties = ConcatList(cloned_properties, record_info->properties);
     }
+
+    /* Detect default indexed property after merging parent fields */
+    detect_default_indexed_property(record_info, parent_record);
 
     if (parent_record != NULL)
     {
@@ -4427,7 +5249,7 @@ static int resolve_const_identifier(SymTab_t *symtab, const char *id, long long 
         return 1;
     
     HashNode_t *node = NULL;
-    if (FindIdent(&node, symtab, (char *)id) >= 0 && 
+    if (FindIdent(&node, symtab, id) >= 0 && 
         node != NULL && (node->hash_type == HASHTYPE_CONST || node->is_typed_const))
     {
         *out_value = node->const_int_value;
@@ -4447,12 +5269,12 @@ static int resolve_scoped_enum_literal(SymTab_t *symtab, const char *type_name,
     for (int depth = 0; depth < 8; ++depth)
     {
         HashNode_t *type_node = NULL;
-        if (FindIdent(&type_node, symtab, (char *)current_type) < 0 || type_node == NULL ||
+        if (FindIdent(&type_node, symtab, current_type) < 0 || type_node == NULL ||
             type_node->hash_type != HASHTYPE_TYPE)
         {
             const char *base = semcheck_base_type_name(current_type);
             if (base == NULL || base == current_type ||
-                FindIdent(&type_node, symtab, (char *)base) < 0 || type_node == NULL ||
+                FindIdent(&type_node, symtab, base) < 0 || type_node == NULL ||
                 type_node->hash_type != HASHTYPE_TYPE)
             {
                 break;
@@ -4757,6 +5579,11 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                         /* Continue processing other type declarations even if this one failed */
                     }
                 }
+                else if (record_info != NULL && record_info->is_class)
+                {
+                    /* Classes without parents (like TObject) still need default indexed property detection */
+                    detect_default_indexed_property(record_info, NULL);
+                }
                 
                 /* Process method templates and register them with class method bindings.
                  * Methods declared in class type sections (e.g., abstract methods)
@@ -4823,18 +5650,12 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                     /* If not already registered, register it now */
                                     if (!already_registered)
                                     {
-                                        int param_count = semcheck_count_param_identifiers(tmpl->params_ast);
-                                        char *param_sig = semcheck_build_param_signature(tmpl->params_ast);
                                         from_cparser_register_method_template(
                                             tree->tree_data.type_decl_data.id,
                                             tmpl->name,
                                             tmpl->is_virtual,
                                             tmpl->is_override,
-                                            tmpl->is_static,
-                                            param_count,
-                                            param_sig);
-                                        if (param_sig != NULL)
-                                            free(param_sig);
+                                            tmpl->is_static);
 
                                         if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                                             fprintf(stderr, "[SemCheck] Registered method template: %s.%s (virtual=%d, override=%d, static=%d)\n",
@@ -5060,6 +5881,56 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                     }
                 }
 
+                /* Interface methods have declarations but no implementations.
+                 * Register synthetic symbols so method resolution can succeed. */
+                if (record_info != NULL && record_info->is_interface &&
+                    record_info->method_templates != NULL &&
+                    record_info->type_id != NULL)
+                {
+                    ListNode_t *tmpl_cur = record_info->method_templates;
+                    while (tmpl_cur != NULL)
+                    {
+                        if (tmpl_cur->type == LIST_METHOD_TEMPLATE)
+                        {
+                            struct MethodTemplate *tmpl = (struct MethodTemplate *)tmpl_cur->cur;
+                            if (tmpl != NULL && tmpl->name != NULL)
+                            {
+                                size_t class_len = strlen(record_info->type_id);
+                                size_t method_len = strlen(tmpl->name);
+                                char *mangled = (char *)malloc(class_len + 2 + method_len + 1);
+                                if (mangled != NULL)
+                                {
+                                    snprintf(mangled, class_len + 2 + method_len + 1,
+                                        "%s__%s", record_info->type_id, tmpl->name);
+                                    HashNode_t *existing = NULL;
+                                    if (FindIdent(&existing, symtab, mangled) == -1)
+                                    {
+                                        KgpcType *proc_type =
+                                            from_cparser_method_template_to_proctype(tmpl, record_info, symtab);
+                                        if (proc_type != NULL)
+                                        {
+                                            char *mangled_dup = strdup(mangled);
+                                            if (proc_type->info.proc_info.return_type != NULL ||
+                                                tmpl->has_return_type)
+                                            {
+                                                PushFunctionOntoScope_Typed(symtab, mangled, mangled_dup, proc_type);
+                                            }
+                                            else
+                                            {
+                                                PushProcedureOntoScope_Typed(symtab, mangled, mangled_dup, proc_type);
+                                            }
+                                            mangled = NULL;
+                                        }
+                                    }
+                                    if (mangled != NULL)
+                                        free(mangled);
+                                }
+                            }
+                        }
+                        tmpl_cur = tmpl_cur->next;
+                    }
+                }
+
                 /* Now also check if this class has method implementations that need to be added.
                  * These are in the subprogram list (nested_subs of the class type decl) */
                 if (tree->tree_data.type_decl_data.info.record != NULL &&
@@ -5148,6 +6019,23 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                         tree->tree_data.type_decl_data.kgpc_type = inline_kgpc;
                         kgpc_type_retain(inline_kgpc);
                     }
+                }
+                if (getenv("KGPC_DEBUG_PROC_TYPE") != NULL &&
+                    tree->tree_data.type_decl_data.id != NULL &&
+                    pascal_identifier_equals(tree->tree_data.type_decl_data.id, "TCreateEncodingProc"))
+                {
+                    fprintf(stderr,
+                        "[KGPC_DEBUG_PROC_TYPE] alias=%s base=%d kgpc=%s kind=%d return_id=%s\n",
+                        tree->tree_data.type_decl_data.id,
+                        alias_info->base_type,
+                        tree->tree_data.type_decl_data.kgpc_type ?
+                            kgpc_type_to_string(tree->tree_data.type_decl_data.kgpc_type) : "<null>",
+                        tree->tree_data.type_decl_data.kgpc_type ?
+                            tree->tree_data.type_decl_data.kgpc_type->kind : -1,
+                        (tree->tree_data.type_decl_data.kgpc_type &&
+                         tree->tree_data.type_decl_data.kgpc_type->kind == TYPE_KIND_PROCEDURE &&
+                         tree->tree_data.type_decl_data.kgpc_type->info.proc_info.return_type_id) ?
+                            tree->tree_data.type_decl_data.kgpc_type->info.proc_info.return_type_id : "<null>");
                 }
                 if (alias_info->is_array)
                 {
@@ -5565,7 +6453,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 
                 /* Only register if not already registered to avoid redeclaration errors */
                 HashNode_t *existing = NULL;
-                if (FindIdent(&existing, symtab, (char *)mangled_name) == -1)
+                if (FindIdent(&existing, symtab, mangled_name) == -1)
                 {
                     /* Create a KgpcType for the inline record if not already created */
                     KgpcType *inline_kgpc_type = create_record_type(alias_info->inline_record_type);
@@ -5628,6 +6516,15 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
     assert(tree->type == TREE_CONST_DECL);
 
     struct Expression *value_expr = tree->tree_data.const_decl_data.value;
+    if (getenv("KGPC_DEBUG_CLASS_CONST") != NULL &&
+        tree->tree_data.const_decl_data.id != NULL &&
+        strstr(tree->tree_data.const_decl_data.id, "DefaultCapacity") != NULL)
+    {
+        fprintf(stderr, "[KGPC] const decl %s value_expr=%p type=%d\n",
+            tree->tree_data.const_decl_data.id,
+            (void *)value_expr,
+            value_expr ? value_expr->type : -1);
+    }
         
         /* Determine the type of constant by checking the expression */
         int is_string_const = expression_is_string(symtab, value_expr);
@@ -5657,6 +6554,11 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                     HashNode_t *const_node = NULL;
                     if (FindIdent(&const_node, symtab, tree->tree_data.const_decl_data.id) != -1 && const_node != NULL)
                     {
+                        if (getenv("KGPC_DEBUG_CLASS_CONST") != NULL)
+                        {
+                            fprintf(stderr, "[KGPC] const pushed: %s\n",
+                                tree->tree_data.const_decl_data.id);
+                        }
                         mark_hashnode_unit_info(const_node,
                             tree->tree_data.const_decl_data.defined_in_unit,
                             tree->tree_data.const_decl_data.unit_is_public);
@@ -5694,7 +6596,7 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                 }
             }
         }
-        else if (value_expr != NULL && value_expr->type == EXPR_SET)
+        else if (value_expr != NULL && expression_is_set_const_expr(symtab, value_expr))
         {
             /* Evaluate as set constant (supports char sets up to 0..255) */
             unsigned char set_bytes[32];
@@ -5833,8 +6735,8 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
             /* Run semantic check on the value expression to resolve types properly.
              * This is important for scoped enum literals like TEndian.Little
              * which need to have their resolved_kgpc_type set. */
-            int expr_type = UNKNOWN_TYPE;
-            semcheck_expr_main(&expr_type, symtab, value_expr, INT_MAX, NO_MUTATE);
+            KgpcType *expr_type = NULL;
+            semcheck_expr_main(symtab, value_expr, INT_MAX, NO_MUTATE, &expr_type);
             
             if (evaluate_const_expr(symtab, value_expr, &value) != 0)
             {
@@ -5859,7 +6761,9 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                 /* If the const expression is an explicit typecast, prefer that as the const's type. */
                 if (value_expr != NULL && value_expr->type == EXPR_TYPECAST)
                 {
-                    int target_tag = value_expr->resolved_type;
+                    int target_tag = (value_expr->resolved_kgpc_type != NULL)
+                        ? semcheck_tag_from_kgpc(value_expr->resolved_kgpc_type)
+                        : UNKNOWN_TYPE;
                     if (target_tag == UNKNOWN_TYPE &&
                         value_expr->expr_data.typecast_data.target_type_id != NULL)
                     {
@@ -5941,6 +6845,14 @@ static int semcheck_const_decls_imported(SymTab_t *symtab, ListNode_t *const_dec
         assert(cur->type == LIST_TREE);
         Tree_t *tree = (Tree_t *)cur->cur;
         assert(tree->type == TREE_CONST_DECL);
+        if (getenv("KGPC_DEBUG_CLASS_CONST") != NULL &&
+            tree->tree_data.const_decl_data.id != NULL &&
+            strstr(tree->tree_data.const_decl_data.id, "DefaultCapacity") != NULL)
+        {
+            fprintf(stderr, "[KGPC] imported const seen: %s (defined_in_unit=%d)\n",
+                tree->tree_data.const_decl_data.id,
+                tree->tree_data.const_decl_data.defined_in_unit);
+        }
         if (tree->tree_data.const_decl_data.defined_in_unit)
             return_val += semcheck_single_const_decl(symtab, tree);
         cur = cur->next;
@@ -5957,6 +6869,14 @@ static int semcheck_const_decls_local(SymTab_t *symtab, ListNode_t *const_decls)
         assert(cur->type == LIST_TREE);
         Tree_t *tree = (Tree_t *)cur->cur;
         assert(tree->type == TREE_CONST_DECL);
+        if (getenv("KGPC_DEBUG_CLASS_CONST") != NULL &&
+            tree->tree_data.const_decl_data.id != NULL &&
+            strstr(tree->tree_data.const_decl_data.id, "DefaultCapacity") != NULL)
+        {
+            fprintf(stderr, "[KGPC] local const seen: %s (defined_in_unit=%d)\n",
+                tree->tree_data.const_decl_data.id,
+                tree->tree_data.const_decl_data.defined_in_unit);
+        }
         if (!tree->tree_data.const_decl_data.defined_in_unit)
             return_val += semcheck_single_const_decl(symtab, tree);
         cur = cur->next;
@@ -6189,11 +7109,18 @@ void semcheck_add_builtins(SymTab_t *symtab)
         {
             tobject->is_class = 1;
             tobject->type_id = strdup("TObject");
-            KgpcType *tobject_type = create_record_type(tobject);
+            KgpcType *tobject_rec = create_record_type(tobject);
+            KgpcType *tobject_type = NULL;
+            if (tobject_rec != NULL)
+                tobject_type = create_pointer_type(tobject_rec);
             if (tobject_type != NULL)
             {
                 AddBuiltinType_Typed(symtab, strdup("TObject"), tobject_type);
                 destroy_kgpc_type(tobject_type);
+            }
+            else if (tobject_rec != NULL)
+            {
+                destroy_kgpc_type(tobject_rec);
             }
         }
 
@@ -6203,31 +7130,38 @@ void semcheck_add_builtins(SymTab_t *symtab)
             tinterfaced->is_class = 1;
             tinterfaced->type_id = strdup("TInterfacedObject");
             tinterfaced->parent_class_name = strdup("TObject");
-            KgpcType *tinterfaced_type = create_record_type(tinterfaced);
+            KgpcType *tinterfaced_rec = create_record_type(tinterfaced);
+            KgpcType *tinterfaced_type = NULL;
+            if (tinterfaced_rec != NULL)
+                tinterfaced_type = create_pointer_type(tinterfaced_rec);
             if (tinterfaced_type != NULL)
             {
                 AddBuiltinType_Typed(symtab, strdup("TInterfacedObject"), tinterfaced_type);
                 destroy_kgpc_type(tinterfaced_type);
             }
+            else if (tinterfaced_rec != NULL)
+            {
+                destroy_kgpc_type(tinterfaced_rec);
+            }
         }
     }
 
     /* Common ordinal aliases (match KGPC system.p sizes) */
-    add_builtin_type_owned(symtab, "Byte", create_primitive_type_with_size(INT_TYPE, 1));
+    add_builtin_type_owned(symtab, "Byte", create_primitive_type_with_size(BYTE_TYPE, 1));
     add_builtin_type_owned(symtab, "ShortInt", create_primitive_type_with_size(INT_TYPE, 1));
     add_builtin_type_owned(symtab, "SmallInt", create_primitive_type_with_size(INT_TYPE, 2));
-    add_builtin_type_owned(symtab, "Word", create_primitive_type_with_size(INT_TYPE, 2));
-    add_builtin_type_owned(symtab, "LongWord", create_primitive_type_with_size(INT_TYPE, 4));
-    add_builtin_type_owned(symtab, "Cardinal", create_primitive_type_with_size(INT_TYPE, 4));
-    add_builtin_type_owned(symtab, "DWord", create_primitive_type_with_size(INT_TYPE, 4));
-    add_builtin_type_owned(symtab, "QWord", create_primitive_type_with_size(INT64_TYPE, 8));
-    add_builtin_type_owned(symtab, "UInt64", create_primitive_type_with_size(INT64_TYPE, 8));
+    add_builtin_type_owned(symtab, "Word", create_primitive_type_with_size(WORD_TYPE, 2));
+    add_builtin_type_owned(symtab, "LongWord", create_primitive_type_with_size(LONGWORD_TYPE, 4));
+    add_builtin_type_owned(symtab, "Cardinal", create_primitive_type_with_size(LONGWORD_TYPE, 4));
+    add_builtin_type_owned(symtab, "DWord", create_primitive_type_with_size(LONGWORD_TYPE, 4));
+    add_builtin_type_owned(symtab, "QWord", create_primitive_type_with_size(QWORD_TYPE, 8));
+    add_builtin_type_owned(symtab, "UInt64", create_primitive_type_with_size(QWORD_TYPE, 8));
     add_builtin_type_owned(symtab, "Int8", create_primitive_type_with_size(INT_TYPE, 1));
-    add_builtin_type_owned(symtab, "UInt8", create_primitive_type_with_size(INT_TYPE, 1));
+    add_builtin_type_owned(symtab, "UInt8", create_primitive_type_with_size(BYTE_TYPE, 1));
     add_builtin_type_owned(symtab, "Int16", create_primitive_type_with_size(INT_TYPE, 2));
-    add_builtin_type_owned(symtab, "UInt16", create_primitive_type_with_size(INT_TYPE, 2));
+    add_builtin_type_owned(symtab, "UInt16", create_primitive_type_with_size(WORD_TYPE, 2));
     add_builtin_type_owned(symtab, "Int32", create_primitive_type_with_size(INT_TYPE, 4));
-    add_builtin_type_owned(symtab, "UInt32", create_primitive_type_with_size(INT_TYPE, 4));
+    add_builtin_type_owned(symtab, "UInt32", create_primitive_type_with_size(LONGWORD_TYPE, 4));
     add_builtin_type_owned(symtab, "Single", create_primitive_type_with_size(REAL_TYPE, 4));
     add_builtin_type_owned(symtab, "Double", create_primitive_type_with_size(REAL_TYPE, 8));
     add_builtin_type_owned(symtab, "Extended", create_primitive_type_with_size(REAL_TYPE, 8));
@@ -6354,6 +7288,25 @@ void semcheck_add_builtins(SymTab_t *symtab)
         AddBuiltinProc_Typed(symtab, assign_name, assign_type);
         destroy_kgpc_type(assign_type);
         free(assign_name);
+    }
+    const char *sysutils_hooks[] = {
+        "InitExceptions",
+        "InitInternational",
+        "DoneExceptions",
+        "FreeDriveStr",
+        "FreeTerminateProcs",
+        "SysBeep"
+    };
+    for (size_t i = 0; i < sizeof(sysutils_hooks) / sizeof(sysutils_hooks[0]); ++i)
+    {
+        char *hook_name = strdup(sysutils_hooks[i]);
+        if (hook_name != NULL) {
+            KgpcType *hook_type = create_procedure_type(NULL, NULL);
+            assert(hook_type != NULL && "Failed to create sysutils hook type");
+            AddBuiltinProc_Typed(symtab, hook_name, hook_type);
+            destroy_kgpc_type(hook_type);
+            free(hook_name);
+        }
     }
     char *close_name = strdup("Close");
     if (close_name != NULL) {
@@ -6746,17 +7699,6 @@ void semcheck_add_builtins(SymTab_t *symtab)
         free(upcase_name);
     }
 
-    char *randseed_name = strdup("RandSeed");
-    if (randseed_name != NULL) {
-        KgpcType *return_type = kgpc_type_from_var_type(HASHVAR_LONGINT);
-        assert(return_type != NULL && "Failed to create return type for RandSeed");
-        KgpcType *randseed_type = create_procedure_type(NULL, return_type);
-        assert(randseed_type != NULL && "Failed to create RandSeed function type");
-        AddBuiltinFunction_Typed(symtab, randseed_name, randseed_type);
-        destroy_kgpc_type(randseed_type);
-        free(randseed_name);
-    }
-
     char *sqr_name = strdup("Sqr");
     if (sqr_name != NULL) {
         KgpcType *return_type = kgpc_type_from_var_type(HASHVAR_LONGINT);
@@ -6864,10 +7806,180 @@ void semcheck_add_builtins(SymTab_t *symtab)
         }
     }
 
+    /* StringOfChar: function StringOfChar(c: Char; l: SizeInt): string */
+    {
+        const char *func_name = "StringOfChar";
+        ListNode_t *param_c = semcheck_create_builtin_param("c", CHAR_TYPE);
+        ListNode_t *param_l = semcheck_create_builtin_param("l", LONGINT_TYPE);
+        ListNode_t *params = ConcatList(param_c, param_l);
+        KgpcType *return_type = create_primitive_type(STRING_TYPE);
+        KgpcType *func_type = create_procedure_type(params, return_type);
+        if (func_type != NULL)
+        {
+            AddBuiltinFunction_Typed(symtab, strdup(func_name), func_type);
+            destroy_kgpc_type(func_type);
+        }
+        if (params != NULL)
+            DestroyList(params);
+    }
+
+    /* BinStr: function BinStr(Val: int64; cnt: byte): shortstring */
+    {
+        const char *func_name = "BinStr";
+        ListNode_t *param_val = semcheck_create_builtin_param("Val", INT64_TYPE);
+        ListNode_t *param_cnt = semcheck_create_builtin_param("cnt", BYTE_TYPE);
+        ListNode_t *params = ConcatList(param_val, param_cnt);
+        KgpcType *return_type = create_primitive_type(SHORTSTRING_TYPE);
+        KgpcType *func_type = create_procedure_type(params, return_type);
+        if (func_type != NULL)
+        {
+            AddBuiltinFunction_Typed(symtab, strdup(func_name), func_type);
+            destroy_kgpc_type(func_type);
+        }
+        if (params != NULL)
+            DestroyList(params);
+    }
+
+    /* PopCnt: function PopCnt(AValue: QWord): Byte - counts set bits */
+    {
+        const char *func_name = "PopCnt";
+        /* Overloads for different integer sizes */
+        ListNode_t *param_byte = semcheck_create_builtin_param("AValue", BYTE_TYPE);
+        KgpcType *popcnt_byte = create_procedure_type(param_byte, create_primitive_type(BYTE_TYPE));
+        if (popcnt_byte != NULL)
+        {
+            AddBuiltinFunction_Typed(symtab, strdup(func_name), popcnt_byte);
+            destroy_kgpc_type(popcnt_byte);
+        }
+        if (param_byte != NULL)
+            DestroyList(param_byte);
+
+        ListNode_t *param_word = semcheck_create_builtin_param("AValue", WORD_TYPE);
+        KgpcType *popcnt_word = create_procedure_type(param_word, create_primitive_type(BYTE_TYPE));
+        if (popcnt_word != NULL)
+        {
+            AddBuiltinFunction_Typed(symtab, strdup(func_name), popcnt_word);
+            destroy_kgpc_type(popcnt_word);
+        }
+        if (param_word != NULL)
+            DestroyList(param_word);
+
+        ListNode_t *param_dword = semcheck_create_builtin_param("AValue", LONGWORD_TYPE);
+        KgpcType *popcnt_dword = create_procedure_type(param_dword, create_primitive_type(BYTE_TYPE));
+        if (popcnt_dword != NULL)
+        {
+            AddBuiltinFunction_Typed(symtab, strdup(func_name), popcnt_dword);
+            destroy_kgpc_type(popcnt_dword);
+        }
+        if (param_dword != NULL)
+            DestroyList(param_dword);
+
+        ListNode_t *param_qword = semcheck_create_builtin_param("AValue", QWORD_TYPE);
+        KgpcType *popcnt_qword = create_procedure_type(param_qword, create_primitive_type(BYTE_TYPE));
+        if (popcnt_qword != NULL)
+        {
+            AddBuiltinFunction_Typed(symtab, strdup(func_name), popcnt_qword);
+            destroy_kgpc_type(popcnt_qword);
+        }
+        if (param_qword != NULL)
+            DestroyList(param_qword);
+    }
+
+    /* IndexChar: function IndexChar(const buf; len: SizeInt; b: Char): SizeInt */
+    {
+        const char *func_name = "IndexChar";
+        ListNode_t *param_buf = semcheck_create_builtin_param("buf", UNKNOWN_TYPE);
+        ListNode_t *param_len = semcheck_create_builtin_param("len", LONGINT_TYPE);
+        ListNode_t *param_b = semcheck_create_builtin_param("b", CHAR_TYPE);
+        ListNode_t *params = ConcatList(ConcatList(param_buf, param_len), param_b);
+        KgpcType *return_type = create_primitive_type(LONGINT_TYPE);
+        KgpcType *func_type = create_procedure_type(params, return_type);
+        if (func_type != NULL)
+        {
+            AddBuiltinFunction_Typed(symtab, strdup(func_name), func_type);
+            destroy_kgpc_type(func_type);
+        }
+        if (params != NULL)
+            DestroyList(params);
+    }
+
+    /* CompareByte: function CompareByte(const buf1, buf2; len: SizeInt): SizeInt */
+    {
+        const char *func_name = "CompareByte";
+        ListNode_t *param_buf1 = semcheck_create_builtin_param("buf1", UNKNOWN_TYPE);
+        ListNode_t *param_buf2 = semcheck_create_builtin_param("buf2", UNKNOWN_TYPE);
+        ListNode_t *param_len = semcheck_create_builtin_param("len", LONGINT_TYPE);
+        ListNode_t *params = ConcatList(ConcatList(param_buf1, param_buf2), param_len);
+        KgpcType *return_type = create_primitive_type(LONGINT_TYPE);
+        KgpcType *func_type = create_procedure_type(params, return_type);
+        if (func_type != NULL)
+        {
+            AddBuiltinFunction_Typed(symtab, strdup(func_name), func_type);
+            destroy_kgpc_type(func_type);
+        }
+        if (params != NULL)
+            DestroyList(params);
+    }
+
+    /* UniqueString: procedure UniqueString(var S: String) */
+    {
+        const char *func_name = "UniqueString";
+        ListNode_t *param_s = semcheck_create_builtin_param_var("S", STRING_TYPE);
+        KgpcType *func_type = create_procedure_type(param_s, NULL);
+        if (func_type != NULL)
+        {
+            AddBuiltinProc_Typed(symtab, strdup(func_name), func_type);
+            destroy_kgpc_type(func_type);
+        }
+        if (param_s != NULL)
+            DestroyList(param_s);
+    }
+
+    /* Bit scan builtins (FPC compatibility) */
+    {
+        struct {
+            const char *name;
+            int param_tag;
+        } bsr_bsf[] = {
+            {"BsrByte", BYTE_TYPE}, {"BsfByte", BYTE_TYPE},
+            {"BsrWord", WORD_TYPE}, {"BsfWord", WORD_TYPE},
+            {"BsrDWord", LONGWORD_TYPE}, {"BsfDWord", LONGWORD_TYPE},
+            {"BsrQWord", QWORD_TYPE}, {"BsfQWord", QWORD_TYPE},
+        };
+
+        for (size_t i = 0; i < sizeof(bsr_bsf) / sizeof(bsr_bsf[0]); i++)
+        {
+            ListNode_t *param = semcheck_create_builtin_param("AValue", bsr_bsf[i].param_tag);
+            KgpcType *return_type = create_primitive_type(LONGINT_TYPE);
+            KgpcType *func_type = create_procedure_type(param, return_type);
+            if (func_type != NULL)
+            {
+                AddBuiltinFunction_Typed(symtab, strdup(bsr_bsf[i].name), func_type);
+                destroy_kgpc_type(func_type);
+            }
+            if (param != NULL)
+                DestroyList(param);
+        }
+    }
+
     /* Builtins are now in system.p */
 }
 
 /* Semantic check for a program */
+#define SEMCHECK_TIMINGS_ENABLED() (getenv("KGPC_DEBUG_TIMINGS") != NULL)
+
+static double semcheck_now_ms(void) {
+    return (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC;
+}
+
+static void semcheck_timing_step(const char *label, double *last_ms) {
+    if (!SEMCHECK_TIMINGS_ENABLED() || last_ms == NULL)
+        return;
+    double now = semcheck_now_ms();
+    fprintf(stderr, "[timing] semcheck_program %s: %.2f ms\n", label, now - *last_ms);
+    *last_ms = now;
+}
+
 int semcheck_program(SymTab_t *symtab, Tree_t *tree)
 {
     int return_val;
@@ -6876,20 +7988,26 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
     assert(tree->type == TREE_PROGRAM_TYPE);
 
     return_val = 0;
+    double t0 = 0.0;
+    if (SEMCHECK_TIMINGS_ENABLED())
+        t0 = semcheck_now_ms();
 
     PushScope(symtab);
 
     semcheck_unit_names_reset();
     semcheck_unit_name_add("System");
     semcheck_unit_names_add_list(tree->tree_data.program_data.uses_units);
+    semcheck_timing_step("unit names", &t0);
 
     return_val += semcheck_id_not_main(tree->tree_data.program_data.program_id);
+    semcheck_timing_step("id check", &t0);
 
     /* TODO: Push program name onto scope */
 
     /* TODO: Fix line number bug here */
     return_val += semcheck_args(symtab, tree->tree_data.program_data.args_char,
       tree->line_num);
+    semcheck_timing_step("args", &t0);
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after args: %d\n", return_val);
 #endif
@@ -6897,12 +8015,14 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
     return_val += predeclare_enum_literals(symtab, tree->tree_data.program_data.type_declaration);
     /* Pre-declare types so they're available for const expressions like High(MyType) */
     return_val += predeclare_types(symtab, tree->tree_data.program_data.type_declaration);
+    semcheck_timing_step("predeclare types", &t0);
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after type predeclare: %d\n", return_val);
 #endif
 
     /* Predeclare subprograms so they can be referenced in const initializers */
     return_val += predeclare_subprograms(symtab, tree->tree_data.program_data.subprograms, 0, NULL);
+    semcheck_timing_step("predeclare subprograms", &t0);
     if (getenv("KGPC_DEBUG_GENERIC_CLONES") != NULL)
     {
         ListNode_t *debug_cur = tree->tree_data.program_data.type_declaration;
@@ -6932,6 +8052,7 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
 
     /* Pass 1: Imported unit untyped constants */
     return_val += semcheck_const_decls_imported(symtab, tree->tree_data.program_data.const_declaration);
+    semcheck_timing_step("consts pass1 imported untyped", &t0);
 
     /* Pass 2: Imported unit typed constants */
     ListNode_t *unit_typed_consts = collect_typed_const_decls_filtered(symtab,
@@ -6941,9 +8062,11 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
         return_val += semcheck_decls(symtab, unit_typed_consts);
         DestroyList(unit_typed_consts);
     }
+    semcheck_timing_step("consts pass2 imported typed", &t0);
 
     /* Pass 3: Local untyped constants */
     return_val += semcheck_const_decls_local(symtab, tree->tree_data.program_data.const_declaration);
+    semcheck_timing_step("consts pass3 local untyped", &t0);
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after consts: %d\n", return_val);
 #endif
@@ -6956,23 +8079,33 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
         return_val += semcheck_decls(symtab, local_typed_consts);
         DestroyList(local_typed_consts);
     }
+    semcheck_timing_step("consts pass4 local typed", &t0);
 
     return_val += semcheck_type_decls(symtab, tree->tree_data.program_data.type_declaration);
+    semcheck_timing_step("type decls", &t0);
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after types: %d\n", return_val);
 #endif
 
-    return_val += semcheck_decls(symtab, tree->tree_data.program_data.var_declaration);
+    ListNode_t *program_vars = collect_non_typed_var_decls(tree->tree_data.program_data.var_declaration);
+    if (program_vars != NULL)
+    {
+        return_val += semcheck_decls(symtab, program_vars);
+        DestroyList(program_vars);
+    }
+    semcheck_timing_step("var decls", &t0);
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after vars: %d\n", return_val);
 #endif
 
     return_val += semcheck_subprograms(symtab, tree->tree_data.program_data.subprograms, 0, NULL);
+    semcheck_timing_step("subprograms", &t0);
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after subprograms: %d\n", return_val);
 #endif
 
     return_val += semcheck_stmt(symtab, tree->tree_data.program_data.body_statement, INT_MAX);
+    semcheck_timing_step("body", &t0);
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after body: %d\n", return_val);
 #endif
@@ -6988,6 +8121,7 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
             final_node = final_node->next;
         }
     }
+    semcheck_timing_step("finalization", &t0);
 
     if(optimize_flag() > 0 && return_val == 0)
     {
@@ -7138,7 +8272,12 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
         fprintf(stderr, "[SemCheck] interface types +%d (total %d)\n",
                 return_val - before, return_val);
     before = return_val;
-    return_val += semcheck_decls(symtab, tree->tree_data.unit_data.interface_var_decls);
+    ListNode_t *iface_vars = collect_non_typed_var_decls(tree->tree_data.unit_data.interface_var_decls);
+    if (iface_vars != NULL)
+    {
+        return_val += semcheck_decls(symtab, iface_vars);
+        DestroyList(iface_vars);
+    }
     if (debug_steps != NULL && return_val != before)
         fprintf(stderr, "[SemCheck] interface vars +%d (total %d)\n",
                 return_val - before, return_val);
@@ -7186,7 +8325,12 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
         fprintf(stderr, "[SemCheck] impl types +%d (total %d)\n",
                 return_val - before, return_val);
     before = return_val;
-    return_val += semcheck_decls(symtab, tree->tree_data.unit_data.implementation_var_decls);
+    ListNode_t *impl_vars = collect_non_typed_var_decls(tree->tree_data.unit_data.implementation_var_decls);
+    if (impl_vars != NULL)
+    {
+        return_val += semcheck_decls(symtab, impl_vars);
+        DestroyList(impl_vars);
+    }
     if (debug_steps != NULL && return_val != before)
         fprintf(stderr, "[SemCheck] impl vars +%d (total %d)\n",
                 return_val - before, return_val);
@@ -7296,17 +8440,19 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 tree->tree_data.var_decl_data.type_id);
         if (tree->type == TREE_VAR_DECL)
         {
-            if (tree->tree_data.var_decl_data.cached_kgpc_type != NULL)
-            {
-                destroy_kgpc_type(tree->tree_data.var_decl_data.cached_kgpc_type);
-                tree->tree_data.var_decl_data.cached_kgpc_type = NULL;
-            }
             if (resolved_type != NULL && resolved_type->type != NULL)
             {
+                /* Clear any pre-existing cached type if we're replacing with resolved type */
+                if (tree->tree_data.var_decl_data.cached_kgpc_type != NULL)
+                {
+                    destroy_kgpc_type(tree->tree_data.var_decl_data.cached_kgpc_type);
+                    tree->tree_data.var_decl_data.cached_kgpc_type = NULL;
+                }
                 kgpc_type_retain(resolved_type->type);
                 tree->tree_data.var_decl_data.cached_kgpc_type = resolved_type->type;
             }
-            else if (resolved_type == NULL && tree->tree_data.var_decl_data.type_id != NULL)
+            else if (tree->tree_data.var_decl_data.cached_kgpc_type == NULL &&
+                     resolved_type == NULL && tree->tree_data.var_decl_data.type_id != NULL)
             {
                 /* Fallback: Create KgpcType for built-in type names not in symbol table */
                 const char *type_id = tree->tree_data.var_decl_data.type_id;
@@ -7314,6 +8460,26 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 if (builtin_tag != UNKNOWN_TYPE)
                 {
                     tree->tree_data.var_decl_data.cached_kgpc_type = create_primitive_type(builtin_tag);
+                }
+            }
+            /* Note: If cached_kgpc_type is already set (e.g., for inline procedure types from parser),
+             * preserve it rather than destroying it. */
+            /* AUDIT: Log when KgpcType is missing for a type_id */
+            if (getenv("KGPC_AUDIT_TYPES") != NULL && tree->tree_data.var_decl_data.type_id != NULL)
+            {
+                const char *var_name = (ids_head && ids_head->cur) ? (char*)ids_head->cur : "<unknown>";
+                const char *type_id = tree->tree_data.var_decl_data.type_id;
+                KgpcType *kgpc = tree->tree_data.var_decl_data.cached_kgpc_type;
+                if (kgpc == NULL)
+                {
+                    fprintf(stderr, "[TYPE_AUDIT] MISSING: var=%s type_id=%s resolved_node=%p\n",
+                        var_name, type_id, (void*)resolved_type);
+                }
+                else if (kgpc->kind == TYPE_KIND_PRIMITIVE && kgpc->info.primitive_type_tag == POINTER_TYPE)
+                {
+                    /* Pointer type but no points_to info - this is a problem */
+                    fprintf(stderr, "[TYPE_AUDIT] INCOMPLETE_PTR: var=%s type_id=%s kind=PRIMITIVE tag=POINTER (should be TYPE_KIND_POINTER)\n",
+                        var_name, type_id);
                 }
             }
         }
@@ -7329,7 +8495,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 if (tree->tree_data.var_decl_data.is_typed_const)
                 {
                     HashNode_t *existing_node = NULL;
-                    if (FindIdent(&existing_node, symtab, (char *)ids->cur) >= 0 &&
+                    if (FindIdent(&existing_node, symtab, ids->cur) >= 0 &&
                         existing_node != NULL && existing_node->is_typed_const)
                     {
                         mark_hashnode_unit_info(existing_node,
@@ -7388,7 +8554,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         if (func_return == 0)
                         {
                             HashNode_t *var_node = NULL;
-                            if (FindIdent(&var_node, symtab, (char *)ids->cur) != -1 && var_node != NULL)
+                            if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
                             {
                                 var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
                                 mark_hashnode_unit_info(var_node,
@@ -7432,7 +8598,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         if (func_return == 0)
                         {
                             HashNode_t *var_node = NULL;
-                            if (FindIdent(&var_node, symtab, (char *)ids->cur) != -1 && var_node != NULL)
+                            if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
                             {
                                 var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
                                 mark_hashnode_unit_info(var_node,
@@ -7505,7 +8671,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             if (func_return == 0)
                             {
                                 HashNode_t *var_node = NULL;
-                                if (FindIdent(&var_node, symtab, (char *)ids->cur) != -1 && var_node != NULL)
+                                if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
                                 {
                                     var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
                                     mark_hashnode_unit_info(var_node,
@@ -7549,7 +8715,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             if (func_return == 0)
                             {
                                 HashNode_t *var_node = NULL;
-                                if (FindIdent(&var_node, symtab, (char *)ids->cur) != -1 && var_node != NULL)
+                                if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
                                 {
                                     var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
                                     mark_hashnode_unit_info(var_node,
@@ -7580,7 +8746,6 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             int element_type_tag = alias->array_element_type;
 
                             /* If element type is a type reference, resolve it */
-                            int element_type_owned = 0;  /* Track if we own element_type */
                             if (element_type_tag == UNKNOWN_TYPE && alias->array_element_type_id != NULL)
                             {
                                 HashNode_t *element_type_node = NULL;
@@ -7592,21 +8757,18 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                                      * and create_array_type takes ownership. Without this, both the symbol
                                      * table and array_type would try to free the same type, causing double-free. */
                                     kgpc_type_retain(element_type);
-                                    element_type_owned = 1;
                                 }
                             }
                             else if (element_type_tag != UNKNOWN_TYPE)
                             {
                                 /* Direct primitive type tag - use create_primitive_type */
                                 element_type = create_primitive_type(element_type_tag);
-                                element_type_owned = 1;
                             }
 
                             /* If element type is still NULL, create an unknown type to avoid crash */
                             if (element_type == NULL)
                             {
                                 element_type = create_primitive_type(UNKNOWN_TYPE);
-                                element_type_owned = 1;
                             }
 
                             /* Create array KgpcType - takes ownership of element_type */
@@ -7620,7 +8782,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             if (func_return == 0)
                             {
                                 HashNode_t *var_node = NULL;
-                                if (FindIdent(&var_node, symtab, (char *)ids->cur) != -1 && var_node != NULL)
+                                if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
                                 {
                                     mark_hashnode_unit_info(var_node,
                                         tree->tree_data.var_decl_data.defined_in_unit,
@@ -7708,7 +8870,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         if (func_return == 0)
                         {
                             HashNode_t *var_node = NULL;
-                            if (FindIdent(&var_node, symtab, (char *)ids->cur) != -1 && var_node != NULL)
+                            if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
                             {
                                 var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
                                 mark_hashnode_unit_info(var_node,
@@ -7723,6 +8885,12 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 {
                     /* For type inference, use INTEGER as placeholder - will be replaced later */
                     var_type = HASHVAR_INTEGER;  /* Placeholder */
+                }
+                else if (tree->tree_data.var_decl_data.type == UNKNOWN_TYPE &&
+                    tree->tree_data.var_decl_data.type_id == NULL &&
+                    tree->tree_data.var_decl_data.is_untyped_param)
+                {
+                    var_type = HASHVAR_UNTYPED;
                 }
                 else if(tree->tree_data.var_decl_data.type == INT_TYPE)
                     var_type = HASHVAR_INTEGER;
@@ -7742,8 +8910,8 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     var_type = HASHVAR_FILE;
                 else if(tree->tree_data.var_decl_data.type == TEXT_TYPE)
                     var_type = HASHVAR_TEXT;
-                else if(tree->tree_data.var_decl_data.type == BUILTIN_ANY_TYPE)
-                    var_type = HASHVAR_UNTYPED;
+                else if(tree->tree_data.var_decl_data.type == PROCEDURE)
+                    var_type = HASHVAR_PROCEDURE;
                 else
                     var_type = HASHVAR_REAL;
                 
@@ -7753,6 +8921,11 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 {
                     /* Use KgpcType from resolved type if available */
                     var_kgpc_type = resolved_type->type;
+                }
+                else if (tree->tree_data.var_decl_data.cached_kgpc_type != NULL)
+                {
+                    /* Use pre-cached KgpcType (e.g., for inline procedure types) */
+                    var_kgpc_type = tree->tree_data.var_decl_data.cached_kgpc_type;
                 }
                 else if (tree->tree_data.var_decl_data.inline_record_type != NULL)
                 {
@@ -7931,7 +9104,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 if (func_return == 0)
                 {
                     HashNode_t *var_node = NULL;
-                    if (FindIdent(&var_node, symtab, (char *)ids->cur) != -1 && var_node != NULL)
+                    if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
                     {
                         var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
                         mark_hashnode_unit_info(var_node,
@@ -8179,7 +9352,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
             else
             {
                 HashNode_t *decl_node = NULL;
-                if (FindIdent(&decl_node, symtab, (char *)ids->cur) != -1 && decl_node != NULL)
+                if (FindIdent(&decl_node, symtab, ids->cur) != -1 && decl_node != NULL)
                 {
                     if (tree->type == TREE_VAR_DECL)
                     {
@@ -8264,7 +9437,7 @@ next_identifier:
                             }
                         }
 
-                        int expr_type = UNKNOWN_TYPE;
+                        KgpcType *expr_type = NULL;
                         if (init_expr->type == EXPR_RECORD_CONSTRUCTOR && init_expr->record_type == NULL)
                         {
                             struct RecordType *record_type = NULL;
@@ -8284,7 +9457,27 @@ next_identifier:
                             }
                             init_expr->record_type = record_type;
                         }
-                        return_val += semcheck_expr_main(&expr_type, symtab, init_expr, INT_MAX, NO_MUTATE);
+                        if (init_expr->type == EXPR_ARRAY_LITERAL &&
+                            init_expr->array_element_type == UNKNOWN_TYPE &&
+                            init_expr->array_element_type_id == NULL)
+                        {
+                            KgpcType *var_type = (var_node != NULL) ? var_node->type : NULL;
+                            if ((var_type == NULL || !kgpc_type_is_array(var_type)) &&
+                                tree->tree_data.var_decl_data.type_id != NULL)
+                            {
+                                HashNode_t *type_node = semcheck_find_preferred_type_node(symtab,
+                                    tree->tree_data.var_decl_data.type_id);
+                                if (type_node != NULL)
+                                    var_type = type_node->type;
+                            }
+                            if (var_type != NULL && kgpc_type_is_array(var_type))
+                            {
+                                KgpcType *elem_type = kgpc_type_get_array_element_type_resolved(var_type, symtab);
+                                if (elem_type != NULL)
+                                    init_expr->array_element_type = semcheck_tag_from_kgpc(elem_type);
+                            }
+                        }
+                        return_val += semcheck_expr_main(symtab, init_expr, INT_MAX, NO_MUTATE, &expr_type);
 
                         if (tree->tree_data.var_decl_data.is_typed_const && var_node != NULL &&
                             init_expr->type != EXPR_ADDR && init_expr->type != EXPR_ADDR_OF_PROC &&
@@ -8312,7 +9505,7 @@ next_identifier:
                                 if (evaluate_real_const_expr(symtab, init_expr, &real_value) == 0)
                                     var_node->const_real_value = real_value;
                             }
-                            else if (init_expr->type == EXPR_SET)
+                            else if (expression_is_set_const_expr(symtab, init_expr))
                             {
                                 unsigned char set_bytes[32];
                                 size_t set_size = 0;
@@ -8340,7 +9533,8 @@ next_identifier:
                             }
                         }
 
-                    if (expr_type == UNKNOWN_TYPE)
+                    int expr_tag = expr_type != NULL ? semcheck_tag_from_kgpc(expr_type) : UNKNOWN_TYPE;
+                    if (expr_tag == UNKNOWN_TYPE)
                     {
                         if (!is_default_param)
                         {
@@ -8351,14 +9545,27 @@ next_identifier:
                     else
                     {
                         enum VarType inferred_var_type = HASHVAR_UNTYPED;
-                        int normalized_type = expr_type;
+                        int normalized_type = expr_tag;
 
-                        switch(expr_type)
+                        switch(expr_tag)
                         {
                             case INT_TYPE:
                             case LONGINT_TYPE:
                                 inferred_var_type = HASHVAR_INTEGER;
-                                normalized_type = (expr_type == LONGINT_TYPE) ? LONGINT_TYPE : INT_TYPE;
+                                normalized_type = (expr_tag == LONGINT_TYPE) ? LONGINT_TYPE : INT_TYPE;
+                                break;
+                            case BYTE_TYPE:
+                            case WORD_TYPE:
+                                inferred_var_type = HASHVAR_INTEGER;
+                                normalized_type = expr_tag;
+                                break;
+                            case LONGWORD_TYPE:
+                                inferred_var_type = HASHVAR_LONGINT;
+                                normalized_type = LONGWORD_TYPE;
+                                break;
+                            case QWORD_TYPE:
+                                inferred_var_type = HASHVAR_INT64;
+                                normalized_type = QWORD_TYPE;
                                 break;
                             case INT64_TYPE:
                                 inferred_var_type = HASHVAR_INT64;
@@ -8443,6 +9650,16 @@ next_identifier:
                             }
                             if (!compatible)
                             {
+                                if (current_var_type == HASHVAR_REAL &&
+                                    (inferred_var_type == HASHVAR_INTEGER ||
+                                     inferred_var_type == HASHVAR_LONGINT ||
+                                     inferred_var_type == HASHVAR_INT64))
+                                {
+                                    compatible = 1;
+                                }
+                            }
+                            if (!compatible)
+                            {
                                 if (current_var_type == HASHVAR_INT64 &&
                                     (inferred_var_type == HASHVAR_INTEGER || inferred_var_type == HASHVAR_LONGINT ||
                                      inferred_var_type == HASHVAR_INT64))
@@ -8456,9 +9673,68 @@ next_identifier:
                                 }
                             }
 
-                            if (!compatible && current_var_type == HASHVAR_PCHAR && expr_type == CHAR_TYPE)
+                            if (!compatible && current_var_type == HASHVAR_PCHAR && expr_tag == CHAR_TYPE)
                             {
                                 compatible = 1;
+                            }
+                            /* Allow string literal initializer for array of char or shortstring-like arrays */
+                            if (!compatible && current_var_type == HASHVAR_ARRAY && expr_tag == STRING_TYPE)
+                            {
+                                KgpcType *var_type = (var_node != NULL) ? var_node->type : NULL;
+                                if (var_type != NULL && var_type->kind == TYPE_KIND_ARRAY &&
+                                    var_type->info.array_info.element_type != NULL &&
+                                    var_type->info.array_info.element_type->kind == TYPE_KIND_PRIMITIVE &&
+                                    var_type->info.array_info.element_type->info.primitive_type_tag == CHAR_TYPE)
+                                {
+                                    char *string_value = NULL;
+                                    size_t string_len = 0;
+                                    if (init_expr != NULL && init_expr->type == EXPR_STRING &&
+                                        init_expr->expr_data.string != NULL)
+                                    {
+                                        string_len = strlen(init_expr->expr_data.string);
+                                    }
+                                    else if (evaluate_string_const_expr(symtab, init_expr, &string_value) == 0)
+                                    {
+                                        if (string_value != NULL)
+                                            string_len = strlen(string_value);
+                                    }
+                                    if (string_value != NULL)
+                                        free(string_value);
+
+                                    int array_size = var_type->info.array_info.end_index -
+                                                     var_type->info.array_info.start_index + 1;
+                                    if (array_size < 0)
+                                        array_size = 0;
+                                    if (string_len <= (size_t)array_size)
+                                    {
+                                        compatible = 1;
+                                    }
+                                    else
+                                    {
+                                        semcheck_error_with_context(
+                                            "Error on line %d, initializer string literal too long for %s (string length: %zu, array size: %d).\n",
+                                            tree->line_num, var_name, string_len, array_size);
+                                        ++return_val;
+                                    }
+                                }
+                            }
+
+                            /* Allow array literal initializer for array variables when element types match */
+                            if (!compatible && current_var_type == HASHVAR_ARRAY &&
+                                init_expr != NULL && init_expr->type == EXPR_ARRAY_LITERAL)
+                            {
+                                KgpcType *var_type = (var_node != NULL) ? var_node->type : NULL;
+                                if (var_type != NULL && kgpc_type_is_array(var_type))
+                                {
+                                    KgpcType *elem_type = kgpc_type_get_array_element_type_resolved(var_type, symtab);
+                                    int elem_tag = semcheck_tag_from_kgpc(elem_type);
+                                    int literal_elem_tag = init_expr->array_element_type;
+                                    if (elem_tag != UNKNOWN_TYPE && literal_elem_tag != UNKNOWN_TYPE &&
+                                        elem_tag == literal_elem_tag)
+                                    {
+                                        compatible = 1;
+                                    }
+                                }
                             }
                             
                             /* Allow pointer type initializers (including nil) for pointer variables.
@@ -8466,13 +9742,13 @@ next_identifier:
                              * be pointer types. This enables patterns like: var my_ptr: PChar = nil; */
                             if (!compatible)
                             {
-                                int inferred_is_pointer = (inferred_var_type == HASHVAR_POINTER || expr_type == POINTER_TYPE);
+                                int inferred_is_pointer = (inferred_var_type == HASHVAR_POINTER || expr_tag == POINTER_TYPE);
                                 int current_is_pointer = (current_var_type == HASHVAR_POINTER);
                                 int current_is_proc = (current_var_type == HASHVAR_PROCEDURE);
                                 if (var_node->type != NULL)
                                 {
                                     current_is_pointer |= kgpc_type_is_pointer(var_node->type);
-                                    if (kgpc_type_get_legacy_tag(var_node->type) == POINTER_TYPE)
+                                    if (semcheck_tag_from_kgpc(var_node->type) == POINTER_TYPE)
                                         current_is_pointer = 1;
                                     if (var_node->type->kind == TYPE_KIND_PROCEDURE)
                                         current_is_proc = 1;
@@ -8487,7 +9763,7 @@ next_identifier:
                                     compatible = 1;
                             }
 
-                            if (!compatible && current_var_type == HASHVAR_RECORD && expr_type == STRING_TYPE)
+                            if (!compatible && current_var_type == HASHVAR_RECORD && expr_tag == STRING_TYPE)
                             {
                                 const char *record_id = NULL;
                                 if (var_node->type != NULL)
@@ -8548,27 +9824,20 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
 
     const char *prev_owner = semcheck_get_current_method_owner();
     char *owner_copy = NULL;
-    const char *owner_source = subprogram->tree_data.subprogram_data.mangled_id;
-    if (owner_source == NULL)
-        owner_source = subprogram->tree_data.subprogram_data.id;
-    semcheck_set_current_method_owner(NULL);
-    if (owner_source != NULL)
+    if (subprogram->tree_data.subprogram_data.mangled_id != NULL)
     {
-        const char *sep = strstr(owner_source, "__");
-        if (sep != NULL && sep != owner_source)
+        const char *mangled = subprogram->tree_data.subprogram_data.mangled_id;
+        const char *sep = strstr(mangled, "__");
+        if (sep != NULL && sep != mangled)
         {
-            size_t len = (size_t)(sep - owner_source);
+            size_t len = (size_t)(sep - mangled);
             owner_copy = (char *)malloc(len + 1);
             if (owner_copy != NULL)
             {
-                memcpy(owner_copy, owner_source, len);
+                memcpy(owner_copy, mangled, len);
                 owner_copy[len] = '\0';
                 semcheck_set_current_method_owner(owner_copy);
             }
-        }
-        else
-        {
-            semcheck_set_current_method_owner(NULL);
         }
     }
 
@@ -8646,6 +9915,22 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     {
         ListNode_t *all_matches = FindAllIdents(symtab, id_to_use_for_lookup);
         ListNode_t *cur = all_matches;
+        
+        if (getenv("KGPC_DEBUG_OVERLOAD_MATCH") != NULL)
+        {
+            fprintf(stderr, "[KGPC] Matching impl %s mangled=%s\n",
+                id_to_use_for_lookup ? id_to_use_for_lookup : "<null>",
+                subprogram->tree_data.subprogram_data.mangled_id);
+            ListNode_t *debug_cur = all_matches;
+            while (debug_cur != NULL)
+            {
+                HashNode_t *debug_cand = (HashNode_t *)debug_cur->cur;
+                fprintf(stderr, "  candidate: id=%s mangled=%s\n",
+                    debug_cand && debug_cand->id ? debug_cand->id : "<null>",
+                    debug_cand && debug_cand->mangled_id ? debug_cand->mangled_id : "<null>");
+                debug_cur = debug_cur->next;
+            }
+        }
         
         while (cur != NULL && existing_decl == NULL)
         {
@@ -8893,6 +10178,22 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         {
             /* "Result" is not already declared in this scope, so add it as an alias */
             PushFuncRetOntoScope_Typed(symtab, "Result", return_kgpc_type);
+            if (getenv("KGPC_DEBUG_RESULT") != NULL)
+            {
+                fprintf(stderr,
+                    "[KGPC] add Result alias for %s type=%s\n",
+                    subprogram->tree_data.subprogram_data.id ?
+                        subprogram->tree_data.subprogram_data.id : "<anon>",
+                    kgpc_type_to_string(return_kgpc_type));
+            }
+        }
+        else if (getenv("KGPC_DEBUG_RESULT") != NULL)
+        {
+            fprintf(stderr,
+                "[KGPC] Result alias already exists for %s existing_type=%s\n",
+                subprogram->tree_data.subprogram_data.id ?
+                    subprogram->tree_data.subprogram_data.id : "<anon>",
+                kgpc_type_to_string(result_check->type));
         }
 
         /* For class methods, also add an alias using the unmangled method name (suffix after __) */
@@ -9011,29 +10312,6 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             if (owner_record != NULL && owner_record->is_type_helper &&
                 owner_record->helper_base_type_id != NULL)
             {
-                int method_is_static = 0;
-                const char *method_source = subprogram->tree_data.subprogram_data.mangled_id;
-                if (method_source == NULL)
-                    method_source = subprogram->tree_data.subprogram_data.id;
-                if (method_source != NULL)
-                {
-                    const char *sep = strstr(method_source, "__");
-                    if (sep != NULL && sep[2] != '\0')
-                    {
-                        const char *method_name = sep + 2;
-                        size_t name_len = strcspn(method_name, "_");
-                        if (name_len > 0 && name_len < 128)
-                        {
-                            char method_buf[128];
-                            memcpy(method_buf, method_name, name_len);
-                            method_buf[name_len] = '\0';
-                            method_is_static = from_cparser_is_method_static(owner_id, method_buf);
-                        }
-                    }
-                }
-                if (method_is_static)
-                    goto skip_helper_self_injection;
-
                 KgpcType *self_type = NULL;
                 HashNode_t *type_node = semcheck_find_preferred_type_node(symtab,
                     owner_record->helper_base_type_id);
@@ -9055,8 +10333,6 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                     PushVarOntoScope_Typed(symtab, "Self", self_type);
                     destroy_kgpc_type(self_type);
                 }
-skip_helper_self_injection:
-                ;
             }
         }
     }
@@ -9142,7 +10418,7 @@ skip_helper_self_injection:
             const char *sep = strstr(id, "__");
             if (sep != NULL && sep[2] != '\0') {
                 HashNode_t *suffix_node = NULL;
-                if (FindIdent(&suffix_node, symtab, (char *)(sep + 2)) == 0 && suffix_node != NULL) {
+                if (FindIdent(&suffix_node, symtab, (sep + 2)) == 0 && suffix_node != NULL) {
                     return_was_assigned = (suffix_node->mutated != NO_MUTATE);
                 }
             }
@@ -9168,10 +10444,11 @@ skip_helper_self_injection:
             }
             else
             {
+                /* FPC treats this as a warning, not an error - function result may be uninitialized */
                 fprintf(stderr,
-                    "Error in function %s: no return statement declared in function body!\n\n",
+                    "Warning in function %s: function result does not seem to be set\n\n",
                     subprogram->tree_data.subprogram_data.id);
-                ++return_val;
+                g_semcheck_warning_count++;
             }
         }
     }
@@ -9212,9 +10489,11 @@ skip_helper_self_injection:
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_subprogram %s returning at end: %d\n", subprogram->tree_data.subprogram_data.id, return_val);
 #endif
-    semcheck_set_current_method_owner(prev_owner);
     if (owner_copy != NULL)
+    {
+        semcheck_set_current_method_owner(prev_owner);
         free(owner_copy);
+    }
 
     return return_val;
 }

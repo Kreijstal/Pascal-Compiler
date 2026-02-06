@@ -15,7 +15,17 @@
 #include "format_arg.h"
 
 static const double KGPC_PI = 3.14159265358979323846264338327950288;
-static uint64_t kgpc_rand_state = 0x9e3779b97f4a7c15ULL;
+
+uint32_t kgpc_randseed = 0u;
+static uint32_t kgpc_old_randseed = 0xFFFFFFFFu;
+
+/* Xoshiro128** state (matching FPC rtl/inc/system.inc). */
+static uint32_t kgpc_xsr_state[4] = {
+    0xAFF181C0u,
+    0x73B13BA2u,
+    0x1340D3B4u,
+    0x61204305u
+};
 
 /* Forward decl for optional debug flag helper */
 static int kgpc_env_flag(const char *name);
@@ -89,7 +99,7 @@ int kgpc_threading_already_used(void)
     return kgpc_threading_used;
 }
 
-int ThreadingAlreadyUsed_void(void)
+int threadingalreadyused_void(void)
 {
     return kgpc_threading_already_used();
 }
@@ -184,6 +194,9 @@ typedef struct KGPCFilePrivate
 #define KGPC_FILE_PRIVATE_MAGIC 0x4B475046u
 #define KGPC_FILE_PRIVATE_MAGIC_INV (~KGPC_FILE_PRIVATE_MAGIC)
 
+static char *kgpc_string_alloc_with_length(size_t length);
+char *kgpc_alloc_empty_string(void);
+
 static int kgpc_file_private_magic_valid(const KGPCFileRec *file)
 {
     if (file == NULL)
@@ -206,6 +219,8 @@ static int kgpc_file_private_magic_valid(const KGPCFileRec *file)
 static KGPCTextRec kgpc_stdin_file = { 0 };
 static KGPCTextRec kgpc_stdout_file = { 0 };
 static KGPCTextRec kgpc_stderr_file = { 0 };
+static int kgpc_argc = 0;
+static char **kgpc_argv = NULL;
 
 /* Global pointers exported for Pascal programs to reference */
 KGPCTextRec *stdin_ptr = NULL;
@@ -274,6 +289,14 @@ static void kgpc_textrec_set_stream(KGPCTextRec *file, FILE *stream)
     file->private_data = (int64_t)(uintptr_t)stream;
     if (stream != NULL)
         file->handle = fileno(stream);
+}
+
+void kgpc_text_setbuf(KGPCTextRec *file, void *buffer, int32_t size)
+{
+    if (file == NULL)
+        return;
+    file->bufptr = (char *)buffer;
+    file->bufsize = size > 0 ? (int64_t)size : 0;
 }
 
 static KGPCFilePrivate kgpc_file_private_get(const KGPCFileRec *file)
@@ -930,6 +953,42 @@ static inline int64_t kgpc_double_to_bits(double value)
     int64_t bits;
     memcpy(&bits, &value, sizeof(bits));
     return bits;
+}
+
+/* Cache extended-precision parses so default Write can preserve StrToFloat precision.
+ * This mirrors FPC's behavior where StrToFloat returns Extended on x86_64. */
+#define KGPC_REAL_CACHE_SIZE 64
+typedef struct
+{
+    int valid;
+    int64_t bits;
+    long double ext_value;
+} kgpc_real_cache_entry;
+
+static kgpc_real_cache_entry kgpc_real_cache[KGPC_REAL_CACHE_SIZE];
+static unsigned kgpc_real_cache_pos = 0;
+
+static void kgpc_real_cache_put(int64_t bits, long double ext_value)
+{
+    kgpc_real_cache[kgpc_real_cache_pos].valid = 1;
+    kgpc_real_cache[kgpc_real_cache_pos].bits = bits;
+    kgpc_real_cache[kgpc_real_cache_pos].ext_value = ext_value;
+    kgpc_real_cache_pos = (kgpc_real_cache_pos + 1) % KGPC_REAL_CACHE_SIZE;
+}
+
+static int kgpc_real_cache_get(int64_t bits, long double *out_value)
+{
+    if (out_value == NULL)
+        return 0;
+    for (int i = 0; i < KGPC_REAL_CACHE_SIZE; ++i)
+    {
+        if (kgpc_real_cache[i].valid && kgpc_real_cache[i].bits == bits)
+        {
+            *out_value = kgpc_real_cache[i].ext_value;
+            return 1;
+        }
+    }
+    return 0;
 }
 
 static const char *kgpc_rtti_type_name(const kgpc_class_typeinfo *info)
@@ -1854,12 +1913,13 @@ void kgpc_write_real(KGPCTextRec *file, int width, int precision, int64_t value_
 
     if (precision < 0)
     {
+        const int default_precision = 6;
         if (width > 0)
-            fprintf(dest, "%*g", width, value);
+            fprintf(dest, "%*.*g", width, default_precision, value);
         else if (width < 0)
-            fprintf(dest, "%-*g", -width, value);
+            fprintf(dest, "%-*.*g", -width, default_precision, value);
         else
-            fprintf(dest, "%g", value);
+            fprintf(dest, "%.*g", default_precision, value);
     }
     else
     {
@@ -1930,83 +1990,220 @@ void *__kgpc_default_create(size_t class_size, const void *vmt_ptr)
     return instance;
 }
 
-typedef struct KgpcStringNode
+typedef struct KgpcStringHeader
 {
-    char *ptr;
-    size_t length;
-    struct KgpcStringNode *next;
-} KgpcStringNode;
+    int32_t refcount;
+    int32_t length;
+} KgpcStringHeader;
 
-static KgpcStringNode *kgpc_string_allocations = NULL;
+static void *const KGPC_STRING_TOMBSTONE = (void *)1;
+static void **kgpc_string_set_slots = NULL;
+static size_t kgpc_string_set_cap = 0;
+static size_t kgpc_string_set_count = 0;
 
-static void kgpc_string_register_allocation(char *ptr, size_t length)
+static size_t kgpc_hash_ptr(const void *value)
 {
-    if (ptr == NULL)
-        return;
-
-    KgpcStringNode *node = (KgpcStringNode *)malloc(sizeof(KgpcStringNode));
-    if (node == NULL)
-        return;
-
-    node->ptr = ptr;
-    node->length = length;
-    node->next = kgpc_string_allocations;
-    kgpc_string_allocations = node;
+    uintptr_t v = (uintptr_t)value;
+    v ^= v >> 33;
+    v *= UINT64_C(0xff51afd7ed558ccd);
+    v ^= v >> 33;
+    v *= UINT64_C(0xc4ceb9fe1a85ec53);
+    v ^= v >> 33;
+    return (size_t)v;
 }
 
-static int kgpc_string_release_allocation(char *ptr)
+static void kgpc_string_set_grow(size_t new_cap)
 {
-    if (ptr == NULL)
-        return 0;
+    void **old_slots = kgpc_string_set_slots;
+    size_t old_cap = kgpc_string_set_cap;
 
-    KgpcStringNode **link = &kgpc_string_allocations;
-    while (*link != NULL)
+    kgpc_string_set_slots = (void **)calloc(new_cap, sizeof(void *));
+    if (kgpc_string_set_slots == NULL)
     {
-        if ((*link)->ptr == ptr)
+        kgpc_string_set_slots = old_slots;
+        return;
+    }
+    kgpc_string_set_cap = new_cap;
+    kgpc_string_set_count = 0;
+
+    if (old_slots != NULL)
+    {
+        size_t mask = new_cap - 1;
+        for (size_t i = 0; i < old_cap; i++)
         {
-            KgpcStringNode *victim = *link;
-            *link = victim->next;
-            free(victim);
-            return 1;
+            void *entry = old_slots[i];
+            if (entry == NULL || entry == KGPC_STRING_TOMBSTONE)
+                continue;
+            size_t idx = kgpc_hash_ptr(entry) & mask;
+            while (kgpc_string_set_slots[idx] != NULL)
+                idx = (idx + 1) & mask;
+            kgpc_string_set_slots[idx] = entry;
+            kgpc_string_set_count += 1;
         }
-        link = &(*link)->next;
+        free(old_slots);
     }
-
-    return 0;
 }
 
-static KgpcStringNode *kgpc_string_find_allocation(const char *ptr)
+static void kgpc_string_set_insert(const void *value)
 {
-    KgpcStringNode *node = kgpc_string_allocations;
-    while (node != NULL)
+    if (value == NULL || value == KGPC_STRING_TOMBSTONE)
+        return;
+    if (kgpc_string_set_cap == 0)
+        kgpc_string_set_grow(1024);
+    if (kgpc_string_set_cap == 0)
+        return;
+    if ((kgpc_string_set_count + 1) * 10 >= kgpc_string_set_cap * 7)
+        kgpc_string_set_grow(kgpc_string_set_cap * 2);
+    if (kgpc_string_set_cap == 0)
+        return;
+
+    size_t mask = kgpc_string_set_cap - 1;
+    size_t idx = kgpc_hash_ptr(value) & mask;
+    size_t first_tombstone = (size_t)-1;
+    for (;;)
     {
-        if (node->ptr == ptr)
-            return node;
-        node = node->next;
+        void *entry = kgpc_string_set_slots[idx];
+        if (entry == NULL)
+        {
+            if (first_tombstone != (size_t)-1)
+                idx = first_tombstone;
+            kgpc_string_set_slots[idx] = (void *)value;
+            kgpc_string_set_count += 1;
+            return;
+        }
+        if (entry == value)
+            return;
+        if (entry == KGPC_STRING_TOMBSTONE && first_tombstone == (size_t)-1)
+            first_tombstone = idx;
+        idx = (idx + 1) & mask;
     }
-    return NULL;
+}
+
+static void kgpc_string_set_remove(const void *value)
+{
+    if (value == NULL || kgpc_string_set_cap == 0)
+        return;
+    size_t mask = kgpc_string_set_cap - 1;
+    size_t idx = kgpc_hash_ptr(value) & mask;
+    for (;;)
+    {
+        void *entry = kgpc_string_set_slots[idx];
+        if (entry == NULL)
+            return;
+        if (entry == value)
+        {
+            kgpc_string_set_slots[idx] = KGPC_STRING_TOMBSTONE;
+            if (kgpc_string_set_count > 0)
+                kgpc_string_set_count -= 1;
+            return;
+        }
+        idx = (idx + 1) & mask;
+    }
+}
+
+static int kgpc_string_is_managed(const char *value)
+{
+    if (value == NULL)
+        return 0;
+    if (value == kgpc_alloc_empty_string())
+        return 1;
+    if (kgpc_string_set_cap == 0)
+        return 0;
+    size_t mask = kgpc_string_set_cap - 1;
+    size_t idx = kgpc_hash_ptr(value) & mask;
+    for (;;)
+    {
+        void *entry = kgpc_string_set_slots[idx];
+        if (entry == NULL)
+            return 0;
+        if (entry == value)
+            return 1;
+        idx = (idx + 1) & mask;
+    }
+}
+
+static KgpcStringHeader *kgpc_string_header(const char *value)
+{
+    if (!kgpc_string_is_managed(value))
+        return NULL;
+    return (KgpcStringHeader *)((char *)value - (int64_t)sizeof(KgpcStringHeader));
 }
 
 static size_t kgpc_string_known_length(const char *value)
 {
     if (value == NULL)
         return 0;
-
-    KgpcStringNode *node = kgpc_string_find_allocation(value);
-    if (node != NULL)
-        return node->length;
+    KgpcStringHeader *hdr = kgpc_string_header(value);
+    if (hdr != NULL)
+        return (size_t)hdr->length;
     return strlen(value);
+}
+
+static char *kgpc_string_alloc_with_length(size_t length)
+{
+    size_t total = sizeof(KgpcStringHeader) + length + 1;
+    KgpcStringHeader *hdr = (KgpcStringHeader *)malloc(total);
+    if (hdr == NULL)
+        return NULL;
+    hdr->refcount = 1;
+    hdr->length = (int32_t)length;
+    char *data = (char *)(hdr + 1);
+    data[length] = '\0';
+    kgpc_string_set_insert(data);
+    return data;
+}
+
+static void kgpc_string_retain(const char *value)
+{
+    KgpcStringHeader *hdr = kgpc_string_header(value);
+    if (hdr == NULL)
+        return;
+    if (hdr->refcount >= 0)
+        hdr->refcount += 1;
+}
+
+static void kgpc_string_release(char *value)
+{
+    KgpcStringHeader *hdr = kgpc_string_header(value);
+    if (hdr == NULL)
+        return;
+    if (hdr->refcount < 0)
+        return;
+    hdr->refcount -= 1;
+    if (hdr->refcount == 0)
+    {
+        kgpc_string_set_remove(value);
+        free(hdr);
+    }
 }
 
 char *kgpc_alloc_empty_string(void)
 {
-    char *empty = (char *)malloc(1);
-    if (empty != NULL)
-    {
-        empty[0] = '\0';
-        kgpc_string_register_allocation(empty, 0);
-    }
-    return empty;
+    static struct {
+        KgpcStringHeader header;
+        char data[1];
+    } empty = { { -1, 0 }, { '\0' } };
+    return empty.data;
+}
+
+void kgpc_init_args(int argc, char **argv)
+{
+    kgpc_argc = (argc < 0) ? 0 : argc;
+    kgpc_argv = argv;
+}
+
+int kgpc_param_count(void)
+{
+    if (kgpc_argc <= 1)
+        return 0;
+    return kgpc_argc - 1;
+}
+
+char *kgpc_param_str(int index)
+{
+    if (index < 0 || index >= kgpc_argc || kgpc_argv == NULL)
+        return kgpc_alloc_empty_string();
+    return kgpc_string_duplicate(kgpc_argv[index]);
 }
 
 char *kgpc_string_duplicate(const char *value)
@@ -2014,27 +2211,29 @@ char *kgpc_string_duplicate(const char *value)
     if (value == NULL)
         return kgpc_alloc_empty_string();
 
-    size_t len = kgpc_string_known_length(value);
-    char *copy = (char *)malloc(len + 1);
+    KgpcStringHeader *hdr = kgpc_string_header(value);
+    if (hdr != NULL)
+    {
+        kgpc_string_retain(value);
+        return (char *)value;
+    }
+
+    size_t len = strlen(value);
+    char *copy = kgpc_string_alloc_with_length(len);
     if (copy == NULL)
         return kgpc_alloc_empty_string();
-
     if (len > 0)
         memcpy(copy, value, len);
-    copy[len] = '\0';
-    kgpc_string_register_allocation(copy, len);
     return copy;
 }
 
 static char *kgpc_string_duplicate_length(const char *value, size_t length)
 {
-    char *copy = (char *)malloc(length + 1);
+    char *copy = kgpc_string_alloc_with_length(length);
     if (copy == NULL)
         return kgpc_alloc_empty_string();
     if (length > 0 && value != NULL)
         memcpy(copy, value, length);
-    copy[length] = '\0';
-    kgpc_string_register_allocation(copy, length);
     return copy;
 }
 
@@ -2099,30 +2298,64 @@ void kgpc_string_assign(char **target, const char *value)
     if (existing != NULL && value == existing)
         return;
 
-    if (existing != NULL && value != NULL)
+    if (existing != NULL)
+        kgpc_string_release(existing);
+
+    if (value == NULL)
     {
-        KgpcStringNode *existing_node = kgpc_string_find_allocation(existing);
-        if (existing_node != NULL)
-        {
-            const char *start = existing_node->ptr;
-            const char *end = start + existing_node->length;
-            if (value >= start && value <= end)
-            {
-                char *copy = kgpc_string_duplicate(value);
-                if (kgpc_string_release_allocation(existing))
-                    free(existing);
-                *target = copy;
-                return;
-            }
-        }
-    }
-    if (kgpc_string_release_allocation(existing))
-    {
-        free(existing);
-        *target = NULL;
+        *target = kgpc_alloc_empty_string();
+        return;
     }
 
-    char *copy = kgpc_string_duplicate(value);
+    KgpcStringHeader *hdr = kgpc_string_header(value);
+    if (hdr != NULL)
+    {
+        kgpc_string_retain(value);
+        *target = (char *)value;
+        return;
+    }
+
+    *target = kgpc_string_duplicate(value);
+}
+
+void kgpc_string_assign_take(char **target, char *value)
+{
+    if (target == NULL)
+    {
+        if (value != NULL)
+            free(value);
+        return;
+    }
+
+    if (value == NULL)
+    {
+        if (*target != NULL)
+            kgpc_string_release(*target);
+        *target = kgpc_alloc_empty_string();
+        return;
+    }
+
+    if (*target != NULL)
+        kgpc_string_release(*target);
+
+    KgpcStringHeader *hdr = kgpc_string_header(value);
+    if (hdr != NULL)
+    {
+        *target = value;
+        return;
+    }
+
+    size_t len = strlen(value);
+    char *copy = kgpc_string_alloc_with_length(len);
+    if (copy == NULL)
+    {
+        *target = kgpc_alloc_empty_string();
+        free(value);
+        return;
+    }
+    if (len > 0)
+        memcpy(copy, value, len);
+    free(value);
     *target = copy;
 }
 
@@ -2147,7 +2380,7 @@ void kgpc_string_setlength(char **target, int64_t new_length)
     if (current_len > requested)
         current_len = requested;
 
-    char *resized = (char *)malloc(requested + 1);
+    char *resized = kgpc_string_alloc_with_length(requested);
     if (resized == NULL)
     {
         fprintf(stderr, "KGPC runtime: failed to resize string to %lld bytes.\n",
@@ -2159,11 +2392,9 @@ void kgpc_string_setlength(char **target, int64_t new_length)
         memcpy(resized, current, current_len);
     if (requested > current_len)
         memset(resized + current_len, 0, requested - current_len);
-    resized[requested] = '\0';
 
-    kgpc_string_register_allocation(resized, requested);
-    if (current != NULL && kgpc_string_release_allocation(current))
-        free(current);
+    if (current != NULL)
+        kgpc_string_release(current);
     *target = resized;
 }
 
@@ -2177,14 +2408,14 @@ void kgpc_setstring(char **target, const char *buffer, int64_t length)
         /* Set to empty string */
         char *empty = kgpc_alloc_empty_string();
         char *current = *target;
-        if (current != NULL && kgpc_string_release_allocation(current))
-            free(current);
+        if (current != NULL)
+            kgpc_string_release(current);
         *target = empty;
         return;
     }
 
     size_t copy_len = (size_t)length;
-    char *result = (char *)malloc(copy_len + 1);
+    char *result = kgpc_string_alloc_with_length(copy_len);
     if (result == NULL)
     {
         fprintf(stderr, "KGPC runtime: failed to allocate string (%zu bytes including null).\n",
@@ -2193,12 +2424,9 @@ void kgpc_setstring(char **target, const char *buffer, int64_t length)
     }
 
     memcpy(result, buffer, copy_len);
-    result[copy_len] = '\0';
-
-    kgpc_string_register_allocation(result, copy_len);
     char *current = *target;
-    if (current != NULL && kgpc_string_release_allocation(current))
-        free(current);
+    if (current != NULL)
+        kgpc_string_release(current);
     *target = result;
 }
 
@@ -2221,7 +2449,7 @@ void kgpc_string_delete(char **target, int64_t index, int64_t count)
         remove = length - start;
 
     size_t new_length = length - remove;
-    char *result = (char *)malloc(new_length + 1);
+    char *result = kgpc_string_alloc_with_length(new_length);
     if (result == NULL)
     {
         fprintf(stderr, "KGPC runtime: failed to delete substring (%lld bytes).\n",
@@ -2234,11 +2462,8 @@ void kgpc_string_delete(char **target, int64_t index, int64_t count)
     size_t tail = length - start - remove;
     if (tail > 0)
         memcpy(result + start, source + start + remove, tail);
-    result[new_length] = '\0';
-
-    kgpc_string_register_allocation(result, new_length);
-    if (source != NULL && kgpc_string_release_allocation(source))
-        free(source);
+    if (source != NULL)
+        kgpc_string_release(source);
     *target = result;
 }
 
@@ -2262,7 +2487,7 @@ void kgpc_string_insert(const char *value, char **target, int64_t index)
     size_t pos = (size_t)(index - 1);
     size_t new_len = dest_len + insert_len;
 
-    char *result = (char *)malloc(new_len + 1);
+    char *result = kgpc_string_alloc_with_length(new_len);
     if (result == NULL)
     {
         fprintf(stderr, "KGPC runtime: failed to insert substring (%zu bytes).\n",
@@ -2276,11 +2501,8 @@ void kgpc_string_insert(const char *value, char **target, int64_t index)
         memcpy(result + pos, value, insert_len);
     if (dest != NULL && pos < dest_len)
         memcpy(result + pos + insert_len, dest + pos, dest_len - pos);
-    result[new_len] = '\0';
-
-    kgpc_string_register_allocation(result, new_len);
-    if (dest != NULL && kgpc_string_release_allocation(dest))
-        free(dest);
+    if (dest != NULL)
+        kgpc_string_release(dest);
     *target = result;
 }
 
@@ -2388,6 +2610,51 @@ void kgpc_string_to_shortstring(char *dest, const char *src, size_t dest_size)
     memcpy(dest + 1, src, copy_len);
     
     /* Pad remaining space with zeros */
+    if (copy_len + 1 < dest_size)
+        memset(dest + 1 + copy_len, 0, dest_size - 1 - copy_len);
+}
+
+void kgpc_char_array_to_shortstring(char *dest, const char *src, size_t src_len, size_t dest_size)
+{
+    if (dest == NULL || src == NULL || dest_size < 2)
+        return;
+
+    size_t max_chars = (dest_size - 1 < 255) ? (dest_size - 1) : 255;
+    size_t copy_len = (src_len < max_chars) ? src_len : max_chars;
+
+    dest[0] = (char)copy_len;
+    if (copy_len > 0)
+        memcpy(dest + 1, src, copy_len);
+    if (copy_len + 1 < dest_size)
+        memset(dest + 1 + copy_len, 0, dest_size - 1 - copy_len);
+}
+
+void kgpc_shortstring_to_char_array(char *dest, const char *src, size_t dest_size)
+{
+    if (dest == NULL || src == NULL || dest_size == 0)
+        return;
+
+    unsigned char src_len = (unsigned char)src[0];
+    size_t copy_len = (src_len < dest_size) ? src_len : dest_size;
+
+    if (copy_len > 0)
+        memcpy(dest, src + 1, copy_len);
+    if (copy_len < dest_size)
+        memset(dest + copy_len, 0, dest_size - copy_len);
+}
+
+void kgpc_shortstring_to_shortstring(char *dest, size_t dest_size, const char *src)
+{
+    if (dest == NULL || src == NULL || dest_size < 2)
+        return;
+
+    unsigned char src_len = (unsigned char)src[0];
+    size_t max_chars = (dest_size - 1 < 255) ? (dest_size - 1) : 255;
+    size_t copy_len = (src_len < max_chars) ? src_len : max_chars;
+
+    dest[0] = (char)copy_len;
+    if (copy_len > 0)
+        memcpy(dest + 1, src + 1, copy_len);
     if (copy_len + 1 < dest_size)
         memset(dest + 1 + copy_len, 0, dest_size - 1 - copy_len);
 }
@@ -2532,36 +2799,30 @@ static char *kgpc_text_read_line_from_stream(FILE *stream)
     if (stream == NULL)
         return NULL;
 
-    size_t capacity = 64;
+    char chunk[4096];
+    size_t capacity = 256;
     size_t length = 0;
     char *buffer = (char *)malloc(capacity);
     if (buffer == NULL)
         return NULL;
 
-    int ch = 0;
     int read_any = 0;
-    while (1)
+    while (fgets(chunk, sizeof(chunk), stream) != NULL)
     {
-        ch = fgetc(stream);
-        if (ch == EOF)
-            break;
-
         read_any = 1;
-        if (ch == '\r')
-        {
-            int next = fgetc(stream);
-            if (next != '\n' && next != EOF)
-                ungetc(next, stream);
-            break;
-        }
-        if (ch == '\n')
-            break;
+        size_t chunk_len = strlen(chunk);
+        char *line_end = strpbrk(chunk, "\r\n");
+        size_t copy_len = (line_end != NULL) ? (size_t)(line_end - chunk) : chunk_len;
 
-        if (length + 1 >= capacity)
+        if (length + copy_len + 1 > capacity)
         {
-            size_t new_capacity = capacity < 128 ? capacity * 2 : capacity + 64;
-            if (new_capacity <= capacity)
-                new_capacity = capacity + 64;
+            size_t new_capacity = capacity;
+            while (length + copy_len + 1 > new_capacity)
+            {
+                new_capacity = (new_capacity < 1024) ? new_capacity * 2 : new_capacity + 512;
+                if (new_capacity <= capacity)
+                    new_capacity = capacity + 512;
+            }
             char *new_buffer = (char *)realloc(buffer, new_capacity);
             if (new_buffer == NULL)
             {
@@ -2572,10 +2833,25 @@ static char *kgpc_text_read_line_from_stream(FILE *stream)
             capacity = new_capacity;
         }
 
-        buffer[length++] = (char)ch;
+        if (copy_len > 0)
+        {
+            memcpy(buffer + length, chunk, copy_len);
+            length += copy_len;
+        }
+
+        if (line_end != NULL)
+        {
+            if (*line_end == '\r' && line_end[1] != '\n')
+            {
+                int next = fgetc(stream);
+                if (next != '\n' && next != EOF)
+                    ungetc(next, stream);
+            }
+            break;
+        }
     }
 
-    if (!read_any && ch == EOF)
+    if (!read_any)
     {
         free(buffer);
         return NULL;
@@ -2609,6 +2885,8 @@ void kgpc_text_rewrite(KGPCTextRec *file)
     if (stream != NULL)
     {
         kgpc_textrec_set_stream(file, stream);
+        if (file->bufptr != NULL && file->bufsize > 0)
+            setvbuf(stream, file->bufptr, _IOFBF, (size_t)file->bufsize);
         file->mode = KGPC_FM_OUTPUT;
         kgpc_ioresult_set(0);
     }
@@ -2634,6 +2912,8 @@ void kgpc_text_append(KGPCTextRec *file)
     if (stream != NULL)
     {
         kgpc_textrec_set_stream(file, stream);
+        if (file->bufptr != NULL && file->bufsize > 0)
+            setvbuf(stream, file->bufptr, _IOFBF, (size_t)file->bufsize);
         file->mode = KGPC_FM_OUTPUT;
         fseek(stream, 0, SEEK_END);
         kgpc_ioresult_set(0);
@@ -2665,6 +2945,8 @@ void kgpc_text_reset(KGPCTextRec *file)
     if (stream != NULL)
     {
         kgpc_textrec_set_stream(file, stream);
+        if (file->bufptr != NULL && file->bufsize > 0)
+            setvbuf(stream, file->bufptr, _IOFBF, (size_t)file->bufsize);
         file->mode = KGPC_FM_INPUT;
         kgpc_ioresult_set(0);
     }
@@ -2757,8 +3039,7 @@ void kgpc_text_readln_into(KGPCTextRec *file, char **target)
         return;
     }
 
-    kgpc_string_assign(target, line);
-    free(line);
+    kgpc_string_assign_take(target, line);
 }
 
 void kgpc_text_readln_into_char(KGPCTextRec *file, char *target)
@@ -2825,6 +3106,16 @@ void kgpc_fillchar(void *dest, size_t count, int value)
 
     unsigned char byte_value = (unsigned char)(value & 0xFF);
     memset(dest, byte_value, count);
+}
+
+void kgpc_fillword(void *dest, size_t count, unsigned short value)
+{
+    if (dest == NULL || count == 0)
+        return;
+
+    unsigned short *ptr = (unsigned short *)dest;
+    for (size_t i = 0; i < count; ++i)
+        ptr[i] = value;
 }
 
 void kgpc_getmem(void **target, size_t size)
@@ -2916,7 +3207,7 @@ char *kgpc_string_concat(const char *lhs, const char *rhs)
     size_t rhs_len = kgpc_string_known_length(rhs);
     size_t total = lhs_len + rhs_len;
 
-    char *result = (char *)malloc(total + 1);
+    char *result = kgpc_string_alloc_with_length(total);
     if (result == NULL)
         return kgpc_alloc_empty_string();
 
@@ -2924,8 +3215,6 @@ char *kgpc_string_concat(const char *lhs, const char *rhs)
         memcpy(result, lhs, lhs_len);
     if (rhs_len > 0)
         memcpy(result + lhs_len, rhs, rhs_len);
-    result[total] = '\0';
-    kgpc_string_register_allocation(result, total);
     return result;
 }
 
@@ -2949,7 +3238,7 @@ char *kgpc_string_copy(const char *value, int64_t index, int64_t count)
     if (value == NULL)
         value = "";
 
-    size_t len = strlen(value);
+    size_t len = kgpc_string_known_length(value);
     if (index < 1 || index > (int64_t)len)
         return kgpc_alloc_empty_string();
 
@@ -2962,14 +3251,12 @@ char *kgpc_string_copy(const char *value, int64_t index, int64_t count)
     if (to_copy > available)
         to_copy = available;
 
-    char *result = (char *)malloc(to_copy + 1);
+    char *result = kgpc_string_alloc_with_length(to_copy);
     if (result == NULL)
         return kgpc_alloc_empty_string();
 
     if (to_copy > 0)
         memcpy(result, value + start, to_copy);
-    result[to_copy] = '\0';
-    kgpc_string_register_allocation(result, to_copy);
     return result;
 }
 
@@ -2995,14 +3282,12 @@ char *kgpc_shortstring_copy(const char *value, int64_t index, int64_t count)
     if (to_copy > available)
         to_copy = available;
 
-    char *result = (char *)malloc(to_copy + 1);
+    char *result = kgpc_string_alloc_with_length(to_copy);
     if (result == NULL)
         return kgpc_alloc_empty_string();
 
     if (to_copy > 0)
         memcpy(result, chars + start, to_copy);
-    result[to_copy] = '\0';
-    kgpc_string_register_allocation(result, to_copy);
     return result;
 }
 
@@ -3033,11 +3318,248 @@ int64_t kgpc_string_compare(const char *lhs, const char *rhs)
     return 0;
 }
 
+static size_t kgpc_char_array_bounded_length(const char *value, size_t max_len)
+{
+    if (value == NULL || max_len == 0)
+        return 0;
+    const void *pos = memchr(value, '\0', max_len);
+    if (pos == NULL)
+        return max_len;
+    return (size_t)((const char *)pos - value);
+}
+
+int64_t kgpc_char_array_compare(const char *array_value, size_t array_len, const char *rhs)
+{
+    if (array_value == NULL)
+        array_value = "";
+    if (rhs == NULL)
+        rhs = "";
+
+    size_t lhs_len = kgpc_char_array_bounded_length(array_value, array_len);
+    size_t rhs_len = kgpc_string_known_length(rhs);
+    size_t min_len = (lhs_len < rhs_len) ? lhs_len : rhs_len;
+
+    if (min_len > 0)
+    {
+        int cmp = memcmp(array_value, rhs, min_len);
+        if (cmp != 0)
+            return (int64_t)cmp;
+    }
+
+    if (lhs_len < rhs_len)
+        return -1;
+    if (lhs_len > rhs_len)
+        return 1;
+    return 0;
+}
+
+int64_t kgpc_char_array_compare_full(const char *array_value, size_t array_len, const char *rhs)
+{
+    if (array_value == NULL)
+        array_value = "";
+    if (rhs == NULL)
+        rhs = "";
+
+    size_t lhs_len = array_len;
+    size_t rhs_len = kgpc_string_known_length(rhs);
+    size_t min_len = (lhs_len < rhs_len) ? lhs_len : rhs_len;
+
+    if (min_len > 0)
+    {
+        int cmp = memcmp(array_value, rhs, min_len);
+        if (cmp != 0)
+            return (int64_t)cmp;
+    }
+
+    if (lhs_len < rhs_len)
+        return -1;
+    if (lhs_len > rhs_len)
+        return 1;
+    return 0;
+}
+
+int64_t kgpc_char_array_compare_array(const char *lhs, size_t lhs_len,
+    const char *rhs, size_t rhs_len)
+{
+    if (lhs == NULL)
+        lhs = "";
+    if (rhs == NULL)
+        rhs = "";
+
+    size_t lhs_eff = kgpc_char_array_bounded_length(lhs, lhs_len);
+    size_t rhs_eff = kgpc_char_array_bounded_length(rhs, rhs_len);
+    size_t min_len = (lhs_eff < rhs_eff) ? lhs_eff : rhs_eff;
+
+    if (min_len > 0)
+    {
+        int cmp = memcmp(lhs, rhs, min_len);
+        if (cmp != 0)
+            return (int64_t)cmp;
+    }
+
+    if (lhs_eff < rhs_eff)
+        return -1;
+    if (lhs_eff > rhs_eff)
+        return 1;
+    return 0;
+}
+
 char *kgpc_strpas(const char *p)
 {
     if (p == NULL)
         return kgpc_alloc_empty_string();
     return kgpc_string_duplicate(p);
+}
+
+char *kgpc_strpas_len(const char *p, int64_t length)
+{
+    if (p == NULL || length <= 0)
+        return kgpc_alloc_empty_string();
+    return kgpc_string_duplicate_length(p, (size_t)length);
+}
+
+int64_t kgpc_string_pos_ca(unsigned char ch, const char *value)
+{
+    if (value == NULL)
+        value = "";
+
+    size_t hay_len = kgpc_string_known_length(value);
+    if (hay_len == 0)
+        return 0;
+
+    for (size_t i = 0; i < hay_len; ++i)
+    {
+        if ((unsigned char)value[i] == ch)
+            return (int64_t)(i + 1);
+    }
+
+    return 0;
+}
+
+int64_t kgpc_string_pos_cs(unsigned char ch, const char *value)
+{
+    if (value == NULL)
+        return 0;
+
+    size_t hay_len = (size_t)(unsigned char)value[0];
+    if (hay_len == 0)
+        return 0;
+
+    const char *hay_data = value + 1;
+    for (size_t i = 0; i < hay_len; ++i)
+    {
+        if ((unsigned char)hay_data[i] == ch)
+            return (int64_t)(i + 1);
+    }
+
+    return 0;
+}
+
+int64_t kgpc_string_pos_cc(unsigned char substr, unsigned char value)
+{
+    return substr == value ? 1 : 0;
+}
+
+int64_t kgpc_string_pos_ac(const char *substr, unsigned char value)
+{
+    if (substr == NULL)
+        substr = "";
+
+    size_t needle_len = kgpc_string_known_length(substr);
+    if (needle_len == 0)
+        return 1;
+    if (needle_len > 1)
+        return 0;
+    return ((unsigned char)substr[0] == value) ? 1 : 0;
+}
+
+int64_t kgpc_string_pos_sc(const char *substr, unsigned char value)
+{
+    if (substr == NULL)
+        return 0;
+
+    size_t needle_len = (size_t)(unsigned char)substr[0];
+    if (needle_len == 0)
+        return 1;
+    if (needle_len > 1)
+        return 0;
+    return ((unsigned char)substr[1] == value) ? 1 : 0;
+}
+
+int64_t kgpc_string_pos_sa(const char *substr, const char *value)
+{
+    if (value == NULL)
+        value = "";
+    if (substr == NULL)
+        return 1;
+
+    size_t hay_len = kgpc_string_known_length(value);
+    size_t needle_len = (size_t)(unsigned char)substr[0];
+
+    if (needle_len == 0)
+        return 1;
+    if (needle_len > hay_len)
+        return 0;
+
+    const char *needle_data = substr + 1;
+    for (size_t i = 0; i + needle_len <= hay_len; ++i)
+    {
+        if (memcmp(value + i, needle_data, needle_len) == 0)
+            return (int64_t)(i + 1);
+    }
+
+    return 0;
+}
+
+int64_t kgpc_string_pos_as(const char *substr, const char *value)
+{
+    if (value == NULL)
+        return 0;
+    if (substr == NULL)
+        return 1;
+
+    size_t hay_len = (size_t)(unsigned char)value[0];
+    size_t needle_len = kgpc_string_known_length(substr);
+
+    if (needle_len == 0)
+        return 1;
+    if (needle_len > hay_len)
+        return 0;
+
+    const char *hay_data = value + 1;
+    for (size_t i = 0; i + needle_len <= hay_len; ++i)
+    {
+        if (memcmp(hay_data + i, substr, needle_len) == 0)
+            return (int64_t)(i + 1);
+    }
+
+    return 0;
+}
+
+int64_t kgpc_string_pos_ss(const char *substr, const char *value)
+{
+    if (value == NULL)
+        return 0;
+    if (substr == NULL)
+        return 1;
+
+    size_t hay_len = (size_t)(unsigned char)value[0];
+    size_t needle_len = (size_t)(unsigned char)substr[0];
+
+    if (needle_len == 0)
+        return 1;
+    if (needle_len > hay_len)
+        return 0;
+
+    const char *hay_data = value + 1;
+    const char *needle_data = substr + 1;
+    for (size_t i = 0; i + needle_len <= hay_len; ++i)
+    {
+        if (memcmp(hay_data + i, needle_data, needle_len) == 0)
+            return (int64_t)(i + 1);
+    }
+
+    return 0;
 }
 
 int64_t kgpc_string_pos(const char *substr, const char *value)
@@ -3062,6 +3584,233 @@ int64_t kgpc_string_pos(const char *substr, const char *value)
     }
 
     return 0;
+}
+
+static int64_t kgpc_pos_empty_result(int64_t start_index, size_t hay_len)
+{
+    if (start_index < 1)
+        start_index = 1;
+    if ((size_t)start_index > hay_len + 1)
+        return 0;
+    return start_index;
+}
+
+int64_t kgpc_string_pos_sa_from(const char *substr, const char *value, int64_t start_index)
+{
+    if (value == NULL)
+        value = "";
+    if (substr == NULL)
+        return 1;
+
+    size_t hay_len = kgpc_string_known_length(value);
+    size_t needle_len = (size_t)(unsigned char)substr[0];
+
+    if (needle_len == 0)
+        return kgpc_pos_empty_result(start_index, hay_len);
+    if (needle_len > hay_len)
+        return 0;
+
+    if (start_index < 1)
+        start_index = 1;
+    size_t start = (size_t)(start_index - 1);
+    if (start >= hay_len)
+        return 0;
+
+    const char *needle_data = substr + 1;
+    for (size_t i = start; i + needle_len <= hay_len; ++i)
+    {
+        if (memcmp(value + i, needle_data, needle_len) == 0)
+            return (int64_t)(i + 1);
+    }
+
+    return 0;
+}
+
+int64_t kgpc_string_pos_as_from(const char *substr, const char *value, int64_t start_index)
+{
+    if (value == NULL)
+        return 0;
+    if (substr == NULL)
+        return 1;
+
+    size_t hay_len = (size_t)(unsigned char)value[0];
+    size_t needle_len = kgpc_string_known_length(substr);
+
+    if (needle_len == 0)
+        return kgpc_pos_empty_result(start_index, hay_len);
+    if (needle_len > hay_len)
+        return 0;
+
+    if (start_index < 1)
+        start_index = 1;
+    size_t start = (size_t)(start_index - 1);
+    if (start >= hay_len)
+        return 0;
+
+    const char *hay_data = value + 1;
+    for (size_t i = start; i + needle_len <= hay_len; ++i)
+    {
+        if (memcmp(hay_data + i, substr, needle_len) == 0)
+            return (int64_t)(i + 1);
+    }
+
+    return 0;
+}
+
+int64_t kgpc_string_pos_ss_from(const char *substr, const char *value, int64_t start_index)
+{
+    if (value == NULL)
+        return 0;
+    if (substr == NULL)
+        return 1;
+
+    size_t hay_len = (size_t)(unsigned char)value[0];
+    size_t needle_len = (size_t)(unsigned char)substr[0];
+
+    if (needle_len == 0)
+        return kgpc_pos_empty_result(start_index, hay_len);
+    if (needle_len > hay_len)
+        return 0;
+
+    if (start_index < 1)
+        start_index = 1;
+    size_t start = (size_t)(start_index - 1);
+    if (start >= hay_len)
+        return 0;
+
+    const char *hay_data = value + 1;
+    const char *needle_data = substr + 1;
+    for (size_t i = start; i + needle_len <= hay_len; ++i)
+    {
+        if (memcmp(hay_data + i, needle_data, needle_len) == 0)
+            return (int64_t)(i + 1);
+    }
+
+    return 0;
+}
+
+int64_t kgpc_string_pos_from(const char *substr, const char *value, int64_t start_index)
+{
+    if (value == NULL)
+        value = "";
+    if (substr == NULL)
+        substr = "";
+
+    size_t hay_len = kgpc_string_known_length(value);
+    size_t needle_len = kgpc_string_known_length(substr);
+
+    if (needle_len == 0)
+        return kgpc_pos_empty_result(start_index, hay_len);
+    if (needle_len > hay_len)
+        return 0;
+
+    if (start_index < 1)
+        start_index = 1;
+    size_t start = (size_t)(start_index - 1);
+    if (start >= hay_len)
+        return 0;
+
+    for (size_t i = start; i + needle_len <= hay_len; ++i)
+    {
+        if (memcmp(value + i, substr, needle_len) == 0)
+            return (int64_t)(i + 1);
+    }
+
+    return 0;
+}
+
+int64_t kgpc_string_pos_ca_from(unsigned char ch, const char *value, int64_t start_index)
+{
+    if (value == NULL)
+        value = "";
+
+    size_t hay_len = kgpc_string_known_length(value);
+    if (hay_len == 0)
+        return 0;
+
+    if (start_index < 1)
+        start_index = 1;
+    size_t start = (size_t)(start_index - 1);
+    if (start >= hay_len)
+        return 0;
+
+    for (size_t i = start; i < hay_len; ++i)
+    {
+        if ((unsigned char)value[i] == ch)
+            return (int64_t)(i + 1);
+    }
+
+    return 0;
+}
+
+int64_t kgpc_string_pos_cs_from(unsigned char ch, const char *value, int64_t start_index)
+{
+    if (value == NULL)
+        return 0;
+
+    size_t hay_len = (size_t)(unsigned char)value[0];
+    if (hay_len == 0)
+        return 0;
+
+    if (start_index < 1)
+        start_index = 1;
+    size_t start = (size_t)(start_index - 1);
+    if (start >= hay_len)
+        return 0;
+
+    const char *hay_data = value + 1;
+    for (size_t i = start; i < hay_len; ++i)
+    {
+        if ((unsigned char)hay_data[i] == ch)
+            return (int64_t)(i + 1);
+    }
+
+    return 0;
+}
+
+int64_t kgpc_string_pos_cc_from(unsigned char substr, unsigned char value, int64_t start_index)
+{
+    if (start_index < 1)
+        start_index = 1;
+    if (start_index > 1)
+        return 0;
+    return substr == value ? 1 : 0;
+}
+
+int64_t kgpc_string_pos_ac_from(const char *substr, unsigned char value, int64_t start_index)
+{
+    if (substr == NULL)
+        substr = "";
+
+    size_t needle_len = kgpc_string_known_length(substr);
+    if (needle_len == 0)
+        return kgpc_pos_empty_result(start_index, 1);
+    if (needle_len > 1)
+        return 0;
+
+    if (start_index < 1)
+        start_index = 1;
+    if (start_index > 1)
+        return 0;
+    return ((unsigned char)substr[0] == value) ? 1 : 0;
+}
+
+int64_t kgpc_string_pos_sc_from(const char *substr, unsigned char value, int64_t start_index)
+{
+    if (substr == NULL)
+        return 0;
+
+    size_t needle_len = (size_t)(unsigned char)substr[0];
+    if (needle_len == 0)
+        return kgpc_pos_empty_result(start_index, 1);
+    if (needle_len > 1)
+        return 0;
+
+    if (start_index < 1)
+        start_index = 1;
+    if (start_index > 1)
+        return 0;
+    return ((unsigned char)substr[1] == value) ? 1 : 0;
 }
 
 static int kgpc_is_path_delim_char(char ch)
@@ -3148,15 +3897,13 @@ char *kgpc_change_file_ext(const char *filename, const char *extension)
     }
     size_t base_len = dot ? (size_t)(dot - filename) : len;
     size_t ext_len = (extension != NULL) ? strlen(extension) : 0;
-    char *result = (char *)malloc(base_len + ext_len + 1);
+    char *result = kgpc_string_alloc_with_length(base_len + ext_len);
     if (result == NULL)
         return kgpc_alloc_empty_string();
     if (base_len > 0)
         memcpy(result, filename, base_len);
     if (ext_len > 0 && extension != NULL)
         memcpy(result + base_len, extension, ext_len);
-    result[base_len + ext_len] = '\0';
-    kgpc_string_register_allocation(result, base_len + ext_len);
     return result;
 }
 
@@ -3294,13 +4041,11 @@ char *kgpc_char_to_string(int64_t value)
     else if (value > 255)
         value = 255;
 
-    char *result = (char *)malloc(2);
+    char *result = kgpc_string_alloc_with_length(1);
     if (result == NULL)
         return kgpc_alloc_empty_string();
 
     result[0] = (char)value;
-    result[1] = '\0';
-    kgpc_string_register_allocation(result, 1);
     return result;
 }
 
@@ -3322,12 +4067,11 @@ char *kgpc_real_to_str(double value)
     if (written < 0 || written >= (int)sizeof(buffer))
         return kgpc_alloc_empty_string();
 
-    char *result = (char *)malloc((size_t)written + 1);
+    char *result = kgpc_string_alloc_with_length((size_t)written);
     if (result == NULL)
         return kgpc_alloc_empty_string();
 
     memcpy(result, buffer, (size_t)written + 1);
-    kgpc_string_register_allocation(result, (size_t)written);
     return result;
 }
 
@@ -3379,12 +4123,11 @@ char *kgpc_int_to_str(int64_t value)
     if (written < 0)
         return kgpc_alloc_empty_string();
 
-    char *result = (char *)malloc((size_t)written + 1);
+    char *result = kgpc_string_alloc_with_length((size_t)written);
     if (result == NULL)
         return kgpc_alloc_empty_string();
 
     memcpy(result, buffer, (size_t)written + 1);
-    kgpc_string_register_allocation(result, (size_t)written);
     return result;
 }
 
@@ -3403,7 +4146,7 @@ static char *kgpc_apply_field_width(char *value, int64_t width)
         return value;
 
     size_t pad = abs_width - len;
-    char *result = (char *)malloc(abs_width + 1);
+    char *result = kgpc_string_alloc_with_length(abs_width);
     if (result == NULL)
         return value;
 
@@ -3417,10 +4160,8 @@ static char *kgpc_apply_field_width(char *value, int64_t width)
         memset(result, ' ', pad);
         memcpy(result + pad, value, len);
     }
-    result[abs_width] = '\0';
-    kgpc_string_register_allocation(result, abs_width);
-    if (kgpc_string_release_allocation(value))
-        free(value);
+    if (value != NULL)
+        kgpc_string_release(value);
     return result;
 }
 
@@ -3434,8 +4175,8 @@ void kgpc_str_int64(int64_t value, char **target)
         return;
 
     char *existing = *target;
-    if (existing != NULL && kgpc_string_release_allocation(existing))
-        free(existing);
+    if (existing != NULL)
+        kgpc_string_release(existing);
     *target = result;
 }
 
@@ -3451,8 +4192,8 @@ void kgpc_str_int64_fmt(int64_t value, int64_t width, char **target)
     result = kgpc_apply_field_width(result, width);
 
     char *existing = *target;
-    if (existing != NULL && kgpc_string_release_allocation(existing))
-        free(existing);
+    if (existing != NULL)
+        kgpc_string_release(existing);
     *target = result;
 }
 
@@ -3466,8 +4207,8 @@ void kgpc_str_real(double value, char **target)
         return;
 
     char *existing = *target;
-    if (existing != NULL && kgpc_string_release_allocation(existing))
-        free(existing);
+    if (existing != NULL)
+        kgpc_string_release(existing);
     *target = result;
 }
 
@@ -3483,8 +4224,8 @@ void kgpc_str_real_fmt(double value, int64_t width, int64_t precision, char **ta
     result = kgpc_apply_field_width(result, width);
 
     char *existing = *target;
-    if (existing != NULL && kgpc_string_release_allocation(existing))
-        free(existing);
+    if (existing != NULL)
+        kgpc_string_release(existing);
     *target = result;
 }
 
@@ -3501,7 +4242,7 @@ void kgpc_str_int64_shortstring(int64_t value, char *target)
 
     /* Copy to ShortString format */
     kgpc_string_to_shortstring(target, result, 256);
-    free(result);
+    kgpc_string_release(result);
 }
 
 void kgpc_str_int64_fmt_shortstring(int64_t value, int64_t width, char *target)
@@ -3519,7 +4260,7 @@ void kgpc_str_int64_fmt_shortstring(int64_t value, int64_t width, char *target)
 
     /* Copy to ShortString format */
     kgpc_string_to_shortstring(target, result, 256);
-    free(result);
+    kgpc_string_release(result);
 }
 
 void kgpc_str_real_shortstring(double value, char *target)
@@ -3533,7 +4274,7 @@ void kgpc_str_real_shortstring(double value, char *target)
 
     /* Copy to ShortString format */
     kgpc_string_to_shortstring(target, result, 256);
-    free(result);
+    kgpc_string_release(result);
 }
 
 void kgpc_str_real_fmt_shortstring(double value, int64_t width, int64_t precision, char *target)
@@ -4269,18 +5010,84 @@ int kgpc_string_to_real(const char *text, double *out_value)
         if (out_value != NULL) *out_value = 0.0;
         return 0;
     }
-    char *endptr;
-    errno = 0;
-    double val = strtod(text, &endptr);
-    if (kgpc_env_flag("KGPC_DEBUG_STRTOFLOAT"))
-        fprintf(stderr, "[kgpc] string_to_real('%s') -> val=%g end=%p (err=%d)\n", text ? text : "(null)", val, (void*)endptr, errno);
-    if (endptr == text || *endptr != '\0' || errno == ERANGE)
+    const char *p = text;
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')
+        p++;
+
+    int sign = 1;
+    if (*p == '+' || *p == '-')
+    {
+        if (*p == '-')
+            sign = -1;
+        p++;
+    }
+
+    double int_part = 0.0;
+    int digits = 0;
+    while (*p >= '0' && *p <= '9')
+    {
+        int_part = int_part * 10.0 + (double)(*p - '0');
+        p++;
+        digits++;
+    }
+
+    double frac_part = 0.0;
+    double frac_div = 1.0;
+    if (*p == '.')
+    {
+        p++;
+        while (*p >= '0' && *p <= '9')
+        {
+            frac_part = frac_part * 10.0 + (double)(*p - '0');
+            frac_div *= 10.0;
+            p++;
+            digits++;
+        }
+    }
+
+    if (digits == 0)
     {
         if (out_value != NULL) *out_value = 0.0;
         return 0;
     }
+
+    if (*p == 'e' || *p == 'E')
+    {
+        char *endptr;
+        errno = 0;
+        double val = strtod(text, &endptr);
+        if (kgpc_env_flag("KGPC_DEBUG_STRTOFLOAT"))
+            fprintf(stderr, "[kgpc] string_to_real('%s') -> val=%g end=%p (err=%d)\n", text ? text : "(null)", val, (void*)endptr, errno);
+        if (endptr == text || errno == ERANGE)
+        {
+            if (out_value != NULL) *out_value = 0.0;
+            return 0;
+        }
+        while (*endptr == ' ' || *endptr == '\t' || *endptr == '\r' || *endptr == '\n')
+            endptr++;
+        if (*endptr != '\0')
+        {
+            if (out_value != NULL) *out_value = 0.0;
+            return 0;
+        }
+        if (out_value != NULL)
+            *out_value = val;
+        kgpc_real_cache_put(kgpc_double_to_bits(val), (long double)val);
+        return 1;
+    }
+
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')
+        p++;
+    if (*p != '\0')
+    {
+        if (out_value != NULL) *out_value = 0.0;
+        return 0;
+    }
+
+    double val = (int_part + (frac_part / frac_div)) * (double)sign;
     if (out_value != NULL)
         *out_value = val;
+    kgpc_real_cache_put(kgpc_double_to_bits(val), (long double)val);
     return 1;
 }
 
@@ -4627,6 +5434,12 @@ int64_t kgpc_abs_longint(int64_t value)
     return (value < 0) ? -value : value;
 }
 
+/* Abs for unsigned types is a no-op (identity function) */
+uint64_t kgpc_abs_unsigned(uint64_t value)
+{
+    return value;
+}
+
 double kgpc_abs_real(double value)
 {
     return fabs(value);
@@ -4842,19 +5655,9 @@ long long kgpc_trunc(double value)
 }
 
 /* Trunc for Currency type - Currency stores values scaled by 10000.
- * The value is passed as a double (bit-pattern) because the code generator
- * passes it via xmm0 as if it were a real argument. We reinterpret the bits
- * as int64 and then perform the Currency-specific truncation. */
-long long kgpc_trunc_currency(double bits_as_double)
+ * The value is passed as a signed 64-bit integer. */
+long long kgpc_trunc_currency(long long currency_value)
 {
-    /* Reinterpret the double bits as int64 */
-    union {
-        double d;
-        long long ll;
-    } u;
-    u.d = bits_as_double;
-    long long currency_value = u.ll;
-
     /* Currency is stored as value * 10000, so divide by 10000 to get actual value */
     /* Truncate towards zero */
     if (currency_value >= 0)
@@ -4881,24 +5684,94 @@ long long kgpc_floor(double value)
 {
     return (long long)floor(value);
 }
-static uint64_t kgpc_rand_next(void)
+
+static uint32_t kgpc_rol32(uint32_t value, uint32_t shift)
 {
-    kgpc_rand_state = kgpc_rand_state * 2862933555777941757ULL + 3037000493ULL;
-    return kgpc_rand_state;
+    return (value << shift) | (value >> (32u - shift));
+}
+
+static uint64_t kgpc_splitmix64_next(uint64_t *state)
+{
+    uint64_t z = *state + 0x9e3779b97f4a7c15ULL;
+    *state = z;
+    z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
+    return z ^ (z >> 31);
+}
+
+static void kgpc_xsr128_setup(uint32_t seed)
+{
+    uint64_t sm_state = (uint64_t)seed;
+    uint64_t x = kgpc_splitmix64_next(&sm_state);
+    kgpc_xsr_state[0] = (uint32_t)x;
+    kgpc_xsr_state[1] = (uint32_t)(x >> 32);
+    x = kgpc_splitmix64_next(&sm_state);
+    kgpc_xsr_state[2] = (uint32_t)x;
+    kgpc_xsr_state[3] = (uint32_t)(x >> 32);
+}
+
+static uint32_t kgpc_xsr128_next(void)
+{
+    uint32_t s0 = kgpc_xsr_state[0];
+    uint32_t s1 = kgpc_xsr_state[1];
+    uint32_t s2 = kgpc_xsr_state[2];
+    uint32_t s3 = kgpc_xsr_state[3];
+
+    uint32_t result = kgpc_rol32(s1 * 5u, 7) * 9u;
+    uint32_t t = s1 << 9;
+
+    s2 ^= s0;
+    s3 ^= s1;
+    s1 ^= s2;
+    s0 ^= s3;
+    s2 ^= t;
+    s3 = kgpc_rol32(s3, 11);
+
+    kgpc_xsr_state[0] = s0;
+    kgpc_xsr_state[1] = s1;
+    kgpc_xsr_state[2] = s2;
+    kgpc_xsr_state[3] = s3;
+    return result;
+}
+
+static uint32_t kgpc_xsr128_u32rand(void)
+{
+    if (kgpc_randseed != kgpc_old_randseed)
+    {
+        kgpc_xsr128_setup(kgpc_randseed);
+        kgpc_randseed = ~kgpc_randseed;
+        kgpc_old_randseed = kgpc_randseed;
+    }
+    return kgpc_xsr128_next();
 }
 
 void kgpc_randomize(void)
 {
-    uint64_t seed = ((uint64_t)time(NULL) << 32) ^ (uint64_t)clock();
-    if (seed == 0)
-        seed = 0x9e3779b97f4a7c15ULL;
-    kgpc_rand_state = seed;
+    kgpc_randseed = (uint32_t)time(NULL);
 }
 
 double kgpc_random_real(void)
 {
-    uint64_t value = kgpc_rand_next();
-    return (double)(value >> 11) * (1.0 / 9007199254740992.0);
+    uint32_t r0 = kgpc_xsr128_u32rand();
+    uint64_t mantissa = (uint64_t)(r0 & ((1u << 20) - 1u)) << 32;
+    mantissa |= (uint64_t)kgpc_xsr128_u32rand();
+
+    int32_t exponent = 1023 - 1 - 31;
+    if ((r0 >> 20) == 0)
+    {
+        exponent += 20;
+        do
+        {
+            exponent -= 32;
+            r0 = kgpc_xsr128_u32rand();
+        } while (r0 == 0);
+    }
+
+    uint32_t bsr = 31u - (uint32_t)__builtin_clz(r0);
+    uint64_t bits = mantissa | ((uint64_t)(exponent + (int32_t)bsr) << 52);
+    double result = 0.0;
+    memcpy(&result, &bits, sizeof(result));
+    return result;
 }
 
 double kgpc_random_real_upper(double upper)
@@ -4908,45 +5781,99 @@ double kgpc_random_real_upper(double upper)
     return kgpc_random_real() * upper;
 }
 
+static uint64_t kgpc_random_u64_bounded(uint64_t bound)
+{
+    if (bound == 0)
+        return 0;
+
+    /* For 32-bit bounds, use a faster path with 64-bit multiplication. */
+    if (bound <= 0xFFFFFFFFu)
+    {
+        uint32_t b32 = (uint32_t)bound;
+        uint64_t m = (uint64_t)kgpc_xsr128_u32rand() * (uint64_t)b32;
+        if ((uint32_t)m < b32)
+        {
+            uint32_t t = (uint32_t)(0u - b32) % b32;
+            while ((uint32_t)m < t)
+                m = (uint64_t)kgpc_xsr128_u32rand() * (uint64_t)b32;
+        }
+        return m >> 32;
+    }
+
+    /* For larger bounds, use rejection sampling with 128-bit multiplication (Lemire's method). */
+    uint32_t a = kgpc_xsr128_u32rand();
+    __uint128_t prod = ((__uint128_t)a << 32) | kgpc_xsr128_u32rand();
+    __uint128_t full = prod * bound;
+    uint64_t mLo = (uint64_t)full;
+    uint64_t mHi = (uint64_t)(full >> 64);
+
+    if (mLo < bound)
+    {
+        uint64_t t = (uint64_t)(0u - bound) % bound;
+        while (mLo < t)
+        {
+            a = kgpc_xsr128_u32rand();
+            prod = ((__uint128_t)a << 32) | kgpc_xsr128_u32rand();
+            full = prod * bound;
+            mLo = (uint64_t)full;
+            mHi = (uint64_t)(full >> 64);
+        }
+    }
+    return mHi;
+}
+
 int64_t kgpc_random_int(int64_t upper)
 {
-    if (upper <= 0)
-        return 0;
-    uint64_t value = kgpc_rand_next();
-    uint64_t range = (uint64_t)upper;
-    return (int64_t)(value % range);
+    uint64_t ul = (uint64_t)upper;
+    if (upper < 0)
+        ul = ~ul;
+
+    uint64_t res = kgpc_random_u64_bounded(ul);
+
+    int64_t result = (int64_t)res;
+    if (upper < -1)
+        result = -result - 1;
+    return result;
+}
+
+int64_t kgpc_random_int64(int64_t upper)
+{
+    return kgpc_random_int(upper);
 }
 
 int64_t kgpc_random_range(int64_t low, int64_t high)
 {
     if (high <= low)
         return low;
-    uint64_t diff = (uint64_t)(high - low);
-    uint64_t value = kgpc_rand_next();
-    uint64_t offset = value % diff;
-    return low + (int64_t)offset;
+    return low + kgpc_random_int64(high - low);
 }
 
-int64_t kgpc_get_randseed(void)
+uint32_t kgpc_get_randseed(void)
 {
-    return (int64_t)kgpc_rand_state;
+    return kgpc_randseed;
 }
 
-void kgpc_set_randseed(int64_t seed)
+void kgpc_set_randseed(uint32_t seed)
 {
-    if ((uint64_t)seed == 0)
-        kgpc_rand_state = 0x9e3779b97f4a7c15ULL;
-    else
-        kgpc_rand_state = (uint64_t)seed;
+    kgpc_randseed = seed;
 }
+
+#if defined(__GLIBC__) || defined(__linux__)
+extern void sincos(double, double *, double *);
+#define KGPC_HAVE_SINCOS 1
+#endif
 
 void kgpc_sincos_bits(int64_t angle_bits, double *sin_out, double *cos_out)
 {
     double angle = kgpc_bits_to_double(angle_bits);
+#ifdef KGPC_HAVE_SINCOS
+    sincos(angle, sin_out, cos_out);
+#else
     if (sin_out != NULL)
         *sin_out = sin(angle);
     if (cos_out != NULL)
         *cos_out = cos(angle);
+#endif
 }
 
 /* BaseUnix wrapper functions */

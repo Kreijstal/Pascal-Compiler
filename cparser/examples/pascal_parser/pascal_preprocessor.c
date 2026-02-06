@@ -55,10 +55,12 @@ static int ascii_tolower(int c);
 static int ascii_strncasecmp(const char *a, const char *b, size_t n);
 static bool set_error(char **error_message, const char *fmt, ...);
 static const char *try_expand_macro(PascalPreprocessor *pp, const char *input, size_t length, size_t pos, size_t *out_identifier_len);
+static char *expand_macro_value_once(PascalPreprocessor *pp, const char *value);
 static void string_builder_init(StringBuilder *sb);
 static bool string_builder_append_char(StringBuilder *sb, char c);
 static bool string_builder_append_string(StringBuilder *sb, const char *str);
 static void string_builder_free(StringBuilder *sb);
+static char *string_builder_finalize(StringBuilder *sb);
 static bool ensure_capacity(void **buffer, size_t element_size, size_t *capacity, size_t needed);
 static bool emit_line_directive(StringBuilder *sb, int line, const char *filename);
 static char *my_strdup(const char *s) {
@@ -136,7 +138,7 @@ PascalPreprocessor *pascal_preprocessor_create(void) {
     pp->defines = NULL;
     pp->define_count = 0;
     pp->define_capacity = 0;
-    pp->macro_enabled = false;  // Macros are off by default
+    pp->macro_enabled = true;  // FPC-style: macro expansion is on by default
     pp->flatten_only = false;
     pp->include_paths = NULL;
     pp->include_path_count = 0;
@@ -342,6 +344,8 @@ static bool preprocess_buffer_internal(PascalPreprocessor *pp,
     bool in_line_comment = false;
 
     int current_line = 1;
+    int last_emitted_line = 0;  /* Track last line we emitted content for */
+    bool need_line_directive = true;  /* Need to emit line directive for first content */
 
     bool skip_block_mode = false;
 
@@ -461,18 +465,41 @@ static bool preprocess_buffer_internal(PascalPreprocessor *pp,
         }
 
         if (pp->flatten_only || current_branch_active(conditions)) {
+            /* Emit line directive at start of included file, or when there's a gap in line numbers */
+            bool should_emit_directive = false;
+            if (need_line_directive && filename != NULL && depth > 0) {
+                /* At start of line (or first character), emit directive */
+                if (i == 0 || input[i-1] == '\n' || last_emitted_line == 0) {
+                    should_emit_directive = true;
+                }
+            }
+            if (should_emit_directive) {
+                if (!emit_line_directive(output, current_line, filename)) {
+                    return set_error(error_message, "out of memory");
+                }
+                need_line_directive = false;
+            }
+            
             // Try macro expansion if we're not in a comment or string
             if (!pp->flatten_only && !in_comment && !in_string && pp->macro_enabled) {
                 size_t identifier_len = 0;
                 const char *macro_value = try_expand_macro(pp, input, length, i, &identifier_len);
                 
                 if (macro_value) {
-                    // Output the macro value instead of the identifier
-                    if (!string_builder_append_string(output, macro_value)) {
+                    // Output the macro value instead of the identifier (single-pass expansion)
+                    char *expanded_value = expand_macro_value_once(pp, macro_value);
+                    if (expanded_value) {
+                        if (!string_builder_append_string(output, expanded_value)) {
+                            free(expanded_value);
+                            return set_error(error_message, "out of memory");
+                        }
+                        free(expanded_value);
+                    } else {
                         return set_error(error_message, "out of memory");
                     }
                     // Skip the identifier in the input
                     i += identifier_len - 1;  // -1 because loop will increment i
+                    last_emitted_line = current_line;
                     continue;
                 }
             }
@@ -480,6 +507,10 @@ static bool preprocess_buffer_internal(PascalPreprocessor *pp,
             if (!string_builder_append_char(output, c)) {
                 return set_error(error_message, "out of memory");
             }
+            last_emitted_line = current_line;
+        } else {
+            /* Content is being skipped - mark that we need a line directive when we resume */
+            need_line_directive = true;
         }
         
         // Track line numbers for ALL newlines
@@ -694,8 +725,9 @@ static bool handle_directive(PascalPreprocessor *pp,
                 }
             }
 
-            /* Emit line directive entering the included file */
-            emit_line_directive(output, 1, resolved_path);
+            /* Line directives are emitted dynamically when content is output,
+             * so we don't emit {#line 1} here - the first emitted content will
+             * trigger a line directive with the correct line number */
 
             bool ok = preprocess_buffer_internal(pp, resolved_path, include_buffer, include_length, conditions, output, depth + 1, error_message);
 
@@ -861,8 +893,9 @@ static bool handle_directive(PascalPreprocessor *pp,
                 }
             }
 
-            /* Emit line directive entering the included file */
-            emit_line_directive(output, 1, resolved_path);
+            /* Line directives are emitted dynamically when content is output,
+             * so we don't emit {#line 1} here - the first emitted content will
+             * trigger a line directive with the correct line number */
 
             bool ok = preprocess_buffer_internal(pp, resolved_path, include_buffer, include_length, conditions, output, depth + 1, error_message);
 
@@ -1346,6 +1379,14 @@ static void string_builder_free(StringBuilder *sb) {
     sb->capacity = 0;
 }
 
+static char *string_builder_finalize(StringBuilder *sb) {
+    char *data = sb->data;
+    sb->data = NULL;
+    sb->length = 0;
+    sb->capacity = 0;
+    return data;
+}
+
 static bool ensure_capacity(void **buffer, size_t element_size, size_t *capacity, size_t needed) {
     if (*capacity >= needed) {
         return true;
@@ -1488,6 +1529,64 @@ static const char *try_expand_macro(PascalPreprocessor *pp, const char *input, s
     }
     
     return NULL;
+}
+
+static char *expand_macro_value_once(PascalPreprocessor *pp, const char *value) {
+    if (!pp || !value) {
+        return NULL;
+    }
+    if (!pp->macro_enabled) {
+        return strdup(value);
+    }
+
+    StringBuilder output;
+    string_builder_init(&output);
+
+    bool in_string = false;
+    char string_delim = '\0';
+    size_t length = strlen(value);
+
+    for (size_t i = 0; i < length; ++i) {
+        char c = value[i];
+        if (in_string) {
+            if (c == string_delim) {
+                if (string_delim == '\'' && i + 1 < length && value[i + 1] == '\'') {
+                    if (!string_builder_append_char(&output, c)) {
+                        string_builder_free(&output);
+                        return NULL;
+                    }
+                    ++i;
+                    c = value[i];
+                } else {
+                    in_string = false;
+                    string_delim = '\0';
+                }
+            }
+        } else if (c == '\'' || c == '"') {
+            in_string = true;
+            string_delim = c;
+        }
+
+        if (!in_string) {
+            size_t identifier_len = 0;
+            const char *macro_value = try_expand_macro(pp, value, length, i, &identifier_len);
+            if (macro_value) {
+                if (!string_builder_append_string(&output, macro_value)) {
+                    string_builder_free(&output);
+                    return NULL;
+                }
+                i += identifier_len - 1;
+                continue;
+            }
+        }
+
+        if (!string_builder_append_char(&output, c)) {
+            string_builder_free(&output);
+            return NULL;
+        }
+    }
+
+    return string_builder_finalize(&output);
 }
 
 static bool define_symbol(PascalPreprocessor *pp, const char *symbol) {
@@ -2350,16 +2449,16 @@ static bool parse_factor(const char **cursor,
             strcmp(type_name, "TTHREADID") == 0)) {
             size = 8;
             found = true;
-        } else if (strcmp(type_name, "LONGINT") == 0 || strcmp(type_name, "INT32") == 0 || 
-                   strcmp(type_name, "CARDINAL") == 0 || strcmp(type_name, "DWORD") == 0 || 
-                   strcmp(type_name, "UINT32") == 0 || strcmp(type_name, "LONGWORD") == 0 ||
-                   strcmp(type_name, "LONGBOOL") == 0) {
+        } else if (strcmp(type_name, "INTEGER") == 0 || strcmp(type_name, "LONGINT") == 0 ||
+                   strcmp(type_name, "INT32") == 0 || strcmp(type_name, "CARDINAL") == 0 ||
+                   strcmp(type_name, "DWORD") == 0 || strcmp(type_name, "UINT32") == 0 ||
+                   strcmp(type_name, "LONGWORD") == 0 || strcmp(type_name, "LONGBOOL") == 0) {
             size = 4;
             found = true;
-        } else if (strcmp(type_name, "INTEGER") == 0 || strcmp(type_name, "SMALLINT") == 0 ||
-                   strcmp(type_name, "INT16") == 0 || strcmp(type_name, "WORD") == 0 ||
-                   strcmp(type_name, "UINT16") == 0 || strcmp(type_name, "WIDECHAR") == 0 ||
-                   strcmp(type_name, "WORDBOOL") == 0 || strcmp(type_name, "TCOMPILERWIDECHAR") == 0) {
+        } else if (strcmp(type_name, "SMALLINT") == 0 || strcmp(type_name, "INT16") == 0 ||
+                   strcmp(type_name, "WORD") == 0 || strcmp(type_name, "UINT16") == 0 ||
+                   strcmp(type_name, "WIDECHAR") == 0 || strcmp(type_name, "WORDBOOL") == 0 ||
+                   strcmp(type_name, "TCOMPILERWIDECHAR") == 0) {
             size = 2;
             found = true;
         } else if (strcmp(type_name, "SHORTINT") == 0 || strcmp(type_name, "INT8") == 0 || 
@@ -2465,13 +2564,15 @@ static bool parse_factor(const char **cursor,
             // For unsigned, Low is 0, High is max
             result = is_high ? (int64_t)UINT64_MAX : 0;
             found = true;
-        } else if (strcmp(type_name, "LONGINT") == 0 || strcmp(type_name, "INT32") == 0) {
+        } else if (strcmp(type_name, "INTEGER") == 0 || strcmp(type_name, "LONGINT") == 0 ||
+                   strcmp(type_name, "INT32") == 0) {
             result = is_high ? INT32_MAX : INT32_MIN;
             found = true;
-        } else if (strcmp(type_name, "CARDINAL") == 0 || strcmp(type_name, "DWORD") == 0 || strcmp(type_name, "UINT32") == 0 || strcmp(type_name, "LONGWORD") == 0) {
+        } else if (strcmp(type_name, "CARDINAL") == 0 || strcmp(type_name, "DWORD") == 0 ||
+                   strcmp(type_name, "UINT32") == 0 || strcmp(type_name, "LONGWORD") == 0) {
             result = is_high ? (int64_t)UINT32_MAX : 0;
             found = true;
-        } else if (strcmp(type_name, "INTEGER") == 0 || strcmp(type_name, "SMALLINT") == 0 || strcmp(type_name, "INT16") == 0) {
+        } else if (strcmp(type_name, "SMALLINT") == 0 || strcmp(type_name, "INT16") == 0) {
             result = is_high ? INT16_MAX : INT16_MIN;
             found = true;
         } else if (strcmp(type_name, "WORD") == 0 || strcmp(type_name, "UINT16") == 0) {

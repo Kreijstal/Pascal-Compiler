@@ -120,6 +120,7 @@ typedef struct Tree
             int type; /* Int, or real */
             char *type_id;
             int is_var_param;
+            int is_untyped_param;
             int inferred_type;
             struct Statement *initializer;
             int is_typed_const;
@@ -238,6 +239,7 @@ struct Statement *mk_label(int line_num, char *label, struct Statement *stmt);
 struct Statement *mk_goto(int line_num, char *label);
 
 struct Statement *mk_procedurecall(int line_num, char *id, ListNode_t *expr_args);
+struct Statement *mk_exprstmt(int line_num, int col_num, struct Expression *expr);
 
 struct Statement *mk_compoundstatement(int line_num, ListNode_t *compound_statement);
 
@@ -306,7 +308,7 @@ struct Expression *mk_functioncall(int line_num, char *id, ListNode_t *args);
 
 struct Expression *mk_inum(int line_num, long long i_num);
 struct Expression *mk_charcode(int line_num, unsigned int char_code);
-struct Expression *mk_rnum(int line_num, float r_num);
+struct Expression *mk_rnum(int line_num, double r_num);
 
 struct Expression *mk_string(int line_num, char *string);
 

@@ -25,6 +25,7 @@ typedef enum {
     PASCAL_T_DIV,
     PASCAL_T_INTDIV,
     PASCAL_T_MOD,
+    PASCAL_T_POWER,     // ** operator (overloadable; e.g. scalar product)
     PASCAL_T_NEG,
     PASCAL_T_POS,
     PASCAL_T_EQ,
@@ -116,7 +117,7 @@ typedef enum {
     PASCAL_T_COMPILER_DIRECTIVE,
     PASCAL_T_EXTERNAL_NAME,
     PASCAL_T_PUBLIC_NAME,
-    PASCAL_T_ABSOLUTE,
+    PASCAL_T_ABSOLUTE_CLAUSE,
     PASCAL_T_COMMENT,
     // Type definition types
     PASCAL_T_TYPE_SECTION,
@@ -195,5 +196,6 @@ combinator_t* token(combinator_t* p);  // Backward compatibility wrapper
 combinator_t* pascal_identifier(tag_t tag);  // Pascal identifier that excludes reserved keywords
 combinator_t* pascal_qualified_identifier(tag_t tag);
 combinator_t* compiler_directive(tag_t tag);
+combinator_t* trace(const char* msg);
 
 #endif // PASCAL_PARSER_H

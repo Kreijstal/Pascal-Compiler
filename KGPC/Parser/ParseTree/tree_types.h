@@ -17,7 +17,7 @@ struct GenericTypeDecl;
 struct RecordType;
 
 /* Enums for readability with types */
-enum StmtType{STMT_VAR_ASSIGN, STMT_PROCEDURE_CALL, STMT_COMPOUND_STATEMENT,
+enum StmtType{STMT_VAR_ASSIGN, STMT_PROCEDURE_CALL, STMT_EXPR, STMT_COMPOUND_STATEMENT,
     STMT_LABEL, STMT_GOTO, STMT_IF_THEN, STMT_WHILE, STMT_REPEAT, STMT_FOR, STMT_FOR_VAR,
     STMT_FOR_ASSIGN_VAR, STMT_FOR_IN, STMT_ASM_BLOCK, STMT_EXIT, STMT_BREAK, STMT_CONTINUE, STMT_CASE, STMT_WITH,
     STMT_TRY_FINALLY, STMT_TRY_EXCEPT, STMT_RAISE, STMT_INHERITED};
@@ -79,6 +79,7 @@ struct RecordField
     int type;
     char *type_id;
     struct RecordType *nested_record;
+    struct KgpcType *proc_type;
     int is_array;
     int array_start;
     int array_end;
@@ -86,6 +87,9 @@ struct RecordField
     char *array_element_type_id;
     int array_is_open;
     int is_hidden;
+    int is_pointer;
+    int pointer_type;
+    char *pointer_type_id;
 };
 
 struct ClassProperty
@@ -144,6 +148,7 @@ struct RecordType
     ListNode_t *methods;      /* List of MethodInfo for virtual/override methods */
     ListNode_t *method_templates; /* Template methods captured from declarations */
     int is_class;             /* 1 if this record represents a class */
+    int is_interface;         /* 1 if this record represents an interface */
     int is_type_helper;       /* 1 if this record represents a type helper */
     char *helper_base_type_id; /* Base type name for helpers (the "for X" part) */
     char *helper_parent_id;   /* Parent helper type name (for inheritance like "type helper(Parent) for X") */
@@ -154,6 +159,10 @@ struct RecordType
     char **generic_args;      /* Concrete type arguments for specialization */
     int num_generic_args;
     int method_clones_emitted; /* 1 if generic method clones have been appended */
+    char *default_indexed_property; /* Field name for default indexed access (e.g., "FItems" for array-like classes) */
+    int default_indexed_element_type; /* Type tag for elements of the default indexed property */
+    char *default_indexed_element_type_id; /* Type identifier for elements of the default indexed property */
+    ListNode_t *record_properties; /* Properties on plain records (Delphi advanced records), not checked by record_type_is_class */
 };
 
 static inline int record_type_is_class(const struct RecordType *record)
@@ -199,6 +208,7 @@ struct Statement
 {
     int line_num;
     int col_num;
+    int source_index;  /* Byte offset in preprocessed buffer for accurate error context (-1 if unknown) */
     enum StmtType type;
     union stmt_data
     {
@@ -231,7 +241,15 @@ struct Statement
             int is_procedural_var_call;      /* 1 if calling through a procedural variable/expression */
             struct HashNode *procedural_var_symbol; /* Symbol for procedural var (if any) */
             struct Expression *procedural_var_expr; /* Expression yielding procedure pointer */
+            int is_method_call_placeholder;  /* 1 if created from member access and needs method resolution */
+            int arg0_is_dynarray_descriptor; /* 1 if arg0 should be passed as dynarray descriptor */
         } procedure_call_data;
+
+        /* Expression statement */
+        struct ExpressionStatement
+        {
+            struct Expression *expr;
+        } expr_stmt_data;
 
         /* Compound Statements */
         ListNode_t *compound_statement;
@@ -380,6 +398,7 @@ struct Expression
 {
     int line_num;
     int col_num;
+    int source_index;  /* Byte offset in preprocessed buffer for accurate error context (-1 if unknown) */
     struct RecordType *record_type; /* MOVED HERE */
     enum ExprType type;
     union expr_data
@@ -423,6 +442,11 @@ struct Expression
         {
             struct Expression *array_expr;
             struct Expression *index_expr;
+            ListNode_t *extra_indices;  /* For multi-dimensional arrays: additional indices beyond the first */
+            int linear_index_count;      /* Total number of indices (first + extra_indices) */
+            long long *linear_strides;   /* Byte stride for each index (length linear_index_count) */
+            long long *linear_lowers;    /* Lower bounds for each index (length linear_index_count) */
+            int linear_info_valid;       /* 1 if stride/lower info has been computed */
         } array_access_data;
 
         /* Record field access */
@@ -455,13 +479,14 @@ struct Expression
             int is_virtual_call;                     /* 1 if this is a virtual method call (needs VMT dispatch) */
             int vmt_index;                           /* VMT index for virtual calls (-1 if not set) */
             char *self_class_name;                   /* Class name for VMT lookup in virtual calls */
+            int arg0_is_dynarray_descriptor;         /* 1 if arg0 should be passed as dynarray descriptor */
         } function_call_data;
 
         /* Integer number */
         long long i_num;
 
         /* Real number */
-        float r_num;
+        double r_num;
 
         /* String literal */
         char *string;
@@ -551,8 +576,6 @@ struct Expression
     } expr_data;
     struct Expression *field_width;
     struct Expression *field_precision;
-    int resolved_type;
-    
     /* NEW: Unified type system - resolved KgpcType for this expression */
     struct KgpcType *resolved_kgpc_type;
     

@@ -17,30 +17,63 @@ static combinator_t* token(combinator_t* p) {
 }
 
 // --- Evaluation ---
-/* HARDENED: Abort on division by zero. */
-/* HARDENED: Abort on unknown AST node type. */
-long eval(ast_t *ast) {
+// Return false on evaluation errors instead of aborting.
+bool eval(ast_t *ast, long *out) {
+    if (out == NULL) {
+        fprintf(stderr, "Error: NULL output in %s at %s:%d\n", __func__, __FILE__, __LINE__);
+        return false;
+    }
     if (!ast) {
-        fprintf(stderr, "FATAL: trying to evaluate a NULL AST node in %s at %s:%d\n", __func__, __FILE__, __LINE__);
-        abort();
+        fprintf(stderr, "Error: NULL AST node in %s at %s:%d\n", __func__, __FILE__, __LINE__);
+        return false;
     }
     switch (ast->typ) {
-        case CALC_T_INT: return atol(ast->sym->name);
-        case CALC_T_ADD: return eval(ast->child) + eval(ast->child->next);
-        case CALC_T_SUB: return eval(ast->child) - eval(ast->child->next);
-        case CALC_T_MUL: return eval(ast->child) * eval(ast->child->next);
-        case CALC_T_DIV: {
-            long divisor = eval(ast->child->next);
-            if (divisor == 0) {
-                fprintf(stderr, "FATAL: Division by zero in %s at %s:%d\n", __func__, __FILE__, __LINE__);
-                abort();
-            }
-            return eval(ast->child) / divisor;
+        case CALC_T_INT:
+            *out = atol(ast->sym->name);
+            return true;
+        case CALC_T_ADD: {
+            long left = 0, right = 0;
+            if (!eval(ast->child, &left) || !eval(ast->child->next, &right))
+                return false;
+            *out = left + right;
+            return true;
         }
-        case CALC_T_NEG: return -eval(ast->child);
+        case CALC_T_SUB: {
+            long left = 0, right = 0;
+            if (!eval(ast->child, &left) || !eval(ast->child->next, &right))
+                return false;
+            *out = left - right;
+            return true;
+        }
+        case CALC_T_MUL: {
+            long left = 0, right = 0;
+            if (!eval(ast->child, &left) || !eval(ast->child->next, &right))
+                return false;
+            *out = left * right;
+            return true;
+        }
+        case CALC_T_DIV: {
+            long left = 0, right = 0;
+            if (!eval(ast->child, &left) || !eval(ast->child->next, &right))
+                return false;
+            if (right == 0) {
+                fprintf(stderr, "Error: Division by zero\n");
+                return false;
+            }
+            *out = left / right;
+            return true;
+        }
+        case CALC_T_NEG: {
+            long value = 0;
+            if (!eval(ast->child, &value))
+                return false;
+            *out = -value;
+            return true;
+        }
         default:
-            fprintf(stderr, "FATAL: Unknown AST node type: %d in %s at %s:%d\n", ast->typ, __func__, __FILE__, __LINE__);
-            abort();
+            fprintf(stderr, "Error: Unknown AST node type: %d in %s at %s:%d\n",
+                ast->typ, __func__, __FILE__, __LINE__);
+            return false;
     }
 }
 
