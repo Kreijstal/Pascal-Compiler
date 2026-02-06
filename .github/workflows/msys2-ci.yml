@@ -39,18 +39,6 @@ jobs:
       shell: msys2 {0}
       run: meson compile -C builddir
 
-    - name: Enable CLANG64 profiling env
-      if: matrix.sys == 'CLANG64'
-      shell: msys2 {0}
-      run: |
-        {
-          echo "KGPC_DEBUG_TIMINGS=1"
-          echo "KGPC_DEBUG_SEMSTMT_VERBOSE=1"
-          echo "KGPC_DEBUG_SEMSTMT_TIMINGS=1"
-          echo "KGPC_DEBUG_FUNCCALL_TIMINGS=1"
-          echo "KGPC_DEBUG_SEMSTMT_LIMIT=50000"
-        } >> "$GITHUB_ENV"
-
     - name: Run tests
       shell: msys2 {0}
       env:
