@@ -63,17 +63,30 @@ git clone https://github.com/fpc/FPCSource
   -I./FPCSource/rtl/x86_64
 ```
 
-### math.pp (unblocked)
+### math.pp (blocked by types.pp)
 
-math.pp uses `types` unit which now parses successfully.
+math.pp depends on `types` which fails to parse function declarations with
+qualified default parameter values (e.g. `THorzRectAlign.Center`).
+
+#### Next blocker: qualified enum default parameters in types.pp
+
+```
+function TRectF.PlaceInto(
+    const Dest: TRectF;
+    const AHorzAlign: THorzRectAlign = THorzRectAlign.Center;
+    const AVertAlign: TVertRectAlign = TVertRectAlign.Center): TRectF;
+```
+
+The parser does not yet support dotted identifiers (`Type.Member`) as
+default parameter values.
 
 ## Units with Compilation Errors
 
 - `baseunix.pp` - **0 errors**
 - `sysutils.pp` - **0 errors** (with `--no-stdlib`)
 - `classes.pp` - **0 errors**
-- `types.pp` - **0 errors** (nested `Type` section in advanced record now supported)
-- `math.pp` - **unblocked** by types.pp fix
+- `types.pp` - **parse error** (qualified default parameter values unsupported)
+- `math.pp` - **blocked** by types.pp
 - `fgl.pp` - **0 errors**
 - `sysconst.pp` - **0 errors**
 - `rtlconsts.pp` - **0 errors**
@@ -87,6 +100,14 @@ Failing compiler invocations dropped from **58 to 7** after fixing:
 3. Plain record properties (Delphi advanced records) triggering `record_type_is_class` heuristic
 
 Additionally, `kgpc_type_sizeof` was missing cases for `BYTE_TYPE`, `WORD_TYPE`, `LONGWORD_TYPE`, and `QWORD_TYPE`, causing SizeOf to fail for arrays of these types (e.g., `array[0..3] of Byte`).
+
+All 3 Pos(char, string) test failures fixed by:
+1. Removing Pos from `builtin_arg_expects_string()` (semcheck already dispatches to typed overloads)
+2. Adding `mangled_call_expects_char()` to suppress spurious char-to-string promotion
+3. Swapping `_ca`/`_cs` runtime signatures to consistent `(ch, value)` argument order
+
+The `**` (power/dot-product) operator is now supported in the expression parser,
+unblocking types.pp up to the qualified-default-parameter issue.
 
 ## Error Reduction with C-Vise (Flatten-Only Preprocessor)
 
