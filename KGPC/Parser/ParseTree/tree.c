@@ -1836,6 +1836,7 @@ struct RecordType *clone_record_type(const struct RecordType *record_type)
     clone->methods = NULL;  /* Methods list copied during semantic checking if needed */
     clone->method_templates = clone_method_template_list(record_type->method_templates);
     clone->is_class = record_type->is_class;
+    clone->is_interface = record_type->is_interface;
     clone->is_type_helper = record_type->is_type_helper;
     clone->helper_base_type_id = record_type->helper_base_type_id ?
         strdup(record_type->helper_base_type_id) : NULL;

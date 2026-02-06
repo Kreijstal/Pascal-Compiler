@@ -230,6 +230,21 @@ relop_fallback:
                 /* Allow comparison of pointers AND procedures */
                 int pointer_ok = ((type_first == POINTER_TYPE || type_first == PROCEDURE) && 
                                   (type_second == POINTER_TYPE || type_second == PROCEDURE));
+                if (!pointer_ok && expr1 != NULL && expr2 != NULL)
+                {
+                    KgpcType *kgpc1 = expr1->resolved_kgpc_type;
+                    KgpcType *kgpc2 = expr2->resolved_kgpc_type;
+                    if (kgpc1 != NULL && kgpc2 != NULL)
+                    {
+                        int tag1 = semcheck_tag_from_kgpc(kgpc1);
+                        int tag2 = semcheck_tag_from_kgpc(kgpc2);
+                        if ((tag1 == POINTER_TYPE || tag1 == PROCEDURE) &&
+                            (tag2 == POINTER_TYPE || tag2 == PROCEDURE))
+                        {
+                            pointer_ok = 1;
+                        }
+                    }
+                }
                 int enum_ok = (type_first == ENUM_TYPE && type_second == ENUM_TYPE);
                 
                 /* Check for string/PChar comparison.
@@ -345,6 +360,21 @@ relop_fallback:
                 /* Allow comparison of pointers AND procedures */
                 int pointer_ok = ((type_first == POINTER_TYPE || type_first == PROCEDURE) && 
                                   (type_second == POINTER_TYPE || type_second == PROCEDURE));
+                if (!pointer_ok && expr1 != NULL && expr2 != NULL)
+                {
+                    KgpcType *kgpc1 = expr1->resolved_kgpc_type;
+                    KgpcType *kgpc2 = expr2->resolved_kgpc_type;
+                    if (kgpc1 != NULL && kgpc2 != NULL)
+                    {
+                        int tag1 = semcheck_tag_from_kgpc(kgpc1);
+                        int tag2 = semcheck_tag_from_kgpc(kgpc2);
+                        if ((tag1 == POINTER_TYPE || tag1 == PROCEDURE) &&
+                            (tag2 == POINTER_TYPE || tag2 == PROCEDURE))
+                        {
+                            pointer_ok = 1;
+                        }
+                    }
+                }
                 int enum_ok = (type_first == ENUM_TYPE && type_second == ENUM_TYPE);
                 
                 /* Check for string/PChar comparison.
@@ -406,7 +436,7 @@ relop_fallback:
 
                 if(!numeric_ok && !string_ok && !char_ok && !pointer_ok && !enum_ok && !string_pchar_ok && !dynarray_nil_ok)
                 {
-                    fprintf(stderr,
+                    semcheck_error_with_context(
                         "Error on line %d, expected compatible numeric, string, or character types between relational op!\n\n",
                         expr->line_num);
                     ++return_val;
@@ -1665,6 +1695,22 @@ int semcheck_varid(int *type_return,
             if (hash_return->type != NULL)
                 semcheck_expr_set_resolved_kgpc_type_shared(expr, hash_return->type);
             return 0;
+        }
+
+        /* Interface type identifiers can be used as GUIDs (FPC behavior). */
+        if (hash_return->hash_type == HASHTYPE_TYPE && mutating == NO_MUTATE)
+        {
+            struct RecordType *type_record = get_record_type_from_node(hash_return);
+            if (type_record != NULL && type_record->is_interface)
+            {
+                HashNode_t *tguid_node = semcheck_find_type_node_with_kgpc_type(symtab, "TGUID");
+                if (tguid_node != NULL && tguid_node->type != NULL)
+                {
+                    semcheck_expr_set_resolved_kgpc_type_shared(expr, tguid_node->type);
+                    *type_return = semcheck_tag_from_kgpc(tguid_node->type);
+                    return 0;
+                }
+            }
         }
         
         set_hash_meta(hash_return, mutating);

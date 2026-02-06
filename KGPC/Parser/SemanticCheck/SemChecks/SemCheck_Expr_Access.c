@@ -393,18 +393,34 @@ int semcheck_arrayaccess(int *type_return,
         }
     }
 
-    if (element_type == UNKNOWN_TYPE)
-        element_type = LONGINT_TYPE;
-
-    *type_return = element_type;
-
     /* Propagate resolved KgpcType to the result of the indexing expression */
     KgpcType *res_type = NULL;
     if (array_expr->resolved_kgpc_type != NULL && kgpc_type_is_array(array_expr->resolved_kgpc_type))
     {
         res_type = kgpc_type_get_array_element_type(array_expr->resolved_kgpc_type);
         if (res_type != NULL) kgpc_type_retain(res_type);
+
+        /* Apply extra indices for multi-dimensional arrays */
+        if (expr->expr_data.array_access_data.extra_indices != NULL)
+        {
+            ListNode_t *extra_idx = expr->expr_data.array_access_data.extra_indices;
+            while (extra_idx != NULL && res_type != NULL && kgpc_type_is_array(res_type))
+            {
+                KgpcType *next = kgpc_type_get_array_element_type(res_type);
+                if (next != NULL) kgpc_type_retain(next);
+                kgpc_type_release(res_type);
+                res_type = next;
+                extra_idx = extra_idx->next;
+            }
+        }
     }
+
+    if (res_type != NULL)
+        element_type = semcheck_tag_from_kgpc(res_type);
+    if (element_type == UNKNOWN_TYPE)
+        element_type = LONGINT_TYPE;
+
+    *type_return = element_type;
 
     if (res_type == NULL)
     {
@@ -414,6 +430,19 @@ int semcheck_arrayaccess(int *type_return,
     if (expr->resolved_kgpc_type != NULL)
         destroy_kgpc_type(expr->resolved_kgpc_type);
     expr->resolved_kgpc_type = res_type;
+
+    if (getenv("KGPC_DEBUG_ARRAY_ACCESS") != NULL &&
+        array_expr != NULL &&
+        array_expr->type == EXPR_VAR_ID &&
+        array_expr->expr_data.id != NULL &&
+        pascal_identifier_equals(array_expr->expr_data.id, "FStandardEncodings"))
+    {
+        fprintf(stderr,
+            "[KGPC_DEBUG_ARRAY_ACCESS] base=%s array_kgpc=%s elem_kgpc=%s\n",
+            array_expr->expr_data.id,
+            array_expr->resolved_kgpc_type ? kgpc_type_to_string(array_expr->resolved_kgpc_type) : "<null>",
+            expr->resolved_kgpc_type ? kgpc_type_to_string(expr->resolved_kgpc_type) : "<null>");
+    }
 
     semcheck_compute_array_linearization(symtab, expr, array_expr);
 
@@ -493,6 +522,16 @@ int semcheck_funccall(int *type_return,
         {
             KgpcType *call_type = expr->expr_data.function_call_data.call_kgpc_type;
             KgpcType *ret_type = NULL;
+            if (getenv("KGPC_DEBUG_PROC_VAR") != NULL &&
+                expr->expr_data.function_call_data.id != NULL &&
+                pascal_identifier_equals(expr->expr_data.function_call_data.id, "Ctr"))
+            {
+                fprintf(stderr,
+                    "[KGPC_DEBUG_PROC_VAR] call_type=%s return_id=%s\n",
+                    call_type ? kgpc_type_to_string(call_type) : "<null>",
+                    (call_type && call_type->info.proc_info.return_type_id) ?
+                        call_type->info.proc_info.return_type_id : "<null>");
+            }
             if (call_type != NULL && call_type->kind == TYPE_KIND_PROCEDURE)
             {
                 ret_type = kgpc_type_get_return_type(call_type);
@@ -2669,6 +2708,17 @@ int semcheck_funccall(int *type_return,
     if (id != NULL) {
         overload_candidates = FindAllIdents(symtab, id);
     }
+    if (getenv("KGPC_DEBUG_PROC_VAR") != NULL && id != NULL &&
+        pascal_identifier_equals(id, "Ctr"))
+    {
+        HashNode_t *cand = (overload_candidates != NULL) ? (HashNode_t *)overload_candidates->cur : NULL;
+        fprintf(stderr,
+            "[KGPC_DEBUG_PROC_VAR] call id=%s cand_hash=%d cand_kind=%d cand_type=%s\n",
+            id,
+            cand ? cand->hash_type : -1,
+            cand && cand->type ? cand->type->kind : -1,
+            cand && cand->type ? kgpc_type_to_string(cand->type) : "<null>");
+    }
 
     int prefer_non_builtin = 0;
     if (overload_candidates != NULL)
@@ -2704,6 +2754,13 @@ int semcheck_funccall(int *type_return,
             KgpcType *proc_type = first_candidate->type;
             ListNode_t *formal_params = kgpc_type_get_procedure_params(proc_type);
             KgpcType *return_type = kgpc_type_get_return_type(proc_type);
+            if (return_type == NULL && proc_type->info.proc_info.return_type_id != NULL)
+            {
+                HashNode_t *ret_node = semcheck_find_preferred_type_node(symtab,
+                    proc_type->info.proc_info.return_type_id);
+                if (ret_node != NULL && ret_node->type != NULL)
+                    return_type = ret_node->type;
+            }
             
             /* Validate arguments match the procedural type's signature */
             if (semcheck_count_total_params(formal_params) != ListLength(args_given))
@@ -3788,6 +3845,24 @@ skip_overload_resolution:
                         }
                         if (owns_expected && expected_kgpc != NULL)
                             destroy_kgpc_type(expected_kgpc);
+                    }
+
+                    if (!type_compatible &&
+                        expected_type == PROCEDURE &&
+                        current_arg_expr != NULL &&
+                        current_arg_expr->resolved_kgpc_type != NULL)
+                    {
+                        KgpcType *arg_kgpc = current_arg_expr->resolved_kgpc_type;
+                        if (kgpc_type_is_procedure(arg_kgpc))
+                        {
+                            type_compatible = 1;
+                        }
+                        else if (kgpc_type_is_pointer(arg_kgpc) &&
+                                 arg_kgpc->info.points_to != NULL &&
+                                 kgpc_type_is_procedure(arg_kgpc->info.points_to))
+                        {
+                            type_compatible = 1;
+                        }
                     }
 
                     if (!type_compatible && arg_type == UNKNOWN_TYPE &&

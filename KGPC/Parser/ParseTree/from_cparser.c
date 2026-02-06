@@ -3268,6 +3268,7 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
 /* Forward declare functions we need */
 static ListNode_t *convert_param_list(ast_t **cursor);
 static ListNode_t *convert_param(ast_t *param_node);
+static struct RecordType *convert_interface_type_ex(const char *interface_name, ast_t *interface_node, ListNode_t **nested_types_out);
 
 /* Convert an AST type specification to a KgpcType object.
  * This is the Phase 2 bridge function that creates KgpcType objects from AST nodes.
@@ -3659,6 +3660,18 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
         struct RecordType *record = convert_record_type(spec_node);
         if (record != NULL) {
             return create_record_type(record);
+        }
+        return NULL;
+    }
+
+    /* Handle interface types */
+    if (spec_node->typ == PASCAL_T_INTERFACE_TYPE) {
+        struct RecordType *record = convert_interface_type_ex(NULL, spec_node, NULL);
+        if (record != NULL) {
+            KgpcType *rec_type = create_record_type(record);
+            if (rec_type != NULL) {
+                return create_pointer_type(rec_type);
+            }
         }
         return NULL;
     }
@@ -4437,6 +4450,7 @@ static struct RecordType *convert_class_type_ex(const char *class_name, ast_t *c
     record->parent_class_name = parent_class_name;
     record->methods = NULL;  /* Methods list will be populated during semantic checking */
     record->is_class = 1;
+    record->is_interface = 0;
     record->is_type_helper = 0;
     record->helper_base_type_id = NULL;
     record->helper_parent_id = NULL;
@@ -4483,6 +4497,74 @@ static struct RecordType *convert_class_type_ex(const char *class_name, ast_t *c
             }
         }
     }
+    return record;
+}
+
+static struct RecordType *convert_interface_type_ex(const char *interface_name, ast_t *interface_node, ListNode_t **nested_types_out)
+{
+    if (interface_node == NULL)
+        return NULL;
+
+    if (nested_types_out != NULL)
+        *nested_types_out = NULL;
+
+    ListBuilder field_builder;
+    ListBuilder property_builder;
+    ListBuilder method_template_builder;
+    ListBuilder nested_type_builder;
+    list_builder_init(&field_builder);
+    list_builder_init(&property_builder);
+    list_builder_init(&method_template_builder);
+    list_builder_init(&nested_type_builder);
+
+    /* Optional parent interface identifier is stored first if present. */
+    char *parent_interface_name = NULL;
+    ast_t *body_start = interface_node->child;
+    if (body_start != NULL && body_start->typ == PASCAL_T_IDENTIFIER) {
+        if (body_start->sym != NULL && body_start->sym->name != NULL)
+            parent_interface_name = strdup(body_start->sym->name);
+        body_start = body_start->next;
+    }
+
+    collect_class_members(body_start, interface_name, &field_builder, &property_builder,
+        &method_template_builder, &nested_type_builder);
+
+    if (nested_types_out != NULL)
+        *nested_types_out = list_builder_finish(&nested_type_builder);
+    else
+        destroy_list(nested_type_builder.head);
+
+    struct RecordType *record = (struct RecordType *)calloc(1, sizeof(struct RecordType));
+    if (record == NULL) {
+        destroy_list(field_builder.head);
+        destroy_list(property_builder.head);
+        destroy_list(method_template_builder.head);
+        free(parent_interface_name);
+        return NULL;
+    }
+
+    record->fields = list_builder_finish(&field_builder);
+    record->properties = list_builder_finish(&property_builder);
+    record->method_templates = list_builder_finish(&method_template_builder);
+    record->parent_class_name = parent_interface_name;
+    record->methods = NULL;
+    record->is_class = 0;
+    record->is_interface = 1;
+    record->is_type_helper = 0;
+    record->helper_base_type_id = NULL;
+    record->helper_parent_id = NULL;
+    record->type_id = interface_name != NULL ? strdup(interface_name) : NULL;
+    record->has_cached_size = 0;
+    record->cached_size = 0;
+    record->generic_decl = NULL;
+    record->generic_args = NULL;
+    record->num_generic_args = 0;
+    record->method_clones_emitted = 0;
+    record->default_indexed_property = NULL;
+    record->default_indexed_element_type = UNKNOWN_TYPE;
+    record->default_indexed_element_type_id = NULL;
+    record->record_properties = NULL;
+
     return record;
 }
 
@@ -4812,6 +4894,7 @@ static struct RecordType *convert_record_type_ex(ast_t *record_node, ListNode_t 
         record->methods = NULL;
         record->method_templates = NULL;
         record->is_class = 0;
+        record->is_interface = 0;
         record->is_type_helper = 1;
         record->helper_base_type_id = NULL;
         record->helper_parent_id = NULL;
@@ -4944,6 +5027,7 @@ static struct RecordType *convert_record_type_ex(ast_t *record_node, ListNode_t 
     record->methods = NULL;  /* Regular records don't have methods */
     record->method_templates = NULL;
     record->is_class = 0;
+    record->is_interface = 0;
     record->is_type_helper = 0;
     record->helper_base_type_id = NULL;
     record->helper_parent_id = NULL;
@@ -5184,6 +5268,66 @@ ListNode_t *from_cparser_convert_params_ast(ast_t *params_ast)
         cursor = cursor->child;
 
     return convert_param_list(&cursor);
+}
+
+KgpcType *from_cparser_method_template_to_proctype(struct MethodTemplate *method_template,
+    struct RecordType *record, struct SymTab *symtab)
+{
+    if (method_template == NULL)
+        return NULL;
+
+    ListNode_t *params = NULL;
+    ListBuilder params_builder;
+    list_builder_init(&params_builder);
+
+    /* Add implicit Self parameter for instance methods */
+    if (!method_template->is_static && !method_template->is_class_method) {
+        ListNode_t *self_ids = CreateListNode(strdup("Self"), LIST_STRING);
+        char *self_type_id = NULL;
+        int self_type_tag = UNKNOWN_TYPE;
+        if (record != NULL && record->type_id != NULL)
+            self_type_id = strdup(record->type_id);
+        Tree_t *self_param = mk_vardecl(0, self_ids, self_type_tag, self_type_id, 1, 0, NULL, NULL, NULL, NULL);
+        if (self_param != NULL)
+            list_builder_append(&params_builder, self_param, LIST_TREE);
+    }
+
+    if (method_template->params_ast != NULL) {
+        ListNode_t *extra_params = from_cparser_convert_params_ast(method_template->params_ast);
+        if (extra_params != NULL)
+            list_builder_extend(&params_builder, extra_params);
+    }
+
+    params = list_builder_finish(&params_builder);
+
+    KgpcType *return_type = NULL;
+    char *return_type_id = NULL;
+    if (method_template->has_return_type && method_template->return_type_ast != NULL) {
+        ast_t *ret_node = method_template->return_type_ast;
+        if (ret_node->typ == PASCAL_T_RETURN_TYPE && ret_node->child != NULL)
+            ret_node = ret_node->child;
+        return_type = convert_type_spec_to_kgpctype(ret_node, symtab);
+        if (return_type == NULL && ret_node != NULL && ret_node->typ == PASCAL_T_IDENTIFIER) {
+            char *ret_name = dup_symbol(ret_node);
+            if (ret_name != NULL) {
+                int ret_tag = map_type_name(ret_name, NULL);
+                if (ret_tag != UNKNOWN_TYPE)
+                    return_type = create_primitive_type(ret_tag);
+                return_type_id = strdup(ret_name);
+                free(ret_name);
+            }
+        } else if (ret_node != NULL && ret_node->typ == PASCAL_T_IDENTIFIER) {
+            return_type_id = dup_symbol(ret_node);
+        }
+    }
+
+    KgpcType *proc_type = create_procedure_type(params, return_type);
+    if (proc_type != NULL && return_type_id != NULL)
+        proc_type->info.proc_info.return_type_id = return_type_id;
+    else if (return_type_id != NULL)
+        free(return_type_id);
+
+    return proc_type;
 }
 
 static bool is_var_hint_clause(ast_t *node) {
@@ -6491,6 +6635,7 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
     while (spec_node != NULL && spec_node->typ != PASCAL_T_TYPE_SPEC &&
            spec_node->typ != PASCAL_T_RECORD_TYPE && spec_node->typ != PASCAL_T_OBJECT_TYPE &&
            spec_node->typ != PASCAL_T_CLASS_TYPE &&
+           spec_node->typ != PASCAL_T_INTERFACE_TYPE &&
            spec_node->typ != PASCAL_T_PROCEDURE_TYPE &&
            spec_node->typ != PASCAL_T_FUNCTION_TYPE &&
            spec_node->typ != PASCAL_T_REFERENCE_TO_TYPE) {
@@ -6502,6 +6647,7 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
     TypeInfo type_info = {0};
     int mapped_type = UNKNOWN_TYPE;
     ast_t *class_spec = NULL;
+    ast_t *interface_spec = NULL;
     ListNode_t *nested_type_sections = NULL;
     if (spec_node != NULL) {
         if (getenv("KGPC_DEBUG_TFPG") != NULL)
@@ -6530,7 +6676,32 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
             }
         }
 
-        if (class_spec != NULL) {
+        if (spec_node->typ == PASCAL_T_INTERFACE_TYPE) {
+            interface_spec = spec_node;
+        } else if (spec_node->typ == PASCAL_T_TYPE_SPEC && spec_node->child != NULL &&
+                   spec_node->child->typ == PASCAL_T_INTERFACE_TYPE) {
+            interface_spec = spec_node->child;
+        }
+
+        if (interface_spec != NULL) {
+            record_type = convert_interface_type_ex(id, interface_spec, &nested_type_sections);
+            if (nested_type_sections != NULL && nested_type_decls_out != NULL) {
+                ListNode_t *section_cursor = nested_type_sections;
+                while (section_cursor != NULL) {
+                    ast_t *type_section_ast = (ast_t *)section_cursor->cur;
+                    if (type_section_ast != NULL) {
+                        append_type_decls_from_section(type_section_ast, nested_type_decls_out,
+                            NULL, NULL, NULL);
+                    }
+                    section_cursor = section_cursor->next;
+                }
+            }
+            while (nested_type_sections != NULL) {
+                ListNode_t *next = nested_type_sections->next;
+                free(nested_type_sections);
+                nested_type_sections = next;
+            }
+        } else if (class_spec != NULL) {
             record_type = convert_class_type_ex(id, class_spec, &nested_type_sections);
             /* Process nested type sections - extract and convert nested type declarations */
             if (nested_type_sections != NULL && nested_type_decls_out != NULL) {
@@ -6600,10 +6771,21 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
     if (spec_node != NULL)
         kgpc_type = convert_type_spec_to_kgpctype(spec_node, NULL);
 
+    if (record_type != NULL && record_type->is_interface)
+    {
+        if (kgpc_type != NULL)
+            destroy_kgpc_type(kgpc_type);
+        KgpcType *rec_type = create_record_type(record_type);
+        if (rec_type != NULL)
+            kgpc_type = create_pointer_type(rec_type);
+        else
+            kgpc_type = NULL;
+    }
+
     /* If KgpcType wasn't created (e.g. for classes/records handled by legacy path), create it now */
     if (kgpc_type == NULL && record_type != NULL) {
         KgpcType *rec_type = create_record_type(record_type);
-        if (record_type->is_class) {
+        if (record_type->is_class || record_type->is_interface) {
             /* Classes are pointers to records */
             kgpc_type = create_pointer_type(rec_type);
         } else {

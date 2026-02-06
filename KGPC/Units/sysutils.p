@@ -109,6 +109,8 @@ procedure FmtStr(var Res: AnsiString; const Fmt: AnsiString; const Args: array o
 function IsDelimiter(const Delimiters, S: AnsiString; Index: Integer): Boolean;
 function StrPas(P: PAnsiChar): AnsiString;
 function StrPas(P: PChar): AnsiString;
+function StrPas(P: PAnsiChar; Len: SizeInt): AnsiString;
+function StrPas(P: PChar; Len: SizeInt): AnsiString;
 function StrLen(P: PAnsiChar): SizeInt;
 function StrPos(Str1, Str2: PAnsiChar): PAnsiChar;
 function StrRScan(P: PAnsiChar; C: AnsiChar): PAnsiChar;
@@ -190,6 +192,7 @@ function kgpc_load_library(path: PChar): NativeUInt; external;
 function kgpc_get_proc_address(handle: NativeUInt; symbol: PChar): NativeUInt; external;
 function kgpc_free_library(handle: NativeUInt): Integer; external;
 function kgpc_strpas(p: PAnsiChar): AnsiString; external;
+function kgpc_strpas_len(p: PAnsiChar; Len: SizeInt): AnsiString; external;
 
 function ToPChar(const S: AnsiString): PChar;
 begin
@@ -234,6 +237,22 @@ begin
         StrPas := ''
     else
         StrPas := kgpc_strpas(PAnsiChar(P));
+end;
+
+function StrPas(P: PAnsiChar; Len: SizeInt): AnsiString;
+begin
+    if (P = nil) or (Len <= 0) then
+        StrPas := ''
+    else
+        StrPas := kgpc_strpas_len(P, Len);
+end;
+
+function StrPas(P: PChar; Len: SizeInt): AnsiString;
+begin
+    if (P = nil) or (Len <= 0) then
+        StrPas := ''
+    else
+        StrPas := kgpc_strpas_len(PAnsiChar(P), Len);
 end;
 
 function StrLen(P: PAnsiChar): SizeInt;

@@ -2587,6 +2587,16 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             if (stmt->stmt_data.inherited_data.call_expr != NULL)
             {
                 struct Expression *call_expr = stmt->stmt_data.inherited_data.call_expr;
+                if (getenv("KGPC_DEBUG_INHERITED") != NULL)
+                {
+                    const char *cid = NULL;
+                    if (call_expr->type == EXPR_FUNCTION_CALL)
+                        cid = call_expr->expr_data.function_call_data.id;
+                    else if (call_expr->type == EXPR_VAR_ID)
+                        cid = call_expr->expr_data.id;
+                    fprintf(stderr, "[INHERITED] stmt line=%d call=%s\n",
+                        stmt->line_num, cid ? cid : "<null>");
+                }
                 
                 /* Handle EXPR_VAR_ID by converting to EXPR_FUNCTION_CALL */
                 if (call_expr->type == EXPR_VAR_ID)
@@ -2608,19 +2618,30 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                 
                 if (call_expr->type == EXPR_FUNCTION_CALL)
                 {
-                    HashNode_t *target_symbol = NULL;
-                    const char *call_id = call_expr->expr_data.function_call_data.id;
-                    if (call_id != NULL)
-                        FindIdent(&target_symbol, symtab, call_id);
-
-                    int is_function_symbol = (target_symbol != NULL) &&
-                        (target_symbol->hash_type == HASHTYPE_FUNCTION ||
-                         target_symbol->hash_type == HASHTYPE_FUNCTION_RETURN);
-
-                    if (!is_function_symbol)
+                    if (1)
                     {
                         /* For inherited procedure calls, check if we need to handle Create/Destroy with no parent */
                         const char *method_name = call_expr->expr_data.function_call_data.id;
+                        char *method_name_buf = NULL;
+                        char *owner_name_buf = NULL;
+                        if (method_name != NULL)
+                        {
+                            const char *sep = strstr(method_name, "__");
+                            if (sep != NULL)
+                            {
+                                size_t owner_len = (size_t)(sep - method_name);
+                                size_t meth_len = strlen(sep + 2);
+                                owner_name_buf = (char *)malloc(owner_len + 1);
+                                method_name_buf = (char *)malloc(meth_len + 1);
+                                if (owner_name_buf != NULL && method_name_buf != NULL)
+                                {
+                                    memcpy(owner_name_buf, method_name, owner_len);
+                                    owner_name_buf[owner_len] = '\0';
+                                    memcpy(method_name_buf, sep + 2, meth_len + 1);
+                                    method_name = method_name_buf;
+                                }
+                            }
+                        }
                         HashNode_t *self_node = NULL;
                         const char *parent_class_name = NULL;
                         struct RecordType *current_class = NULL;
@@ -2639,12 +2660,20 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                                      self_node->type->info.points_to->kind == TYPE_KIND_RECORD &&
                                      self_node->type->info.points_to->info.record_info != NULL)
                             {
-                                current_class = self_node->type->info.points_to->info.record_info;
+                                    current_class = self_node->type->info.points_to->info.record_info;
                             }
 
                             if (current_class != NULL)
                             {
                                 parent_class_name = current_class->parent_class_name;
+                                if (getenv("KGPC_DEBUG_INHERITED") != NULL && method_name != NULL &&
+                                    strcasecmp(method_name, "Create") == 0)
+                                {
+                                    fprintf(stderr,
+                                        "[INHERITED] class=%s parent=%s\n",
+                                        current_class->type_id ? current_class->type_id : "<null>",
+                                        parent_class_name ? parent_class_name : "<null>");
+                                }
 
                                 /* Check if there's no parent class and this is Create or Destroy */
                                 if (current_class->parent_class_name == NULL && method_name != NULL &&
@@ -2664,6 +2693,32 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                                 }
                             }
                         }
+                        if (current_class == NULL)
+                        {
+                            const char *owner_id = semcheck_get_current_method_owner();
+                            if (owner_id == NULL && owner_name_buf != NULL)
+                                owner_id = owner_name_buf;
+                            if (owner_id != NULL)
+                            {
+                                HashNode_t *owner_node = NULL;
+                                if (FindIdent(&owner_node, symtab, owner_id) != -1 && owner_node != NULL)
+                                    current_class = semcheck_stmt_get_record_type_from_node(owner_node);
+                                if (current_class != NULL)
+                                    parent_class_name = current_class->parent_class_name;
+                            }
+                        }
+                        if (getenv("KGPC_DEBUG_INHERITED") != NULL && method_name != NULL &&
+                            strcasecmp(method_name, "Create") == 0)
+                        {
+                            fprintf(stderr,
+                                "[INHERITED] resolved class=%s parent=%s\n",
+                                current_class && current_class->type_id ? current_class->type_id : "<null>",
+                                parent_class_name ? parent_class_name : "<null>");
+                        }
+                        if (owner_name_buf != NULL)
+                            free(owner_name_buf);
+                        if (method_name_buf != NULL)
+                            free(method_name_buf);
 
                         /* If a parent exists, call the parent class method */
                         HashNode_t *parent_method_node = NULL;
@@ -2671,59 +2726,75 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                         parent_mangled[0] = '\0';
                         if (parent_class_name != NULL && method_name != NULL)
                         {
-                            /* Build the parent method name */
-                            snprintf(parent_mangled, sizeof(parent_mangled), "%s__%s",
-                                parent_class_name, method_name);
-
-                            /* Prefer overload resolution by call-site signature */
-                            ListNode_t *parent_candidates = FindAllIdents(symtab, parent_mangled);
-                            if (parent_candidates != NULL)
+                            const char *search_parent = parent_class_name;
+                            while (search_parent != NULL && parent_method_node == NULL)
                             {
-                                /* Build temp args including Self to match method signatures */
-                                struct Expression *self_expr = mk_varid(stmt->line_num, strdup("Self"));
-                                ListNode_t *self_arg = CreateListNode(self_expr, LIST_EXPR);
-                                self_arg->next = call_expr->expr_data.function_call_data.args_expr;
+                                snprintf(parent_mangled, sizeof(parent_mangled), "%s__%s",
+                                    search_parent, method_name);
 
-                                char *call_mangled = MangleFunctionNameFromCallSite(parent_mangled,
-                                    self_arg, symtab, INT_MAX);
-                                if (call_mangled != NULL)
+                                /* Prefer overload resolution by call-site signature */
+                                ListNode_t *parent_candidates = FindAllIdents(symtab, parent_mangled);
+                                if (parent_candidates != NULL)
                                 {
-                                    for (ListNode_t *cur = parent_candidates; cur != NULL; cur = cur->next)
-                                    {
-                                        HashNode_t *candidate = (HashNode_t *)cur->cur;
-                                        if (candidate != NULL && candidate->mangled_id != NULL &&
-                                            strcmp(candidate->mangled_id, call_mangled) == 0)
-                                        {
-                                            parent_method_node = candidate;
-                                            break;
-                                        }
-                                    }
-                                    free(call_mangled);
-                                }
+                                    /* Build temp args including Self to match method signatures */
+                                    struct Expression *self_expr = mk_varid(stmt->line_num, strdup("Self"));
+                                    ListNode_t *self_arg = CreateListNode(self_expr, LIST_EXPR);
+                                    self_arg->next = call_expr->expr_data.function_call_data.args_expr;
 
-                                self_arg->next = NULL;
-                                destroy_expr(self_expr);
-                                free(self_arg);
+                                    char *call_mangled = MangleFunctionNameFromCallSite(parent_mangled,
+                                        self_arg, symtab, INT_MAX);
+                                    if (call_mangled != NULL)
+                                    {
+                                        for (ListNode_t *cur = parent_candidates; cur != NULL; cur = cur->next)
+                                        {
+                                            HashNode_t *candidate = (HashNode_t *)cur->cur;
+                                            if (candidate != NULL && candidate->mangled_id != NULL &&
+                                                strcmp(candidate->mangled_id, call_mangled) == 0)
+                                            {
+                                                parent_method_node = candidate;
+                                                break;
+                                            }
+                                        }
+                                        free(call_mangled);
+                                    }
+
+                                    self_arg->next = NULL;
+                                    destroy_expr(self_expr);
+                                    free(self_arg);
+
+                                    DestroyList(parent_candidates);
+                                }
+                                else
+                                {
+                                    if (FindIdent(&parent_method_node, symtab, parent_mangled) == -1)
+                                        parent_method_node = NULL;
+                                }
 
                                 if (parent_method_node == NULL)
                                 {
-                                    int candidate_count = ListLength(parent_candidates);
-                                    semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index,
-                                        "Error on line %d, inherited call to %s has no matching overload: %d overloads found.\n\n",
-                                        stmt->line_num,
-                                        parent_mangled[0] != '\0' ? parent_mangled :
-                                            (method_name != NULL ? method_name : "(unknown)"),
-                                        candidate_count);
-                                    DestroyList(parent_candidates);
-                                    return ++return_val;
+                                    HashNode_t *parent_node = NULL;
+                                    if (FindIdent(&parent_node, symtab, (char *)search_parent) != -1 &&
+                                        parent_node != NULL)
+                                    {
+                                        struct RecordType *parent_record =
+                                            semcheck_stmt_get_record_type_from_node(parent_node);
+                                        search_parent = parent_record ? parent_record->parent_class_name : NULL;
+                                    }
+                                    else
+                                    {
+                                        search_parent = NULL;
+                                    }
                                 }
-
-                                DestroyList(parent_candidates);
                             }
-                            else
+
+                            if (parent_method_node == NULL)
                             {
-                                if (FindIdent(&parent_method_node, symtab, parent_mangled) == -1)
-                                    parent_method_node = NULL;
+                                semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index,
+                                    "Error on line %d, inherited call to %s has no matching overload.\n\n",
+                                    stmt->line_num,
+                                    parent_mangled[0] != '\0' ? parent_mangled :
+                                        (method_name != NULL ? method_name : "(unknown)"));
+                                return ++return_val;
                             }
 
                             if (getenv("KGPC_DEBUG_INHERITED") != NULL)
@@ -2836,11 +2907,6 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                         semcheck_stmt_set_call_kgpc_type(&temp_call, NULL,
                             temp_call.stmt_data.procedure_call_data.is_call_info_valid == 1);
                         temp_call.stmt_data.procedure_call_data.is_call_info_valid = 0;
-                    }
-                    else
-                    {
-                        int inherited_type = UNKNOWN_TYPE;
-                        return_val += semcheck_funccall(&inherited_type, symtab, call_expr, max_scope_lev, NO_MUTATE);
                     }
                 }
                 else
@@ -3181,6 +3247,14 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                     "[KGPC] assignment Result type mismatch: lhs=%s rhs=%s\n",
                     kgpc_type_to_string(lhs_kgpctype),
                     kgpc_type_to_string(rhs_kgpctype));
+                if (expr != NULL)
+                {
+                    fprintf(stderr,
+                        "[KGPC] rhs expr type=%d resolved_kgpc=%s rhs_kgpc=%s\n",
+                        expr->type,
+                        expr->resolved_kgpc_type ? kgpc_type_to_string(expr->resolved_kgpc_type) : "<null>",
+                        rhs_kgpctype ? kgpc_type_to_string(rhs_kgpctype) : "<null>");
+                }
             }
 
             const char *lhs_name = "<expression>";
@@ -5516,9 +5590,38 @@ int semcheck_for_in(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
                     stmt->line_num);
             ++return_val;
         } else if (!collection_is_list && loop_var_nonordinal) {
-            semcheck_error_with_context("Error on line %d: for-in loop variable must be an ordinal type!\n\n",
-                    stmt->line_num);
-            ++return_val;
+            int loop_var_type_owned = 0;
+            KgpcType *loop_var_kgpc = semcheck_resolve_expression_kgpc_type(symtab, loop_var,
+                max_scope_lev, MUTATE, &loop_var_type_owned);
+            KgpcType *element_kgpc = NULL;
+
+            if (collection_is_string)
+            {
+                element_kgpc = create_primitive_type(CHAR_TYPE);
+            }
+            else if (collection_kgpc_type != NULL && kgpc_type_is_array(collection_kgpc_type))
+            {
+                element_kgpc = kgpc_type_get_array_element_type(collection_kgpc_type);
+                if (element_kgpc != NULL)
+                    kgpc_type_retain(element_kgpc);
+            }
+
+            if (loop_var_kgpc != NULL && element_kgpc != NULL &&
+                kgpc_type_equals(loop_var_kgpc, element_kgpc))
+            {
+                loop_var_nonordinal = 0;
+            }
+            else
+            {
+                semcheck_error_with_context("Error on line %d: for-in loop variable must be an ordinal type!\n\n",
+                        stmt->line_num);
+                ++return_val;
+            }
+
+            if (loop_var_type_owned && loop_var_kgpc != NULL)
+                destroy_kgpc_type(loop_var_kgpc);
+            if (element_kgpc != NULL)
+                destroy_kgpc_type(element_kgpc);
         }
 
         if (collection_type_owned && collection_kgpc_type != NULL)

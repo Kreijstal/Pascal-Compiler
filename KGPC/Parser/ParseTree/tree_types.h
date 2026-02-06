@@ -148,6 +148,7 @@ struct RecordType
     ListNode_t *methods;      /* List of MethodInfo for virtual/override methods */
     ListNode_t *method_templates; /* Template methods captured from declarations */
     int is_class;             /* 1 if this record represents a class */
+    int is_interface;         /* 1 if this record represents an interface */
     int is_type_helper;       /* 1 if this record represents a type helper */
     char *helper_base_type_id; /* Base type name for helpers (the "for X" part) */
     char *helper_parent_id;   /* Parent helper type name (for inheritance like "type helper(Parent) for X") */

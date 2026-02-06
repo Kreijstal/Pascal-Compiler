@@ -31,6 +31,10 @@ typedef struct {
  */
 KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab);
 
+/* Build a procedure type from a method template (used for interface method declarations). */
+KgpcType *from_cparser_method_template_to_proctype(struct MethodTemplate *method_template,
+    struct RecordType *record, struct SymTab *symtab);
+
 /* Get method information for a class.
  * Returns a list of ClassMethodBinding for the given class.
  * Caller should NOT free the returned list - it's owned by the parser.

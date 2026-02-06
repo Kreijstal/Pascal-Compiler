@@ -35,6 +35,22 @@ int semcheck_typecast(int *type_return,
         inner_type = semcheck_tag_from_kgpc(inner_kgpc_type);
     }
 
+    const char *target_id = expr->expr_data.typecast_data.target_type_id;
+    if (target_id != NULL && pascal_identifier_equals(target_id, "unaligned"))
+    {
+        if (expr->expr_data.typecast_data.expr == NULL)
+        {
+            semcheck_error_with_context("Error on line %d, unaligned requires an argument.\n\n",
+                expr->line_num);
+            *type_return = UNKNOWN_TYPE;
+            return 1;
+        }
+        expr->expr_data.typecast_data.target_type = inner_type;
+        semcheck_expr_set_resolved_type(expr, inner_type);
+        *type_return = inner_type;
+        return error_count;
+    }
+
     int target_type = expr->expr_data.typecast_data.target_type;
     int builtin_mapped = semcheck_map_builtin_type_name(symtab,
         expr->expr_data.typecast_data.target_type_id);
@@ -1827,6 +1843,19 @@ FIELD_RESOLVED:
     /* Handle inline pointer fields like bufptr: ^Char */
     if (field_desc->is_pointer)
         field_type = POINTER_TYPE;
+    /* Procedural fields (function/procedure pointers) */
+    if (field_desc->proc_type != NULL)
+        field_type = PROCEDURE;
+    if (getenv("KGPC_DEBUG_PROC_FIELD") != NULL)
+    {
+        fprintf(stderr,
+            "[KGPC_DEBUG_PROC_FIELD] field=%s type=%d raw_type=%d type_id=%s proc_type=%p\n",
+            field_id != NULL ? field_id : "<null>",
+            field_type,
+            field_desc->type,
+            field_desc->type_id != NULL ? field_desc->type_id : "<null>",
+            (void *)field_desc->proc_type);
+    }
     if (getenv("KGPC_DEBUG_POINTER_FIELD") != NULL && field_id != NULL)
     {
         fprintf(stderr,
@@ -2104,7 +2133,8 @@ FIELD_RESOLVED:
     expr->record_type = (field_type == RECORD_TYPE) ? field_record : NULL;
     if (expr->resolved_kgpc_type != NULL &&
         (kgpc_type_is_array(expr->resolved_kgpc_type) ||
-         kgpc_type_is_array_of_const(expr->resolved_kgpc_type)))
+         kgpc_type_is_array_of_const(expr->resolved_kgpc_type) ||
+         kgpc_type_is_procedure(expr->resolved_kgpc_type)))
     {
         /* Preserve array KgpcType for overload resolution (var params/open arrays). */
     }

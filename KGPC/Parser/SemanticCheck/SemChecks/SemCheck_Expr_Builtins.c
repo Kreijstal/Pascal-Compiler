@@ -549,7 +549,8 @@ int semcheck_builtin_pos(int *type_return, SymTab_t *symtab,
     error_count += semcheck_expr_with_type(&substr_kgpc_type, symtab, substr_expr, max_scope_lev, NO_MUTATE);
     
     /* Check if substr is a string type, char, or shortstring (array of char) */
-    int is_valid_substr = kgpc_type_is_string(substr_kgpc_type) || kgpc_type_is_char(substr_kgpc_type) ||
+    int substr_is_char = kgpc_type_is_char(substr_kgpc_type);
+    int is_valid_substr = kgpc_type_is_string(substr_kgpc_type) || substr_is_char ||
                           kgpc_type_is_shortstring(substr_kgpc_type) ||
                           is_shortstring_array(semcheck_tag_from_kgpc(substr_kgpc_type), substr_expr->is_array_expr);
     
@@ -562,9 +563,15 @@ int semcheck_builtin_pos(int *type_return, SymTab_t *symtab,
     KgpcType *value_kgpc_type = NULL;
     error_count += semcheck_expr_with_type(&value_kgpc_type, symtab, value_expr, max_scope_lev, NO_MUTATE);
     
-    /* Check if value is a string type OR a shortstring (array of char) */
+    int value_is_char = kgpc_type_is_char(value_kgpc_type);
+    /* Check if value is a string type OR a shortstring (array of char).
+     * Allow char targets when the substring is also a string/shortstring/char. */
     int is_valid_value = kgpc_type_is_string(value_kgpc_type) || kgpc_type_is_shortstring(value_kgpc_type) ||
-                         is_shortstring_array(semcheck_tag_from_kgpc(value_kgpc_type), value_expr->is_array_expr);
+                         is_shortstring_array(semcheck_tag_from_kgpc(value_kgpc_type), value_expr->is_array_expr) ||
+                         (value_is_char && (substr_is_char || kgpc_type_is_string(substr_kgpc_type) ||
+                                            kgpc_type_is_shortstring(substr_kgpc_type) ||
+                                            is_shortstring_array(semcheck_tag_from_kgpc(substr_kgpc_type),
+                                                substr_expr->is_array_expr)));
     
     if (error_count == 0 && !is_valid_value)
     {
@@ -598,7 +605,23 @@ int semcheck_builtin_pos(int *type_return, SymTab_t *symtab,
                              is_shortstring_array(semcheck_tag_from_kgpc(value_kgpc_type), value_expr->is_array_expr);
 
         const char *mangled_name = has_start ? "kgpc_string_pos_from" : "kgpc_string_pos";
-        if (substr_is_short && value_is_short)
+        if (substr_is_char)
+        {
+            if (value_is_char)
+                mangled_name = has_start ? "kgpc_string_pos_cc_from" : "kgpc_string_pos_cc";
+            else if (value_is_short)
+                mangled_name = has_start ? "kgpc_string_pos_cs_from" : "kgpc_string_pos_cs";
+            else
+                mangled_name = has_start ? "kgpc_string_pos_ca_from" : "kgpc_string_pos_ca";
+        }
+        else if (value_is_char)
+        {
+            if (substr_is_short)
+                mangled_name = has_start ? "kgpc_string_pos_sc_from" : "kgpc_string_pos_sc";
+            else
+                mangled_name = has_start ? "kgpc_string_pos_ac_from" : "kgpc_string_pos_ac";
+        }
+        else if (substr_is_short && value_is_short)
             mangled_name = has_start ? "kgpc_string_pos_ss_from" : "kgpc_string_pos_ss";
         else if (substr_is_short)
             mangled_name = has_start ? "kgpc_string_pos_sa_from" : "kgpc_string_pos_sa";
@@ -631,9 +654,10 @@ int semcheck_builtin_strpas(int *type_return, SymTab_t *symtab,
     assert(expr->type == EXPR_FUNCTION_CALL);
 
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
-    if (args == NULL || args->next != NULL)
+    int arg_count = ListLength(args);
+    if (args == NULL || (arg_count != 1 && arg_count != 2))
     {
-        semcheck_error_with_context("Error on line %d, StrPas expects exactly one argument.\n",
+        semcheck_error_with_context("Error on line %d, StrPas expects one or two arguments.\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -653,6 +677,19 @@ int semcheck_builtin_strpas(int *type_return, SymTab_t *symtab,
         ++error_count;
     }
 
+    if (error_count == 0 && arg_count == 2)
+    {
+        struct Expression *len_expr = (struct Expression *)args->next->cur;
+        KgpcType *len_kgpc_type = NULL;
+        error_count += semcheck_expr_with_type(&len_kgpc_type, symtab, len_expr, max_scope_lev, NO_MUTATE);
+        if (error_count == 0 && !kgpc_type_is_integer(len_kgpc_type))
+        {
+            semcheck_error_with_context("Error on line %d, StrPas length must be an integer.\n",
+                expr->line_num);
+            ++error_count;
+        }
+    }
+
     if (error_count == 0)
     {
         if (expr->expr_data.function_call_data.mangled_id != NULL)
@@ -660,7 +697,7 @@ int semcheck_builtin_strpas(int *type_return, SymTab_t *symtab,
             free(expr->expr_data.function_call_data.mangled_id);
             expr->expr_data.function_call_data.mangled_id = NULL;
         }
-        expr->expr_data.function_call_data.mangled_id = strdup("kgpc_strpas");
+        expr->expr_data.function_call_data.mangled_id = strdup(arg_count == 2 ? "kgpc_strpas_len" : "kgpc_strpas");
         if (expr->expr_data.function_call_data.mangled_id == NULL)
         {
             fprintf(stderr, "Error: failed to allocate mangled name for StrPas.\n");
@@ -924,6 +961,15 @@ int semcheck_builtin_assigned(int *type_return, SymTab_t *symtab,
     KgpcType *arg_kgpc_type = NULL;
     int error_count = semcheck_expr_with_type(&arg_kgpc_type, symtab,
         (struct Expression *)args->cur, max_scope_lev, NO_MUTATE);
+    if (getenv("KGPC_DEBUG_ASSIGNED") != NULL)
+    {
+        struct Expression *arg_expr = (struct Expression *)args->cur;
+        fprintf(stderr,
+            "[KGPC_DEBUG_ASSIGNED] expr_type=%d kgpc=%s kind=%d\n",
+            arg_expr != NULL ? arg_expr->type : -1,
+            arg_kgpc_type != NULL ? kgpc_type_to_string(arg_kgpc_type) : "<null>",
+            arg_kgpc_type != NULL ? arg_kgpc_type->kind : -1);
+    }
 
     /* Assigned accepts pointers (TYPE_KIND_POINTER or POINTER_TYPE primitive) and procedure types */
     int is_valid_type = kgpc_type_is_pointer(arg_kgpc_type) || 

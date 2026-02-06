@@ -663,7 +663,12 @@ int semcheck_tag_from_kgpc(const KgpcType *type)
         }
     }
     if (kgpc_type_is_record((KgpcType *)type))
+    {
+        struct RecordType *rec = kgpc_type_get_record((KgpcType *)type);
+        if (rec != NULL && rec->is_interface)
+            return POINTER_TYPE;
         return RECORD_TYPE;
+    }
     if (kgpc_type_is_pointer((KgpcType *)type))
         return POINTER_TYPE;
     if (kgpc_type_is_procedure((KgpcType *)type))
@@ -1143,6 +1148,9 @@ static void add_class_vars_to_method_scope(SymTab_t *symtab, const char *method_
     if (symtab == NULL || method_id == NULL)
         return;
 
+    if (getenv("KGPC_DEBUG_CLASS_VAR") != NULL)
+        fprintf(stderr, "[KGPC_DEBUG_CLASS_VAR] method_id=%s\n", method_id ? method_id : "<null>");
+
     /* Check if this is a method (contains "__") */
     const char *sep = strstr(method_id, "__");
     if (sep == NULL || sep == method_id)
@@ -1230,6 +1238,17 @@ static void add_class_vars_to_method_scope(SymTab_t *symtab, const char *method_
         struct RecordField *field = (struct RecordField *)field_node->cur;
         if (field != NULL && field->name != NULL && field->name[0] != '\0')
         {
+            if (getenv("KGPC_DEBUG_CLASS_VAR") != NULL &&
+                pascal_identifier_equals(field->name, "FStandardEncodings"))
+            {
+                fprintf(stderr,
+                    "[KGPC_DEBUG_CLASS_VAR] class=%s field=%s is_array=%d elem_type=%d elem_type_id=%s\n",
+                    class_name ? class_name : "<null>",
+                    field->name,
+                    field->is_array,
+                    field->array_element_type,
+                    field->array_element_type_id ? field->array_element_type_id : "<null>");
+            }
             /* Check if already defined in scope */
             HashNode_t *existing = NULL;
             if (FindIdent(&existing, symtab, field->name) == -1)
@@ -1246,8 +1265,60 @@ static void add_class_vars_to_method_scope(SymTab_t *symtab, const char *method_
                         kgpc_type_retain(field_type);
                     }
                 }
+                else if (field->is_array)
+                {
+                    KgpcType *elem_type = NULL;
+                    if (field->array_element_type_id != NULL)
+                    {
+                        HashNode_t *elem_node = NULL;
+                        if (FindIdent(&elem_node, symtab, field->array_element_type_id) != -1 &&
+                            elem_node != NULL && elem_node->type != NULL)
+                        {
+                            elem_type = elem_node->type;
+                            kgpc_type_retain(elem_type);
+                        }
+                        else if (getenv("KGPC_DEBUG_CLASS_VAR") != NULL &&
+                            pascal_identifier_equals(field->name, "FStandardEncodings"))
+                        {
+                            fprintf(stderr,
+                                "[KGPC_DEBUG_CLASS_VAR] element type lookup failed for %s (node=%p type=%p)\n",
+                                field->array_element_type_id ? field->array_element_type_id : "<null>",
+                                (void *)elem_node,
+                                elem_node ? (void *)elem_node->type : NULL);
+                        }
+                        else if (elem_node != NULL)
+                        {
+                            struct RecordType *elem_record = get_record_type_from_node(elem_node);
+                            if (elem_record != NULL)
+                                elem_type = create_record_type(elem_record);
+                        }
+                    }
+                    else if (field->array_element_type != UNKNOWN_TYPE)
+                    {
+                        elem_type = create_primitive_type(field->array_element_type);
+                    }
+                    if (elem_type != NULL)
+                    {
+                        if (getenv("KGPC_DEBUG_CLASS_VAR") != NULL &&
+                            pascal_identifier_equals(field->name, "FStandardEncodings"))
+                        {
+                            fprintf(stderr,
+                                "[KGPC_DEBUG_CLASS_VAR] resolved elem kgpc=%s kind=%d\n",
+                                kgpc_type_to_string(elem_type),
+                                elem_type ? elem_type->kind : -1);
+                        }
+                        field_type = create_array_type(elem_type, field->array_start, field->array_end);
+                    }
+                }
                 
                 /* Push onto scope - using typed variant */
+                if (getenv("KGPC_DEBUG_CLASS_VAR") != NULL &&
+                    pascal_identifier_equals(field->name, "FStandardEncodings"))
+                {
+                    fprintf(stderr,
+                        "[KGPC_DEBUG_CLASS_VAR] field_type=%s\n",
+                        field_type ? kgpc_type_to_string(field_type) : "<null>");
+                }
                 PushVarOntoScope_Typed(symtab, field->name, field_type);
                 
                 /* Release our ref if we retained it */
@@ -5810,6 +5881,56 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                     }
                 }
 
+                /* Interface methods have declarations but no implementations.
+                 * Register synthetic symbols so method resolution can succeed. */
+                if (record_info != NULL && record_info->is_interface &&
+                    record_info->method_templates != NULL &&
+                    record_info->type_id != NULL)
+                {
+                    ListNode_t *tmpl_cur = record_info->method_templates;
+                    while (tmpl_cur != NULL)
+                    {
+                        if (tmpl_cur->type == LIST_METHOD_TEMPLATE)
+                        {
+                            struct MethodTemplate *tmpl = (struct MethodTemplate *)tmpl_cur->cur;
+                            if (tmpl != NULL && tmpl->name != NULL)
+                            {
+                                size_t class_len = strlen(record_info->type_id);
+                                size_t method_len = strlen(tmpl->name);
+                                char *mangled = (char *)malloc(class_len + 2 + method_len + 1);
+                                if (mangled != NULL)
+                                {
+                                    snprintf(mangled, class_len + 2 + method_len + 1,
+                                        "%s__%s", record_info->type_id, tmpl->name);
+                                    HashNode_t *existing = NULL;
+                                    if (FindIdent(&existing, symtab, mangled) == -1)
+                                    {
+                                        KgpcType *proc_type =
+                                            from_cparser_method_template_to_proctype(tmpl, record_info, symtab);
+                                        if (proc_type != NULL)
+                                        {
+                                            char *mangled_dup = strdup(mangled);
+                                            if (proc_type->info.proc_info.return_type != NULL ||
+                                                tmpl->has_return_type)
+                                            {
+                                                PushFunctionOntoScope_Typed(symtab, mangled, mangled_dup, proc_type);
+                                            }
+                                            else
+                                            {
+                                                PushProcedureOntoScope_Typed(symtab, mangled, mangled_dup, proc_type);
+                                            }
+                                            mangled = NULL;
+                                        }
+                                    }
+                                    if (mangled != NULL)
+                                        free(mangled);
+                                }
+                            }
+                        }
+                        tmpl_cur = tmpl_cur->next;
+                    }
+                }
+
                 /* Now also check if this class has method implementations that need to be added.
                  * These are in the subprogram list (nested_subs of the class type decl) */
                 if (tree->tree_data.type_decl_data.info.record != NULL &&
@@ -5898,6 +6019,23 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                         tree->tree_data.type_decl_data.kgpc_type = inline_kgpc;
                         kgpc_type_retain(inline_kgpc);
                     }
+                }
+                if (getenv("KGPC_DEBUG_PROC_TYPE") != NULL &&
+                    tree->tree_data.type_decl_data.id != NULL &&
+                    pascal_identifier_equals(tree->tree_data.type_decl_data.id, "TCreateEncodingProc"))
+                {
+                    fprintf(stderr,
+                        "[KGPC_DEBUG_PROC_TYPE] alias=%s base=%d kgpc=%s kind=%d return_id=%s\n",
+                        tree->tree_data.type_decl_data.id,
+                        alias_info->base_type,
+                        tree->tree_data.type_decl_data.kgpc_type ?
+                            kgpc_type_to_string(tree->tree_data.type_decl_data.kgpc_type) : "<null>",
+                        tree->tree_data.type_decl_data.kgpc_type ?
+                            tree->tree_data.type_decl_data.kgpc_type->kind : -1,
+                        (tree->tree_data.type_decl_data.kgpc_type &&
+                         tree->tree_data.type_decl_data.kgpc_type->kind == TYPE_KIND_PROCEDURE &&
+                         tree->tree_data.type_decl_data.kgpc_type->info.proc_info.return_type_id) ?
+                            tree->tree_data.type_decl_data.kgpc_type->info.proc_info.return_type_id : "<null>");
                 }
                 if (alias_info->is_array)
                 {
@@ -9319,6 +9457,26 @@ next_identifier:
                             }
                             init_expr->record_type = record_type;
                         }
+                        if (init_expr->type == EXPR_ARRAY_LITERAL &&
+                            init_expr->array_element_type == UNKNOWN_TYPE &&
+                            init_expr->array_element_type_id == NULL)
+                        {
+                            KgpcType *var_type = (var_node != NULL) ? var_node->type : NULL;
+                            if ((var_type == NULL || !kgpc_type_is_array(var_type)) &&
+                                tree->tree_data.var_decl_data.type_id != NULL)
+                            {
+                                HashNode_t *type_node = semcheck_find_preferred_type_node(symtab,
+                                    tree->tree_data.var_decl_data.type_id);
+                                if (type_node != NULL)
+                                    var_type = type_node->type;
+                            }
+                            if (var_type != NULL && kgpc_type_is_array(var_type))
+                            {
+                                KgpcType *elem_type = kgpc_type_get_array_element_type_resolved(var_type, symtab);
+                                if (elem_type != NULL)
+                                    init_expr->array_element_type = semcheck_tag_from_kgpc(elem_type);
+                            }
+                        }
                         return_val += semcheck_expr_main(symtab, init_expr, INT_MAX, NO_MUTATE, &expr_type);
 
                         if (tree->tree_data.var_decl_data.is_typed_const && var_node != NULL &&
@@ -9557,6 +9715,24 @@ next_identifier:
                                             "Error on line %d, initializer string literal too long for %s (string length: %zu, array size: %d).\n",
                                             tree->line_num, var_name, string_len, array_size);
                                         ++return_val;
+                                    }
+                                }
+                            }
+
+                            /* Allow array literal initializer for array variables when element types match */
+                            if (!compatible && current_var_type == HASHVAR_ARRAY &&
+                                init_expr != NULL && init_expr->type == EXPR_ARRAY_LITERAL)
+                            {
+                                KgpcType *var_type = (var_node != NULL) ? var_node->type : NULL;
+                                if (var_type != NULL && kgpc_type_is_array(var_type))
+                                {
+                                    KgpcType *elem_type = kgpc_type_get_array_element_type_resolved(var_type, symtab);
+                                    int elem_tag = semcheck_tag_from_kgpc(elem_type);
+                                    int literal_elem_tag = init_expr->array_element_type;
+                                    if (elem_tag != UNKNOWN_TYPE && literal_elem_tag != UNKNOWN_TYPE &&
+                                        elem_tag == literal_elem_tag)
+                                    {
+                                        compatible = 1;
                                     }
                                 }
                             }

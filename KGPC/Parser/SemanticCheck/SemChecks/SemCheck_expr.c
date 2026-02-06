@@ -446,6 +446,15 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
             if (expr->expr_data.id != NULL &&
                 FindIdent(&node, symtab, expr->expr_data.id) != -1 && node != NULL)
             {
+                if (getenv("KGPC_DEBUG_PROC_VAR") != NULL &&
+                    pascal_identifier_equals(expr->expr_data.id, "Ctr"))
+                {
+                    fprintf(stderr,
+                        "[KGPC_DEBUG_PROC_VAR] id=%s node_type=%s kind=%d\n",
+                        expr->expr_data.id,
+                        node->type ? kgpc_type_to_string(node->type) : "<null>",
+                        node->type ? node->type->kind : -1);
+                }
                 if (node->hash_type == HASHTYPE_FUNCTION && mutating != NO_MUTATE &&
                     node->type != NULL)
                 {
@@ -553,6 +562,14 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                 KgpcType *record_type = semcheck_resolve_expression_kgpc_type(symtab, record_expr, 
                                                                           max_scope_lev, mutating, &record_type_owned);
                 
+                if (record_type != NULL &&
+                    record_type->kind == TYPE_KIND_POINTER &&
+                    record_type->info.points_to != NULL &&
+                    record_type->info.points_to->kind == TYPE_KIND_RECORD)
+                {
+                    record_type = record_type->info.points_to;
+                }
+
                 if (record_type != NULL && record_type->kind == TYPE_KIND_RECORD)
                 {
                     /* Look up the field in the record type */
@@ -690,6 +707,26 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
         {
             struct Expression *array_expr = expr->expr_data.array_access_data.array_expr;
             const char *alias_id = NULL;
+            int debug_fstd = 0;
+            if (getenv("KGPC_DEBUG_ARRAY_ACCESS") != NULL &&
+                array_expr != NULL &&
+                array_expr->type == EXPR_VAR_ID &&
+                array_expr->expr_data.id != NULL &&
+                pascal_identifier_equals(array_expr->expr_data.id, "FStandardEncodings"))
+            {
+                debug_fstd = 1;
+                fprintf(stderr,
+                    "[KGPC_DEBUG_ARRAY_ACCESS] resolve expr=%s resolved_kgpc=%s\n",
+                    array_expr->expr_data.id,
+                    expr->resolved_kgpc_type ? kgpc_type_to_string(expr->resolved_kgpc_type) : "<null>");
+            }
+
+            if (expr->resolved_kgpc_type != NULL)
+            {
+                if (owns_type != NULL)
+                    *owns_type = 0;
+                return expr->resolved_kgpc_type;
+            }
 
             if (array_expr != NULL && array_expr->is_array_expr &&
                 array_expr->array_element_type_id != NULL)
@@ -710,6 +747,13 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                 if (FindIdent(&type_node, symtab, alias_id) != -1 &&
                     type_node != NULL && type_node->type != NULL)
                 {
+                    if (debug_fstd)
+                    {
+                        fprintf(stderr,
+                            "[KGPC_DEBUG_ARRAY_ACCESS] alias_id=%s kgpc=%s\n",
+                            alias_id,
+                            kgpc_type_to_string(type_node->type));
+                    }
                     if (owns_type != NULL)
                         *owns_type = 0;
                     return type_node->type;
@@ -772,6 +816,12 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                 {
                     if (owns_type != NULL)
                         *owns_type = 1;
+                    if (debug_fstd)
+                    {
+                        fprintf(stderr,
+                            "[KGPC_DEBUG_ARRAY_ACCESS] fallback element kgpc=%s\n",
+                            kgpc_type_to_string(element_type));
+                    }
                     return element_type;
                 }
             }

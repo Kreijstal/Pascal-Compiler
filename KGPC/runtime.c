@@ -3411,6 +3411,81 @@ char *kgpc_strpas(const char *p)
     return kgpc_string_duplicate(p);
 }
 
+char *kgpc_strpas_len(const char *p, int64_t length)
+{
+    if (p == NULL || length <= 0)
+        return kgpc_alloc_empty_string();
+    return kgpc_string_duplicate_length(p, (size_t)length);
+}
+
+int64_t kgpc_string_pos_ca(const char *value, unsigned char ch)
+{
+    if (value == NULL)
+        value = "";
+
+    size_t hay_len = kgpc_string_known_length(value);
+    if (hay_len == 0)
+        return 0;
+
+    for (size_t i = 0; i < hay_len; ++i)
+    {
+        if ((unsigned char)value[i] == ch)
+            return (int64_t)(i + 1);
+    }
+
+    return 0;
+}
+
+int64_t kgpc_string_pos_cs(const char *value, unsigned char ch)
+{
+    if (value == NULL)
+        return 0;
+
+    size_t hay_len = (size_t)(unsigned char)value[0];
+    if (hay_len == 0)
+        return 0;
+
+    const char *hay_data = value + 1;
+    for (size_t i = 0; i < hay_len; ++i)
+    {
+        if ((unsigned char)hay_data[i] == ch)
+            return (int64_t)(i + 1);
+    }
+
+    return 0;
+}
+
+int64_t kgpc_string_pos_cc(unsigned char substr, unsigned char value)
+{
+    return substr == value ? 1 : 0;
+}
+
+int64_t kgpc_string_pos_ac(const char *substr, unsigned char value)
+{
+    if (substr == NULL)
+        substr = "";
+
+    size_t needle_len = kgpc_string_known_length(substr);
+    if (needle_len == 0)
+        return 1;
+    if (needle_len > 1)
+        return 0;
+    return ((unsigned char)substr[0] == value) ? 1 : 0;
+}
+
+int64_t kgpc_string_pos_sc(const char *substr, unsigned char value)
+{
+    if (substr == NULL)
+        return 0;
+
+    size_t needle_len = (size_t)(unsigned char)substr[0];
+    if (needle_len == 0)
+        return 1;
+    if (needle_len > 1)
+        return 0;
+    return ((unsigned char)substr[1] == value) ? 1 : 0;
+}
+
 int64_t kgpc_string_pos_sa(const char *substr, const char *value)
 {
     if (value == NULL)
@@ -3642,6 +3717,100 @@ int64_t kgpc_string_pos_from(const char *substr, const char *value, int64_t star
     }
 
     return 0;
+}
+
+int64_t kgpc_string_pos_ca_from(const char *value, unsigned char ch, int64_t start_index)
+{
+    if (value == NULL)
+        value = "";
+
+    size_t hay_len = kgpc_string_known_length(value);
+    if (hay_len == 0)
+        return 0;
+
+    if (start_index < 1)
+        start_index = 1;
+    size_t start = (size_t)(start_index - 1);
+    if (start >= hay_len)
+        return 0;
+
+    for (size_t i = start; i < hay_len; ++i)
+    {
+        if ((unsigned char)value[i] == ch)
+            return (int64_t)(i + 1);
+    }
+
+    return 0;
+}
+
+int64_t kgpc_string_pos_cs_from(const char *value, unsigned char ch, int64_t start_index)
+{
+    if (value == NULL)
+        return 0;
+
+    size_t hay_len = (size_t)(unsigned char)value[0];
+    if (hay_len == 0)
+        return 0;
+
+    if (start_index < 1)
+        start_index = 1;
+    size_t start = (size_t)(start_index - 1);
+    if (start >= hay_len)
+        return 0;
+
+    const char *hay_data = value + 1;
+    for (size_t i = start; i < hay_len; ++i)
+    {
+        if ((unsigned char)hay_data[i] == ch)
+            return (int64_t)(i + 1);
+    }
+
+    return 0;
+}
+
+int64_t kgpc_string_pos_cc_from(unsigned char substr, unsigned char value, int64_t start_index)
+{
+    if (start_index < 1)
+        start_index = 1;
+    if (start_index > 1)
+        return 0;
+    return substr == value ? 1 : 0;
+}
+
+int64_t kgpc_string_pos_ac_from(const char *substr, unsigned char value, int64_t start_index)
+{
+    if (substr == NULL)
+        substr = "";
+
+    size_t needle_len = kgpc_string_known_length(substr);
+    if (needle_len == 0)
+        return kgpc_pos_empty_result(start_index, 1);
+    if (needle_len > 1)
+        return 0;
+
+    if (start_index < 1)
+        start_index = 1;
+    if (start_index > 1)
+        return 0;
+    return ((unsigned char)substr[0] == value) ? 1 : 0;
+}
+
+int64_t kgpc_string_pos_sc_from(const char *substr, unsigned char value, int64_t start_index)
+{
+    if (substr == NULL)
+        return 0;
+
+    size_t needle_len = (size_t)(unsigned char)substr[0];
+    if (needle_len == 0)
+        return kgpc_pos_empty_result(start_index, 1);
+    if (needle_len > 1)
+        return 0;
+
+    if (start_index < 1)
+        start_index = 1;
+    if (start_index > 1)
+        return 0;
+    return ((unsigned char)substr[1] == value) ? 1 : 0;
 }
 
 static int kgpc_is_path_delim_char(char ch)
