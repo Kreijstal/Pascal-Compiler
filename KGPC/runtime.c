@@ -3418,7 +3418,7 @@ char *kgpc_strpas_len(const char *p, int64_t length)
     return kgpc_string_duplicate_length(p, (size_t)length);
 }
 
-int64_t kgpc_string_pos_ca(const char *value, unsigned char ch)
+int64_t kgpc_string_pos_ca(unsigned char ch, const char *value)
 {
     if (value == NULL)
         value = "";
@@ -3436,7 +3436,7 @@ int64_t kgpc_string_pos_ca(const char *value, unsigned char ch)
     return 0;
 }
 
-int64_t kgpc_string_pos_cs(const char *value, unsigned char ch)
+int64_t kgpc_string_pos_cs(unsigned char ch, const char *value)
 {
     if (value == NULL)
         return 0;
@@ -3719,7 +3719,7 @@ int64_t kgpc_string_pos_from(const char *substr, const char *value, int64_t star
     return 0;
 }
 
-int64_t kgpc_string_pos_ca_from(const char *value, unsigned char ch, int64_t start_index)
+int64_t kgpc_string_pos_ca_from(unsigned char ch, const char *value, int64_t start_index)
 {
     if (value == NULL)
         value = "";
@@ -3743,7 +3743,7 @@ int64_t kgpc_string_pos_ca_from(const char *value, unsigned char ch, int64_t sta
     return 0;
 }
 
-int64_t kgpc_string_pos_cs_from(const char *value, unsigned char ch, int64_t start_index)
+int64_t kgpc_string_pos_cs_from(unsigned char ch, const char *value, int64_t start_index)
 {
     if (value == NULL)
         return 0;

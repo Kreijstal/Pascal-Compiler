@@ -511,15 +511,47 @@ static int formal_decl_expects_string(Tree_t *decl)
 
 static int builtin_arg_expects_string(const char *procedure_name, int arg_index)
 {
-    if (procedure_name == NULL || arg_index != 0)
-        return 0;
-    if (pascal_identifier_equals(procedure_name, "Pos") ||
-        pascal_identifier_equals(procedure_name, "AnsiPos") ||
-        pascal_identifier_equals(procedure_name, "kgpc_string_pos"))
-    {
-        return 1;
-    }
+    (void)procedure_name;
+    (void)arg_index;
+    /* Pos/AnsiPos dispatch is fully handled by the semantic checker which
+     * selects typed runtime overloads (_ca, _cs, _cc, etc.).  Promoting
+     * char arguments to strings here would break those overloads.  No
+     * builtin currently needs argument-type promotion in the codegen. */
     return 0;
+}
+
+/* Return 1 if the mangled call target already expects a char (not a string)
+ * for the given argument position.  This prevents the codegen from inserting
+ * a spurious kgpc_char_to_string promotion when a user-defined wrapper
+ * (e.g. SysUtils.Pos) declares the formal parameter as AnsiString but the
+ * semantic checker has already rewritten the call to a char-specific runtime
+ * overload.
+ *
+ * The naming convention for Pos overloads encodes argument types as a
+ * two-letter suffix after "kgpc_string_pos_":
+ *   first  letter = substr type  (c = char, a = ansistring, s = shortstring)
+ *   second letter = value  type  (c = char, a = ansistring, s = shortstring)
+ * arg_index 0 corresponds to the first letter, arg_index 1 to the second. */
+static int mangled_call_expects_char(const struct Expression *call_expr, int arg_index)
+{
+    if (call_expr == NULL || call_expr->type != EXPR_FUNCTION_CALL)
+        return 0;
+    const char *mangled = call_expr->expr_data.function_call_data.mangled_id;
+    if (mangled == NULL)
+        return 0;
+
+    /* Match "kgpc_string_pos_XY" or "kgpc_string_pos_XY_from" where X,Y ∈ {c,a,s} */
+    const char prefix[] = "kgpc_string_pos_";
+    size_t plen = sizeof(prefix) - 1;
+    if (strncmp(mangled, prefix, plen) != 0)
+        return 0;
+    const char *suffix = mangled + plen;
+    /* suffix should be at least 2 chars: type_substr, type_value */
+    if (suffix[0] == '\0' || suffix[1] == '\0')
+        return 0;
+    /* suffix[0] = substr type, suffix[1] = value type */
+    char type_char = (arg_index == 0) ? suffix[0] : suffix[1];
+    return type_char == 'c';
 }
 
 static int codegen_param_expected_type(Tree_t *decl, SymTab_t *symtab)
@@ -6203,10 +6235,13 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                     inst_list = codegen_expr_maybe_convert_int_like_to_real(expected_type,
                         arg_expr, top_reg, inst_list);
 
-                /* Promote char arguments to strings when the formal parameter expects string. */
+                /* Promote char arguments to strings when the formal parameter expects string,
+                 * unless the semantic checker already rewrote the call to a runtime
+                 * overload that accepts a char natively (e.g. kgpc_string_pos_ca). */
                 if ((formal_decl_expects_string(formal_arg_decl) ||
                      builtin_arg_expects_string(procedure_name, arg_num)) &&
-                    expr_has_type_tag(arg_expr, CHAR_TYPE))
+                    expr_has_type_tag(arg_expr, CHAR_TYPE) &&
+                    !mangled_call_expects_char(call_expr, arg_num))
                 {
                     const char *arg_reg32 = codegen_target_is_windows() ? "%ecx" : "%edi";
                     snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", top_reg->bit_32, arg_reg32);

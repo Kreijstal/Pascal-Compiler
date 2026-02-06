@@ -305,6 +305,7 @@ const char* pascal_tag_to_string(tag_t tag) {
         case PASCAL_T_DIV: return "DIV";
         case PASCAL_T_INTDIV: return "INTDIV";
         case PASCAL_T_MOD: return "MOD";
+        case PASCAL_T_POWER: return "POWER";
         case PASCAL_T_NEG: return "NEG";
         case PASCAL_T_POS: return "POS";
         case PASCAL_T_EQ: return "EQ";

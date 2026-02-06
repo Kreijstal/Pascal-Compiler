@@ -2430,9 +2430,17 @@ void init_pascal_unit_parser(combinator_t** p) {
     );
 
     // Operator name with class qualification (Class.+ or Class<T>.+)
+    // Use sep_by1 for generic params so that <> is not consumed as an
+    // empty generic-params list when it is the not-equal operator name.
+    combinator_t* op_class_generic_type_params = optional(seq(new_combinator(), PASCAL_T_TYPE_PARAM_LIST,
+        token(match("<")),
+        sep_by1(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
+        token(match(">")),
+        NULL
+    ));
     combinator_t* operator_name_with_class = seq(new_combinator(), PASCAL_T_QUALIFIED_IDENTIFIER,
         token(cident(PASCAL_T_IDENTIFIER)),          // class/record name
-        class_generic_type_params,                   // optional generic type params for class
+        op_class_generic_type_params,                // optional generic type params for class
         token(match(".")),                           // dot
         token(operator_name(PASCAL_T_IDENTIFIER)),   // operator symbol or name
         NULL
