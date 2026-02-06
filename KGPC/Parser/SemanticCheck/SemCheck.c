@@ -1302,27 +1302,6 @@ static void add_class_vars_to_method_scope(SymTab_t *symtab, const char *method_
     free(class_name);
 }
 
-static int method_id_is_type_helper(const char *method_id)
-{
-    if (method_id == NULL)
-        return 0;
-
-    const char *sep = strstr(method_id, "__");
-    if (sep == NULL || sep == method_id)
-        return 0;
-
-    size_t class_name_len = (size_t)(sep - method_id);
-    char *class_name = (char *)malloc(class_name_len + 1);
-    if (class_name == NULL)
-        return 0;
-    memcpy(class_name, method_id, class_name_len);
-    class_name[class_name_len] = '\0';
-
-    int is_helper = from_cparser_is_type_helper(class_name);
-    free(class_name);
-    return is_helper;
-}
-
 /**
  * For a method implementation (ClassName__MethodName), copy default parameter
  * values from the class declaration to the implementation's parameters.
@@ -9741,8 +9720,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         PushScope(symtab);
         
         /* For method implementations, add class vars to scope */
-        // NOTE: Temporarily disabled due to crashes in helper method resolution.
-        // add_class_vars_to_method_scope(symtab, subprogram->tree_data.subprogram_data.id);
+        add_class_vars_to_method_scope(symtab, subprogram->tree_data.subprogram_data.id);
         
         if (existing_decl != NULL && existing_decl->type != NULL)
         {
@@ -9847,8 +9825,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                 subprogram->tree_data.subprogram_data.id);
 
         /* For method implementations, add class vars to scope */
-        // NOTE: Temporarily disabled due to crashes in helper method resolution.
-        // add_class_vars_to_method_scope(symtab, subprogram->tree_data.subprogram_data.id);
+        add_class_vars_to_method_scope(symtab, subprogram->tree_data.subprogram_data.id);
 
         // **THIS IS THE FIX FOR THE RETURN VALUE**:
         // Use the ORIGINAL name for the internal return variable with KgpcType
