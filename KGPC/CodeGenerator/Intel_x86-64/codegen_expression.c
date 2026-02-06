@@ -38,11 +38,6 @@ static inline int node_is_record_type(HashNode_t *node)
 }
 
 /* Helper function to get RecordType from HashNode */
-static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
-{
-    return hashnode_get_record_type(node);
-}
-
 static int codegen_expr_is_shortstring_array_local(const struct Expression *expr)
 {
     if (expr == NULL)
@@ -1341,11 +1336,6 @@ static ListNode_t *codegen_materialize_array_of_const(struct Expression *expr,
 }
 
 /* Helper function to get TypeAlias from HashNode */
-static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
-{
-    return hashnode_get_type_alias(node);
-}
-
 static unsigned long codegen_next_record_temp_id(void)
 {
     static unsigned long counter = 0;
@@ -1974,7 +1964,7 @@ static int codegen_sizeof_array_node(CodeGenContext *ctx, HashNode_t *node,
     
     if (element_size <= 0)
     {
-        struct TypeAlias *alias = get_type_alias_from_node(node);
+        struct TypeAlias *alias = hashnode_get_type_alias(node);
         if (alias != NULL && alias->is_array)
         {
             if (codegen_sizeof_type(ctx, alias->array_element_type,
@@ -1984,7 +1974,7 @@ static int codegen_sizeof_array_node(CodeGenContext *ctx, HashNode_t *node,
         }
         else if (node_is_record_type(node))
         {
-            struct RecordType *record_type = get_record_type_from_node(node);
+            struct RecordType *record_type = hashnode_get_record_type_extended(node);
             if (record_type != NULL && codegen_sizeof_record(ctx, record_type, &element_size,
                     depth + 1) != 0)
                 return 1;
@@ -2388,22 +2378,22 @@ static int codegen_sizeof_hashnode(CodeGenContext *ctx, HashNode_t *node,
 
     if (node->hash_type == HASHTYPE_TYPE)
     {
-        struct RecordType *record = get_record_type_from_node(node);
+        struct RecordType *record = hashnode_get_record_type_extended(node);
         if (record != NULL)
             return codegen_sizeof_record(ctx, record, size_out, depth + 1);
-        struct TypeAlias *alias = get_type_alias_from_node(node);
+        struct TypeAlias *alias = hashnode_get_type_alias(node);
         if (alias != NULL)
             return codegen_sizeof_alias(ctx, alias, size_out, depth + 1);
     }
 
     if (node_is_record_type(node))
     {
-        struct RecordType *record_type = get_record_type_from_node(node);
+        struct RecordType *record_type = hashnode_get_record_type_extended(node);
         if (record_type != NULL)
             return codegen_sizeof_record(ctx, record_type, size_out, depth + 1);
     }
 
-    struct TypeAlias *alias = get_type_alias_from_node(node);
+    struct TypeAlias *alias = hashnode_get_type_alias(node);
     if (alias != NULL)
         return codegen_sizeof_alias(ctx, alias, size_out, depth + 1);
 
@@ -2538,7 +2528,7 @@ int codegen_sizeof_pointer_target(CodeGenContext *ctx, struct Expression *pointe
     {
         HashNode_t *node = NULL;
         if (FindIdent(&node, ctx->symtab, type_id) >= 0 && node != NULL)
-            record_type = get_record_type_from_node(node);
+            record_type = hashnode_get_record_type_extended(node);
     }
 
     if (record_type == NULL && subtype == RECORD_TYPE && type_id == NULL)

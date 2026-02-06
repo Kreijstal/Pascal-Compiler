@@ -111,18 +111,18 @@ struct RecordType *semcheck_lookup_record_type(SymTab_t *symtab, const char *typ
     if (type_node == NULL)
         return NULL;
 
-    struct RecordType *record = get_record_type_from_node(type_node);
+    struct RecordType *record = hashnode_get_record_type_extended(type_node);
     if (record != NULL)
         return record;
 
-    struct TypeAlias *alias = get_type_alias_from_node(type_node);
+    struct TypeAlias *alias = hashnode_get_type_alias(type_node);
     if (alias != NULL && alias->target_type_id != NULL)
     {
         HashNode_t *target_node = NULL;
         if (FindIdent(&target_node, symtab, alias->target_type_id) != -1 &&
             target_node != NULL)
         {
-            return get_record_type_from_node(target_node);
+            return hashnode_get_record_type_extended(target_node);
         }
     }
 
@@ -164,7 +164,7 @@ void semcheck_set_array_info_from_alias(struct Expression *expr, SymTab_t *symta
                     if (FindIdent(&type_node, symtab, dim_str) >= 0 &&
                         type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
                     {
-                        struct TypeAlias *dim_alias = get_type_alias_from_node(type_node);
+                        struct TypeAlias *dim_alias = hashnode_get_type_alias(type_node);
                         if (dim_alias != NULL && dim_alias->is_enum &&
                             dim_alias->enum_literals != NULL)
                         {
@@ -316,7 +316,7 @@ void semcheck_set_array_info_from_hashnode(struct Expression *expr, SymTab_t *sy
         }
     }
 
-    struct TypeAlias *type_alias = get_type_alias_from_node(node);
+    struct TypeAlias *type_alias = hashnode_get_type_alias(node);
     if (type_alias != NULL && type_alias->is_array)
     {
         semcheck_set_array_info_from_alias(expr, symtab, type_alias, line_num);
@@ -416,6 +416,6 @@ void semcheck_set_array_info_from_hashnode(struct Expression *expr, SymTab_t *sy
     }
     else
     {
-        expr->array_element_record_type = get_record_type_from_node(node);
+        expr->array_element_record_type = hashnode_get_record_type_extended(node);
     }
 }

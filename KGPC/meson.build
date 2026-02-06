@@ -53,6 +53,8 @@ kgpc_cparser_sources = [
   'Parser/parser_error.c',
   'Parser/pascal_frontend.c',
   'Parser/SemanticCheck/SemCheck.c',
+  'Parser/SemanticCheck/SemCheck_decls.c',
+  'Parser/SemanticCheck/SemCheck_subprogram.c',
   'Parser/SemanticCheck/HashTable/HashTable.c',
   'Parser/SemanticCheck/SymTab/SymTab.c',
   'Parser/SemanticCheck/NameMangling.c',

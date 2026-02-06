@@ -277,10 +277,8 @@ int semcheck_is_currency_kgpc_type(KgpcType *type);
  *===========================================================================*/
 
 /* Get RecordType from HashNode */
-struct RecordType *get_record_type_from_node(HashNode_t *node);
 
 /* Get TypeAlias from HashNode */
-struct TypeAlias *get_type_alias_from_node(HashNode_t *node);
 
 /* Check if node is a record type */
 int node_is_record_type(HashNode_t *node);

@@ -9,13 +9,6 @@
 
 #include "SemCheck_Expr_Internal.h"
 
-const char *semcheck_base_type_name(const char *id)
-{
-    if (id == NULL)
-        return NULL;
-    const char *dot = strrchr(id, '.');
-    return (dot != NULL && dot[1] != '\0') ? (dot + 1) : id;
-}
 
 const char *semcheck_type_tag_name(int type_tag)
 {
@@ -136,7 +129,7 @@ int resolve_type_identifier(int *out_type, SymTab_t *symtab,
 
     set_type_from_hashtype(out_type, type_node);
 
-    struct TypeAlias *alias = get_type_alias_from_node(type_node);
+    struct TypeAlias *alias = hashnode_get_type_alias(type_node);
     if (alias != NULL)
     {
         if (alias->base_type != UNKNOWN_TYPE)

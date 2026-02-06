@@ -172,7 +172,7 @@ int semcheck_typecast(int *type_return,
                         (void *)target_node,
                         target_node->type != NULL ? target_node->type->kind : -1);
                 }
-                record_info = get_record_type_from_node(target_node);
+                record_info = hashnode_get_record_type_extended(target_node);
                 if (record_info == NULL && target_node->type != NULL &&
                     kgpc_type_is_record(target_node->type))
                 {
@@ -434,7 +434,7 @@ int semcheck_pointer_deref(int *type_return,
             target_node != NULL)
         {
             set_type_from_hashtype(&target_type, target_node);
-            struct TypeAlias *alias = get_type_alias_from_node(target_node);
+            struct TypeAlias *alias = hashnode_get_type_alias(target_node);
             if (alias != NULL)
             {
                 if (alias->base_type != UNKNOWN_TYPE)
@@ -477,7 +477,7 @@ int semcheck_pointer_deref(int *type_return,
         HashNode_t *ptr_node = NULL;
         if (FindIdent(&ptr_node, symtab, pointer_expr->expr_data.id) != -1 && ptr_node != NULL)
         {
-            struct TypeAlias *alias = get_type_alias_from_node(ptr_node);
+            struct TypeAlias *alias = hashnode_get_type_alias(ptr_node);
             if (alias != NULL && alias->is_pointer)
             {
                 target_type = alias->pointer_type;
@@ -533,7 +533,7 @@ int semcheck_pointer_deref(int *type_return,
         {
             HashNode_t *target_node = NULL;
             if (FindIdent(&target_node, symtab, pointer_expr->pointer_subtype_id) != -1 && target_node != NULL)
-                expr->record_type = get_record_type_from_node(target_node);
+                expr->record_type = hashnode_get_record_type_extended(target_node);
         }
     }
 
@@ -542,7 +542,7 @@ int semcheck_pointer_deref(int *type_return,
         HashNode_t *type_node = NULL;
         if (FindIdent(&type_node, symtab, pointer_expr->pointer_subtype_id) != -1 && type_node != NULL)
         {
-            struct TypeAlias *alias = get_type_alias_from_node(type_node);
+            struct TypeAlias *alias = hashnode_get_type_alias(type_node);
             if (alias != NULL && alias->is_array)
             {
                 semcheck_set_array_info_from_alias(expr, symtab, alias, expr->line_num);
@@ -991,7 +991,7 @@ int semcheck_recordaccess(int *type_return,
                     FindIdent(&type_node, symtab, target_id);
                 if (type_node != NULL)
                 {
-                    record_info = get_record_type_from_node(type_node);
+                    record_info = hashnode_get_record_type_extended(type_node);
                     if (record_info == NULL && type_node->type != NULL &&
                         kgpc_type_is_record(type_node->type))
                     {
@@ -1016,7 +1016,7 @@ int semcheck_recordaccess(int *type_return,
             if (FindIdent(&target_node, symtab, record_expr->pointer_subtype_id) != -1 &&
                 target_node != NULL)
             {
-                record_info = get_record_type_from_node(target_node);
+                record_info = hashnode_get_record_type_extended(target_node);
             }
         }
         /* Try resolved KgpcType pointer target */
@@ -1949,22 +1949,22 @@ FIELD_RESOLVED:
                 semcheck_set_array_info_from_hashnode(expr, symtab, type_node, expr->line_num);
             }
 
-            struct RecordType *record_type = get_record_type_from_node(type_node);
+            struct RecordType *record_type = hashnode_get_record_type_extended(type_node);
             if (record_type != NULL)
                 field_record = record_type;
             else
             {
-                struct TypeAlias *alias = get_type_alias_from_node(type_node);
+                struct TypeAlias *alias = hashnode_get_type_alias(type_node);
                 if (alias != NULL && alias->target_type_id != NULL)
                 {
                     HashNode_t *target_node =
                         semcheck_find_preferred_type_node(symtab, alias->target_type_id);
                     if (target_node != NULL)
-                        field_record = get_record_type_from_node(target_node);
+                        field_record = hashnode_get_record_type_extended(target_node);
                 }
             }
 
-            struct TypeAlias *alias = get_type_alias_from_node(type_node);
+            struct TypeAlias *alias = hashnode_get_type_alias(type_node);
             if (alias != NULL && alias->is_array)
                 array_alias = alias;
         }
@@ -2050,7 +2050,7 @@ FIELD_RESOLVED:
                 type_node = semcheck_find_type_node_with_kgpc_type(symtab, field_desc->type_id);
             if (type_node != NULL)
             {
-                struct TypeAlias *alias = get_type_alias_from_node(type_node);
+                struct TypeAlias *alias = hashnode_get_type_alias(type_node);
                 if (alias != NULL && alias->is_pointer)
                 {
                     pointer_subtype = alias->pointer_type;
@@ -2184,7 +2184,7 @@ int semcheck_try_reinterpret_as_typecast(int *type_return,
     HashNode_t *self_node = NULL;
     if (FindIdent(&self_node, symtab, "Self") == 0 && self_node != NULL)
     {
-        struct RecordType *self_record = get_record_type_from_node(self_node);
+        struct RecordType *self_record = hashnode_get_record_type_extended(self_node);
         if (self_record != NULL)
         {
             if (semcheck_find_class_method(symtab, self_record, id, NULL) != NULL)

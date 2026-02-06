@@ -244,7 +244,7 @@ int semcheck_arrayaccess(int *type_return,
             HashNode_t *type_node = NULL;
             if (FindIdent(&type_node, symtab, array_expr->pointer_subtype_id) != -1 && type_node != NULL)
             {
-                struct TypeAlias *alias = get_type_alias_from_node(type_node);
+                struct TypeAlias *alias = hashnode_get_type_alias(type_node);
                 if (alias != NULL && alias->is_pointer)
                 {
                     expr->pointer_subtype = alias->pointer_type;
@@ -284,7 +284,7 @@ int semcheck_arrayaccess(int *type_return,
             HashNode_t *type_node = NULL;
             if (FindIdent(&type_node, symtab, array_expr->array_element_type_id) != -1 && type_node != NULL)
             {
-                struct TypeAlias *alias = get_type_alias_from_node(type_node);
+                struct TypeAlias *alias = hashnode_get_type_alias(type_node);
                 if (alias != NULL && alias->is_array)
                 {
                     semcheck_set_array_info_from_alias(expr, symtab, alias, expr->line_num);
@@ -304,7 +304,7 @@ int semcheck_arrayaccess(int *type_return,
                 if (FindIdent(&type_node, symtab, array_expr->array_element_type_id) != -1 &&
                     type_node != NULL)
                 {
-                    struct TypeAlias *alias = get_type_alias_from_node(type_node);
+                    struct TypeAlias *alias = hashnode_get_type_alias(type_node);
                     if (alias != NULL && alias->is_pointer)
                     {
                         pointer_subtype = alias->pointer_type;
@@ -830,7 +830,7 @@ int semcheck_funccall(int *type_return,
             HashNode_t *self_node = NULL;
             if (FindIdent(&self_node, symtab, "Self") == 0 && self_node != NULL)
             {
-                struct RecordType *self_record = get_record_type_from_node(self_node);
+                struct RecordType *self_record = hashnode_get_record_type_extended(self_node);
                 int self_is_helper = 0;
                 if (self_record == NULL)
                 {
@@ -993,7 +993,7 @@ int semcheck_funccall(int *type_return,
                                         int find_result = FindIdent(&class_node, symtab, class_name);
                                         if (find_result != -1 && class_node != NULL)
                                         {
-                                            struct RecordType *correct_record = get_record_type_from_node(class_node);
+                                            struct RecordType *correct_record = hashnode_get_record_type_extended(class_node);
                                             if (correct_record != NULL)
                                             {
                                                 /* Don't use semcheck_find_class_method because it walks up inheritance
@@ -1199,7 +1199,7 @@ int semcheck_funccall(int *type_return,
             HashNode_t *recv_node = NULL;
             if (FindIdent(&recv_node, symtab, receiver_expr->expr_data.id) == 0 && recv_node != NULL)
             {
-                recv_record = get_record_type_from_node(recv_node);
+                recv_record = hashnode_get_record_type_extended(recv_node);
                 if (recv_record == NULL && recv_node->type != NULL &&
                     recv_node->type->kind == TYPE_KIND_POINTER &&
                     recv_node->type->info.points_to != NULL &&
@@ -2419,7 +2419,7 @@ int semcheck_funccall(int *type_return,
                 first_arg->expr_data.id);
             if (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
             {
-                record_info = get_record_type_from_node(type_node);
+                record_info = hashnode_get_record_type_extended(type_node);
                 if (owner_type == NULL && type_node->type != NULL)
                     owner_type = type_node->type;
             }
@@ -2999,7 +2999,7 @@ method_call_resolved:
                         HashNode_t *class_node = NULL;
                         if (FindIdent(&class_node, symtab, class_name) != -1 && class_node != NULL)
                         {
-                            struct RecordType *record_info = get_record_type_from_node(class_node);
+                            struct RecordType *record_info = hashnode_get_record_type_extended(class_node);
                             if (record_info != NULL)
                             {
                                 struct MethodTemplate *tmpl =
@@ -3458,7 +3458,7 @@ skip_overload_resolution:
 
         if (*type_return == RECORD_TYPE)
         {
-            struct RecordType *record_type = get_record_type_from_node(hash_return);
+            struct RecordType *record_type = hashnode_get_record_type_extended(hash_return);
             if (record_type != NULL)
                 expr->record_type = record_type;
             else

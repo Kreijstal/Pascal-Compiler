@@ -49,66 +49,7 @@ static inline int node_is_record_type(HashNode_t *node)
 }
 
 /* Helper to get record type from node */
-static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
-{
-    if (node == NULL) return NULL;
-
-    /* Use hashnode helper which handles NULL KgpcType */
-    struct RecordType *record = hashnode_get_record_type(node);
-    if (record != NULL)
-        return record;
-
-    /* If not a direct record, check if it's a pointer to a record (Class types are pointers) */
-    if (node->type != NULL && kgpc_type_is_pointer(node->type))
-    {
-        KgpcType *pointed_to = node->type->info.points_to;
-        if (pointed_to != NULL && kgpc_type_is_record(pointed_to))
-        {
-            return kgpc_type_get_record(pointed_to);
-        }
-    }
-
-    return NULL;
-}
-
 /* Helper to get type alias from node */
-static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
-{
-    return hashnode_get_type_alias(node);
-}
-
-HashNode_t *semcheck_find_preferred_type_node(SymTab_t *symtab, const char *type_id)
-{
-    if (symtab == NULL || type_id == NULL)
-        return NULL;
-
-    ListNode_t *matches = FindAllIdents(symtab, type_id);
-    if (matches == NULL)
-    {
-        /* Try stripping unit prefix from qualified name like "baseunix.stat" */
-        const char *dot = strrchr(type_id, '.');
-        if (dot != NULL && dot[1] != '\0')
-            matches = FindAllIdents(symtab, (dot + 1));
-    }
-    HashNode_t *best = NULL;
-    ListNode_t *cur = matches;
-    while (cur != NULL)
-    {
-        HashNode_t *node = (HashNode_t *)cur->cur;
-        if (node != NULL && node->hash_type == HASHTYPE_TYPE)
-        {
-            if (best == NULL)
-                best = node;
-            else if (best->defined_in_unit && !node->defined_in_unit)
-                best = node;
-        }
-        cur = cur->next;
-    }
-    if (matches != NULL)
-        DestroyList(matches);
-    return best;
-}
-
 long long sizeof_from_type_tag(int type_tag)
 {
     switch(type_tag)
@@ -717,11 +658,11 @@ int sizeof_from_hashnode(SymTab_t *symtab, HashNode_t *node,
 
     if (node->hash_type == HASHTYPE_TYPE)
     {
-        struct RecordType *record = get_record_type_from_node(node);
+        struct RecordType *record = hashnode_get_record_type_extended(node);
         if (record != NULL)
             return sizeof_from_record(symtab, record, size_out, depth + 1, line_num);
 
-        struct TypeAlias *alias = get_type_alias_from_node(node);
+        struct TypeAlias *alias = hashnode_get_type_alias(node);
         if (alias != NULL)
         {
             return sizeof_from_alias(symtab, alias, size_out, depth + 1, line_num);
@@ -770,12 +711,12 @@ int sizeof_from_hashnode(SymTab_t *symtab, HashNode_t *node,
 
     if (node_is_record_type(node))
     {
-        struct RecordType *record = get_record_type_from_node(node);
+        struct RecordType *record = hashnode_get_record_type_extended(node);
         if (record != NULL)
             return sizeof_from_record(symtab, record, size_out, depth + 1, line_num);
     }
 
-    struct TypeAlias *alias = get_type_alias_from_node(node);
+    struct TypeAlias *alias = hashnode_get_type_alias(node);
     if (alias != NULL)
         return sizeof_from_alias(symtab, alias, size_out, depth + 1, line_num);
 

@@ -179,10 +179,6 @@ static inline int node_is_file_type(HashNode_t *node)
 }
 
 /* Helper function to get RecordType from HashNode */
-static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
-{
-    return hashnode_get_record_type(node);
-}
 
 /* Get field offset within a record by field name.
  * Returns -1 if field not found. */
@@ -210,23 +206,18 @@ static inline int node_is_class_type(HashNode_t *node)
         return 0;
     if (!node_is_record_type(node))
         return 0;
-    struct RecordType *record = get_record_type_from_node(node);
+    struct RecordType *record = hashnode_get_record_type_extended(node);
     return record_type_is_class(record);
 }
 
 /* Helper function to get TypeAlias from HashNode */
-static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
-{
-    return hashnode_get_type_alias(node);
-}
-
 static const char *codegen_resolve_record_type_name(HashNode_t *node, SymTab_t *symtab)
 {
     if (node == NULL)
         return NULL;
     if (node_is_record_type(node) && node->id != NULL)
         return node->id;
-    struct TypeAlias *alias = get_type_alias_from_node(node);
+    struct TypeAlias *alias = hashnode_get_type_alias(node);
     if (alias != NULL && alias->target_type_id != NULL && symtab != NULL)
     {
         HashNode_t *target = NULL;
@@ -295,7 +286,7 @@ static void codegen_add_class_vars_for_static_method(const char *mangled_name,
     }
     
     /* Get the record type - for classes, the type is a pointer to the record */
-    struct RecordType *record_info = get_record_type_from_node(class_node);
+    struct RecordType *record_info = hashnode_get_record_type_extended(class_node);
     if (record_info == NULL)
     {
         /* Try to dereference if it's a pointer type (class types are pointers to records) */
@@ -2181,7 +2172,7 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                                 CODEGEN_DEBUG("DEBUG ALLOC: Detected record type for '%s', allocating full size\n",
                                     (char *)id_list->cur);
                                 /* For records/objects, get the full struct size */
-                                struct RecordType *record_desc = get_record_type_from_node(size_node);
+                                struct RecordType *record_desc = hashnode_get_record_type_extended(size_node);
                                 long long record_size = 0;
                                 if (record_desc != NULL &&
                                     codegen_sizeof_record_type(ctx, record_desc, &record_size) == 0 &&
@@ -2217,7 +2208,7 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                                         FindIdent(&base_node, ctx->symtab, base_var) >= 0 &&
                                         base_node != NULL)
                                     {
-                                        struct RecordType *record = get_record_type_from_node(base_node);
+                                        struct RecordType *record = hashnode_get_record_type_extended(base_node);
                                         if (record != NULL)
                                         {
                                             field_offset = record_type_get_field_offset(ctx->symtab, record, field_name);
@@ -2307,7 +2298,7 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                                         FindIdent(&base_node, ctx->symtab, base_var) >= 0 &&
                                         base_node != NULL)
                                     {
-                                        struct RecordType *record = get_record_type_from_node(base_node);
+                                        struct RecordType *record = hashnode_get_record_type_extended(base_node);
                                         if (record != NULL)
                                         {
                                             field_offset = record_type_get_field_offset(ctx->symtab, record, field_name);
@@ -2363,14 +2354,14 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
             struct RecordType *record_desc = NULL;
             if (type_node != NULL)
             {
-                record_desc = get_record_type_from_node(type_node);
-                struct TypeAlias *alias = get_type_alias_from_node(type_node);
+                record_desc = hashnode_get_record_type_extended(type_node);
+                struct TypeAlias *alias = hashnode_get_type_alias(type_node);
                 if (record_desc == NULL && alias != NULL && alias->target_type_id != NULL)
                 {
                     HashNode_t *target_node = NULL;
                     if (FindIdent(&target_node, symtab, alias->target_type_id) >= 0 &&
                         target_node != NULL)
-                        record_desc = get_record_type_from_node(target_node);
+                        record_desc = hashnode_get_record_type_extended(target_node);
                 }
             }
 
@@ -3809,13 +3800,13 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     
                     struct RecordType *rec = NULL;
                     if (scan_type_node != NULL)
-                        rec = get_record_type_from_node(scan_type_node);
+                        rec = hashnode_get_record_type_extended(scan_type_node);
                     if (rec == NULL && scan_cached_type != NULL)
                     {
                         HashNode_t cached_node;
                         memset(&cached_node, 0, sizeof(cached_node));
                         cached_node.type = scan_cached_type;
-                        rec = get_record_type_from_node(&cached_node);
+                        rec = hashnode_get_record_type_extended(&cached_node);
                     }
                     
                     if (rec != NULL)
@@ -3930,7 +3921,7 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     FindIdent(&type_node, symtab, arg_decl->tree_data.var_decl_data.type_id);
                     if (type_node != NULL)
                     {
-                        struct TypeAlias *alias = get_type_alias_from_node(type_node);
+                        struct TypeAlias *alias = hashnode_get_type_alias(type_node);
                         if (alias != NULL)
                         {
                             type = alias->base_type;
@@ -3993,9 +3984,9 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     if (!symbol_is_var_param)
                     {
                         if (resolved_type_node != NULL)
-                            record_type_info = get_record_type_from_node(resolved_type_node);
+                            record_type_info = hashnode_get_record_type_extended(resolved_type_node);
                         if (record_type_info == NULL && cached_arg_node_ptr != NULL)
-                            record_type_info = get_record_type_from_node(cached_arg_node_ptr);
+                            record_type_info = hashnode_get_record_type_extended(cached_arg_node_ptr);
                         if (record_type_info == NULL)
                         {
                             KgpcType *param_type = NULL;
@@ -4655,7 +4646,7 @@ ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, C
             if (decl->tree_data.var_decl_data.type_id != NULL)
                 FindIdent(&type_node, symtab, decl->tree_data.var_decl_data.type_id);
 
-            struct TypeAlias *alias = get_type_alias_from_node(type_node);
+            struct TypeAlias *alias = hashnode_get_type_alias(type_node);
             if (alias != NULL && alias->is_array && alias->is_open_array)
             {
                 ListNode_t *ids = decl->tree_data.var_decl_data.ids;
@@ -4700,7 +4691,7 @@ ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, C
 
                         long long file_elem_size = 0;
                         int file_elem_hash = HASHVAR_INTEGER;
-                        struct TypeAlias *file_alias = get_type_alias_from_node(type_node);
+                        struct TypeAlias *file_alias = hashnode_get_type_alias(type_node);
                         if (file_alias == NULL && decl_inline_alias != NULL)
                             file_alias = decl_inline_alias;
                         if (file_alias == NULL || !file_alias->is_file)
@@ -4726,7 +4717,7 @@ ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, C
             struct Statement *init_stmt = decl->tree_data.var_decl_data.initializer;
             if (type_node != NULL && node_is_class_type(type_node))
             {
-                struct RecordType *record_desc = get_record_type_from_node(type_node);
+                struct RecordType *record_desc = hashnode_get_record_type_extended(type_node);
                 const char *class_type_name = (record_desc != NULL && record_desc->type_id != NULL) ?
                     record_desc->type_id : codegen_resolve_record_type_name(type_node, symtab);
                 ListNode_t *ids = decl->tree_data.var_decl_data.ids;
@@ -4807,3 +4798,109 @@ ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, C
 #if KGPC_ENABLE_REG_DEBUG
 extern const char *g_reg_debug_context;
 #endif
+
+/* Assembly emission helpers */
+ListNode_t *emit_movq(ListNode_t *inst_list, const char *src, const char *dst)
+{
+    char buffer[CODEGEN_MAX_INST_BUF];
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", src, dst);
+    return add_inst(inst_list, buffer);
+}
+
+ListNode_t *emit_movq_reg_to_stack(ListNode_t *inst_list, const char *reg, int offset)
+{
+    char buffer[CODEGEN_MAX_INST_BUF];
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", reg, offset);
+    return add_inst(inst_list, buffer);
+}
+
+ListNode_t *emit_movq_stack_to_reg(ListNode_t *inst_list, int offset, const char *reg)
+{
+    char buffer[CODEGEN_MAX_INST_BUF];
+    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", offset, reg);
+    return add_inst(inst_list, buffer);
+}
+
+ListNode_t *emit_movl(ListNode_t *inst_list, const char *src, const char *dst)
+{
+    char buffer[CODEGEN_MAX_INST_BUF];
+    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", src, dst);
+    return add_inst(inst_list, buffer);
+}
+
+ListNode_t *emit_leaq(ListNode_t *inst_list, const char *src, const char *dst)
+{
+    char buffer[CODEGEN_MAX_INST_BUF];
+    snprintf(buffer, sizeof(buffer), "\tleaq\t%s, %s\n", src, dst);
+    return add_inst(inst_list, buffer);
+}
+
+ListNode_t *emit_addq(ListNode_t *inst_list, const char *src, const char *dst)
+{
+    char buffer[CODEGEN_MAX_INST_BUF];
+    snprintf(buffer, sizeof(buffer), "\taddq\t%s, %s\n", src, dst);
+    return add_inst(inst_list, buffer);
+}
+
+ListNode_t *emit_subq(ListNode_t *inst_list, const char *src, const char *dst)
+{
+    char buffer[CODEGEN_MAX_INST_BUF];
+    snprintf(buffer, sizeof(buffer), "\tsubq\t%s, %s\n", src, dst);
+    return add_inst(inst_list, buffer);
+}
+
+ListNode_t *emit_pushq(ListNode_t *inst_list, const char *reg)
+{
+    char buffer[CODEGEN_MAX_INST_BUF];
+    snprintf(buffer, sizeof(buffer), "\tpushq\t%s\n", reg);
+    return add_inst(inst_list, buffer);
+}
+
+ListNode_t *emit_popq(ListNode_t *inst_list, const char *reg)
+{
+    char buffer[CODEGEN_MAX_INST_BUF];
+    snprintf(buffer, sizeof(buffer), "\tpopq\t%s\n", reg);
+    return add_inst(inst_list, buffer);
+}
+
+ListNode_t *emit_call(ListNode_t *inst_list, const char *target)
+{
+    char buffer[CODEGEN_MAX_INST_BUF];
+    snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", target);
+    return add_inst(inst_list, buffer);
+}
+
+ListNode_t *emit_jmp(ListNode_t *inst_list, const char *label)
+{
+    char buffer[CODEGEN_MAX_INST_BUF];
+    snprintf(buffer, sizeof(buffer), "\tjmp\t%s\n", label);
+    return add_inst(inst_list, buffer);
+}
+
+ListNode_t *emit_label(ListNode_t *inst_list, const char *label)
+{
+    char buffer[CODEGEN_MAX_INST_BUF];
+    snprintf(buffer, sizeof(buffer), "%s:\n", label);
+    return add_inst(inst_list, buffer);
+}
+
+ListNode_t *emit_cmpq(ListNode_t *inst_list, const char *src, const char *dst)
+{
+    char buffer[CODEGEN_MAX_INST_BUF];
+    snprintf(buffer, sizeof(buffer), "\tcmpq\t%s, %s\n", src, dst);
+    return add_inst(inst_list, buffer);
+}
+
+ListNode_t *emit_cmpl(ListNode_t *inst_list, const char *src, const char *dst)
+{
+    char buffer[CODEGEN_MAX_INST_BUF];
+    snprintf(buffer, sizeof(buffer), "\tcmpl\t%s, %s\n", src, dst);
+    return add_inst(inst_list, buffer);
+}
+
+ListNode_t *emit_testl(ListNode_t *inst_list, const char *src, const char *dst)
+{
+    char buffer[CODEGEN_MAX_INST_BUF];
+    snprintf(buffer, sizeof(buffer), "\ttestl\t%s, %s\n", src, dst);
+    return add_inst(inst_list, buffer);
+}
