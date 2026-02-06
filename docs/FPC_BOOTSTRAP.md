@@ -57,36 +57,35 @@ git clone https://github.com/fpc/FPCSource
   --no-stdlib \
   -I./FPCSource/rtl/unix \
   -I./FPCSource/rtl/objpas \
+  -I./FPCSource/rtl/objpas/sysutils \
   -I./FPCSource/rtl/inc \
   -I./FPCSource/rtl/linux \
   -I./FPCSource/rtl/linux/x86_64 \
-  -I./FPCSource/rtl/x86_64
+  -I./FPCSource/rtl/x86_64 \
+  -I./FPCSource/packages/rtl-objpas/src/inc
 ```
 
-### math.pp (blocked by types.pp)
-
-math.pp depends on `types` which fails to parse function declarations with
-qualified default parameter values (e.g. `THorzRectAlign.Center`).
-
-#### Next blocker: qualified enum default parameters in types.pp
-
+### math.pp (0 errors)
+```bash
+./build/KGPC/kgpc ./FPCSource/rtl/objpas/math.pp /tmp/math.s \
+  --no-stdlib \
+  -I./FPCSource/rtl/unix \
+  -I./FPCSource/rtl/objpas \
+  -I./FPCSource/rtl/objpas/sysutils \
+  -I./FPCSource/rtl/inc \
+  -I./FPCSource/rtl/linux \
+  -I./FPCSource/rtl/linux/x86_64 \
+  -I./FPCSource/rtl/x86_64 \
+  -I./FPCSource/packages/rtl-objpas/src/inc
 ```
-function TRectF.PlaceInto(
-    const Dest: TRectF;
-    const AHorzAlign: THorzRectAlign = THorzRectAlign.Center;
-    const AVertAlign: TVertRectAlign = TVertRectAlign.Center): TRectF;
-```
-
-The parser does not yet support dotted identifiers (`Type.Member`) as
-default parameter values.
 
 ## Units with Compilation Errors
 
 - `baseunix.pp` - **0 errors**
 - `sysutils.pp` - **0 errors** (with `--no-stdlib`)
 - `classes.pp` - **0 errors**
-- `types.pp` - **parse error** (qualified default parameter values unsupported)
-- `math.pp` - **blocked** by types.pp
+- `types.pp` - **0 errors**
+- `math.pp` - **0 errors**
 - `fgl.pp` - **0 errors**
 - `sysconst.pp` - **0 errors**
 - `rtlconsts.pp` - **0 errors**
@@ -108,6 +107,19 @@ All 3 Pos(char, string) test failures fixed by:
 
 The `**` (power/dot-product) operator is now supported in the expression parser,
 unblocking types.pp up to the qualified-default-parameter issue.
+
+Qualified identifiers in case labels (`THorzRectAlign.Left:`) now parse and
+resolve correctly. Fixed by using `pascal_qualified_identifier()` in the
+case expression parser and adding dot-split resolution in `semcheck_varid()`
+for scoped enum values and unit-qualified constants.
+
+Generic class procedures and functions inside advanced records (`generic class
+procedure Foo<T>(...)`) now parse correctly by adding `optional(generic)` and
+`create_method_type_param_list()` to the record member parsers.
+
+The `specialize` expression now supports multiple comma-separated arguments
+(`TFoo.specialize A<T>(X, Dest)`) instead of just a single argument, unblocking
+the TBitConverter methods in types.pp.
 
 ## Error Reduction with C-Vise (Flatten-Only Preprocessor)
 

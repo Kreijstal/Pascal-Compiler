@@ -1721,11 +1721,13 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
         NULL
     );
 
-    // Simple procedure header inside a record (with optional class prefix and method directives)
+    // Simple procedure header inside a record (with optional generic/class prefix and method directives)
     combinator_t* adv_proc_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
+        optional(token(keyword_ci("generic"))),
         optional(token(keyword_ci("class"))),
         token(keyword_ci("procedure")),
         token(cident(PASCAL_T_IDENTIFIER)),
+        create_method_type_param_list(),
         create_pascal_param_parser(),
         many(pre_semi_directive),
         token(match(";")),
@@ -1733,11 +1735,13 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
         NULL
     );
 
-    // Simple function header inside a record (with optional class prefix and method directives)
+    // Simple function header inside a record (with optional generic/class prefix and method directives)
     combinator_t* adv_func_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
+        optional(token(keyword_ci("generic"))),
         optional(token(keyword_ci("class"))),
         token(keyword_ci("function")),
         token(cident(PASCAL_T_IDENTIFIER)),
+        create_method_type_param_list(),
         create_pascal_param_parser(),
         token(match(":")),
         create_type_ref_parser(),
