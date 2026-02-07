@@ -2410,8 +2410,6 @@ cleanup_constructor:
     {
         if (expr_get_type_tag(expr) == CHAR_TYPE)
         {
-            fprintf(stderr, "[DEBUG-EXPR_STRING] CHAR_TYPE path: resolved_kgpc_type=%p string='%s'\n",
-                (void*)expr->resolved_kgpc_type, expr->expr_data.string ? expr->expr_data.string : "(null)");
             unsigned char value = 0;
             if (expr->expr_data.string != NULL && expr->expr_data.string[0] != '\0')
                 value = (unsigned char)expr->expr_data.string[0];
