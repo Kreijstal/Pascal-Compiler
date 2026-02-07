@@ -9078,15 +9078,56 @@ static ListNode_t *codegen_try_except(struct Statement *stmt, ListNode_t *inst_l
     gen_label(except_label, sizeof(except_label), ctx);
     gen_label(after_label, sizeof(after_label), ctx);
 
+    /* ── push a runtime except frame (setjmp) ── */
+    inst_list = add_inst(inst_list, "\t# TRY/EXCEPT: push runtime except frame\n");
+    /* call kgpc_push_except_frame() → returns jmp_buf* in %rax */
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = codegen_call_with_shadow_space(inst_list, ctx, "kgpc_push_except_frame");
+    free_arg_regs();
+
+    /* Spill the jmp_buf pointer to a stack slot so setjmp can use it */
+    StackNode_t *jmpbuf_slot = add_l_t("try_except_jmpbuf");
+    char buffer[96];
+    if (jmpbuf_slot != NULL) {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, -%d(%%rbp)\n", jmpbuf_slot->offset);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    /* call setjmp(jmp_buf*) — argument is in %rax, move to %rdi */
+    if (codegen_target_is_windows())
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %%rcx\n");
+    else
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %%rdi\n");
+    inst_list = add_inst(inst_list, buffer);
+    inst_list = codegen_vect_reg(inst_list, 0);
+
+    /* Use _setjmp on Linux (avoids saving signal mask for performance) */
+    if (codegen_target_is_windows())
+        inst_list = codegen_call_with_shadow_space(inst_list, ctx, "setjmp");
+    else
+        inst_list = codegen_call_with_shadow_space(inst_list, ctx, "_setjmp");
+    free_arg_regs();
+
+    /* If setjmp returned non-zero, we got here from longjmp → jump to except */
+    inst_list = add_inst(inst_list, "\ttestl\t%eax, %eax\n");
+    snprintf(buffer, sizeof(buffer), "\tjne\t%s\n", except_label);
+    inst_list = add_inst(inst_list, buffer);
+
+    /* ── try body (setjmp returned 0) ── */
     if (!codegen_push_except(ctx, except_label)) {
         return inst_list;
     }
     inst_list = codegen_statement_list(try_stmts, inst_list, ctx, symtab);
-    inst_list = gencode_jmp(NORMAL_JMP, 0, after_label, inst_list);
-
     codegen_pop_except(ctx);
 
-    char buffer[64];
+    /* Pop the runtime except frame (normal exit from try) */
+    inst_list = add_inst(inst_list, "\t# TRY/EXCEPT: pop runtime except frame (normal exit)\n");
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = codegen_call_with_shadow_space(inst_list, ctx, "kgpc_pop_except_frame");
+    free_arg_regs();
+    inst_list = gencode_jmp(NORMAL_JMP, 0, after_label, inst_list);
+
+    /* ── except handler (setjmp returned non-zero, or local raise jumped here) ── */
     snprintf(buffer, sizeof(buffer), "%s:\n", except_label);
     inst_list = add_inst(inst_list, buffer);
 
@@ -9157,6 +9198,12 @@ static ListNode_t *codegen_raise(struct Statement *stmt, ListNode_t *inst_list, 
 
     if (except_label != NULL)
     {
+        /* Pop the runtime except frame before local jump to handler */
+        inst_list = add_inst(inst_list, "\t# RAISE: pop runtime except frame (local raise)\n");
+        inst_list = codegen_vect_reg(inst_list, 0);
+        inst_list = codegen_call_with_shadow_space(inst_list, ctx, "kgpc_pop_except_frame");
+        free_arg_regs();
+
         int limit_depth = codegen_current_except_finally_depth(ctx);
         inst_list = codegen_branch_through_finally(ctx, inst_list, symtab, except_label, limit_depth);
         return inst_list;

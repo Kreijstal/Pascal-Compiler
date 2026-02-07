@@ -8,6 +8,7 @@
 #include <stddef.h>
 #include <math.h>
 #include <errno.h>
+#include <setjmp.h>
 
 #include "runtime_internal.h"
 #include <sys/stat.h>
@@ -69,6 +70,45 @@ static char *kgpc_apply_field_width(char *value, int64_t width);
 int64_t kgpc_current_exception = 0;
 static __thread int kgpc_ioresult = 0;
 static int kgpc_threading_used = 0;
+
+/* ────────── setjmp/longjmp exception frame stack ────────── */
+
+typedef struct kgpc_except_frame {
+    jmp_buf buf;
+} kgpc_except_frame;
+
+#define KGPC_EXCEPT_STACK_INIT 8
+
+static kgpc_except_frame *kgpc_except_stack = NULL;
+static int kgpc_except_stack_depth = 0;
+static int kgpc_except_stack_capacity = 0;
+
+jmp_buf *kgpc_push_except_frame(void)
+{
+    if (kgpc_except_stack_depth >= kgpc_except_stack_capacity) {
+        int new_cap = (kgpc_except_stack_capacity > 0)
+                      ? kgpc_except_stack_capacity * 2
+                      : KGPC_EXCEPT_STACK_INIT;
+        kgpc_except_frame *new_stack =
+            (kgpc_except_frame *)realloc(kgpc_except_stack,
+                                         sizeof(kgpc_except_frame) * (size_t)new_cap);
+        if (new_stack == NULL) {
+            fprintf(stderr, "KGPC runtime: except frame stack allocation failed\n");
+            exit(EXIT_FAILURE);
+        }
+        kgpc_except_stack = new_stack;
+        kgpc_except_stack_capacity = new_cap;
+    }
+    return &kgpc_except_stack[kgpc_except_stack_depth++].buf;
+}
+
+void kgpc_pop_except_frame(void)
+{
+    if (kgpc_except_stack_depth > 0)
+        kgpc_except_stack_depth--;
+}
+
+/* ────────── end exception frame stack ────────── */
 
 int kgpc_ioresult_get_and_clear(void)
 {
@@ -1935,6 +1975,15 @@ void kgpc_write_real(KGPCTextRec *file, int width, int precision, int64_t value_
 
 void kgpc_raise(int64_t value)
 {
+    kgpc_current_exception = value;
+
+    /* If there is an active except frame, longjmp to it */
+    if (kgpc_except_stack_depth > 0) {
+        kgpc_except_stack_depth--;
+        longjmp(kgpc_except_stack[kgpc_except_stack_depth].buf, 1);
+    }
+
+    /* No except frame — truly unhandled */
     if (value == 0)
         fprintf(stderr, "Unhandled exception raised.\n");
     else

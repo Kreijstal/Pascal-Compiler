@@ -1223,6 +1223,7 @@ StackNode_t *stackscope_find_x(StackScope_t *cur_scope, char *label)
     ListNode_t *cur_li;
     StackNode_t *cur_node;
     StackNode_t *alias_match = NULL;
+    StackNode_t *last_match = NULL;
 
     assert(cur_scope != NULL);
     assert(label != NULL);
@@ -1234,7 +1235,7 @@ StackNode_t *stackscope_find_x(StackScope_t *cur_scope, char *label)
         if(pascal_identifier_equals(cur_node->label, label))
         {
             if (!cur_node->is_alias)
-                return cur_node;
+                last_match = cur_node;
             if (alias_match == NULL)
                 alias_match = cur_node;
         }
@@ -1242,7 +1243,7 @@ StackNode_t *stackscope_find_x(StackScope_t *cur_scope, char *label)
         cur_li = cur_li->next;
     }
 
-    return alias_match;
+    return last_match != NULL ? last_match : alias_match;
 }
 
 StackNode_t *stackscope_find_z(StackScope_t *cur_scope, char *label)
