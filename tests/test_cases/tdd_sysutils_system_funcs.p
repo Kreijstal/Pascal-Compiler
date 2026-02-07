@@ -23,13 +23,13 @@ begin
   else
     writeln('GetCurrentDir: FAIL');
 
-  { FileExists }
-  writeln(FileExists('/dev/null'));
-  writeln(FileExists('/nonexistent_file_xyz'));
+  { FileExists — use the meson build file which must exist in curdir }
+  writeln(FileExists('meson.build'));
+  writeln(FileExists('nonexistent_file_xyz_9999'));
 
-  { DirectoryExists }
-  writeln(DirectoryExists('/tmp'));
-  writeln(DirectoryExists('/nonexistent_dir_xyz'));
+  { DirectoryExists — use 'tests' subdir which must exist }
+  writeln(DirectoryExists('tests'));
+  writeln(DirectoryExists('nonexistent_dir_xyz_9999'));
 
   { GetEnvironmentVariable }
   envval := GetEnvironmentVariable('PATH');
