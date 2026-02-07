@@ -2410,6 +2410,8 @@ cleanup_constructor:
     {
         if (expr_get_type_tag(expr) == CHAR_TYPE)
         {
+            fprintf(stderr, "[DEBUG-EXPR_STRING] CHAR_TYPE path: resolved_kgpc_type=%p string='%s'\n",
+                (void*)expr->resolved_kgpc_type, expr->expr_data.string ? expr->expr_data.string : "(null)");
             unsigned char value = 0;
             if (expr->expr_data.string != NULL && expr->expr_data.string[0] != '\0')
                 value = (unsigned char)expr->expr_data.string[0];
@@ -3904,6 +3906,83 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                         snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
                             spill_other->offset, left);
                         inst_list = add_inst(inst_list, buffer);
+                    }
+
+                    /* Promote char-typed operands (EXPR_CHAR_CODE or single-char
+                     * EXPR_STRING resolved to CHAR_TYPE) to string pointers.
+                     * The register holds a raw char integer, not a string pointer.
+                     * Convert via kgpc_char_to_string before kgpc_string_compare. */
+                    if (left_expr != NULL &&
+                        (left_expr->type == EXPR_CHAR_CODE ||
+                         (left_expr->type == EXPR_STRING && expr_get_type_tag(left_expr) == CHAR_TYPE)) &&
+                        left != NULL && left[0] == '%')
+                    {
+                        StackNode_t *rhs_save = NULL;
+                        if (right != NULL && right[0] == '%')
+                        {
+                            rhs_save = add_l_t("relop_rhs_charpromo");
+                            if (rhs_save != NULL)
+                            {
+                                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                                    right, rhs_save->offset);
+                                inst_list = add_inst(inst_list, buffer);
+                            }
+                        }
+                        const char *arg_reg32 = codegen_target_is_windows() ? "%ecx" : "%edi";
+                        char left32_conv[16];
+                        const char *left32c = reg_to_reg32(left, left32_conv, sizeof(left32_conv));
+                        if (left32c != NULL)
+                        {
+                            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", left32c, arg_reg32);
+                            inst_list = add_inst(inst_list, buffer);
+                        }
+                        inst_list = codegen_vect_reg(inst_list, 0);
+                        inst_list = add_inst(inst_list, "\tcall\tkgpc_char_to_string\n");
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", left);
+                        inst_list = add_inst(inst_list, buffer);
+                        free_arg_regs();
+                        if (rhs_save != NULL)
+                        {
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                                rhs_save->offset, right);
+                            inst_list = add_inst(inst_list, buffer);
+                        }
+                    }
+                    if (right_expr != NULL &&
+                        (right_expr->type == EXPR_CHAR_CODE ||
+                         (right_expr->type == EXPR_STRING && expr_get_type_tag(right_expr) == CHAR_TYPE)) &&
+                        right != NULL && right[0] == '%')
+                    {
+                        StackNode_t *lhs_save = NULL;
+                        if (left != NULL && left[0] == '%')
+                        {
+                            lhs_save = add_l_t("relop_lhs_charpromo");
+                            if (lhs_save != NULL)
+                            {
+                                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                                    left, lhs_save->offset);
+                                inst_list = add_inst(inst_list, buffer);
+                            }
+                        }
+                        const char *arg_reg32 = codegen_target_is_windows() ? "%ecx" : "%edi";
+                        char right32_conv[16];
+                        const char *right32c = reg_to_reg32(right, right32_conv, sizeof(right32_conv));
+                        if (right32c != NULL)
+                        {
+                            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", right32c, arg_reg32);
+                            inst_list = add_inst(inst_list, buffer);
+                        }
+                        inst_list = codegen_vect_reg(inst_list, 0);
+                        inst_list = add_inst(inst_list, "\tcall\tkgpc_char_to_string\n");
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", right);
+                        inst_list = add_inst(inst_list, buffer);
+                        free_arg_regs();
+                        if (lhs_save != NULL)
+                        {
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                                lhs_save->offset, left);
+                            inst_list = add_inst(inst_list, buffer);
+                        }
                     }
 
                     const char *arg0 = current_arg_reg64(0);
