@@ -4476,6 +4476,73 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
     int left_is_char_ptr = expr_is_char_pointer(left_expr);
     int right_is_char_ptr = expr_is_char_pointer(right_expr);
 
+    /* When comparing a string to a char (EXPR_CHAR_CODE or single-char literal),
+     * promote the char operand to a string via kgpc_char_to_string so the
+     * comparison uses kgpc_string_compare.  This fixes segfaults from passing
+     * raw char integers where string pointers are expected.
+     * 
+     * The semantic checker may promote EXPR_CHAR_CODE to STRING_TYPE for equality
+     * comparisons, so right_is_string can be TRUE even when the register holds
+     * a raw char integer.  Detect this by checking the expression node type. */
+    int right_needs_char_promo = (right_expr != NULL &&
+        (right_expr->type == EXPR_CHAR_CODE ||
+         (right_expr->type == EXPR_STRING && expr_get_type_tag(right_expr) == CHAR_TYPE)));
+    int left_needs_char_promo = (left_expr != NULL &&
+        (left_expr->type == EXPR_CHAR_CODE ||
+         (left_expr->type == EXPR_STRING && expr_get_type_tag(left_expr) == CHAR_TYPE)));
+    if ((left_is_string || right_is_string) && right_needs_char_promo)
+    {
+        StackNode_t *lhs_spill = add_l_t("relop_str_char_lhs");
+        if (lhs_spill != NULL)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                left_reg->bit_64, lhs_spill->offset);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        const char *arg_reg32 = codegen_target_is_windows() ? "%ecx" : "%edi";
+        snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", right_reg->bit_32, arg_reg32);
+        inst_list = add_inst(inst_list, buffer);
+        inst_list = codegen_vect_reg(inst_list, 0);
+        inst_list = add_inst(inst_list, "\tcall\tkgpc_char_to_string\n");
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", right_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        free_arg_regs();
+        if (lhs_spill != NULL)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                lhs_spill->offset, left_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        right_is_string = 1;
+        right_needs_char_promo = 0;
+    }
+    if ((left_is_string || right_is_string) && left_needs_char_promo)
+    {
+        StackNode_t *rhs_spill = add_l_t("relop_str_char_rhs");
+        if (rhs_spill != NULL)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                right_reg->bit_64, rhs_spill->offset);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        const char *arg_reg32 = codegen_target_is_windows() ? "%ecx" : "%edi";
+        snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", left_reg->bit_32, arg_reg32);
+        inst_list = add_inst(inst_list, buffer);
+        inst_list = codegen_vect_reg(inst_list, 0);
+        inst_list = add_inst(inst_list, "\tcall\tkgpc_char_to_string\n");
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", left_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        free_arg_regs();
+        if (rhs_spill != NULL)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                rhs_spill->offset, right_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        left_is_string = 1;
+        left_needs_char_promo = 0;
+    }
+
     if ((left_is_char_array || right_is_char_array) &&
         (left_is_string || right_is_string || left_is_char_ptr || right_is_char_ptr))
     {
@@ -4652,6 +4719,59 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
             inst_list = codegen_promote_shortstring_reg(inst_list, ctx, left_reg);
         if (right_is_shortstring)
             inst_list = codegen_promote_shortstring_reg(inst_list, ctx, right_reg);
+
+        /* Promote char-typed operands (EXPR_CHAR_CODE or single-char EXPR_STRING)
+         * that hold raw integer values to string pointers before calling
+         * kgpc_string_compare. The semantic checker may set resolved_kgpc_type
+         * to STRING_TYPE but the expression evaluator still loads char integers. */
+        if (left_needs_char_promo)
+        {
+            StackNode_t *rhs_spill = add_l_t("relop_rhs_char_promo");
+            if (rhs_spill != NULL)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                    right_reg->bit_64, rhs_spill->offset);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            const char *arg_reg32 = codegen_target_is_windows() ? "%ecx" : "%edi";
+            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", left_reg->bit_32, arg_reg32);
+            inst_list = add_inst(inst_list, buffer);
+            inst_list = codegen_vect_reg(inst_list, 0);
+            inst_list = add_inst(inst_list, "\tcall\tkgpc_char_to_string\n");
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", left_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            free_arg_regs();
+            if (rhs_spill != NULL)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                    rhs_spill->offset, right_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+        }
+        if (right_needs_char_promo)
+        {
+            StackNode_t *lhs_spill = add_l_t("relop_lhs_char_promo");
+            if (lhs_spill != NULL)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                    left_reg->bit_64, lhs_spill->offset);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            const char *arg_reg32 = codegen_target_is_windows() ? "%ecx" : "%edi";
+            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", right_reg->bit_32, arg_reg32);
+            inst_list = add_inst(inst_list, buffer);
+            inst_list = codegen_vect_reg(inst_list, 0);
+            inst_list = add_inst(inst_list, "\tcall\tkgpc_char_to_string\n");
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", right_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            free_arg_regs();
+            if (lhs_spill != NULL)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                    lhs_spill->offset, left_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+        }
 
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", right_reg->bit_64, rhs_arg);
         inst_list = add_inst(inst_list, buffer);

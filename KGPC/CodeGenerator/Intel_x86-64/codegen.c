@@ -1305,7 +1305,14 @@ void codegen_function_header(char *func_name, CodeGenContext *ctx)
     assert(ctx != NULL);
     codegen_emit_function_debug_comments(func_name, ctx);
     fprintf(ctx->output_file, ".globl\t%s\n", func_name);
-    fprintf(ctx->output_file, "%s:\n\tpushq\t%%rbp\n\tmovq\t%%rsp, %%rbp\n", func_name);
+    if (codegen_target_is_windows())
+        fprintf(ctx->output_file, "\t.seh_proc\t%s\n", func_name);
+    fprintf(ctx->output_file, "%s:\n\tpushq\t%%rbp\n", func_name);
+    if (codegen_target_is_windows())
+        fprintf(ctx->output_file, "\t.seh_pushreg\t%%rbp\n");
+    fprintf(ctx->output_file, "\tmovq\t%%rsp, %%rbp\n");
+    if (codegen_target_is_windows())
+        fprintf(ctx->output_file, "\t.seh_setframe\t%%rbp, 0\n");
 
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
@@ -1322,6 +1329,8 @@ void codegen_function_footer(char *func_name, CodeGenContext *ctx)
     assert(func_name != NULL);
     assert(ctx != NULL);
     fprintf(ctx->output_file, "\tnop\n\tleave\n\tret\n");
+    if (codegen_target_is_windows())
+        fprintf(ctx->output_file, "\t.seh_endproc\n");
 
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
@@ -1732,7 +1741,13 @@ void codegen_main(char *prgm_name, CodeGenContext *ctx)
     codegen_function_header("main", ctx);
     call_space = codegen_target_is_windows() ? g_stack_home_space_bytes : 32;
     if (call_space > 0)
+    {
         fprintf(ctx->output_file, "\tsubq\t$%d, %%rsp\n", call_space);
+        if (codegen_target_is_windows())
+            fprintf(ctx->output_file, "\t.seh_stackalloc\t%d\n", call_space);
+    }
+    if (codegen_target_is_windows())
+        fprintf(ctx->output_file, "\t.seh_endprologue\n");
     if (codegen_target_is_windows())
     {
         fprintf(ctx->output_file, "\tcall\tkgpc_init_args\n");
@@ -1771,21 +1786,23 @@ void codegen_stack_space(CodeGenContext *ctx)
     if(aligned_space != 0)
     {
         fprintf(ctx->output_file, "\tsubq\t$%d, %%rsp\n", aligned_space);
-        
+        if (codegen_target_is_windows())
+            fprintf(ctx->output_file, "\t.seh_stackalloc\t%d\n", aligned_space);
+
         /* Zero-initialize the allocated stack space to ensure local variables start with zero values.
          * This is critical for code that assumes uninitialized variables are zero (like linked lists).
          * We use rep stosq for efficient zero-filling.
-         * 
+         *
          * Calling conventions differ between platforms:
          * - Windows x64: parameters in rcx, rdx, r8, r9
          * - System V AMD64 (Linux): parameters in rdi, rsi, rdx, rcx, r8, r9
-         * 
+         *
          * rep stosq uses rdi (destination), rax (value), rcx (count)
          * We need to save/restore these registers if they contain parameters.
          * r10 and r11 are caller-saved scratch registers safe to use on both platforms.
          */
         int quadwords = (aligned_space + 7) / 8;  /* Round up to nearest quadword */
-        
+
         if (codegen_target_is_windows())
         {
             /* Windows x64 calling convention: rcx, rdx, r8, r9
@@ -1814,6 +1831,8 @@ void codegen_stack_space(CodeGenContext *ctx)
             fprintf(ctx->output_file, "\tmovq\t%%r11, %%rcx\n");  /* Restore rcx */
         }
     }
+    if (codegen_target_is_windows())
+        fprintf(ctx->output_file, "\t.seh_endprologue\n");
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
