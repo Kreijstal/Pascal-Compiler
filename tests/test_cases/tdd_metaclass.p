@@ -1,22 +1,22 @@
-program test_metaclass;
+program test_metaclass6;
 {$MODE OBJFPC}
 {$MODESWITCH class}
 
 type
   TMyClass = class
-    class function ClassName: String;
+    class function GetInfo(const x: Integer): Integer;
   end;
 
   TMyClassRef = class of TMyClass;
 
-class function TMyClass.ClassName: String;
+class function TMyClass.GetInfo(const x: Integer): Integer;
 begin
-  Result := 'TMyClass';
+  Result := x * 2;
 end;
 
 var
   c: TMyClassRef;
 begin
   c := TMyClass;
-  WriteLn(c.ClassName);
+  WriteLn(c.GetInfo(21));
 end.
