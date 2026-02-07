@@ -3916,17 +3916,11 @@ char *kgpc_exclude_trailing_path_delim(const char *path)
         return kgpc_alloc_empty_string();
     size_t end = len;
     while (end > 0 && kgpc_is_path_delim_char(path[end - 1]))
-    {
-        if (end == 1)
-            break;
-        if (end == 3 && path[1] == ':' && kgpc_is_path_delim_char(path[2]))
-            break;
         --end;
-    }
+    if (end == 0)
+        return kgpc_alloc_empty_string();
     if (end == len)
         return kgpc_string_duplicate(path);
-    if (end == 0)
-        end = 1;
     return kgpc_string_duplicate_length(path, end);
 }
 
@@ -5368,12 +5362,12 @@ int kgpc_file_exists(const char *path)
     struct _stat st;
     if (_stat(path, &st) != 0)
         return 0;
-    return (_S_IFREG & st.st_mode) && (_S_IFMT & st.st_mode);
+    return !(_S_IFDIR & st.st_mode);
 #else
     struct stat st;
     if (stat(path, &st) != 0)
         return 0;
-    return S_ISREG(st.st_mode);
+    return !S_ISDIR(st.st_mode);
 #endif
 }
 

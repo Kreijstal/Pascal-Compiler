@@ -1,0 +1,8 @@
+GetTickCount64: OK
+GetCurrentDir: OK
+TRUE
+FALSE
+TRUE
+FALSE
+GetEnvVar: OK
+GetProcessID: OK
