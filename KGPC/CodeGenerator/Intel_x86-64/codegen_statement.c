@@ -9136,7 +9136,11 @@ static ListNode_t *codegen_try_except(struct Statement *stmt, ListNode_t *inst_l
     if (stmt->stmt_data.try_except_data.has_on_clause && 
         stmt->stmt_data.try_except_data.exception_var_name != NULL) {
         
-        /* Push a new scope for the exception variable */
+        /* Push a new scope for the exception variable on the symbol table.
+         * Also add the variable to the stack manager's current scope so
+         * find_label resolves to the correct stack offset.  After the handler,
+         * remove it from the stack manager so lookups of the same name fall
+         * back to any outer variable. */
         PushScope(symtab);
         
         /* Add the exception variable to the stack manager (8 bytes for pointer) */
@@ -9156,7 +9160,10 @@ static ListNode_t *codegen_try_except(struct Statement *stmt, ListNode_t *inst_l
         else
             inst_list = add_inst(inst_list, "\t# EXCEPT block with no handlers\n");
         
-        /* Pop the scope */
+        /* Remove the exception variable from the stack manager so outer
+         * variables with the same name are visible again, then pop the
+         * symbol table scope. */
+        remove_last_l_x(stmt->stmt_data.try_except_data.exception_var_name);
         PopScope(symtab);
     } else {
         /* No exception variable - just generate the except statements normally */
