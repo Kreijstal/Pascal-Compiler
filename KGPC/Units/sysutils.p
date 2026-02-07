@@ -381,7 +381,7 @@ begin
     if Count > max_count then
         Count := max_count;
     SetLength(bytes, Count);
-    start_index := Index + 1;
+    start_index := Index;
     for i := 0 to Count - 1 do
         bytes[i] := Ord(S[start_index + i]) and $FF;
     GetAnsiBytes := bytes;

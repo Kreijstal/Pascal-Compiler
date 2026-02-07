@@ -1,0 +1,20 @@
+Hello Pascal
+ccc bbb ccc
+HI HELLO hello
+HI HI HI
+HELLO PASCAL
+Key: key
+Value: value
+CompareText eq: OK
+CompareText lt: OK
+SameText: OK
+Name: Pascal, Age: 42, Score: 98.5
+The slow white fox jumps over the active dog
+[Hello]
+Hello
+Sum: 100
+NoMatch: 0
+IsDelimiter comma: OK
+IsDelimiter H: OK
+LowerKey: value
+NumVal: 42

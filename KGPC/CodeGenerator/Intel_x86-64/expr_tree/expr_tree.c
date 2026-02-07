@@ -1305,6 +1305,8 @@ static ListNode_t *emit_move_ptr_operand(ListNode_t *inst_list, const char *src,
     char buffer[128];
     if (src[0] == '%' || src[0] == '$')
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", src, dst);
+    else if (strstr(src, "(%rbp)") != NULL)
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", src, dst);
     else
         snprintf(buffer, sizeof(buffer), "\tleaq\t%s, %s\n", src, dst);
     return add_inst(inst_list, buffer);
