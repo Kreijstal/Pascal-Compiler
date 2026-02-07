@@ -109,7 +109,9 @@ void push_stackscope_inherited()
     StackScope_t *new_scope = init_stackscope();
 
     /* Inherit the parent's cumulative offset so that new variables
-     * in this child scope are placed at non-overlapping stack slots. */
+     * in this child scope are placed at non-overlapping stack slots.
+     * z_offset: parameter area, x_offset: local variables, t_offset: temporaries.
+     * Their sum is the total bytes used in the parent scope. */
     if (parent != NULL) {
         new_scope->z_offset = parent->z_offset + parent->x_offset + parent->t_offset;
     }
