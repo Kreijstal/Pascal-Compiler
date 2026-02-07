@@ -824,6 +824,35 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
         {
             if (actual_sub == formal_sub)
             {
+                /* Both point to the same type tag, but for RECORD_TYPE we need
+                 * to compare the actual record types more deeply to distinguish
+                 * e.g. ^TObject from ^IUnknown */
+                if (actual_sub == RECORD_TYPE)
+                {
+                    KgpcType *actual_inner = actual_kgpc->info.points_to;
+                    KgpcType *formal_inner = formal_kgpc->info.points_to;
+                    if (actual_inner != NULL && formal_inner != NULL &&
+                        actual_inner->kind == TYPE_KIND_RECORD &&
+                        formal_inner->kind == TYPE_KIND_RECORD)
+                    {
+                        struct RecordType *actual_rec = actual_inner->info.record_info;
+                        struct RecordType *formal_rec = formal_inner->info.record_info;
+                        if (actual_rec == formal_rec)
+                        {
+                            MatchQuality q = semcheck_make_quality(MATCH_EXACT);
+                            q.exact_pointer_subtype = 1;
+                            return q;
+                        }
+                        /* Check if types are compatible via inheritance */
+                        if (are_types_compatible_for_assignment(formal_inner, actual_inner, symtab))
+                        {
+                            MatchQuality q = semcheck_make_quality(MATCH_PROMOTION);
+                            q.exact_pointer_subtype = 1;
+                            return q;
+                        }
+                        return semcheck_make_quality(MATCH_INCOMPATIBLE);
+                    }
+                }
                 MatchQuality q = semcheck_make_quality(MATCH_EXACT);
                 q.exact_pointer_subtype = 1;
                 return q;

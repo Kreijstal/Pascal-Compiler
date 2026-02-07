@@ -577,7 +577,9 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
         "FPC_HAS_FEATURE_TEXTIO", "FPC_HAS_FEATURE_FILEIO",
         "FPC_HAS_FEATURE_CONSOLEIO", "FPC_HAS_FEATURE_RANDOM",
         "FPC_HAS_FEATURE_VARIANTS", "FPC_HAS_FEATURE_INITFINAL",
-        "FPC_HAS_FEATURE_EXITCODE"
+        "FPC_HAS_FEATURE_EXITCODE", "FPC_HAS_FEATURE_RESOURCES",
+        "FPC_HAS_FEATURE_COMMANDARGS", "FPC_HAS_FEATURE_PROCESSES",
+        "FPC_HAS_FEATURE_THREADING", "FPC_HAS_FEATURE_DYNLIBS"
     };
     for (size_t i = 0; i < sizeof(default_symbols) / sizeof(default_symbols[0]); ++i)
     {

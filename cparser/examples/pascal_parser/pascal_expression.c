@@ -1399,7 +1399,7 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
         NULL
     );
 
-    // specialize TypeName<T>(expr) - generic typecast
+    // specialize TypeName<T>(args) - generic specialization call/typecast
     combinator_t* specialize_type = seq(new_combinator(), PASCAL_T_CONSTRUCTED_TYPE,
         token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
         type_arg_list,
@@ -1408,7 +1408,8 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
     combinator_t* specialize_typecast = seq(new_combinator(), PASCAL_T_TYPECAST,
         token(keyword_ci("specialize")),
         specialize_type,
-        between(token(match("(")), token(match(")")), lazy(p)),
+        between(token(match("(")), token(match(")")),
+            sep_by(lazy(p), token(match(",")))),
         NULL
     );
     combinator_t* specialize_typecast_with_suffixes = map(seq(new_combinator(), PASCAL_T_NONE,

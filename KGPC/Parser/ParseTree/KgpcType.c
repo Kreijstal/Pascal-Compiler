@@ -226,7 +226,17 @@ KgpcType* create_kgpc_type_from_type_alias(struct TypeAlias *alias, struct SymTa
         KgpcType *pointee_type = NULL;
         int pointer_type_tag = alias->pointer_type;
 
-        if (pointer_type_tag != UNKNOWN_TYPE) {
+        if (pointer_type_tag == RECORD_TYPE && alias->pointer_type_id != NULL && symtab != NULL) {
+            /* "class of T" or pointer-to-record: look up T's actual record type */
+            HashNode_t *pointee_node = kgpc_find_type_node(symtab, alias->pointer_type_id);
+            if (pointee_node != NULL && pointee_node->type != NULL) {
+                pointee_type = pointee_node->type;
+                kgpc_type_retain(pointee_type);
+            } else {
+                /* Target class not yet declared; create primitive placeholder */
+                pointee_type = create_primitive_type(pointer_type_tag);
+            }
+        } else if (pointer_type_tag != UNKNOWN_TYPE) {
             /* Direct primitive type tag */
             pointee_type = create_primitive_type(pointer_type_tag);
         } else if (alias->pointer_type_id != NULL && symtab != NULL) {
@@ -1014,7 +1024,76 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
                     /* No target class info or can't verify - allow (for backwards compatibility) */
                     return 1;
                 }
-                
+
+                /* Reverse case: LHS points to record and RHS points to primitive(RECORD_TYPE).
+                 * This happens when one side was resolved to TYPE_KIND_RECORD by symtab lookup
+                 * but the other side still has the unresolved primitive placeholder. */
+                if (lhs_inner != NULL && lhs_inner->kind == TYPE_KIND_RECORD &&
+                    rhs_inner != NULL && rhs_inner->kind == TYPE_KIND_PRIMITIVE &&
+                    rhs_inner->info.primitive_type_tag == RECORD_TYPE)
+                {
+                    struct RecordType *lhs_record = lhs_inner->info.record_info;
+                    struct TypeAlias *rhs_alias = rhs_type->type_alias;
+                    if (lhs_record != NULL && lhs_record->type_id != NULL &&
+                        rhs_alias != NULL && rhs_alias->pointer_type_id != NULL)
+                    {
+                        if (strcasecmp(lhs_record->type_id, rhs_alias->pointer_type_id) == 0)
+                            return 1;  /* Same class */
+                        /* Check if RHS target is a subclass of LHS record */
+                        if (symtab != NULL) {
+                            struct HashNode *rhs_class_node = NULL;
+                            if (FindIdent(&rhs_class_node, symtab, rhs_alias->pointer_type_id) >= 0 &&
+                                rhs_class_node != NULL && rhs_class_node->type != NULL &&
+                                rhs_class_node->type->kind == TYPE_KIND_POINTER &&
+                                rhs_class_node->type->info.points_to != NULL &&
+                                rhs_class_node->type->info.points_to->kind == TYPE_KIND_RECORD) {
+                                struct RecordType *rhs_record = rhs_class_node->type->info.points_to->info.record_info;
+                                if (rhs_record != NULL && rhs_record->parent_class_name != NULL) {
+                                    const char *parent = rhs_record->parent_class_name;
+                                    while (parent != NULL) {
+                                        if (strcasecmp(lhs_record->type_id, parent) == 0)
+                                            return 1;
+                                        struct HashNode *parent_node = NULL;
+                                        if (FindIdent(&parent_node, symtab, (char*)parent) >= 0 &&
+                                            parent_node != NULL && parent_node->type != NULL &&
+                                            parent_node->type->kind == TYPE_KIND_POINTER &&
+                                            parent_node->type->info.points_to != NULL &&
+                                            parent_node->type->info.points_to->kind == TYPE_KIND_RECORD) {
+                                            struct RecordType *parent_record = parent_node->type->info.points_to->info.record_info;
+                                            parent = (parent_record != NULL) ? parent_record->parent_class_name : NULL;
+                                        } else {
+                                            parent = NULL;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        /* Check if LHS record is a subclass of RHS target */
+                        if (lhs_record->parent_class_name != NULL) {
+                            const char *parent = lhs_record->parent_class_name;
+                            while (parent != NULL) {
+                                if (strcasecmp(rhs_alias->pointer_type_id, parent) == 0)
+                                    return 1;
+                                struct HashNode *parent_node = NULL;
+                                if (symtab != NULL &&
+                                    FindIdent(&parent_node, symtab, (char*)parent) >= 0 &&
+                                    parent_node != NULL && parent_node->type != NULL &&
+                                    parent_node->type->kind == TYPE_KIND_POINTER &&
+                                    parent_node->type->info.points_to != NULL &&
+                                    parent_node->type->info.points_to->kind == TYPE_KIND_RECORD) {
+                                    struct RecordType *parent_record = parent_node->type->info.points_to->info.record_info;
+                                    parent = (parent_record != NULL) ? parent_record->parent_class_name : NULL;
+                                } else {
+                                    parent = NULL;
+                                }
+                            }
+                        }
+                        return 0;  /* Incompatible classes */
+                    }
+                    /* No type info to compare - allow for backwards compatibility */
+                    return 1;
+                }
+
                 /* Symmetric case: both are ^primitive(RECORD_TYPE) - class ref to class ref */
                 if (lhs_inner != NULL && lhs_inner->kind == TYPE_KIND_PRIMITIVE &&
                     lhs_inner->info.primitive_type_tag == RECORD_TYPE &&

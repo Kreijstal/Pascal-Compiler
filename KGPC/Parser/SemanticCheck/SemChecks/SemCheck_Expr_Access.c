@@ -2108,7 +2108,7 @@ int semcheck_funccall(int *type_return,
         if (first_arg->resolved_kgpc_type != NULL) {
             KgpcType *owner_type = first_arg->resolved_kgpc_type;
             struct RecordType *record_info = NULL;
-            
+
             if (owner_type->kind == TYPE_KIND_RECORD) {
                 record_info = owner_type->info.record_info;
             } else if (owner_type->kind == TYPE_KIND_POINTER &&
@@ -2116,7 +2116,68 @@ int semcheck_funccall(int *type_return,
                 owner_type->info.points_to->kind == TYPE_KIND_RECORD) {
                 record_info = owner_type->info.points_to->info.record_info;
             }
-            
+
+            /* For "class of T" (metaclass) types, the pointer's pointee may not
+             * have been resolved to TYPE_KIND_RECORD at AST conversion time.
+             * Try multiple strategies to find the record type:
+             * 1. The expression's record_type field (set by record access resolution)
+             * 2. Variable lookup via TypeAlias pointer_type_id
+             * 3. The KgpcType's own type_alias pointer_type_id */
+            if (record_info == NULL && owner_type->kind == TYPE_KIND_POINTER)
+            {
+                /* Strategy 1: expression's record_type */
+                if (first_arg->record_type != NULL)
+                    record_info = first_arg->record_type;
+
+                /* Strategy 2: variable's TypeAlias */
+                if (record_info == NULL && first_arg->type == EXPR_VAR_ID &&
+                    first_arg->expr_data.id != NULL)
+                {
+                    HashNode_t *var_node = NULL;
+                    if (FindIdent(&var_node, symtab, first_arg->expr_data.id) != -1 &&
+                        var_node != NULL)
+                    {
+                        record_info = get_record_type_from_node(var_node);
+                        if (record_info == NULL && var_node->type != NULL &&
+                            var_node->type->type_alias != NULL &&
+                            var_node->type->type_alias->pointer_type_id != NULL)
+                        {
+                            record_info = semcheck_lookup_record_type(symtab,
+                                var_node->type->type_alias->pointer_type_id);
+                        }
+                    }
+                }
+
+                /* Strategy 3: KgpcType's own type_alias */
+                if (record_info == NULL && owner_type->type_alias != NULL &&
+                    owner_type->type_alias->pointer_type_id != NULL)
+                {
+                    record_info = semcheck_lookup_record_type(symtab,
+                        owner_type->type_alias->pointer_type_id);
+                }
+
+                /* Strategy 4: expression's pointer_subtype_id */
+                if (record_info == NULL && first_arg->pointer_subtype_id != NULL)
+                {
+                    record_info = semcheck_lookup_record_type(symtab,
+                        first_arg->pointer_subtype_id);
+                }
+
+                /* Fix the KgpcType's points_to so overload resolution sees the
+                 * correct record type instead of the unresolved primitive placeholder. */
+                if (record_info != NULL && owner_type->info.points_to != NULL &&
+                    owner_type->info.points_to->kind != TYPE_KIND_RECORD)
+                {
+                    KgpcType *old_pointee = owner_type->info.points_to;
+                    KgpcType *new_pointee = create_record_type(record_info);
+                    if (new_pointee != NULL)
+                    {
+                        owner_type->info.points_to = new_pointee;
+                        destroy_kgpc_type(old_pointee);
+                    }
+                }
+            }
+
             if (record_info != NULL && record_info->type_id != NULL) {
                 const char *method_name = id;
                 if (method_name != NULL && strncmp(method_name, "__", 2) == 0)
@@ -2423,6 +2484,42 @@ int semcheck_funccall(int *type_return,
                 if (owner_type == NULL && type_node->type != NULL)
                     owner_type = type_node->type;
             }
+        }
+
+        /* Metaclass fallback: when owner_type is pointer-to-primitive(RECORD_TYPE)
+         * or a primitive POINTER_TYPE, try to find the target class from type aliases
+         * or expression metadata. This handles "class of T" constructor calls. */
+        if (record_info == NULL && owner_type != NULL)
+        {
+            /* Case 1: TYPE_KIND_POINTER -> TYPE_KIND_PRIMITIVE(RECORD_TYPE) */
+            if (owner_type->kind == TYPE_KIND_POINTER &&
+                owner_type->info.points_to != NULL &&
+                owner_type->info.points_to->kind == TYPE_KIND_PRIMITIVE &&
+                owner_type->info.points_to->info.primitive_type_tag == RECORD_TYPE)
+            {
+                if (owner_type->type_alias != NULL &&
+                    owner_type->type_alias->pointer_type_id != NULL)
+                    record_info = semcheck_lookup_record_type(symtab,
+                        owner_type->type_alias->pointer_type_id);
+                if (record_info == NULL && first_arg->pointer_subtype_id != NULL)
+                    record_info = semcheck_lookup_record_type(symtab,
+                        first_arg->pointer_subtype_id);
+            }
+            /* Case 2: TYPE_KIND_PRIMITIVE(POINTER_TYPE) - unresolved pointer type */
+            if (record_info == NULL && owner_type->kind == TYPE_KIND_PRIMITIVE &&
+                owner_type->info.primitive_type_tag == POINTER_TYPE)
+            {
+                if (owner_type->type_alias != NULL &&
+                    owner_type->type_alias->pointer_type_id != NULL)
+                    record_info = semcheck_lookup_record_type(symtab,
+                        owner_type->type_alias->pointer_type_id);
+                if (record_info == NULL && first_arg->pointer_subtype_id != NULL)
+                    record_info = semcheck_lookup_record_type(symtab,
+                        first_arg->pointer_subtype_id);
+            }
+            /* Case 3: expression's record_type not yet checked in pointer context */
+            if (record_info == NULL && first_arg->record_type != NULL)
+                record_info = first_arg->record_type;
         }
 
         if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
