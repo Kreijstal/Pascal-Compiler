@@ -1,0 +1,23 @@
+Test1: test message
+CreateFmt: Error 42: bad input
+Inner finally: step=3
+Outer except: inner error step=3
+SafeStrToInt valid: 123
+SafeStrToInt caught: "not_a_number" is an invalid integer
+SafeStrToInt invalid: -1
+Handler caught: generic error
+Resource: allocated
+Caught: cleanup test
+After except resource: allocated
+Finally no-error: OK
+Inner: level 1
+Nested: level 2
+SafeStrToInt in try: 456
+First catch: original
+Second catch after re-raise: original
+IntDivide 10/2: 5
+IntDivide caught: Division by zero
+IntDivide 10/0: 0
+Caught base Exception: Base exception
+Finally order: 1,2,3
+Done

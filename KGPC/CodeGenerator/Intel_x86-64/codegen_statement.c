@@ -9078,15 +9078,58 @@ static ListNode_t *codegen_try_except(struct Statement *stmt, ListNode_t *inst_l
     gen_label(except_label, sizeof(except_label), ctx);
     gen_label(after_label, sizeof(after_label), ctx);
 
+    /* ── push a runtime except frame (setjmp) ── */
+    inst_list = add_inst(inst_list, "\t# TRY/EXCEPT: push runtime except frame\n");
+    /* call kgpc_push_except_frame() → returns jmp_buf* in %rax */
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = codegen_call_with_shadow_space(inst_list, ctx, "kgpc_push_except_frame");
+    free_arg_regs();
+
+    /* Spill the jmp_buf pointer to a stack slot so setjmp can use it */
+    StackNode_t *jmpbuf_slot = add_l_t("try_except_jmpbuf");
+    char buffer[96];
+    if (jmpbuf_slot != NULL) {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, -%d(%%rbp)\n", jmpbuf_slot->offset);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    /* call setjmp(jmp_buf*) — argument is in %rax, move to first arg reg */
+    if (codegen_target_is_windows())
+    {
+        /* Windows x64: _setjmp(jmp_buf*, frame_addr) — needs two args.
+         * %rcx = jmp_buf pointer, %rdx = frame pointer (RBP) for SEH unwinding. */
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %%rcx\n\tmovq\t%%rbp, %%rdx\n");
+    }
+    else
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %%rdi\n");
+    inst_list = add_inst(inst_list, buffer);
+    inst_list = codegen_vect_reg(inst_list, 0);
+
+    /* Windows x64: _setjmp requires frame pointer as 2nd arg for SEH unwinding.
+     * Linux: _setjmp avoids saving signal mask for performance. */
+    inst_list = codegen_call_with_shadow_space(inst_list, ctx, "_setjmp");
+    free_arg_regs();
+
+    /* If setjmp returned non-zero, we got here from longjmp → jump to except */
+    inst_list = add_inst(inst_list, "\ttestl\t%eax, %eax\n");
+    snprintf(buffer, sizeof(buffer), "\tjne\t%s\n", except_label);
+    inst_list = add_inst(inst_list, buffer);
+
+    /* ── try body (setjmp returned 0) ── */
     if (!codegen_push_except(ctx, except_label)) {
         return inst_list;
     }
     inst_list = codegen_statement_list(try_stmts, inst_list, ctx, symtab);
-    inst_list = gencode_jmp(NORMAL_JMP, 0, after_label, inst_list);
-
     codegen_pop_except(ctx);
 
-    char buffer[64];
+    /* Pop the runtime except frame (normal exit from try) */
+    inst_list = add_inst(inst_list, "\t# TRY/EXCEPT: pop runtime except frame (normal exit)\n");
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = codegen_call_with_shadow_space(inst_list, ctx, "kgpc_pop_except_frame");
+    free_arg_regs();
+    inst_list = gencode_jmp(NORMAL_JMP, 0, after_label, inst_list);
+
+    /* ── except handler (setjmp returned non-zero, or local raise jumped here) ── */
     snprintf(buffer, sizeof(buffer), "%s:\n", except_label);
     inst_list = add_inst(inst_list, buffer);
 
@@ -9095,7 +9138,11 @@ static ListNode_t *codegen_try_except(struct Statement *stmt, ListNode_t *inst_l
     if (stmt->stmt_data.try_except_data.has_on_clause && 
         stmt->stmt_data.try_except_data.exception_var_name != NULL) {
         
-        /* Push a new scope for the exception variable */
+        /* Push a new scope for the exception variable on the symbol table.
+         * Also add the variable to the stack manager's current scope so
+         * find_label resolves to the correct stack offset.  After the handler,
+         * remove it from the stack manager so lookups of the same name fall
+         * back to any outer variable. */
         PushScope(symtab);
         
         /* Add the exception variable to the stack manager (8 bytes for pointer) */
@@ -9115,7 +9162,10 @@ static ListNode_t *codegen_try_except(struct Statement *stmt, ListNode_t *inst_l
         else
             inst_list = add_inst(inst_list, "\t# EXCEPT block with no handlers\n");
         
-        /* Pop the scope */
+        /* Remove the exception variable from the stack manager so outer
+         * variables with the same name are visible again, then pop the
+         * symbol table scope. */
+        remove_last_l_x(stmt->stmt_data.try_except_data.exception_var_name);
         PopScope(symtab);
     } else {
         /* No exception variable - just generate the except statements normally */
@@ -9157,6 +9207,12 @@ static ListNode_t *codegen_raise(struct Statement *stmt, ListNode_t *inst_list, 
 
     if (except_label != NULL)
     {
+        /* Pop the runtime except frame before local jump to handler */
+        inst_list = add_inst(inst_list, "\t# RAISE: pop runtime except frame (local raise)\n");
+        inst_list = codegen_vect_reg(inst_list, 0);
+        inst_list = codegen_call_with_shadow_space(inst_list, ctx, "kgpc_pop_except_frame");
+        free_arg_regs();
+
         int limit_depth = codegen_current_except_finally_depth(ctx);
         inst_list = codegen_branch_through_finally(ctx, inst_list, symtab, except_label, limit_depth);
         return inst_list;

@@ -43,6 +43,9 @@ type
         property Message: AnsiString read FMessage;
     end;
 
+    EConvertError = class(Exception)
+    end;
+
     TEncoding = class
     public
         class function UTF8: TEncoding; static;
@@ -381,7 +384,7 @@ begin
     if Count > max_count then
         Count := max_count;
     SetLength(bytes, Count);
-    start_index := Index + 1;
+    start_index := Index;
     for i := 0 to Count - 1 do
         bytes[i] := Ord(S[start_index + i]) and $FF;
     GetAnsiBytes := bytes;
@@ -979,13 +982,13 @@ end;
 function StrToInt(const S: AnsiString): longint;
 begin
     if not TryStrToInt(S, Result) then
-        Result := 0;
+        raise EConvertError.CreateFmt('"%s" is an invalid integer', [S]);
 end;
 
 function StrToFloat(const S: AnsiString): real;
 begin
     if not TryStrToFloat(S, Result) then
-        Result := 0.0;
+        raise EConvertError.CreateFmt('"%s" is not a valid floating point value', [S]);
 end;
 
 function AnsiCompareStr(const S1, S2: AnsiString): Integer;

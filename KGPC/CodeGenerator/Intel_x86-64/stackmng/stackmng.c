@@ -101,6 +101,25 @@ void push_stackscope()
     global_stackmng->cur_scope = new_scope;
 }
 
+void push_stackscope_inherited()
+{
+    assert(global_stackmng != NULL);
+
+    StackScope_t *parent = global_stackmng->cur_scope;
+    StackScope_t *new_scope = init_stackscope();
+
+    /* Inherit the parent's cumulative offset so that new variables
+     * in this child scope are placed at non-overlapping stack slots.
+     * z_offset: parameter area, x_offset: local variables, t_offset: temporaries.
+     * Their sum is the total bytes used in the parent scope. */
+    if (parent != NULL) {
+        new_scope->z_offset = parent->z_offset + parent->x_offset + parent->t_offset;
+    }
+
+    new_scope->prev_scope = parent;
+    global_stackmng->cur_scope = new_scope;
+}
+
 void pop_stackscope()
 {
     assert(global_stackmng != NULL);
@@ -253,6 +272,48 @@ StackNode_t *add_l_x(char *label, int size)
     #endif
 
     return new_node;
+}
+
+void remove_last_l_x(char *label)
+{
+    assert(global_stackmng != NULL);
+    assert(global_stackmng->cur_scope != NULL);
+    assert(label != NULL);
+
+    StackScope_t *cur_scope = global_stackmng->cur_scope;
+    ListNode_t *cur_li = cur_scope->x;
+    ListNode_t *prev_li = NULL;
+    ListNode_t *last_match_prev = NULL;
+    ListNode_t *last_match = NULL;
+
+    /* Find the LAST node with this label */
+    while (cur_li != NULL) {
+        StackNode_t *node = (StackNode_t *)cur_li->cur;
+        if (pascal_identifier_equals(node->label, label)) {
+            last_match_prev = prev_li;
+            last_match = cur_li;
+        }
+        prev_li = cur_li;
+        cur_li = cur_li->next;
+    }
+
+    if (last_match == NULL)
+        return;
+
+    /* Remove from linked list */
+    if (last_match_prev != NULL)
+        last_match_prev->next = last_match->next;
+    else
+        cur_scope->x = last_match->next;
+
+    /* Free the node */
+    StackNode_t *node = (StackNode_t *)last_match->cur;
+    if (node != NULL) {
+        if (node->label != NULL)
+            free(node->label);
+        free(node);
+    }
+    free(last_match);
 }
 
 StackNode_t *add_array(char *label, int total_size, int element_size, int lower_bound)
