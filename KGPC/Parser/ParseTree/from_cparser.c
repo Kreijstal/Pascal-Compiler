@@ -10185,6 +10185,37 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     return tree;
 }
 
+/* Extract generic type parameter names from a PASCAL_T_TYPE_PARAM_LIST AST node.
+ * Returns the number of type parameters found, and fills *out_params with
+ * a malloc'd array of strdup'd parameter names. */
+static int extract_generic_type_params(ast_t *type_param_list, char ***out_params) {
+    assert(type_param_list != NULL);
+    assert(type_param_list->typ == PASCAL_T_TYPE_PARAM_LIST);
+    assert(out_params != NULL);
+
+    int count = 0;
+    for (ast_t *p = type_param_list->child; p != NULL; p = p->next) {
+        if (p->typ == PASCAL_T_IDENTIFIER)
+            count++;
+    }
+    if (count == 0) {
+        *out_params = NULL;
+        return 0;
+    }
+    char **params = (char **)malloc(sizeof(char *) * count);
+    assert(params != NULL);
+    int i = 0;
+    for (ast_t *p = type_param_list->child; p != NULL; p = p->next) {
+        if (p->typ == PASCAL_T_IDENTIFIER) {
+            params[i] = dup_symbol(p);
+            assert(params[i] != NULL);
+            i++;
+        }
+    }
+    *out_params = params;
+    return count;
+}
+
 static Tree_t *convert_procedure(ast_t *proc_node) {
     ast_t *cur = proc_node->child;
     char *id = NULL;
@@ -10197,6 +10228,14 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
 
     if (cur != NULL)
         cur = cur->next;
+
+    /* Skip generic type parameter list (e.g., <T, U>) */
+    char **generic_type_params = NULL;
+    int num_generic_type_params = 0;
+    if (cur != NULL && cur->typ == PASCAL_T_TYPE_PARAM_LIST) {
+        num_generic_type_params = extract_generic_type_params(cur, &generic_type_params);
+        cur = cur->next;
+    }
 
     ListNode_t *params = NULL;
     if (cur != NULL && cur->typ == PASCAL_T_PARAM_LIST) {
@@ -10301,6 +10340,14 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
         tree->tree_data.subprogram_data.cname_override = external_alias;
     else if (external_alias != NULL)
         free(external_alias);
+    if (tree != NULL && num_generic_type_params > 0) {
+        tree->tree_data.subprogram_data.generic_type_params = generic_type_params;
+        tree->tree_data.subprogram_data.num_generic_type_params = num_generic_type_params;
+    } else if (generic_type_params != NULL) {
+        for (int i = 0; i < num_generic_type_params; i++)
+            free(generic_type_params[i]);
+        free(generic_type_params);
+    }
     return tree;
 }
 
@@ -10329,6 +10376,14 @@ static Tree_t *convert_function(ast_t *func_node) {
     }
 
     if (cur != NULL) {
+        cur = cur->next;
+    }
+
+    /* Skip generic type parameter list (e.g., <T, U>) */
+    char **generic_type_params = NULL;
+    int num_generic_type_params = 0;
+    if (cur != NULL && cur->typ == PASCAL_T_TYPE_PARAM_LIST) {
+        num_generic_type_params = extract_generic_type_params(cur, &generic_type_params);
         cur = cur->next;
     }
 
@@ -10543,6 +10598,14 @@ static Tree_t *convert_function(ast_t *func_node) {
         tree->tree_data.subprogram_data.cname_override = external_alias;
     else if (external_alias != NULL)
         free(external_alias);
+    if (tree != NULL && num_generic_type_params > 0) {
+        tree->tree_data.subprogram_data.generic_type_params = generic_type_params;
+        tree->tree_data.subprogram_data.num_generic_type_params = num_generic_type_params;
+    } else if (generic_type_params != NULL) {
+        for (int i = 0; i < num_generic_type_params; i++)
+            free(generic_type_params[i]);
+        free(generic_type_params);
+    }
     return tree;
 }
 

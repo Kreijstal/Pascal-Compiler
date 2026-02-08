@@ -110,6 +110,8 @@ typedef struct Tree
             ListNode_t *subprograms;
             struct Statement *statement_list;
             int is_used;
+            char **generic_type_params;   /* Generic type parameter names (e.g., ["T"]) */
+            int num_generic_type_params;  /* Number of generic type parameters */
         } subprogram_data;
 
         /* A variable declaration */

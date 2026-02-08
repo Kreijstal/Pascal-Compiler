@@ -2123,7 +2123,17 @@ static KgpcType *build_function_return_type(Tree_t *subprogram, SymTab_t *symtab
             int builtin_type = semcheck_map_builtin_type_name_local(type_id);
             if (builtin_type == UNKNOWN_TYPE)
             {
-                if (!allow_undefined)
+                /* Check if this is a generic type parameter of the function */
+                int is_generic_param = 0;
+                for (int i = 0; i < subprogram->tree_data.subprogram_data.num_generic_type_params; i++) {
+                    if (strcasecmp(type_id, subprogram->tree_data.subprogram_data.generic_type_params[i]) == 0) {
+                        is_generic_param = 1;
+                        break;
+                    }
+                }
+                if (is_generic_param) {
+                    builtin_return = create_primitive_type(POINTER_TYPE);
+                } else if (!allow_undefined)
                 {
                     semantic_error(subprogram->line_num, 0, "undefined type %s",
                         subprogram->tree_data.subprogram_data.return_type_id);
@@ -10288,6 +10298,17 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                 }
             }
             arg_debug = arg_debug->next;
+        }
+    }
+    /* Register generic type parameters (e.g., T, U) as opaque types in the function scope.
+     * This allows parameters of type T and expressions using T to pass semantic checking. */
+    if (subprogram->tree_data.subprogram_data.num_generic_type_params > 0) {
+        for (int i = 0; i < subprogram->tree_data.subprogram_data.num_generic_type_params; i++) {
+            const char *tparam = subprogram->tree_data.subprogram_data.generic_type_params[i];
+            assert(tparam != NULL);
+            KgpcType *opaque = create_primitive_type(POINTER_TYPE);
+            PushTypeOntoScope_Typed(symtab, (char *)tparam, opaque);
+            destroy_kgpc_type(opaque);
         }
     }
     return_val += semcheck_decls(symtab, subprogram->tree_data.subprogram_data.args_var);
