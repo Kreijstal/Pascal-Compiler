@@ -7198,6 +7198,10 @@ void semcheck_add_builtins(SymTab_t *symtab)
     add_builtin_type_owned(symtab, "Double", create_primitive_type_with_size(REAL_TYPE, 8));
     add_builtin_type_owned(symtab, "Extended", create_primitive_type_with_size(REAL_TYPE, 8));
 
+    /* Variant and OleVariant (COM interop) - treated as opaque 16-byte types */
+    add_builtin_type_owned(symtab, "Variant", create_primitive_type_with_size(POINTER_TYPE, 16));
+    add_builtin_type_owned(symtab, "OleVariant", create_primitive_type_with_size(POINTER_TYPE, 16));
+
     /* File/Text primitives (sizes align with system.p TextRec/FileRec layout) */
     char *file_name = strdup("file");
     if (file_name != NULL) {
@@ -7987,6 +7991,28 @@ void semcheck_add_builtins(SymTab_t *symtab)
             if (func_type != NULL)
             {
                 AddBuiltinFunction_Typed(symtab, strdup(bsr_bsf[i].name), func_type);
+                destroy_kgpc_type(func_type);
+            }
+            if (param != NULL)
+                DestroyList(param);
+        }
+    }
+
+    /* FPC compiler intrinsics for stack frame access.
+     * These return Pointer and are used by error handling code. */
+    {
+        const char *frame_intrinsics[] = {
+            "get_frame", "get_pc_addr", "get_caller_addr", "get_caller_frame",
+            "Get_Frame", "Get_Caller_Addr", "Get_Caller_Frame",
+        };
+        for (size_t i = 0; i < sizeof(frame_intrinsics) / sizeof(frame_intrinsics[0]); i++)
+        {
+            ListNode_t *param = semcheck_create_builtin_param("p", POINTER_TYPE);
+            KgpcType *return_type = create_primitive_type(POINTER_TYPE);
+            KgpcType *func_type = create_procedure_type(param, return_type);
+            if (func_type != NULL)
+            {
+                AddBuiltinFunction_Typed(symtab, strdup(frame_intrinsics[i]), func_type);
                 destroy_kgpc_type(func_type);
             }
             if (param != NULL)
