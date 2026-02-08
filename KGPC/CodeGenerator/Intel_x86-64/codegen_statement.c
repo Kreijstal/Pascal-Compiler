@@ -9093,19 +9093,21 @@ static ListNode_t *codegen_try_except(struct Statement *stmt, ListNode_t *inst_l
         inst_list = add_inst(inst_list, buffer);
     }
 
-    /* call setjmp(jmp_buf*) — argument is in %rax, move to %rdi */
+    /* call setjmp(jmp_buf*) — argument is in %rax, move to first arg reg */
     if (codegen_target_is_windows())
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %%rcx\n");
+    {
+        /* Windows x64: _setjmp(jmp_buf*, frame_addr) — needs two args.
+         * %rcx = jmp_buf pointer, %rdx = frame pointer (RBP) for SEH unwinding. */
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %%rcx\n\tmovq\t%%rbp, %%rdx\n");
+    }
     else
         snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %%rdi\n");
     inst_list = add_inst(inst_list, buffer);
     inst_list = codegen_vect_reg(inst_list, 0);
 
-    /* Use _setjmp on Linux (avoids saving signal mask for performance) */
-    if (codegen_target_is_windows())
-        inst_list = codegen_call_with_shadow_space(inst_list, ctx, "setjmp");
-    else
-        inst_list = codegen_call_with_shadow_space(inst_list, ctx, "_setjmp");
+    /* Windows x64: _setjmp requires frame pointer as 2nd arg for SEH unwinding.
+     * Linux: _setjmp avoids saving signal mask for performance. */
+    inst_list = codegen_call_with_shadow_space(inst_list, ctx, "_setjmp");
     free_arg_regs();
 
     /* If setjmp returned non-zero, we got here from longjmp → jump to except */
