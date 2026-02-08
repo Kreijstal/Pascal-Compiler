@@ -2380,6 +2380,15 @@ cleanup_constructor:
              * to store the procedure name, not an actual string value */
             !(node->type != NULL && node->type->kind == TYPE_KIND_PROCEDURE))
         {
+            /* Check if this is a single-char constant (Char type, not String) */
+            if (node->type != NULL && node->type->kind == TYPE_KIND_PRIMITIVE &&
+                node->type->info.primitive_type_tag == CHAR_TYPE)
+            {
+                /* Char constant - load the character value directly as an immediate */
+                unsigned char ch = (unsigned char)node->const_string_value[0];
+                snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %s\n", (int)ch, target_reg->bit_32);
+                return add_inst(inst_list, buffer);
+            }
             /* String constant - treat it like a string literal */
             char label[20];
             snprintf(label, 20, ".LC%d", ctx->write_label_counter++);
@@ -2972,17 +2981,27 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                     }
                     else if (node->const_string_value != NULL)
                     {
-                        /* String constant - emit in rodata and use its address */
-                        char label[20];
-                        snprintf(label, 20, ".LC%d", ctx->write_label_counter++);
-                        char add_rodata[1024];
-                        const char *readonly_section = codegen_readonly_section_directive();
-                        char *escaped = escape_string_for_assembly(node->const_string_value);
-                        snprintf(add_rodata, 1024, "%s\n%s:\n\t.string \"%s\"\n\t.text\n",
-                            readonly_section, label, escaped ? escaped : node->const_string_value);
-                        if (escaped) free(escaped);
-                        inst_list = add_inst(inst_list, add_rodata);
-                        snprintf(buffer, buf_len, "%s(%%rip)", label);
+                        /* Check if this is a single-char constant (Char type) */
+                        if (node->type != NULL && node->type->kind == TYPE_KIND_PRIMITIVE &&
+                            node->type->info.primitive_type_tag == CHAR_TYPE)
+                        {
+                            unsigned char ch = (unsigned char)node->const_string_value[0];
+                            snprintf(buffer, buf_len, "$%d", (int)ch);
+                        }
+                        else
+                        {
+                            /* String constant - emit in rodata and use its address */
+                            char label[20];
+                            snprintf(label, 20, ".LC%d", ctx->write_label_counter++);
+                            char add_rodata[1024];
+                            const char *readonly_section = codegen_readonly_section_directive();
+                            char *escaped = escape_string_for_assembly(node->const_string_value);
+                            snprintf(add_rodata, 1024, "%s\n%s:\n\t.string \"%s\"\n\t.text\n",
+                                readonly_section, label, escaped ? escaped : node->const_string_value);
+                            if (escaped) free(escaped);
+                            inst_list = add_inst(inst_list, add_rodata);
+                            snprintf(buffer, buf_len, "%s(%%rip)", label);
+                        }
                     }
                     else
                     {

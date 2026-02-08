@@ -6551,8 +6551,30 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
             }
             else
             {
-                int push_result = PushStringConstOntoScope(symtab, tree->tree_data.const_decl_data.id, string_value);
-                free(string_value);  /* PushStringConstOntoScope makes its own copy */
+                int push_result;
+                /* In Pascal, a single-character string literal constant is a Char, not a String.
+                 * e.g., const PathDelim = '/' should be Char type. */
+                if (string_value != NULL && strlen(string_value) == 1)
+                {
+                    long long char_val = (unsigned char)string_value[0];
+                    KgpcType *char_type = create_primitive_type(CHAR_TYPE);
+                    push_result = PushConstOntoScope_Typed(symtab,
+                        tree->tree_data.const_decl_data.id, char_val, char_type);
+                    destroy_kgpc_type(char_type);
+                    if (push_result == 0)
+                    {
+                        HashNode_t *const_node = NULL;
+                        if (FindIdent(&const_node, symtab, tree->tree_data.const_decl_data.id) != -1 && const_node != NULL)
+                        {
+                            const_node->const_string_value = strdup(string_value);
+                        }
+                    }
+                }
+                else
+                {
+                    push_result = PushStringConstOntoScope(symtab, tree->tree_data.const_decl_data.id, string_value);
+                }
+                free(string_value);
                 if (push_result > 0)
                 {
                     semcheck_error_with_context("Error on line %d, redeclaration of const %s!\n",
