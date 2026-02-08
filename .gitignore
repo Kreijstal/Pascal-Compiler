@@ -56,3 +56,4 @@ fpc-source/
 FPCSource/
 build/
 FPCSource
+build-debug
