@@ -7999,24 +7999,40 @@ void semcheck_add_builtins(SymTab_t *symtab)
     }
 
     /* FPC compiler intrinsics for stack frame access.
-     * These return Pointer and are used by error handling code. */
+     * These return Pointer and are used by error handling code.
+     * Register both zero-arg and one-arg (Pointer) overloads to match FPC semantics.
+     * Also register kgpc_get_frame (the runtime stub these get rewritten to). */
     {
         const char *frame_intrinsics[] = {
             "get_frame", "get_pc_addr", "get_caller_addr", "get_caller_frame",
             "Get_Frame", "Get_Caller_Addr", "Get_Caller_Frame",
+            "kgpc_get_frame",
         };
         for (size_t i = 0; i < sizeof(frame_intrinsics) / sizeof(frame_intrinsics[0]); i++)
         {
-            ListNode_t *param = semcheck_create_builtin_param("p", POINTER_TYPE);
-            KgpcType *return_type = create_primitive_type(POINTER_TYPE);
-            KgpcType *func_type = create_procedure_type(param, return_type);
-            if (func_type != NULL)
+            /* Zero-argument overload: get_frame() -> Pointer */
             {
-                AddBuiltinFunction_Typed(symtab, strdup(frame_intrinsics[i]), func_type);
-                destroy_kgpc_type(func_type);
+                KgpcType *return_type = create_primitive_type(POINTER_TYPE);
+                KgpcType *func_type = create_procedure_type(NULL, return_type);
+                if (func_type != NULL)
+                {
+                    AddBuiltinFunction_Typed(symtab, strdup(frame_intrinsics[i]), func_type);
+                    destroy_kgpc_type(func_type);
+                }
             }
-            if (param != NULL)
-                DestroyList(param);
+            /* One-argument overload: get_caller_addr(frame: Pointer) -> Pointer */
+            {
+                ListNode_t *param = semcheck_create_builtin_param("p", POINTER_TYPE);
+                KgpcType *return_type = create_primitive_type(POINTER_TYPE);
+                KgpcType *func_type = create_procedure_type(param, return_type);
+                if (func_type != NULL)
+                {
+                    AddBuiltinFunction_Typed(symtab, strdup(frame_intrinsics[i]), func_type);
+                    destroy_kgpc_type(func_type);
+                }
+                if (param != NULL)
+                    DestroyList(param);
+            }
         }
     }
 

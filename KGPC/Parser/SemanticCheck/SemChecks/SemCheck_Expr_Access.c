@@ -1598,6 +1598,45 @@ int semcheck_funccall(int *type_return,
     if (id != NULL && pascal_identifier_equals(id, "Assigned"))
         return semcheck_builtin_assigned(type_return, symtab, expr, max_scope_lev);
 
+    /* FPC compiler intrinsics: get_frame, get_pc_addr, get_caller_addr, get_caller_frame
+     * These return Pointer and are used for exception handling / stack trace support. */
+    if (id != NULL && (pascal_identifier_equals(id, "get_frame") ||
+                       pascal_identifier_equals(id, "get_pc_addr") ||
+                       pascal_identifier_equals(id, "get_caller_addr") ||
+                       pascal_identifier_equals(id, "get_caller_frame") ||
+                       pascal_identifier_equals(id, "Get_Frame") ||
+                       pascal_identifier_equals(id, "Get_Caller_Addr") ||
+                       pascal_identifier_equals(id, "Get_Caller_Frame")))
+    {
+        /* Type-check any arguments (they should be Pointer) */
+        ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+        while (args != NULL)
+        {
+            struct Expression *arg_expr = (struct Expression *)args->cur;
+            if (arg_expr != NULL)
+            {
+                int arg_type = UNKNOWN_TYPE;
+                return_val += semcheck_expr_legacy_tag(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
+            }
+            args = args->next;
+        }
+        /* Rewrite to runtime stub */
+        free(expr->expr_data.function_call_data.id);
+        expr->expr_data.function_call_data.id = strdup("kgpc_get_frame");
+        if (expr->expr_data.function_call_data.mangled_id != NULL)
+            free(expr->expr_data.function_call_data.mangled_id);
+        expr->expr_data.function_call_data.mangled_id = strdup("kgpc_get_frame");
+        semcheck_reset_function_call_cache(expr);
+        *type_return = POINTER_TYPE;
+        if (expr->resolved_kgpc_type != NULL)
+        {
+            destroy_kgpc_type(expr->resolved_kgpc_type);
+            expr->resolved_kgpc_type = NULL;
+        }
+        expr->resolved_kgpc_type = create_primitive_type(POINTER_TYPE);
+        return return_val;
+    }
+
     if (id != NULL && pascal_identifier_equals(id, "Abs"))
         return semcheck_builtin_abs(type_return, symtab, expr, max_scope_lev);
 
