@@ -6635,6 +6635,13 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             if (use_qword)
             {
                 int value_is_qword = expr_uses_qword_kgpctype(assign_expr);
+                /* Fallback: check expr type tag for pointer arithmetic / 64-bit ops */
+                if (!value_is_qword && assign_expr != NULL)
+                {
+                    int assign_tag = expr_get_type_tag(assign_expr);
+                    if (codegen_type_uses_qword(assign_tag))
+                        value_is_qword = 1;
+                }
                 if (coerced_to_real)
                     value_is_qword = 1;
                 /* Check for procedural var calls with pointer return type */
@@ -6768,6 +6775,13 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             if (use_qword)
             {
                 int value_is_qword = expr_uses_qword_kgpctype(assign_expr);
+                /* Fallback: check expr type tag for pointer arithmetic / 64-bit ops */
+                if (!value_is_qword && assign_expr != NULL)
+                {
+                    int assign_tag = expr_get_type_tag(assign_expr);
+                    if (codegen_type_uses_qword(assign_tag))
+                        value_is_qword = 1;
+                }
                 if (coerced_to_real)
                     value_is_qword = 1;
                 /* Check for procedural var calls with pointer return type */
@@ -6913,6 +6927,13 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         else if (use_qword)
         {
             int value_is_qword = expr_uses_qword_kgpctype(assign_expr);
+            /* Fallback: check expr type tag for pointer arithmetic / 64-bit ops */
+            if (!value_is_qword && assign_expr != NULL)
+            {
+                int assign_tag = expr_get_type_tag(assign_expr);
+                if (codegen_type_uses_qword(assign_tag))
+                    value_is_qword = 1;
+            }
             if (coerced_to_real)
                 value_is_qword = 1;
             /* Check for procedural var calls with pointer return type */
@@ -7039,6 +7060,13 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         else if (use_qword)
         {
             int value_is_qword = expr_uses_qword_kgpctype(assign_expr);
+            /* Fallback: check expr type tag for pointer arithmetic / 64-bit ops */
+            if (!value_is_qword && assign_expr != NULL)
+            {
+                int assign_tag = expr_get_type_tag(assign_expr);
+                if (codegen_type_uses_qword(assign_tag))
+                    value_is_qword = 1;
+            }
             if (coerced_to_real)
                 value_is_qword = 1;
             /* Check for procedural var calls with pointer return type */
@@ -7166,6 +7194,13 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         else if (codegen_type_uses_qword(var_type_3))
         {
             int value_is_qword = expr_uses_qword_kgpctype(assign_expr);
+            /* Fallback: check expr type tag for pointer arithmetic / 64-bit ops */
+            if (!value_is_qword && assign_expr != NULL)
+            {
+                int assign_tag = expr_get_type_tag(assign_expr);
+                if (codegen_type_uses_qword(assign_tag))
+                    value_is_qword = 1;
+            }
             if (coerced_to_real)
                 value_is_qword = 1;
             /* Check for procedural var calls with pointer return type */

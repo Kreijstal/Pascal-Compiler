@@ -35,6 +35,10 @@ const char *semcheck_type_tag_name(int type_tag)
         case PROCEDURE: return "procedure";
         case ENUM_TYPE: return "enum";
         case FILE_TYPE: return "file";
+        case BYTE_TYPE: return "byte";
+        case WORD_TYPE: return "word";
+        case LONGWORD_TYPE: return "longword";
+        case QWORD_TYPE: return "qword";
         default: return "unknown";
     }
 }

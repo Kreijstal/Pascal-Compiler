@@ -3308,9 +3308,28 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                 int left_is_pointer = (left_expr != NULL && expr_get_type_tag(left_expr) == POINTER_TYPE);
                 int right_is_pointer = (right_expr != NULL && expr_get_type_tag(right_expr) == POINTER_TYPE);
                 
+                /* Promote operands to 64-bit registers for pointer operations */
+                char left64_buf[16], right64_buf[16];
+                const char *left64 = reg32_to_reg64(left, left64_buf, sizeof(left64_buf));
+                const char *right64 = reg32_to_reg64(right, right64_buf, sizeof(right64_buf));
+                if (left64 == NULL) left64 = left;
+                if (right64 == NULL) right64 = right;
+
+                /* Sign-extend 32-bit operands to 64-bit if needed */
+                if (operand_is_32bit_register(left) && left64 != left)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", left, left64);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+                if (operand_is_32bit_register(right) && right64 != right)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", right, right64);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+
                 /* Determine which operand is the pointer and which is the integer */
-                const char *ptr_reg = left_is_pointer ? left : right;
-                const char *int_reg = left_is_pointer ? right : left;
+                const char *ptr_reg = left_is_pointer ? left64 : right64;
+                const char *int_reg = left_is_pointer ? right64 : left64;
                 struct Expression *ptr_expr = left_is_pointer ? left_expr : right_expr;
                 
                 /* Get element size */
@@ -3352,19 +3371,19 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                     /* For integer + pointer, we need to put result in correct register */
                     if (right_is_pointer && left_is_pointer == 0)
                     {
-                        /* int + ptr: add int to ptr, result goes to left (the int register initially) */
-                        snprintf(buffer, sizeof(buffer), "\taddq\t%s, %s\n", ptr_reg, left);
+                        /* int + ptr: add int to ptr, result goes to left */
+                        snprintf(buffer, sizeof(buffer), "\taddq\t%s, %s\n", ptr_reg, left64);
                     }
                     else
                     {
                         /* ptr + int: add int to ptr */
-                        snprintf(buffer, sizeof(buffer), "\taddq\t%s, %s\n", int_reg, left);
+                        snprintf(buffer, sizeof(buffer), "\taddq\t%s, %s\n", int_reg, left64);
                     }
                 }
                 else /* MINUS */
                 {
                     /* ptr - int: subtract int from ptr */
-                    snprintf(buffer, sizeof(buffer), "\tsubq\t%s, %s\n", int_reg, left);
+                    snprintf(buffer, sizeof(buffer), "\tsubq\t%s, %s\n", int_reg, left64);
                 }
                 inst_list = add_inst(inst_list, buffer);
                 break;
