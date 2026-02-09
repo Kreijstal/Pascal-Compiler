@@ -112,6 +112,7 @@ typedef struct Tree
             int is_used;
             char **generic_type_params;   /* Generic type parameter names (e.g., ["T"]) */
             int num_generic_type_params;  /* Number of generic type parameters */
+            char *result_var_name;        /* Named result variable (e.g., "dest" in operator :=(src) dest: Type) */
         } subprogram_data;
 
         /* A variable declaration */

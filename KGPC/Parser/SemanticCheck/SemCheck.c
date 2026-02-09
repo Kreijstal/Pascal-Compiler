@@ -260,6 +260,16 @@ static int semcheck_map_builtin_type_name_local(const char *id)
         pascal_identifier_equals(id, "Int16") ||
         pascal_identifier_equals(id, "Int32"))
         return INT_TYPE;
+    if (pascal_identifier_equals(id, "NativeInt") ||
+        pascal_identifier_equals(id, "PtrInt") ||
+        pascal_identifier_equals(id, "SizeInt") ||
+        pascal_identifier_equals(id, "IntPtr"))
+        return INT64_TYPE;
+    if (pascal_identifier_equals(id, "NativeUInt") ||
+        pascal_identifier_equals(id, "PtrUInt") ||
+        pascal_identifier_equals(id, "SizeUInt") ||
+        pascal_identifier_equals(id, "UIntPtr"))
+        return QWORD_TYPE;
     if (pascal_identifier_equals(id, "String") ||
         pascal_identifier_equals(id, "AnsiString") ||
         pascal_identifier_equals(id, "RawByteString") ||
@@ -10399,6 +10409,13 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                 subprogram->tree_data.subprogram_data.id ?
                     subprogram->tree_data.subprogram_data.id : "<anon>",
                 kgpc_type_to_string(result_check->type));
+        }
+
+        /* For operator declarations with named result variables (e.g., "operator :=(src) dest: variant"),
+         * push the named result variable as an additional alias for the return variable. */
+        if (subprogram->tree_data.subprogram_data.result_var_name != NULL)
+        {
+            PushFuncRetOntoScope_Typed(symtab, subprogram->tree_data.subprogram_data.result_var_name, return_kgpc_type);
         }
 
         /* For class methods, also add an alias using the unmangled method name (suffix after __) */

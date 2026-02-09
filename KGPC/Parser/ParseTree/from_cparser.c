@@ -9729,9 +9729,18 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
 
                             /* Find return type by scanning siblings of param_node */
                             ast_t *return_type_node = NULL;
+                            char *result_var_name_method = NULL;
                             ast_t *scan = param_node->next;
                             while (scan != NULL) {
                                 if (scan->typ == PASCAL_T_RETURN_TYPE) {
+                                    return_type_node = scan;
+                                    break;
+                                }
+                                /* Named result identifier before RETURN_TYPE (e.g., dest : variant) */
+                                if (scan->typ == PASCAL_T_IDENTIFIER && scan->next != NULL &&
+                                    scan->next->typ == PASCAL_T_RETURN_TYPE) {
+                                    result_var_name_method = dup_symbol(scan);
+                                    scan = scan->next;
                                     return_type_node = scan;
                                     break;
                                 }
@@ -9776,6 +9785,11 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
                             /* Create the function tree */
                             Tree_t *tree = mk_function(method_node->line, mangled_name, params, NULL,
                                 NULL, NULL, NULL, NULL, body, return_type, return_type_id, inline_return_type, 0, 0);
+                            if (tree != NULL && result_var_name_method != NULL) {
+                                tree->tree_data.subprogram_data.result_var_name = result_var_name_method;
+                            } else if (result_var_name_method != NULL) {
+                                free(result_var_name_method);
+                            }
 
                             free(encoded_op);
                             return tree;
@@ -10442,6 +10456,14 @@ static Tree_t *convert_function(ast_t *func_node) {
     char *return_type_id = NULL;
     int return_type = UNKNOWN_TYPE;
     struct TypeAlias *inline_return_type = NULL;
+    char *result_var_name = NULL;
+
+    /* For operator declarations with named results (e.g., "operator :=(source: byte) dest: variant"),
+     * the named result identifier appears as a PASCAL_T_IDENTIFIER node before PASCAL_T_RETURN_TYPE. */
+    if (cur != NULL && cur->typ == PASCAL_T_IDENTIFIER && is_standalone_operator) {
+        result_var_name = dup_symbol(cur);
+        cur = cur->next;
+    }
 
     if (cur != NULL && cur->typ == PASCAL_T_RETURN_TYPE) {
         TypeInfo type_info;
@@ -10605,6 +10627,11 @@ static Tree_t *convert_function(ast_t *func_node) {
         for (int i = 0; i < num_generic_type_params; i++)
             free(generic_type_params[i]);
         free(generic_type_params);
+    }
+    if (tree != NULL && result_var_name != NULL) {
+        tree->tree_data.subprogram_data.result_var_name = result_var_name;
+    } else if (result_var_name != NULL) {
+        free(result_var_name);
     }
     return tree;
 }
