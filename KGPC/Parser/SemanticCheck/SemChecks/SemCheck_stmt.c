@@ -1623,9 +1623,9 @@ static int semcheck_builtin_include_like(SymTab_t *symtab, struct Statement *stm
     struct Expression *set_expr = (struct Expression *)args->cur;
     int set_type = UNKNOWN_TYPE;
     error_count += semcheck_stmt_expr_tag(&set_type, symtab, set_expr, max_scope_lev, MUTATE);
-    if (set_type != SET_TYPE || !semcheck_expr_is_char_set(symtab, set_expr))
+    if (set_type != SET_TYPE)
     {
-        semcheck_error_with_context("Error on line %d, %s target must be a set of char.\n",
+        semcheck_error_with_context("Error on line %d, %s target must be a set.\n",
             stmt->line_num, display_name);
         ++error_count;
     }
@@ -1633,7 +1633,7 @@ static int semcheck_builtin_include_like(SymTab_t *symtab, struct Statement *stm
     struct Expression *value_expr = (struct Expression *)args->next->cur;
     int value_type = UNKNOWN_TYPE;
     error_count += semcheck_stmt_expr_tag(&value_type, symtab, value_expr, max_scope_lev, NO_MUTATE);
-    if (!is_integer_type(value_type) && value_type != CHAR_TYPE)
+    if (!is_ordinal_type(value_type))
     {
         semcheck_error_with_context("Error on line %d, %s element must be an ordinal value.\n",
             stmt->line_num, display_name);

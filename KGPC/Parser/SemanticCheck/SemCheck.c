@@ -1227,8 +1227,9 @@ static void add_class_vars_to_method_scope(SymTab_t *symtab, const char *method_
         return;
     }
 
-    /* Only process real class types, not regular records */
-    if (!record_info->is_class)
+    /* Process class types and advanced records (records with class vars/properties).
+     * Advanced records may use record_properties instead of properties. */
+    if (!record_type_is_class(record_info) && record_info->record_properties == NULL)
     {
         free(class_name);
         return;
@@ -1338,6 +1339,11 @@ static void add_class_vars_to_method_scope(SymTab_t *symtab, const char *method_
         }
         field_node = field_node->next;
     }
+
+    /* Class properties are NOT pushed to scope here; they are resolved
+     * dynamically in semcheck_varid() by rewriting the identifier to
+     * the backing field (read accessor) at resolution time. This avoids
+     * scope level issues in codegen. */
 
     /* Add other static methods of the same class to scope, so they can be
      * called without full qualification from within a static method. */
