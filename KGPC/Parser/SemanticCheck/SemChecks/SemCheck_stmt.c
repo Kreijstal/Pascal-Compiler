@@ -1623,9 +1623,9 @@ static int semcheck_builtin_include_like(SymTab_t *symtab, struct Statement *stm
     struct Expression *set_expr = (struct Expression *)args->cur;
     int set_type = UNKNOWN_TYPE;
     error_count += semcheck_stmt_expr_tag(&set_type, symtab, set_expr, max_scope_lev, MUTATE);
-    if (set_type != SET_TYPE || !semcheck_expr_is_char_set(symtab, set_expr))
+    if (set_type != SET_TYPE)
     {
-        semcheck_error_with_context("Error on line %d, %s target must be a set of char.\n",
+        semcheck_error_with_context("Error on line %d, %s target must be a set.\n",
             stmt->line_num, display_name);
         ++error_count;
     }
@@ -1633,7 +1633,7 @@ static int semcheck_builtin_include_like(SymTab_t *symtab, struct Statement *stm
     struct Expression *value_expr = (struct Expression *)args->next->cur;
     int value_type = UNKNOWN_TYPE;
     error_count += semcheck_stmt_expr_tag(&value_type, symtab, value_expr, max_scope_lev, NO_MUTATE);
-    if (!is_integer_type(value_type) && value_type != CHAR_TYPE)
+    if (!is_ordinal_type(value_type))
     {
         semcheck_error_with_context("Error on line %d, %s element must be an ordinal value.\n",
             stmt->line_num, display_name);
@@ -1651,6 +1651,39 @@ static int semcheck_builtin_include(SymTab_t *symtab, struct Statement *stmt, in
 static int semcheck_builtin_exclude(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
     return semcheck_builtin_include_like(symtab, stmt, max_scope_lev, "Exclude");
+}
+
+/* Initialize(var v) / Finalize(var v) - accept any managed type */
+static int semcheck_builtin_initialize_finalize(SymTab_t *symtab, struct Statement *stmt,
+    int max_scope_lev, const char *display_name)
+{
+    if (stmt == NULL)
+        return 0;
+
+    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+    if (args == NULL || args->next != NULL)
+    {
+        semcheck_error_with_context("Error on line %d, %s expects exactly one argument.\n",
+            stmt->line_num, display_name);
+        return 1;
+    }
+
+    int error_count = 0;
+    struct Expression *arg_expr = (struct Expression *)args->cur;
+    int arg_type = UNKNOWN_TYPE;
+    error_count += semcheck_stmt_expr_tag(&arg_type, symtab, arg_expr, max_scope_lev, MUTATE);
+    /* Accept any type - Initialize/Finalize work with all managed types */
+    return error_count;
+}
+
+static int semcheck_builtin_initialize(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    return semcheck_builtin_initialize_finalize(symtab, stmt, max_scope_lev, "Initialize");
+}
+
+static int semcheck_builtin_finalize(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    return semcheck_builtin_initialize_finalize(symtab, stmt, max_scope_lev, "Finalize");
 }
 
 static int semcheck_builtin_write_like(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
@@ -3926,6 +3959,18 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     handled_builtin = 0;
     return_val += try_resolve_builtin_procedure(symtab, stmt, "Dispose",
         semcheck_builtin_dispose, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
+
+    handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "Initialize",
+        semcheck_builtin_initialize, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
+
+    handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "Finalize",
+        semcheck_builtin_finalize, max_scope_lev, &handled_builtin);
     if (handled_builtin)
         return return_val;
 

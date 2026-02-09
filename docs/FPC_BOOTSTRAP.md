@@ -1,6 +1,6 @@
 # FPC Bootstrap Analysis
 
-## Status: sysutils.pp compiles with 0 errors
+## Status: sysutils.pp compiles with ~1935 errors (target: 0)
 
 ## Prerequisites
 

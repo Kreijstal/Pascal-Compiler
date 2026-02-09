@@ -1368,6 +1368,54 @@ int semcheck_varid(int *type_return,
                 free(prefix);
             }
         }
+        /* Class property resolution in static methods: if the identifier
+         * matches a class property of the enclosing record, rewrite it
+         * to reference the backing field (read accessor). */
+        if (scope_return == -1 && owner != NULL)
+        {
+            HashNode_t *owner_node = NULL;
+            if (FindIdent(&owner_node, symtab, owner) >= 0 && owner_node != NULL)
+            {
+                struct RecordType *owner_record = get_record_type_from_node(owner_node);
+                if (owner_record != NULL)
+                {
+                    /* Search both 'properties' and 'record_properties' lists */
+                    for (int pp = 0; pp < 2 && scope_return == -1; pp++)
+                    {
+                        ListNode_t *pnode = (pp == 0) ? owner_record->properties
+                                                       : owner_record->record_properties;
+                        while (pnode != NULL)
+                        {
+                            if (pnode->type == LIST_CLASS_PROPERTY && pnode->cur != NULL)
+                            {
+                                struct ClassProperty *cprop = (struct ClassProperty *)pnode->cur;
+                                if (cprop->name != NULL &&
+                                    pascal_identifier_equals(cprop->name, id) &&
+                                    cprop->read_accessor != NULL)
+                                {
+                                    /* Rewrite identifier to reference the backing field */
+                                    HashNode_t *accessor_node = NULL;
+                                    int acc_scope = FindIdent(&accessor_node, symtab,
+                                        cprop->read_accessor);
+                                    if (acc_scope >= 0 && accessor_node != NULL)
+                                    {
+                                        char *new_id = strdup(cprop->read_accessor);
+                                        assert(new_id != NULL);
+                                        free(expr->expr_data.id);
+                                        expr->expr_data.id = new_id;
+                                        id = expr->expr_data.id;
+                                        hash_return = accessor_node;
+                                        scope_return = acc_scope;
+                                    }
+                                    break;
+                                }
+                            }
+                            pnode = pnode->next;
+                        }
+                    }
+                }
+            }
+        }
 resolved:;
     }
     if (getenv("KGPC_DEBUG_RESULT") != NULL && id != NULL &&
