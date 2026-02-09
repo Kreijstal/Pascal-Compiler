@@ -1022,11 +1022,19 @@ begin
 end;
 
 function IncludeTrailingPathDelimiter(const Dir: AnsiString): AnsiString;
+var
+  lastCh: Char;
 begin
-  if (Dir = '') or (Copy(Dir, Length(Dir), 1) = PathDelim) or (Copy(Dir, Length(Dir), 1) = AltPathDelim) then
+  if Dir = '' then
     IncludeTrailingPathDelimiter := Dir
   else
-    IncludeTrailingPathDelimiter := Dir + PathDelim;
+  begin
+    lastCh := Dir[Length(Dir)];
+    if (lastCh = PathDelim) or (lastCh = AltPathDelim) then
+      IncludeTrailingPathDelimiter := Dir
+    else
+      IncludeTrailingPathDelimiter := Dir + PathDelim;
+  end;
 end;
 
 function ExcludeTrailingPathDelimiter(const Dir: AnsiString): AnsiString;

@@ -2380,6 +2380,15 @@ cleanup_constructor:
              * to store the procedure name, not an actual string value */
             !(node->type != NULL && node->type->kind == TYPE_KIND_PROCEDURE))
         {
+            /* Check if this is a single-char constant (Char type, not String) */
+            if (node->type != NULL && node->type->kind == TYPE_KIND_PRIMITIVE &&
+                node->type->info.primitive_type_tag == CHAR_TYPE)
+            {
+                /* Char constant - load the character value directly as an immediate */
+                unsigned char ch = (unsigned char)node->const_string_value[0];
+                snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %s\n", (int)ch, target_reg->bit_32);
+                return add_inst(inst_list, buffer);
+            }
             /* String constant - treat it like a string literal */
             char label[20];
             snprintf(label, 20, ".LC%d", ctx->write_label_counter++);
@@ -2972,17 +2981,27 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                     }
                     else if (node->const_string_value != NULL)
                     {
-                        /* String constant - emit in rodata and use its address */
-                        char label[20];
-                        snprintf(label, 20, ".LC%d", ctx->write_label_counter++);
-                        char add_rodata[1024];
-                        const char *readonly_section = codegen_readonly_section_directive();
-                        char *escaped = escape_string_for_assembly(node->const_string_value);
-                        snprintf(add_rodata, 1024, "%s\n%s:\n\t.string \"%s\"\n\t.text\n",
-                            readonly_section, label, escaped ? escaped : node->const_string_value);
-                        if (escaped) free(escaped);
-                        inst_list = add_inst(inst_list, add_rodata);
-                        snprintf(buffer, buf_len, "%s(%%rip)", label);
+                        /* Check if this is a single-char constant (Char type) */
+                        if (node->type != NULL && node->type->kind == TYPE_KIND_PRIMITIVE &&
+                            node->type->info.primitive_type_tag == CHAR_TYPE)
+                        {
+                            unsigned char ch = (unsigned char)node->const_string_value[0];
+                            snprintf(buffer, buf_len, "$%d", (int)ch);
+                        }
+                        else
+                        {
+                            /* String constant - emit in rodata and use its address */
+                            char label[20];
+                            snprintf(label, 20, ".LC%d", ctx->write_label_counter++);
+                            char add_rodata[1024];
+                            const char *readonly_section = codegen_readonly_section_directive();
+                            char *escaped = escape_string_for_assembly(node->const_string_value);
+                            snprintf(add_rodata, 1024, "%s\n%s:\n\t.string \"%s\"\n\t.text\n",
+                                readonly_section, label, escaped ? escaped : node->const_string_value);
+                            if (escaped) free(escaped);
+                            inst_list = add_inst(inst_list, add_rodata);
+                            snprintf(buffer, buf_len, "%s(%%rip)", label);
+                        }
                     }
                     else
                     {
@@ -3289,9 +3308,28 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                 int left_is_pointer = (left_expr != NULL && expr_get_type_tag(left_expr) == POINTER_TYPE);
                 int right_is_pointer = (right_expr != NULL && expr_get_type_tag(right_expr) == POINTER_TYPE);
                 
+                /* Promote operands to 64-bit registers for pointer operations */
+                char left64_buf[16], right64_buf[16];
+                const char *left64 = reg32_to_reg64(left, left64_buf, sizeof(left64_buf));
+                const char *right64 = reg32_to_reg64(right, right64_buf, sizeof(right64_buf));
+                if (left64 == NULL) left64 = left;
+                if (right64 == NULL) right64 = right;
+
+                /* Sign-extend 32-bit operands to 64-bit if needed */
+                if (operand_is_32bit_register(left) && left64 != left)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", left, left64);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+                if (operand_is_32bit_register(right) && right64 != right)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", right, right64);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+
                 /* Determine which operand is the pointer and which is the integer */
-                const char *ptr_reg = left_is_pointer ? left : right;
-                const char *int_reg = left_is_pointer ? right : left;
+                const char *ptr_reg = left_is_pointer ? left64 : right64;
+                const char *int_reg = left_is_pointer ? right64 : left64;
                 struct Expression *ptr_expr = left_is_pointer ? left_expr : right_expr;
                 
                 /* Get element size */
@@ -3333,19 +3371,19 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                     /* For integer + pointer, we need to put result in correct register */
                     if (right_is_pointer && left_is_pointer == 0)
                     {
-                        /* int + ptr: add int to ptr, result goes to left (the int register initially) */
-                        snprintf(buffer, sizeof(buffer), "\taddq\t%s, %s\n", ptr_reg, left);
+                        /* int + ptr: add int to ptr, result goes to left */
+                        snprintf(buffer, sizeof(buffer), "\taddq\t%s, %s\n", ptr_reg, left64);
                     }
                     else
                     {
                         /* ptr + int: add int to ptr */
-                        snprintf(buffer, sizeof(buffer), "\taddq\t%s, %s\n", int_reg, left);
+                        snprintf(buffer, sizeof(buffer), "\taddq\t%s, %s\n", int_reg, left64);
                     }
                 }
                 else /* MINUS */
                 {
                     /* ptr - int: subtract int from ptr */
-                    snprintf(buffer, sizeof(buffer), "\tsubq\t%s, %s\n", int_reg, left);
+                    snprintf(buffer, sizeof(buffer), "\tsubq\t%s, %s\n", int_reg, left64);
                 }
                 inst_list = add_inst(inst_list, buffer);
                 break;

@@ -260,6 +260,16 @@ static int semcheck_map_builtin_type_name_local(const char *id)
         pascal_identifier_equals(id, "Int16") ||
         pascal_identifier_equals(id, "Int32"))
         return INT_TYPE;
+    if (pascal_identifier_equals(id, "NativeInt") ||
+        pascal_identifier_equals(id, "PtrInt") ||
+        pascal_identifier_equals(id, "SizeInt") ||
+        pascal_identifier_equals(id, "IntPtr"))
+        return INT64_TYPE;
+    if (pascal_identifier_equals(id, "NativeUInt") ||
+        pascal_identifier_equals(id, "PtrUInt") ||
+        pascal_identifier_equals(id, "SizeUInt") ||
+        pascal_identifier_equals(id, "UIntPtr"))
+        return QWORD_TYPE;
     if (pascal_identifier_equals(id, "String") ||
         pascal_identifier_equals(id, "AnsiString") ||
         pascal_identifier_equals(id, "RawByteString") ||
@@ -2123,7 +2133,17 @@ static KgpcType *build_function_return_type(Tree_t *subprogram, SymTab_t *symtab
             int builtin_type = semcheck_map_builtin_type_name_local(type_id);
             if (builtin_type == UNKNOWN_TYPE)
             {
-                if (!allow_undefined)
+                /* Check if this is a generic type parameter of the function */
+                int is_generic_param = 0;
+                for (int i = 0; i < subprogram->tree_data.subprogram_data.num_generic_type_params; i++) {
+                    if (strcasecmp(type_id, subprogram->tree_data.subprogram_data.generic_type_params[i]) == 0) {
+                        is_generic_param = 1;
+                        break;
+                    }
+                }
+                if (is_generic_param) {
+                    builtin_return = create_primitive_type(POINTER_TYPE);
+                } else if (!allow_undefined)
                 {
                     semantic_error(subprogram->line_num, 0, "undefined type %s",
                         subprogram->tree_data.subprogram_data.return_type_id);
@@ -6541,8 +6561,30 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
             }
             else
             {
-                int push_result = PushStringConstOntoScope(symtab, tree->tree_data.const_decl_data.id, string_value);
-                free(string_value);  /* PushStringConstOntoScope makes its own copy */
+                int push_result;
+                /* In Pascal, a single-character string literal constant is a Char, not a String.
+                 * e.g., const PathDelim = '/' should be Char type. */
+                if (string_value != NULL && strlen(string_value) == 1)
+                {
+                    long long char_val = (unsigned char)string_value[0];
+                    KgpcType *char_type = create_primitive_type(CHAR_TYPE);
+                    push_result = PushConstOntoScope_Typed(symtab,
+                        tree->tree_data.const_decl_data.id, char_val, char_type);
+                    destroy_kgpc_type(char_type);
+                    if (push_result == 0)
+                    {
+                        HashNode_t *const_node = NULL;
+                        if (FindIdent(&const_node, symtab, tree->tree_data.const_decl_data.id) != -1 && const_node != NULL)
+                        {
+                            const_node->const_string_value = strdup(string_value);
+                        }
+                    }
+                }
+                else
+                {
+                    push_result = PushStringConstOntoScope(symtab, tree->tree_data.const_decl_data.id, string_value);
+                }
+                free(string_value);
                 if (push_result > 0)
                 {
                     semcheck_error_with_context("Error on line %d, redeclaration of const %s!\n",
@@ -7165,6 +7207,10 @@ void semcheck_add_builtins(SymTab_t *symtab)
     add_builtin_type_owned(symtab, "Single", create_primitive_type_with_size(REAL_TYPE, 4));
     add_builtin_type_owned(symtab, "Double", create_primitive_type_with_size(REAL_TYPE, 8));
     add_builtin_type_owned(symtab, "Extended", create_primitive_type_with_size(REAL_TYPE, 8));
+
+    /* Variant and OleVariant (COM interop) - treated as opaque 16-byte types */
+    add_builtin_type_owned(symtab, "Variant", create_primitive_type_with_size(POINTER_TYPE, 16));
+    add_builtin_type_owned(symtab, "OleVariant", create_primitive_type_with_size(POINTER_TYPE, 16));
 
     /* File/Text primitives (sizes align with system.p TextRec/FileRec layout) */
     char *file_name = strdup("file");
@@ -7962,7 +8008,176 @@ void semcheck_add_builtins(SymTab_t *symtab)
         }
     }
 
+    /* FPC compiler intrinsics for stack frame access.
+     * These return Pointer and are used by error handling code.
+     * Register both zero-arg and one-arg (Pointer) overloads to match FPC semantics.
+     * Also register kgpc_get_frame (the runtime stub these get rewritten to). */
+    {
+        const char *frame_intrinsics[] = {
+            "get_frame", "get_pc_addr", "get_caller_addr", "get_caller_frame",
+            "Get_Frame", "Get_Caller_Addr", "Get_Caller_Frame",
+            "kgpc_get_frame",
+        };
+        for (size_t i = 0; i < sizeof(frame_intrinsics) / sizeof(frame_intrinsics[0]); i++)
+        {
+            /* Zero-argument overload: get_frame() -> Pointer */
+            {
+                KgpcType *return_type = create_primitive_type(POINTER_TYPE);
+                KgpcType *func_type = create_procedure_type(NULL, return_type);
+                if (func_type != NULL)
+                {
+                    AddBuiltinFunction_Typed(symtab, strdup(frame_intrinsics[i]), func_type);
+                    destroy_kgpc_type(func_type);
+                }
+            }
+            /* One-argument overload: get_caller_addr(frame: Pointer) -> Pointer */
+            {
+                ListNode_t *param = semcheck_create_builtin_param("p", POINTER_TYPE);
+                KgpcType *return_type = create_primitive_type(POINTER_TYPE);
+                KgpcType *func_type = create_procedure_type(param, return_type);
+                if (func_type != NULL)
+                {
+                    AddBuiltinFunction_Typed(symtab, strdup(frame_intrinsics[i]), func_type);
+                    destroy_kgpc_type(func_type);
+                }
+                if (param != NULL)
+                    DestroyList(param);
+            }
+        }
+    }
+
     /* Builtins are now in system.p */
+
+    /* Atomic operations: AtomicCmpExchange, AtomicExchange, AtomicIncrement, AtomicDecrement.
+     * In FPC these are compiler intrinsics that work on any ordinal/pointer type.
+     * We register them with Integer parameters as a common overload. */
+    {
+        /* AtomicCmpExchange(var Target: Integer; NewValue: Integer; Comparand: Integer): Integer */
+        {
+            ListNode_t *p1 = semcheck_create_builtin_param("Target", INT_TYPE);
+            ListNode_t *p2 = semcheck_create_builtin_param("NewValue", INT_TYPE);
+            ListNode_t *p3 = semcheck_create_builtin_param("Comparand", INT_TYPE);
+            p1->next = p2;
+            p2->next = p3;
+            KgpcType *return_type = create_primitive_type(INT_TYPE);
+            KgpcType *func_type = create_procedure_type(p1, return_type);
+            if (func_type != NULL)
+            {
+                AddBuiltinFunction_Typed(symtab, strdup("AtomicCmpExchange"), func_type);
+                AddBuiltinFunction_Typed(symtab, strdup("InterlockedCompareExchange"), func_type);
+                destroy_kgpc_type(func_type);
+            }
+            DestroyList(p1);
+        }
+        /* Pointer overload: AtomicCmpExchange(var Target: Pointer; NewValue: Pointer; Comparand: Pointer): Pointer */
+        {
+            ListNode_t *p1 = semcheck_create_builtin_param("Target", POINTER_TYPE);
+            ListNode_t *p2 = semcheck_create_builtin_param("NewValue", POINTER_TYPE);
+            ListNode_t *p3 = semcheck_create_builtin_param("Comparand", POINTER_TYPE);
+            p1->next = p2;
+            p2->next = p3;
+            KgpcType *return_type = create_primitive_type(POINTER_TYPE);
+            KgpcType *func_type = create_procedure_type(p1, return_type);
+            if (func_type != NULL)
+            {
+                AddBuiltinFunction_Typed(symtab, strdup("AtomicCmpExchange"), func_type);
+                AddBuiltinFunction_Typed(symtab, strdup("InterlockedCompareExchange"), func_type);
+                destroy_kgpc_type(func_type);
+            }
+            DestroyList(p1);
+        }
+        /* AtomicExchange(var Target: Integer; Value: Integer): Integer */
+        {
+            ListNode_t *p1 = semcheck_create_builtin_param("Target", INT_TYPE);
+            ListNode_t *p2 = semcheck_create_builtin_param("Value", INT_TYPE);
+            p1->next = p2;
+            KgpcType *return_type = create_primitive_type(INT_TYPE);
+            KgpcType *func_type = create_procedure_type(p1, return_type);
+            if (func_type != NULL)
+            {
+                AddBuiltinFunction_Typed(symtab, strdup("AtomicExchange"), func_type);
+                AddBuiltinFunction_Typed(symtab, strdup("InterlockedExchange"), func_type);
+                destroy_kgpc_type(func_type);
+            }
+            DestroyList(p1);
+        }
+        /* Pointer overload: AtomicExchange(var Target: Pointer; Value: Pointer): Pointer */
+        {
+            ListNode_t *p1 = semcheck_create_builtin_param("Target", POINTER_TYPE);
+            ListNode_t *p2 = semcheck_create_builtin_param("Value", POINTER_TYPE);
+            p1->next = p2;
+            KgpcType *return_type = create_primitive_type(POINTER_TYPE);
+            KgpcType *func_type = create_procedure_type(p1, return_type);
+            if (func_type != NULL)
+            {
+                AddBuiltinFunction_Typed(symtab, strdup("AtomicExchange"), func_type);
+                AddBuiltinFunction_Typed(symtab, strdup("InterlockedExchange"), func_type);
+                destroy_kgpc_type(func_type);
+            }
+            DestroyList(p1);
+        }
+        /* AtomicIncrement/AtomicDecrement(var Target: Integer; Value: Integer): Integer */
+        {
+            const char *names[] = {
+                "AtomicIncrement", "AtomicDecrement",
+                "InterlockedIncrement", "InterlockedDecrement",
+            };
+            for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++)
+            {
+                /* One-arg overload */
+                {
+                    ListNode_t *p1 = semcheck_create_builtin_param("Target", INT_TYPE);
+                    KgpcType *return_type = create_primitive_type(INT_TYPE);
+                    KgpcType *func_type = create_procedure_type(p1, return_type);
+                    if (func_type != NULL)
+                    {
+                        AddBuiltinFunction_Typed(symtab, strdup(names[i]), func_type);
+                        destroy_kgpc_type(func_type);
+                    }
+                    DestroyList(p1);
+                }
+                /* Two-arg overload */
+                {
+                    ListNode_t *p1 = semcheck_create_builtin_param("Target", INT_TYPE);
+                    ListNode_t *p2 = semcheck_create_builtin_param("Value", INT_TYPE);
+                    p1->next = p2;
+                    KgpcType *return_type = create_primitive_type(INT_TYPE);
+                    KgpcType *func_type = create_procedure_type(p1, return_type);
+                    if (func_type != NULL)
+                    {
+                        AddBuiltinFunction_Typed(symtab, strdup(names[i]), func_type);
+                        destroy_kgpc_type(func_type);
+                    }
+                    DestroyList(p1);
+                }
+            }
+        }
+        /* bitsizeof(T): Integer - returns size in bits */
+        {
+            ListNode_t *p1 = semcheck_create_builtin_param("x", INT_TYPE);
+            KgpcType *return_type = create_primitive_type(INT_TYPE);
+            KgpcType *func_type = create_procedure_type(p1, return_type);
+            if (func_type != NULL)
+            {
+                AddBuiltinFunction_Typed(symtab, strdup("bitsizeof"), func_type);
+                AddBuiltinFunction_Typed(symtab, strdup("BitSizeOf"), func_type);
+                destroy_kgpc_type(func_type);
+            }
+            DestroyList(p1);
+        }
+        /* Finalize(var v): frees resources - registered as a procedure */
+        {
+            ListNode_t *p1 = semcheck_create_builtin_param("v", INT_TYPE);
+            KgpcType *return_type = create_primitive_type(INT_TYPE); /* dummy return for function registration */
+            KgpcType *func_type = create_procedure_type(p1, return_type);
+            if (func_type != NULL)
+            {
+                AddBuiltinFunction_Typed(symtab, strdup("Finalize"), func_type);
+                destroy_kgpc_type(func_type);
+            }
+            DestroyList(p1);
+        }
+    }
 }
 
 /* Semantic check for a program */
@@ -10196,6 +10411,13 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                 kgpc_type_to_string(result_check->type));
         }
 
+        /* For operator declarations with named result variables (e.g., "operator :=(src) dest: variant"),
+         * push the named result variable as an additional alias for the return variable. */
+        if (subprogram->tree_data.subprogram_data.result_var_name != NULL)
+        {
+            PushFuncRetOntoScope_Typed(symtab, subprogram->tree_data.subprogram_data.result_var_name, return_kgpc_type);
+        }
+
         /* For class methods, also add an alias using the unmangled method name (suffix after __) */
         const char *alias_suffix = NULL;
         if (subprogram->tree_data.subprogram_data.id != NULL)
@@ -10288,6 +10510,17 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                 }
             }
             arg_debug = arg_debug->next;
+        }
+    }
+    /* Register generic type parameters (e.g., T, U) as opaque types in the function scope.
+     * This allows parameters of type T and expressions using T to pass semantic checking. */
+    if (subprogram->tree_data.subprogram_data.num_generic_type_params > 0) {
+        for (int i = 0; i < subprogram->tree_data.subprogram_data.num_generic_type_params; i++) {
+            const char *tparam = subprogram->tree_data.subprogram_data.generic_type_params[i];
+            assert(tparam != NULL);
+            KgpcType *opaque = create_primitive_type(POINTER_TYPE);
+            PushTypeOntoScope_Typed(symtab, (char *)tparam, opaque);
+            destroy_kgpc_type(opaque);
         }
     }
     return_val += semcheck_decls(symtab, subprogram->tree_data.subprogram_data.args_var);

@@ -1246,6 +1246,13 @@ void destroy_tree(Tree_t *tree)
           destroy_list(tree->tree_data.subprogram_data.subprograms);
 
           destroy_stmt(tree->tree_data.subprogram_data.statement_list);
+          if (tree->tree_data.subprogram_data.generic_type_params != NULL) {
+              for (int i = 0; i < tree->tree_data.subprogram_data.num_generic_type_params; i++)
+                  free(tree->tree_data.subprogram_data.generic_type_params[i]);
+              free(tree->tree_data.subprogram_data.generic_type_params);
+          }
+          if (tree->tree_data.subprogram_data.result_var_name != NULL)
+              free(tree->tree_data.subprogram_data.result_var_name);
           break;
 
         case TREE_VAR_DECL:

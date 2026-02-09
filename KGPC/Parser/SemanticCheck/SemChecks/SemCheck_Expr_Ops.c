@@ -768,6 +768,25 @@ int semcheck_addop(int *type_return,
         }
     }
 
+    /* Pointer arithmetic: pointer +/- integer yields pointer (FPC {$POINTERMATH ON}) */
+    if ((type_first == POINTER_TYPE && is_integer_type(type_second)) ||
+        (is_integer_type(type_first) && type_second == POINTER_TYPE))
+    {
+        *type_return = POINTER_TYPE;
+        if (expr->resolved_kgpc_type != NULL)
+            destroy_kgpc_type(expr->resolved_kgpc_type);
+        expr->resolved_kgpc_type = create_primitive_type(POINTER_TYPE);
+        return return_val;
+    }
+    /* Pointer - pointer yields integer (distance between two pointers) */
+    if (type_first == POINTER_TYPE && type_second == POINTER_TYPE)
+    {
+        *type_return = INT64_TYPE;
+        if (expr->resolved_kgpc_type != NULL)
+            destroy_kgpc_type(expr->resolved_kgpc_type);
+        expr->resolved_kgpc_type = create_primitive_type_with_size(INT64_TYPE, 8);
+        return return_val;
+    }
     /* Checking numeric types */
     if(!types_numeric_compatible(type_first, type_second))
     {

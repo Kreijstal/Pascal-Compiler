@@ -6048,3 +6048,23 @@ void __kgpc_abstract_method_error(void)
     fprintf(stderr, "Runtime error: Abstract method called\n");
     abort();
 }
+
+/* FPC compiler intrinsic stubs: get_frame, get_pc_addr, etc.
+ * These return the current stack frame pointer for exception handling.
+ * The _void suffix variant is needed because KGPC's codegen mangles
+ * zero-argument functions with _void. */
+void *kgpc_get_frame(void)
+{
+    return __builtin_frame_address(0);
+}
+
+void *kgpc_get_frame_void(void)
+{
+    return __builtin_frame_address(0);
+}
+
+void *kgpc_get_frame_p(void *frame)
+{
+    (void)frame;
+    return __builtin_frame_address(0);
+}
