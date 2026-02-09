@@ -4950,6 +4950,7 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
         inst_list = add_inst(inst_list, buffer);
 
         free_reg(get_reg_stack(), left_reg);
+        free_reg(get_reg_stack(), right_reg);
         return inst_list;
     }
 
