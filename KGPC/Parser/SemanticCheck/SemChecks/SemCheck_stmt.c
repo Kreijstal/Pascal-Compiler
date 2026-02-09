@@ -1653,6 +1653,39 @@ static int semcheck_builtin_exclude(SymTab_t *symtab, struct Statement *stmt, in
     return semcheck_builtin_include_like(symtab, stmt, max_scope_lev, "Exclude");
 }
 
+/* Initialize(var v) / Finalize(var v) - accept any managed type */
+static int semcheck_builtin_initialize_finalize(SymTab_t *symtab, struct Statement *stmt,
+    int max_scope_lev, const char *display_name)
+{
+    if (stmt == NULL)
+        return 0;
+
+    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+    if (args == NULL || args->next != NULL)
+    {
+        semcheck_error_with_context("Error on line %d, %s expects exactly one argument.\n",
+            stmt->line_num, display_name);
+        return 1;
+    }
+
+    int error_count = 0;
+    struct Expression *arg_expr = (struct Expression *)args->cur;
+    int arg_type = UNKNOWN_TYPE;
+    error_count += semcheck_stmt_expr_tag(&arg_type, symtab, arg_expr, max_scope_lev, MUTATE);
+    /* Accept any type - Initialize/Finalize work with all managed types */
+    return error_count;
+}
+
+static int semcheck_builtin_initialize(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    return semcheck_builtin_initialize_finalize(symtab, stmt, max_scope_lev, "Initialize");
+}
+
+static int semcheck_builtin_finalize(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    return semcheck_builtin_initialize_finalize(symtab, stmt, max_scope_lev, "Finalize");
+}
+
 static int semcheck_builtin_write_like(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
     int return_val = 0;
@@ -3926,6 +3959,18 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     handled_builtin = 0;
     return_val += try_resolve_builtin_procedure(symtab, stmt, "Dispose",
         semcheck_builtin_dispose, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
+
+    handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "Initialize",
+        semcheck_builtin_initialize, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
+
+    handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "Finalize",
+        semcheck_builtin_finalize, max_scope_lev, &handled_builtin);
     if (handled_builtin)
         return return_val;
 

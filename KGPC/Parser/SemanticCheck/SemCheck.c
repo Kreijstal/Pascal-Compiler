@@ -8171,15 +8171,25 @@ void semcheck_add_builtins(SymTab_t *symtab)
             }
             DestroyList(p1);
         }
-        /* Finalize(var v): frees resources - registered as a procedure */
+        /* Finalize(var v): frees managed resources - accepts any type */
         {
-            ListNode_t *p1 = semcheck_create_builtin_param("v", INT_TYPE);
-            KgpcType *return_type = create_primitive_type(INT_TYPE); /* dummy return for function registration */
-            KgpcType *func_type = create_procedure_type(p1, return_type);
-            if (func_type != NULL)
+            ListNode_t *p1 = semcheck_create_builtin_param("v", POINTER_TYPE);
+            KgpcType *proc_type = create_procedure_type(p1, NULL);
+            if (proc_type != NULL)
             {
-                AddBuiltinFunction_Typed(symtab, strdup("Finalize"), func_type);
-                destroy_kgpc_type(func_type);
+                AddBuiltinProc_Typed(symtab, strdup("Finalize"), proc_type);
+                destroy_kgpc_type(proc_type);
+            }
+            DestroyList(p1);
+        }
+        /* Initialize(var v): initializes managed resources - accepts any type */
+        {
+            ListNode_t *p1 = semcheck_create_builtin_param("v", POINTER_TYPE);
+            KgpcType *proc_type = create_procedure_type(p1, NULL);
+            if (proc_type != NULL)
+            {
+                AddBuiltinProc_Typed(symtab, strdup("Initialize"), proc_type);
+                destroy_kgpc_type(proc_type);
             }
             DestroyList(p1);
         }
