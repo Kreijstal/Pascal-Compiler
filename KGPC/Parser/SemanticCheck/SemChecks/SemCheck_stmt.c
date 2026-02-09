@@ -1531,7 +1531,7 @@ static int semcheck_builtin_val(SymTab_t *symtab, struct Statement *stmt, int ma
     struct Expression *source_expr = (struct Expression *)args->cur;
     int source_type = UNKNOWN_TYPE;
     error_count += semcheck_stmt_expr_tag(&source_type, symtab, source_expr, max_scope_lev, NO_MUTATE);
-    if (source_type != STRING_TYPE && source_type != UNKNOWN_TYPE)
+    if (source_type != STRING_TYPE)
     {
         semcheck_error_with_context("Error on line %d, Val expects its first argument to be a string.\n",
             stmt->line_num);
@@ -1590,7 +1590,7 @@ static int semcheck_builtin_inc(SymTab_t *symtab, struct Statement *stmt, int ma
         struct Expression *value_expr = (struct Expression *)args->next->cur;
         int value_type = UNKNOWN_TYPE;
         return_val += semcheck_stmt_expr_tag(&value_type, symtab, value_expr, max_scope_lev, NO_MUTATE);
-        if (!is_integer_type(value_type) && value_type != UNKNOWN_TYPE)
+        if (!is_integer_type(value_type))
         {
             semcheck_error_with_context("Error on line %d, Inc increment must be an integer.\n", stmt->line_num);
             ++return_val;
@@ -5328,7 +5328,7 @@ int semcheck_ifthen(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 
     return_val += semcheck_stmt_expr_tag(&if_type, symtab, relop_expr, INT_MAX, NO_MUTATE);
 
-    if(if_type != BOOL && if_type != UNKNOWN_TYPE)
+    if(if_type != BOOL)
     {
         semcheck_error_with_context("Error on line %d, expected relational inside if statement!\n\n",
                 stmt->line_num);

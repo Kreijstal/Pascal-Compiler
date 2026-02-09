@@ -211,15 +211,10 @@ int semcheck_arrayaccess(int *type_return,
         if (property_result >= 0)
             return return_val + property_result;
 
-        /* Suppress cascading error when base expression already failed resolution */
-        if (base_type != UNKNOWN_TYPE)
-        {
-            semcheck_error_with_context("Error on line %d, expression is not indexable as an array.\n\n",
-                expr->line_num);
-            return_val++;
-        }
+        semcheck_error_with_context("Error on line %d, expression is not indexable as an array.\n\n",
+            expr->line_num);
         *type_return = UNKNOWN_TYPE;
-        return return_val;
+        return return_val + 1;
     }
 
     if (base_is_string)

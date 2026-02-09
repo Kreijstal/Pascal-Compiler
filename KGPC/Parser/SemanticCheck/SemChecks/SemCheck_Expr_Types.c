@@ -420,15 +420,10 @@ int semcheck_pointer_deref(int *type_return,
 
     if (pointer_type != POINTER_TYPE)
     {
-        /* Suppress cascading error when pointer expr already failed resolution */
-        if (pointer_type != UNKNOWN_TYPE)
-        {
-            semcheck_error_with_context("Error on line %d, dereference operator requires a pointer expression.\\n\\n",
-                expr->line_num);
-            ++error_count;
-        }
+        semcheck_error_with_context("Error on line %d, dereference operator requires a pointer expression.\\n\\n",
+            expr->line_num);
         *type_return = UNKNOWN_TYPE;
-        return error_count;
+        return ++error_count;
     }
 
     int target_type = pointer_expr->pointer_subtype;
@@ -1171,25 +1166,15 @@ int semcheck_recordaccess(int *type_return,
                 }
             }
             
-            /* Suppress cascading error when record expr already failed resolution */
-            if (record_type != UNKNOWN_TYPE)
-            {
-                semcheck_error_with_context("Error on line %d, field access requires a record value.\n\n", expr->line_num);
-                error_count++;
-            }
+            semcheck_error_with_context("Error on line %d, field access requires a record value.\n\n", expr->line_num);
             *type_return = UNKNOWN_TYPE;
-            return error_count;
+            return error_count + 1;
         }
         else
         {
-            /* Suppress cascading error when record expr already failed resolution */
-            if (record_type != UNKNOWN_TYPE)
-            {
-                semcheck_error_with_context("Error on line %d, field access requires a record value.\n\n", expr->line_num);
-                error_count++;
-            }
+            semcheck_error_with_context("Error on line %d, field access requires a record value.\n\n", expr->line_num);
             *type_return = UNKNOWN_TYPE;
-            return error_count;
+            return error_count + 1;
         }
     }
 
