@@ -8171,7 +8171,9 @@ void semcheck_add_builtins(SymTab_t *symtab)
             }
             DestroyList(p1);
         }
-        /* Finalize(var v): frees managed resources - accepts any type */
+        /* Finalize(var v): frees managed resources.
+         * POINTER_TYPE is used as a placeholder parameter type; actual type
+         * validation is bypassed in the builtin handler which accepts any type. */
         {
             ListNode_t *p1 = semcheck_create_builtin_param("v", POINTER_TYPE);
             KgpcType *proc_type = create_procedure_type(p1, NULL);
@@ -8182,7 +8184,9 @@ void semcheck_add_builtins(SymTab_t *symtab)
             }
             DestroyList(p1);
         }
-        /* Initialize(var v): initializes managed resources - accepts any type */
+        /* Initialize(var v): initializes managed resources.
+         * POINTER_TYPE is used as a placeholder parameter type; actual type
+         * validation is bypassed in the builtin handler which accepts any type. */
         {
             ListNode_t *p1 = semcheck_create_builtin_param("v", POINTER_TYPE);
             KgpcType *proc_type = create_procedure_type(p1, NULL);

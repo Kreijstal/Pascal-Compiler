@@ -1399,8 +1399,10 @@ int semcheck_varid(int *type_return,
                                         cprop->read_accessor);
                                     if (acc_scope >= 0 && accessor_node != NULL)
                                     {
+                                        char *new_id = strdup(cprop->read_accessor);
+                                        assert(new_id != NULL);
                                         free(expr->expr_data.id);
-                                        expr->expr_data.id = strdup(cprop->read_accessor);
+                                        expr->expr_data.id = new_id;
                                         id = expr->expr_data.id;
                                         hash_return = accessor_node;
                                         scope_return = acc_scope;
