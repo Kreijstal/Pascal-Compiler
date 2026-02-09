@@ -332,7 +332,8 @@ relop_fallback:
                     }
                 }
                 
-                if (!numeric_ok && !boolean_ok && !string_ok && !char_ok && !pointer_ok && !enum_ok && !string_pchar_ok && !dynarray_nil_ok)
+                if (!numeric_ok && !boolean_ok && !string_ok && !char_ok && !pointer_ok && !enum_ok && !string_pchar_ok && !dynarray_nil_ok
+                    && type_first != UNKNOWN_TYPE && type_second != UNKNOWN_TYPE)
                 {
                     semcheck_error_with_context("Error on line %d, equality comparison requires matching numeric, boolean, string, character, or pointer types!\n\n",
                         expr->line_num);
@@ -434,7 +435,8 @@ relop_fallback:
                     }
                 }
 
-                if(!numeric_ok && !string_ok && !char_ok && !pointer_ok && !enum_ok && !string_pchar_ok && !dynarray_nil_ok)
+                if(!numeric_ok && !string_ok && !char_ok && !pointer_ok && !enum_ok && !string_pchar_ok && !dynarray_nil_ok
+                    && type_first != UNKNOWN_TYPE && type_second != UNKNOWN_TYPE)
                 {
                     semcheck_error_with_context(
                         "Error on line %d, expected compatible numeric, string, or character types between relational op!\n\n",
@@ -517,19 +519,23 @@ int semcheck_addop(int *type_return,
                 *type_return = INT_TYPE;
             return return_val;
         }
-        semcheck_error_with_context("Error on line %d, expected boolean or integer operands for OR expression!\n\n",
-            expr->line_num);
-        if (getenv("KGPC_DEBUG_ANDOR") != NULL)
+        /* Suppress cascading errors when either operand is UNKNOWN_TYPE */
+        if (type_first != UNKNOWN_TYPE && type_second != UNKNOWN_TYPE)
         {
-            fprintf(stderr,
-                "[SemCheck] OR mismatch at line %d: lhs=%s(%d) rhs=%s(%d)\n",
-                expr->line_num,
-                semcheck_type_tag_name(type_first), type_first,
-                semcheck_type_tag_name(type_second), type_second);
-            semcheck_debug_expr_brief(expr1, "OR lhs");
-            semcheck_debug_expr_brief(expr2, "OR rhs");
+            semcheck_error_with_context("Error on line %d, expected boolean or integer operands for OR expression!\n\n",
+                expr->line_num);
+            if (getenv("KGPC_DEBUG_ANDOR") != NULL)
+            {
+                fprintf(stderr,
+                    "[SemCheck] OR mismatch at line %d: lhs=%s(%d) rhs=%s(%d)\n",
+                    expr->line_num,
+                    semcheck_type_tag_name(type_first), type_first,
+                    semcheck_type_tag_name(type_second), type_second);
+                semcheck_debug_expr_brief(expr1, "OR lhs");
+                semcheck_debug_expr_brief(expr2, "OR rhs");
+            }
+            ++return_val;
         }
-        ++return_val;
         *type_return = UNKNOWN_TYPE;
         return return_val;
     }
@@ -787,36 +793,41 @@ int semcheck_addop(int *type_return,
         expr->resolved_kgpc_type = create_primitive_type_with_size(INT64_TYPE, 8);
         return return_val;
     }
-    /* Checking numeric types */
-    if(!types_numeric_compatible(type_first, type_second))
+    /* Suppress cascading errors: if either operand is already UNKNOWN_TYPE,
+     * an error was already reported for it — don't pile on secondary diagnostics. */
+    if (type_first != UNKNOWN_TYPE && type_second != UNKNOWN_TYPE)
     {
-        semantic_error(expr->line_num, expr->col_num, "type mismatch on addop");
-        if (getenv("KGPC_DEBUG_ADDOP") != NULL)
+        /* Checking numeric types */
+        if(!types_numeric_compatible(type_first, type_second))
         {
-            fprintf(stderr,
-                "[SemCheck] addop mismatch at line %d: lhs=%s(%d) rhs=%s(%d)\n",
-                expr->line_num,
-                semcheck_type_tag_name(type_first), type_first,
-                semcheck_type_tag_name(type_second), type_second);
-            semcheck_debug_expr_brief(expr1, "ADD lhs");
-            semcheck_debug_expr_brief(expr2, "ADD rhs");
+            semantic_error(expr->line_num, expr->col_num, "type mismatch on addop");
+            if (getenv("KGPC_DEBUG_ADDOP") != NULL)
+            {
+                fprintf(stderr,
+                    "[SemCheck] addop mismatch at line %d: lhs=%s(%d) rhs=%s(%d)\n",
+                    expr->line_num,
+                    semcheck_type_tag_name(type_first), type_first,
+                    semcheck_type_tag_name(type_second), type_second);
+                semcheck_debug_expr_brief(expr1, "ADD lhs");
+                semcheck_debug_expr_brief(expr2, "ADD rhs");
+            }
+            ++return_val;
         }
-        ++return_val;
-    }
-    if(!is_type_ir(&type_first) || !is_type_ir(&type_second))
-    {
-        semantic_error(expr->line_num, expr->col_num, "expected int/real on both sides of addop");
-        if (getenv("KGPC_DEBUG_ADDOP") != NULL)
+        if(!is_type_ir(&type_first) || !is_type_ir(&type_second))
         {
-            fprintf(stderr,
-                "[SemCheck] addop non-numeric at line %d: lhs=%s(%d) rhs=%s(%d)\n",
-                expr->line_num,
-                semcheck_type_tag_name(type_first), type_first,
-                semcheck_type_tag_name(type_second), type_second);
-            semcheck_debug_expr_brief(expr1, "ADD lhs");
-            semcheck_debug_expr_brief(expr2, "ADD rhs");
+            semantic_error(expr->line_num, expr->col_num, "expected int/real on both sides of addop");
+            if (getenv("KGPC_DEBUG_ADDOP") != NULL)
+            {
+                fprintf(stderr,
+                    "[SemCheck] addop non-numeric at line %d: lhs=%s(%d) rhs=%s(%d)\n",
+                    expr->line_num,
+                    semcheck_type_tag_name(type_first), type_first,
+                    semcheck_type_tag_name(type_second), type_second);
+                semcheck_debug_expr_brief(expr1, "ADD lhs");
+                semcheck_debug_expr_brief(expr2, "ADD rhs");
+            }
+            ++return_val;
         }
-        ++return_val;
     }
 
     if (type_first == REAL_TYPE || type_second == REAL_TYPE)
@@ -883,21 +894,24 @@ int semcheck_mulop(int *type_return,
             return return_val;
         }
         
-        /* Invalid operand types for AND/XOR */
-        semcheck_error_with_context("Error on line %d, expected boolean, integer, or set operands for %s expression!\n\n",
-            expr->line_num, op_type == AND ? "AND" : "XOR");
-        if (getenv("KGPC_DEBUG_ANDOR") != NULL)
+        /* Invalid operand types for AND/XOR - suppress when either is UNKNOWN_TYPE */
+        if (type_first != UNKNOWN_TYPE && type_second != UNKNOWN_TYPE)
         {
-            fprintf(stderr,
-                "[SemCheck] %s mismatch at line %d: lhs=%s(%d) rhs=%s(%d)\n",
-                op_type == AND ? "AND" : "XOR",
-                expr->line_num,
-                semcheck_type_tag_name(type_first), type_first,
-                semcheck_type_tag_name(type_second), type_second);
-            semcheck_debug_expr_brief(expr1, "AND lhs");
-            semcheck_debug_expr_brief(expr2, "AND rhs");
+            semcheck_error_with_context("Error on line %d, expected boolean, integer, or set operands for %s expression!\n\n",
+                expr->line_num, op_type == AND ? "AND" : "XOR");
+            if (getenv("KGPC_DEBUG_ANDOR") != NULL)
+            {
+                fprintf(stderr,
+                    "[SemCheck] %s mismatch at line %d: lhs=%s(%d) rhs=%s(%d)\n",
+                    op_type == AND ? "AND" : "XOR",
+                    expr->line_num,
+                    semcheck_type_tag_name(type_first), type_first,
+                    semcheck_type_tag_name(type_second), type_second);
+                semcheck_debug_expr_brief(expr1, "AND lhs");
+                semcheck_debug_expr_brief(expr2, "AND rhs");
+            }
+            ++return_val;
         }
-        ++return_val;
         *type_return = UNKNOWN_TYPE;
         return return_val;
     }
@@ -1021,18 +1035,22 @@ int semcheck_mulop(int *type_return,
         }
     }
 
-    /* Checking numeric types */
-    if(!types_numeric_compatible(type_first, type_second))
+    /* Suppress cascading errors when either operand is UNKNOWN_TYPE */
+    if (type_first != UNKNOWN_TYPE && type_second != UNKNOWN_TYPE)
     {
-        semcheck_error_with_context("Error on line %d, type mismatch on mulop!\n\n",
-            expr->line_num);
-        ++return_val;
-    }
-    if(!is_type_ir(&type_first) || !is_type_ir(&type_second))
-    {
-        semcheck_error_with_context("Error on line %d, expected int/real on both sides of mulop!\n\n",
-            expr->line_num);
-        ++return_val;
+        /* Checking numeric types */
+        if(!types_numeric_compatible(type_first, type_second))
+        {
+            semcheck_error_with_context("Error on line %d, type mismatch on mulop!\n\n",
+                expr->line_num);
+            ++return_val;
+        }
+        if(!is_type_ir(&type_first) || !is_type_ir(&type_second))
+        {
+            semcheck_error_with_context("Error on line %d, expected int/real on both sides of mulop!\n\n",
+                expr->line_num);
+            ++return_val;
+        }
     }
 
     /* Handle DIV and MOD operators - integer division only */
