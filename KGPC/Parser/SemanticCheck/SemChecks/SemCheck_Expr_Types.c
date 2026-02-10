@@ -614,11 +614,9 @@ int semcheck_pointer_deref(int *type_return,
             }
             else
             {
-                /* Fall back to size-based inference for primitive types */
-                int tag = semcheck_tag_from_kgpc(points_to);
-                if (tag != UNKNOWN_TYPE)
-                    target_type = tag;
-                else
+                /* Fall back to tag-based then size-based inference for primitive types */
+                target_type = semcheck_tag_from_kgpc(points_to);
+                if (target_type == UNKNOWN_TYPE)
                 {
                     long long inferred_size = kgpc_type_sizeof(points_to);
                     if (inferred_size == 1)
