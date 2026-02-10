@@ -6183,8 +6183,13 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
              * gencode_jmp(NE, inverse=0, ...) emits jne label (jump if not-equal-to-zero = true). */
             inst_list = gencode_jmp(relop_type, 0, pass_label, inst_list);
 
-            /* Failure path: call kgpc_assert_failed(msg, "", line) */
-            /* Set up message argument in %rdi */
+            /* Failure path: call kgpc_assert_failed(msg, filename, line)
+             * ABI: Windows uses rcx/rdx/r8, SysV uses rdi/rsi/rdx */
+            const char *arg1_reg = codegen_target_is_windows() ? "%rcx" : "%rdi";
+            const char *arg2_reg = codegen_target_is_windows() ? "%rdx" : "%rsi";
+            const char *arg3_reg_32 = codegen_target_is_windows() ? "%r8d" : "%edx";
+
+            /* Set up message argument (arg1) */
             if (msg_expr != NULL && msg_expr->type == EXPR_STRING && msg_expr->expr_data.string != NULL)
             {
                 const char *readonly_section = codegen_readonly_section_directive();
@@ -6196,7 +6201,7 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
                 snprintf(rodata_buf, sizeof(rodata_buf), "%s\n%s:\n\t.string \"%s\"\n\t.text\n",
                          readonly_section, msg_label, escaped_msg);
                 inst_list = add_inst(inst_list, rodata_buf);
-                snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %%rdi\n", msg_label);
+                snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", msg_label, arg1_reg);
                 inst_list = add_inst(inst_list, buffer);
             }
             else
@@ -6209,10 +6214,10 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
                 snprintf(rodata_buf, sizeof(rodata_buf), "%s\n%s:\n\t.string \"\"\n\t.text\n",
                          readonly_section, msg_label);
                 inst_list = add_inst(inst_list, rodata_buf);
-                snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %%rdi\n", msg_label);
+                snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", msg_label, arg1_reg);
                 inst_list = add_inst(inst_list, buffer);
             }
-            /* filename argument in %rsi (empty for now) */
+            /* filename argument (arg2) - empty for now */
             {
                 const char *readonly_section = codegen_readonly_section_directive();
                 char fn_label[64];
@@ -6221,15 +6226,15 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
                 snprintf(rodata_buf, sizeof(rodata_buf), "%s\n%s:\n\t.string \"\"\n\t.text\n",
                          readonly_section, fn_label);
                 inst_list = add_inst(inst_list, rodata_buf);
-                snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %%rsi\n", fn_label);
+                snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", fn_label, arg2_reg);
                 inst_list = add_inst(inst_list, buffer);
             }
-            /* line number argument in %edx */
-            snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%edx\n", stmt->line_num);
+            /* line number argument (arg3) */
+            snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %s\n", stmt->line_num, arg3_reg_32);
             inst_list = add_inst(inst_list, buffer);
-            /* Zero %eax (no vector regs) and call */
+            /* Zero %eax (no vector regs) and call with shadow space */
             inst_list = add_inst(inst_list, "\txorl\t%eax, %eax\n");
-            inst_list = add_inst(inst_list, "\tcall\tkgpc_assert_failed\n");
+            inst_list = codegen_call_with_shadow_space(inst_list, ctx, "kgpc_assert_failed");
 
             /* Emit pass label */
             snprintf(buffer, sizeof(buffer), "%s:\n", pass_label);
