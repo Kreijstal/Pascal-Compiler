@@ -61,6 +61,13 @@ int semcheck_relop(int *type_return,
 
     /* Verifying types */
 
+    /* Suppress cascading errors when either operand is UNKNOWN_TYPE */
+    if (type_first == UNKNOWN_TYPE || (expr2 != NULL && type_second == UNKNOWN_TYPE))
+    {
+        *type_return = UNKNOWN_TYPE;
+        return return_val;
+    }
+
     /* Type must be a bool (this only happens with a NOT operator) */
     if (expr2 == NULL)
     {
@@ -467,6 +474,11 @@ int semcheck_signterm(int *type_return,
     *type_return = semcheck_tag_from_kgpc(sign_kgpc_type);
 
     /* Checking types */
+    if (*type_return == UNKNOWN_TYPE)
+    {
+        /* Already errored upstream – propagate silently */
+        return return_val;
+    }
     if(!is_type_ir(type_return))
     {
         semcheck_error_with_context("Error on line %d, expected int or real after \"-\"!\n\n",
@@ -500,6 +512,17 @@ int semcheck_addop(int *type_return,
     type_second = semcheck_tag_from_kgpc(kgpc_type_second);
 
     int op_type = expr->expr_data.addop_data.addop_type;
+
+    /* Suppress cascading errors: if either operand already resolved to
+       UNKNOWN_TYPE the real error was reported at the source.  Propagate
+       UNKNOWN_TYPE silently so every downstream operator does not emit
+       a redundant diagnostic. */
+    if (type_first == UNKNOWN_TYPE || type_second == UNKNOWN_TYPE)
+    {
+        *type_return = UNKNOWN_TYPE;
+        return return_val;
+    }
+
     if (op_type == OR)
     {
         if (type_first == BOOL && type_second == BOOL)
@@ -851,6 +874,13 @@ int semcheck_mulop(int *type_return,
     type_second = semcheck_tag_from_kgpc(kgpc_type_second);
 
     int op_type = expr->expr_data.mulop_data.mulop_type;
+
+    /* Suppress cascading errors when either operand is UNKNOWN_TYPE */
+    if (type_first == UNKNOWN_TYPE || type_second == UNKNOWN_TYPE)
+    {
+        *type_return = UNKNOWN_TYPE;
+        return return_val;
+    }
     
     /* Handle AND and XOR operators */
     if (op_type == AND || op_type == XOR)

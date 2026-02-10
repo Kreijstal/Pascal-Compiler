@@ -1531,7 +1531,7 @@ static int semcheck_builtin_val(SymTab_t *symtab, struct Statement *stmt, int ma
     struct Expression *source_expr = (struct Expression *)args->cur;
     int source_type = UNKNOWN_TYPE;
     error_count += semcheck_stmt_expr_tag(&source_type, symtab, source_expr, max_scope_lev, NO_MUTATE);
-    if (source_type != STRING_TYPE)
+    if (source_type != STRING_TYPE && source_type != UNKNOWN_TYPE)
     {
         semcheck_error_with_context("Error on line %d, Val expects its first argument to be a string.\n",
             stmt->line_num);
@@ -1590,7 +1590,7 @@ static int semcheck_builtin_inc(SymTab_t *symtab, struct Statement *stmt, int ma
         struct Expression *value_expr = (struct Expression *)args->next->cur;
         int value_type = UNKNOWN_TYPE;
         return_val += semcheck_stmt_expr_tag(&value_type, symtab, value_expr, max_scope_lev, NO_MUTATE);
-        if (!is_integer_type(value_type))
+        if (!is_integer_type(value_type) && value_type != UNKNOWN_TYPE)
         {
             semcheck_error_with_context("Error on line %d, Inc increment must be an integer.\n", stmt->line_num);
             ++return_val;
@@ -3329,6 +3329,14 @@ assignment_types_ok:
     if (!handled_by_kgpctype)
     {
         int coerced_rhs_type = type_second;
+
+        /* Suppress cascading errors when either side is UNKNOWN_TYPE */
+        if (type_first == UNKNOWN_TYPE || type_second == UNKNOWN_TYPE)
+        {
+            /* Already errored upstream – skip assignment type check */
+            goto assign_skip_type_check;
+        }
+
         int types_compatible = (type_first == type_second);
         
         /* Reject assignment of scalar to array or vice versa */
@@ -3451,6 +3459,7 @@ assignment_types_ok:
             type_second = coerced_rhs_type;
         }
     }
+assign_skip_type_check:
 
     int property_result = semcheck_try_property_assignment(symtab, stmt, max_scope_lev);
     if (property_result >= 0)
@@ -5328,7 +5337,7 @@ int semcheck_ifthen(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 
     return_val += semcheck_stmt_expr_tag(&if_type, symtab, relop_expr, INT_MAX, NO_MUTATE);
 
-    if(if_type != BOOL)
+    if(if_type != BOOL && if_type != UNKNOWN_TYPE)
     {
         semcheck_error_with_context("Error on line %d, expected relational inside if statement!\n\n",
                 stmt->line_num);
@@ -5359,7 +5368,7 @@ int semcheck_while(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
     while_stmt = stmt->stmt_data.while_data.while_stmt;
 
     return_val += semcheck_stmt_expr_tag(&while_type, symtab, relop_expr, INT_MAX, NO_MUTATE);
-    if(while_type != BOOL)
+    if(while_type != BOOL && while_type != UNKNOWN_TYPE)
     {
         semcheck_error_with_context("Error on line %d, expected relational inside while statement!\n\n",
                 stmt->line_num);
@@ -5396,7 +5405,7 @@ int semcheck_repeat(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
     semcheck_loop_depth--;
 
     return_val += semcheck_stmt_expr_tag(&until_type, symtab, stmt->stmt_data.repeat_data.until_expr, INT_MAX, NO_MUTATE);
-    if (until_type != BOOL)
+    if (until_type != BOOL && until_type != UNKNOWN_TYPE)
     {
         semcheck_error_with_context("Error on line %d, expected relational inside repeat statement!\n\n",
             stmt->line_num);
