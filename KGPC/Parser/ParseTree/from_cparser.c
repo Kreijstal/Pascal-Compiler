@@ -5396,7 +5396,9 @@ static void convert_record_members(ast_t *node, ListBuilder *builder, ListBuilde
             list_builder_extend(builder, tag_fields);
             if (variant != NULL)
                 list_builder_append(builder, variant, LIST_VARIANT_PART);
-        } else if (cur->typ == PASCAL_T_METHOD_DECL) {
+        } else if (cur->typ == PASCAL_T_METHOD_DECL ||
+                   cur->typ == PASCAL_T_CONSTRUCTOR_DECL ||
+                   cur->typ == PASCAL_T_DESTRUCTOR_DECL) {
             /* Store method declaration as a special marker node for operator overloading */
             /* We'll handle this during semantic check when we know the record type name */
             list_builder_append(builder, cur, LIST_UNSPECIFIED);
@@ -5404,6 +5406,18 @@ static void convert_record_members(ast_t *node, ListBuilder *builder, ListBuilde
             struct ClassProperty *property = convert_property_decl(cur);
             if (property != NULL)
                 list_builder_append(property_builder, property, LIST_CLASS_PROPERTY);
+        } else if (cur->typ == PASCAL_T_VAR_SECTION) {
+            /* Handle var / class var / class threadvar sections inside objects.
+             * The VAR_SECTION wraps keyword nodes and FIELD_DECL children. */
+            for (ast_t *child = cur->child; child != NULL; child = child->next) {
+                if (child->typ == PASCAL_T_FIELD_DECL) {
+                    ListNode_t *fields = convert_field_decl(child);
+                    list_builder_extend(builder, fields);
+                }
+            }
+        } else if (cur->typ == PASCAL_T_CLASS_MEMBER) {
+            /* Recurse into CLASS_MEMBER wrappers (e.g. from visibility sections) */
+            convert_record_members(cur->child, builder, property_builder);
         }
     }
 }
@@ -7377,7 +7391,9 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
             if (field_cur->type == LIST_UNSPECIFIED) {
                 /* This is a method AST node stored during convert_record_members */
                 ast_t *method_ast = (ast_t *)field_cur->cur;
-                if (method_ast != NULL && method_ast->typ == PASCAL_T_METHOD_DECL) {
+                if (method_ast != NULL && (method_ast->typ == PASCAL_T_METHOD_DECL ||
+                    method_ast->typ == PASCAL_T_CONSTRUCTOR_DECL ||
+                    method_ast->typ == PASCAL_T_DESTRUCTOR_DECL)) {
                     struct MethodTemplate *template = create_method_template(method_ast);
                     if (template != NULL) {
                         register_class_method_ex(id, template->name,
@@ -7837,17 +7853,18 @@ static ast_t *find_class_spec(ast_t *type_decl_node)
     ast_t *spec_node = id_node->next;
     while (spec_node != NULL &&
            spec_node->typ != PASCAL_T_TYPE_SPEC &&
-           spec_node->typ != PASCAL_T_CLASS_TYPE)
+           spec_node->typ != PASCAL_T_CLASS_TYPE &&
+           spec_node->typ != PASCAL_T_OBJECT_TYPE)
     {
         spec_node = spec_node->next;
     }
     if (spec_node == NULL)
         return NULL;
 
-    if (spec_node->typ == PASCAL_T_CLASS_TYPE)
+    if (spec_node->typ == PASCAL_T_CLASS_TYPE || spec_node->typ == PASCAL_T_OBJECT_TYPE)
         return spec_node;
     if (spec_node->typ == PASCAL_T_TYPE_SPEC && spec_node->child != NULL &&
-        spec_node->child->typ == PASCAL_T_CLASS_TYPE)
+        (spec_node->child->typ == PASCAL_T_CLASS_TYPE || spec_node->child->typ == PASCAL_T_OBJECT_TYPE))
         return spec_node->child;
 
     return NULL;

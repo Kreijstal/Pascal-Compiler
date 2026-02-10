@@ -1294,11 +1294,7 @@ static void add_class_vars_to_method_scope(SymTab_t *symtab, const char *method_
 
     /* Only add class fields for static methods. Non-static methods
      * access fields via Self which is handled differently. */
-    if (!from_cparser_is_method_static(class_name, method_name))
-    {
-        free(class_name);
-        return;
-    }
+    int is_static = from_cparser_is_method_static(class_name, method_name);
 
     /* Look up the class type */
     HashNode_t *class_node = NULL;
@@ -1323,17 +1319,17 @@ static void add_class_vars_to_method_scope(SymTab_t *symtab, const char *method_
         return;
     }
 
-    /* Process class types and advanced records (records with class vars/properties).
-     * Advanced records may use record_properties instead of properties. */
-    if (!record_type_is_class(record_info) && record_info->record_properties == NULL)
+    /* For class types (not objects), non-static methods access fields via Self.
+     * For object types, class vars and consts are NOT accessible via Self,
+     * so we must always push them into scope. */
+    int is_object_type = !record_type_is_class(record_info) && !record_info->is_type_helper;
+    if (!is_static && !is_object_type)
     {
         free(class_name);
         return;
     }
 
-    /* Add class vars from the record fields to the current scope.
-     * Class vars are stored in the record's fields list.
-     * For class types, all fields are accessible in methods. */
+    /* Process class types, object types, and advanced records that have fields. */
     ListNode_t *field_node = record_info->fields;
     while (field_node != NULL)
     {
