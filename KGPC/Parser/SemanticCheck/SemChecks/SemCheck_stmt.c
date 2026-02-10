@@ -1686,6 +1686,37 @@ static int semcheck_builtin_finalize(SymTab_t *symtab, struct Statement *stmt, i
     return semcheck_builtin_initialize_finalize(symtab, stmt, max_scope_lev, "Finalize");
 }
 
+static int semcheck_builtin_assert(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    int return_val = 0;
+    if (stmt == NULL)
+        return 0;
+
+    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+    int arg_count = ListLength(args);
+    if (arg_count < 1 || arg_count > 2)
+    {
+        semcheck_error_with_context("Error on line %d, Assert expects 1 or 2 arguments.\n",
+            stmt->line_num);
+        return 1;
+    }
+
+    /* First argument: boolean condition */
+    struct Expression *cond_expr = (struct Expression *)args->cur;
+    int cond_type = UNKNOWN_TYPE;
+    return_val += semcheck_stmt_expr_tag(&cond_type, symtab, cond_expr, max_scope_lev, NO_MUTATE);
+
+    /* Second argument (optional): string message */
+    if (args->next != NULL)
+    {
+        struct Expression *msg_expr = (struct Expression *)args->next->cur;
+        int msg_type = UNKNOWN_TYPE;
+        return_val += semcheck_stmt_expr_tag(&msg_type, symtab, msg_expr, max_scope_lev, NO_MUTATE);
+    }
+
+    return return_val;
+}
+
 static int semcheck_builtin_write_like(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
     int return_val = 0;
@@ -3971,6 +4002,12 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     handled_builtin = 0;
     return_val += try_resolve_builtin_procedure(symtab, stmt, "Finalize",
         semcheck_builtin_finalize, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
+
+    handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "Assert",
+        semcheck_builtin_assert, max_scope_lev, &handled_builtin);
     if (handled_builtin)
         return return_val;
 

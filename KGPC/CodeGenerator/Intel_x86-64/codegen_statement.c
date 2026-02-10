@@ -6158,6 +6158,17 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
         return inst_list;
     }
 
+    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "Assert"))
+    {
+        /* Assert is a compiler intrinsic - in release/no-stdlib mode, emit nothing.
+         * A full implementation would emit a conditional branch to an assertion
+         * failure handler, but for now this unblocks compilation. */
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s (Assert no-op)\n", __func__);
+        #endif
+        return inst_list;
+    }
+
     const char *proc_name_hint = stmt->stmt_data.procedure_call_data.id;
     if (proc_name_hint == NULL)
         proc_name_hint = stmt->stmt_data.procedure_call_data.mangled_id;
