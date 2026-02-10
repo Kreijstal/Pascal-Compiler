@@ -2007,6 +2007,42 @@ resolved:;
                 kgpc_type_is_pointer(hash_return->type))
             {
                 subtype = kgpc_type_get_pointer_subtype_tag(hash_return->type);
+                /* Also try to get the type_id from the KgpcType's points_to info */
+                if (type_id == NULL)
+                {
+                    KgpcType *pts = hash_return->type->info.points_to;
+                    if (pts != NULL && pts->type_alias != NULL && pts->type_alias->alias_name != NULL)
+                        type_id = pts->type_alias->alias_name;
+                }
+            }
+
+            /* If the variable's own type has an alias_name (e.g. "PMyRec"),
+             * look up the corresponding type node to get pointer target info */
+            if (subtype == UNKNOWN_TYPE && alias != NULL && alias->alias_name != NULL)
+            {
+                HashNode_t *type_node = NULL;
+                if (FindIdent(&type_node, symtab, alias->alias_name) != -1 &&
+                    type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+                {
+                    struct TypeAlias *type_alias = get_type_alias_from_node(type_node);
+                    if (type_alias != NULL && type_alias->is_pointer)
+                    {
+                        subtype = type_alias->pointer_type;
+                        type_id = type_alias->pointer_type_id;
+                    }
+                    /* Also check the type node's KgpcType for resolved pointer info */
+                    if (subtype == UNKNOWN_TYPE && type_node->type != NULL &&
+                        kgpc_type_is_pointer(type_node->type))
+                    {
+                        subtype = kgpc_type_get_pointer_subtype_tag(type_node->type);
+                        if (type_id == NULL)
+                        {
+                            KgpcType *pts = type_node->type->info.points_to;
+                            if (pts != NULL && pts->type_alias != NULL && pts->type_alias->alias_name != NULL)
+                                type_id = pts->type_alias->alias_name;
+                        }
+                    }
+                }
             }
             
             if (subtype == UNKNOWN_TYPE && type_id != NULL)

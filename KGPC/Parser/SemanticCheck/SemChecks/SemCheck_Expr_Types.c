@@ -598,15 +598,39 @@ int semcheck_pointer_deref(int *type_return,
         KgpcType *points_to = pointer_expr->resolved_kgpc_type->info.points_to;
         if (points_to != NULL)
         {
-            long long inferred_size = kgpc_type_sizeof(points_to);
-            if (inferred_size == 1)
-                target_type = CHAR_TYPE;
-            else if (inferred_size == 2)
-                target_type = INT_TYPE;
-            else if (inferred_size > 0 && inferred_size <= 4)
-                target_type = INT_TYPE;
-            else if (inferred_size > 0)
-                target_type = LONGINT_TYPE;
+            /* Check the actual kind of the pointed-to type first */
+            if (kgpc_type_is_record(points_to))
+            {
+                target_type = RECORD_TYPE;
+                expr->record_type = kgpc_type_get_record(points_to);
+            }
+            else if (points_to->kind == TYPE_KIND_POINTER)
+            {
+                target_type = POINTER_TYPE;
+            }
+            else if (points_to->kind == TYPE_KIND_ARRAY)
+            {
+                target_type = semcheck_tag_from_kgpc(points_to);
+            }
+            else
+            {
+                /* Fall back to size-based inference for primitive types */
+                int tag = semcheck_tag_from_kgpc(points_to);
+                if (tag != UNKNOWN_TYPE)
+                    target_type = tag;
+                else
+                {
+                    long long inferred_size = kgpc_type_sizeof(points_to);
+                    if (inferred_size == 1)
+                        target_type = CHAR_TYPE;
+                    else if (inferred_size == 2)
+                        target_type = INT_TYPE;
+                    else if (inferred_size > 0 && inferred_size <= 4)
+                        target_type = INT_TYPE;
+                    else if (inferred_size > 0)
+                        target_type = LONGINT_TYPE;
+                }
+            }
         }
     }
 
@@ -617,7 +641,9 @@ int semcheck_pointer_deref(int *type_return,
         semcheck_set_pointer_info(expr, POINTER_TYPE, pointer_expr->pointer_subtype_id);
     else if (target_type == RECORD_TYPE)
     {
-        expr->record_type = pointer_expr->record_type;
+        /* Prefer record_type already set from KgpcType resolution above */
+        if (expr->record_type == NULL)
+            expr->record_type = pointer_expr->record_type;
         if (expr->record_type == NULL && pointer_expr->pointer_subtype_id != NULL)
         {
             HashNode_t *target_node = NULL;
@@ -642,6 +668,19 @@ int semcheck_pointer_deref(int *type_return,
     /* Set the expression's resolved type to the pointed-to type.
      * This is critical for code generation to emit correct-sized loads. */
     semcheck_expr_set_resolved_type(expr, target_type);
+
+    /* Propagate KgpcType from the pointer's target for downstream resolution */
+    if (target_type == RECORD_TYPE && pointer_expr->resolved_kgpc_type != NULL &&
+        pointer_expr->resolved_kgpc_type->kind == TYPE_KIND_POINTER)
+    {
+        KgpcType *points_to = pointer_expr->resolved_kgpc_type->info.points_to;
+        if (points_to != NULL && kgpc_type_is_record(points_to))
+        {
+            kgpc_type_retain(points_to);
+            semcheck_expr_set_resolved_kgpc_type_shared(expr, points_to);
+        }
+    }
+
     *type_return = target_type;
     return error_count;
 }
