@@ -1236,6 +1236,10 @@ static void rewrite_method_impl_ast(ast_t *method_ast, struct RecordType *record
 
 static Tree_t *convert_method_impl(ast_t *method_node);
 
+static Tree_t *convert_procedure(ast_t *proc_node);
+static Tree_t *convert_function(ast_t *func_node);
+static Tree_t *convert_method_impl(ast_t *method_node);
+
 static Tree_t *instantiate_method_template(struct MethodTemplate *method_template, struct RecordType *record)
 {
     if (method_template == NULL || method_template->method_impl_ast == NULL || record == NULL)
@@ -1266,9 +1270,513 @@ static void append_subprogram_node(ListNode_t **dest, Tree_t *tree)
     *tail = node;
 }
 
-static Tree_t *convert_procedure(ast_t *proc_node);
-static Tree_t *convert_function(ast_t *func_node);
-static Tree_t *convert_method_impl(ast_t *method_node);
+static int subprogram_list_has_id(const ListNode_t *subprograms, const char *id)
+{
+    if (subprograms == NULL || id == NULL)
+        return 0;
+
+    const ListNode_t *cur = subprograms;
+    while (cur != NULL)
+    {
+        if (cur->type == LIST_TREE && cur->cur != NULL)
+        {
+            const Tree_t *tree = (const Tree_t *)cur->cur;
+            if (tree->type == TREE_SUBPROGRAM &&
+                tree->tree_data.subprogram_data.id != NULL &&
+                strcasecmp(tree->tree_data.subprogram_data.id, id) == 0)
+            {
+                return 1;
+            }
+        }
+        cur = cur->next;
+    }
+    return 0;
+}
+
+static int parse_generic_mangled_id(const char *mangled, char **base_out,
+    char ***args_out, int *argc_out)
+{
+    if (mangled == NULL || base_out == NULL || args_out == NULL || argc_out == NULL)
+        return 0;
+
+    const char *dollar = strchr(mangled, '$');
+    if (dollar == NULL || dollar == mangled || dollar[1] == '\0')
+        return 0;
+
+    size_t base_len = (size_t)(dollar - mangled);
+    char *base = (char *)malloc(base_len + 1);
+    if (base == NULL)
+        return 0;
+    memcpy(base, mangled, base_len);
+    base[base_len] = '\0';
+
+    int count = 0;
+    for (const char *p = dollar; p != NULL; p = strchr(p + 1, '$'))
+        count++;
+    if (count <= 0)
+    {
+        free(base);
+        return 0;
+    }
+
+    char **args = (char **)calloc((size_t)count, sizeof(char *));
+    if (args == NULL)
+    {
+        free(base);
+        return 0;
+    }
+
+    int idx = 0;
+    const char *seg = dollar + 1;
+    while (seg != NULL && idx < count)
+    {
+        const char *next = strchr(seg, '$');
+        size_t seg_len = next ? (size_t)(next - seg) : strlen(seg);
+        args[idx] = (char *)malloc(seg_len + 1);
+        if (args[idx] == NULL)
+            break;
+        memcpy(args[idx], seg, seg_len);
+        args[idx][seg_len] = '\0';
+        idx++;
+        if (next == NULL)
+            break;
+        seg = next + 1;
+    }
+
+    if (idx != count)
+    {
+        for (int i = 0; i < count; ++i)
+            free(args[i]);
+        free(args);
+        free(base);
+        return 0;
+    }
+
+    *base_out = base;
+    *args_out = args;
+    *argc_out = count;
+    return 1;
+}
+
+static void substitute_generic_identifiers(ast_t *node, char **params, char **args, int count)
+{
+    if (node == NULL || params == NULL || args == NULL || count <= 0)
+        return;
+
+    ast_t *cursor = node;
+    while (cursor != NULL)
+    {
+        if (cursor->sym != NULL && cursor->sym->name != NULL)
+        {
+            for (int i = 0; i < count; ++i)
+            {
+                if (params[i] != NULL && args[i] != NULL &&
+                    strcasecmp(cursor->sym->name, params[i]) == 0)
+                {
+                    free(cursor->sym->name);
+                    cursor->sym->name = strdup(args[i]);
+                    break;
+                }
+            }
+        }
+        if (cursor->child != NULL)
+            substitute_generic_identifiers(cursor->child, params, args, count);
+        cursor = cursor->next;
+    }
+}
+
+static void rewrite_generic_subprogram_ast(ast_t *subprogram_ast, const char *specialized_name,
+    char **params, char **args, int count)
+{
+    if (subprogram_ast == NULL || specialized_name == NULL)
+        return;
+
+    ast_t *cursor = subprogram_ast->child;
+    while (cursor != NULL && cursor->typ != PASCAL_T_IDENTIFIER)
+        cursor = cursor->next;
+    if (cursor != NULL && cursor->sym != NULL)
+    {
+        free(cursor->sym->name);
+        cursor->sym->name = strdup(specialized_name);
+    }
+
+    substitute_generic_identifiers(subprogram_ast, params, args, count);
+}
+
+static Tree_t *instantiate_generic_subprogram(Tree_t *template,
+    char **arg_types, int arg_count, const char *specialized_name)
+{
+    if (template == NULL || arg_types == NULL || arg_count <= 0 ||
+        template->tree_data.subprogram_data.generic_template_ast == NULL)
+        return NULL;
+
+    ast_t *ast_copy = copy_ast(template->tree_data.subprogram_data.generic_template_ast);
+    if (ast_copy == NULL)
+        return NULL;
+
+    rewrite_generic_subprogram_ast(ast_copy, specialized_name,
+        template->tree_data.subprogram_data.generic_type_params, arg_types, arg_count);
+
+    Tree_t *result = NULL;
+    if (template->type == TREE_SUBPROGRAM &&
+        template->tree_data.subprogram_data.sub_type == TREE_SUBPROGRAM_PROC)
+        result = convert_procedure(ast_copy);
+    else if (template->type == TREE_SUBPROGRAM &&
+        template->tree_data.subprogram_data.sub_type == TREE_SUBPROGRAM_FUNC)
+        result = convert_function(ast_copy);
+
+    free_ast(ast_copy);
+
+    if (result != NULL && result->tree_data.subprogram_data.generic_type_params != NULL)
+    {
+        for (int i = 0; i < result->tree_data.subprogram_data.num_generic_type_params; i++)
+            free(result->tree_data.subprogram_data.generic_type_params[i]);
+        free(result->tree_data.subprogram_data.generic_type_params);
+        result->tree_data.subprogram_data.generic_type_params = NULL;
+        result->tree_data.subprogram_data.num_generic_type_params = 0;
+    }
+
+    return result;
+}
+
+static void collect_specialize_from_expr(struct Expression *expr, Tree_t *program_tree)
+{
+    if (expr == NULL || program_tree == NULL)
+        return;
+
+    switch (expr->type)
+    {
+        case EXPR_TYPECAST:
+        {
+            const char *target_id = expr->expr_data.typecast_data.target_type_id;
+            char *base = NULL;
+            char **args = NULL;
+            int argc = 0;
+            if (target_id != NULL &&
+                parse_generic_mangled_id(target_id, &base, &args, &argc))
+            {
+                if (getenv("KGPC_DEBUG_GENERIC_SUBPROGRAM") != NULL)
+                    fprintf(stderr, "[KGPC] specialize expr target=%s base=%s argc=%d\n",
+                        target_id, base ? base : "<null>", argc);
+                ListNode_t *cur = program_tree->tree_data.program_data.subprograms;
+                while (cur != NULL)
+                {
+                    if (cur->type == LIST_TREE && cur->cur != NULL)
+                    {
+                        Tree_t *sub = (Tree_t *)cur->cur;
+                        if (sub->type == TREE_SUBPROGRAM &&
+                            sub->tree_data.subprogram_data.id != NULL &&
+                            sub->tree_data.subprogram_data.num_generic_type_params == argc &&
+                            strcasecmp(sub->tree_data.subprogram_data.id, base) == 0)
+                        {
+                            if (getenv("KGPC_DEBUG_GENERIC_SUBPROGRAM") != NULL)
+                                fprintf(stderr, "[KGPC] generic template match %s\n",
+                                    sub->tree_data.subprogram_data.id);
+                            if (!subprogram_list_has_id(program_tree->tree_data.program_data.subprograms, target_id))
+                            {
+                                Tree_t *specialized = instantiate_generic_subprogram(
+                                    sub, args, argc, target_id);
+                                if (specialized != NULL)
+                                    append_subprogram_node(&program_tree->tree_data.program_data.subprograms,
+                                        specialized);
+                            }
+                            break;
+                        }
+                    }
+                    cur = cur->next;
+                }
+            }
+            if (args != NULL)
+            {
+                for (int i = 0; i < argc; ++i)
+                    free(args[i]);
+                free(args);
+            }
+            if (base != NULL)
+                free(base);
+            collect_specialize_from_expr(expr->expr_data.typecast_data.expr, program_tree);
+            break;
+        }
+        case EXPR_FUNCTION_CALL:
+        {
+            const char *call_id = expr->expr_data.function_call_data.id;
+            char *base = NULL;
+            char **args = NULL;
+            int argc = 0;
+            if (call_id != NULL &&
+                parse_generic_mangled_id(call_id, &base, &args, &argc))
+            {
+                ListNode_t *cur = program_tree->tree_data.program_data.subprograms;
+                while (cur != NULL)
+                {
+                    if (cur->type == LIST_TREE && cur->cur != NULL)
+                    {
+                        Tree_t *sub = (Tree_t *)cur->cur;
+                        if (sub->type == TREE_SUBPROGRAM &&
+                            sub->tree_data.subprogram_data.id != NULL &&
+                            sub->tree_data.subprogram_data.num_generic_type_params == argc &&
+                            strcasecmp(sub->tree_data.subprogram_data.id, base) == 0)
+                        {
+                            if (!subprogram_list_has_id(program_tree->tree_data.program_data.subprograms, call_id))
+                            {
+                                Tree_t *specialized = instantiate_generic_subprogram(
+                                    sub, args, argc, call_id);
+                                if (specialized != NULL)
+                                    append_subprogram_node(&program_tree->tree_data.program_data.subprograms,
+                                        specialized);
+                            }
+                            break;
+                        }
+                    }
+                    cur = cur->next;
+                }
+            }
+            if (args != NULL)
+            {
+                for (int i = 0; i < argc; ++i)
+                    free(args[i]);
+                free(args);
+            }
+            if (base != NULL)
+                free(base);
+
+            ListNode_t *arg = expr->expr_data.function_call_data.args_expr;
+            while (arg != NULL)
+            {
+                if (arg->type == LIST_EXPR)
+                    collect_specialize_from_expr((struct Expression *)arg->cur, program_tree);
+                arg = arg->next;
+            }
+            break;
+        }
+        case EXPR_RECORD_ACCESS:
+            collect_specialize_from_expr(expr->expr_data.record_access_data.record_expr, program_tree);
+            break;
+        case EXPR_ARRAY_ACCESS:
+            collect_specialize_from_expr(expr->expr_data.array_access_data.array_expr, program_tree);
+            collect_specialize_from_expr(expr->expr_data.array_access_data.index_expr, program_tree);
+            break;
+        case EXPR_RELOP:
+            collect_specialize_from_expr(expr->expr_data.relop_data.left, program_tree);
+            collect_specialize_from_expr(expr->expr_data.relop_data.right, program_tree);
+            break;
+        case EXPR_SIGN_TERM:
+            collect_specialize_from_expr(expr->expr_data.sign_term, program_tree);
+            break;
+        case EXPR_ADDOP:
+            collect_specialize_from_expr(expr->expr_data.addop_data.left_expr, program_tree);
+            collect_specialize_from_expr(expr->expr_data.addop_data.right_term, program_tree);
+            break;
+        case EXPR_MULOP:
+            collect_specialize_from_expr(expr->expr_data.mulop_data.left_term, program_tree);
+            collect_specialize_from_expr(expr->expr_data.mulop_data.right_factor, program_tree);
+            break;
+        case EXPR_ADDR:
+            collect_specialize_from_expr(expr->expr_data.addr_data.expr, program_tree);
+            break;
+        case EXPR_POINTER_DEREF:
+            collect_specialize_from_expr(expr->expr_data.pointer_deref_data.pointer_expr, program_tree);
+            break;
+        default:
+            break;
+    }
+}
+
+static void collect_specialize_from_stmt(struct Statement *stmt, Tree_t *program_tree)
+{
+    if (stmt == NULL || program_tree == NULL)
+        return;
+
+    switch (stmt->type)
+    {
+        case STMT_VAR_ASSIGN:
+            collect_specialize_from_expr(stmt->stmt_data.var_assign_data.var, program_tree);
+            collect_specialize_from_expr(stmt->stmt_data.var_assign_data.expr, program_tree);
+            break;
+        case STMT_PROCEDURE_CALL:
+        {
+            ListNode_t *arg = stmt->stmt_data.procedure_call_data.expr_args;
+            while (arg != NULL)
+            {
+                if (arg->type == LIST_EXPR)
+                    collect_specialize_from_expr((struct Expression *)arg->cur, program_tree);
+                arg = arg->next;
+            }
+            break;
+        }
+        case STMT_EXPR:
+            collect_specialize_from_expr(stmt->stmt_data.expr_stmt_data.expr, program_tree);
+            break;
+        case STMT_COMPOUND_STATEMENT:
+        {
+            ListNode_t *cur = stmt->stmt_data.compound_statement;
+            while (cur != NULL)
+            {
+                if (cur->type == LIST_STMT)
+                    collect_specialize_from_stmt((struct Statement *)cur->cur, program_tree);
+                cur = cur->next;
+            }
+            break;
+        }
+        case STMT_LABEL:
+            collect_specialize_from_stmt(stmt->stmt_data.label_data.stmt, program_tree);
+            break;
+        case STMT_IF_THEN:
+            collect_specialize_from_expr(stmt->stmt_data.if_then_data.relop_expr, program_tree);
+            collect_specialize_from_stmt(stmt->stmt_data.if_then_data.if_stmt, program_tree);
+            collect_specialize_from_stmt(stmt->stmt_data.if_then_data.else_stmt, program_tree);
+            break;
+        case STMT_WHILE:
+            collect_specialize_from_expr(stmt->stmt_data.while_data.relop_expr, program_tree);
+            collect_specialize_from_stmt(stmt->stmt_data.while_data.while_stmt, program_tree);
+            break;
+        case STMT_REPEAT:
+        {
+            ListNode_t *cur = stmt->stmt_data.repeat_data.body_list;
+            while (cur != NULL)
+            {
+                if (cur->type == LIST_STMT)
+                    collect_specialize_from_stmt((struct Statement *)cur->cur, program_tree);
+                cur = cur->next;
+            }
+            collect_specialize_from_expr(stmt->stmt_data.repeat_data.until_expr, program_tree);
+            break;
+        }
+        case STMT_FOR:
+            collect_specialize_from_expr(stmt->stmt_data.for_data.to, program_tree);
+            collect_specialize_from_stmt(stmt->stmt_data.for_data.do_for, program_tree);
+            if (stmt->stmt_data.for_data.for_assign_type == STMT_VAR_ASSIGN)
+                collect_specialize_from_stmt(stmt->stmt_data.for_data.for_assign_data.var_assign, program_tree);
+            else
+                collect_specialize_from_expr(stmt->stmt_data.for_data.for_assign_data.var, program_tree);
+            break;
+        case STMT_FOR_IN:
+            collect_specialize_from_expr(stmt->stmt_data.for_in_data.loop_var, program_tree);
+            collect_specialize_from_expr(stmt->stmt_data.for_in_data.collection, program_tree);
+            collect_specialize_from_stmt(stmt->stmt_data.for_in_data.do_stmt, program_tree);
+            break;
+        case STMT_CASE:
+        {
+            collect_specialize_from_expr(stmt->stmt_data.case_data.selector_expr, program_tree);
+            ListNode_t *branch = stmt->stmt_data.case_data.branches;
+            while (branch != NULL)
+            {
+                if (branch->type == LIST_CASE_BRANCH && branch->cur != NULL)
+                {
+                    struct CaseBranch *cb = (struct CaseBranch *)branch->cur;
+                    ListNode_t *label = cb->labels;
+                    while (label != NULL)
+                    {
+                        if (label->type == LIST_EXPR)
+                            collect_specialize_from_expr((struct Expression *)label->cur, program_tree);
+                        label = label->next;
+                    }
+                    collect_specialize_from_stmt(cb->stmt, program_tree);
+                }
+                branch = branch->next;
+            }
+            collect_specialize_from_stmt(stmt->stmt_data.case_data.else_stmt, program_tree);
+            break;
+        }
+        case STMT_WITH:
+            collect_specialize_from_expr(stmt->stmt_data.with_data.context_expr, program_tree);
+            collect_specialize_from_stmt(stmt->stmt_data.with_data.body_stmt, program_tree);
+            break;
+        case STMT_TRY_FINALLY:
+        {
+            ListNode_t *cur = stmt->stmt_data.try_finally_data.try_statements;
+            while (cur != NULL)
+            {
+                if (cur->type == LIST_STMT)
+                    collect_specialize_from_stmt((struct Statement *)cur->cur, program_tree);
+                cur = cur->next;
+            }
+            cur = stmt->stmt_data.try_finally_data.finally_statements;
+            while (cur != NULL)
+            {
+                if (cur->type == LIST_STMT)
+                    collect_specialize_from_stmt((struct Statement *)cur->cur, program_tree);
+                cur = cur->next;
+            }
+            break;
+        }
+        case STMT_TRY_EXCEPT:
+        {
+            ListNode_t *cur = stmt->stmt_data.try_except_data.try_statements;
+            while (cur != NULL)
+            {
+                if (cur->type == LIST_STMT)
+                    collect_specialize_from_stmt((struct Statement *)cur->cur, program_tree);
+                cur = cur->next;
+            }
+            cur = stmt->stmt_data.try_except_data.except_statements;
+            while (cur != NULL)
+            {
+                if (cur->type == LIST_STMT)
+                    collect_specialize_from_stmt((struct Statement *)cur->cur, program_tree);
+                cur = cur->next;
+            }
+            break;
+        }
+        case STMT_RAISE:
+            collect_specialize_from_expr(stmt->stmt_data.raise_data.exception_expr, program_tree);
+            break;
+        case STMT_INHERITED:
+            collect_specialize_from_expr(stmt->stmt_data.inherited_data.call_expr, program_tree);
+            break;
+        case STMT_EXIT:
+            collect_specialize_from_expr(stmt->stmt_data.exit_data.return_expr, program_tree);
+            break;
+        default:
+            break;
+    }
+}
+
+void resolve_pending_generic_subprograms(Tree_t *program_tree)
+{
+    if (program_tree == NULL || program_tree->type != TREE_PROGRAM_TYPE)
+        return;
+
+    if (getenv("KGPC_DEBUG_GENERIC_SUBPROGRAM") != NULL)
+        fprintf(stderr, "[KGPC] resolve_pending_generic_subprograms\n");
+
+    ListNode_t *sub = program_tree->tree_data.program_data.subprograms;
+    if (getenv("KGPC_DEBUG_GENERIC_SUBPROGRAM") != NULL && sub == NULL)
+        fprintf(stderr, "[KGPC] program has no subprograms\n");
+    while (sub != NULL)
+    {
+        if (getenv("KGPC_DEBUG_GENERIC_SUBPROGRAM") != NULL)
+            fprintf(stderr, "[KGPC] subprogram node type=%d\n", sub->type);
+        if (sub->type == LIST_TREE && sub->cur != NULL)
+        {
+            Tree_t *sub_tree = (Tree_t *)sub->cur;
+            if (sub_tree->type == TREE_SUBPROGRAM)
+            {
+                if (getenv("KGPC_DEBUG_GENERIC_SUBPROGRAM") != NULL &&
+                    sub_tree->tree_data.subprogram_data.id != NULL)
+                {
+                    fprintf(stderr, "[KGPC] subprogram %s generic_params=%d\n",
+                        sub_tree->tree_data.subprogram_data.id,
+                        sub_tree->tree_data.subprogram_data.num_generic_type_params);
+                }
+                collect_specialize_from_stmt(sub_tree->tree_data.subprogram_data.statement_list, program_tree);
+            }
+        }
+        sub = sub->next;
+    }
+
+    collect_specialize_from_stmt(program_tree->tree_data.program_data.body_statement, program_tree);
+    if (program_tree->tree_data.program_data.finalization_statements != NULL)
+    {
+        ListNode_t *final_node = program_tree->tree_data.program_data.finalization_statements;
+        while (final_node != NULL)
+        {
+            if (final_node->type == LIST_STMT)
+                collect_specialize_from_stmt((struct Statement *)final_node->cur, program_tree);
+            final_node = final_node->next;
+        }
+    }
+}
 
 static int subprogram_list_has_decl(const ListNode_t *subprograms, const Tree_t *tree)
 {
@@ -2611,6 +3119,31 @@ static char *serialize_expr_to_string(ast_t *expr) {
     
     /* Simple identifier or literal with a symbol */
     if (expr->sym != NULL && expr->sym->name != NULL) {
+        if (strcasecmp(expr->sym->name, "sizeof") == 0 &&
+            getenv("KGPC_DEBUG_ARRAY_BOUNDS") != NULL)
+        {
+            fprintf(stderr,
+                "[KGPC] sizeof node typ=%d child=%p child_typ=%d child_sym=%s next_typ=%d\n",
+                expr->typ,
+                (void *)expr->child,
+                expr->child ? expr->child->typ : -1,
+                (expr->child && expr->child->sym && expr->child->sym->name) ? expr->child->sym->name : "<null>",
+                expr->next ? expr->next->typ : -1);
+        }
+        if (strcasecmp(expr->sym->name, "sizeof") == 0 && expr->child != NULL) {
+            char *inner = serialize_expr_to_string(expr->child);
+            if (inner == NULL)
+                return NULL;
+            size_t len = strlen(inner) + 9;  /* "sizeof(" + inner + ")" + '\0' */
+            char *result = (char *)malloc(len);
+            if (result == NULL) {
+                free(inner);
+                return NULL;
+            }
+            snprintf(result, len, "sizeof(%s)", inner);
+            free(inner);
+            return result;
+        }
         return strdup(expr->sym->name);
     }
     
@@ -2676,6 +3209,35 @@ static char *serialize_expr_to_string(ast_t *expr) {
     
     /* If we have a child with a symbol (wrapped expression) */
     if (expr->child != NULL && expr->child->sym != NULL && expr->child->sym->name != NULL) {
+        if (strcasecmp(expr->child->sym->name, "sizeof") == 0) {
+            ast_t *arg_node = expr->child->child;
+            if (arg_node == NULL)
+                arg_node = expr->child->next;
+            if (getenv("KGPC_DEBUG_ARRAY_BOUNDS") != NULL)
+            {
+                fprintf(stderr,
+                    "[KGPC] sizeof wrapper typ=%d arg_typ=%d arg_sym=%s\n",
+                    expr->child->typ,
+                    arg_node ? arg_node->typ : -1,
+                    (arg_node && arg_node->sym && arg_node->sym->name) ? arg_node->sym->name : "<null>");
+            }
+            if (arg_node != NULL)
+            {
+                char *inner = serialize_expr_to_string(arg_node);
+                if (inner != NULL)
+                {
+                    size_t len = strlen(inner) + 9;
+                    char *result = (char *)malloc(len);
+                    if (result == NULL) {
+                        free(inner);
+                        return NULL;
+                    }
+                    snprintf(result, len, "sizeof(%s)", inner);
+                    free(inner);
+                    return result;
+                }
+            }
+        }
         return strdup(expr->child->sym->name);
     }
     
@@ -8334,7 +8896,36 @@ record_ctor_cleanup:
             }
         }
 
-        struct Expression *inner_expr = convert_expression(value_node);
+        ListNode_t *args = NULL;
+        int arg_count = 0;
+        if (value_node != NULL)
+        {
+            args = convert_expression_list(value_node);
+            arg_count = ListLength(args);
+        }
+
+        if (arg_count > 1)
+        {
+            char *call_id = target_type_id;
+            target_type_id = NULL;
+            return mk_functioncall(expr_node->line, call_id, args);
+        }
+
+        struct Expression *inner_expr = NULL;
+        if (arg_count == 1 && args != NULL)
+        {
+            inner_expr = (struct Expression *)args->cur;
+            free(args);
+        }
+        else
+        {
+            if (args != NULL)
+            {
+                DestroyList(args);
+                args = NULL;
+            }
+            inner_expr = convert_expression(value_node);
+        }
         return mk_typecast(expr_node->line, target_type, target_type_id, inner_expr);
     }
     case PASCAL_T_DEREF:
@@ -10357,6 +10948,7 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
     if (tree != NULL && num_generic_type_params > 0) {
         tree->tree_data.subprogram_data.generic_type_params = generic_type_params;
         tree->tree_data.subprogram_data.num_generic_type_params = num_generic_type_params;
+        tree->tree_data.subprogram_data.generic_template_ast = copy_ast(proc_node);
     } else if (generic_type_params != NULL) {
         for (int i = 0; i < num_generic_type_params; i++)
             free(generic_type_params[i]);
@@ -10623,6 +11215,7 @@ static Tree_t *convert_function(ast_t *func_node) {
     if (tree != NULL && num_generic_type_params > 0) {
         tree->tree_data.subprogram_data.generic_type_params = generic_type_params;
         tree->tree_data.subprogram_data.num_generic_type_params = num_generic_type_params;
+        tree->tree_data.subprogram_data.generic_template_ast = copy_ast(func_node);
     } else if (generic_type_params != NULL) {
         for (int i = 0; i < num_generic_type_params; i++)
             free(generic_type_params[i]);

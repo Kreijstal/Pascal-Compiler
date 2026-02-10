@@ -161,6 +161,7 @@ type
   public
     destructor Destroy; virtual;
     class function ClassName: ShortString; virtual;
+    class procedure GetLastCastErrorInfo(out aFrom, aTo: ShortString); static;
     procedure Free;
   end;
   TInterfacedObject = class(TObject)
@@ -1121,6 +1122,12 @@ end;
 class function TObject.ClassName: ShortString;
 begin
     ClassName := 'TObject';
+end;
+
+class procedure TObject.GetLastCastErrorInfo(out aFrom, aTo: ShortString);
+begin
+    aFrom := '';
+    aTo := '';
 end;
 
 destructor TObject.Destroy;

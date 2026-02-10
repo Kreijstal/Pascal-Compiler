@@ -2747,6 +2747,11 @@ ListNode_t *gencode_case1(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     if (!leaf_expr_is_simple(right_expr) || rhs_requires_reference)
     {
         Register_t *rhs_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (rhs_reg == target_reg)
+        {
+            free_reg(get_reg_stack(), rhs_reg);
+            rhs_reg = NULL;
+        }
         if (rhs_reg == NULL)
         {
             StackNode_t *spill_loc = add_l_t("rhs");
@@ -2811,6 +2816,11 @@ ListNode_t *gencode_case2(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     assert(right_expr != NULL);
 
     temp_reg = get_free_reg(get_reg_stack(), &inst_list);
+    if (temp_reg == target_reg)
+    {
+        free_reg(get_reg_stack(), temp_reg);
+        temp_reg = NULL;
+    }
     if(temp_reg == NULL)
     {
         inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, target_reg);
@@ -2864,6 +2874,11 @@ ListNode_t *gencode_case3(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 
     inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
     temp_reg = get_free_reg(get_reg_stack(), &inst_list);
+    if (temp_reg == target_reg)
+    {
+        free_reg(get_reg_stack(), temp_reg);
+        temp_reg = NULL;
+    }
 
     if(temp_reg == NULL)
     {

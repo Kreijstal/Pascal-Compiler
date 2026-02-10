@@ -1251,6 +1251,8 @@ void destroy_tree(Tree_t *tree)
                   free(tree->tree_data.subprogram_data.generic_type_params[i]);
               free(tree->tree_data.subprogram_data.generic_type_params);
           }
+          if (tree->tree_data.subprogram_data.generic_template_ast != NULL)
+              free_ast(tree->tree_data.subprogram_data.generic_template_ast);
           if (tree->tree_data.subprogram_data.result_var_name != NULL)
               free(tree->tree_data.subprogram_data.result_var_name);
           break;

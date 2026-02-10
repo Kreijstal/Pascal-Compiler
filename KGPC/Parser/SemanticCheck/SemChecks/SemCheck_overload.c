@@ -7,6 +7,7 @@
 #include <strings.h>
 #include <assert.h>
 #include <stdio.h>
+#include <limits.h>
 
 #include "SemCheck_overload.h"
 #include "../HashTable/HashTable.h"
@@ -34,6 +35,44 @@ int semcheck_candidate_is_builtin(SymTab_t *symtab, HashNode_t *node)
     if (matches != NULL)
         DestroyList(matches);
     return is_builtin;
+}
+
+static int semcheck_scope_level_for_candidate(SymTab_t *symtab, HashNode_t *candidate)
+{
+    if (symtab == NULL || candidate == NULL || candidate->id == NULL)
+        return INT_MAX / 2;
+
+    int level = 0;
+    for (ListNode_t *scope = symtab->stack_head; scope != NULL; scope = scope->next, ++level)
+    {
+        ListNode_t *matches = FindAllIdentsInTable((HashTable_t *)scope->cur, candidate->id);
+        for (ListNode_t *cur = matches; cur != NULL; cur = cur->next)
+        {
+            if (cur->cur == candidate)
+            {
+                if (matches != NULL)
+                    DestroyList(matches);
+                return level;
+            }
+        }
+        if (matches != NULL)
+            DestroyList(matches);
+    }
+
+    ListNode_t *builtins = FindAllIdentsInTable(symtab->builtins, candidate->id);
+    for (ListNode_t *cur = builtins; cur != NULL; cur = cur->next)
+    {
+        if (cur->cur == candidate)
+        {
+            if (builtins != NULL)
+                DestroyList(builtins);
+            return INT_MAX / 2;
+        }
+    }
+    if (builtins != NULL)
+        DestroyList(builtins);
+
+    return INT_MAX / 2;
 }
 
 static const char *semcheck_get_param_type_id(Tree_t *decl)
@@ -1176,6 +1215,7 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
     MatchQuality *best_qualities = NULL;
     int best_missing = 0;
     int num_best = 0;
+    int best_scope_level = INT_MAX;
 
     int given_count = ListLength(args_given);
 
@@ -1688,6 +1728,25 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
         }
 
         if (!candidate_valid)
+        {
+            free(qualities);
+            continue;
+        }
+
+        int candidate_scope = semcheck_scope_level_for_candidate(symtab, candidate);
+        if (candidate_scope < best_scope_level)
+        {
+            best_scope_level = candidate_scope;
+            if (best_qualities != NULL)
+            {
+                free(best_qualities);
+                best_qualities = NULL;
+            }
+            best_match = NULL;
+            best_missing = 0;
+            num_best = 0;
+        }
+        if (candidate_scope > best_scope_level)
         {
             free(qualities);
             continue;

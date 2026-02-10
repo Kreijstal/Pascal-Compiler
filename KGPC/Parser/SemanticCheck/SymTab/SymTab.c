@@ -343,6 +343,27 @@ ListNode_t *FindAllIdents(SymTab_t *symtab, const char *id)
     return all_found_nodes;
 }
 
+/* Searches for all instances of an identifier in the nearest scope that defines it */
+ListNode_t *FindAllIdentsInNearestScope(SymTab_t *symtab, const char *id)
+{
+    ListNode_t *cur_scope;
+
+    assert(symtab != NULL);
+    assert(id != NULL);
+
+    cur_scope = symtab->stack_head;
+
+    while (cur_scope != NULL)
+    {
+        ListNode_t *scope_matches = FindAllIdentsInTable((HashTable_t *)cur_scope->cur, id);
+        if (scope_matches != NULL)
+            return scope_matches;
+        cur_scope = cur_scope->next;
+    }
+
+    return FindAllIdentsInTable(symtab->builtins, id);
+}
+
 /* Pushes a new type onto the current scope (head) */
 int PushTypeOntoScope(SymTab_t *symtab, char *id, enum VarType var_type,
     struct RecordType *record_type, struct TypeAlias *type_alias)

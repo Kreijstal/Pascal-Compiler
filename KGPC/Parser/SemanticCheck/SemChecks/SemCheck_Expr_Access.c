@@ -18,6 +18,59 @@ static double funccall_now_ms(void) {
     return (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC;
 }
 
+static void semcheck_set_pointer_info_from_kgpc_type(struct Expression *expr, SymTab_t *symtab, KgpcType *type)
+{
+    if (expr == NULL || type == NULL || !kgpc_type_is_pointer(type))
+        return;
+
+    if (expr->pointer_subtype_id != NULL || expr->pointer_subtype != UNKNOWN_TYPE)
+        return;
+
+    int subtype = UNKNOWN_TYPE;
+    const char *subtype_id = NULL;
+
+    KgpcType *points_to = type->info.points_to;
+    if (points_to != NULL)
+    {
+        if (points_to->kind == TYPE_KIND_RECORD)
+        {
+            struct RecordType *record = kgpc_type_get_record(points_to);
+            if (record != NULL && record->type_id != NULL)
+                subtype_id = record->type_id;
+            subtype = RECORD_TYPE;
+        }
+        else if (points_to->kind == TYPE_KIND_PRIMITIVE)
+        {
+            subtype = points_to->info.primitive_type_tag;
+        }
+        else if (points_to->kind == TYPE_KIND_POINTER)
+        {
+            subtype = POINTER_TYPE;
+        }
+    }
+
+    if (subtype_id == NULL)
+    {
+        struct TypeAlias *alias = kgpc_type_get_type_alias(type);
+        if (alias != NULL && alias->is_pointer)
+        {
+            if (alias->pointer_type_id != NULL)
+                subtype_id = alias->pointer_type_id;
+            if (alias->pointer_type != UNKNOWN_TYPE)
+                subtype = alias->pointer_type;
+            if (subtype == UNKNOWN_TYPE && subtype_id != NULL)
+            {
+                struct RecordType *record = semcheck_lookup_record_type(symtab, subtype_id);
+                if (record != NULL)
+                    subtype = RECORD_TYPE;
+            }
+        }
+    }
+
+    if (subtype != UNKNOWN_TYPE || subtype_id != NULL)
+        semcheck_set_pointer_info(expr, subtype, subtype_id);
+}
+
 static void semcheck_clear_array_linearization(struct Expression *expr)
 {
     if (expr == NULL)
@@ -1369,6 +1422,7 @@ int semcheck_funccall(int *type_return,
                                 destroy_kgpc_type(expr->resolved_kgpc_type);
                             kgpc_type_retain(ret_type);
                             expr->resolved_kgpc_type = ret_type;
+                            semcheck_set_pointer_info_from_kgpc_type(expr, symtab, ret_type);
                         }
                         else if (ret_type != NULL)
                         {
@@ -3553,6 +3607,7 @@ skip_overload_resolution:
                 }
                 if (!skip_override_for_ctor)
                     semcheck_expr_set_resolved_kgpc_type_shared(expr, return_type);
+                semcheck_set_pointer_info_from_kgpc_type(expr, symtab, return_type);
                 if (return_type->kind == TYPE_KIND_ARRAY)
                     semcheck_set_array_info_from_kgpctype(expr, symtab, return_type, expr->line_num);
                 else

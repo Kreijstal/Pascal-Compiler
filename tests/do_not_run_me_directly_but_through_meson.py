@@ -1393,6 +1393,24 @@ class TestCompiler(unittest.TestCase):
         stderr = cm.exception.stderr or ""
         self.assertIn("unterminated conditional", stderr)
 
+    def test_error_reports_path(self):
+        """Compiler errors should include the source path prefix."""
+        input_file, asm_file, _ = self._get_test_paths(
+            "tdd_error_path_in_include"
+        )
+
+        with self.assertRaises(subprocess.CalledProcessError) as cm:
+            run_compiler(input_file, asm_file)
+
+        stderr = cm.exception.stderr or ""
+        self.assertIn(f"{input_file}:", stderr)
+        lower = stderr.lower()
+        self.assertTrue(
+            "type mismatch" in lower or "incompatible types" in lower,
+            "Expected type error in compiler output.",
+        )
+        self.assertIn("bad", stderr)
+
     def test_classof_nonclass_target_reports_error(self):
         """'class of Integer' must be rejected - Integer is not a class type."""
         input_file, asm_file, _ = self._get_test_paths("bug_classof_nonclass_target")

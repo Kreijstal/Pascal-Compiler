@@ -24,6 +24,7 @@
 #endif
 #include <math.h>
 #include "SemCheck.h"
+#include "SemChecks/SemCheck_sizeof.h"
 #include "../../flags.h"
 #include "../../identifier_utils.h"
 #include "../../Optimizer/optimizer.h"
@@ -379,7 +380,7 @@ static HashNode_t *semcheck_find_type_excluding_alias(SymTab_t *symtab, const ch
     if (symtab == NULL || type_id == NULL)
         return NULL;
 
-    ListNode_t *matches = FindAllIdents(symtab, type_id);
+    ListNode_t *matches = FindAllIdentsInNearestScope(symtab, type_id);
     if (matches == NULL)
     {
         const char *base = semcheck_base_type_name(type_id);
@@ -645,6 +646,83 @@ void semcheck_clear_error_context(void)
     g_semcheck_error_source_index = -1;
 }
 
+static int resolve_array_bound_expr(SymTab_t *symtab, const char *expr, int *out_value)
+{
+    if (expr == NULL || out_value == NULL)
+        return -1;
+
+    const char *p = expr;
+    while (*p == ' ' || *p == '\t')
+        p++;
+
+    if (strncasecmp(p, "sizeof", 6) != 0)
+        return -1;
+    p += 6;
+    while (*p == ' ' || *p == '\t')
+        p++;
+    if (*p != '(')
+        return -1;
+    p++;
+    while (*p == ' ' || *p == '\t')
+        p++;
+
+    const char *start = p;
+    while ((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') ||
+           (*p >= '0' && *p <= '9') || *p == '_' || *p == '.')
+        p++;
+    if (p == start)
+        return -1;
+    size_t len = (size_t)(p - start);
+    char *type_id = (char *)malloc(len + 1);
+    if (type_id == NULL)
+        return -1;
+    memcpy(type_id, start, len);
+    type_id[len] = '\0';
+
+    while (*p == ' ' || *p == '\t')
+        p++;
+    if (*p != ')')
+    {
+        free(type_id);
+        return -1;
+    }
+    p++;
+
+    long long size_val = 0;
+    int sizeof_ok = sizeof_from_type_ref(symtab, UNKNOWN_TYPE, type_id, &size_val, 0, 0) == 0;
+    free(type_id);
+    if (!sizeof_ok || size_val <= 0)
+        return -1;
+
+    while (*p == ' ' || *p == '\t')
+        p++;
+
+    long long result = size_val;
+    if (*p == '+' || *p == '-')
+    {
+        int sign = (*p == '-') ? -1 : 1;
+        p++;
+        while (*p == ' ' || *p == '\t')
+            p++;
+        char *endptr = NULL;
+        long val = strtol(p, &endptr, 10);
+        if (endptr == p)
+            return -1;
+        result += (long long)sign * (long long)val;
+        p = endptr;
+    }
+
+    while (*p == ' ' || *p == '\t')
+        p++;
+    if (*p != '\0')
+        return -1;
+
+    if (result < INT_MIN || result > INT_MAX)
+        return -1;
+    *out_value = (int)result;
+    return 0;
+}
+
 int semcheck_tag_from_kgpc(const KgpcType *type)
 {
     if (type == NULL)
@@ -686,6 +764,28 @@ int semcheck_tag_from_kgpc(const KgpcType *type)
     return UNKNOWN_TYPE;
 }
 
+static const char *semcheck_get_error_path(void)
+{
+    const char *file_path = (file_to_parse != NULL && *file_to_parse != '\0')
+                                ? file_to_parse
+                                : ((preprocessed_path != NULL && *preprocessed_path != '\0') ? preprocessed_path
+                                                                                              : pascal_frontend_current_path());
+    if (file_path == NULL)
+        file_path = g_semcheck_source_path;
+    if (file_path == NULL)
+        file_path = "<unknown>";
+    return file_path;
+}
+
+static void semcheck_print_error_prefix(const char *file_path, int line_num, int col_num)
+{
+    fprintf(stderr, "%s:%d", file_path, line_num);
+    if (col_num > 0) {
+        fprintf(stderr, ":%d", col_num);
+    }
+    fprintf(stderr, ": ");
+}
+
 /* Helper function to print semantic error with source code context */
 void semantic_error(int line_num, int col_num, const char *format, ...)
 {
@@ -709,11 +809,8 @@ void semantic_error(int line_num, int col_num, const char *format, ...)
             effective_col = g_semcheck_error_col;
     }
 
-    fprintf(stderr, "Error on line %d", effective_line);
-    if (effective_col > 0) {
-        fprintf(stderr, ", column %d", effective_col);
-    }
-    fprintf(stderr, ": ");
+    const char *file_path = semcheck_get_error_path();
+    semcheck_print_error_prefix(file_path, effective_line, effective_col);
 
     va_list args;
     va_start(args, format);
@@ -741,11 +838,8 @@ void semantic_error_at(int line_num, int col_num, int source_index, const char *
             line_num = computed_line;
     }
 
-    fprintf(stderr, "Error on line %d", line_num);
-    if (col_num > 0) {
-        fprintf(stderr, ", column %d", col_num);
-    }
-    fprintf(stderr, ": ");
+    const char *file_path = semcheck_get_error_path();
+    semcheck_print_error_prefix(file_path, line_num, col_num);
 
     va_list args;
     va_start(args, format);
@@ -759,12 +853,7 @@ void semantic_error_at(int line_num, int col_num, int source_index, const char *
 void semcheck_error_with_context_at(int line_num, int col_num, int source_index,
     const char *format, ...)
 {
-    const char *file_path = (file_to_parse != NULL && *file_to_parse != '\0')
-                                ? file_to_parse
-                                : ((preprocessed_path != NULL && *preprocessed_path != '\0') ? preprocessed_path
-                                                                                              : pascal_frontend_current_path());
-    if (file_path == NULL)
-        file_path = g_semcheck_source_path;
+    const char *file_path = semcheck_get_error_path();
     size_t context_len = preprocessed_length;
     if (context_len == 0 && preprocessed_source != NULL)
         context_len = strlen(preprocessed_source);
@@ -789,12 +878,18 @@ void semcheck_error_with_context_at(int line_num, int col_num, int source_index,
 
     va_list args;
     va_start(args, format);
+    semcheck_print_error_prefix(file_path, effective_line, effective_col);
     if (format != NULL && strncmp(format, "Error on line %d", 16) == 0)
     {
         int original_line = va_arg(args, int);
         (void)original_line;
-        fprintf(stderr, "Error on line %d", effective_line);
         const char *rest = format + 16;
+        if (rest[0] == ',' && rest[1] == ' ')
+            rest += 2;
+        else if (rest[0] == ',' )
+            rest += 1;
+        else if (rest[0] == ':' && rest[1] == ' ')
+            rest += 2;
         vfprintf(stderr, rest, args);
     }
     else
@@ -841,12 +936,7 @@ void semcheck_error_with_context_at(int line_num, int col_num, int source_index,
 /* Helper for legacy error prints that already include "Error on line %d". */
 void semcheck_error_with_context(const char *format, ...)
 {
-    const char *file_path = (file_to_parse != NULL && *file_to_parse != '\0')
-                                ? file_to_parse
-                                : ((preprocessed_path != NULL && *preprocessed_path != '\0') ? preprocessed_path
-                                                                                              : pascal_frontend_current_path());
-    if (file_path == NULL)
-        file_path = g_semcheck_source_path;
+    const char *file_path = semcheck_get_error_path();
     size_t context_len = preprocessed_length;
     if (context_len == 0 && preprocessed_source != NULL)
         context_len = strlen(preprocessed_source);
@@ -882,12 +972,18 @@ void semcheck_error_with_context(const char *format, ...)
         effective_line = line_num;
 
     /* If the format starts with "Error on line %d", rewrite that part to use the effective line. */
+    semcheck_print_error_prefix(file_path, effective_line, effective_col);
     if (format != NULL && strncmp(format, "Error on line %d", 16) == 0)
     {
         int original_line = va_arg(args, int);
         (void)original_line;
-        fprintf(stderr, "Error on line %d", effective_line);
         const char *rest = format + 16;
+        if (rest[0] == ',' && rest[1] == ' ')
+            rest += 2;
+        else if (rest[0] == ',' )
+            rest += 1;
+        else if (rest[0] == ':' && rest[1] == ' ')
+            rest += 2;
         vfprintf(stderr, rest, args);
     }
     else
@@ -1575,7 +1671,7 @@ static void copy_method_decl_defaults_to_impl(SymTab_t *symtab, Tree_t *subprogr
     free(class_name);
 }
 
-static HashNode_t *semcheck_find_preferred_type_node(SymTab_t *symtab, const char *type_id)
+HashNode_t *semcheck_find_preferred_type_node(SymTab_t *symtab, const char *type_id)
 {
     if (symtab == NULL || type_id == NULL)
         return NULL;
@@ -5379,6 +5475,18 @@ static char *build_qualified_identifier_from_expr(struct Expression *expr)
     return qualified;
 }
 
+static void sync_alias_array_bounds(KgpcType *kgpc_type, struct TypeAlias *alias)
+{
+    if (kgpc_type == NULL || alias == NULL)
+        return;
+    if (kgpc_type->type_alias != NULL && kgpc_type->type_alias != alias)
+    {
+        kgpc_type->type_alias->array_start = alias->array_start;
+        kgpc_type->type_alias->array_end = alias->array_end;
+        kgpc_type->type_alias->is_open_array = alias->is_open_array;
+    }
+}
+
 /* Resolves array bounds specified as constant identifiers in a KgpcType
  * This is needed because parsing happens before constants are declared */
 static void resolve_array_bounds_in_kgpctype(SymTab_t *symtab, KgpcType *kgpc_type, struct TypeAlias *alias)
@@ -5411,6 +5519,9 @@ static void resolve_array_bounds_in_kgpctype(SymTab_t *symtab, KgpcType *kgpc_ty
                 {
                     strncpy(start_str, dim_str, start_len);
                     start_str[start_len] = '\0';
+                    if (getenv("KGPC_DEBUG_ARRAY_BOUNDS") != NULL)
+                        fprintf(stderr, "[KGPC] array dim raw='%s' start='%s' end='%s'\n",
+                            dim_str, start_str, end_str);
                     
                     /* Trim whitespace */
                     while (*start_str == ' ') start_str++;
@@ -5423,8 +5534,12 @@ static void resolve_array_bounds_in_kgpctype(SymTab_t *symtab, KgpcType *kgpc_ty
                     int end_resolved = 0;
                     
                     /* Try constant lookup first */
-                    if (resolve_const_identifier(symtab, start_str, &start_val) == 0)
+                    int tmp_val = 0;
+                    int tmp_resolved = (resolve_array_bound_expr(symtab, start_str, &tmp_val) == 0);
+                    if (resolve_const_identifier(symtab, start_str, &start_val) == 0 || tmp_resolved)
                     {
+                        if (tmp_resolved)
+                            start_val = tmp_val;
                         start_resolved = 1;
                     }
                     else
@@ -5439,8 +5554,12 @@ static void resolve_array_bounds_in_kgpctype(SymTab_t *symtab, KgpcType *kgpc_ty
                         }
                     }
                     
-                    if (resolve_const_identifier(symtab, end_str, &end_val) == 0)
+                    int tmp_end_val = 0;
+                    int tmp_end_resolved = (resolve_array_bound_expr(symtab, end_str, &tmp_end_val) == 0);
+                    if (resolve_const_identifier(symtab, end_str, &end_val) == 0 || tmp_end_resolved)
                     {
+                        if (tmp_end_resolved)
+                            end_val = tmp_end_val;
                         end_resolved = 1;
                     }
                     else
@@ -5467,6 +5586,7 @@ static void resolve_array_bounds_in_kgpctype(SymTab_t *symtab, KgpcType *kgpc_ty
                         
                         /* Re-evaluate is_open_array based on resolved bounds */
                         alias->is_open_array = (alias->array_end < alias->array_start);
+                        sync_alias_array_bounds(kgpc_type, alias);
                     }
                     
                     free(start_str);
@@ -5493,6 +5613,7 @@ static void resolve_array_bounds_in_kgpctype(SymTab_t *symtab, KgpcType *kgpc_ty
                                 alias->array_start = 0;
                                 alias->array_end = count - 1;
                                 alias->is_open_array = 0;
+                                sync_alias_array_bounds(kgpc_type, alias);
                             }
                         }
                         else if (type_alias->is_range && type_alias->range_known)
@@ -5502,6 +5623,7 @@ static void resolve_array_bounds_in_kgpctype(SymTab_t *symtab, KgpcType *kgpc_ty
                             alias->array_start = type_alias->range_start;
                             alias->array_end = type_alias->range_end;
                             alias->is_open_array = 0;
+                            sync_alias_array_bounds(kgpc_type, alias);
                         }
                     }
                 }
@@ -5512,6 +5634,7 @@ static void resolve_array_bounds_in_kgpctype(SymTab_t *symtab, KgpcType *kgpc_ty
                     alias->array_start = 0;
                     alias->array_end = 1;
                     alias->is_open_array = 0;
+                    sync_alias_array_bounds(kgpc_type, alias);
                 }
                 else if (pascal_identifier_equals(dim_str, "Char") ||
                          pascal_identifier_equals(dim_str, "AnsiChar"))
@@ -5521,6 +5644,7 @@ static void resolve_array_bounds_in_kgpctype(SymTab_t *symtab, KgpcType *kgpc_ty
                     alias->array_start = 0;
                     alias->array_end = 255;
                     alias->is_open_array = 0;
+                    sync_alias_array_bounds(kgpc_type, alias);
                 }
             }
         }
@@ -8968,6 +9092,33 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         struct TypeAlias *alias = get_type_alias_from_node(type_node);
                         if (alias != NULL && alias->is_array)
                         {
+                            /* Ensure array bounds are resolved for aliases using symbolic dimensions. */
+                            if (alias->array_dimensions != NULL &&
+                                type_node->type != NULL &&
+                                type_node->type->kind == TYPE_KIND_ARRAY)
+                            {
+                                resolve_array_bounds_in_kgpctype(symtab, type_node->type, alias);
+                            }
+
+                            /* Prefer the KgpcType from the type node if it is already an array. */
+                            if (type_node->type != NULL &&
+                                type_node->type->kind == TYPE_KIND_ARRAY)
+                            {
+                                func_return = PushArrayOntoScope_Typed(symtab, (char *)ids->cur, type_node->type);
+                                if (func_return == 0)
+                                {
+                                    HashNode_t *var_node = NULL;
+                                    if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
+                                    {
+                                        mark_hashnode_unit_info(var_node,
+                                            tree->tree_data.var_decl_data.defined_in_unit,
+                                            tree->tree_data.var_decl_data.unit_is_public);
+                                    }
+                                }
+
+                                goto next_identifier;
+                            }
+
                             int start = alias->array_start;
                             int end = alias->array_end;
                             if (alias->is_open_array)

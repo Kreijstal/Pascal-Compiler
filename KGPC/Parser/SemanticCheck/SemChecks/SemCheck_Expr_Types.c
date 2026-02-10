@@ -26,10 +26,10 @@ int semcheck_typecast(int *type_return,
 
     int error_count = 0;
     int inner_type = UNKNOWN_TYPE;
+    KgpcType *inner_kgpc_type = NULL;
 
     if (expr->expr_data.typecast_data.expr != NULL)
     {
-        KgpcType *inner_kgpc_type = NULL;
         error_count += semcheck_expr_with_type(&inner_kgpc_type, symtab,
             expr->expr_data.typecast_data.expr, max_scope_lev, NO_MUTATE);
         inner_type = semcheck_tag_from_kgpc(inner_kgpc_type);
@@ -72,6 +72,19 @@ int semcheck_typecast(int *type_return,
         }
         error_count += resolve_type_identifier(&target_type, symtab,
             expr->expr_data.typecast_data.target_type_id, expr->line_num);
+    }
+
+    HashNode_t *array_target_node = NULL;
+    int target_is_array = 0;
+    if (expr->expr_data.typecast_data.target_type_id != NULL)
+    {
+        array_target_node = semcheck_find_preferred_type_node(symtab,
+            expr->expr_data.typecast_data.target_type_id);
+        if (array_target_node != NULL && array_target_node->type != NULL &&
+            array_target_node->type->kind == TYPE_KIND_ARRAY)
+        {
+            target_is_array = 1;
+        }
     }
 
     if (target_type == UNKNOWN_TYPE &&
@@ -144,8 +157,70 @@ int semcheck_typecast(int *type_return,
 
         if (resolved_ptr == NULL)
         {
-            resolved_ptr = create_pointer_type(NULL);
-            semcheck_set_pointer_info(expr, UNKNOWN_TYPE, expr->expr_data.typecast_data.target_type_id);
+            int inferred_subtype = UNKNOWN_TYPE;
+
+            if (inner_kgpc_type != NULL)
+            {
+                if (kgpc_type_is_string(inner_kgpc_type) ||
+                    kgpc_type_is_shortstring(inner_kgpc_type) ||
+                    kgpc_type_is_char(inner_kgpc_type))
+                {
+                    inferred_subtype = CHAR_TYPE;
+                }
+                else if (kgpc_type_is_array(inner_kgpc_type))
+                {
+                    KgpcType *elem = inner_kgpc_type->info.array_info.element_type;
+                    if (elem != NULL && elem->kind == TYPE_KIND_PRIMITIVE &&
+                        elem->info.primitive_type_tag == CHAR_TYPE)
+                    {
+                        inferred_subtype = CHAR_TYPE;
+                    }
+                }
+            }
+
+            if (inferred_subtype != UNKNOWN_TYPE)
+            {
+                KgpcType *points_to = create_primitive_type(inferred_subtype);
+                if (points_to != NULL)
+                {
+                    resolved_ptr = create_pointer_type(points_to);
+                    semcheck_set_pointer_info(expr, inferred_subtype, NULL);
+                }
+                else
+                {
+                    resolved_ptr = create_pointer_type(NULL);
+                    semcheck_set_pointer_info(expr, UNKNOWN_TYPE,
+                        expr->expr_data.typecast_data.target_type_id);
+                }
+            }
+            else
+            {
+                resolved_ptr = create_pointer_type(NULL);
+                semcheck_set_pointer_info(expr, UNKNOWN_TYPE,
+                    expr->expr_data.typecast_data.target_type_id);
+            }
+        }
+        else if (resolved_ptr->kind == TYPE_KIND_PRIMITIVE &&
+            resolved_ptr->info.primitive_type_tag == POINTER_TYPE)
+        {
+            if (expr->pointer_subtype == UNKNOWN_TYPE && inner_kgpc_type != NULL)
+            {
+                if (kgpc_type_is_string(inner_kgpc_type) ||
+                    kgpc_type_is_shortstring(inner_kgpc_type) ||
+                    kgpc_type_is_char(inner_kgpc_type))
+                {
+                    semcheck_set_pointer_info(expr, CHAR_TYPE, NULL);
+                }
+                else if (kgpc_type_is_array(inner_kgpc_type))
+                {
+                    KgpcType *elem = inner_kgpc_type->info.array_info.element_type;
+                    if (elem != NULL && elem->kind == TYPE_KIND_PRIMITIVE &&
+                        elem->info.primitive_type_tag == CHAR_TYPE)
+                    {
+                        semcheck_set_pointer_info(expr, CHAR_TYPE, NULL);
+                    }
+                }
+            }
         }
 
         expr->resolved_kgpc_type = resolved_ptr;
@@ -201,6 +276,20 @@ int semcheck_typecast(int *type_return,
         expr->resolved_kgpc_type = create_primitive_type(target_type);
         semcheck_clear_array_info(expr);
         expr->record_type = NULL;
+    }
+
+    if (target_is_array && array_target_node != NULL && array_target_node->type != NULL)
+    {
+        if (expr->resolved_kgpc_type != NULL)
+        {
+            destroy_kgpc_type(expr->resolved_kgpc_type);
+            expr->resolved_kgpc_type = NULL;
+        }
+        kgpc_type_retain(array_target_node->type);
+        expr->resolved_kgpc_type = array_target_node->type;
+        semcheck_set_array_info_from_kgpctype(expr, symtab, array_target_node->type, expr->line_num);
+        expr->record_type = NULL;
+        *type_return = UNKNOWN_TYPE;
     }
 
     (void)inner_type;
@@ -2457,6 +2546,20 @@ int semcheck_addressof(int *type_return,
 
     if (inner_type == UNKNOWN_TYPE)
     {
+        if (inner->type == EXPR_VAR_ID && inner->expr_data.id != NULL)
+        {
+            HashNode_t *inner_symbol = NULL;
+            if (FindIdent(&inner_symbol, symtab, inner->expr_data.id) >= 0 &&
+                inner_symbol != NULL && inner_symbol->type == NULL &&
+                inner_symbol->is_var_parameter)
+            {
+                *type_return = POINTER_TYPE;
+                if (expr->resolved_kgpc_type != NULL)
+                    destroy_kgpc_type(expr->resolved_kgpc_type);
+                expr->resolved_kgpc_type = create_pointer_type(NULL);
+                return error_count;
+            }
+        }
         *type_return = UNKNOWN_TYPE;
         return error_count;
     }

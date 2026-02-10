@@ -56,6 +56,7 @@ void from_cparser_enable_pending_specializations(void);
 void from_cparser_disable_pending_specializations(void);
 void resolve_pending_generic_aliases(Tree_t *program_tree);
 void append_generic_method_clones(Tree_t *program_tree);
+void resolve_pending_generic_subprograms(Tree_t *program_tree);
 
 /* Get the method template AST for a class method declaration.
  * Returns the params_ast from the method template, or NULL if not found.
