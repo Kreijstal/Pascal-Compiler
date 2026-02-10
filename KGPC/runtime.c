@@ -1075,6 +1075,19 @@ void kgpc_rtti_check_cast(const kgpc_class_typeinfo *value_type,
     abort();
 }
 
+void kgpc_assert_failed(const char *msg, const char *filename, int line)
+{
+    if (msg != NULL && msg[0] != '\0')
+        fprintf(stderr, "Assertion failed: %s", msg);
+    else
+        fprintf(stderr, "Assertion failed");
+    if (filename != NULL && filename[0] != '\0')
+        fprintf(stderr, " (%s, line %d)", filename, line);
+    fprintf(stderr, "\n");
+    fflush(stderr);
+    exit(227);
+}
+
 int kgpc_printf(const char *format, ...) {
     va_list args;
     va_start(args, format);

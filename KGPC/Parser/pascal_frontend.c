@@ -569,6 +569,7 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
         "MinSearchableVarHeaderAndPayload := 16", "MinFixedHeaderAndPayload := 16", 
         "CommonHeaderSize := 8",
         // FPC feature flags
+        "FPC_HAS_FEATURE_SUPPORT",
         "FPC_HAS_FEATURE_DYNARRAYS", "FPC_HAS_FEATURE_ANSISTRINGS", 
         "FPC_HAS_FEATURE_WIDESTRINGS", "FPC_HAS_UNICODESTRING",
         "FPC_HAS_FEATURE_CLASSES",
@@ -579,7 +580,8 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
         "FPC_HAS_FEATURE_VARIANTS", "FPC_HAS_FEATURE_INITFINAL",
         "FPC_HAS_FEATURE_EXITCODE", "FPC_HAS_FEATURE_RESOURCES",
         "FPC_HAS_FEATURE_COMMANDARGS", "FPC_HAS_FEATURE_PROCESSES",
-        "FPC_HAS_FEATURE_THREADING", "FPC_HAS_FEATURE_DYNLIBS"
+        "FPC_HAS_FEATURE_THREADING", "FPC_HAS_FEATURE_DYNLIBS",
+        "FPC_HAS_FEATURE_OBJECTIVEC1", "FPC_HAS_FEATURE_STACKCHECK"
     };
     for (size_t i = 0; i < sizeof(default_symbols) / sizeof(default_symbols[0]); ++i)
     {

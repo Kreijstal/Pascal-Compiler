@@ -163,6 +163,8 @@ int main(int argc, char **argv)
     pascal_preprocessor_define(preprocessor, "FPC_HAS_FEATURE_THREADING");
     pascal_preprocessor_define(preprocessor, "FPC_HAS_FEATURE_DYNLIBS");
     pascal_preprocessor_define(preprocessor, "FPC_HAS_FEATURE_OBJECTIVEC1");
+    pascal_preprocessor_define(preprocessor, "FPC_HAS_FEATURE_UNICODESTRINGS");
+    pascal_preprocessor_define(preprocessor, "FPC_HAS_FEATURE_STACKCHECK");
     
     /* FPC internal capabilities */
     pascal_preprocessor_define(preprocessor, "FPC_HAS_SETSJMP");

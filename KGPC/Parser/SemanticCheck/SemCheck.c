@@ -7691,6 +7691,15 @@ void semcheck_add_builtins(SymTab_t *symtab)
         free(dispose_name);
     }
 
+    char *assert_name = strdup("Assert");
+    if (assert_name != NULL) {
+        KgpcType *assert_type = create_procedure_type(NULL, NULL);
+        assert(assert_type != NULL && "Failed to create Assert procedure type");
+        AddBuiltinProc_Typed(symtab, assert_name, assert_type);
+        destroy_kgpc_type(assert_type);
+        free(assert_name);
+    }
+
     /* Builtin functions - functions have return types */
     char *length_name = strdup("Length");
     if (length_name != NULL) {
