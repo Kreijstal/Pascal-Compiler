@@ -6160,11 +6160,83 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
 
     if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "Assert"))
     {
-        /* Assert is a compiler intrinsic - in release/no-stdlib mode, emit nothing.
-         * A full implementation would emit a conditional branch to an assertion
-         * failure handler, but for now this unblocks compilation. */
+        /* Assert(condition [, message])
+         * Evaluate the boolean condition. If true, continue execution.
+         * If false, call kgpc_assert_failed(msg, filename, line) which
+         * prints the assertion failure and exits with code 227. */
+        ListNode_t *assert_args = stmt->stmt_data.procedure_call_data.expr_args;
+        struct Expression *cond_expr = (assert_args != NULL) ? (struct Expression *)assert_args->cur : NULL;
+        struct Expression *msg_expr = (assert_args != NULL && assert_args->next != NULL)
+                                      ? (struct Expression *)assert_args->next->cur : NULL;
+
+        if (cond_expr != NULL)
+        {
+            int relop_type = 0;
+            inst_list = codegen_condition_expr(cond_expr, inst_list, ctx, &relop_type);
+
+            /* Generate label for the "pass" path (condition was true) */
+            char pass_label[18];
+            gen_label(pass_label, 18, ctx);
+
+            /* Jump to pass_label if condition is TRUE (non-zero).
+             * codegen_condition_expr with a boolean expr does testl and sets relop_type=NE.
+             * gencode_jmp(NE, inverse=0, ...) emits jne label (jump if not-equal-to-zero = true). */
+            inst_list = gencode_jmp(relop_type, 0, pass_label, inst_list);
+
+            /* Failure path: call kgpc_assert_failed(msg, "", line) */
+            /* Set up message argument in %rdi */
+            if (msg_expr != NULL && msg_expr->type == EXPR_STRING && msg_expr->expr_data.string != NULL)
+            {
+                const char *readonly_section = codegen_readonly_section_directive();
+                char msg_label[64];
+                snprintf(msg_label, sizeof(msg_label), ".LC%d", ctx->write_label_counter++);
+                char escaped_msg[CODEGEN_MAX_INST_BUF];
+                escape_string(escaped_msg, msg_expr->expr_data.string, sizeof(escaped_msg));
+                char rodata_buf[CODEGEN_MAX_INST_BUF + 128];
+                snprintf(rodata_buf, sizeof(rodata_buf), "%s\n%s:\n\t.string \"%s\"\n\t.text\n",
+                         readonly_section, msg_label, escaped_msg);
+                inst_list = add_inst(inst_list, rodata_buf);
+                snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %%rdi\n", msg_label);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else
+            {
+                /* No message provided - pass empty string */
+                const char *readonly_section = codegen_readonly_section_directive();
+                char msg_label[64];
+                snprintf(msg_label, sizeof(msg_label), ".LC%d", ctx->write_label_counter++);
+                char rodata_buf[256];
+                snprintf(rodata_buf, sizeof(rodata_buf), "%s\n%s:\n\t.string \"\"\n\t.text\n",
+                         readonly_section, msg_label);
+                inst_list = add_inst(inst_list, rodata_buf);
+                snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %%rdi\n", msg_label);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            /* filename argument in %rsi (empty for now) */
+            {
+                const char *readonly_section = codegen_readonly_section_directive();
+                char fn_label[64];
+                snprintf(fn_label, sizeof(fn_label), ".LC%d", ctx->write_label_counter++);
+                char rodata_buf[256];
+                snprintf(rodata_buf, sizeof(rodata_buf), "%s\n%s:\n\t.string \"\"\n\t.text\n",
+                         readonly_section, fn_label);
+                inst_list = add_inst(inst_list, rodata_buf);
+                snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %%rsi\n", fn_label);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            /* line number argument in %edx */
+            snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%edx\n", stmt->line_num);
+            inst_list = add_inst(inst_list, buffer);
+            /* Zero %eax (no vector regs) and call */
+            inst_list = add_inst(inst_list, "\txorl\t%eax, %eax\n");
+            inst_list = add_inst(inst_list, "\tcall\tkgpc_assert_failed\n");
+
+            /* Emit pass label */
+            snprintf(buffer, sizeof(buffer), "%s:\n", pass_label);
+            inst_list = add_inst(inst_list, buffer);
+        }
         #ifdef DEBUG_CODEGEN
-        CODEGEN_DEBUG("DEBUG: LEAVING %s (Assert no-op)\n", __func__);
+        CODEGEN_DEBUG("DEBUG: LEAVING %s (Assert)\n", __func__);
         #endif
         return inst_list;
     }

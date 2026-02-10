@@ -2681,6 +2681,31 @@ sys.exit(3)
                 flags = UNIT_ONLY_FLAGS.get(base_name)
                 run_compiler(input_file, asm_file, flags=flags)
 
+    def test_assert_failure_exits_227(self):
+        """Assert(False, 'msg') must print the message to stderr and exit with code 227."""
+        input_file = os.path.join(TEST_CASES_DIR, "assert_fail.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "assert_fail.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "assert_fail")
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        process = subprocess.run(
+            [executable_file],
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+        # stdout should show output before the assertion
+        self.assertIn("before assert", process.stdout)
+        # The assertion failure message must appear on stderr
+        self.assertIn("Assertion failed", process.stderr)
+        self.assertIn("this assertion should fail", process.stderr)
+        # Must NOT reach code after the failed assert
+        self.assertNotIn("this should not be printed", process.stdout)
+        # FPC-compatible exit code 227 for assertion failure
+        self.assertEqual(process.returncode, 227)
+
 
 def _discover_and_add_auto_tests():
     """
