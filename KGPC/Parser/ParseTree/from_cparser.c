@@ -10682,11 +10682,28 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     const char *effective_class = (cleaned_class_name != NULL) ? cleaned_class_name : 
                                   (class_name != NULL) ? class_name : registered_class;
     
+    /* For nested types like TManager.TState, the effective class for mangling
+     * should use just the last component (TState) since that's the actual type
+     * name that methods are registered under.  Keep the full dotted name in
+     * effective_class_full for const/var lookups.  */
+    const char *effective_class_full = effective_class;
+    char *effective_class_last = NULL;
+    if (effective_class != NULL)
+    {
+        const char *last_dot = strrchr(effective_class, '.');
+        if (last_dot != NULL && last_dot[1] != '\0')
+        {
+            effective_class_last = strdup(last_dot + 1);
+            effective_class = effective_class_last;
+        }
+    }
+
     if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
-        fprintf(stderr, "[FromCParser] convert_method_impl: class_name=%s method_name=%s effective_class=%s\n",
+        fprintf(stderr, "[FromCParser] convert_method_impl: class_name=%s method_name=%s effective_class=%s effective_class_full=%s\n",
             class_name ? class_name : "<null>",
             method_name ? method_name : "<null>",
-            effective_class ? effective_class : "<null>");
+            effective_class ? effective_class : "<null>",
+            effective_class_full ? effective_class_full : "<null>");
     }
     
     /* Don't re-register the method here - it was already registered during class declaration */
@@ -10712,6 +10729,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     if (proc_name == NULL) {
         free(class_name);
         free(method_name);
+        free(effective_class_last);
         return NULL;
     }
     
@@ -10947,7 +10965,19 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
                            nested_subs, body, 0, 0);
     }
     if (tree != NULL) {
-        tree->tree_data.subprogram_data.mangled_id = strdup(proc_name);
+        /* Use the full dotted class path for mangled_id so that
+         * semcheck_get_current_method_owner returns the full nested path.
+         * This allows const lookup to fall back to outer classes.
+         * E.g., for TManager.TState.Init, mangled_id = "TManager.TState__Init" */
+        if (effective_class_full != NULL && effective_class_full != effective_class)
+        {
+            char *full_mangled = mangle_method_name(effective_class_full, method_name);
+            tree->tree_data.subprogram_data.mangled_id = full_mangled != NULL ? full_mangled : strdup(proc_name);
+        }
+        else
+        {
+            tree->tree_data.subprogram_data.mangled_id = strdup(proc_name);
+        }
     }
 
     record_generic_method_impl(effective_class, method_name, method_node);
@@ -10965,6 +10995,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
             free(cleaned_class_name);
         free(class_name);
         free(method_name);
+        free(effective_class_last);
         return NULL;
     }
     
@@ -10976,6 +11007,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         free(cleaned_class_name);
     free(class_name);
     free(method_name);
+    free(effective_class_last);
     return tree;
 }
 

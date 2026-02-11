@@ -1964,6 +1964,31 @@ int semcheck_recordaccess(int *type_return,
             }
         }
 
+        /* For classes and object types, check if the field is a class/object const
+         * stored with mangled name ClassName__ConstName. */
+        if (record_info != NULL && record_info->type_id != NULL && field_id != NULL)
+        {
+            char *mangled_const = semcheck_mangle_helper_const_id(record_info->type_id, field_id);
+            HashNode_t *const_node = NULL;
+            if (mangled_const != NULL &&
+                FindIdent(&const_node, symtab, mangled_const) >= 0 &&
+                const_node != NULL && const_node->hash_type == HASHTYPE_CONST)
+            {
+                destroy_expr(record_expr);
+                expr->expr_data.record_access_data.record_expr = NULL;
+                if (expr->expr_data.record_access_data.field_id != NULL)
+                {
+                    free(expr->expr_data.record_access_data.field_id);
+                    expr->expr_data.record_access_data.field_id = NULL;
+                }
+                expr->type = EXPR_VAR_ID;
+                expr->expr_data.id = mangled_const;
+                return semcheck_varid(type_return, symtab, expr, max_scope_lev, mutating);
+            }
+            if (mangled_const != NULL)
+                free(mangled_const);
+        }
+
         semcheck_error_with_context("Error on line %d, record field %s not found.\n", expr->line_num, field_id);
         if (getenv("KGPC_DEBUG_FIELD") != NULL)
         {
