@@ -557,6 +557,41 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
             
             if (record_expr != NULL && field_name != NULL)
             {
+                if (record_expr->type == EXPR_VAR_ID && record_expr->expr_data.id != NULL)
+                {
+                    HashNode_t *type_node = NULL;
+                    if (FindIdent(&type_node, symtab, record_expr->expr_data.id) != -1 &&
+                        type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+                    {
+                        size_t len = strlen(record_expr->expr_data.id) + strlen(field_name) + 3;
+                        char *mangled = (char *)malloc(len);
+                        if (mangled != NULL)
+                        {
+                            snprintf(mangled, len, "%s__%s", record_expr->expr_data.id, field_name);
+                            HashNode_t *const_node = NULL;
+                            if (FindIdent(&const_node, symtab, mangled) != -1 &&
+                                const_node != NULL &&
+                                (const_node->hash_type == HASHTYPE_CONST ||
+                                 const_node->hash_type == HASHTYPE_ARRAY ||
+                                 const_node->hash_type == HASHTYPE_VAR ||
+                                 const_node->is_typed_const))
+                            {
+                                destroy_expr(record_expr);
+                                if (expr->expr_data.record_access_data.field_id != NULL)
+                                    free(expr->expr_data.record_access_data.field_id);
+                                expr->type = EXPR_VAR_ID;
+                                expr->expr_data.id = mangled;
+                                if (const_node->type != NULL)
+                                    semcheck_expr_set_resolved_kgpc_type_shared(expr, const_node->type);
+                                if (owns_type != NULL)
+                                    *owns_type = 0;
+                                return const_node->type;
+                            }
+                            free(mangled);
+                        }
+                    }
+                }
+
                 /* Resolve the record expression's type */
                 int record_type_owned = 0;
                 KgpcType *record_type = semcheck_resolve_expression_kgpc_type(symtab, record_expr, 

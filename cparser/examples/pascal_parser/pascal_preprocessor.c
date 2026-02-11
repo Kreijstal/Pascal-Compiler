@@ -398,6 +398,93 @@ static bool preprocess_buffer_internal(PascalPreprocessor *pp,
                 }
                 continue;
             }
+            if (c == '{') {
+                size_t close = i + 1;
+                bool has_newline = false;
+                bool has_nested = false;
+                for (; close < length; ++close) {
+                    if (input[close] == '\n' || input[close] == '\r') {
+                        has_newline = true;
+                        break;
+                    }
+                    if (input[close] == '{') {
+                        has_nested = true;
+                        break;
+                    }
+                    if (input[close] == '}') {
+                        break;
+                    }
+                }
+                if (!has_newline && !has_nested && close < length && input[close] == '}') {
+                    const char *p = input + i + 1;
+                    const char *end = input + close;
+                    while (p < end && isspace((unsigned char)*p))
+                        ++p;
+                    const char *id1_start = p;
+                    if (p < end && (isalpha((unsigned char)*p) || *p == '_')) {
+                        ++p;
+                        while (p < end && (isalnum((unsigned char)*p) || *p == '_'))
+                            ++p;
+                        const char *id1_end = p;
+                        while (p < end && isspace((unsigned char)*p))
+                            ++p;
+                        if (p + 1 < end && p[0] == ':' && p[1] == '=') {
+                            p += 2;
+                            while (p < end && isspace((unsigned char)*p))
+                                ++p;
+                            const char *id2_start = p;
+                            if (p < end && (isalpha((unsigned char)*p) || *p == '_')) {
+                                ++p;
+                                while (p < end && (isalnum((unsigned char)*p) || *p == '_'))
+                                    ++p;
+                                const char *id2_end = p;
+                                while (p < end && isspace((unsigned char)*p))
+                                    ++p;
+                                if (p == end) {
+                                    size_t next = close + 1;
+                                    while (next < length && (input[next] == ' ' || input[next] == '\t'))
+                                        ++next;
+                                    if (next < length && input[next] == '(') {
+                                        if (pp->flatten_only || current_branch_active(conditions)) {
+                                            bool should_emit_directive = false;
+                                            if (need_line_directive && filename != NULL && depth > 0) {
+                                                if (i == 0 || input[i - 1] == '\n' || last_emitted_line == 0) {
+                                                    should_emit_directive = true;
+                                                }
+                                            }
+                                            if (should_emit_directive) {
+                                                if (!emit_line_directive(output, current_line, filename)) {
+                                                    return set_error(error_message, "out of memory");
+                                                }
+                                                need_line_directive = false;
+                                            }
+                                            for (const char *cur = id1_start; cur < id1_end; ++cur) {
+                                                if (!string_builder_append_char(output, *cur)) {
+                                                    return set_error(error_message, "out of memory");
+                                                }
+                                            }
+                                            if (!string_builder_append_char(output, ':') ||
+                                                !string_builder_append_char(output, '=')) {
+                                                return set_error(error_message, "out of memory");
+                                            }
+                                            for (const char *cur = id2_start; cur < id2_end; ++cur) {
+                                                if (!string_builder_append_char(output, *cur)) {
+                                                    return set_error(error_message, "out of memory");
+                                                }
+                                            }
+                                            last_emitted_line = current_line;
+                                        } else {
+                                            need_line_directive = true;
+                                        }
+                                        i = close;
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         if (in_line_comment) {

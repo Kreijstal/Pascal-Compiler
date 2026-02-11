@@ -1972,12 +1972,15 @@ static inline enum VarType get_var_type_from_node(HashNode_t *node)
     }
 }
 
-static inline void mark_hashnode_unit_info(HashNode_t *node, int defined_in_unit, int is_public)
+static inline void mark_hashnode_unit_info(SymTab_t *symtab, HashNode_t *node,
+    int defined_in_unit, int is_public)
 {
     if (node == NULL || !defined_in_unit)
         return;
     node->defined_in_unit = 1;
     node->unit_is_public = is_public ? 1 : 0;
+    if (symtab != NULL)
+        SymTab_MoveHashNodeToBack(symtab, node);
 }
 
 static Tree_t *g_semcheck_current_subprogram = NULL;
@@ -2898,6 +2901,30 @@ static int evaluate_real_const_expr(SymTab_t *symtab, struct Expression *expr, d
                     return 1;
                 }
                 return evaluate_real_const_expr(symtab, arg, out_value);
+            }
+            if (id != NULL && pascal_identifier_equals(id, "Ln"))
+            {
+                if (args == NULL || args->next != NULL)
+                {
+                    fprintf(stderr, "Error: Ln in const expression requires exactly one argument.\n");
+                    return 1;
+                }
+                struct Expression *arg = (struct Expression *)args->cur;
+                if (arg == NULL)
+                {
+                    fprintf(stderr, "Error: Ln argument is NULL.\n");
+                    return 1;
+                }
+                double value = 0.0;
+                if (evaluate_real_const_expr(symtab, arg, &value) != 0)
+                    return 1;
+                if (value <= 0.0)
+                {
+                    fprintf(stderr, "Error: Ln argument must be > 0 in const expression.\n");
+                    return 1;
+                }
+                *out_value = log(value);
+                return 0;
             }
             break;
         }
@@ -4400,7 +4427,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             HashNode_t *type_node = semcheck_find_type_node_with_unit_flag(symtab,
                                 type_id, tree->tree_data.type_decl_data.defined_in_unit);
                             if (type_node != NULL)
-                                mark_hashnode_unit_info(type_node,
+                                mark_hashnode_unit_info(symtab, type_node,
                                     tree->tree_data.type_decl_data.defined_in_unit,
                                     tree->tree_data.type_decl_data.unit_is_public);
                         }
@@ -4447,7 +4474,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                 HashNode_t *type_node = semcheck_find_type_node_with_unit_flag(symtab,
                                     record_name, tree->tree_data.type_decl_data.defined_in_unit);
                                 if (type_node != NULL)
-                                    mark_hashnode_unit_info(type_node,
+                                    mark_hashnode_unit_info(symtab, type_node,
                                         tree->tree_data.type_decl_data.defined_in_unit,
                                         tree->tree_data.type_decl_data.unit_is_public);
                             }
@@ -4466,7 +4493,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             HashNode_t *type_node = semcheck_find_type_node_with_unit_flag(symtab,
                                 type_id, tree->tree_data.type_decl_data.defined_in_unit);
                             if (type_node != NULL)
-                                mark_hashnode_unit_info(type_node,
+                                mark_hashnode_unit_info(symtab, type_node,
                                     tree->tree_data.type_decl_data.defined_in_unit,
                                     tree->tree_data.type_decl_data.unit_is_public);
                         }
@@ -4519,7 +4546,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                 HashNode_t *type_node = semcheck_find_type_node_with_unit_flag(symtab,
                                     type_id, tree->tree_data.type_decl_data.defined_in_unit);
                                 if (type_node != NULL)
-                                    mark_hashnode_unit_info(type_node,
+                                    mark_hashnode_unit_info(symtab, type_node,
                                         tree->tree_data.type_decl_data.defined_in_unit,
                                         tree->tree_data.type_decl_data.unit_is_public);
                             }
@@ -4547,7 +4574,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                 HashNode_t *type_node = semcheck_find_type_node_with_unit_flag(symtab,
                                     type_id, tree->tree_data.type_decl_data.defined_in_unit);
                                 if (type_node != NULL)
-                                    mark_hashnode_unit_info(type_node,
+                                    mark_hashnode_unit_info(symtab, type_node,
                                         tree->tree_data.type_decl_data.defined_in_unit,
                                         tree->tree_data.type_decl_data.unit_is_public);
                             }
@@ -4610,7 +4637,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                 HashNode_t *type_node = semcheck_find_type_node_with_unit_flag(symtab,
                                     type_id, tree->tree_data.type_decl_data.defined_in_unit);
                                 if (type_node != NULL)
-                                    mark_hashnode_unit_info(type_node,
+                                    mark_hashnode_unit_info(symtab, type_node,
                                         tree->tree_data.type_decl_data.defined_in_unit,
                                         tree->tree_data.type_decl_data.unit_is_public);
                             }
@@ -6628,7 +6655,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 tree->tree_data.type_decl_data.defined_in_unit);
             if (type_node != NULL)
             {
-                mark_hashnode_unit_info(type_node,
+                mark_hashnode_unit_info(symtab, type_node,
                     tree->tree_data.type_decl_data.defined_in_unit,
                     tree->tree_data.type_decl_data.unit_is_public);
             }
@@ -6772,7 +6799,7 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                             fprintf(stderr, "[KGPC] const pushed: %s\n",
                                 tree->tree_data.const_decl_data.id);
                         }
-                        mark_hashnode_unit_info(const_node,
+                        mark_hashnode_unit_info(symtab, const_node,
                             tree->tree_data.const_decl_data.defined_in_unit,
                             tree->tree_data.const_decl_data.unit_is_public);
                     }
@@ -6802,7 +6829,7 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                     HashNode_t *const_node = NULL;
                     if (FindIdent(&const_node, symtab, tree->tree_data.const_decl_data.id) != -1 && const_node != NULL)
                     {
-                        mark_hashnode_unit_info(const_node,
+                        mark_hashnode_unit_info(symtab, const_node,
                             tree->tree_data.const_decl_data.defined_in_unit,
                             tree->tree_data.const_decl_data.unit_is_public);
                     }
@@ -6843,7 +6870,7 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                     HashNode_t *const_node = NULL;
                     if (FindIdent(&const_node, symtab, tree->tree_data.const_decl_data.id) != -1 && const_node != NULL)
                     {
-                        mark_hashnode_unit_info(const_node,
+                        mark_hashnode_unit_info(symtab, const_node,
                             tree->tree_data.const_decl_data.defined_in_unit,
                             tree->tree_data.const_decl_data.unit_is_public);
                     }
@@ -6893,7 +6920,7 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                         {
                             /* Store the procedure name as const_string_value for codegen to use */
                             const_node->const_string_value = strdup(proc_name);
-                            mark_hashnode_unit_info(const_node,
+                            mark_hashnode_unit_info(symtab, const_node,
                                 tree->tree_data.const_decl_data.defined_in_unit,
                                 tree->tree_data.const_decl_data.unit_is_public);
                         }
@@ -6920,7 +6947,7 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                         if (FindIdent(&const_node, symtab, tree->tree_data.const_decl_data.id) != -1 && const_node != NULL)
                         {
                             const_node->const_string_value = strdup(proc_name);
-                            mark_hashnode_unit_info(const_node,
+                            mark_hashnode_unit_info(symtab, const_node,
                                 tree->tree_data.const_decl_data.defined_in_unit,
                                 tree->tree_data.const_decl_data.unit_is_public);
                         }
@@ -7038,7 +7065,7 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                     HashNode_t *const_node = NULL;
                     if (FindIdent(&const_node, symtab, tree->tree_data.const_decl_data.id) != -1 && const_node != NULL)
                     {
-                        mark_hashnode_unit_info(const_node,
+                        mark_hashnode_unit_info(symtab, const_node,
                             tree->tree_data.const_decl_data.defined_in_unit,
                             tree->tree_data.const_decl_data.unit_is_public);
                     }
@@ -8907,7 +8934,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     if (FindIdent(&existing_node, symtab, ids->cur) >= 0 &&
                         existing_node != NULL && existing_node->is_typed_const)
                     {
-                        mark_hashnode_unit_info(existing_node,
+                        mark_hashnode_unit_info(symtab, existing_node,
                             tree->tree_data.var_decl_data.defined_in_unit,
                             tree->tree_data.var_decl_data.unit_is_public);
                         skip_initializer = 1;
@@ -8966,7 +8993,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
                             {
                                 var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
-                                mark_hashnode_unit_info(var_node,
+                                mark_hashnode_unit_info(symtab, var_node,
                                     tree->tree_data.var_decl_data.defined_in_unit,
                                     tree->tree_data.var_decl_data.unit_is_public);
                             }
@@ -9010,7 +9037,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
                             {
                                 var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
-                                mark_hashnode_unit_info(var_node,
+                                mark_hashnode_unit_info(symtab, var_node,
                                     tree->tree_data.var_decl_data.defined_in_unit,
                                     tree->tree_data.var_decl_data.unit_is_public);
                             }
@@ -9083,7 +9110,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                                 if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
                                 {
                                     var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
-                                    mark_hashnode_unit_info(var_node,
+                                    mark_hashnode_unit_info(symtab, var_node,
                                         tree->tree_data.var_decl_data.defined_in_unit,
                                         tree->tree_data.var_decl_data.unit_is_public);
                                 }
@@ -9127,7 +9154,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                                 if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
                                 {
                                     var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
-                                    mark_hashnode_unit_info(var_node,
+                                    mark_hashnode_unit_info(symtab, var_node,
                                         tree->tree_data.var_decl_data.defined_in_unit,
                                         tree->tree_data.var_decl_data.unit_is_public);
                                 }
@@ -9160,7 +9187,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                                     HashNode_t *var_node = NULL;
                                     if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
                                     {
-                                        mark_hashnode_unit_info(var_node,
+                                        mark_hashnode_unit_info(symtab, var_node,
                                             tree->tree_data.var_decl_data.defined_in_unit,
                                             tree->tree_data.var_decl_data.unit_is_public);
                                     }
@@ -9220,7 +9247,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                                 HashNode_t *var_node = NULL;
                                 if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
                                 {
-                                    mark_hashnode_unit_info(var_node,
+                                    mark_hashnode_unit_info(symtab, var_node,
                                         tree->tree_data.var_decl_data.defined_in_unit,
                                         tree->tree_data.var_decl_data.unit_is_public);
                                 }
@@ -9309,7 +9336,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
                             {
                                 var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
-                                mark_hashnode_unit_info(var_node,
+                                mark_hashnode_unit_info(symtab, var_node,
                                     tree->tree_data.var_decl_data.defined_in_unit,
                                     tree->tree_data.var_decl_data.unit_is_public);
                             }
@@ -9543,7 +9570,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
                     {
                         var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
-                        mark_hashnode_unit_info(var_node,
+                        mark_hashnode_unit_info(symtab, var_node,
                             tree->tree_data.var_decl_data.defined_in_unit,
                             tree->tree_data.var_decl_data.unit_is_public);
                     }
@@ -9793,15 +9820,17 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     if (tree->type == TREE_VAR_DECL)
                     {
                         decl_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
-                        mark_hashnode_unit_info(decl_node,
+                        mark_hashnode_unit_info(symtab, decl_node,
                             tree->tree_data.var_decl_data.defined_in_unit,
                             tree->tree_data.var_decl_data.unit_is_public);
                     }
                     else
                     {
-                        mark_hashnode_unit_info(decl_node,
+                        mark_hashnode_unit_info(symtab, decl_node,
                             tree->tree_data.arr_decl_data.defined_in_unit,
                             tree->tree_data.arr_decl_data.unit_is_public);
+                        if (tree->tree_data.arr_decl_data.is_typed_const)
+                            decl_node->is_typed_const = 1;
                     }
                 }
             }

@@ -128,9 +128,10 @@ int semcheck_typecast(int *type_return,
     {
         /* Resolve full pointer type info so deref preserves record/element types */
         KgpcType *resolved_ptr = NULL;
+        HashNode_t *target_node = NULL;
+        struct TypeAlias *alias = NULL;
         if (expr->expr_data.typecast_data.target_type_id != NULL)
         {
-            HashNode_t *target_node = NULL;
             if (FindIdent(&target_node, symtab, expr->expr_data.typecast_data.target_type_id) >= 0 &&
                 target_node != NULL && target_node->type != NULL)
             {
@@ -150,6 +151,38 @@ int semcheck_typecast(int *type_return,
                     {
                         int subtype = kgpc_type_get_primitive_tag(points_to);
                         semcheck_set_pointer_info(expr, subtype, NULL);
+                    }
+                }
+            }
+            if (target_node != NULL)
+                alias = get_type_alias_from_node(target_node);
+            if (alias != NULL && alias->is_pointer)
+            {
+                KgpcType *alias_type = create_kgpc_type_from_type_alias(alias, symtab);
+                if (alias_type != NULL)
+                {
+                    if (alias->kgpc_type == alias_type)
+                        kgpc_type_retain(alias_type);
+                    if (resolved_ptr != NULL)
+                        destroy_kgpc_type(resolved_ptr);
+                    resolved_ptr = alias_type;
+
+                    if (resolved_ptr->kind == TYPE_KIND_POINTER &&
+                        resolved_ptr->info.points_to != NULL)
+                    {
+                        KgpcType *points_to = resolved_ptr->info.points_to;
+                        if (points_to->kind == TYPE_KIND_RECORD &&
+                            points_to->info.record_info != NULL)
+                        {
+                            semcheck_set_pointer_info(expr, RECORD_TYPE,
+                                points_to->info.record_info->type_id);
+                            expr->record_type = points_to->info.record_info;
+                        }
+                        else if (points_to->kind == TYPE_KIND_PRIMITIVE)
+                        {
+                            int subtype = kgpc_type_get_primitive_tag(points_to);
+                            semcheck_set_pointer_info(expr, subtype, NULL);
+                        }
                     }
                 }
             }
@@ -1972,7 +2005,11 @@ int semcheck_recordaccess(int *type_return,
             HashNode_t *const_node = NULL;
             if (mangled_const != NULL &&
                 FindIdent(&const_node, symtab, mangled_const) >= 0 &&
-                const_node != NULL && const_node->hash_type == HASHTYPE_CONST)
+                const_node != NULL &&
+                (const_node->hash_type == HASHTYPE_CONST ||
+                 const_node->hash_type == HASHTYPE_ARRAY ||
+                 const_node->hash_type == HASHTYPE_VAR ||
+                 const_node->is_typed_const))
             {
                 destroy_expr(record_expr);
                 expr->expr_data.record_access_data.record_expr = NULL;

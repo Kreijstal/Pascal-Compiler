@@ -1257,7 +1257,10 @@ int semcheck_varid(int *type_return,
                     mangled, class_const_scope, (void*)class_const);
             }
             if (class_const_scope >= 0 && class_const != NULL &&
-                class_const->hash_type == HASHTYPE_CONST)
+                (class_const->hash_type == HASHTYPE_CONST ||
+                 class_const->hash_type == HASHTYPE_ARRAY ||
+                 class_const->hash_type == HASHTYPE_VAR ||
+                 class_const->is_typed_const))
             {
                 if (expr->expr_data.id != NULL)
                     free(expr->expr_data.id);
@@ -1280,7 +1283,10 @@ int semcheck_varid(int *type_return,
                     class_const = NULL;
                     class_const_scope = FindIdent(&class_const, symtab, outer_mangled);
                     if (class_const_scope >= 0 && class_const != NULL &&
-                        class_const->hash_type == HASHTYPE_CONST)
+                        (class_const->hash_type == HASHTYPE_CONST ||
+                         class_const->hash_type == HASHTYPE_ARRAY ||
+                         class_const->hash_type == HASHTYPE_VAR ||
+                         class_const->is_typed_const))
                     {
                         if (expr->expr_data.id != NULL)
                             free(expr->expr_data.id);
@@ -1350,7 +1356,10 @@ int semcheck_varid(int *type_return,
                     HashNode_t *class_const_node = NULL;
                     int cc_scope = FindIdent(&class_const_node, symtab, mangled_qid);
                     if (cc_scope >= 0 && class_const_node != NULL &&
-                        class_const_node->hash_type == HASHTYPE_CONST)
+                        (class_const_node->hash_type == HASHTYPE_CONST ||
+                         class_const_node->hash_type == HASHTYPE_ARRAY ||
+                         class_const_node->hash_type == HASHTYPE_VAR ||
+                         class_const_node->is_typed_const))
                     {
                         free(prefix);
                         if (expr->expr_data.id != NULL)

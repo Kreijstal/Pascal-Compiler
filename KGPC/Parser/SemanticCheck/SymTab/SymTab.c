@@ -690,3 +690,16 @@ void PrintSymTab(SymTab_t *symtab, FILE *f, int num_indent)
         ++scope;
     }
 }
+
+void SymTab_MoveHashNodeToBack(SymTab_t *symtab, HashNode_t *node)
+{
+    if (symtab == NULL || node == NULL)
+        return;
+
+    for (ListNode_t *cur = symtab->stack_head; cur != NULL; cur = cur->next)
+    {
+        HashTable_t *table = (HashTable_t *)cur->cur;
+        if (table != NULL)
+            HashTable_MoveNodeToBack(table, node);
+    }
+}

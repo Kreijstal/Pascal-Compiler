@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <stdint.h>
 #include <stdarg.h>
 #include <limits.h>
@@ -395,6 +396,30 @@ static void register_const_section(ast_t *const_section) {
     } else {
         PushListNodeBack(g_const_sections, node);
     }
+}
+
+static int const_section_is_resourcestring(ast_t *const_section) {
+    if (const_section == NULL)
+        return 0;
+
+    if (const_section->sym != NULL && const_section->sym->name != NULL &&
+        strcasecmp(const_section->sym->name, "resourcestring") == 0)
+        return 1;
+
+    ast_t *cur = const_section->child;
+    if (cur != NULL && cur->sym != NULL && cur->sym->name != NULL &&
+        strcasecmp(cur->sym->name, "resourcestring") == 0)
+        return 1;
+
+    if (cur != NULL && cur->typ == PASCAL_T_NONE && cur->child != NULL)
+    {
+        ast_t *inner = cur->child;
+        if (inner->sym != NULL && inner->sym->name != NULL &&
+            strcasecmp(inner->sym->name, "resourcestring") == 0)
+            return 1;
+    }
+
+    return 0;
 }
 
 static int evaluate_simple_const_expr(const char *expr, ast_t *const_section, int *result);
@@ -2976,6 +3001,47 @@ static int evaluate_const_int_expr(ast_t *expr, int *out_value, int depth) {
             *out_value = left - right;
         return 0;
     }
+    case PASCAL_T_MUL:
+    case PASCAL_T_DIV:
+    case PASCAL_T_INTDIV:
+    case PASCAL_T_MOD:
+    case PASCAL_T_SHL:
+    case PASCAL_T_SHR:
+    {
+        int left = 0;
+        int right = 0;
+        if (expr->child == NULL || expr->child->next == NULL)
+            return -1;
+        if (evaluate_const_int_expr(expr->child, &left, depth + 1) != 0)
+            return -1;
+        if (evaluate_const_int_expr(expr->child->next, &right, depth + 1) != 0)
+            return -1;
+        switch (expr->typ) {
+            case PASCAL_T_MUL:
+                *out_value = left * right;
+                return 0;
+            case PASCAL_T_DIV:
+            case PASCAL_T_INTDIV:
+                if (right == 0)
+                    return -1;
+                *out_value = left / right;
+                return 0;
+            case PASCAL_T_MOD:
+                if (right == 0)
+                    return -1;
+                *out_value = left % right;
+                return 0;
+            case PASCAL_T_SHL:
+                *out_value = left << right;
+                return 0;
+            case PASCAL_T_SHR:
+                *out_value = (unsigned int)left >> right;
+                return 0;
+            default:
+                break;
+        }
+        return -1;
+    }
     default:
         return -1;
     }
@@ -3016,107 +3082,267 @@ static int resolve_const_int_from_ast(const char *identifier, ast_t *const_secti
 }
 
 /* Evaluate simple const expression like "NUM-1" or "NUM+1" */
+typedef struct ConstExprScanner {
+    const char *input;
+    size_t pos;
+    ast_t *const_section;
+} ConstExprScanner;
+
+static void const_expr_skip_ws(ConstExprScanner *scanner) {
+    while (scanner->input[scanner->pos] != '\0' &&
+           isspace((unsigned char)scanner->input[scanner->pos])) {
+        scanner->pos++;
+    }
+}
+
+static int const_expr_match_char(ConstExprScanner *scanner, char ch) {
+    const_expr_skip_ws(scanner);
+    if (scanner->input[scanner->pos] == ch) {
+        scanner->pos++;
+        return 1;
+    }
+    return 0;
+}
+
+static int const_expr_match_keyword(ConstExprScanner *scanner, const char *kw) {
+    const_expr_skip_ws(scanner);
+    size_t len = strlen(kw);
+    if (strncasecmp(scanner->input + scanner->pos, kw, len) != 0)
+        return 0;
+    char next = scanner->input[scanner->pos + len];
+    if (isalnum((unsigned char)next) || next == '_')
+        return 0;
+    scanner->pos += len;
+    return 1;
+}
+
+static int const_expr_parse_number(ConstExprScanner *scanner, long long *out_value) {
+    const_expr_skip_ws(scanner);
+    const char *start = scanner->input + scanner->pos;
+    if (*start == '\0')
+        return -1;
+
+    int base = 10;
+    const char *num_start = start;
+    if (*start == '$') {
+        base = 16;
+        num_start = start + 1;
+    } else if (*start == '%') {
+        base = 2;
+        num_start = start + 1;
+    } else if (*start == '&') {
+        base = 8;
+        num_start = start + 1;
+    } else if (!isdigit((unsigned char)*start)) {
+        return -1;
+    }
+
+    char *endptr = NULL;
+    long long value = strtoll(num_start, &endptr, base);
+    if (endptr == num_start)
+        return -1;
+
+    scanner->pos = (size_t)(endptr - scanner->input);
+    *out_value = value;
+    return 0;
+}
+
+static int const_expr_parse_identifier(ConstExprScanner *scanner, long long *out_value) {
+    const_expr_skip_ws(scanner);
+    size_t start = scanner->pos;
+    char ch = scanner->input[start];
+    if (!(isalpha((unsigned char)ch) || ch == '_'))
+        return -1;
+    scanner->pos++;
+    while (scanner->input[scanner->pos] != '\0') {
+        char c = scanner->input[scanner->pos];
+        if (!(isalnum((unsigned char)c) || c == '_'))
+            break;
+        scanner->pos++;
+    }
+
+    size_t len = scanner->pos - start;
+    char *ident = (char *)malloc(len + 1);
+    if (ident == NULL)
+        return -1;
+    memcpy(ident, scanner->input + start, len);
+    ident[len] = '\0';
+
+    int val = resolve_const_int_from_ast(ident, scanner->const_section, INT_MIN);
+    free(ident);
+    if (val == INT_MIN)
+        return -1;
+    *out_value = val;
+    return 0;
+}
+
+static int const_expr_parse_expression(ConstExprScanner *scanner, long long *out_value);
+
+static int const_expr_parse_primary(ConstExprScanner *scanner, long long *out_value) {
+    const_expr_skip_ws(scanner);
+    if (const_expr_match_char(scanner, '(')) {
+        if (const_expr_parse_expression(scanner, out_value) != 0)
+            return -1;
+        if (!const_expr_match_char(scanner, ')'))
+            return -1;
+        return 0;
+    }
+    if (const_expr_parse_number(scanner, out_value) == 0)
+        return 0;
+    return const_expr_parse_identifier(scanner, out_value);
+}
+
+static int const_expr_parse_unary(ConstExprScanner *scanner, long long *out_value) {
+    if (const_expr_match_char(scanner, '-')) {
+        long long inner = 0;
+        if (const_expr_parse_unary(scanner, &inner) != 0)
+            return -1;
+        *out_value = -inner;
+        return 0;
+    }
+    return const_expr_parse_primary(scanner, out_value);
+}
+
+static int const_expr_parse_mul(ConstExprScanner *scanner, long long *out_value) {
+    long long lhs = 0;
+    if (const_expr_parse_unary(scanner, &lhs) != 0)
+        return -1;
+
+    while (1) {
+        if (const_expr_match_char(scanner, '*')) {
+            long long rhs = 0;
+            if (const_expr_parse_unary(scanner, &rhs) != 0)
+                return -1;
+            lhs *= rhs;
+            continue;
+        }
+        if (const_expr_match_char(scanner, '/')) {
+            long long rhs = 0;
+            if (const_expr_parse_unary(scanner, &rhs) != 0)
+                return -1;
+            if (rhs == 0)
+                return -1;
+            lhs /= rhs;
+            continue;
+        }
+        if (const_expr_match_keyword(scanner, "div")) {
+            long long rhs = 0;
+            if (const_expr_parse_unary(scanner, &rhs) != 0)
+                return -1;
+            if (rhs == 0)
+                return -1;
+            lhs /= rhs;
+            continue;
+        }
+        if (const_expr_match_keyword(scanner, "mod")) {
+            long long rhs = 0;
+            if (const_expr_parse_unary(scanner, &rhs) != 0)
+                return -1;
+            if (rhs == 0)
+                return -1;
+            lhs %= rhs;
+            continue;
+        }
+        if (const_expr_match_keyword(scanner, "shl")) {
+            long long rhs = 0;
+            if (const_expr_parse_unary(scanner, &rhs) != 0)
+                return -1;
+            lhs = lhs << rhs;
+            continue;
+        }
+        if (const_expr_match_keyword(scanner, "shr")) {
+            long long rhs = 0;
+            if (const_expr_parse_unary(scanner, &rhs) != 0)
+                return -1;
+            lhs = (unsigned long long)lhs >> rhs;
+            continue;
+        }
+        break;
+    }
+
+    *out_value = lhs;
+    return 0;
+}
+
+static int const_expr_parse_add(ConstExprScanner *scanner, long long *out_value) {
+    long long lhs = 0;
+    if (const_expr_parse_mul(scanner, &lhs) != 0)
+        return -1;
+
+    while (1) {
+        if (const_expr_match_char(scanner, '+')) {
+            long long rhs = 0;
+            if (const_expr_parse_mul(scanner, &rhs) != 0)
+                return -1;
+            lhs += rhs;
+            continue;
+        }
+        if (const_expr_match_char(scanner, '-')) {
+            long long rhs = 0;
+            if (const_expr_parse_mul(scanner, &rhs) != 0)
+                return -1;
+            lhs -= rhs;
+            continue;
+        }
+        break;
+    }
+
+    *out_value = lhs;
+    return 0;
+}
+
+static int const_expr_parse_expression(ConstExprScanner *scanner, long long *out_value) {
+    return const_expr_parse_add(scanner, out_value);
+}
+
 static int evaluate_simple_const_expr(const char *expr, ast_t *const_section, int *result) {
     if (expr == NULL || result == NULL)
         return -1;
-    
-    /* Try to find '-' or '+' operator */
-    const char *minus = strstr(expr, "-");
-    const char *plus = strstr(expr, "+");
-    
-    if (minus == NULL && plus == NULL) {
-        /* No operator - try as simple identifier */
-        int val = resolve_const_int_from_ast(expr, const_section, INT_MIN);
-        if (val != INT_MIN) {
-            *result = val;
-            return 0;
-        }
-        /* Try as numeric literal */
-        char *endptr;
-        long num = strtol(expr, &endptr, 10);
-        if (*endptr == '\0' && num >= INT_MIN && num <= INT_MAX) {
-            *result = (int)num;
-            return 0;
-        }
+
+    ConstExprScanner scanner = {expr, 0, const_section};
+    long long value = 0;
+    if (const_expr_parse_expression(&scanner, &value) != 0)
         return -1;
-    }
-    
-    const char *op = (minus != NULL) ? minus : plus;
-    int is_minus = (minus != NULL);
-    
-    /* Extract left and right parts */
-    size_t left_len = op - expr;
-    char *left_part = (char *)malloc(left_len + 1);
-    if (left_part == NULL)
+    const_expr_skip_ws(&scanner);
+    if (scanner.input[scanner.pos] != '\0')
         return -1;
-    strncpy(left_part, expr, left_len);
-    left_part[left_len] = '\0';
-    
-    const char *right_part = op + 1;
-    
-    /* Trim leading whitespace from left_part using pointer advance */
-    char *trimmed_left = left_part;
-    while (*trimmed_left == ' ' || *trimmed_left == '\t') trimmed_left++;
-    /* If we advanced, shift content to beginning */
-    if (trimmed_left != left_part) {
-        memmove(left_part, trimmed_left, strlen(trimmed_left) + 1);
-    }
-    /* Trim trailing whitespace */
-    size_t len = strlen(left_part);
-    char *p = (len > 0) ? (left_part + len - 1) : left_part;
-    while (p > left_part && (*p == ' ' || *p == '\t')) *p-- = '\0';
-    
-    /* Skip leading whitespace from right_part */
-    while (*right_part == ' ' || *right_part == '\t') right_part++;
-    
-    /* Evaluate left part */
-    int left_val;
-    int left_result = resolve_const_int_from_ast(left_part, const_section, INT_MIN);
-    if (left_result != INT_MIN) {
-        left_val = left_result;
-    } else {
-        char *endptr;
-        long num = strtol(left_part, &endptr, 10);
-        if (*endptr == '\0' && num >= INT_MIN && num <= INT_MAX) {
-            left_val = (int)num;
-        } else {
-            free(left_part);
-            return -1;
-        }
-    }
-    free(left_part);
-    
-    /* Evaluate right part */
-    int right_val;
-    int right_result = resolve_const_int_from_ast(right_part, const_section, INT_MIN);
-    if (right_result != INT_MIN) {
-        right_val = right_result;
-    } else {
-        char *endptr;
-        long num = strtol(right_part, &endptr, 10);
-        if (*endptr == '\0' && num >= INT_MIN && num <= INT_MAX) {
-            right_val = (int)num;
-        } else {
-            return -1;
-        }
-    }
-    
-    /* Compute result */
-    if (is_minus) {
-        *result = left_val - right_val;
-    } else {
-        *result = left_val + right_val;
-    }
+    if (value < INT_MIN || value > INT_MAX)
+        return -1;
+    *result = (int)value;
     return 0;
 }
 
 /* Serialize an expression AST node to a string representation.
  * Handles simple identifiers, literals, and binary operations (+, -).
  * Returns a malloc'd string or NULL on failure. */
-static char *serialize_expr_to_string(ast_t *expr) {
+static int const_expr_precedence(ast_t *expr) {
+    if (expr == NULL)
+        return 0;
+    switch (expr->typ) {
+        case PASCAL_T_ADD:
+        case PASCAL_T_SUB:
+            return 1;
+        case PASCAL_T_MUL:
+        case PASCAL_T_DIV:
+        case PASCAL_T_INTDIV:
+        case PASCAL_T_MOD:
+        case PASCAL_T_SHL:
+        case PASCAL_T_SHR:
+            return 2;
+        case PASCAL_T_NEG:
+            return 3;
+        default:
+            return 4;
+    }
+}
+
+static char *serialize_expr_to_string_internal(ast_t *expr, int parent_prec) {
     if (expr == NULL)
         return NULL;
-    
+    expr = unwrap_pascal_node(expr);
+    if (expr == NULL)
+        return NULL;
+
     /* Simple identifier or literal with a symbol */
     if (expr->sym != NULL && expr->sym->name != NULL) {
         if (strcasecmp(expr->sym->name, "sizeof") == 0 &&
@@ -3131,7 +3357,7 @@ static char *serialize_expr_to_string(ast_t *expr) {
                 expr->next ? expr->next->typ : -1);
         }
         if (strcasecmp(expr->sym->name, "sizeof") == 0 && expr->child != NULL) {
-            char *inner = serialize_expr_to_string(expr->child);
+            char *inner = serialize_expr_to_string_internal(expr->child, 0);
             if (inner == NULL)
                 return NULL;
             size_t len = strlen(inner) + 9;  /* "sizeof(" + inner + ")" + '\0' */
@@ -3146,67 +3372,87 @@ static char *serialize_expr_to_string(ast_t *expr) {
         }
         return strdup(expr->sym->name);
     }
-    
+
     /* Unary minus: -X */
     if (expr->typ == PASCAL_T_NEG && expr->child != NULL) {
-        char *inner = serialize_expr_to_string(expr->child);
+        int prec = const_expr_precedence(expr);
+        char *inner = serialize_expr_to_string_internal(expr->child, prec);
         if (inner == NULL)
             return NULL;
-        size_t len = strlen(inner) + 2;  /* '-' + inner + '\0' */
-        char *result = (char *)malloc(len);
+        size_t len = strlen(inner) + 2;
+        char *result = (char *)malloc(len + 2);
         if (result == NULL) {
             free(inner);
             return NULL;
         }
-        snprintf(result, len, "-%s", inner);
+        if (const_expr_precedence(expr->child) < prec)
+            snprintf(result, len + 2, "-(%s)", inner);
+        else
+            snprintf(result, len + 2, "-%s", inner);
         free(inner);
+        if (prec < parent_prec) {
+            size_t wrap_len = strlen(result) + 3;
+            char *wrapped = (char *)malloc(wrap_len);
+            if (wrapped == NULL) {
+                free(result);
+                return NULL;
+            }
+            snprintf(wrapped, wrap_len, "(%s)", result);
+            free(result);
+            return wrapped;
+        }
         return result;
     }
-    
-    /* Binary subtraction: X - Y */
-    if (expr->typ == PASCAL_T_SUB && expr->child != NULL && expr->child->next != NULL) {
-        char *left = serialize_expr_to_string(expr->child);
-        char *right = serialize_expr_to_string(expr->child->next);
+
+    if ((expr->typ == PASCAL_T_ADD || expr->typ == PASCAL_T_SUB ||
+         expr->typ == PASCAL_T_MUL || expr->typ == PASCAL_T_DIV ||
+         expr->typ == PASCAL_T_INTDIV || expr->typ == PASCAL_T_MOD || expr->typ == PASCAL_T_SHL ||
+         expr->typ == PASCAL_T_SHR) &&
+        expr->child != NULL && expr->child->next != NULL) {
+        int prec = const_expr_precedence(expr);
+        char *left = serialize_expr_to_string_internal(expr->child, prec);
+        char *right = serialize_expr_to_string_internal(expr->child->next, prec);
         if (left == NULL || right == NULL) {
             if (left) free(left);
             if (right) free(right);
             return NULL;
         }
-        size_t len = strlen(left) + strlen(right) + 4;  /* left + '-' + right + '\0' + extra */
-        char *result = (char *)malloc(len);
+        const char *op = NULL;
+        switch (expr->typ) {
+            case PASCAL_T_ADD: op = "+"; break;
+            case PASCAL_T_SUB: op = "-"; break;
+            case PASCAL_T_MUL: op = "*"; break;
+            case PASCAL_T_DIV: op = "div"; break;
+            case PASCAL_T_INTDIV: op = "div"; break;
+            case PASCAL_T_MOD: op = "mod"; break;
+            case PASCAL_T_SHL: op = "shl"; break;
+            case PASCAL_T_SHR: op = "shr"; break;
+            default: break;
+        }
+        size_t len = strlen(left) + strlen(right) + strlen(op) + 3;
+        char *result = (char *)malloc(len + 2);
         if (result == NULL) {
             free(left);
             free(right);
             return NULL;
         }
-        snprintf(result, len, "%s-%s", left, right);
+        snprintf(result, len + 2, "%s %s %s", left, op, right);
         free(left);
         free(right);
+        if (prec < parent_prec) {
+            size_t wrap_len = strlen(result) + 3;
+            char *wrapped = (char *)malloc(wrap_len);
+            if (wrapped == NULL) {
+                free(result);
+                return NULL;
+            }
+            snprintf(wrapped, wrap_len, "(%s)", result);
+            free(result);
+            return wrapped;
+        }
         return result;
     }
-    
-    /* Binary addition: X + Y */
-    if (expr->typ == PASCAL_T_ADD && expr->child != NULL && expr->child->next != NULL) {
-        char *left = serialize_expr_to_string(expr->child);
-        char *right = serialize_expr_to_string(expr->child->next);
-        if (left == NULL || right == NULL) {
-            if (left) free(left);
-            if (right) free(right);
-            return NULL;
-        }
-        size_t len = strlen(left) + strlen(right) + 4;
-        char *result = (char *)malloc(len);
-        if (result == NULL) {
-            free(left);
-            free(right);
-            return NULL;
-        }
-        snprintf(result, len, "%s+%s", left, right);
-        free(left);
-        free(right);
-        return result;
-    }
-    
+
     /* If we have a child with a symbol (wrapped expression) */
     if (expr->child != NULL && expr->child->sym != NULL && expr->child->sym->name != NULL) {
         if (strcasecmp(expr->child->sym->name, "sizeof") == 0) {
@@ -3223,7 +3469,7 @@ static char *serialize_expr_to_string(ast_t *expr) {
             }
             if (arg_node != NULL)
             {
-                char *inner = serialize_expr_to_string(arg_node);
+                char *inner = serialize_expr_to_string_internal(arg_node, 0);
                 if (inner != NULL)
                 {
                     size_t len = strlen(inner) + 9;
@@ -3240,8 +3486,12 @@ static char *serialize_expr_to_string(ast_t *expr) {
         }
         return strdup(expr->child->sym->name);
     }
-    
+
     return NULL;
+}
+
+static char *serialize_expr_to_string(ast_t *expr) {
+    return serialize_expr_to_string_internal(expr, 0);
 }
 
 static int resolve_const_expr_to_int(ast_t *expr, int *out_value)
@@ -3251,6 +3501,12 @@ static int resolve_const_expr_to_int(ast_t *expr, int *out_value)
     *out_value = 0;
     if (expr == NULL)
         return -1;
+
+    int direct_value = 0;
+    if (evaluate_const_int_expr(expr, &direct_value, 0) == 0) {
+        *out_value = direct_value;
+        return 0;
+    }
 
     char *expr_str = serialize_expr_to_string(expr);
     if (expr_str == NULL)
@@ -3507,6 +3763,14 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
             while (element_node != NULL && element_node->next != NULL)
                 element_node = element_node->next;
 
+            if (getenv("KGPC_DEBUG_ARRAY_BOUNDS") != NULL) {
+                fprintf(stderr, "[KGPC] array type children:");
+                for (ast_t *dim = child; dim != NULL; dim = dim->next) {
+                    fprintf(stderr, " %d(%s)", dim->typ, pascal_tag_to_string(dim->typ));
+                }
+                fprintf(stderr, "\n");
+            }
+
             // Check if there are any dimensions specified
             int has_dimensions = 0;
             for (ast_t *dim = child; dim != NULL && dim != element_node; dim = dim->next) {
@@ -3531,14 +3795,44 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                      * Use serialize_expr_to_string to handle all cases uniformly */
                     char *lower_str = serialize_expr_to_string(lower);
                     char *upper_str = serialize_expr_to_string(upper);
-                    
+                    int lower_val = 0;
+                    int upper_val = 0;
+                    int lower_ok = (evaluate_const_int_expr(lower, &lower_val, 0) == 0);
+                    int upper_ok = (evaluate_const_int_expr(upper, &upper_val, 0) == 0);
+
+                    if (lower_str == NULL && lower_ok) {
+                        char buffer[64];
+                        snprintf(buffer, sizeof(buffer), "%d", lower_val);
+                        lower_str = strdup(buffer);
+                    }
+                    if (upper_str == NULL && upper_ok) {
+                        char buffer[64];
+                        snprintf(buffer, sizeof(buffer), "%d", upper_val);
+                        upper_str = strdup(buffer);
+                    }
+
+                    if ((lower_str == NULL || upper_str == NULL) &&
+                        getenv("KGPC_DEBUG_ARRAY_BOUNDS") != NULL)
+                    {
+                        fprintf(stderr,
+                            "[KGPC] array bounds serialize failed: lower typ=%d (%s) upper typ=%d (%s)\n",
+                            lower ? lower->typ : -1,
+                            lower ? pascal_tag_to_string(lower->typ) : "<null>",
+                            upper ? upper->typ : -1,
+                            upper ? pascal_tag_to_string(upper->typ) : "<null>");
+                    }
+
                     if (lower_str != NULL && upper_str != NULL) {
                         if (dims_builder.head == NULL) {
                             int start_val = 0;
                             int end_val = 0;
-                            if (resolve_const_expr_from_sections(lower_str, &start_val) != 0)
+                            if (lower_ok)
+                                start_val = lower_val;
+                            else if (resolve_const_expr_from_sections(lower_str, &start_val) != 0)
                                 start_val = atoi(lower_str);
-                            if (resolve_const_expr_from_sections(upper_str, &end_val) != 0)
+                            if (upper_ok)
+                                end_val = upper_val;
+                            else if (resolve_const_expr_from_sections(upper_str, &end_val) != 0)
                                 end_val = atoi(upper_str);
                             type_info->start = start_val;
                             type_info->end = end_val;
@@ -6976,7 +7270,11 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_build
     char *type_id = NULL;
     TypeInfo type_info = {0};
 
-    if (cur != NULL && cur->typ == PASCAL_T_TYPE_SPEC) {
+    if (cur != NULL &&
+        (cur->typ == PASCAL_T_TYPE_SPEC ||
+         cur->typ == PASCAL_T_ARRAY_TYPE ||
+         cur->typ == PASCAL_T_RECORD_TYPE ||
+         cur->typ == PASCAL_T_POINTER_TYPE)) {
         convert_type_spec(cur, &type_id, NULL, &type_info);
         cur = cur->next;
     } else if (cur != NULL && cur->typ == PASCAL_T_NONE) {
@@ -7001,6 +7299,10 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_build
             }
             cur = cur->next;
         }
+    }
+
+    if (type_id == NULL && const_section_is_resourcestring(const_section)) {
+        type_id = strdup("AnsiString");
     }
 
     ast_t *value_node = unwrap_pascal_node(cur);
@@ -8011,6 +8313,186 @@ static char *mangle_helper_const_name(const char *helper_id, const char *const_i
     return name;
 }
 
+typedef struct {
+    char *original;
+    char *mangled;
+} ClassConstMap;
+
+static const char *lookup_class_const_map(ListNode_t *map, const char *name)
+{
+    if (map == NULL || name == NULL)
+        return NULL;
+    for (ListNode_t *cur = map; cur != NULL; cur = cur->next) {
+        ClassConstMap *entry = (ClassConstMap *)cur->cur;
+        if (entry != NULL && entry->original != NULL &&
+            pascal_identifier_equals(entry->original, name)) {
+            return entry->mangled;
+        }
+    }
+    return NULL;
+}
+
+static void rewrite_class_const_expr(struct Expression *expr, ListNode_t *map)
+{
+    if (expr == NULL || map == NULL)
+        return;
+
+    switch (expr->type) {
+        case EXPR_VAR_ID: {
+            const char *mangled = lookup_class_const_map(map, expr->expr_data.id);
+            if (mangled != NULL) {
+                free(expr->expr_data.id);
+                expr->expr_data.id = strdup(mangled);
+            }
+            break;
+        }
+        case EXPR_ADDOP:
+            rewrite_class_const_expr(expr->expr_data.addop_data.left_expr, map);
+            rewrite_class_const_expr(expr->expr_data.addop_data.right_term, map);
+            break;
+        case EXPR_MULOP:
+            rewrite_class_const_expr(expr->expr_data.mulop_data.left_term, map);
+            rewrite_class_const_expr(expr->expr_data.mulop_data.right_factor, map);
+            break;
+        case EXPR_RELOP:
+            rewrite_class_const_expr(expr->expr_data.relop_data.left, map);
+            rewrite_class_const_expr(expr->expr_data.relop_data.right, map);
+            break;
+        case EXPR_SIGN_TERM:
+            rewrite_class_const_expr(expr->expr_data.sign_term, map);
+            break;
+        case EXPR_FUNCTION_CALL: {
+            ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+            for (ListNode_t *cur = args; cur != NULL; cur = cur->next) {
+                if (cur->type == LIST_EXPR)
+                    rewrite_class_const_expr((struct Expression *)cur->cur, map);
+            }
+            break;
+        }
+        case EXPR_ARRAY_ACCESS: {
+            rewrite_class_const_expr(expr->expr_data.array_access_data.array_expr, map);
+            rewrite_class_const_expr(expr->expr_data.array_access_data.index_expr, map);
+            for (ListNode_t *cur = expr->expr_data.array_access_data.extra_indices;
+                 cur != NULL; cur = cur->next) {
+                if (cur->type == LIST_EXPR)
+                    rewrite_class_const_expr((struct Expression *)cur->cur, map);
+            }
+            break;
+        }
+        case EXPR_RECORD_ACCESS:
+            rewrite_class_const_expr(expr->expr_data.record_access_data.record_expr, map);
+            break;
+        case EXPR_TYPECAST:
+            rewrite_class_const_expr(expr->expr_data.typecast_data.expr, map);
+            break;
+        case EXPR_SET:
+            for (ListNode_t *cur = expr->expr_data.set_data.elements; cur != NULL; cur = cur->next) {
+                if (cur->type == LIST_SET_ELEMENT && cur->cur != NULL) {
+                    struct SetElement *elem = (struct SetElement *)cur->cur;
+                    rewrite_class_const_expr(elem->lower, map);
+                    rewrite_class_const_expr(elem->upper, map);
+                }
+            }
+            break;
+        case EXPR_ARRAY_LITERAL:
+            for (ListNode_t *cur = expr->expr_data.array_literal_data.elements; cur != NULL; cur = cur->next) {
+                if (cur->type == LIST_EXPR)
+                    rewrite_class_const_expr((struct Expression *)cur->cur, map);
+            }
+            break;
+        case EXPR_RECORD_CONSTRUCTOR:
+            for (ListNode_t *cur = expr->expr_data.record_constructor_data.fields; cur != NULL; cur = cur->next) {
+                if (cur->type == LIST_UNSPECIFIED && cur->cur != NULL) {
+                    struct RecordConstructorField *field = (struct RecordConstructorField *)cur->cur;
+                    rewrite_class_const_expr(field->value, map);
+                }
+            }
+            break;
+        case EXPR_ADDR:
+            rewrite_class_const_expr(expr->expr_data.addr_data.expr, map);
+            break;
+        case EXPR_POINTER_DEREF:
+            rewrite_class_const_expr(expr->expr_data.pointer_deref_data.pointer_expr, map);
+            break;
+        case EXPR_IS:
+            rewrite_class_const_expr(expr->expr_data.is_data.expr, map);
+            break;
+        case EXPR_AS:
+            rewrite_class_const_expr(expr->expr_data.as_data.expr, map);
+            break;
+        default:
+            break;
+    }
+}
+
+static void rewrite_class_const_statement(struct Statement *stmt, ListNode_t *map)
+{
+    if (stmt == NULL || map == NULL)
+        return;
+
+    switch (stmt->type) {
+        case STMT_VAR_ASSIGN:
+            rewrite_class_const_expr(stmt->stmt_data.var_assign_data.var, map);
+            rewrite_class_const_expr(stmt->stmt_data.var_assign_data.expr, map);
+            break;
+        case STMT_COMPOUND_STATEMENT:
+            for (ListNode_t *cur = stmt->stmt_data.compound_statement; cur != NULL; cur = cur->next)
+            {
+                if (cur->type == LIST_STMT)
+                    rewrite_class_const_statement((struct Statement *)cur->cur, map);
+            }
+            break;
+        case STMT_IF_THEN:
+            rewrite_class_const_expr(stmt->stmt_data.if_then_data.relop_expr, map);
+            rewrite_class_const_statement(stmt->stmt_data.if_then_data.if_stmt, map);
+            rewrite_class_const_statement(stmt->stmt_data.if_then_data.else_stmt, map);
+            break;
+        case STMT_WHILE:
+            rewrite_class_const_expr(stmt->stmt_data.while_data.relop_expr, map);
+            rewrite_class_const_statement(stmt->stmt_data.while_data.while_stmt, map);
+            break;
+        case STMT_REPEAT:
+            for (ListNode_t *cur = stmt->stmt_data.repeat_data.body_list; cur != NULL; cur = cur->next)
+            {
+                if (cur->type == LIST_STMT)
+                    rewrite_class_const_statement((struct Statement *)cur->cur, map);
+            }
+            rewrite_class_const_expr(stmt->stmt_data.repeat_data.until_expr, map);
+            break;
+        case STMT_FOR:
+            if (stmt->stmt_data.for_data.for_assign_type == STMT_FOR_ASSIGN_VAR)
+                rewrite_class_const_statement(stmt->stmt_data.for_data.for_assign_data.var_assign, map);
+            else if (stmt->stmt_data.for_data.for_assign_type == STMT_FOR_VAR)
+                rewrite_class_const_expr(stmt->stmt_data.for_data.for_assign_data.var, map);
+            rewrite_class_const_expr(stmt->stmt_data.for_data.to, map);
+            rewrite_class_const_statement(stmt->stmt_data.for_data.do_for, map);
+            break;
+        case STMT_FOR_IN:
+            rewrite_class_const_expr(stmt->stmt_data.for_in_data.loop_var, map);
+            rewrite_class_const_expr(stmt->stmt_data.for_in_data.collection, map);
+            rewrite_class_const_statement(stmt->stmt_data.for_in_data.do_stmt, map);
+            break;
+        case STMT_EXPR:
+            rewrite_class_const_expr(stmt->stmt_data.expr_stmt_data.expr, map);
+            break;
+        default:
+            break;
+    }
+}
+
+static void add_class_const_map_entry(ListBuilder *builder, const char *original,
+                                      const char *mangled)
+{
+    if (builder == NULL || original == NULL || mangled == NULL)
+        return;
+    ClassConstMap *entry = (ClassConstMap *)calloc(1, sizeof(ClassConstMap));
+    if (entry == NULL)
+        return;
+    entry->original = strdup(original);
+    entry->mangled = strdup(mangled);
+    list_builder_append(builder, entry, LIST_UNSPECIFIED);
+}
+
 static ast_t *find_class_spec(ast_t *type_decl_node)
 {
     if (type_decl_node == NULL || type_decl_node->typ != PASCAL_T_TYPE_DECL)
@@ -8093,6 +8575,9 @@ static void append_class_const_decls_from_type_decl(ast_t *type_decl_node,
     while (*tail != NULL)
         tail = &(*tail)->next;
 
+    ListBuilder class_map_builder;
+    list_builder_init(&class_map_builder);
+
     for (ast_t *cur = class_spec->child; cur != NULL; cur = cur->next)
     {
         ast_t *node = cur;
@@ -8115,15 +8600,14 @@ static void append_class_const_decls_from_type_decl(ast_t *type_decl_node,
         }
 
         ListNode_t *class_consts = NULL;
+        ListNode_t **var_tail_before = var_builder->tail_next;
         append_const_decls_from_section(node, &class_consts, var_builder, type_section);
+        ListNode_t *new_var_nodes = (var_tail_before != NULL) ? *var_tail_before : NULL;
 
-        ListNode_t *const_cur = class_consts;
-        while (const_cur != NULL)
+        ListNode_t *class_iter = class_consts;
+        while (class_iter != NULL)
         {
-            ListNode_t *next = const_cur->next;
-            const_cur->next = NULL;
-
-            Tree_t *decl = (Tree_t *)const_cur->cur;
+            Tree_t *decl = (Tree_t *)class_iter->cur;
             if (decl != NULL && decl->type == TREE_CONST_DECL &&
                 decl->tree_data.const_decl_data.id != NULL)
             {
@@ -8135,16 +8619,140 @@ static void append_class_const_decls_from_type_decl(ast_t *type_decl_node,
                     decl->tree_data.const_decl_data.id);
                 if (mangled != NULL)
                 {
+                    add_class_const_map_entry(&class_map_builder,
+                        decl->tree_data.const_decl_data.id, mangled);
+                    free(mangled);
+                }
+            }
+            class_iter = class_iter->next;
+        }
+
+        for (ListNode_t *iter = new_var_nodes; iter != NULL; iter = iter->next)
+        {
+            Tree_t *decl = (Tree_t *)iter->cur;
+            if (decl == NULL)
+                continue;
+            if (decl->type == TREE_VAR_DECL)
+            {
+                for (ListNode_t *id_node = decl->tree_data.var_decl_data.ids;
+                     id_node != NULL; id_node = id_node->next)
+                {
+                    if (id_node->type == LIST_STRING && id_node->cur != NULL)
+                    {
+                        char *old_id = (char *)id_node->cur;
+                        char *mangled = mangle_helper_const_name(class_id, old_id);
+                        if (mangled != NULL)
+                        {
+                            add_class_const_map_entry(&class_map_builder, old_id, mangled);
+                            free(mangled);
+                        }
+                    }
+                }
+            }
+            else if (decl->type == TREE_ARR_DECL)
+            {
+                for (ListNode_t *id_node = decl->tree_data.arr_decl_data.ids;
+                     id_node != NULL; id_node = id_node->next)
+                {
+                    if (id_node->type == LIST_STRING && id_node->cur != NULL)
+                    {
+                        char *old_id = (char *)id_node->cur;
+                        char *mangled = mangle_helper_const_name(class_id, old_id);
+                        if (mangled != NULL)
+                        {
+                            add_class_const_map_entry(&class_map_builder, old_id, mangled);
+                            free(mangled);
+                        }
+                    }
+                }
+            }
+        }
+
+        ListNode_t *map_list = list_builder_finish(&class_map_builder);
+
+        ListNode_t *iter = class_consts;
+        while (iter != NULL)
+        {
+            Tree_t *decl = (Tree_t *)iter->cur;
+            if (decl != NULL && decl->type == TREE_CONST_DECL &&
+                decl->tree_data.const_decl_data.id != NULL)
+            {
+                const char *mangled = lookup_class_const_map(map_list,
+                    decl->tree_data.const_decl_data.id);
+                if (mangled != NULL)
+                {
                     free(decl->tree_data.const_decl_data.id);
-                    decl->tree_data.const_decl_data.id = mangled;
+                    decl->tree_data.const_decl_data.id = strdup(mangled);
                 }
             }
 
-            *tail = const_cur;
-            tail = &const_cur->next;
-            const_cur = next;
+            if (decl != NULL && decl->type == TREE_CONST_DECL)
+                rewrite_class_const_expr(decl->tree_data.const_decl_data.value, map_list);
+
+            ListNode_t *next = iter->next;
+            iter->next = NULL;
+            *tail = iter;
+            tail = &iter->next;
+            iter = next;
+        }
+
+        for (ListNode_t *iter = new_var_nodes; iter != NULL; iter = iter->next)
+        {
+            Tree_t *decl = (Tree_t *)iter->cur;
+            if (decl == NULL)
+                continue;
+            if (decl->type == TREE_VAR_DECL)
+            {
+                for (ListNode_t *id_node = decl->tree_data.var_decl_data.ids;
+                     id_node != NULL; id_node = id_node->next)
+                {
+                    if (id_node->type == LIST_STRING && id_node->cur != NULL)
+                    {
+                        const char *mangled = lookup_class_const_map(map_list,
+                            (char *)id_node->cur);
+                        if (mangled != NULL)
+                        {
+                            free(id_node->cur);
+                            id_node->cur = strdup(mangled);
+                        }
+                    }
+                }
+                rewrite_class_const_statement(decl->tree_data.var_decl_data.initializer, map_list);
+            }
+            else if (decl->type == TREE_ARR_DECL)
+            {
+                for (ListNode_t *id_node = decl->tree_data.arr_decl_data.ids;
+                     id_node != NULL; id_node = id_node->next)
+                {
+                    if (id_node->type == LIST_STRING && id_node->cur != NULL)
+                    {
+                        const char *mangled = lookup_class_const_map(map_list,
+                            (char *)id_node->cur);
+                        if (mangled != NULL)
+                        {
+                            free(id_node->cur);
+                            id_node->cur = strdup(mangled);
+                        }
+                    }
+                }
+                rewrite_class_const_statement(decl->tree_data.arr_decl_data.initializer, map_list);
+            }
+        }
+
+    }
+
+    ListNode_t *map_list = list_builder_finish(&class_map_builder);
+    for (ListNode_t *cur_map = map_list; cur_map != NULL; cur_map = cur_map->next)
+    {
+        ClassConstMap *entry = (ClassConstMap *)cur_map->cur;
+        if (entry != NULL)
+        {
+            free(entry->original);
+            free(entry->mangled);
+            free(entry);
         }
     }
+    destroy_list(map_list);
 }
 
 static void append_helper_const_decls_from_type_decl(ast_t *type_decl_node,

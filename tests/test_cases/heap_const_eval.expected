@@ -1,0 +1,8 @@
+bits=4
+mask=15
+quant=32
+divcheck=33
+sumSizes=3440
+sumIndexMap=329
+sumMapped=159488
+sumMask=0

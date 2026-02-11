@@ -2687,7 +2687,7 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                             free_arg_regs();
                             
                             /* Save the allocated instance pointer */
-                            constructor_instance_reg = get_free_reg(get_reg_stack(), &inst_list);
+                            constructor_instance_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
                             if (constructor_instance_reg == NULL)
                             {
                                 codegen_report_error(ctx, 

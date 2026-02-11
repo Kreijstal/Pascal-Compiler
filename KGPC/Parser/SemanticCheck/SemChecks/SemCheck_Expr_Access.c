@@ -3162,6 +3162,23 @@ method_call_resolved:
         }
     }
 
+    if (best_match != NULL && overload_candidates != NULL && overload_candidates->next != NULL)
+    {
+        HashNode_t *override_match = NULL;
+        int override_score = 0;
+        int override_count = 0;
+        int override_status = semcheck_resolve_overload(&override_match, &override_score,
+            &override_count, overload_candidates, args_given, symtab, expr,
+            max_scope_lev, prefer_non_builtin);
+        if (override_status == 0 && override_match != NULL && override_count == 1 &&
+            override_match != best_match)
+        {
+            best_match = override_match;
+            best_score = override_score;
+            num_best_matches = override_count;
+        }
+    }
+
 
     if (num_best_matches == 1)
     {

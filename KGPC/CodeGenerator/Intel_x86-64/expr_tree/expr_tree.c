@@ -1798,7 +1798,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                     free_arg_regs();
                     
                     /* Save the allocated instance pointer */
-                    constructor_instance_reg = get_free_reg(get_reg_stack(), &inst_list);
+                    constructor_instance_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
                     if (constructor_instance_reg == NULL)
                     {
                         codegen_report_error(ctx, 
