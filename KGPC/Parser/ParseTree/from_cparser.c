@@ -8508,17 +8508,20 @@ static ast_t *find_class_spec(ast_t *type_decl_node)
     while (spec_node != NULL &&
            spec_node->typ != PASCAL_T_TYPE_SPEC &&
            spec_node->typ != PASCAL_T_CLASS_TYPE &&
-           spec_node->typ != PASCAL_T_OBJECT_TYPE)
+           spec_node->typ != PASCAL_T_OBJECT_TYPE &&
+           spec_node->typ != PASCAL_T_RECORD_TYPE)
     {
         spec_node = spec_node->next;
     }
     if (spec_node == NULL)
         return NULL;
 
-    if (spec_node->typ == PASCAL_T_CLASS_TYPE || spec_node->typ == PASCAL_T_OBJECT_TYPE)
+    if (spec_node->typ == PASCAL_T_CLASS_TYPE || spec_node->typ == PASCAL_T_OBJECT_TYPE ||
+        spec_node->typ == PASCAL_T_RECORD_TYPE)
         return spec_node;
     if (spec_node->typ == PASCAL_T_TYPE_SPEC && spec_node->child != NULL &&
-        (spec_node->child->typ == PASCAL_T_CLASS_TYPE || spec_node->child->typ == PASCAL_T_OBJECT_TYPE))
+        (spec_node->child->typ == PASCAL_T_CLASS_TYPE || spec_node->child->typ == PASCAL_T_OBJECT_TYPE ||
+         spec_node->child->typ == PASCAL_T_RECORD_TYPE))
         return spec_node->child;
 
     return NULL;
