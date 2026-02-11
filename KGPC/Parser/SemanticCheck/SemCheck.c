@@ -10523,6 +10523,17 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         
         /* For method implementations, add class vars to scope */
         add_class_vars_to_method_scope(symtab, subprogram->tree_data.subprogram_data.id);
+        /* For nested types (e.g. HeapInc.ThreadState), also add outer class
+         * vars/consts to scope using the full path from mangled_id. */
+        if (subprogram->tree_data.subprogram_data.mangled_id != NULL &&
+            subprogram->tree_data.subprogram_data.id != NULL)
+        {
+            const char *mid = subprogram->tree_data.subprogram_data.mangled_id;
+            const char *id = subprogram->tree_data.subprogram_data.id;
+            /* Only try if mangled_id has a different (longer) prefix than id */
+            if (strcasecmp(mid, id) != 0)
+                add_class_vars_to_method_scope(symtab, mid);
+        }
         
         if (existing_decl != NULL && existing_decl->type != NULL)
         {
@@ -10628,6 +10639,15 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
 
         /* For method implementations, add class vars to scope */
         add_class_vars_to_method_scope(symtab, subprogram->tree_data.subprogram_data.id);
+        /* For nested types, also add outer class vars/consts via mangled_id */
+        if (subprogram->tree_data.subprogram_data.mangled_id != NULL &&
+            subprogram->tree_data.subprogram_data.id != NULL)
+        {
+            const char *mid = subprogram->tree_data.subprogram_data.mangled_id;
+            const char *id = subprogram->tree_data.subprogram_data.id;
+            if (strcasecmp(mid, id) != 0)
+                add_class_vars_to_method_scope(symtab, mid);
+        }
 
         // **THIS IS THE FIX FOR THE RETURN VALUE**:
         // Use the ORIGINAL name for the internal return variable with KgpcType
@@ -11013,6 +11033,41 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
     }
 
     // --- Name Mangling Logic ---
+    /* Preserve any dotted class prefix from the original mangled_id set by
+     * convert_method_impl (e.g. "TOuter.TInner__DoWork").  This is needed
+     * so that semcheck_get_current_method_owner can walk up to outer classes
+     * when resolving class vars / consts in nested object methods. */
+    char *original_dotted_prefix = NULL;
+    if (subprogram->tree_data.subprogram_data.mangled_id != NULL)
+    {
+        const char *orig = subprogram->tree_data.subprogram_data.mangled_id;
+        const char *orig_sep = strstr(orig, "__");
+        if (orig_sep != NULL)
+        {
+            /* Check if the prefix before __ contains a dot (nested class) */
+            const char *dot = memchr(orig, '.', (size_t)(orig_sep - orig));
+            if (dot != NULL)
+            {
+                /* Extract everything up to and including the last dot */
+                const char *last_dot = orig_sep;
+                while (last_dot > orig && *last_dot != '.')
+                    last_dot--;
+                if (last_dot > orig)
+                {
+                    size_t prefix_len = (size_t)(last_dot - orig) + 1; /* Include the dot */
+                    original_dotted_prefix = (char *)malloc(prefix_len + 1);
+                    if (original_dotted_prefix != NULL)
+                    {
+                        memcpy(original_dotted_prefix, orig, prefix_len);
+                        original_dotted_prefix[prefix_len] = '\0';
+                    }
+                }
+            }
+        }
+        free(subprogram->tree_data.subprogram_data.mangled_id);
+        subprogram->tree_data.subprogram_data.mangled_id = NULL;
+    }
+
     const char *predeclare_name = subprogram->tree_data.subprogram_data.cname_override;
     if (predeclare_name != NULL) {
         subprogram->tree_data.subprogram_data.mangled_id = strdup(predeclare_name);
@@ -11041,6 +11096,25 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
             subprogram->tree_data.subprogram_data.mangled_id = base_mangled;
         }
     }
+
+    /* Re-apply the dotted class prefix so that the owner lookup in
+     * semcheck_subprogram can resolve outer-class vars/consts. */
+    if (original_dotted_prefix != NULL &&
+        subprogram->tree_data.subprogram_data.mangled_id != NULL)
+    {
+        const char *current = subprogram->tree_data.subprogram_data.mangled_id;
+        size_t prefix_len = strlen(original_dotted_prefix);
+        size_t current_len = strlen(current);
+        char *combined = (char *)malloc(prefix_len + current_len + 1);
+        if (combined != NULL)
+        {
+            memcpy(combined, original_dotted_prefix, prefix_len);
+            memcpy(combined + prefix_len, current, current_len + 1);
+            free(subprogram->tree_data.subprogram_data.mangled_id);
+            subprogram->tree_data.subprogram_data.mangled_id = combined;
+        }
+    }
+    free(original_dotted_prefix);
 
     if (getenv("KGPC_DEBUG_PREDECLARE_PROC") != NULL)
     {
