@@ -1662,6 +1662,32 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                         }
                     }
 
+                    if (arg_expr != NULL && arg_expr->type == EXPR_TYPECAST)
+                    {
+                        int cast_target = arg_expr->expr_data.typecast_data.target_type;
+                        const char *cast_target_id = arg_expr->expr_data.typecast_data.target_type_id;
+                        if (cast_target == POINTER_TYPE)
+                        {
+                            if (formal_tag == POINTER_TYPE)
+                            {
+                                quality.kind = MATCH_EXACT;
+                                if (formal_kgpc != NULL && formal_kgpc->kind == TYPE_KIND_POINTER)
+                                {
+                                    if (cast_target_id != NULL &&
+                                        kgpc_type_get_pointer_subtype_tag(formal_kgpc) != UNKNOWN_TYPE)
+                                    {
+                                        quality.exact_pointer_subtype = 1;
+                                    }
+                                }
+                            }
+                            else if (is_string_type(formal_tag))
+                            {
+                                if (quality.kind != MATCH_INCOMPATIBLE)
+                                    quality.kind = MATCH_CONVERSION;
+                            }
+                        }
+                    }
+
                     if (is_integer_type(arg_tag) && is_integer_type(formal_tag))
                     {
                         quality.int_promo_rank = semcheck_integer_promotion_rank(

@@ -1935,6 +1935,31 @@ int semcheck_recordaccess(int *type_return,
                         }
                         goto FIELD_RESOLVED;
                     }
+
+                    HashNode_t *method_node = semcheck_find_class_method(symtab, record_info,
+                        accessor, NULL);
+                    if (method_node != NULL)
+                    {
+                        struct Expression *receiver = record_expr;
+                        ListNode_t *arg_node = CreateListNode(receiver, LIST_EXPR);
+                        if (arg_node != NULL)
+                        {
+                            char *method_id = strdup(accessor);
+                            expr->type = EXPR_FUNCTION_CALL;
+                            memset(&expr->expr_data.function_call_data, 0,
+                                sizeof(expr->expr_data.function_call_data));
+                            expr->expr_data.function_call_data.is_method_call_placeholder = 1;
+                            expr->expr_data.function_call_data.id = method_id;
+                            if (method_node->mangled_id != NULL)
+                                expr->expr_data.function_call_data.mangled_id =
+                                    strdup(method_node->mangled_id);
+                            expr->expr_data.function_call_data.resolved_func = method_node;
+                            expr->expr_data.function_call_data.args_expr = arg_node;
+                            expr->record_type = NULL;
+                            semcheck_expr_set_resolved_type(expr, UNKNOWN_TYPE);
+                            return semcheck_funccall(type_return, symtab, expr, max_scope_lev, mutating);
+                        }
+                    }
                 }
             }
         }

@@ -87,6 +87,7 @@ struct RecordField
     char *array_element_type_id;
     int array_is_open;
     int is_hidden;
+    int is_class_var;
     int is_pointer;
     int pointer_type;
     char *pointer_type_id;

@@ -544,6 +544,8 @@ end;
 function kgpc_get_current_dir: AnsiString; cdecl; external name 'kgpc_get_current_dir';
 function kgpc_set_current_dir(path: PChar): Integer; cdecl; external name 'kgpc_set_current_dir';
 function kgpc_ioresult_peek: Integer; cdecl; external name 'kgpc_ioresult_peek';
+function kgpc_class_name(self: Pointer): PAnsiChar; cdecl; external name 'kgpc_class_name';
+procedure kgpc_string_to_shortstring(var dest; src: PAnsiChar; dest_size: SizeInt); cdecl; external name 'kgpc_string_to_shortstring';
 procedure kgpc_text_assign(var f: text; filename: PAnsiChar); cdecl; external name 'kgpc_text_assign';
 procedure kgpc_text_rewrite(var f: text); cdecl; external name 'kgpc_text_rewrite';
 procedure kgpc_text_reset(var f: text); cdecl; external name 'kgpc_text_reset';
@@ -1120,8 +1122,14 @@ end;
 { TObject methods }
 
 class function TObject.ClassName: ShortString;
+var
+    name_ptr: PAnsiChar;
 begin
-    ClassName := 'TObject';
+    name_ptr := kgpc_class_name(Self);
+    if name_ptr = nil then
+        ClassName := ''
+    else
+        kgpc_string_to_shortstring(ClassName, name_ptr, 256);
 end;
 
 class procedure TObject.GetLastCastErrorInfo(out aFrom, aTo: ShortString);

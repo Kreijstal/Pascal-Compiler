@@ -711,6 +711,41 @@ int semcheck_funccall(int *type_return,
     }
     args_given = expr->expr_data.function_call_data.args_expr;
 
+    if (expr->expr_data.function_call_data.is_method_call_placeholder &&
+        args_given != NULL && args_given->cur != NULL)
+    {
+        struct Expression *first_arg = (struct Expression *)args_given->cur;
+        if (first_arg->type == EXPR_RELOP &&
+            first_arg->expr_data.relop_data.type == NOT &&
+            first_arg->expr_data.relop_data.right == NULL &&
+            first_arg->expr_data.relop_data.left != NULL)
+        {
+            struct Expression *receiver = first_arg->expr_data.relop_data.left;
+            first_arg->expr_data.relop_data.left = NULL;
+            args_given->cur = receiver;
+            destroy_expr(first_arg);
+
+            struct Expression *call_expr = (struct Expression *)calloc(1, sizeof(struct Expression));
+            if (call_expr == NULL)
+            {
+                semcheck_error_with_context("Error on line %d: failed to allocate expression for NOT call fixup.\n",
+                    expr->line_num);
+                *type_return = UNKNOWN_TYPE;
+                return 1;
+            }
+
+            *call_expr = *expr;
+            expr->type = EXPR_RELOP;
+            memset(&expr->expr_data.relop_data, 0, sizeof(expr->expr_data.relop_data));
+            expr->expr_data.relop_data.type = NOT;
+            expr->expr_data.relop_data.left = call_expr;
+            expr->expr_data.relop_data.right = NULL;
+            expr->record_type = NULL;
+            semcheck_expr_set_resolved_type(expr, UNKNOWN_TYPE);
+            return semcheck_relop(type_return, symtab, expr, max_scope_lev, mutating);
+        }
+    }
+
     /* FPC Bootstrap Feature: Handle unit-qualified calls that the parser
      * represents as __Function(UnitName, Args...). Only strip the first
      * argument when the unit qualifier is unresolved AND the real function

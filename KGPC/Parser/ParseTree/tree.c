@@ -1904,6 +1904,7 @@ static struct RecordField *clone_record_field(const struct RecordField *field)
         strdup(field->array_element_type_id) : NULL;
     clone->array_is_open = field->array_is_open;
     clone->is_hidden = field->is_hidden;
+    clone->is_class_var = field->is_class_var;
     clone->is_pointer = field->is_pointer;
     clone->pointer_type = field->pointer_type;
     clone->pointer_type_id = field->pointer_type_id != NULL ?

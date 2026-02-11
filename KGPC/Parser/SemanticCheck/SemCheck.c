@@ -1319,6 +1319,23 @@ static void add_class_vars_to_method_scope(SymTab_t *symtab, const char *method_
         return;
     }
 
+    int has_class_vars = 0;
+    if (record_info->fields != NULL)
+    {
+        for (ListNode_t *scan = record_info->fields; scan != NULL; scan = scan->next)
+        {
+            if (scan->type == LIST_RECORD_FIELD && scan->cur != NULL)
+            {
+                struct RecordField *field = (struct RecordField *)scan->cur;
+                if (field->is_class_var == 1)
+                {
+                    has_class_vars = 1;
+                    break;
+                }
+            }
+        }
+    }
+
     /* For class types (not objects), non-static methods access fields via Self.
      * For object types, class vars and consts are NOT accessible via Self,
      * so we must always push them into scope. */
@@ -1327,6 +1344,11 @@ static void add_class_vars_to_method_scope(SymTab_t *symtab, const char *method_
     {
         free(class_name);
         return;
+    }
+    if (getenv("KGPC_DEBUG_CLASS_VAR") != NULL)
+    {
+        fprintf(stderr, "[KGPC_DEBUG_CLASS_VAR] class=%s static=%d has_class_vars=%d\n",
+            class_name ? class_name : "<null>", is_static, has_class_vars);
     }
 
     /* Process class types, object types, and advanced records that have fields. */
@@ -1341,6 +1363,18 @@ static void add_class_vars_to_method_scope(SymTab_t *symtab, const char *method_
         struct RecordField *field = (struct RecordField *)field_node->cur;
         if (field != NULL && field->name != NULL && field->name[0] != '\0')
         {
+            int allow_all_fields = (record_type_is_class(record_info) && is_static && !has_class_vars);
+            if (getenv("KGPC_DEBUG_CLASS_VAR") != NULL)
+            {
+                fprintf(stderr, "[KGPC_DEBUG_CLASS_VAR] field=%s class_var=%d allow_all=%d\n",
+                    field->name ? field->name : "<null>",
+                    field->is_class_var, allow_all_fields);
+            }
+            if (record_type_is_class(record_info) && !allow_all_fields && field->is_class_var != 1)
+            {
+                field_node = field_node->next;
+                continue;
+            }
             if (getenv("KGPC_DEBUG_CLASS_VAR") != NULL &&
                 pascal_identifier_equals(field->name, "FStandardEncodings"))
             {

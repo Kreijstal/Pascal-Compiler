@@ -2945,25 +2945,25 @@ ListNode_t *codegen_record_field_address(struct Expression *expr, ListNode_t *in
     int is_class_field = (record_expr->record_type != NULL && 
                           record_type_is_class(record_expr->record_type));
 
-    int is_class_type_ref = 0;
-    const char *class_type_label = NULL;
-    if (is_class_field && record_expr->type == EXPR_VAR_ID &&
+    int is_type_ref = 0;
+    const char *type_label = NULL;
+    if (record_expr->type == EXPR_VAR_ID &&
         record_expr->expr_data.id != NULL && ctx->symtab != NULL)
     {
         HashNode_t *symbol = NULL;
         if (FindIdent(&symbol, ctx->symtab, record_expr->expr_data.id) >= 0 &&
             symbol != NULL && symbol->hash_type == HASHTYPE_TYPE)
         {
-            is_class_type_ref = 1;
+            is_type_ref = 1;
             if (record_expr->record_type != NULL && record_expr->record_type->type_id != NULL)
-                class_type_label = record_expr->record_type->type_id;
+                type_label = record_expr->record_type->type_id;
             else
-                class_type_label = record_expr->expr_data.id;
+                type_label = record_expr->expr_data.id;
         }
     }
     
     Register_t *addr_reg = NULL;
-    if (is_class_type_ref && class_type_label != NULL)
+    if (is_type_ref && type_label != NULL)
     {
         addr_reg = get_free_reg(get_reg_stack(), &inst_list);
         if (addr_reg == NULL)
@@ -2977,7 +2977,7 @@ ListNode_t *codegen_record_field_address(struct Expression *expr, ListNode_t *in
 
         char buffer[96];
         snprintf(buffer, sizeof(buffer), "\tleaq\t%s_CLASSVAR(%%rip), %s\n",
-            class_type_label, addr_reg->bit_64);
+            type_label, addr_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
     }
     else
@@ -2990,7 +2990,7 @@ ListNode_t *codegen_record_field_address(struct Expression *expr, ListNode_t *in
     /* For class types, addr_reg points to the variable holding the pointer when the
      * record expression is a VAR_ID. Load the pointer value to get the instance.
      * Non-var expressions (casts, function calls) already yield the pointer value. */
-    int needs_class_deref = (is_class_field && !is_class_type_ref);
+    int needs_class_deref = (is_class_field && !is_type_ref);
     if (needs_class_deref && record_expr->type != EXPR_VAR_ID)
         needs_class_deref = 0;
     if (needs_class_deref)

@@ -67,6 +67,13 @@ int semcheck_relop(int *type_return,
         if (type_first == BOOL)
         {
             *type_return = BOOL;
+            semcheck_expr_set_resolved_type(expr, BOOL);
+            KgpcType *bool_type = create_primitive_type(BOOL);
+            if (bool_type != NULL)
+            {
+                semcheck_expr_set_resolved_kgpc_type_shared(expr, bool_type);
+                destroy_kgpc_type(bool_type);
+            }
             return return_val;
         }
         if (is_integer_type(type_first))
