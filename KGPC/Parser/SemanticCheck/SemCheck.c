@@ -10530,7 +10530,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         {
             const char *mid = subprogram->tree_data.subprogram_data.mangled_id;
             const char *id = subprogram->tree_data.subprogram_data.id;
-            /* Only try if mangled_id has a different (longer) prefix than id */
+            /* Only try if mangled_id differs from id (nested type path) */
             if (strcasecmp(mid, id) != 0)
                 add_class_vars_to_method_scope(symtab, mid);
         }
