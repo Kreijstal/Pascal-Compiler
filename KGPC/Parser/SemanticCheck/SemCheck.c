@@ -1301,8 +1301,19 @@ static void add_class_vars_to_method_scope(SymTab_t *symtab, const char *method_
     int lookup_result = FindIdent(&class_node, symtab, class_name);
     if (lookup_result == -1 || class_node == NULL)
     {
-        free(class_name);
-        return;
+        /* For nested types like "HeapInc.ThreadState", the full dotted name
+         * won't be found as a symbol. Try resolving the outermost class. */
+        char *dot = strchr(class_name, '.');
+        if (dot != NULL)
+        {
+            *dot = '\0'; /* Truncate to outermost class name */
+            lookup_result = FindIdent(&class_node, symtab, class_name);
+        }
+        if (lookup_result == -1 || class_node == NULL)
+        {
+            free(class_name);
+            return;
+        }
     }
 
     struct RecordType *record_info = get_record_type_from_node(class_node);
