@@ -634,9 +634,14 @@ static int g_semcheck_error_source_index = -1;
 
 void semcheck_set_error_context(int line_num, int col_num, int source_index)
 {
-    g_semcheck_error_line = line_num;
-    g_semcheck_error_col = col_num;
-    g_semcheck_error_source_index = source_index;
+    /* Don't overwrite a valid line number with 0 from synthetic AST nodes.
+     * This preserves the last known real line for error reporting. */
+    if (line_num > 0 || g_semcheck_error_line == 0)
+        g_semcheck_error_line = line_num;
+    if (col_num > 0 || g_semcheck_error_col == 0)
+        g_semcheck_error_col = col_num;
+    if (source_index >= 0 || g_semcheck_error_source_index < 0)
+        g_semcheck_error_source_index = source_index;
 }
 
 void semcheck_clear_error_context(void)
@@ -793,6 +798,13 @@ void semantic_error(int line_num, int col_num, const char *format, ...)
     int effective_col = col_num;
     int effective_source_index = g_semcheck_error_source_index;
 
+    /* Fall back to the last known good line/col from error context when the
+     * AST node has line_num == 0 (synthetic nodes from WITH expansion etc.) */
+    if (effective_line <= 0 && g_semcheck_error_line > 0)
+        effective_line = g_semcheck_error_line;
+    if (effective_col <= 0 && g_semcheck_error_col > 0)
+        effective_col = g_semcheck_error_col;
+
     if (effective_source_index >= 0)
     {
         const char *context_buf = preprocessed_source;
@@ -860,6 +872,13 @@ void semcheck_error_with_context_at(int line_num, int col_num, int source_index,
 
     int effective_line = line_num;
     int effective_col = col_num;
+
+    /* Fall back to last known good line/col for synthetic nodes with line 0 */
+    if (effective_line <= 0 && g_semcheck_error_line > 0)
+        effective_line = g_semcheck_error_line;
+    if (effective_col <= 0 && g_semcheck_error_col > 0)
+        effective_col = g_semcheck_error_col;
+
     if (source_index >= 0)
     {
         const char *context_buf = preprocessed_source;
@@ -970,6 +989,12 @@ void semcheck_error_with_context(const char *format, ...)
     }
     if (effective_line <= 0)
         effective_line = line_num;
+    /* Fall back to the last known good line from error context when the
+     * AST node has line_num == 0 (synthetic nodes from WITH expansion etc.) */
+    if (effective_line <= 0 && g_semcheck_error_line > 0)
+        effective_line = g_semcheck_error_line;
+    if (effective_col <= 0 && g_semcheck_error_col > 0)
+        effective_col = g_semcheck_error_col;
 
     /* If the format starts with "Error on line %d", rewrite that part to use the effective line. */
     semcheck_print_error_prefix(file_path, effective_line, effective_col);
