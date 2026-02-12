@@ -836,6 +836,12 @@ void semantic_error(int line_num, int col_num, const char *format, ...)
 /* Helper function to print semantic error with accurate source context using byte offset */
 void semantic_error_at(int line_num, int col_num, int source_index, const char *format, ...)
 {
+    /* Fall back to last known good line/col for synthetic nodes with line 0 */
+    if (line_num <= 0 && g_semcheck_error_line > 0)
+        line_num = g_semcheck_error_line;
+    if (col_num <= 0 && g_semcheck_error_col > 0)
+        col_num = g_semcheck_error_col;
+
     if (source_index >= 0)
     {
         const char *context_buf = preprocessed_source;
