@@ -297,6 +297,13 @@ static int semcheck_map_builtin_type_name_local(const char *id)
     return UNKNOWN_TYPE;
 }
 
+static int semcheck_helper_self_is_var(SymTab_t *symtab, const char *base_type_id)
+{
+    (void)symtab;
+    (void)base_type_id;
+    return 0;
+}
+
 static char *semcheck_dup_type_id_from_ast(ast_t *node)
 {
     if (node == NULL)
@@ -6007,7 +6014,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                         {
                                             if (record_info->helper_base_type_id != NULL)
                                                 self_type_id = record_info->helper_base_type_id;
-                                            self_is_var = 0;
+                                            self_is_var = semcheck_helper_self_is_var(symtab, self_type_id);
                                         }
                                         ListNode_t *self_ids = CreateListNode(strdup("Self"), LIST_STRING);
                                         if (self_ids != NULL && self_type_id != NULL)

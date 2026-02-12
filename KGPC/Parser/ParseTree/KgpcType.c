@@ -2245,6 +2245,7 @@ int kgpc_type_uses_qword(KgpcType *type)
                 case POINTER_TYPE:
                 case PROCEDURE:
                 case INT64_TYPE:
+                case QWORD_TYPE:
                     return 1;
                 default:
                     return 0;

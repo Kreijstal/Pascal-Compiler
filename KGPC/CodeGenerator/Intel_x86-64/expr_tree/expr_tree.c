@@ -2580,32 +2580,23 @@ cleanup_constructor:
             }
 
             char load_value[80];
-            switch (expr_type)
+            int use_qword = expr_requires_qword(expr) ||
+                codegen_type_uses_qword(expr_type) ||
+                expr_type == UNKNOWN_TYPE;
+            if (use_qword)
             {
-                case STRING_TYPE:
-                case POINTER_TYPE:
-                case PROCEDURE:
-                case FILE_TYPE:
-                case TEXT_TYPE:
-                case REAL_TYPE:
-                case UNKNOWN_TYPE:
-                    snprintf(load_value, sizeof(load_value), "\tmovq\t(%s), %s\n",
-                        target_reg->bit_64, target_reg->bit_64);
-                    break;
-                case LONGINT_TYPE:
-                    // Now 4 bytes, use movl like INT_TYPE
-                    snprintf(load_value, sizeof(load_value), "\tmovl\t(%s), %s\n",
-                        target_reg->bit_64, target_reg->bit_32);
-                    break;
-                case CHAR_TYPE:
-                case BOOL:
-                    snprintf(load_value, sizeof(load_value), "\tmovzbl\t(%s), %s\n",
-                        target_reg->bit_64, target_reg->bit_32);
-                    break;
-                default:
-                    snprintf(load_value, sizeof(load_value), "\tmovl\t(%s), %s\n",
-                        target_reg->bit_64, target_reg->bit_32);
-                    break;
+                snprintf(load_value, sizeof(load_value), "\tmovq\t(%s), %s\n",
+                    target_reg->bit_64, target_reg->bit_64);
+            }
+            else if (expr_type == CHAR_TYPE || expr_type == BOOL)
+            {
+                snprintf(load_value, sizeof(load_value), "\tmovzbl\t(%s), %s\n",
+                    target_reg->bit_64, target_reg->bit_32);
+            }
+            else
+            {
+                snprintf(load_value, sizeof(load_value), "\tmovl\t(%s), %s\n",
+                    target_reg->bit_64, target_reg->bit_32);
             }
 
             inst_list = add_inst(inst_list, load_value);
