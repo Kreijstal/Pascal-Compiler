@@ -10444,6 +10444,28 @@ static struct Statement *convert_proc_call(ast_t *call_node, bool implicit_ident
             if (child->typ == PASCAL_T_IDENTIFIER) {
                 id = dup_symbol(child);
                 args_start = child->next;
+            } else if (child->typ == PASCAL_T_TYPECAST && child->child != NULL &&
+                       child->child->typ == PASCAL_T_IDENTIFIER) {
+                /* Handle chained call pattern: TypeName(source)(args)
+                 * Parser creates: FUNC_CALL -> TYPECAST(TypeName, source) -> outer args
+                 * child is TYPECAST with: child->child = IDENTIFIER(TypeName), rest = source args
+                 * call_node has: child->next = outer call args
+                 * We need to preserve both: create a procedure call where the first arg
+                 * is the typecast source, followed by the outer call args. */
+                id = dup_symbol(child->child);
+                /* Build args: inner args (typecast source) + outer args (call args) */
+                ast_t *inner_args = child->child->next;
+                ast_t *outer_args = child->next;
+                if (inner_args != NULL) {
+                    /* Chain inner args before outer args */
+                    ast_t *tail = inner_args;
+                    while (tail->next != NULL)
+                        tail = tail->next;
+                    tail->next = outer_args;
+                    args_start = inner_args;
+                } else {
+                    args_start = outer_args;
+                }
             } else if (child->child != NULL && child->child->typ == PASCAL_T_IDENTIFIER) {
                 id = dup_symbol(child->child);
                 args_start = child->next;

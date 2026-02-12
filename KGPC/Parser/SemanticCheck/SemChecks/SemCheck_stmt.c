@@ -4623,6 +4623,70 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     }
     assert(mangled_name != NULL);
 
+    /* Check for procedural type typecast-call pattern: TypeName(source)(args)
+     * The parser creates a call to TypeName with (source, args...) as flat arguments.
+     * If TypeName is a procedural type, the first arg is the typecast source and
+     * remaining args are the actual call arguments. Transform into indirect call. */
+    {
+        HashNode_t *type_check = NULL;
+        int type_scope = FindIdent(&type_check, symtab, proc_id);
+        if (type_scope != -1 && type_check != NULL &&
+            type_check->hash_type == HASHTYPE_TYPE &&
+            type_check->type != NULL && type_check->type->kind == TYPE_KIND_PROCEDURE &&
+            args_given != NULL)
+        {
+            /* Count expected parameters from the procedural type */
+            int expected_params = 0;
+            if (type_check->type->info.proc_info.params != NULL)
+            {
+                for (ListNode_t *p = type_check->type->info.proc_info.params; p != NULL; p = p->next)
+                    expected_params++;
+            }
+
+            /* Count actual args given */
+            int actual_args = 0;
+            for (ListNode_t *a = args_given; a != NULL; a = a->next)
+                actual_args++;
+
+            /* If we have exactly expected_params + 1 arguments, the first is the typecast source */
+            if (actual_args == expected_params + 1)
+            {
+                struct Expression *typecast_source = (struct Expression *)args_given->cur;
+
+                /* Create a typecast expression wrapping the source */
+                struct Expression *typecast_expr = (struct Expression *)calloc(1, sizeof(struct Expression));
+                assert(typecast_expr != NULL);
+                typecast_expr->type = EXPR_TYPECAST;
+                typecast_expr->line_num = stmt->line_num;
+                typecast_expr->col_num = stmt->col_num;
+                typecast_expr->source_index = stmt->source_index;
+                typecast_expr->expr_data.typecast_data.target_type_id = strdup(proc_id);
+                typecast_expr->expr_data.typecast_data.expr = typecast_source;
+
+                /* Semcheck the typecast */
+                int typecast_tag = UNKNOWN_TYPE;
+                return_val += semcheck_stmt_expr_tag(&typecast_tag, symtab, typecast_expr, max_scope_lev, NO_MUTATE);
+
+                /* Remove the first arg from the list (don't free - owned by typecast_expr) */
+                ListNode_t *call_args = args_given->next;
+                args_given->next = NULL;
+                args_given->cur = NULL;
+                free(args_given);
+                stmt->stmt_data.procedure_call_data.expr_args = call_args;
+                args_given = call_args;
+
+                /* Set up as a procedural var call through the typecast */
+                stmt->stmt_data.procedure_call_data.is_procedural_var_call = 1;
+                stmt->stmt_data.procedure_call_data.procedural_var_expr = typecast_expr;
+                stmt->stmt_data.procedure_call_data.resolved_proc = type_check;
+
+                free(mangled_name);
+
+                return return_val + semcheck_call_with_proc_var(symtab, stmt, type_check, max_scope_lev);
+            }
+        }
+    }
+
     ListNode_t *overload_candidates = FindAllIdents(symtab, proc_id);
     HashNode_t *resolved_proc = NULL;
     int match_count = 0;

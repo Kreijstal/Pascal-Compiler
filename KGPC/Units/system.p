@@ -165,6 +165,10 @@ type
     procedure Free;
   end;
   TInterfacedObject = class(TObject)
+  protected
+    FRefCount : LongInt;
+  public
+    property RefCount : LongInt read FRefCount;
   end;
 
   { GUID type for SysUtils compatibility }
