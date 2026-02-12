@@ -67,6 +67,7 @@ type
     TStringSplitOption = (ExcludeEmpty, ExcludeLastEmpty);
     TStringSplitOptions = set of TStringSplitOption;
     TStringArray = array of AnsiString;
+    TCharArray = array of AnsiChar;
 
 const
     PathDelim = '/';
@@ -104,8 +105,17 @@ function CompareText(const S1, S2: AnsiString): Integer;
 function SameText(const S1, S2: AnsiString): Boolean;
 function StringReplace(const S, OldPattern, NewPattern: AnsiString): AnsiString;
 function StringReplace(const S, OldPattern, NewPattern: AnsiString; Flags: TReplaceFlags): AnsiString;
+function BoolToStr(B: Boolean; UseBoolStrs: Boolean): AnsiString;
+function PadLeft(const S: AnsiString; ATotalWidth: SizeInt; PaddingChar: AnsiChar): AnsiString;
+function PadRight(const S: AnsiString; ATotalWidth: SizeInt; PaddingChar: AnsiChar): AnsiString;
+function QuotedString(const S: AnsiString; QuoteChar: AnsiChar): AnsiString;
+function StartsWith(const S, Prefix: AnsiString): Boolean;
+function EndsWith(const S, Suffix: AnsiString): Boolean;
 function StringOfChar(C: AnsiChar; Count: Integer): AnsiString;
+function IntToHex(Value: LongInt): AnsiString;
 function IntToHex(Value: LongInt; Digits: Integer): AnsiString;
+function IntToHex(Value: Int64): AnsiString;
+function IntToHex(Value: Int64; Digits: Integer): AnsiString;
 function BinStr(Value: LongInt; Digits: Integer): AnsiString;
 function Pos(Substr: AnsiString; S: AnsiString): integer;
 function FormatDateTime(const FormatStr: string; DateTime: TDateTime): AnsiString;
@@ -167,9 +177,17 @@ type
         function Split(const Separators: array of AnsiString; Options: TStringSplitOptions): TStringArray;
         function LastIndexOf(const AValue: AnsiString; AStartIndex, ACount: SizeInt): SizeInt;
         function LastIndexOfAny(const AnyOf: array of AnsiChar; AStartIndex, ACount: SizeInt): SizeInt;
+        function PadLeft(ATotalWidth: SizeInt): AnsiString; overload;
+        function PadLeft(ATotalWidth: SizeInt; PaddingChar: AnsiChar): AnsiString; overload;
         function PadRight(ATotalWidth: SizeInt): AnsiString; overload;
         function PadRight(ATotalWidth: SizeInt; PaddingChar: AnsiChar): AnsiString; overload;
+        function QuotedString(QuoteChar: AnsiChar): AnsiString;
+        function StartsWith(const AValue: AnsiString): Boolean;
+        function EndsWith(const AValue: AnsiString): Boolean;
         function Replace(const OldValue, NewValue: AnsiString; Flags: TReplaceFlags): AnsiString;
+        function CountChar(const C: AnsiChar): SizeInt;
+        function IndexOfAny(const AnyOf: array of AnsiChar): SizeInt;
+        function ToCharArray: TCharArray;
     end;
 
     TLongIntHelper = type helper for LongInt
@@ -711,6 +729,87 @@ begin
     StringReplace := result;
 end;
 
+function BoolToStr(B: Boolean; UseBoolStrs: Boolean): AnsiString;
+begin
+    if UseBoolStrs then
+    begin
+        if B then
+            Result := 'True'
+        else
+            Result := 'False';
+    end
+    else
+    begin
+        if B then
+            Result := '1'
+        else
+            Result := '0';
+    end;
+end;
+
+function PadLeft(const S: AnsiString; ATotalWidth: SizeInt; PaddingChar: AnsiChar): AnsiString;
+var
+    pad_len: SizeInt;
+begin
+    Result := S;
+    pad_len := ATotalWidth - Length(S);
+    if pad_len > 0 then
+        Result := StringOfChar(PaddingChar, pad_len) + Result;
+end;
+
+function PadRight(const S: AnsiString; ATotalWidth: SizeInt; PaddingChar: AnsiChar): AnsiString;
+var
+    pad_len: SizeInt;
+begin
+    Result := S;
+    pad_len := ATotalWidth - Length(S);
+    if pad_len > 0 then
+        Result := Result + StringOfChar(PaddingChar, pad_len);
+end;
+
+function QuotedString(const S: AnsiString; QuoteChar: AnsiChar): AnsiString;
+begin
+    Result := StringOfChar(QuoteChar, 1) + S + StringOfChar(QuoteChar, 1);
+end;
+
+function StartsWith(const S, Prefix: AnsiString): Boolean;
+var
+    i: Integer;
+begin
+    if Length(Prefix) > Length(S) then
+    begin
+        Result := False;
+        exit;
+    end;
+    for i := 1 to Length(Prefix) do
+        if S[i] <> Prefix[i] then
+        begin
+            Result := False;
+            exit;
+        end;
+    Result := True;
+end;
+
+function EndsWith(const S, Suffix: AnsiString): Boolean;
+var
+    i: Integer;
+    offset: Integer;
+begin
+    if Length(Suffix) > Length(S) then
+    begin
+        Result := False;
+        exit;
+    end;
+    offset := Length(S) - Length(Suffix);
+    for i := 1 to Length(Suffix) do
+        if S[offset + i] <> Suffix[i] then
+        begin
+            Result := False;
+            exit;
+        end;
+    Result := True;
+end;
+
 function StringOfChar(C: AnsiChar; Count: Integer): AnsiString;
 var
     i: Integer;
@@ -725,6 +824,11 @@ begin
         Result[i] := C;
 end;
 
+function IntToHex(Value: LongInt): AnsiString;
+begin
+    Result := IntToHex(Value, SizeOf(Value) * 2);
+end;
+
 function IntToHex(Value: LongInt; Digits: Integer): AnsiString;
 const
     HexDigits: AnsiString = '0123456789ABCDEF';
@@ -734,6 +838,37 @@ var
     nibble: Integer;
 begin
     v := LongWord(Value);
+    temp := '';
+    if v = 0 then
+        temp := '0'
+    else
+        while v <> 0 do
+        begin
+            nibble := v and $F;
+            temp := HexDigits[nibble + 1] + temp;
+            v := v shr 4;
+        end;
+    if Digits < 1 then
+        Digits := 1;
+    if Length(temp) < Digits then
+        temp := StringOfChar('0', Digits - Length(temp)) + temp;
+    Result := temp;
+end;
+
+function IntToHex(Value: Int64): AnsiString;
+begin
+    Result := IntToHex(Value, SizeOf(Value) * 2);
+end;
+
+function IntToHex(Value: Int64; Digits: Integer): AnsiString;
+const
+    HexDigits: AnsiString = '0123456789ABCDEF';
+var
+    temp: AnsiString;
+    v: QWord;
+    nibble: Integer;
+begin
+    v := QWord(Value);
     temp := '';
     if v = 0 then
         temp := '0'
@@ -1075,24 +1210,77 @@ begin
     Result := -1;
 end;
 
+function TStringHelper.PadLeft(ATotalWidth: SizeInt): AnsiString;
+begin
+    Result := SysUtils.PadLeft(Self, ATotalWidth, ' ');
+end;
+
+function TStringHelper.PadLeft(ATotalWidth: SizeInt; PaddingChar: AnsiChar): AnsiString;
+begin
+    Result := SysUtils.PadLeft(Self, ATotalWidth, PaddingChar);
+end;
+
 function TStringHelper.PadRight(ATotalWidth: SizeInt): AnsiString;
 begin
-    Result := PadRight(ATotalWidth, ' ');
+    Result := SysUtils.PadRight(Self, ATotalWidth, ' ');
 end;
 
 function TStringHelper.PadRight(ATotalWidth: SizeInt; PaddingChar: AnsiChar): AnsiString;
-var
-    pad_len: SizeInt;
 begin
-    Result := Self;
-    pad_len := ATotalWidth - Length(Self);
-    if pad_len > 0 then
-        Result := Result + StringOfChar(PaddingChar, pad_len);
+    Result := SysUtils.PadRight(Self, ATotalWidth, PaddingChar);
+end;
+
+function TStringHelper.QuotedString(QuoteChar: AnsiChar): AnsiString;
+begin
+    Result := SysUtils.QuotedString(Self, QuoteChar);
+end;
+
+function TStringHelper.StartsWith(const AValue: AnsiString): Boolean;
+begin
+    Result := SysUtils.StartsWith(Self, AValue);
+end;
+
+function TStringHelper.EndsWith(const AValue: AnsiString): Boolean;
+begin
+    Result := SysUtils.EndsWith(Self, AValue);
 end;
 
 function TStringHelper.Replace(const OldValue, NewValue: AnsiString; Flags: TReplaceFlags): AnsiString;
 begin
     Result := StringReplace(Self, OldValue, NewValue, Flags);
+end;
+
+function TStringHelper.CountChar(const C: AnsiChar): SizeInt;
+var
+    i: SizeInt;
+begin
+    Result := 0;
+    for i := 1 to Length(Self) do
+        if Self[i] = C then
+            Inc(Result);
+end;
+
+function TStringHelper.IndexOfAny(const AnyOf: array of AnsiChar): SizeInt;
+var
+    i, j: SizeInt;
+begin
+    Result := -1;
+    for i := 1 to Length(Self) do
+        for j := Low(AnyOf) to High(AnyOf) do
+            if Self[i] = AnyOf[j] then
+            begin
+                Result := i - 1;
+                Exit;
+            end;
+end;
+
+function TStringHelper.ToCharArray: TCharArray;
+var
+    i: SizeInt;
+begin
+    SetLength(Result, Length(Self));
+    for i := 1 to Length(Self) do
+        Result[i - 1] := Self[i];
 end;
 
 function TLongIntHelper.SetBit(const Index: Integer): LongInt;

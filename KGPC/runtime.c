@@ -4064,6 +4064,37 @@ static long long kgpc_val_parse_integer(const char *text, long long min_value,
     return 0;
 }
 
+static long long kgpc_val_parse_unsigned(const char *text, unsigned long long max_value,
+    unsigned long long *out_value)
+{
+    if (text == NULL)
+        text = "";
+
+    const char *ptr = text;
+    while (*ptr != '\0' && isspace((unsigned char)*ptr))
+        ++ptr;
+
+    if (*ptr == '-')
+        return kgpc_val_error_position(text, ptr);
+
+    errno = 0;
+    char *endptr = NULL;
+    unsigned long long value = strtoull(ptr, &endptr, 10);
+    if (endptr == ptr)
+        return 1;
+
+    if (errno == ERANGE || value > max_value)
+        return kgpc_val_error_position(text, endptr);
+
+    const char *rest = kgpc_val_skip_trailing_whitespace(endptr);
+    if (rest != NULL && *rest != '\0')
+        return kgpc_val_error_position(text, rest);
+
+    if (out_value != NULL)
+        *out_value = value;
+    return 0;
+}
+
 static long long kgpc_val_parse_real(const char *text, double *out_value)
 {
     if (text == NULL)
@@ -4105,6 +4136,15 @@ long long kgpc_val_longint(const char *text, int64_t *out_value)
     return code;
 }
 
+long long kgpc_val_qword(const char *text, uint64_t *out_value)
+{
+    unsigned long long parsed = 0;
+    long long code = kgpc_val_parse_unsigned(text, ULLONG_MAX, &parsed);
+    if (code == 0 && out_value != NULL)
+        *out_value = (uint64_t)parsed;
+    return code;
+}
+
 long long kgpc_val_real(const char *text, double *out_value)
 {
     double parsed = 0.0;
@@ -4112,6 +4152,25 @@ long long kgpc_val_real(const char *text, double *out_value)
     if (code == 0 && out_value != NULL)
         *out_value = parsed;
     return code;
+}
+
+int64_t bsrqword_i64(uint64_t value)
+{
+    if (value == 0)
+        return -1;
+    return (int64_t)(63u - (uint64_t)__builtin_clzll(value));
+}
+
+int64_t bsfqword_i64(uint64_t value)
+{
+    if (value == 0)
+        return -1;
+    return (int64_t)__builtin_ctzll(value);
+}
+
+int64_t popcnt_i64(uint64_t value)
+{
+    return (int64_t)__builtin_popcountll(value);
 }
 
 /* Chr function - returns a character value as an integer */

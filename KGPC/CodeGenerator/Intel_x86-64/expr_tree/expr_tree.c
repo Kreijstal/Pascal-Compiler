@@ -3565,8 +3565,39 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                 }
             if(type == STAR)
             {
-                snprintf(buffer, sizeof(buffer), "\timul%c\t%s, %s\n", arith_suffix, op_right, op_left);
-                inst_list = add_inst(inst_list, buffer);
+                int used_temp = 0;
+                Register_t *imm_reg = NULL;
+                if (use_qword_op && op_right != NULL && op_right[0] == '$')
+                {
+                    char *endptr = NULL;
+                    long long imm_value = strtoll(op_right + 1, &endptr, 0);
+                    if (endptr != NULL && *endptr == '\0' &&
+                        (imm_value > INT32_MAX || imm_value < INT32_MIN))
+                    {
+                        imm_reg = get_free_reg(get_reg_stack(), &inst_list);
+                        if (imm_reg == NULL)
+                        {
+                            codegen_report_error(ctx,
+                                "ERROR: Unable to allocate temporary for 64-bit immediate multiplication.");
+                            break;
+                        }
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n",
+                            imm_value, imm_reg->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\timul%c\t%s, %s\n",
+                            arith_suffix, imm_reg->bit_64, op_left);
+                        inst_list = add_inst(inst_list, buffer);
+                        used_temp = 1;
+                    }
+                }
+
+                if (!used_temp)
+                {
+                    snprintf(buffer, sizeof(buffer), "\timul%c\t%s, %s\n", arith_suffix, op_right, op_left);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+                if (imm_reg != NULL)
+                    free_reg(get_reg_stack(), imm_reg);
             }
             else if(type == AND)
             {

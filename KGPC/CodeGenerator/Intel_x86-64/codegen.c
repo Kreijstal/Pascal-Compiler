@@ -4166,6 +4166,9 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                 while(arg_ids != NULL)
                 {
                     int tree_is_var_param = arg_decl->tree_data.var_decl_data.is_var_param;
+                    int is_untyped_param = arg_decl->tree_data.var_decl_data.is_untyped_param;
+                    if (is_untyped_param)
+                        tree_is_var_param = 1;
                     int symbol_is_var_param = tree_is_var_param;
                     int is_self_param = 0;
                     if (arg_decl->tree_data.var_decl_data.ids != NULL)

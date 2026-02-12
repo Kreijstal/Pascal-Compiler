@@ -4824,7 +4824,11 @@ static ListNode_t *codegen_builtin_val(struct Statement *stmt, ListNode_t *inst_
             call_target = "kgpc_val_integer";
             break;
         case LONGINT_TYPE:
+        case INT64_TYPE:
             call_target = "kgpc_val_longint";
+            break;
+        case QWORD_TYPE:
+            call_target = "kgpc_val_qword";
             break;
         case REAL_TYPE:
             call_target = "kgpc_val_real";

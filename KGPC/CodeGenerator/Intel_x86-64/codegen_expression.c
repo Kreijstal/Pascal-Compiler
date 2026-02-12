@@ -5385,7 +5385,8 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         }
 
         int is_var_param = (formal_arg_decl != NULL &&
-            formal_arg_decl->tree_data.var_decl_data.is_var_param);
+            (formal_arg_decl->tree_data.var_decl_data.is_var_param ||
+             formal_arg_decl->tree_data.var_decl_data.is_untyped_param));
         if (is_self_param && codegen_self_param_is_class(formal_arg_decl, ctx))
             is_var_param = 0;
         int is_array_param = (formal_arg_decl != NULL && formal_arg_decl->type == TREE_ARR_DECL);

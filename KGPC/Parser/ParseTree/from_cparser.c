@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include <stdarg.h>
 #include <limits.h>
+#include <errno.h>
 #ifndef _WIN32
 #include <strings.h>
 #else
@@ -3116,6 +3117,25 @@ static int const_expr_match_keyword(ConstExprScanner *scanner, const char *kw) {
     return 1;
 }
 
+static int parse_integer_literal(const char *num_str, int base, long long *out_value, char **out_endptr)
+{
+    if (num_str == NULL || out_value == NULL)
+        return -1;
+
+    errno = 0;
+    char *endptr = NULL;
+    unsigned long long value = strtoull(num_str, &endptr, base);
+    if (endptr == num_str)
+        return -1;
+    if (errno == ERANGE)
+        errno = 0;
+
+    *out_value = (long long)value;
+    if (out_endptr != NULL)
+        *out_endptr = endptr;
+    return 0;
+}
+
 static int const_expr_parse_number(ConstExprScanner *scanner, long long *out_value) {
     const_expr_skip_ws(scanner);
     const char *start = scanner->input + scanner->pos;
@@ -3138,8 +3158,8 @@ static int const_expr_parse_number(ConstExprScanner *scanner, long long *out_val
     }
 
     char *endptr = NULL;
-    long long value = strtoll(num_start, &endptr, base);
-    if (endptr == num_start)
+    long long value = 0;
+    if (parse_integer_literal(num_start, base, &value, &endptr) != 0)
         return -1;
 
     scanner->pos = (size_t)(endptr - scanner->input);
@@ -7600,6 +7620,18 @@ static int select_range_primitive_tag(const TypeInfo *info)
 
     long long start = info->range_start;
     long long end = info->range_end;
+    if (start >= 0 && end < 0)
+    {
+        unsigned long long u_end = (unsigned long long)end;
+        if (u_end <= 0xFFULL)
+            return BYTE_TYPE;
+        if (u_end <= 0xFFFFULL)
+            return WORD_TYPE;
+        if (u_end <= 0xFFFFFFFFULL)
+            return LONGWORD_TYPE;
+        return QWORD_TYPE;
+    }
+
     if (start > end) {
         long long tmp = start;
         start = end;
@@ -7631,6 +7663,18 @@ static long long compute_range_storage_size(const TypeInfo *info)
 
     long long start = info->range_start;
     long long end = info->range_end;
+    if (start >= 0 && end < 0)
+    {
+        unsigned long long u_end = (unsigned long long)end;
+        if (u_end <= 0xFFULL)
+            return 1;
+        if (u_end <= 0xFFFFULL)
+            return 2;
+        if (u_end <= 0xFFFFFFFFULL)
+            return 4;
+        return 8;
+    }
+
     if (start > end)
     {
         long long tmp = start;
@@ -9157,7 +9201,10 @@ static struct Expression *convert_factor(ast_t *expr_node) {
             base = 8;
             num_str++;  /* Skip the & prefix */
         }
-        return mk_inum(expr_node->line, strtoll(num_str, NULL, base));
+        long long literal_value = 0;
+        if (parse_integer_literal(num_str, base, &literal_value, NULL) != 0)
+            literal_value = 0;
+        return mk_inum(expr_node->line, literal_value);
     }
     case PASCAL_T_REAL:
         return mk_rnum(expr_node->line, strtod(expr_node->sym->name, NULL));

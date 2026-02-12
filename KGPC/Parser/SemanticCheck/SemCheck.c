@@ -9098,7 +9098,9 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             HashNode_t *var_node = NULL;
                             if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
                             {
-                                var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
+                                var_node->is_var_parameter =
+                                    (tree->tree_data.var_decl_data.is_var_param ||
+                                     tree->tree_data.var_decl_data.is_untyped_param) ? 1 : 0;
                                 mark_hashnode_unit_info(symtab, var_node,
                                     tree->tree_data.var_decl_data.defined_in_unit,
                                     tree->tree_data.var_decl_data.unit_is_public);
@@ -9142,7 +9144,9 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             HashNode_t *var_node = NULL;
                             if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
                             {
-                                var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
+                                var_node->is_var_parameter =
+                                    (tree->tree_data.var_decl_data.is_var_param ||
+                                     tree->tree_data.var_decl_data.is_untyped_param) ? 1 : 0;
                                 mark_hashnode_unit_info(symtab, var_node,
                                     tree->tree_data.var_decl_data.defined_in_unit,
                                     tree->tree_data.var_decl_data.unit_is_public);
@@ -9215,7 +9219,9 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                                 HashNode_t *var_node = NULL;
                                 if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
                                 {
-                                    var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
+                                    var_node->is_var_parameter =
+                                        (tree->tree_data.var_decl_data.is_var_param ||
+                                         tree->tree_data.var_decl_data.is_untyped_param) ? 1 : 0;
                                     mark_hashnode_unit_info(symtab, var_node,
                                         tree->tree_data.var_decl_data.defined_in_unit,
                                         tree->tree_data.var_decl_data.unit_is_public);
@@ -9259,7 +9265,9 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                                 HashNode_t *var_node = NULL;
                                 if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
                                 {
-                                    var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
+                                    var_node->is_var_parameter =
+                                        (tree->tree_data.var_decl_data.is_var_param ||
+                                         tree->tree_data.var_decl_data.is_untyped_param) ? 1 : 0;
                                     mark_hashnode_unit_info(symtab, var_node,
                                         tree->tree_data.var_decl_data.defined_in_unit,
                                         tree->tree_data.var_decl_data.unit_is_public);
@@ -9441,7 +9449,9 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             HashNode_t *var_node = NULL;
                             if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
                             {
-                                var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
+                                var_node->is_var_parameter =
+                                    (tree->tree_data.var_decl_data.is_var_param ||
+                                     tree->tree_data.var_decl_data.is_untyped_param) ? 1 : 0;
                                 mark_hashnode_unit_info(symtab, var_node,
                                     tree->tree_data.var_decl_data.defined_in_unit,
                                     tree->tree_data.var_decl_data.unit_is_public);
@@ -9675,7 +9685,9 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     HashNode_t *var_node = NULL;
                     if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
                     {
-                        var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
+                        var_node->is_var_parameter =
+                            (tree->tree_data.var_decl_data.is_var_param ||
+                             tree->tree_data.var_decl_data.is_untyped_param) ? 1 : 0;
                         mark_hashnode_unit_info(symtab, var_node,
                             tree->tree_data.var_decl_data.defined_in_unit,
                             tree->tree_data.var_decl_data.unit_is_public);
@@ -9925,7 +9937,9 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 {
                     if (tree->type == TREE_VAR_DECL)
                     {
-                        decl_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
+                        decl_node->is_var_parameter =
+                            (tree->tree_data.var_decl_data.is_var_param ||
+                             tree->tree_data.var_decl_data.is_untyped_param) ? 1 : 0;
                         mark_hashnode_unit_info(symtab, decl_node,
                             tree->tree_data.var_decl_data.defined_in_unit,
                             tree->tree_data.var_decl_data.unit_is_public);
@@ -10903,6 +10917,68 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_subprogram %s error after args: %d\n", subprogram->tree_data.subprogram_data.id, return_val);
 #endif
+
+    /* Ensure parameter identifiers are present in scope even if parsing produced
+     * incomplete type info (e.g., untyped const params in helper methods). */
+    {
+        ListNode_t *param_node = subprogram->tree_data.subprogram_data.args_var;
+        while (param_node != NULL)
+        {
+            if (param_node->type == LIST_TREE && param_node->cur != NULL)
+            {
+                Tree_t *param_tree = (Tree_t *)param_node->cur;
+                ListNode_t *ids = NULL;
+                if (param_tree->type == TREE_VAR_DECL)
+                    ids = param_tree->tree_data.var_decl_data.ids;
+                else if (param_tree->type == TREE_ARR_DECL)
+                    ids = param_tree->tree_data.arr_decl_data.ids;
+
+                while (ids != NULL)
+                {
+                    HashNode_t *existing = NULL;
+                    if (FindIdent(&existing, symtab, ids->cur) == -1)
+                    {
+                        KgpcType *param_type = NULL;
+                        if (param_tree->type == TREE_VAR_DECL)
+                        {
+                            param_type = param_tree->tree_data.var_decl_data.cached_kgpc_type;
+                            if (param_type == NULL && param_tree->tree_data.var_decl_data.type_id != NULL)
+                            {
+                                int builtin_tag = semcheck_map_builtin_type_name_local(
+                                    param_tree->tree_data.var_decl_data.type_id);
+                                if (builtin_tag != UNKNOWN_TYPE)
+                                    param_type = create_primitive_type(builtin_tag);
+                            }
+                            PushVarOntoScope_Typed(symtab, (char *)ids->cur, param_type);
+                            if (param_type != NULL &&
+                                param_type != param_tree->tree_data.var_decl_data.cached_kgpc_type)
+                            {
+                                destroy_kgpc_type(param_type);
+                            }
+                        }
+                        else if (param_tree->type == TREE_ARR_DECL)
+                        {
+                            PushArrayOntoScope_Typed(symtab, (char *)ids->cur, NULL);
+                        }
+
+                        if (FindIdent(&existing, symtab, ids->cur) != -1 && existing != NULL)
+                        {
+                            int is_var_param = 0;
+                            int is_untyped = 0;
+                            if (param_tree->type == TREE_VAR_DECL)
+                            {
+                                is_var_param = param_tree->tree_data.var_decl_data.is_var_param;
+                                is_untyped = param_tree->tree_data.var_decl_data.is_untyped_param;
+                            }
+                            existing->is_var_parameter = (is_var_param || is_untyped) ? 1 : 0;
+                        }
+                    }
+                    ids = ids->next;
+                }
+            }
+            param_node = param_node->next;
+        }
+    }
 
     /* Ensure helper methods always have an implicit Self in scope even if the
      * parameter list was parsed without it (e.g., macro-expanded helper types). */
