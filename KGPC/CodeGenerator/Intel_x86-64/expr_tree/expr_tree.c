@@ -3730,7 +3730,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                 const char *count = use_qword_op ? reg64_to_reg32(op_right, right32, sizeof(right32)) : op_right;
                 snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%ecx\n", count);
                 inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, sizeof(buffer), "\tsar%c\t%%cl, %s\n", arith_suffix, op_left);
+                snprintf(buffer, sizeof(buffer), "\tshr%c\t%%cl, %s\n", arith_suffix, op_left);
                 inst_list = add_inst(inst_list, buffer);
             }
             else if(type == ROL)

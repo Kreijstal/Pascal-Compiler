@@ -1,7 +1,7 @@
-hex=81234567DEADBEEF
-bits=37
+hex=8123456789ABCDFE
+bits=33
 hsb=63
-lsb=0
-byte2=AD
-word1=DEAD
-dword0=DEADBEEF
+lsb=1
+byte2=AB
+word1=89AB
+dword0=89ABCDFE

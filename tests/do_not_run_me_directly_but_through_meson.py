@@ -1464,7 +1464,7 @@ class TestCompiler(unittest.TestCase):
         asm = read_file_content(asm_file)
 
         self.assertTrue(any(token in asm for token in ("\tsall\t", "\tshlq\t")))
-        self.assertTrue(any(token in asm for token in ("\tsarl\t", "\tsarq\t")))
+        self.assertTrue(any(token in asm for token in ("\tshrl\t", "\tshrq\t")))
         self.assertTrue(any(token in asm for token in ("\troll\t", "\trolq\t")))
         self.assertTrue(any(token in asm for token in ("\trorl\t", "\trorq\t")))
 
