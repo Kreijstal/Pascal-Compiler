@@ -1,0 +1,7 @@
+ansi_trim=one::two::::three::
+ansi_split=one|two|three
+ansi_last=16
+ansi_pad=one::two::::three::.
+ansi_repl=one--two----three--
+longint_bin=00000000000000000000000000001000
+longint_hex=0008

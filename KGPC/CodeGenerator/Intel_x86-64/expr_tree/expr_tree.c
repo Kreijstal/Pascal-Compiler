@@ -914,7 +914,6 @@ static int leaf_expr_is_simple(const struct Expression *expr)
         case EXPR_CHAR_CODE:
         case EXPR_BOOL:
         case EXPR_NIL:
-        case EXPR_SET:
             return 1;
         default:
             return 0;
@@ -2415,6 +2414,25 @@ cleanup_constructor:
             return add_inst(inst_list, buffer);
         }
     }
+    else if (expr->type == EXPR_SET)
+    {
+        Register_t *set_reg = NULL;
+        inst_list = codegen_set_literal(expr, inst_list, ctx, &set_reg, 0);
+        if (set_reg == NULL)
+            return inst_list;
+
+        if (set_reg != target_reg)
+        {
+            int is_char_set = expr_is_char_set_ctx(expr, ctx);
+            const char *src_reg = is_char_set ? set_reg->bit_64 : set_reg->bit_32;
+            const char *dst_reg = is_char_set ? target_reg->bit_64 : target_reg->bit_32;
+            snprintf(buffer, sizeof(buffer), "\tmov%c\t%s, %s\n",
+                is_char_set ? 'q' : 'l', src_reg, dst_reg);
+            inst_list = add_inst(inst_list, buffer);
+            free_reg(get_reg_stack(), set_reg);
+        }
+        return inst_list;
+    }
     else if (expr->type == EXPR_STRING)
     {
         if (expr_get_type_tag(expr) == CHAR_TYPE)
@@ -3203,10 +3221,17 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                         }
                         else
                         {
-                            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%r10d\n", right);
+                            const char *scratch_reg = "%r10d";
+                            if (left != NULL && strcmp(left, "%r10d") == 0)
+                                scratch_reg = "%r11d";
+                            else if (left != NULL && strcmp(left, "%r11d") == 0)
+                                scratch_reg = "%r10d";
+
+                            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", right, scratch_reg);
                             inst_list = add_inst(inst_list, buffer);
-                            inst_list = add_inst(inst_list, "\tnotl\t%r10d\n");
-                            snprintf(buffer, sizeof(buffer), "\tandl\t%%r10d, %s\n", left);
+                            snprintf(buffer, sizeof(buffer), "\tnotl\t%s\n", scratch_reg);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tandl\t%s, %s\n", scratch_reg, left);
                             inst_list = add_inst(inst_list, buffer);
                         }
                         break;

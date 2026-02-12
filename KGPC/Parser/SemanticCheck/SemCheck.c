@@ -3108,11 +3108,25 @@ static int resolve_range_bounds_for_type(SymTab_t *symtab, const char *type_name
         return 0;
 
     struct TypeAlias *alias = get_type_alias_from_node(type_node);
-    if (alias != NULL && alias->is_range && alias->range_known)
+    if (alias != NULL)
     {
-        *out_low = alias->range_start;
-        *out_high = alias->range_end;
-        return 1;
+        if (alias->is_enum && alias->enum_literals != NULL)
+        {
+            int count = ListLength(alias->enum_literals);
+            if (count > 0)
+            {
+                *out_low = 0;
+                *out_high = (long long)count - 1;
+                return 1;
+            }
+        }
+
+        if (alias->is_range && alias->range_known)
+        {
+            *out_low = alias->range_start;
+            *out_high = alias->range_end;
+            return 1;
+        }
     }
 
     return 0;
@@ -3603,73 +3617,101 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                 }
                 
                 /* High expects a type identifier */
-                if (arg->type == EXPR_VAR_ID)
+                if (arg->type == EXPR_VAR_ID || arg->type == EXPR_RECORD_ACCESS)
                 {
-                    const char *type_name = arg->expr_data.id;
+                    char *qualified_name = NULL;
+                    const char *type_name = NULL;
+                    int status = 1;
+                    if (arg->type == EXPR_VAR_ID)
+                        type_name = arg->expr_data.id;
+                    else
+                    {
+                        qualified_name = build_qualified_identifier_from_expr(arg);
+                        type_name = qualified_name;
+                    }
                     const char *base_name = semcheck_base_type_name(type_name);
-                    if (base_name != NULL)
-                        type_name = base_name;
+                    const char *lookup_name = type_name;
                     long long range_low = 0;
                     long long range_high = 0;
-                    if (resolve_range_bounds_for_type(symtab, type_name, &range_low, &range_high))
+                    if (resolve_range_bounds_for_type(symtab, lookup_name, &range_low, &range_high))
                     {
                         *out_value = range_high;
-                        return 0;
+                        status = 0;
+                        goto high_cleanup;
                     }
                     /* Resolve type aliases to base type */
-                    const char *resolved = resolve_type_to_base_name(symtab, type_name);
+                    const char *resolved = resolve_type_to_base_name(symtab, lookup_name);
                     if (resolved != NULL)
-                        type_name = resolved;
+                        lookup_name = resolved;
                     
                     /* Map common type names to their High values */
-                    if (pascal_identifier_equals(type_name, "Int64")) {
+                    if (base_name != NULL && pascal_identifier_equals(base_name, "Int64")) {
                         *out_value = 9223372036854775807LL; /* INT64_MAX */
-                        return 0;
+                        status = 0;
+                        goto high_cleanup;
                     }
-                    if (pascal_identifier_equals(type_name, "QWord") ||
-                        pascal_identifier_equals(type_name, "UInt64")) {
+                    if (base_name != NULL &&
+                        (pascal_identifier_equals(base_name, "QWord") ||
+                         pascal_identifier_equals(base_name, "UInt64"))) {
                         /* Treat QWord as signed 64-bit until unsigned semantics are supported. */
                         *out_value = 9223372036854775807LL;
-                        return 0;
+                        status = 0;
+                        goto high_cleanup;
                     }
-                    if (pascal_identifier_equals(type_name, "LongInt") ||
-                        pascal_identifier_equals(type_name, "Integer")) {
+                    if (base_name != NULL &&
+                        (pascal_identifier_equals(base_name, "LongInt") ||
+                         pascal_identifier_equals(base_name, "Integer"))) {
                         *out_value = 2147483647LL; /* INT32_MAX */
-                        return 0;
+                        status = 0;
+                        goto high_cleanup;
                     }
-                    if (pascal_identifier_equals(type_name, "Cardinal") ||
-                        pascal_identifier_equals(type_name, "LongWord") ||
-                        pascal_identifier_equals(type_name, "DWord")) {
+                    if (base_name != NULL &&
+                        (pascal_identifier_equals(base_name, "Cardinal") ||
+                         pascal_identifier_equals(base_name, "LongWord") ||
+                         pascal_identifier_equals(base_name, "DWord"))) {
                         *out_value = 4294967295LL; /* UINT32_MAX */
-                        return 0;
+                        status = 0;
+                        goto high_cleanup;
                     }
-                    if (pascal_identifier_equals(type_name, "SmallInt")) {
+                    if (base_name != NULL && pascal_identifier_equals(base_name, "SmallInt")) {
                         *out_value = 32767LL; /* INT16_MAX */
-                        return 0;
+                        status = 0;
+                        goto high_cleanup;
                     }
-                    if (pascal_identifier_equals(type_name, "Word")) {
+                    if (base_name != NULL && pascal_identifier_equals(base_name, "Word")) {
                         *out_value = 65535LL; /* UINT16_MAX */
-                        return 0;
+                        status = 0;
+                        goto high_cleanup;
                     }
-                    if (pascal_identifier_equals(type_name, "ShortInt")) {
+                    if (base_name != NULL && pascal_identifier_equals(base_name, "ShortInt")) {
                         *out_value = 127LL; /* INT8_MAX */
-                        return 0;
+                        status = 0;
+                        goto high_cleanup;
                     }
-                    if (pascal_identifier_equals(type_name, "Byte")) {
+                    if (base_name != NULL && pascal_identifier_equals(base_name, "Byte")) {
                         *out_value = 255LL; /* UINT8_MAX */
-                        return 0;
+                        status = 0;
+                        goto high_cleanup;
                     }
-                    if (pascal_identifier_equals(type_name, "Boolean")) {
+                    if (base_name != NULL && pascal_identifier_equals(base_name, "Boolean")) {
                         *out_value = 1LL;
-                        return 0;
+                        status = 0;
+                        goto high_cleanup;
                     }
-                    if (pascal_identifier_equals(type_name, "Char") ||
-                        pascal_identifier_equals(type_name, "AnsiChar")) {
+                    if (base_name != NULL &&
+                        (pascal_identifier_equals(base_name, "Char") ||
+                         pascal_identifier_equals(base_name, "AnsiChar"))) {
                         *out_value = 255LL;
-                        return 0;
+                        status = 0;
+                        goto high_cleanup;
                     }
-                    fprintf(stderr, "Error: High(%s) - unsupported type in const expression.\n", arg->expr_data.id);
-                    return 1;
+                    fprintf(stderr, "Error: High(%s) - unsupported type in const expression.\n",
+                        qualified_name != NULL ? qualified_name : arg->expr_data.id);
+                    status = 1;
+high_cleanup:
+                    if (qualified_name != NULL)
+                        free(qualified_name);
+                    return status;
                 }
                 fprintf(stderr, "Error: High expects a type identifier as argument.\n");
                 return 1;
@@ -3692,72 +3734,100 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                 }
                 
                 /* Low expects a type identifier */
-                if (arg->type == EXPR_VAR_ID)
+                if (arg->type == EXPR_VAR_ID || arg->type == EXPR_RECORD_ACCESS)
                 {
-                    const char *type_name = arg->expr_data.id;
+                    char *qualified_name = NULL;
+                    const char *type_name = NULL;
+                    int status = 1;
+                    if (arg->type == EXPR_VAR_ID)
+                        type_name = arg->expr_data.id;
+                    else
+                    {
+                        qualified_name = build_qualified_identifier_from_expr(arg);
+                        type_name = qualified_name;
+                    }
                     const char *base_name = semcheck_base_type_name(type_name);
-                    if (base_name != NULL)
-                        type_name = base_name;
+                    const char *lookup_name = type_name;
                     long long range_low = 0;
                     long long range_high = 0;
-                    if (resolve_range_bounds_for_type(symtab, type_name, &range_low, &range_high))
+                    if (resolve_range_bounds_for_type(symtab, lookup_name, &range_low, &range_high))
                     {
                         *out_value = range_low;
-                        return 0;
+                        status = 0;
+                        goto low_cleanup;
                     }
                     /* Resolve type aliases to base type */
-                    const char *resolved = resolve_type_to_base_name(symtab, type_name);
+                    const char *resolved = resolve_type_to_base_name(symtab, lookup_name);
                     if (resolved != NULL)
-                        type_name = resolved;
+                        lookup_name = resolved;
                         
                     /* Map common type names to their Low values */
-                    if (pascal_identifier_equals(type_name, "Int64")) {
+                    if (base_name != NULL && pascal_identifier_equals(base_name, "Int64")) {
                         *out_value = (-9223372036854775807LL - 1); /* INT64_MIN */
-                        return 0;
+                        status = 0;
+                        goto low_cleanup;
                     }
-                    if (pascal_identifier_equals(type_name, "QWord") ||
-                        pascal_identifier_equals(type_name, "UInt64")) {
+                    if (base_name != NULL &&
+                        (pascal_identifier_equals(base_name, "QWord") ||
+                         pascal_identifier_equals(base_name, "UInt64"))) {
                         *out_value = 0LL;
-                        return 0;
+                        status = 0;
+                        goto low_cleanup;
                     }
-                    if (pascal_identifier_equals(type_name, "LongInt") ||
-                        pascal_identifier_equals(type_name, "Integer")) {
+                    if (base_name != NULL &&
+                        (pascal_identifier_equals(base_name, "LongInt") ||
+                         pascal_identifier_equals(base_name, "Integer"))) {
                         *out_value = -2147483648LL; /* INT32_MIN */
-                        return 0;
+                        status = 0;
+                        goto low_cleanup;
                     }
-                    if (pascal_identifier_equals(type_name, "Cardinal") ||
-                        pascal_identifier_equals(type_name, "LongWord") ||
-                        pascal_identifier_equals(type_name, "DWord")) {
+                    if (base_name != NULL &&
+                        (pascal_identifier_equals(base_name, "Cardinal") ||
+                         pascal_identifier_equals(base_name, "LongWord") ||
+                         pascal_identifier_equals(base_name, "DWord"))) {
                         *out_value = 0LL;
-                        return 0;
+                        status = 0;
+                        goto low_cleanup;
                     }
-                    if (pascal_identifier_equals(type_name, "SmallInt")) {
+                    if (base_name != NULL && pascal_identifier_equals(base_name, "SmallInt")) {
                         *out_value = -32768LL; /* INT16_MIN */
-                        return 0;
+                        status = 0;
+                        goto low_cleanup;
                     }
-                    if (pascal_identifier_equals(type_name, "Word")) {
+                    if (base_name != NULL && pascal_identifier_equals(base_name, "Word")) {
                         *out_value = 0LL;
-                        return 0;
+                        status = 0;
+                        goto low_cleanup;
                     }
-                    if (pascal_identifier_equals(type_name, "ShortInt")) {
+                    if (base_name != NULL && pascal_identifier_equals(base_name, "ShortInt")) {
                         *out_value = -128LL; /* INT8_MIN */
-                        return 0;
+                        status = 0;
+                        goto low_cleanup;
                     }
-                    if (pascal_identifier_equals(type_name, "Byte")) {
+                    if (base_name != NULL && pascal_identifier_equals(base_name, "Byte")) {
                         *out_value = 0LL;
-                        return 0;
+                        status = 0;
+                        goto low_cleanup;
                     }
-                    if (pascal_identifier_equals(type_name, "Boolean")) {
+                    if (base_name != NULL && pascal_identifier_equals(base_name, "Boolean")) {
                         *out_value = 0LL;
-                        return 0;
+                        status = 0;
+                        goto low_cleanup;
                     }
-                    if (pascal_identifier_equals(type_name, "Char") ||
-                        pascal_identifier_equals(type_name, "AnsiChar")) {
+                    if (base_name != NULL &&
+                        (pascal_identifier_equals(base_name, "Char") ||
+                         pascal_identifier_equals(base_name, "AnsiChar"))) {
                         *out_value = 0LL;
-                        return 0;
+                        status = 0;
+                        goto low_cleanup;
                     }
-                    fprintf(stderr, "Error: Low(%s) - unsupported type in const expression.\n", arg->expr_data.id);
-                    return 1;
+                    fprintf(stderr, "Error: Low(%s) - unsupported type in const expression.\n",
+                        qualified_name != NULL ? qualified_name : arg->expr_data.id);
+                    status = 1;
+low_cleanup:
+                    if (qualified_name != NULL)
+                        free(qualified_name);
+                    return status;
                 }
                 fprintf(stderr, "Error: Low expects a type identifier as argument.\n");
                 return 1;
@@ -4215,6 +4285,11 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                                     tree->tree_data.type_decl_data.id);
                             ++errors;
                         }
+                    }
+                    if (alias_info->kgpc_type != NULL &&
+                        alias_info->kgpc_type->type_alias == NULL)
+                    {
+                        kgpc_type_set_type_alias(alias_info->kgpc_type, alias_info);
                     }
                     
                     if (alias_info->kgpc_type != NULL)
@@ -10802,40 +10877,47 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
      * parameter list was parsed without it (e.g., macro-expanded helper types). */
     {
         HashNode_t *self_node = NULL;
-        if (FindIdent(&self_node, symtab, "Self") == -1)
+        const char *owner_id = semcheck_get_current_method_owner();
+        struct RecordType *owner_record = NULL;
+        if (owner_id != NULL)
         {
-            const char *owner_id = semcheck_get_current_method_owner();
-            struct RecordType *owner_record = NULL;
-            if (owner_id != NULL)
+            HashNode_t *owner_node = semcheck_find_preferred_type_node(symtab, owner_id);
+            if (owner_node != NULL)
+                owner_record = get_record_type_from_node(owner_node);
+        }
+        if (owner_record != NULL && owner_record->is_type_helper &&
+            owner_record->helper_base_type_id != NULL)
+        {
+            KgpcType *self_type = NULL;
+            HashNode_t *type_node = semcheck_find_preferred_type_node(symtab,
+                owner_record->helper_base_type_id);
+            if (type_node != NULL && type_node->type != NULL)
             {
-                HashNode_t *owner_node = semcheck_find_preferred_type_node(symtab, owner_id);
-                if (owner_node != NULL)
-                    owner_record = get_record_type_from_node(owner_node);
+                kgpc_type_retain(type_node->type);
+                self_type = type_node->type;
             }
-            if (owner_record != NULL && owner_record->is_type_helper &&
-                owner_record->helper_base_type_id != NULL)
+            else
             {
-                KgpcType *self_type = NULL;
-                HashNode_t *type_node = semcheck_find_preferred_type_node(symtab,
+                int builtin_tag = semcheck_map_builtin_type_name_local(
                     owner_record->helper_base_type_id);
-                if (type_node != NULL && type_node->type != NULL)
-                {
-                    kgpc_type_retain(type_node->type);
-                    self_type = type_node->type;
-                }
-                else
-                {
-                    int builtin_tag = semcheck_map_builtin_type_name_local(
-                        owner_record->helper_base_type_id);
-                    if (builtin_tag != UNKNOWN_TYPE)
-                        self_type = create_primitive_type(builtin_tag);
-                }
+                if (builtin_tag != UNKNOWN_TYPE)
+                    self_type = create_primitive_type(builtin_tag);
+            }
 
-                if (self_type != NULL)
+            if (self_type != NULL)
+            {
+                if (FindIdent(&self_node, symtab, "Self") == -1)
                 {
                     PushVarOntoScope_Typed(symtab, "Self", self_type);
-                    destroy_kgpc_type(self_type);
                 }
+                else if (self_node->type == NULL || !kgpc_type_equals(self_node->type, self_type))
+                {
+                    if (self_node->type != NULL)
+                        destroy_kgpc_type(self_node->type);
+                    kgpc_type_retain(self_type);
+                    self_node->type = self_type;
+                }
+                destroy_kgpc_type(self_type);
             }
         }
     }

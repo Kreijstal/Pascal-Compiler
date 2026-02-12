@@ -64,6 +64,8 @@ type
 
     TReplaceFlag = (rfReplaceAll, rfIgnoreCase);
     TReplaceFlags = set of TReplaceFlag;
+    TStringSplitOption = (ExcludeEmpty, ExcludeLastEmpty);
+    TStringSplitOptions = set of TStringSplitOption;
     TStringArray = array of AnsiString;
 
 const
@@ -102,6 +104,9 @@ function CompareText(const S1, S2: AnsiString): Integer;
 function SameText(const S1, S2: AnsiString): Boolean;
 function StringReplace(const S, OldPattern, NewPattern: AnsiString): AnsiString;
 function StringReplace(const S, OldPattern, NewPattern: AnsiString; Flags: TReplaceFlags): AnsiString;
+function StringOfChar(C: AnsiChar; Count: Integer): AnsiString;
+function IntToHex(Value: LongInt; Digits: Integer): AnsiString;
+function BinStr(Value: LongInt; Digits: Integer): AnsiString;
 function Pos(Substr: AnsiString; S: AnsiString): integer;
 function FormatDateTime(const FormatStr: string; DateTime: TDateTime): AnsiString;
 function DateTimeToStr(DateTime: TDateTime): AnsiString;
@@ -159,7 +164,20 @@ type
         function Trim: AnsiString; overload;
         function Trim(const TrimChars: set of AnsiChar): AnsiString; overload;
         function Split(const Separators: array of AnsiChar; ACount: SizeInt): TStringArray;
+        function Split(const Separators: array of AnsiString; Options: TStringSplitOptions): TStringArray;
         function LastIndexOf(const AValue: AnsiString; AStartIndex, ACount: SizeInt): SizeInt;
+        function LastIndexOfAny(const AnyOf: array of AnsiChar; AStartIndex, ACount: SizeInt): SizeInt;
+        function PadRight(ATotalWidth: SizeInt): AnsiString; overload;
+        function PadRight(ATotalWidth: SizeInt; PaddingChar: AnsiChar): AnsiString; overload;
+        function Replace(const OldValue, NewValue: AnsiString; Flags: TReplaceFlags): AnsiString;
+    end;
+
+    TLongIntHelper = type helper for LongInt
+    public
+        function SetBit(const Index: Integer): LongInt; inline;
+        function ToggleBit(const Index: Integer): LongInt; inline;
+        function ToBinString: AnsiString;
+        function ToHexString(const AMinDigits: Integer): AnsiString; inline;
     end;
 
 { Generic procedure to free an object and set its reference to nil }
@@ -693,6 +711,71 @@ begin
     StringReplace := result;
 end;
 
+function StringOfChar(C: AnsiChar; Count: Integer): AnsiString;
+var
+    i: Integer;
+begin
+    if Count <= 0 then
+    begin
+        Result := '';
+        exit;
+    end;
+    SetLength(Result, Count);
+    for i := 1 to Count do
+        Result[i] := C;
+end;
+
+function IntToHex(Value: LongInt; Digits: Integer): AnsiString;
+const
+    HexDigits: AnsiString = '0123456789ABCDEF';
+var
+    temp: AnsiString;
+    v: LongWord;
+    nibble: Integer;
+begin
+    v := LongWord(Value);
+    temp := '';
+    if v = 0 then
+        temp := '0'
+    else
+        while v <> 0 do
+        begin
+            nibble := v and $F;
+            temp := HexDigits[nibble + 1] + temp;
+            v := v shr 4;
+        end;
+    if Digits < 1 then
+        Digits := 1;
+    if Length(temp) < Digits then
+        temp := StringOfChar('0', Digits - Length(temp)) + temp;
+    Result := temp;
+end;
+
+function BinStr(Value: LongInt; Digits: Integer): AnsiString;
+var
+    temp: AnsiString;
+    v: LongWord;
+begin
+    v := LongWord(Value);
+    temp := '';
+    if v = 0 then
+        temp := '0'
+    else
+        while v <> 0 do
+        begin
+            if (v and 1) <> 0 then
+                temp := '1' + temp
+            else
+                temp := '0' + temp;
+            v := v shr 1;
+        end;
+    if Digits < 1 then
+        Digits := 1;
+    if Length(temp) < Digits then
+        temp := StringOfChar('0', Digits - Length(temp)) + temp;
+    Result := temp;
+end;
+
 function Pos(Substr: AnsiString; S: AnsiString): integer;
 var
     i, j: integer;
@@ -833,6 +916,65 @@ begin
     Result[part_count] := Copy(Self, start_pos, Length(Self) - start_pos + 1);
 end;
 
+function TStringHelper.Split(const Separators: array of AnsiString; Options: TStringSplitOptions): TStringArray;
+var
+    search_pos: Integer;
+    next_pos: Integer;
+    best_pos: Integer;
+    best_len: Integer;
+    sep_index: Integer;
+    token: AnsiString;
+    result_count: Integer;
+    remaining: AnsiString;
+begin
+    SetLength(Result, 0);
+    search_pos := 1;
+    result_count := 0;
+
+    while search_pos <= Length(Self) do
+    begin
+        best_pos := 0;
+        best_len := 0;
+        remaining := Copy(Self, search_pos, Length(Self) - search_pos + 1);
+        for sep_index := Low(Separators) to High(Separators) do
+        begin
+            if Separators[sep_index] = '' then
+                continue;
+            next_pos := Pos(Separators[sep_index], remaining);
+            if next_pos > 0 then
+            begin
+                next_pos := search_pos + next_pos - 1;
+                if (best_pos = 0) or (next_pos < best_pos) then
+                begin
+                    best_pos := next_pos;
+                    best_len := Length(Separators[sep_index]);
+                end;
+            end;
+        end;
+
+        if best_pos = 0 then
+        begin
+            token := Copy(Self, search_pos, Length(Self) - search_pos + 1);
+            search_pos := Length(Self) + 1;
+        end
+        else
+        begin
+            token := Copy(Self, search_pos, best_pos - search_pos);
+            search_pos := best_pos + best_len;
+        end;
+
+        if (token <> '') or not (ExcludeEmpty in Options) then
+        begin
+            SetLength(Result, result_count + 1);
+            Result[result_count] := token;
+            Inc(result_count);
+        end;
+    end;
+
+    if (ExcludeLastEmpty in Options) and (result_count > 0) and (Result[result_count - 1] = '') then
+        SetLength(Result, result_count - 1);
+end;
+
 function TStringHelper.LastIndexOf(const AValue: AnsiString; AStartIndex, ACount: SizeInt): SizeInt;
 var
     i: SizeInt;
@@ -887,6 +1029,90 @@ begin
     end;
 
     Result := -1;
+end;
+
+function TStringHelper.LastIndexOfAny(const AnyOf: array of AnsiChar; AStartIndex, ACount: SizeInt): SizeInt;
+var
+    i: SizeInt;
+    j: Integer;
+    min_index: SizeInt;
+    start_index: SizeInt;
+    found: Boolean;
+begin
+    if Length(Self) = 0 then
+    begin
+        Result := -1;
+        exit;
+    end;
+
+    if AStartIndex < 0 then
+        AStartIndex := 0;
+    if AStartIndex > Length(Self) - 1 then
+        AStartIndex := Length(Self) - 1;
+
+    start_index := AStartIndex;
+    min_index := start_index - ACount + 1;
+    if min_index < 0 then
+        min_index := 0;
+
+    for i := start_index downto min_index do
+    begin
+        found := False;
+        for j := Low(AnyOf) to High(AnyOf) do
+        begin
+            if Self[i + 1] = AnyOf[j] then
+            begin
+                found := True;
+                break;
+            end;
+        end;
+        if found then
+        begin
+            Result := i;
+            exit;
+        end;
+    end;
+    Result := -1;
+end;
+
+function TStringHelper.PadRight(ATotalWidth: SizeInt): AnsiString;
+begin
+    Result := PadRight(ATotalWidth, ' ');
+end;
+
+function TStringHelper.PadRight(ATotalWidth: SizeInt; PaddingChar: AnsiChar): AnsiString;
+var
+    pad_len: SizeInt;
+begin
+    Result := Self;
+    pad_len := ATotalWidth - Length(Self);
+    if pad_len > 0 then
+        Result := Result + StringOfChar(PaddingChar, pad_len);
+end;
+
+function TStringHelper.Replace(const OldValue, NewValue: AnsiString; Flags: TReplaceFlags): AnsiString;
+begin
+    Result := StringReplace(Self, OldValue, NewValue, Flags);
+end;
+
+function TLongIntHelper.SetBit(const Index: Integer): LongInt;
+begin
+    Result := Self or (LongInt(1) shl Index);
+end;
+
+function TLongIntHelper.ToggleBit(const Index: Integer): LongInt;
+begin
+    Result := Self xor (LongInt(1) shl Index);
+end;
+
+function TLongIntHelper.ToBinString: AnsiString;
+begin
+    Result := BinStr(Self, SizeOf(LongInt) * 8);
+end;
+
+function TLongIntHelper.ToHexString(const AMinDigits: Integer): AnsiString;
+begin
+    Result := IntToHex(Self, AMinDigits);
 end;
 
 function FormatDateTime(const FormatStr: string; DateTime: TDateTime): AnsiString;

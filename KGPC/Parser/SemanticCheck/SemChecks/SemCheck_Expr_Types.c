@@ -14,6 +14,31 @@
 
 #include "SemCheck_Expr_Internal.h"
 
+static char *build_qualified_identifier_from_expr_local(struct Expression *expr)
+{
+    if (expr == NULL)
+        return NULL;
+    if (expr->type == EXPR_VAR_ID && expr->expr_data.id != NULL)
+        return strdup(expr->expr_data.id);
+    if (expr->type != EXPR_RECORD_ACCESS)
+        return NULL;
+
+    struct Expression *record_expr = expr->expr_data.record_access_data.record_expr;
+    char *field_id = expr->expr_data.record_access_data.field_id;
+    if (record_expr == NULL || field_id == NULL)
+        return NULL;
+
+    char *base = build_qualified_identifier_from_expr_local(record_expr);
+    if (base == NULL)
+        return NULL;
+    size_t qualified_len = strlen(base) + 1 + strlen(field_id) + 1;
+    char *qualified = (char *)malloc(qualified_len);
+    if (qualified != NULL)
+        snprintf(qualified, qualified_len, "%s.%s", base, field_id);
+    free(base);
+    return qualified;
+}
+
 int semcheck_typecast(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating)
 {
@@ -881,6 +906,69 @@ int semcheck_recordaccess(int *type_return,
         semcheck_error_with_context("Error on line %d, malformed record field access.\n\n", expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
+    }
+
+    if (record_expr->type == EXPR_VAR_ID || record_expr->type == EXPR_RECORD_ACCESS)
+    {
+        char *qualified_id = NULL;
+        if (record_expr->type == EXPR_VAR_ID)
+        {
+            size_t qualified_len = strlen(record_expr->expr_data.id) + 1 + strlen(field_id) + 1;
+            qualified_id = (char *)malloc(qualified_len);
+            if (qualified_id != NULL)
+                snprintf(qualified_id, qualified_len, "%s.%s", record_expr->expr_data.id, field_id);
+        }
+        else
+        {
+            qualified_id = build_qualified_identifier_from_expr_local(record_expr);
+            if (qualified_id != NULL)
+            {
+                size_t qualified_len = strlen(qualified_id) + 1 + strlen(field_id) + 1;
+                char *combined = (char *)malloc(qualified_len);
+                if (combined != NULL)
+                {
+                    snprintf(combined, qualified_len, "%s.%s", qualified_id, field_id);
+                    free(qualified_id);
+                    qualified_id = combined;
+                }
+                else
+                {
+                    free(qualified_id);
+                    qualified_id = NULL;
+                }
+            }
+        }
+
+        if (qualified_id != NULL)
+        {
+            HashNode_t *type_node = NULL;
+            const char *resolved_id = qualified_id;
+            if (FindIdent(&type_node, symtab, qualified_id) < 0 ||
+                type_node == NULL || type_node->hash_type != HASHTYPE_TYPE)
+            {
+                const char *base = semcheck_base_type_name(qualified_id);
+                if (base != NULL && base != qualified_id &&
+                    FindIdent(&type_node, symtab, base) >= 0 &&
+                    type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+                {
+                    resolved_id = base;
+                }
+            }
+
+            if (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+            {
+                destroy_expr(record_expr);
+                free(expr->expr_data.record_access_data.field_id);
+                expr->expr_data.record_access_data.record_expr = NULL;
+                expr->expr_data.record_access_data.field_id = NULL;
+                expr->type = EXPR_VAR_ID;
+                expr->expr_data.id = strdup(resolved_id);
+                free(qualified_id);
+                *type_return = UNKNOWN_TYPE;
+                return 0;
+            }
+            free(qualified_id);
+        }
     }
 
     /* AST TRANSFORMATION FIX: Parser incorrectly parses `-r.x` as `(-r).x` instead of `-(r.x)`.
