@@ -5713,6 +5713,22 @@ static ListNode_t *convert_field_decl(ast_t *field_decl_node) {
                 field_desc->pointer_type_id = strdup(field_info.pointer_type_id);
             else
                 field_desc->pointer_type_id = NULL;
+            /* Transfer anonymous enum values for fields like `kind: (a, b, c)` */
+            if (field_info.enum_literals != NULL && name_node->next == NULL)
+            {
+                field_desc->enum_literals = field_info.enum_literals;
+                field_info.enum_literals = NULL;
+            }
+            else if (field_info.enum_literals != NULL)
+            {
+                /* Clone for multi-name fields (e.g. a, b: (x, y, z)) */
+                ListBuilder clone_builder;
+                list_builder_init(&clone_builder);
+                for (ListNode_t *en = field_info.enum_literals; en != NULL; en = en->next)
+                    if (en->cur != NULL)
+                        list_builder_append(&clone_builder, strdup((char *)en->cur), LIST_STRING);
+                field_desc->enum_literals = list_builder_finish(&clone_builder);
+            }
             list_builder_append(&result_builder, field_desc, LIST_RECORD_FIELD);
         } else {
             if (field_name != NULL)

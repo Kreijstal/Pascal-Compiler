@@ -360,6 +360,8 @@ static void destroy_record_field(struct RecordField *field)
         free(field->array_element_type_id);
     if (field->pointer_type_id != NULL)
         free(field->pointer_type_id);
+    if (field->enum_literals != NULL)
+        destroy_list(field->enum_literals);
     if (field->proc_type != NULL)
         kgpc_type_release(field->proc_type);
     destroy_record_type(field->nested_record);
@@ -1909,6 +1911,7 @@ static struct RecordField *clone_record_field(const struct RecordField *field)
     clone->pointer_type = field->pointer_type;
     clone->pointer_type_id = field->pointer_type_id != NULL ?
         strdup(field->pointer_type_id) : NULL;
+    clone->enum_literals = NULL; /* enum_literals are not cloned - they're registered at declaration */
     return clone;
 }
 

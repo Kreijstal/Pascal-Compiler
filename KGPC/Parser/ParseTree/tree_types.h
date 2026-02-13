@@ -91,6 +91,7 @@ struct RecordField
     int is_pointer;
     int pointer_type;
     char *pointer_type_id;
+    ListNode_t *enum_literals; /* Anonymous enum values for fields like `kind: (a, b, c)` */
 };
 
 struct ClassProperty

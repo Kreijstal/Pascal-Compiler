@@ -4294,6 +4294,93 @@ SymTab_t *start_semcheck(Tree_t *parse_tree, int *sem_result)
     return symtab;
 }
 
+/* Register anonymous enum values from record field declarations.
+ * For fields like `kind: (vInteger, vString, vNone)`, the enum values
+ * must be visible in the enclosing scope. */
+static int register_record_field_enum_literals(SymTab_t *symtab, struct RecordType *record)
+{
+    if (symtab == NULL || record == NULL)
+        return 0;
+
+    int errors = 0;
+    ListNode_t *field_node = record->fields;
+    while (field_node != NULL)
+    {
+        if (field_node->type == LIST_RECORD_FIELD && field_node->cur != NULL)
+        {
+            struct RecordField *field = (struct RecordField *)field_node->cur;
+            if (field->enum_literals != NULL)
+            {
+                KgpcType *enum_type = create_primitive_type(ENUM_TYPE);
+                int ordinal = 0;
+                ListNode_t *lit = field->enum_literals;
+                while (lit != NULL)
+                {
+                    if (lit->cur != NULL)
+                    {
+                        char *name = (char *)lit->cur;
+                        HashNode_t *existing = NULL;
+                        if (FindIdent(&existing, symtab, name) == -1)
+                        {
+                            if (PushConstOntoScope_Typed(symtab, name, ordinal, enum_type) > 0)
+                                ++errors;
+                        }
+                    }
+                    ++ordinal;
+                    lit = lit->next;
+                }
+                if (enum_type != NULL)
+                    kgpc_type_release(enum_type);
+            }
+        }
+        else if (field_node->type == LIST_VARIANT_PART && field_node->cur != NULL)
+        {
+            struct VariantPart *variant = (struct VariantPart *)field_node->cur;
+            /* Check tag field for anonymous enum */
+            if (variant->tag_field != NULL && variant->tag_field->enum_literals != NULL)
+            {
+                KgpcType *enum_type = create_primitive_type(ENUM_TYPE);
+                int ordinal = 0;
+                ListNode_t *lit = variant->tag_field->enum_literals;
+                while (lit != NULL)
+                {
+                    if (lit->cur != NULL)
+                    {
+                        char *name = (char *)lit->cur;
+                        HashNode_t *existing = NULL;
+                        if (FindIdent(&existing, symtab, name) == -1)
+                        {
+                            if (PushConstOntoScope_Typed(symtab, name, ordinal, enum_type) > 0)
+                                ++errors;
+                        }
+                    }
+                    ++ordinal;
+                    lit = lit->next;
+                }
+                if (enum_type != NULL)
+                    kgpc_type_release(enum_type);
+            }
+            /* Recurse into variant branches */
+            ListNode_t *branch_node = variant->branches;
+            while (branch_node != NULL)
+            {
+                if (branch_node->type == LIST_VARIANT_BRANCH && branch_node->cur != NULL)
+                {
+                    struct VariantBranch *branch = (struct VariantBranch *)branch_node->cur;
+                    /* Create a temporary RecordType to recurse */
+                    struct RecordType temp_rec;
+                    memset(&temp_rec, 0, sizeof(temp_rec));
+                    temp_rec.fields = branch->members;
+                    errors += register_record_field_enum_literals(symtab, &temp_rec);
+                }
+                branch_node = branch_node->next;
+            }
+        }
+        field_node = field_node->next;
+    }
+    return errors;
+}
+
 /* Pushes a bunch of type declarations onto the current scope */
 static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
 {
@@ -4436,6 +4523,14 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                         destroy_kgpc_type(inline_enum_type);
                     }
                 }
+            }
+            /* Handle record types with fields that have anonymous enum types */
+            if (tree->type == TREE_TYPE_DECL &&
+                tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD)
+            {
+                struct RecordType *record = tree->tree_data.type_decl_data.info.record;
+                if (record != NULL)
+                    errors += register_record_field_enum_literals(symtab, record);
             }
         }
         cur = cur->next;
@@ -5311,6 +5406,7 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
             cloned_field->pointer_type = original_field->pointer_type;
             cloned_field->pointer_type_id = original_field->pointer_type_id ?
                 strdup(original_field->pointer_type_id) : NULL;
+            cloned_field->enum_literals = NULL;
             
             /* Create list node for cloned field */
             ListNode_t *new_node = (ListNode_t *)malloc(sizeof(ListNode_t));
