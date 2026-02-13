@@ -4154,6 +4154,43 @@ long long kgpc_val_real(const char *text, double *out_value)
     return code;
 }
 
+/* ShortString versions of Val: take a ShortString pointer (length byte + chars) */
+static const char *kgpc_shortstr_to_cstr(const unsigned char *ss, char *buf, int bufsize)
+{
+    if (ss == NULL)
+        return "";
+    int len = ss[0];
+    if (len >= bufsize)
+        len = bufsize - 1;
+    memcpy(buf, ss + 1, len);
+    buf[len] = '\0';
+    return buf;
+}
+
+long long kgpc_val_integer_ss(const unsigned char *ss, int32_t *out_value)
+{
+    char buf[256];
+    return kgpc_val_integer(kgpc_shortstr_to_cstr(ss, buf, sizeof(buf)), out_value);
+}
+
+long long kgpc_val_longint_ss(const unsigned char *ss, int64_t *out_value)
+{
+    char buf[256];
+    return kgpc_val_longint(kgpc_shortstr_to_cstr(ss, buf, sizeof(buf)), out_value);
+}
+
+long long kgpc_val_qword_ss(const unsigned char *ss, uint64_t *out_value)
+{
+    char buf[256];
+    return kgpc_val_qword(kgpc_shortstr_to_cstr(ss, buf, sizeof(buf)), out_value);
+}
+
+long long kgpc_val_real_ss(const unsigned char *ss, double *out_value)
+{
+    char buf[256];
+    return kgpc_val_real(kgpc_shortstr_to_cstr(ss, buf, sizeof(buf)), out_value);
+}
+
 int64_t bsrqword_i64(uint64_t value)
 {
     if (value == 0)

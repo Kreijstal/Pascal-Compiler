@@ -4805,7 +4805,20 @@ static ListNode_t *codegen_builtin_val(struct Statement *stmt, ListNode_t *inst_
     StackNode_t *code_spill = NULL;
     StackNode_t *code_result_spill = NULL;
 
-    inst_list = codegen_expr_with_result(source_expr, inst_list, ctx, &source_reg);
+    int source_is_shortstring = codegen_expr_is_shortstring_array(source_expr);
+    if (!source_is_shortstring && source_expr != NULL &&
+        expr_get_type_tag(source_expr) == SHORTSTRING_TYPE)
+        source_is_shortstring = 1;
+
+    if (source_is_shortstring)
+    {
+        /* For ShortString sources, get the address instead of the value */
+        inst_list = codegen_address_for_expr(source_expr, inst_list, ctx, &source_reg);
+    }
+    else
+    {
+        inst_list = codegen_expr_with_result(source_expr, inst_list, ctx, &source_reg);
+    }
     if (codegen_had_error(ctx) || source_reg == NULL)
         goto cleanup;
 
@@ -4821,17 +4834,17 @@ static ListNode_t *codegen_builtin_val(struct Statement *stmt, ListNode_t *inst_
     switch (value_expr != NULL ? expr_get_type_tag(value_expr) : UNKNOWN_TYPE)
     {
         case INT_TYPE:
-            call_target = "kgpc_val_integer";
+            call_target = source_is_shortstring ? "kgpc_val_integer_ss" : "kgpc_val_integer";
             break;
         case LONGINT_TYPE:
         case INT64_TYPE:
-            call_target = "kgpc_val_longint";
+            call_target = source_is_shortstring ? "kgpc_val_longint_ss" : "kgpc_val_longint";
             break;
         case QWORD_TYPE:
-            call_target = "kgpc_val_qword";
+            call_target = source_is_shortstring ? "kgpc_val_qword_ss" : "kgpc_val_qword";
             break;
         case REAL_TYPE:
-            call_target = "kgpc_val_real";
+            call_target = source_is_shortstring ? "kgpc_val_real_ss" : "kgpc_val_real";
             break;
         default:
             call_target = NULL;

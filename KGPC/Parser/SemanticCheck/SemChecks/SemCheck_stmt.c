@@ -1531,7 +1531,7 @@ static int semcheck_builtin_val(SymTab_t *symtab, struct Statement *stmt, int ma
     struct Expression *source_expr = (struct Expression *)args->cur;
     int source_type = UNKNOWN_TYPE;
     error_count += semcheck_stmt_expr_tag(&source_type, symtab, source_expr, max_scope_lev, NO_MUTATE);
-    if (source_type != STRING_TYPE)
+    if (!is_string_type(source_type) && source_type != CHAR_TYPE)
     {
         semcheck_error_with_context("Error on line %d, Val expects its first argument to be a string.\n",
             stmt->line_num);
