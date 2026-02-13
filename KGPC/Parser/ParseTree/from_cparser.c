@@ -9348,6 +9348,24 @@ static struct Expression *convert_factor(ast_t *expr_node) {
         if (child != NULL) {
             if (child->typ == PASCAL_T_IDENTIFIER) {
                 id = dup_symbol(child);
+            } else if (child->typ == PASCAL_T_TYPECAST &&
+                       child->child != NULL &&
+                       child->child->typ == PASCAL_T_IDENTIFIER) {
+                /* Handle chained call: TypeName(source)(outer_args)
+                 * Parser creates: FUNC_CALL(TYPECAST(TypeName, source), outer_args)
+                 * Convert the typecast part to an expression, then create a call
+                 * with the outer args that invokes the typecast result. */
+                struct Expression *typecast_expr = convert_expression(child);
+                ast_t *outer_args_start = child->next;
+                ListNode_t *outer_args = convert_expression_list(outer_args_start);
+                /* Create a function call where the callee is the typecast expression */
+                char *type_id = dup_symbol(child->child);
+                struct Expression *call_expr = mk_functioncall(expr_node->line, type_id, outer_args);
+                if (call_expr != NULL) {
+                    call_expr->expr_data.function_call_data.is_procedural_var_call = 1;
+                    call_expr->expr_data.function_call_data.procedural_var_expr = typecast_expr;
+                }
+                return call_expr;
             } else if (child->child != NULL && child->child->typ == PASCAL_T_IDENTIFIER) {
                 id = dup_symbol(child->child);
             }

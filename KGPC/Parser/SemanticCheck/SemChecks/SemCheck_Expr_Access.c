@@ -571,6 +571,32 @@ int semcheck_funccall(int *type_return,
             id != NULL ? id : "(null)", expr->line_num);
     }
     if (expr->expr_data.function_call_data.is_procedural_var_call) {
+        /* If call_kgpc_type hasn't been set yet but we have a procedural_var_expr,
+         * evaluate it to determine the type (e.g., for typecast-then-call patterns
+         * like TClassGetter(Getter)() ) */
+        if (expr->expr_data.function_call_data.call_kgpc_type == NULL &&
+            expr->expr_data.function_call_data.procedural_var_expr != NULL)
+        {
+            struct Expression *proc_expr = expr->expr_data.function_call_data.procedural_var_expr;
+            return_val += semcheck_expr_with_type(NULL, symtab, proc_expr, max_scope_lev, NO_MUTATE);
+            /* Try to get the KgpcType from the evaluated expression */
+            KgpcType *resolved = proc_expr->resolved_kgpc_type;
+            if (resolved == NULL || resolved->kind != TYPE_KIND_PROCEDURE)
+            {
+                /* Look up the type by the function call id (which is the typecast type name) */
+                HashNode_t *type_node = NULL;
+                if (id != NULL && FindIdent(&type_node, symtab, id) != -1 &&
+                    type_node != NULL && type_node->type != NULL)
+                {
+                    resolved = type_node->type;
+                }
+            }
+            if (resolved != NULL && resolved->kind == TYPE_KIND_PROCEDURE)
+            {
+                kgpc_type_retain(resolved);
+                expr->expr_data.function_call_data.call_kgpc_type = resolved;
+            }
+        }
         if (type_return != NULL)
         {
             KgpcType *call_type = expr->expr_data.function_call_data.call_kgpc_type;
