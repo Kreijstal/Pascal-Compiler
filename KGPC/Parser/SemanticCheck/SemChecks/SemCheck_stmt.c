@@ -4667,11 +4667,13 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                 int typecast_tag = UNKNOWN_TYPE;
                 return_val += semcheck_stmt_expr_tag(&typecast_tag, symtab, typecast_expr, max_scope_lev, NO_MUTATE);
 
-                /* Remove the first arg from the list (don't free - owned by typecast_expr) */
+                /* Remove first list node only; the Expression* it held is now owned
+                 * by typecast_expr->expr_data.typecast_data.expr, so we NULL .cur
+                 * before freeing the ListNode_t shell. */
                 ListNode_t *call_args = args_given->next;
                 args_given->next = NULL;
                 args_given->cur = NULL;
-                free(args_given);
+                free(args_given);  /* Free only the ListNode_t, not the Expression */
                 stmt->stmt_data.procedure_call_data.expr_args = call_args;
                 args_given = call_args;
 
