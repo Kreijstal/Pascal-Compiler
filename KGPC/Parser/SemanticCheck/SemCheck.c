@@ -7577,6 +7577,8 @@ void semcheck_add_builtins(SymTab_t *symtab)
         add_builtin_type_owned(symtab, "PString",
             create_pointer_type(create_primitive_type(STRING_TYPE)));
     }
+    add_builtin_type_owned(symtab, "PAnsiChar",
+        create_pointer_type(create_primitive_type(CHAR_TYPE)));
 
     /* Primitive pointer type */
     add_builtin_type_owned(symtab, "Pointer", create_primitive_type(POINTER_TYPE));

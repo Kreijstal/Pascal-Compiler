@@ -1657,8 +1657,102 @@ void free_error(ParseError* err) {
     recycle_parse_error(err);
 }
 
-void free_ast(ast_t* ast) {
+typedef struct {
+    ast_t **items;
+    size_t capacity;
+    size_t count;
+} AstVisitSet;
+
+static void ast_visit_set_init(AstVisitSet *set, size_t capacity)
+{
+    set->capacity = capacity;
+    set->count = 0;
+    set->items = (ast_t **)calloc(capacity, sizeof(ast_t *));
+}
+
+static void ast_visit_set_destroy(AstVisitSet *set)
+{
+    free(set->items);
+    set->items = NULL;
+    set->capacity = 0;
+    set->count = 0;
+}
+
+static size_t ast_visit_set_hash(AstVisitSet *set, ast_t *node)
+{
+    uintptr_t value = (uintptr_t)node;
+    value ^= value >> 33;
+    value *= (uintptr_t)0xff51afd7ed558ccdULL;
+    value ^= value >> 33;
+    value *= (uintptr_t)0xc4ceb9fe1a85ec53ULL;
+    value ^= value >> 33;
+    return (size_t)(value & (set->capacity - 1));
+}
+
+static void ast_visit_set_grow(AstVisitSet *set)
+{
+    size_t old_capacity = set->capacity;
+    ast_t **old_items = set->items;
+    size_t new_capacity = old_capacity ? old_capacity * 2 : 1024;
+    set->items = (ast_t **)calloc(new_capacity, sizeof(ast_t *));
+    set->capacity = new_capacity;
+    set->count = 0;
+    if (old_items != NULL)
+    {
+        for (size_t i = 0; i < old_capacity; i++)
+        {
+            if (old_items[i] != NULL)
+            {
+                size_t idx = ast_visit_set_hash(set, old_items[i]);
+                while (set->items[idx] != NULL)
+                {
+                    idx = (idx + 1) & (set->capacity - 1);
+                }
+                set->items[idx] = old_items[i];
+                set->count++;
+            }
+        }
+        free(old_items);
+    }
+}
+
+static bool ast_visit_set_contains(AstVisitSet *set, ast_t *node)
+{
+    if (node == NULL || set->items == NULL || set->capacity == 0)
+        return false;
+    size_t idx = ast_visit_set_hash(set, node);
+    while (set->items[idx] != NULL)
+    {
+        if (set->items[idx] == node)
+            return true;
+        idx = (idx + 1) & (set->capacity - 1);
+    }
+    return false;
+}
+
+static void ast_visit_set_insert(AstVisitSet *set, ast_t *node)
+{
+    if (set->capacity == 0 || set->items == NULL)
+        ast_visit_set_grow(set);
+    if ((set->count + 1) * 10 >= set->capacity * 7)
+        ast_visit_set_grow(set);
+    size_t idx = ast_visit_set_hash(set, node);
+    while (set->items[idx] != NULL)
+    {
+        if (set->items[idx] == node)
+            return;
+        idx = (idx + 1) & (set->capacity - 1);
+    }
+    set->items[idx] = node;
+    set->count++;
+}
+
+static void free_ast_internal(ast_t* ast, AstVisitSet *visited)
+{
     if (ast == NULL || ast == ensure_ast_nil_initialized()) return;
+    if (ast_visit_set_contains(visited, ast))
+        return;
+    ast_visit_set_insert(visited, ast);
     ast_t* child = ast->child;
     ast_t* sibling = ast->next;
     ast->child = NULL;
@@ -1668,9 +1762,16 @@ void free_ast(ast_t* ast) {
         free(ast->sym);
         ast->sym = NULL;
     }
-    free_ast(child);
-    free_ast(sibling);
+    free_ast_internal(child, visited);
+    free_ast_internal(sibling, visited);
     recycle_ast_node(ast);
+}
+
+void free_ast(ast_t* ast) {
+    AstVisitSet visited;
+    ast_visit_set_init(&visited, 1024);
+    free_ast_internal(ast, &visited);
+    ast_visit_set_destroy(&visited);
 }
 
 // Initialize ast_nil if not already initialized
