@@ -272,6 +272,7 @@ static int semcheck_map_builtin_type_name_local(const char *id)
         pascal_identifier_equals(id, "UIntPtr"))
         return QWORD_TYPE;
     if (pascal_identifier_equals(id, "String") ||
+        pascal_identifier_equals(id, "OpenString") ||
         pascal_identifier_equals(id, "AnsiString") ||
         pascal_identifier_equals(id, "RawByteString") ||
         pascal_identifier_equals(id, "UnicodeString") ||
@@ -513,6 +514,33 @@ static ListNode_t *semcheck_create_builtin_param_var(const char *name, int type_
     Tree_t *decl = mk_vardecl(0, ids, type_tag, NULL, 1, 0, NULL, NULL, NULL, NULL);
     if (decl == NULL)
         return NULL;
+
+    return CreateListNode(decl, LIST_TREE);
+}
+
+static ListNode_t *semcheck_create_builtin_param_with_id(const char *name, int type_tag,
+    const char *type_id, int is_var_param)
+{
+    char *param_name = strdup(name);
+    if (param_name == NULL)
+        return NULL;
+
+    ListNode_t *ids = CreateListNode(param_name, LIST_STRING);
+    if (ids == NULL)
+        return NULL;
+
+    char *type_id_copy = NULL;
+    if (type_id != NULL)
+        type_id_copy = strdup(type_id);
+
+    Tree_t *decl = mk_vardecl(0, ids, type_tag, type_id_copy,
+        is_var_param, 0, NULL, NULL, NULL, NULL);
+    if (decl == NULL)
+    {
+        if (type_id_copy != NULL)
+            free(type_id_copy);
+        return NULL;
+    }
 
     return CreateListNode(decl, LIST_TREE);
 }
@@ -7534,8 +7562,10 @@ void semcheck_add_builtins(SymTab_t *symtab)
         add_builtin_alias_type(symtab, "TSignalState", INT_TYPE, 4);
     }
     add_builtin_from_vartype(symtab, "Char", HASHVAR_CHAR);
+    add_builtin_from_vartype(symtab, "AnsiChar", HASHVAR_CHAR);
     add_builtin_type_owned(symtab, "WideChar", create_primitive_type_with_size(CHAR_TYPE, 2));
     add_builtin_from_vartype(symtab, "String", HASHVAR_PCHAR);
+    add_builtin_from_vartype(symtab, "OpenString", HASHVAR_PCHAR);
     add_builtin_from_vartype(symtab, "AnsiString", HASHVAR_PCHAR);
     add_builtin_string_type_with_alias(symtab, "RawByteString", HASHVAR_PCHAR);
     add_builtin_string_type_with_alias(symtab, "UnicodeString", HASHVAR_PCHAR);
@@ -7680,6 +7710,25 @@ void semcheck_add_builtins(SymTab_t *symtab)
         AddBuiltinProc_Typed(symtab, setstring_name, setstring_type);
         destroy_kgpc_type(setstring_type);
         free(setstring_name);
+    }
+
+    char *pchar_to_shortstr_name = strdup("fpc_pchar_to_shortstr");
+    if (pchar_to_shortstr_name != NULL)
+    {
+        ListNode_t *param_res = semcheck_create_builtin_param_with_id(
+            "res", STRING_TYPE, "openstring", 1);
+        ListNode_t *param_p = semcheck_create_builtin_param_with_id(
+            "p", POINTER_TYPE, "PAnsiChar", 0);
+        if (param_res != NULL)
+        {
+            param_res->next = param_p;
+            KgpcType *proc_type = create_procedure_type(param_res, NULL);
+            assert(proc_type != NULL &&
+                "Failed to create fpc_pchar_to_shortstr procedure type");
+            AddBuiltinProc_Typed(symtab, pchar_to_shortstr_name, proc_type);
+            destroy_kgpc_type(proc_type);
+        }
+        free(pchar_to_shortstr_name);
     }
 
     char *write_name = strdup("write");

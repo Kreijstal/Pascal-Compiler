@@ -780,9 +780,13 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
             if (kgpc_type_equals(actual_kgpc, formal_kgpc))
                 return semcheck_make_quality(MATCH_EXACT);
             int formal_is_untyped_ptr = (formal_kgpc->kind == TYPE_KIND_PRIMITIVE &&
-                formal_kgpc->info.primitive_type_tag == POINTER_TYPE);
+                formal_kgpc->info.primitive_type_tag == POINTER_TYPE) ||
+                (formal_kgpc->kind == TYPE_KIND_POINTER &&
+                    formal_kgpc->info.points_to == NULL);
             int actual_is_untyped_ptr = (actual_kgpc->kind == TYPE_KIND_PRIMITIVE &&
-                actual_kgpc->info.primitive_type_tag == POINTER_TYPE);
+                actual_kgpc->info.primitive_type_tag == POINTER_TYPE) ||
+                (actual_kgpc->kind == TYPE_KIND_POINTER &&
+                    actual_kgpc->info.points_to == NULL);
             int formal_is_ptr = (formal_kgpc->kind == TYPE_KIND_POINTER || formal_is_untyped_ptr);
             int actual_is_ptr = (actual_kgpc->kind == TYPE_KIND_POINTER || actual_is_untyped_ptr);
             if (formal_is_ptr && actual_is_ptr)
@@ -840,6 +844,8 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
             return semcheck_make_quality(MATCH_EXACT);
         /* Check for compatible primitive types (e.g., Integer/LongInt) */
         if (are_primitive_tags_compatible(actual_tag, formal_tag))
+            return semcheck_make_quality(MATCH_EXACT);
+        if (is_string_type(actual_tag) && is_string_type(formal_tag))
             return semcheck_make_quality(MATCH_EXACT);
         return semcheck_make_quality(MATCH_INCOMPATIBLE);
     }
@@ -1244,7 +1250,8 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
         HashNode_t *candidate = (HashNode_t *)cur->cur;
         if (candidate == NULL ||
             (candidate->hash_type != HASHTYPE_FUNCTION &&
-             candidate->hash_type != HASHTYPE_PROCEDURE) ||
+             candidate->hash_type != HASHTYPE_PROCEDURE &&
+             candidate->hash_type != HASHTYPE_BUILTIN_PROCEDURE) ||
             candidate->type == NULL)
             continue;
         if (prefer_non_builtin && semcheck_candidate_is_builtin(symtab, candidate))
@@ -1628,11 +1635,19 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                     quality = semcheck_classify_match(arg_tag, arg_kgpc, formal_tag, formal_kgpc,
                         is_var_param, symtab, is_integer_literal);
 
+                    const char *formal_id = semcheck_get_param_type_id(formal_decl);
+                    if (formal_id != NULL && is_var_param &&
+                        pascal_identifier_equals(formal_id, "OpenString") &&
+                        is_string_type(arg_tag))
+                    {
+                        quality = semcheck_make_quality(MATCH_EXACT);
+                        quality.exact_type_id = 1;
+                    }
+
                     if (arg_expr != NULL && arg_expr->type == EXPR_STRING &&
                         arg_expr->expr_data.string != NULL &&
                         strlen(arg_expr->expr_data.string) != 1)
                     {
-                        const char *formal_id = semcheck_get_param_type_id(formal_decl);
                         if (formal_id != NULL && pascal_identifier_equals(formal_id, "ShortString"))
                         {
                             quality.kind = MATCH_EXACT;

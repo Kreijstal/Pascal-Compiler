@@ -36,6 +36,8 @@
 const char *semcheck_type_tag_name(int type_tag);
 int semcheck_typecheck_array_literal(struct Expression *expr, SymTab_t *symtab,
     int max_scope_lev, int expected_type, const char *expected_type_id, int line_num);
+int set_type_from_hashtype(int *type, HashNode_t *hash_node);
+struct RecordType *semcheck_lookup_record_type(SymTab_t *symtab, const char *type_id);
 
 #define SEMSTMT_TIMINGS_ENABLED() (getenv("KGPC_DEBUG_SEMSTMT_TIMINGS") != NULL)
 
@@ -3850,34 +3852,60 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     if (proc_id != NULL && !stmt->stmt_data.procedure_call_data.is_method_call_placeholder)
     {
         HashNode_t *self_node = NULL;
-        if (FindIdent(&self_node, symtab, "Self") == 0 && self_node != NULL)
+        struct RecordType *self_record = NULL;
+        if (FindIdent(&self_node, symtab, "Self") != -1 && self_node != NULL)
         {
-            struct RecordType *self_record = semcheck_stmt_get_record_type_from_node(self_node);
-            if (self_record != NULL)
+            self_record = semcheck_stmt_get_record_type_from_node(self_node);
+            if (self_record == NULL)
             {
-                HashNode_t *method_node = semcheck_find_class_method(symtab, self_record, proc_id, NULL);
-                if (method_node != NULL &&
-                    (method_node->hash_type == HASHTYPE_PROCEDURE ||
-                     method_node->hash_type == HASHTYPE_FUNCTION))
+                int self_type_tag = UNKNOWN_TYPE;
+                const char *self_type_name = NULL;
+                set_type_from_hashtype(&self_type_tag, self_node);
+                if (self_node->type != NULL &&
+                    self_node->type->type_alias != NULL &&
+                    self_node->type->type_alias->target_type_id != NULL)
                 {
-                    /* Prepend Self to arguments */
-                    struct Expression *self_expr = mk_varid(stmt->line_num, strdup("Self"));
-                    ListNode_t *self_arg = CreateListNode(self_expr, LIST_EXPR);
-                    self_arg->next = args_given;
-                    stmt->stmt_data.procedure_call_data.expr_args = self_arg;
-                    args_given = self_arg;
+                    self_type_name = self_node->type->type_alias->target_type_id;
+                }
 
-                    /* Update proc_id to mangled name */
-                    size_t class_len = strlen(self_record->type_id);
-                    size_t method_len = strlen(proc_id);
-                    char *new_proc_id = (char *)malloc(class_len + 2 + method_len + 1);
-                    if (new_proc_id != NULL)
-                    {
-                        sprintf(new_proc_id, "%s__%s", self_record->type_id, proc_id);
-                        free(proc_id);
-                        proc_id = new_proc_id;
-                        stmt->stmt_data.procedure_call_data.id = proc_id;
-                    }
+                struct RecordType *helper_record = semcheck_lookup_type_helper(
+                    symtab, self_type_tag, self_type_name);
+                if (helper_record != NULL)
+                    self_record = helper_record;
+            }
+        }
+
+        if (self_record == NULL)
+        {
+            const char *current_owner = semcheck_get_current_method_owner();
+            if (current_owner != NULL)
+                self_record = semcheck_lookup_record_type(symtab, current_owner);
+        }
+
+        if (self_record != NULL)
+        {
+            HashNode_t *method_node = semcheck_find_class_method(symtab, self_record, proc_id, NULL);
+            if (method_node != NULL &&
+                (method_node->hash_type == HASHTYPE_PROCEDURE ||
+                 method_node->hash_type == HASHTYPE_FUNCTION))
+            {
+                /* Prepend Self to arguments */
+                struct Expression *self_expr = mk_varid(stmt->line_num, strdup("Self"));
+                ListNode_t *self_arg = CreateListNode(self_expr, LIST_EXPR);
+                self_arg->next = args_given;
+                stmt->stmt_data.procedure_call_data.expr_args = self_arg;
+                args_given = self_arg;
+
+                /* Update proc_id to mangled name */
+                size_t class_len = strlen(self_record->type_id);
+                size_t method_len = strlen(proc_id);
+                char *new_proc_id = (char *)malloc(class_len + 2 + method_len + 1);
+                if (new_proc_id != NULL)
+                {
+                    sprintf(new_proc_id, "%s__%s", self_record->type_id, proc_id);
+                    free(proc_id);
+                    proc_id = new_proc_id;
+                    stmt->stmt_data.procedure_call_data.id = proc_id;
                 }
             }
         }

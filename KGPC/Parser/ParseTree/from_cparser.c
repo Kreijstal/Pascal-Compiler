@@ -2440,10 +2440,16 @@ static int map_type_name(const char *name, char **type_id_out) {
         return REAL_TYPE;
     }
     if (strcasecmp(name, "string") == 0 ||
+        strcasecmp(name, "openstring") == 0 ||
         strcasecmp(name, "ansistring") == 0 ||
         strcasecmp(name, "widestring") == 0) {
         if (type_id_out != NULL)
-            *type_id_out = strdup("string");
+        {
+            if (strcasecmp(name, "openstring") == 0)
+                *type_id_out = strdup("openstring");
+            else
+                *type_id_out = strdup("string");
+        }
         return STRING_TYPE;
     }
     if (strcasecmp(name, "shortstring") == 0) {
