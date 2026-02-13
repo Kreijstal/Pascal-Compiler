@@ -4,60 +4,73 @@ program test_record_prop_setter;
 type
   TMyRec = record
   private
-    FHigh: Integer;
-    FLow: Integer;
-    function GetHigh: Integer;
-    procedure SetHigh(AValue: Integer);
-    function GetLow: Integer;
-    procedure SetLow(AValue: Integer);
+    FData: LongWord;
+    function GetHigh: Word;
+    procedure SetHigh(AValue: Word);
+    function GetLow: Word;
+    procedure SetLow(AValue: Word);
   public
-    property HighVal: Integer read GetHigh write SetHigh;
-    property LowVal: Integer read GetLow write SetLow;
+    property HighWord: Word read GetHigh write SetHigh;
+    property LowWord: Word read GetLow write SetLow;
   end;
 
-function TMyRec.GetHigh: Integer;
+function TMyRec.GetHigh: Word;
 begin
-  Result := FHigh;
+  Result := Word(FData shr 16);
 end;
 
-procedure TMyRec.SetHigh(AValue: Integer);
+procedure TMyRec.SetHigh(AValue: Word);
 begin
-  FHigh := AValue;
+  FData := (FData and $0000FFFF) or (LongWord(AValue) shl 16);
 end;
 
-function TMyRec.GetLow: Integer;
+function TMyRec.GetLow: Word;
 begin
-  Result := FLow;
+  Result := Word(FData and $FFFF);
 end;
 
-procedure TMyRec.SetLow(AValue: Integer);
+procedure TMyRec.SetLow(AValue: Word);
 begin
-  FLow := AValue;
+  FData := (FData and $FFFF0000) or LongWord(AValue);
 end;
 
 type
-  TIntHelper = record helper for Integer
-    function GetDoubled: Integer;
-    procedure SetFromHelper(AValue: Integer);
+  TLongWordHelper = record helper for LongWord
+    function GetHigh: Word;
+    procedure SetHigh(AValue: Word);
+    function GetLow: Word;
+    procedure SetLow(AValue: Word);
   end;
 
-function TIntHelper.GetDoubled: Integer;
+function TLongWordHelper.GetHigh: Word;
 begin
-  Result := Self * 2;
+  Result := TMyRec(Self).HighWord;
 end;
 
-procedure TIntHelper.SetFromHelper(AValue: Integer);
+procedure TLongWordHelper.SetHigh(AValue: Word);
 begin
-  Self := AValue;
+  TMyRec(Self).HighWord := AValue;
+end;
+
+function TLongWordHelper.GetLow: Word;
+begin
+  Result := TMyRec(Self).LowWord;
+end;
+
+procedure TLongWordHelper.SetLow(AValue: Word);
+begin
+  TMyRec(Self).LowWord := AValue;
 end;
 
 var
   r: TMyRec;
+  v: LongWord;
 begin
-  r.HighVal := 10;
-  r.LowVal := 20;
-  WriteLn(r.HighVal);
-  WriteLn(r.LowVal);
-  r.HighVal := r.LowVal + 5;
-  WriteLn(r.HighVal);
+  r.HighWord := 1;
+  r.LowWord := 2;
+  WriteLn(r.HighWord);
+  WriteLn(r.LowWord);
+  v := $00030004;
+  WriteLn(v.GetHigh);
+  WriteLn(v.GetLow);
 end.

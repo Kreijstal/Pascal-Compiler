@@ -374,6 +374,58 @@ static long long expr_integer_constant_value(const struct Expression *expr, cons
     return 0;
 }
 
+/**
+ * Emit a 64-bit ALU instruction (and/or/xor/add/sub) handling the case where
+ * the immediate operand exceeds the signed 32-bit range.  x86-64 ALU
+ * instructions with 'q' suffix only accept sign-extended 32-bit immediates,
+ * so values outside [-2^31, 2^31-1] must be materialised in a scratch
+ * register first.
+ *
+ * Returns the (possibly updated) inst_list, or NULL on allocation failure.
+ * Sets *error to 1 on failure so the caller can break out.
+ */
+static ListNode_t *emit_alu_op_with_large_imm(
+    ListNode_t *inst_list, CodeGenContext *ctx,
+    const char *mnemonic, char arith_suffix,
+    const char *op_right, const char *op_left,
+    int *error)
+{
+    char buffer[128];
+    *error = 0;
+
+    if (arith_suffix == 'q' && op_right != NULL && op_right[0] == '$')
+    {
+        char *endptr = NULL;
+        long long imm_value = strtoll(op_right + 1, &endptr, 0);
+        if (endptr != NULL && *endptr == '\0' &&
+            (imm_value > INT32_MAX || imm_value < INT32_MIN))
+        {
+            Register_t *imm_reg = get_free_reg(get_reg_stack(), &inst_list);
+            if (imm_reg == NULL)
+            {
+                codegen_report_error(ctx,
+                    "ERROR: Unable to allocate temporary for 64-bit immediate in %s.", mnemonic);
+                *error = 1;
+                return inst_list;
+            }
+            snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n",
+                imm_value, imm_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\t%s%c\t%s, %s\n",
+                mnemonic, arith_suffix, imm_reg->bit_64, op_left);
+            inst_list = add_inst(inst_list, buffer);
+            free_reg(get_reg_stack(), imm_reg);
+            return inst_list;
+        }
+    }
+
+    /* Normal path: immediate fits or operand is a register */
+    snprintf(buffer, sizeof(buffer), "\t%s%c\t%s, %s\n",
+        mnemonic, arith_suffix, op_right, op_left);
+    inst_list = add_inst(inst_list, buffer);
+    return inst_list;
+}
+
 static ListNode_t *load_real_operand_into_xmm(CodeGenContext *ctx,
     struct Expression *operand_expr, const char *operand, const char *xmm_reg,
     ListNode_t *inst_list)
@@ -3444,29 +3496,35 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                 }
                 if (type == OR)
                 {
-                    snprintf(buffer, sizeof(buffer), "\tor%c\t%s, %s\n", arith_suffix, right_op, left_op);
-                    inst_list = add_inst(inst_list, buffer);
+                    int err = 0;
+                    inst_list = emit_alu_op_with_large_imm(inst_list, ctx, "or", arith_suffix, right_op, left_op, &err);
+                    if (err) break;
                     break;
                 }
                 switch(type)
             {
                 case PLUS:
                 {
-                    /*
-                     * The expression tree emits the literal 1 as the string "$1". Detecting that
-                     * special case lets us use INC instead of ADD to save an instruction byte.
-                     */
                     if(strcmp(right, "$1") == 0)
+                    {
                         snprintf(buffer, sizeof(buffer), "\tinc%c\t%s\n", arith_suffix, left_op);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
                     else
-                        snprintf(buffer, sizeof(buffer), "\tadd%c\t%s, %s\n", arith_suffix, right_op, left_op);
-                    inst_list = add_inst(inst_list, buffer);
+                    {
+                        int err = 0;
+                        inst_list = emit_alu_op_with_large_imm(inst_list, ctx, "add", arith_suffix, right_op, left_op, &err);
+                        if (err) break;
+                    }
                     break;
                 }
                 case MINUS:
-                    snprintf(buffer, sizeof(buffer), "\tsub%c\t%s, %s\n", arith_suffix, right_op, left_op);
-                    inst_list = add_inst(inst_list, buffer);
+                {
+                    int err = 0;
+                    inst_list = emit_alu_op_with_large_imm(inst_list, ctx, "sub", arith_suffix, right_op, left_op, &err);
+                    if (err) break;
                     break;
+                }
                 default:
                     assert(0 && "Bad addop type!");
                     break;
@@ -3556,44 +3614,15 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                 }
             if(type == STAR)
             {
-                int used_temp = 0;
-                Register_t *imm_reg = NULL;
-                if (use_qword_op && op_right != NULL && op_right[0] == '$')
-                {
-                    char *endptr = NULL;
-                    long long imm_value = strtoll(op_right + 1, &endptr, 0);
-                    if (endptr != NULL && *endptr == '\0' &&
-                        (imm_value > INT32_MAX || imm_value < INT32_MIN))
-                    {
-                        imm_reg = get_free_reg(get_reg_stack(), &inst_list);
-                        if (imm_reg == NULL)
-                        {
-                            codegen_report_error(ctx,
-                                "ERROR: Unable to allocate temporary for 64-bit immediate multiplication.");
-                            break;
-                        }
-                        snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n",
-                            imm_value, imm_reg->bit_64);
-                        inst_list = add_inst(inst_list, buffer);
-                        snprintf(buffer, sizeof(buffer), "\timul%c\t%s, %s\n",
-                            arith_suffix, imm_reg->bit_64, op_left);
-                        inst_list = add_inst(inst_list, buffer);
-                        used_temp = 1;
-                    }
-                }
-
-                if (!used_temp)
-                {
-                    snprintf(buffer, sizeof(buffer), "\timul%c\t%s, %s\n", arith_suffix, op_right, op_left);
-                    inst_list = add_inst(inst_list, buffer);
-                }
-                if (imm_reg != NULL)
-                    free_reg(get_reg_stack(), imm_reg);
+                int err = 0;
+                inst_list = emit_alu_op_with_large_imm(inst_list, ctx, "imul", arith_suffix, op_right, op_left, &err);
+                if (err) break;
             }
             else if(type == AND)
             {
-                snprintf(buffer, sizeof(buffer), "\tand%c\t%s, %s\n", arith_suffix, op_right, op_left);
-                inst_list = add_inst(inst_list, buffer);
+                int err = 0;
+                inst_list = emit_alu_op_with_large_imm(inst_list, ctx, "and", arith_suffix, op_right, op_left, &err);
+                if (err) break;
             }
             else if(type == MOD)
             {
@@ -3702,8 +3731,9 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
             }
             else if(type == XOR)
             {
-                snprintf(buffer, sizeof(buffer), "\txor%c\t%s, %s\n", arith_suffix, op_right, op_left);
-                inst_list = add_inst(inst_list, buffer);
+                int err = 0;
+                inst_list = emit_alu_op_with_large_imm(inst_list, ctx, "xor", arith_suffix, op_right, op_left, &err);
+                if (err) break;
             }
             else if(type == SHL)
             {
