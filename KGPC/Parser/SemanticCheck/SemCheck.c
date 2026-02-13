@@ -10815,7 +10815,9 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             PushFuncRetOntoScope_Typed(symtab, subprogram->tree_data.subprogram_data.result_var_name, return_kgpc_type);
         }
 
-        /* For class methods, also add an alias using the unmangled method name (suffix after __) */
+        /* For class methods, also add an alias using the unmangled method name (suffix after __).
+         * The mangled id format is ClassName__MethodName; the method name after __ may itself
+         * contain underscores (e.g., _AddRef, _Release), so we use the full suffix. */
         const char *alias_suffix = NULL;
         if (subprogram->tree_data.subprogram_data.id != NULL)
         {
@@ -10825,7 +10827,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         }
         if (alias_suffix != NULL && alias_suffix[0] != '\0')
         {
-            size_t alias_len = strcspn(alias_suffix, "_");
+            size_t alias_len = strlen(alias_suffix);
             if (alias_len > 0 && alias_len < 128)
             {
                 char alias_buf[128];
