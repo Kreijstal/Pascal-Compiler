@@ -3027,6 +3027,16 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
     } else {
         return_val += semcheck_stmt_expr_tag(&type_first, symtab, var, max_scope_lev, MUTATE);
     }
+
+    /* Check for record property assignment early, before RHS type checking.
+     * This handles plain record (Delphi advanced record) properties with setter methods.
+     * Must happen after LHS is evaluated but before type compatibility checks. */
+    {
+        int property_result = semcheck_try_property_assignment(symtab, stmt, max_scope_lev);
+        if (property_result >= 0)
+            return return_val + property_result;
+    }
+
     if (expr != NULL && expr->type == EXPR_RECORD_CONSTRUCTOR && expr->record_type == NULL)
     {
         struct RecordType *record_type = var != NULL ? var->record_type : NULL;
@@ -3668,7 +3678,7 @@ static int semcheck_try_property_assignment(SymTab_t *symtab,
     if (object_record == NULL)
         object_record = object_expr->record_type;
 
-    if (object_record == NULL || !record_type_is_class(object_record))
+    if (object_record == NULL)
         return -1;
 
     struct RecordType *property_owner = NULL;
@@ -3676,6 +3686,9 @@ static int semcheck_try_property_assignment(SymTab_t *symtab,
         object_record, property_name, &property_owner);
     if (property == NULL || property->write_accessor == NULL)
         return -1;
+
+    if (property_owner == NULL)
+        property_owner = object_record;
 
     struct RecordField *write_field =
         semcheck_find_class_field_including_hidden(symtab,

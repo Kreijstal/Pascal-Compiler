@@ -1998,6 +1998,16 @@ int semcheck_recordaccess(int *type_return,
                         goto FIELD_RESOLVED;
                     }
 
+                    if (mutating != NO_MUTATE)
+                    {
+                        /* For setter method calls on record properties, leave the expression
+                         * as EXPR_RECORD_ACCESS so the assignment handler in
+                         * semcheck_try_property_assignment() can construct the setter call
+                         * with the value argument. Return 0 to suppress "field not found"
+                         * and let the assignment handler take over. */
+                        return 0;
+                    }
+
                     HashNode_t *method_node = semcheck_find_class_method(symtab, record_info,
                         accessor, NULL);
                     if (method_node != NULL)
