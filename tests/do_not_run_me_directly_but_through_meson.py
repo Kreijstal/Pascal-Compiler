@@ -2755,6 +2755,22 @@ def _discover_and_add_auto_tests():
                         self.skipTest("Unix fork() test not supported on MinGW (requires Cygwin/MSYS for fork)")
                 
                 input_file = os.path.join(TEST_CASES_DIR, f"{test_base_name}.p")
+
+                # Skip tests that include FPCSource files when FPCSource is not available
+                try:
+                    with open(input_file, 'r') as f:
+                        content = f.read()
+                    if 'FPCSource' in content:
+                        # Resolve include paths relative to the test file
+                        import re
+                        for match in re.finditer(r'\{\$(?:i|include)\s+([^}]+)\}', content, re.IGNORECASE):
+                            inc_path = match.group(1).strip()
+                            resolved = os.path.normpath(os.path.join(os.path.dirname(input_file), inc_path))
+                            if not os.path.exists(resolved):
+                                self.skipTest(f"FPCSource include not available: {inc_path}")
+                except OSError:
+                    pass
+
                 asm_file = os.path.join(TEST_OUTPUT_DIR, f"{test_base_name}.s")
                 executable_file = os.path.join(TEST_OUTPUT_DIR, test_base_name)
                 expected_output_file = os.path.join(TEST_CASES_DIR, f"{test_base_name}.expected")
