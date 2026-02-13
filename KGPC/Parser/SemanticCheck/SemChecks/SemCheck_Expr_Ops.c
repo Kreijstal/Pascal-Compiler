@@ -67,6 +67,13 @@ int semcheck_relop(int *type_return,
         if (type_first == BOOL)
         {
             *type_return = BOOL;
+            semcheck_expr_set_resolved_type(expr, BOOL);
+            KgpcType *bool_type = create_primitive_type(BOOL);
+            if (bool_type != NULL)
+            {
+                semcheck_expr_set_resolved_kgpc_type_shared(expr, bool_type);
+                destroy_kgpc_type(bool_type);
+            }
             return return_val;
         }
         if (is_integer_type(type_first))
@@ -1250,7 +1257,10 @@ int semcheck_varid(int *type_return,
                     mangled, class_const_scope, (void*)class_const);
             }
             if (class_const_scope >= 0 && class_const != NULL &&
-                class_const->hash_type == HASHTYPE_CONST)
+                (class_const->hash_type == HASHTYPE_CONST ||
+                 class_const->hash_type == HASHTYPE_ARRAY ||
+                 class_const->hash_type == HASHTYPE_VAR ||
+                 class_const->is_typed_const))
             {
                 if (expr->expr_data.id != NULL)
                     free(expr->expr_data.id);
@@ -1258,6 +1268,34 @@ int semcheck_varid(int *type_return,
                 id = expr->expr_data.id;
                 hash_return = class_const;
                 scope_return = class_const_scope;
+            }
+            /* For nested types like HeapInc.ThreadState, also try the
+             * outermost class: HeapInc__ConstName */
+            if (class_const_scope == -1)
+            {
+                const char *dot = strchr(owner, '.');
+                if (dot != NULL)
+                {
+                    size_t outer_len = (size_t)(dot - owner);
+                    char outer_mangled[256];
+                    snprintf(outer_mangled, sizeof(outer_mangled), "%.*s__%s",
+                             (int)outer_len, owner, id);
+                    class_const = NULL;
+                    class_const_scope = FindIdent(&class_const, symtab, outer_mangled);
+                    if (class_const_scope >= 0 && class_const != NULL &&
+                        (class_const->hash_type == HASHTYPE_CONST ||
+                         class_const->hash_type == HASHTYPE_ARRAY ||
+                         class_const->hash_type == HASHTYPE_VAR ||
+                         class_const->is_typed_const))
+                    {
+                        if (expr->expr_data.id != NULL)
+                            free(expr->expr_data.id);
+                        expr->expr_data.id = strdup(outer_mangled);
+                        id = expr->expr_data.id;
+                        hash_return = class_const;
+                        scope_return = class_const_scope;
+                    }
+                }
             }
         }
         /* Qualified identifier resolution: split dotted identifiers like
@@ -1318,7 +1356,10 @@ int semcheck_varid(int *type_return,
                     HashNode_t *class_const_node = NULL;
                     int cc_scope = FindIdent(&class_const_node, symtab, mangled_qid);
                     if (cc_scope >= 0 && class_const_node != NULL &&
-                        class_const_node->hash_type == HASHTYPE_CONST)
+                        (class_const_node->hash_type == HASHTYPE_CONST ||
+                         class_const_node->hash_type == HASHTYPE_ARRAY ||
+                         class_const_node->hash_type == HASHTYPE_VAR ||
+                         class_const_node->is_typed_const))
                     {
                         free(prefix);
                         if (expr->expr_data.id != NULL)

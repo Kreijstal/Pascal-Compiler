@@ -4041,7 +4041,14 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     // Try procedures/functions first to avoid the main block 'begin' being
     // misinterpreted from within a routine when routine directives are present.
     // Then handle declaration sections.
+    combinator_t* generic_prefixed_declaration = seq(new_combinator(), PASCAL_T_NONE,
+        token(keyword_ci("generic")),
+        all_declarations,
+        NULL
+    );
+
     combinator_t* declaration_or_section = multi(new_combinator(), PASCAL_T_NONE,
+        generic_prefixed_declaration,   // generic procedure/function declarations
         all_declarations,   // Procedures/functions (keywords "procedure", "function", etc.)
         create_label_section(),    // Label declarations
         const_section,      // const

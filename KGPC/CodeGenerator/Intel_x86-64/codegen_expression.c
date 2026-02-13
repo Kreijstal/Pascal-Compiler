@@ -2878,6 +2878,33 @@ ListNode_t *codegen_addressof_leaf(struct Expression *expr, ListNode_t *inst_lis
             return add_inst(inst_list, buffer);
         }
 
+        if (ctx != NULL && ctx->symtab != NULL)
+        {
+            HashNode_t *node = NULL;
+            if (FindIdent(&node, ctx->symtab, inner->expr_data.id) >= 0 &&
+                node != NULL && node->hash_type == HASHTYPE_CONST &&
+                node->const_string_value != NULL &&
+                !(node->type != NULL && node->type->kind == TYPE_KIND_PROCEDURE))
+            {
+                int label_id = ctx->write_label_counter++;
+                char str_label[32];
+                char ptr_label[40];
+                snprintf(str_label, sizeof(str_label), ".LC%d", label_id);
+                snprintf(ptr_label, sizeof(ptr_label), ".LC%d_ptr", label_id);
+                char rodata_buf[1024];
+                const char *readonly_section = codegen_readonly_section_directive();
+                char escaped[512];
+                escape_string(escaped, node->const_string_value, sizeof(escaped));
+                snprintf(rodata_buf, sizeof(rodata_buf),
+                    "%s\n%s:\n\t.string \"%s\"\n%s:\n\t.quad\t%s\n\t.text\n",
+                    readonly_section, str_label, escaped, ptr_label, str_label);
+                inst_list = add_inst(inst_list, rodata_buf);
+                snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                    ptr_label, target_reg->bit_64);
+                return add_inst(inst_list, buffer);
+            }
+        }
+
         codegen_report_error(ctx,
             "ERROR: Address-of non-local variables is unsupported without -non-local flag.");
         return inst_list;
@@ -2945,25 +2972,25 @@ ListNode_t *codegen_record_field_address(struct Expression *expr, ListNode_t *in
     int is_class_field = (record_expr->record_type != NULL && 
                           record_type_is_class(record_expr->record_type));
 
-    int is_class_type_ref = 0;
-    const char *class_type_label = NULL;
-    if (is_class_field && record_expr->type == EXPR_VAR_ID &&
+    int is_type_ref = 0;
+    const char *type_label = NULL;
+    if (record_expr->type == EXPR_VAR_ID &&
         record_expr->expr_data.id != NULL && ctx->symtab != NULL)
     {
         HashNode_t *symbol = NULL;
         if (FindIdent(&symbol, ctx->symtab, record_expr->expr_data.id) >= 0 &&
             symbol != NULL && symbol->hash_type == HASHTYPE_TYPE)
         {
-            is_class_type_ref = 1;
+            is_type_ref = 1;
             if (record_expr->record_type != NULL && record_expr->record_type->type_id != NULL)
-                class_type_label = record_expr->record_type->type_id;
+                type_label = record_expr->record_type->type_id;
             else
-                class_type_label = record_expr->expr_data.id;
+                type_label = record_expr->expr_data.id;
         }
     }
     
     Register_t *addr_reg = NULL;
-    if (is_class_type_ref && class_type_label != NULL)
+    if (is_type_ref && type_label != NULL)
     {
         addr_reg = get_free_reg(get_reg_stack(), &inst_list);
         if (addr_reg == NULL)
@@ -2977,7 +3004,7 @@ ListNode_t *codegen_record_field_address(struct Expression *expr, ListNode_t *in
 
         char buffer[96];
         snprintf(buffer, sizeof(buffer), "\tleaq\t%s_CLASSVAR(%%rip), %s\n",
-            class_type_label, addr_reg->bit_64);
+            type_label, addr_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
     }
     else
@@ -2990,7 +3017,7 @@ ListNode_t *codegen_record_field_address(struct Expression *expr, ListNode_t *in
     /* For class types, addr_reg points to the variable holding the pointer when the
      * record expression is a VAR_ID. Load the pointer value to get the instance.
      * Non-var expressions (casts, function calls) already yield the pointer value. */
-    int needs_class_deref = (is_class_field && !is_class_type_ref);
+    int needs_class_deref = (is_class_field && !is_type_ref);
     if (needs_class_deref && record_expr->type != EXPR_VAR_ID)
         needs_class_deref = 0;
     if (needs_class_deref)
@@ -5358,7 +5385,8 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         }
 
         int is_var_param = (formal_arg_decl != NULL &&
-            formal_arg_decl->tree_data.var_decl_data.is_var_param);
+            (formal_arg_decl->tree_data.var_decl_data.is_var_param ||
+             formal_arg_decl->tree_data.var_decl_data.is_untyped_param));
         if (is_self_param && codegen_self_param_is_class(formal_arg_decl, ctx))
             is_var_param = 0;
         int is_array_param = (formal_arg_decl != NULL && formal_arg_decl->type == TREE_ARR_DECL);

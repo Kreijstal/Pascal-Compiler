@@ -711,6 +711,41 @@ int semcheck_funccall(int *type_return,
     }
     args_given = expr->expr_data.function_call_data.args_expr;
 
+    if (expr->expr_data.function_call_data.is_method_call_placeholder &&
+        args_given != NULL && args_given->cur != NULL)
+    {
+        struct Expression *first_arg = (struct Expression *)args_given->cur;
+        if (first_arg->type == EXPR_RELOP &&
+            first_arg->expr_data.relop_data.type == NOT &&
+            first_arg->expr_data.relop_data.right == NULL &&
+            first_arg->expr_data.relop_data.left != NULL)
+        {
+            struct Expression *receiver = first_arg->expr_data.relop_data.left;
+            first_arg->expr_data.relop_data.left = NULL;
+            args_given->cur = receiver;
+            destroy_expr(first_arg);
+
+            struct Expression *call_expr = (struct Expression *)calloc(1, sizeof(struct Expression));
+            if (call_expr == NULL)
+            {
+                semcheck_error_with_context("Error on line %d: failed to allocate expression for NOT call fixup.\n",
+                    expr->line_num);
+                *type_return = UNKNOWN_TYPE;
+                return 1;
+            }
+
+            *call_expr = *expr;
+            expr->type = EXPR_RELOP;
+            memset(&expr->expr_data.relop_data, 0, sizeof(expr->expr_data.relop_data));
+            expr->expr_data.relop_data.type = NOT;
+            expr->expr_data.relop_data.left = call_expr;
+            expr->expr_data.relop_data.right = NULL;
+            expr->record_type = NULL;
+            semcheck_expr_set_resolved_type(expr, UNKNOWN_TYPE);
+            return semcheck_relop(type_return, symtab, expr, max_scope_lev, mutating);
+        }
+    }
+
     /* FPC Bootstrap Feature: Handle unit-qualified calls that the parser
      * represents as __Function(UnitName, Args...). Only strip the first
      * argument when the unit qualifier is unresolved AND the real function
@@ -2898,6 +2933,98 @@ int semcheck_funccall(int *type_return,
     if (id != NULL) {
         overload_candidates = FindAllIdents(symtab, id);
     }
+    if (overload_candidates == NULL && id != NULL && args_given != NULL)
+    {
+        struct Expression *first_arg = (struct Expression *)args_given->cur;
+        struct RecordType *helper_record = NULL;
+        struct RecordType *actual_method_owner = NULL;
+        int helper_tag = UNKNOWN_TYPE;
+        const char *helper_name = NULL;
+        int arg_type_owned = 0;
+        KgpcType *arg_type = NULL;
+
+        if (first_arg != NULL)
+        {
+            arg_type = semcheck_resolve_expression_kgpc_type(symtab,
+                first_arg, max_scope_lev, NO_MUTATE, &arg_type_owned);
+            if (arg_type != NULL)
+            {
+                helper_tag = semcheck_tag_from_kgpc(arg_type);
+                if (arg_type->kind == TYPE_KIND_PRIMITIVE)
+                    helper_tag = arg_type->info.primitive_type_tag;
+                if (arg_type->kind == TYPE_KIND_RECORD &&
+                    arg_type->info.record_info != NULL &&
+                    arg_type->info.record_info->type_id != NULL)
+                    helper_name = arg_type->info.record_info->type_id;
+
+                struct TypeAlias *alias = kgpc_type_get_type_alias(arg_type);
+                if (alias != NULL)
+                {
+                    if (alias->target_type_id != NULL)
+                        helper_name = alias->target_type_id;
+                    else if (alias->alias_name != NULL)
+                        helper_name = alias->alias_name;
+                }
+            }
+
+            helper_record = semcheck_lookup_type_helper(symtab, helper_tag, helper_name);
+            if (helper_record == NULL && first_arg->type == EXPR_VAR_ID &&
+                first_arg->expr_data.id != NULL)
+            {
+                HashNode_t *var_node = NULL;
+                if (FindIdent(&var_node, symtab, first_arg->expr_data.id) != -1 &&
+                    var_node != NULL)
+                {
+                    struct TypeAlias *var_alias = hashnode_get_type_alias(var_node);
+                    const char *var_helper_name = NULL;
+                    if (var_alias != NULL)
+                    {
+                        if (var_alias->target_type_id != NULL)
+                            var_helper_name = var_alias->target_type_id;
+                        else if (var_alias->alias_name != NULL)
+                            var_helper_name = var_alias->alias_name;
+                    }
+                    if (var_helper_name != NULL)
+                        helper_record = semcheck_lookup_type_helper(symtab,
+                            UNKNOWN_TYPE, var_helper_name);
+                }
+            }
+        }
+
+        if (arg_type_owned && arg_type != NULL)
+            destroy_kgpc_type(arg_type);
+
+        if (helper_record != NULL)
+        {
+            HashNode_t *method_node = semcheck_find_class_method(symtab,
+                helper_record, id, &actual_method_owner);
+            struct RecordType *owner_for_mangle =
+                (actual_method_owner != NULL) ? actual_method_owner : helper_record;
+
+            if (method_node != NULL && owner_for_mangle != NULL &&
+                owner_for_mangle->type_id != NULL)
+            {
+                size_t class_len = strlen(owner_for_mangle->type_id);
+                size_t method_len = strlen(id);
+                char *candidate_name = (char *)malloc(class_len + 2 + method_len + 1);
+                if (candidate_name != NULL)
+                {
+                    snprintf(candidate_name, class_len + 2 + method_len + 1,
+                        "%s__%s", owner_for_mangle->type_id, id);
+                    ListNode_t *candidates = FindAllIdents(symtab, candidate_name);
+                    if (candidates != NULL)
+                    {
+                        overload_candidates = candidates;
+                        if (mangled_name != NULL)
+                            free(mangled_name);
+                        mangled_name = candidate_name;
+                        goto method_call_resolved;
+                    }
+                    free(candidate_name);
+                }
+            }
+        }
+    }
     if (getenv("KGPC_DEBUG_PROC_VAR") != NULL && id != NULL &&
         pascal_identifier_equals(id, "Ctr"))
     {
@@ -3124,6 +3251,23 @@ method_call_resolved:
             *type_return = UNKNOWN_TYPE;
             final_status = ++return_val;
             goto funccall_cleanup;
+        }
+    }
+
+    if (best_match != NULL && overload_candidates != NULL && overload_candidates->next != NULL)
+    {
+        HashNode_t *override_match = NULL;
+        int override_score = 0;
+        int override_count = 0;
+        int override_status = semcheck_resolve_overload(&override_match, &override_score,
+            &override_count, overload_candidates, args_given, symtab, expr,
+            max_scope_lev, prefer_non_builtin);
+        if (override_status == 0 && override_match != NULL && override_count == 1 &&
+            override_match != best_match)
+        {
+            best_match = override_match;
+            best_score = override_score;
+            num_best_matches = override_count;
         }
     }
 

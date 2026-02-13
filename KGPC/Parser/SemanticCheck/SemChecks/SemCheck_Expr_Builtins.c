@@ -9,6 +9,31 @@
 
 #include "SemCheck_Expr_Internal.h"
 
+static char *build_qualified_identifier_from_expr_local(struct Expression *expr)
+{
+    if (expr == NULL)
+        return NULL;
+    if (expr->type == EXPR_VAR_ID && expr->expr_data.id != NULL)
+        return strdup(expr->expr_data.id);
+    if (expr->type != EXPR_RECORD_ACCESS)
+        return NULL;
+
+    struct Expression *record_expr = expr->expr_data.record_access_data.record_expr;
+    char *field_id = expr->expr_data.record_access_data.field_id;
+    if (record_expr == NULL || field_id == NULL)
+        return NULL;
+
+    char *base = build_qualified_identifier_from_expr_local(record_expr);
+    if (base == NULL)
+        return NULL;
+    size_t qualified_len = strlen(base) + 1 + strlen(field_id) + 1;
+    char *qualified = (char *)malloc(qualified_len);
+    if (qualified != NULL)
+        snprintf(qualified, qualified_len, "%s.%s", base, field_id);
+    free(base);
+    return qualified;
+}
+
 /*===========================================================================
  * String/Character Builtins
  *===========================================================================*/
@@ -1937,10 +1962,22 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
     }
 
     struct Expression *arg_expr = (struct Expression *)args->cur;
-    if (arg_expr != NULL && arg_expr->type == EXPR_VAR_ID && arg_expr->expr_data.id != NULL)
+    if (arg_expr != NULL && (arg_expr->type == EXPR_VAR_ID || arg_expr->type == EXPR_RECORD_ACCESS))
     {
-        const char *type_name = semcheck_base_type_name(arg_expr->expr_data.id);
-        HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, type_name);
+        char *qualified_name = NULL;
+        const char *type_name = NULL;
+        if (arg_expr->type == EXPR_VAR_ID)
+            type_name = arg_expr->expr_data.id;
+        else
+        {
+            qualified_name = build_qualified_identifier_from_expr_local(arg_expr);
+            type_name = qualified_name;
+        }
+        const char *raw_name = type_name;
+        const char *base_name = semcheck_base_type_name(raw_name);
+        HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, raw_name);
+        if (type_node == NULL && base_name != NULL && base_name != raw_name)
+            type_node = semcheck_find_preferred_type_node(symtab, base_name);
         if (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
         {
             struct TypeAlias *alias = get_type_alias_from_node(type_node);
@@ -1949,7 +1986,17 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
             int have_bounds = 0;
             int result_type = INT_TYPE;
 
-            if (alias != NULL && alias->is_range && alias->range_known)
+            if (alias != NULL && alias->is_enum && alias->enum_literals != NULL)
+            {
+                int count = ListLength(alias->enum_literals);
+                if (count > 0)
+                {
+                    low = 0;
+                    high = count - 1;
+                    have_bounds = 1;
+                }
+            }
+            if (!have_bounds && alias != NULL && alias->is_range && alias->range_known)
             {
                 low = alias->range_start;
                 high = alias->range_end;
@@ -2008,95 +2055,100 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
                     }
                 }
             }
-            else if (pascal_identifier_equals(type_name, "Int64"))
+            else if (base_name != NULL && pascal_identifier_equals(base_name, "Int64"))
             {
                 low = (-9223372036854775807LL - 1);
                 high = 9223372036854775807LL;
                 have_bounds = 1;
                 result_type = INT64_TYPE;
             }
-            else if (pascal_identifier_equals(type_name, "QWord") ||
-                     pascal_identifier_equals(type_name, "UInt64"))
+            else if (base_name != NULL &&
+                     (pascal_identifier_equals(base_name, "QWord") ||
+                      pascal_identifier_equals(base_name, "UInt64")))
             {
                 low = 0;
                 high = (long long)0xFFFFFFFFFFFFFFFFULL;
                 have_bounds = 1;
                 result_type = INT64_TYPE;
             }
-            else if (pascal_identifier_equals(type_name, "NativeUInt") ||
-                     pascal_identifier_equals(type_name, "SizeUInt") ||
-                     pascal_identifier_equals(type_name, "PtrUInt"))
+            else if (base_name != NULL &&
+                     (pascal_identifier_equals(base_name, "NativeUInt") ||
+                      pascal_identifier_equals(base_name, "SizeUInt") ||
+                      pascal_identifier_equals(base_name, "PtrUInt")))
             {
                 low = 0;
                 high = (long long)0xFFFFFFFFFFFFFFFFULL;
                 have_bounds = 1;
                 result_type = INT64_TYPE;
             }
-            else if (pascal_identifier_equals(type_name, "NativeInt") ||
-                     pascal_identifier_equals(type_name, "SizeInt") ||
-                     pascal_identifier_equals(type_name, "PtrInt"))
+            else if (base_name != NULL &&
+                     (pascal_identifier_equals(base_name, "NativeInt") ||
+                      pascal_identifier_equals(base_name, "SizeInt") ||
+                      pascal_identifier_equals(base_name, "PtrInt")))
             {
                 low = (-9223372036854775807LL - 1);
                 high = 9223372036854775807LL;
                 have_bounds = 1;
                 result_type = INT64_TYPE;
             }
-            else if (pascal_identifier_equals(type_name, "LongInt"))
+            else if (base_name != NULL && pascal_identifier_equals(base_name, "LongInt"))
             {
                 low = -2147483648LL;
                 high = 2147483647LL;
                 have_bounds = 1;
                 result_type = LONGINT_TYPE;
             }
-            else if (pascal_identifier_equals(type_name, "Integer"))
+            else if (base_name != NULL && pascal_identifier_equals(base_name, "Integer"))
             {
                 low = -2147483648LL;
                 high = 2147483647LL;
                 have_bounds = 1;
                 result_type = INT_TYPE;
             }
-            else if (pascal_identifier_equals(type_name, "Cardinal") ||
-                     pascal_identifier_equals(type_name, "LongWord") ||
-                     pascal_identifier_equals(type_name, "DWord"))
+            else if (base_name != NULL &&
+                     (pascal_identifier_equals(base_name, "Cardinal") ||
+                      pascal_identifier_equals(base_name, "LongWord") ||
+                      pascal_identifier_equals(base_name, "DWord")))
             {
                 low = 0;
                 high = 4294967295LL;
                 have_bounds = 1;
                 result_type = INT64_TYPE;
             }
-            else if (pascal_identifier_equals(type_name, "SmallInt"))
+            else if (base_name != NULL && pascal_identifier_equals(base_name, "SmallInt"))
             {
                 low = -32768LL;
                 high = 32767LL;
                 have_bounds = 1;
             }
-            else if (pascal_identifier_equals(type_name, "Word"))
+            else if (base_name != NULL && pascal_identifier_equals(base_name, "Word"))
             {
                 low = 0;
                 high = 65535LL;
                 have_bounds = 1;
             }
-            else if (pascal_identifier_equals(type_name, "ShortInt"))
+            else if (base_name != NULL && pascal_identifier_equals(base_name, "ShortInt"))
             {
                 low = -128LL;
                 high = 127LL;
                 have_bounds = 1;
             }
-            else if (pascal_identifier_equals(type_name, "Byte"))
+            else if (base_name != NULL && pascal_identifier_equals(base_name, "Byte"))
             {
                 low = 0;
                 high = 255LL;
                 have_bounds = 1;
             }
-            else if (pascal_identifier_equals(type_name, "Boolean"))
+            else if (base_name != NULL && pascal_identifier_equals(base_name, "Boolean"))
             {
                 low = 0;
                 high = 1;
                 have_bounds = 1;
                 result_type = BOOL;
             }
-            else if (pascal_identifier_equals(type_name, "Char") ||
-                     pascal_identifier_equals(type_name, "AnsiChar"))
+            else if (base_name != NULL &&
+                     (pascal_identifier_equals(base_name, "Char") ||
+                      pascal_identifier_equals(base_name, "AnsiChar")))
             {
                 low = 0;
                 high = 255;
@@ -2108,10 +2160,14 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
             {
                 semcheck_replace_call_with_integer_literal(expr, is_high ? high : low);
                 semcheck_expr_set_resolved_type(expr, result_type);
+                if (qualified_name != NULL)
+                    free(qualified_name);
                 *type_return = result_type;
                 return 0;
             }
         }
+        if (qualified_name != NULL)
+            free(qualified_name);
     }
 
     KgpcType *arg_kgpc_type = NULL;

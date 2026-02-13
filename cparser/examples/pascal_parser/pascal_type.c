@@ -1932,10 +1932,15 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
         while (adv_cur != NULL) {
             ast_t *next_node = adv_cur->next;
             if (adv_cur->typ == PASCAL_T_METHOD_DECL ||
+                adv_cur->typ == PASCAL_T_CONSTRUCTOR_DECL ||
+                adv_cur->typ == PASCAL_T_DESTRUCTOR_DECL ||
                 adv_cur->typ == PASCAL_T_FIELD_DECL ||
                 adv_cur->typ == PASCAL_T_PROPERTY_DECL ||
                 adv_cur->typ == PASCAL_T_NESTED_TYPE_SECTION ||
-                adv_cur->typ == PASCAL_T_CONST_SECTION) {
+                adv_cur->typ == PASCAL_T_CONST_SECTION ||
+                adv_cur->typ == PASCAL_T_VARIANT_PART ||
+                adv_cur->typ == PASCAL_T_CLASS_MEMBER ||
+                adv_cur->typ == PASCAL_T_VAR_SECTION) {
                 adv_cur->next = NULL;
                 if (first_kept == NULL) {
                     first_kept = adv_cur;

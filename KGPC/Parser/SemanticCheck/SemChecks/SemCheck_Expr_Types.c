@@ -14,6 +14,31 @@
 
 #include "SemCheck_Expr_Internal.h"
 
+static char *build_qualified_identifier_from_expr_local(struct Expression *expr)
+{
+    if (expr == NULL)
+        return NULL;
+    if (expr->type == EXPR_VAR_ID && expr->expr_data.id != NULL)
+        return strdup(expr->expr_data.id);
+    if (expr->type != EXPR_RECORD_ACCESS)
+        return NULL;
+
+    struct Expression *record_expr = expr->expr_data.record_access_data.record_expr;
+    char *field_id = expr->expr_data.record_access_data.field_id;
+    if (record_expr == NULL || field_id == NULL)
+        return NULL;
+
+    char *base = build_qualified_identifier_from_expr_local(record_expr);
+    if (base == NULL)
+        return NULL;
+    size_t qualified_len = strlen(base) + 1 + strlen(field_id) + 1;
+    char *qualified = (char *)malloc(qualified_len);
+    if (qualified != NULL)
+        snprintf(qualified, qualified_len, "%s.%s", base, field_id);
+    free(base);
+    return qualified;
+}
+
 int semcheck_typecast(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating)
 {
@@ -128,9 +153,10 @@ int semcheck_typecast(int *type_return,
     {
         /* Resolve full pointer type info so deref preserves record/element types */
         KgpcType *resolved_ptr = NULL;
+        HashNode_t *target_node = NULL;
+        struct TypeAlias *alias = NULL;
         if (expr->expr_data.typecast_data.target_type_id != NULL)
         {
-            HashNode_t *target_node = NULL;
             if (FindIdent(&target_node, symtab, expr->expr_data.typecast_data.target_type_id) >= 0 &&
                 target_node != NULL && target_node->type != NULL)
             {
@@ -150,6 +176,38 @@ int semcheck_typecast(int *type_return,
                     {
                         int subtype = kgpc_type_get_primitive_tag(points_to);
                         semcheck_set_pointer_info(expr, subtype, NULL);
+                    }
+                }
+            }
+            if (target_node != NULL)
+                alias = get_type_alias_from_node(target_node);
+            if (alias != NULL && alias->is_pointer)
+            {
+                KgpcType *alias_type = create_kgpc_type_from_type_alias(alias, symtab);
+                if (alias_type != NULL)
+                {
+                    if (alias->kgpc_type == alias_type)
+                        kgpc_type_retain(alias_type);
+                    if (resolved_ptr != NULL)
+                        destroy_kgpc_type(resolved_ptr);
+                    resolved_ptr = alias_type;
+
+                    if (resolved_ptr->kind == TYPE_KIND_POINTER &&
+                        resolved_ptr->info.points_to != NULL)
+                    {
+                        KgpcType *points_to = resolved_ptr->info.points_to;
+                        if (points_to->kind == TYPE_KIND_RECORD &&
+                            points_to->info.record_info != NULL)
+                        {
+                            semcheck_set_pointer_info(expr, RECORD_TYPE,
+                                points_to->info.record_info->type_id);
+                            expr->record_type = points_to->info.record_info;
+                        }
+                        else if (points_to->kind == TYPE_KIND_PRIMITIVE)
+                        {
+                            int subtype = kgpc_type_get_primitive_tag(points_to);
+                            semcheck_set_pointer_info(expr, subtype, NULL);
+                        }
                     }
                 }
             }
@@ -850,6 +908,69 @@ int semcheck_recordaccess(int *type_return,
         return 1;
     }
 
+    if (record_expr->type == EXPR_VAR_ID || record_expr->type == EXPR_RECORD_ACCESS)
+    {
+        char *qualified_id = NULL;
+        if (record_expr->type == EXPR_VAR_ID)
+        {
+            size_t qualified_len = strlen(record_expr->expr_data.id) + 1 + strlen(field_id) + 1;
+            qualified_id = (char *)malloc(qualified_len);
+            if (qualified_id != NULL)
+                snprintf(qualified_id, qualified_len, "%s.%s", record_expr->expr_data.id, field_id);
+        }
+        else
+        {
+            qualified_id = build_qualified_identifier_from_expr_local(record_expr);
+            if (qualified_id != NULL)
+            {
+                size_t qualified_len = strlen(qualified_id) + 1 + strlen(field_id) + 1;
+                char *combined = (char *)malloc(qualified_len);
+                if (combined != NULL)
+                {
+                    snprintf(combined, qualified_len, "%s.%s", qualified_id, field_id);
+                    free(qualified_id);
+                    qualified_id = combined;
+                }
+                else
+                {
+                    free(qualified_id);
+                    qualified_id = NULL;
+                }
+            }
+        }
+
+        if (qualified_id != NULL)
+        {
+            HashNode_t *type_node = NULL;
+            const char *resolved_id = qualified_id;
+            if (FindIdent(&type_node, symtab, qualified_id) < 0 ||
+                type_node == NULL || type_node->hash_type != HASHTYPE_TYPE)
+            {
+                const char *base = semcheck_base_type_name(qualified_id);
+                if (base != NULL && base != qualified_id &&
+                    FindIdent(&type_node, symtab, base) >= 0 &&
+                    type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+                {
+                    resolved_id = base;
+                }
+            }
+
+            if (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+            {
+                destroy_expr(record_expr);
+                free(expr->expr_data.record_access_data.field_id);
+                expr->expr_data.record_access_data.record_expr = NULL;
+                expr->expr_data.record_access_data.field_id = NULL;
+                expr->type = EXPR_VAR_ID;
+                expr->expr_data.id = strdup(resolved_id);
+                free(qualified_id);
+                *type_return = UNKNOWN_TYPE;
+                return 0;
+            }
+            free(qualified_id);
+        }
+    }
+
     /* AST TRANSFORMATION FIX: Parser incorrectly parses `-r.x` as `(-r).x` instead of `-(r.x)`.
      * When we detect this pattern (record access on a sign term), we restructure the AST
      * to have the correct operator precedence: the sign term should wrap the record access. 
@@ -1236,65 +1357,6 @@ int semcheck_recordaccess(int *type_return,
             expr->expr_data.relop_data.right = right_expr;
 
             return semcheck_expr_legacy_tag(type_return, symtab, expr, max_scope_lev, mutating);
-        }
-        /* FPC string helper methods: Transform S.Trim into Trim(S), S.Substring(i) into Substring(S, i) etc.
-         * This provides FPC-compatible string method syntax without full type helper infrastructure. */
-        else if (record_type == STRING_TYPE && field_id != NULL)
-        {
-            /* List of known string helper methods that map to SysUtils functions */
-            HashNode_t *func_node = NULL;
-            int is_string_method = 0;
-            if (pascal_identifier_equals(field_id, "Trim") ||
-                pascal_identifier_equals(field_id, "TrimLeft") ||
-                pascal_identifier_equals(field_id, "TrimRight") ||
-                pascal_identifier_equals(field_id, "UpperCase") ||
-                pascal_identifier_equals(field_id, "LowerCase") ||
-                pascal_identifier_equals(field_id, "Length"))
-            {
-                /* These are no-arg methods that take the string as single argument */
-                if (FindIdent(&func_node, symtab, field_id) == 0 &&
-                    func_node != NULL && func_node->hash_type == HASHTYPE_FUNCTION)
-                {
-                    is_string_method = 1;
-                }
-            }
-            else if (pascal_identifier_equals(field_id, "Substring") ||
-                     pascal_identifier_equals(field_id, "IndexOf") ||
-                     pascal_identifier_equals(field_id, "Contains") ||
-                     pascal_identifier_equals(field_id, "StartsWith") ||
-                     pascal_identifier_equals(field_id, "EndsWith"))
-            {
-                /* These methods take additional arguments - handled by method call transformation */
-                if (FindIdent(&func_node, symtab, field_id) == 0 &&
-                    func_node != NULL && func_node->hash_type == HASHTYPE_FUNCTION)
-                {
-                    is_string_method = 1;
-                }
-            }
-            
-            if (is_string_method && func_node != NULL)
-            {
-                /* Transform this record access into a function call: field_id(record_expr)
-                 * This works because the parser converts S.Trim() into a method call with S prepended */
-                char *func_id = strdup(field_id);
-                if (func_id != NULL)
-                {
-                    /* Create a function call expression with the string as first argument */
-                    ListNode_t *args_list = CreateListNode(record_expr, LIST_EXPR);
-                    
-                    expr->type = EXPR_FUNCTION_CALL;
-                    memset(&expr->expr_data.function_call_data, 0, sizeof(expr->expr_data.function_call_data));
-                    expr->expr_data.function_call_data.id = func_id;
-                    expr->expr_data.function_call_data.args_expr = args_list;
-                    expr->expr_data.function_call_data.mangled_id = NULL;
-                    
-                    return semcheck_funccall(type_return, symtab, expr, max_scope_lev, mutating);
-                }
-            }
-            
-            semcheck_error_with_context("Error on line %d, field access requires a record value.\n\n", expr->line_num);
-            *type_return = UNKNOWN_TYPE;
-            return error_count + 1;
         }
         else
         {
@@ -1935,8 +1997,62 @@ int semcheck_recordaccess(int *type_return,
                         }
                         goto FIELD_RESOLVED;
                     }
+
+                    HashNode_t *method_node = semcheck_find_class_method(symtab, record_info,
+                        accessor, NULL);
+                    if (method_node != NULL)
+                    {
+                        struct Expression *receiver = record_expr;
+                        ListNode_t *arg_node = CreateListNode(receiver, LIST_EXPR);
+                        if (arg_node != NULL)
+                        {
+                            char *method_id = strdup(accessor);
+                            expr->type = EXPR_FUNCTION_CALL;
+                            memset(&expr->expr_data.function_call_data, 0,
+                                sizeof(expr->expr_data.function_call_data));
+                            expr->expr_data.function_call_data.is_method_call_placeholder = 1;
+                            expr->expr_data.function_call_data.id = method_id;
+                            if (method_node->mangled_id != NULL)
+                                expr->expr_data.function_call_data.mangled_id =
+                                    strdup(method_node->mangled_id);
+                            expr->expr_data.function_call_data.resolved_func = method_node;
+                            expr->expr_data.function_call_data.args_expr = arg_node;
+                            expr->record_type = NULL;
+                            semcheck_expr_set_resolved_type(expr, UNKNOWN_TYPE);
+                            return semcheck_funccall(type_return, symtab, expr, max_scope_lev, mutating);
+                        }
+                    }
                 }
             }
+        }
+
+        /* For classes and object types, check if the field is a class/object const
+         * stored with mangled name ClassName__ConstName. */
+        if (record_info != NULL && record_info->type_id != NULL && field_id != NULL)
+        {
+            char *mangled_const = semcheck_mangle_helper_const_id(record_info->type_id, field_id);
+            HashNode_t *const_node = NULL;
+            if (mangled_const != NULL &&
+                FindIdent(&const_node, symtab, mangled_const) >= 0 &&
+                const_node != NULL &&
+                (const_node->hash_type == HASHTYPE_CONST ||
+                 const_node->hash_type == HASHTYPE_ARRAY ||
+                 const_node->hash_type == HASHTYPE_VAR ||
+                 const_node->is_typed_const))
+            {
+                destroy_expr(record_expr);
+                expr->expr_data.record_access_data.record_expr = NULL;
+                if (expr->expr_data.record_access_data.field_id != NULL)
+                {
+                    free(expr->expr_data.record_access_data.field_id);
+                    expr->expr_data.record_access_data.field_id = NULL;
+                }
+                expr->type = EXPR_VAR_ID;
+                expr->expr_data.id = mangled_const;
+                return semcheck_varid(type_return, symtab, expr, max_scope_lev, mutating);
+            }
+            if (mangled_const != NULL)
+                free(mangled_const);
         }
 
         semcheck_error_with_context("Error on line %d, record field %s not found.\n", expr->line_num, field_id);

@@ -3714,6 +3714,7 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     Tree_t *arg_decl;
     char *proc_id;
     char *mangled_name;
+    int static_arg_already_removed = 0;
 
     assert(symtab != NULL);
     assert(stmt != NULL);
@@ -3723,6 +3724,44 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
 
     proc_id = stmt->stmt_data.procedure_call_data.id;
     args_given = stmt->stmt_data.procedure_call_data.expr_args;
+
+    /* If this is a method call placeholder with a type identifier receiver,
+     * resolve it to the class method immediately to avoid type-helper detours. */
+    if (proc_id != NULL && strncmp(proc_id, "__", 2) == 0 && args_given != NULL)
+    {
+        struct Expression *first_arg = (struct Expression *)args_given->cur;
+        if (first_arg != NULL && first_arg->type == EXPR_VAR_ID && first_arg->expr_data.id != NULL)
+        {
+            HashNode_t *type_node = NULL;
+            if (FindIdent(&type_node, symtab, first_arg->expr_data.id) >= 0 &&
+                type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+            {
+                struct RecordType *record_info = semcheck_stmt_get_record_type_from_node(type_node);
+                if (record_info != NULL && record_info->type_id != NULL)
+                {
+                    const char *method_name = proc_id + 2;
+                    size_t class_len = strlen(record_info->type_id);
+                    size_t method_len = strlen(method_name);
+                    char *new_proc_id = (char *)malloc(class_len + 2 + method_len + 1);
+                    if (new_proc_id != NULL)
+                    {
+                        sprintf(new_proc_id, "%s__%s", record_info->type_id, method_name);
+                        free(proc_id);
+                        proc_id = new_proc_id;
+                        stmt->stmt_data.procedure_call_data.id = proc_id;
+                        ListNode_t *remaining_args = args_given->next;
+                        destroy_expr(first_arg);
+                        args_given->cur = NULL;
+                        free(args_given);
+                        stmt->stmt_data.procedure_call_data.expr_args = remaining_args;
+                        args_given = remaining_args;
+                        stmt->stmt_data.procedure_call_data.is_method_call_placeholder = 0;
+                        static_arg_already_removed = 1;
+                    }
+                }
+            }
+        }
+    }
 
     /* FPC Bootstrap Feature: Handle unit-qualified procedure calls.
      * When the parser sees Unit.Procedure(args), it creates a procedure call with id "__Procedure"
@@ -4189,9 +4228,6 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
      * where we explicitly want to call the parent class method).
      */
     
-    /* Track if we already removed the static method's first argument to avoid double removal */
-    int static_arg_already_removed = 0;
-    
     /* Check for method call with unresolved name (member-access placeholder) where first arg is the instance. */
     if (stmt->stmt_data.procedure_call_data.is_method_call_placeholder && args_given != NULL) {
         struct Expression *first_arg = (struct Expression *)args_given->cur;
@@ -4200,6 +4236,7 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
 
         KgpcType *owner_type = first_arg->resolved_kgpc_type;
         struct RecordType *record_info = NULL;
+        int force_static = 0;
 
         if (owner_type != NULL) {
             if (owner_type->kind == TYPE_KIND_RECORD) {
@@ -4211,12 +4248,26 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
             }
         }
 
+        if (first_arg->type == EXPR_VAR_ID && first_arg->expr_data.id != NULL)
+        {
+            HashNode_t *type_node = NULL;
+            if (FindIdent(&type_node, symtab, first_arg->expr_data.id) >= 0 &&
+                type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+            {
+                force_static = 1;
+                if (record_info == NULL)
+                    record_info = semcheck_stmt_get_record_type_from_node(type_node);
+            }
+        }
+
         if (record_info != NULL && record_info->type_id != NULL) {
             const char *method_name = proc_id;
             if (method_name != NULL && strncmp(method_name, "__", 2) == 0)
                 method_name += 2;
 
             int is_static = from_cparser_is_method_static(record_info->type_id, method_name);
+            if (force_static)
+                is_static = 1;
             HashNode_t *method_node = semcheck_find_class_method(symtab, record_info, method_name, NULL);
 
             if (method_node != NULL) {
@@ -4262,6 +4313,17 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                 
                 /* Try to get the record type of the first argument */
                 struct RecordType *record_type = NULL;
+                if (first_arg->type == EXPR_VAR_ID && first_arg->expr_data.id != NULL)
+                {
+                    HashNode_t *type_node = NULL;
+                    if (FindIdent(&type_node, symtab, first_arg->expr_data.id) != -1 &&
+                        type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+                    {
+                        record_type = semcheck_stmt_get_record_type_from_node(type_node);
+                        if (record_type != NULL && record_type->type_id != NULL)
+                            class_name = record_type->type_id;
+                    }
+                }
                 if (first_arg->record_type != NULL) {
                     record_type = first_arg->record_type;
                 } else if (first_arg->type == EXPR_VAR_ID) {
@@ -4323,7 +4385,7 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                         destroy_kgpc_type(arg_type);
                 }
 
-                if (record_type != NULL && record_type->type_id != NULL) {
+                if (class_name == NULL && record_type != NULL && record_type->type_id != NULL) {
                     if (getenv("KGPC_DEBUG_TYPE_HELPER") != NULL) {
                         fprintf(stderr, "[SemCheck] method placeholder: resolved helper record %s for %s\n",
                             record_type->type_id, method_name != NULL ? method_name : "<null>");
@@ -4371,9 +4433,11 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
             free((void *)class_name);
         }
     }
+
     
     char *type_resolution_double_underscore = (proc_id != NULL) ? strstr(proc_id, "__") : NULL;
     if (type_resolution_double_underscore != NULL && args_given != NULL &&
+        !static_arg_already_removed &&
         stmt->stmt_data.procedure_call_data.mangled_id == NULL) {
         /* Extract the method name (part after __) */
         char *method_name_part = type_resolution_double_underscore + 2;
@@ -4558,6 +4622,72 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
         mangled_name = MangleFunctionNameFromCallSite(proc_id, args_given, symtab, INT_MAX);
     }
     assert(mangled_name != NULL);
+
+    /* Check for procedural type typecast-call pattern: TypeName(source)(args)
+     * The parser creates a call to TypeName with (source, args...) as flat arguments.
+     * If TypeName is a procedural type, the first arg is the typecast source and
+     * remaining args are the actual call arguments. Transform into indirect call. */
+    {
+        HashNode_t *type_check = NULL;
+        int type_scope = FindIdent(&type_check, symtab, proc_id);
+        if (type_scope != -1 && type_check != NULL &&
+            type_check->hash_type == HASHTYPE_TYPE &&
+            type_check->type != NULL && type_check->type->kind == TYPE_KIND_PROCEDURE &&
+            args_given != NULL)
+        {
+            /* Count expected parameters from the procedural type */
+            int expected_params = 0;
+            if (type_check->type->info.proc_info.params != NULL)
+            {
+                for (ListNode_t *p = type_check->type->info.proc_info.params; p != NULL; p = p->next)
+                    expected_params++;
+            }
+
+            /* Count actual args given */
+            int actual_args = 0;
+            for (ListNode_t *a = args_given; a != NULL; a = a->next)
+                actual_args++;
+
+            /* If we have exactly expected_params + 1 arguments, the first is the typecast source */
+            if (actual_args == expected_params + 1)
+            {
+                struct Expression *typecast_source = (struct Expression *)args_given->cur;
+
+                /* Create a typecast expression wrapping the source */
+                struct Expression *typecast_expr = (struct Expression *)calloc(1, sizeof(struct Expression));
+                assert(typecast_expr != NULL);
+                typecast_expr->type = EXPR_TYPECAST;
+                typecast_expr->line_num = stmt->line_num;
+                typecast_expr->col_num = stmt->col_num;
+                typecast_expr->source_index = stmt->source_index;
+                typecast_expr->expr_data.typecast_data.target_type_id = strdup(proc_id);
+                typecast_expr->expr_data.typecast_data.expr = typecast_source;
+
+                /* Semcheck the typecast */
+                int typecast_tag = UNKNOWN_TYPE;
+                return_val += semcheck_stmt_expr_tag(&typecast_tag, symtab, typecast_expr, max_scope_lev, NO_MUTATE);
+
+                /* Remove first list node only; the Expression* it held is now owned
+                 * by typecast_expr->expr_data.typecast_data.expr, so we NULL .cur
+                 * before freeing the ListNode_t shell. */
+                ListNode_t *call_args = args_given->next;
+                args_given->next = NULL;
+                args_given->cur = NULL;
+                free(args_given);  /* Free only the ListNode_t, not the Expression */
+                stmt->stmt_data.procedure_call_data.expr_args = call_args;
+                args_given = call_args;
+
+                /* Set up as a procedural var call through the typecast */
+                stmt->stmt_data.procedure_call_data.is_procedural_var_call = 1;
+                stmt->stmt_data.procedure_call_data.procedural_var_expr = typecast_expr;
+                stmt->stmt_data.procedure_call_data.resolved_proc = type_check;
+
+                free(mangled_name);
+
+                return return_val + semcheck_call_with_proc_var(symtab, stmt, type_check, max_scope_lev);
+            }
+        }
+    }
 
     ListNode_t *overload_candidates = FindAllIdents(symtab, proc_id);
     HashNode_t *resolved_proc = NULL;
@@ -4759,6 +4889,30 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
         else
         {
             match_count = 0;
+        }
+    }
+
+    if (match_count == 1 && overload_candidates != NULL && overload_candidates->next != NULL)
+    {
+        HashNode_t *best_candidate = NULL;
+        int num_best_matches = 0;
+        struct Expression call_stub;
+        memset(&call_stub, 0, sizeof(call_stub));
+        call_stub.line_num = stmt->line_num;
+        call_stub.type = EXPR_FUNCTION_CALL;
+
+        int overload_status = semcheck_resolve_overload(&best_candidate, NULL, &num_best_matches,
+            overload_candidates, args_given, symtab, &call_stub, max_scope_lev, 0);
+
+        if (overload_status == 0 && best_candidate != NULL && num_best_matches == 1 &&
+            best_candidate != resolved_proc)
+        {
+            resolved_proc = best_candidate;
+            if (best_candidate->mangled_id != NULL)
+            {
+                free(mangled_name);
+                mangled_name = strdup(best_candidate->mangled_id);
+            }
         }
     }
 

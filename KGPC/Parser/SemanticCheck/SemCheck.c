@@ -297,6 +297,13 @@ static int semcheck_map_builtin_type_name_local(const char *id)
     return UNKNOWN_TYPE;
 }
 
+static int semcheck_helper_self_is_var(SymTab_t *symtab, const char *base_type_id)
+{
+    (void)symtab;
+    (void)base_type_id;
+    return 0;
+}
+
 static char *semcheck_dup_type_id_from_ast(ast_t *node)
 {
     if (node == NULL)
@@ -634,9 +641,14 @@ static int g_semcheck_error_source_index = -1;
 
 void semcheck_set_error_context(int line_num, int col_num, int source_index)
 {
-    g_semcheck_error_line = line_num;
-    g_semcheck_error_col = col_num;
-    g_semcheck_error_source_index = source_index;
+    /* Don't overwrite a valid line number with 0 from synthetic AST nodes.
+     * This preserves the last known real line for error reporting. */
+    if (line_num > 0 || g_semcheck_error_line == 0)
+        g_semcheck_error_line = line_num;
+    if (col_num > 0 || g_semcheck_error_col == 0)
+        g_semcheck_error_col = col_num;
+    if (source_index >= 0 || g_semcheck_error_source_index < 0)
+        g_semcheck_error_source_index = source_index;
 }
 
 void semcheck_clear_error_context(void)
@@ -793,6 +805,13 @@ void semantic_error(int line_num, int col_num, const char *format, ...)
     int effective_col = col_num;
     int effective_source_index = g_semcheck_error_source_index;
 
+    /* Fall back to the last known good line/col from error context when the
+     * AST node has line_num == 0 (synthetic nodes from WITH expansion etc.) */
+    if (effective_line <= 0 && g_semcheck_error_line > 0)
+        effective_line = g_semcheck_error_line;
+    if (effective_col <= 0 && g_semcheck_error_col > 0)
+        effective_col = g_semcheck_error_col;
+
     if (effective_source_index >= 0)
     {
         const char *context_buf = preprocessed_source;
@@ -824,6 +843,12 @@ void semantic_error(int line_num, int col_num, const char *format, ...)
 /* Helper function to print semantic error with accurate source context using byte offset */
 void semantic_error_at(int line_num, int col_num, int source_index, const char *format, ...)
 {
+    /* Fall back to last known good line/col for synthetic nodes with line 0 */
+    if (line_num <= 0 && g_semcheck_error_line > 0)
+        line_num = g_semcheck_error_line;
+    if (col_num <= 0 && g_semcheck_error_col > 0)
+        col_num = g_semcheck_error_col;
+
     if (source_index >= 0)
     {
         const char *context_buf = preprocessed_source;
@@ -860,6 +885,13 @@ void semcheck_error_with_context_at(int line_num, int col_num, int source_index,
 
     int effective_line = line_num;
     int effective_col = col_num;
+
+    /* Fall back to last known good line/col for synthetic nodes with line 0 */
+    if (effective_line <= 0 && g_semcheck_error_line > 0)
+        effective_line = g_semcheck_error_line;
+    if (effective_col <= 0 && g_semcheck_error_col > 0)
+        effective_col = g_semcheck_error_col;
+
     if (source_index >= 0)
     {
         const char *context_buf = preprocessed_source;
@@ -970,6 +1002,12 @@ void semcheck_error_with_context(const char *format, ...)
     }
     if (effective_line <= 0)
         effective_line = line_num;
+    /* Fall back to the last known good line from error context when the
+     * AST node has line_num == 0 (synthetic nodes from WITH expansion etc.) */
+    if (effective_line <= 0 && g_semcheck_error_line > 0)
+        effective_line = g_semcheck_error_line;
+    if (effective_col <= 0 && g_semcheck_error_col > 0)
+        effective_col = g_semcheck_error_col;
 
     /* If the format starts with "Error on line %d", rewrite that part to use the effective line. */
     semcheck_print_error_prefix(file_path, effective_line, effective_col);
@@ -1294,19 +1332,26 @@ static void add_class_vars_to_method_scope(SymTab_t *symtab, const char *method_
 
     /* Only add class fields for static methods. Non-static methods
      * access fields via Self which is handled differently. */
-    if (!from_cparser_is_method_static(class_name, method_name))
-    {
-        free(class_name);
-        return;
-    }
+    int is_static = from_cparser_is_method_static(class_name, method_name);
 
     /* Look up the class type */
     HashNode_t *class_node = NULL;
     int lookup_result = FindIdent(&class_node, symtab, class_name);
     if (lookup_result == -1 || class_node == NULL)
     {
-        free(class_name);
-        return;
+        /* For nested types like "HeapInc.ThreadState", the full dotted name
+         * won't be found as a symbol. Try resolving the outermost class. */
+        char *dot = strchr(class_name, '.');
+        if (dot != NULL)
+        {
+            *dot = '\0'; /* Truncate to outermost class name */
+            lookup_result = FindIdent(&class_node, symtab, class_name);
+        }
+        if (lookup_result == -1 || class_node == NULL)
+        {
+            free(class_name);
+            return;
+        }
     }
 
     struct RecordType *record_info = get_record_type_from_node(class_node);
@@ -1323,17 +1368,39 @@ static void add_class_vars_to_method_scope(SymTab_t *symtab, const char *method_
         return;
     }
 
-    /* Process class types and advanced records (records with class vars/properties).
-     * Advanced records may use record_properties instead of properties. */
-    if (!record_type_is_class(record_info) && record_info->record_properties == NULL)
+    int has_class_vars = 0;
+    if (record_info->fields != NULL)
+    {
+        for (ListNode_t *scan = record_info->fields; scan != NULL; scan = scan->next)
+        {
+            if (scan->type == LIST_RECORD_FIELD && scan->cur != NULL)
+            {
+                struct RecordField *field = (struct RecordField *)scan->cur;
+                if (field->is_class_var == 1)
+                {
+                    has_class_vars = 1;
+                    break;
+                }
+            }
+        }
+    }
+
+    /* For class types (not objects), non-static methods access fields via Self.
+     * For object types, class vars and consts are NOT accessible via Self,
+     * so we must always push them into scope. */
+    int is_object_type = !record_type_is_class(record_info) && !record_info->is_type_helper;
+    if (!is_static && !is_object_type)
     {
         free(class_name);
         return;
     }
+    if (getenv("KGPC_DEBUG_CLASS_VAR") != NULL)
+    {
+        fprintf(stderr, "[KGPC_DEBUG_CLASS_VAR] class=%s static=%d has_class_vars=%d\n",
+            class_name ? class_name : "<null>", is_static, has_class_vars);
+    }
 
-    /* Add class vars from the record fields to the current scope.
-     * Class vars are stored in the record's fields list.
-     * For class types, all fields are accessible in methods. */
+    /* Process class types, object types, and advanced records that have fields. */
     ListNode_t *field_node = record_info->fields;
     while (field_node != NULL)
     {
@@ -1345,6 +1412,18 @@ static void add_class_vars_to_method_scope(SymTab_t *symtab, const char *method_
         struct RecordField *field = (struct RecordField *)field_node->cur;
         if (field != NULL && field->name != NULL && field->name[0] != '\0')
         {
+            int allow_all_fields = (record_type_is_class(record_info) && is_static && !has_class_vars);
+            if (getenv("KGPC_DEBUG_CLASS_VAR") != NULL)
+            {
+                fprintf(stderr, "[KGPC_DEBUG_CLASS_VAR] field=%s class_var=%d allow_all=%d\n",
+                    field->name ? field->name : "<null>",
+                    field->is_class_var, allow_all_fields);
+            }
+            if (record_type_is_class(record_info) && !allow_all_fields && field->is_class_var != 1)
+            {
+                field_node = field_node->next;
+                continue;
+            }
             if (getenv("KGPC_DEBUG_CLASS_VAR") != NULL &&
                 pascal_identifier_equals(field->name, "FStandardEncodings"))
             {
@@ -1931,12 +2010,15 @@ static inline enum VarType get_var_type_from_node(HashNode_t *node)
     }
 }
 
-static inline void mark_hashnode_unit_info(HashNode_t *node, int defined_in_unit, int is_public)
+static inline void mark_hashnode_unit_info(SymTab_t *symtab, HashNode_t *node,
+    int defined_in_unit, int is_public)
 {
     if (node == NULL || !defined_in_unit)
         return;
     node->defined_in_unit = 1;
     node->unit_is_public = is_public ? 1 : 0;
+    if (symtab != NULL)
+        SymTab_MoveHashNodeToBack(symtab, node);
 }
 
 static Tree_t *g_semcheck_current_subprogram = NULL;
@@ -2858,6 +2940,30 @@ static int evaluate_real_const_expr(SymTab_t *symtab, struct Expression *expr, d
                 }
                 return evaluate_real_const_expr(symtab, arg, out_value);
             }
+            if (id != NULL && pascal_identifier_equals(id, "Ln"))
+            {
+                if (args == NULL || args->next != NULL)
+                {
+                    fprintf(stderr, "Error: Ln in const expression requires exactly one argument.\n");
+                    return 1;
+                }
+                struct Expression *arg = (struct Expression *)args->cur;
+                if (arg == NULL)
+                {
+                    fprintf(stderr, "Error: Ln argument is NULL.\n");
+                    return 1;
+                }
+                double value = 0.0;
+                if (evaluate_real_const_expr(symtab, arg, &value) != 0)
+                    return 1;
+                if (value <= 0.0)
+                {
+                    fprintf(stderr, "Error: Ln argument must be > 0 in const expression.\n");
+                    return 1;
+                }
+                *out_value = log(value);
+                return 0;
+            }
             break;
         }
         default:
@@ -3040,11 +3146,25 @@ static int resolve_range_bounds_for_type(SymTab_t *symtab, const char *type_name
         return 0;
 
     struct TypeAlias *alias = get_type_alias_from_node(type_node);
-    if (alias != NULL && alias->is_range && alias->range_known)
+    if (alias != NULL)
     {
-        *out_low = alias->range_start;
-        *out_high = alias->range_end;
-        return 1;
+        if (alias->is_enum && alias->enum_literals != NULL)
+        {
+            int count = ListLength(alias->enum_literals);
+            if (count > 0)
+            {
+                *out_low = 0;
+                *out_high = (long long)count - 1;
+                return 1;
+            }
+        }
+
+        if (alias->is_range && alias->range_known)
+        {
+            *out_low = alias->range_start;
+            *out_high = alias->range_end;
+            return 1;
+        }
     }
 
     return 0;
@@ -3535,73 +3655,101 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                 }
                 
                 /* High expects a type identifier */
-                if (arg->type == EXPR_VAR_ID)
+                if (arg->type == EXPR_VAR_ID || arg->type == EXPR_RECORD_ACCESS)
                 {
-                    const char *type_name = arg->expr_data.id;
+                    char *qualified_name = NULL;
+                    const char *type_name = NULL;
+                    int status = 1;
+                    if (arg->type == EXPR_VAR_ID)
+                        type_name = arg->expr_data.id;
+                    else
+                    {
+                        qualified_name = build_qualified_identifier_from_expr(arg);
+                        type_name = qualified_name;
+                    }
                     const char *base_name = semcheck_base_type_name(type_name);
-                    if (base_name != NULL)
-                        type_name = base_name;
+                    const char *lookup_name = type_name;
                     long long range_low = 0;
                     long long range_high = 0;
-                    if (resolve_range_bounds_for_type(symtab, type_name, &range_low, &range_high))
+                    if (resolve_range_bounds_for_type(symtab, lookup_name, &range_low, &range_high))
                     {
                         *out_value = range_high;
-                        return 0;
+                        status = 0;
+                        goto high_cleanup;
                     }
                     /* Resolve type aliases to base type */
-                    const char *resolved = resolve_type_to_base_name(symtab, type_name);
+                    const char *resolved = resolve_type_to_base_name(symtab, lookup_name);
                     if (resolved != NULL)
-                        type_name = resolved;
+                        lookup_name = resolved;
                     
                     /* Map common type names to their High values */
-                    if (pascal_identifier_equals(type_name, "Int64")) {
+                    if (base_name != NULL && pascal_identifier_equals(base_name, "Int64")) {
                         *out_value = 9223372036854775807LL; /* INT64_MAX */
-                        return 0;
+                        status = 0;
+                        goto high_cleanup;
                     }
-                    if (pascal_identifier_equals(type_name, "QWord") ||
-                        pascal_identifier_equals(type_name, "UInt64")) {
+                    if (base_name != NULL &&
+                        (pascal_identifier_equals(base_name, "QWord") ||
+                         pascal_identifier_equals(base_name, "UInt64"))) {
                         /* Treat QWord as signed 64-bit until unsigned semantics are supported. */
                         *out_value = 9223372036854775807LL;
-                        return 0;
+                        status = 0;
+                        goto high_cleanup;
                     }
-                    if (pascal_identifier_equals(type_name, "LongInt") ||
-                        pascal_identifier_equals(type_name, "Integer")) {
+                    if (base_name != NULL &&
+                        (pascal_identifier_equals(base_name, "LongInt") ||
+                         pascal_identifier_equals(base_name, "Integer"))) {
                         *out_value = 2147483647LL; /* INT32_MAX */
-                        return 0;
+                        status = 0;
+                        goto high_cleanup;
                     }
-                    if (pascal_identifier_equals(type_name, "Cardinal") ||
-                        pascal_identifier_equals(type_name, "LongWord") ||
-                        pascal_identifier_equals(type_name, "DWord")) {
+                    if (base_name != NULL &&
+                        (pascal_identifier_equals(base_name, "Cardinal") ||
+                         pascal_identifier_equals(base_name, "LongWord") ||
+                         pascal_identifier_equals(base_name, "DWord"))) {
                         *out_value = 4294967295LL; /* UINT32_MAX */
-                        return 0;
+                        status = 0;
+                        goto high_cleanup;
                     }
-                    if (pascal_identifier_equals(type_name, "SmallInt")) {
+                    if (base_name != NULL && pascal_identifier_equals(base_name, "SmallInt")) {
                         *out_value = 32767LL; /* INT16_MAX */
-                        return 0;
+                        status = 0;
+                        goto high_cleanup;
                     }
-                    if (pascal_identifier_equals(type_name, "Word")) {
+                    if (base_name != NULL && pascal_identifier_equals(base_name, "Word")) {
                         *out_value = 65535LL; /* UINT16_MAX */
-                        return 0;
+                        status = 0;
+                        goto high_cleanup;
                     }
-                    if (pascal_identifier_equals(type_name, "ShortInt")) {
+                    if (base_name != NULL && pascal_identifier_equals(base_name, "ShortInt")) {
                         *out_value = 127LL; /* INT8_MAX */
-                        return 0;
+                        status = 0;
+                        goto high_cleanup;
                     }
-                    if (pascal_identifier_equals(type_name, "Byte")) {
+                    if (base_name != NULL && pascal_identifier_equals(base_name, "Byte")) {
                         *out_value = 255LL; /* UINT8_MAX */
-                        return 0;
+                        status = 0;
+                        goto high_cleanup;
                     }
-                    if (pascal_identifier_equals(type_name, "Boolean")) {
+                    if (base_name != NULL && pascal_identifier_equals(base_name, "Boolean")) {
                         *out_value = 1LL;
-                        return 0;
+                        status = 0;
+                        goto high_cleanup;
                     }
-                    if (pascal_identifier_equals(type_name, "Char") ||
-                        pascal_identifier_equals(type_name, "AnsiChar")) {
+                    if (base_name != NULL &&
+                        (pascal_identifier_equals(base_name, "Char") ||
+                         pascal_identifier_equals(base_name, "AnsiChar"))) {
                         *out_value = 255LL;
-                        return 0;
+                        status = 0;
+                        goto high_cleanup;
                     }
-                    fprintf(stderr, "Error: High(%s) - unsupported type in const expression.\n", arg->expr_data.id);
-                    return 1;
+                    fprintf(stderr, "Error: High(%s) - unsupported type in const expression.\n",
+                        qualified_name != NULL ? qualified_name : arg->expr_data.id);
+                    status = 1;
+high_cleanup:
+                    if (qualified_name != NULL)
+                        free(qualified_name);
+                    return status;
                 }
                 fprintf(stderr, "Error: High expects a type identifier as argument.\n");
                 return 1;
@@ -3624,72 +3772,100 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                 }
                 
                 /* Low expects a type identifier */
-                if (arg->type == EXPR_VAR_ID)
+                if (arg->type == EXPR_VAR_ID || arg->type == EXPR_RECORD_ACCESS)
                 {
-                    const char *type_name = arg->expr_data.id;
+                    char *qualified_name = NULL;
+                    const char *type_name = NULL;
+                    int status = 1;
+                    if (arg->type == EXPR_VAR_ID)
+                        type_name = arg->expr_data.id;
+                    else
+                    {
+                        qualified_name = build_qualified_identifier_from_expr(arg);
+                        type_name = qualified_name;
+                    }
                     const char *base_name = semcheck_base_type_name(type_name);
-                    if (base_name != NULL)
-                        type_name = base_name;
+                    const char *lookup_name = type_name;
                     long long range_low = 0;
                     long long range_high = 0;
-                    if (resolve_range_bounds_for_type(symtab, type_name, &range_low, &range_high))
+                    if (resolve_range_bounds_for_type(symtab, lookup_name, &range_low, &range_high))
                     {
                         *out_value = range_low;
-                        return 0;
+                        status = 0;
+                        goto low_cleanup;
                     }
                     /* Resolve type aliases to base type */
-                    const char *resolved = resolve_type_to_base_name(symtab, type_name);
+                    const char *resolved = resolve_type_to_base_name(symtab, lookup_name);
                     if (resolved != NULL)
-                        type_name = resolved;
+                        lookup_name = resolved;
                         
                     /* Map common type names to their Low values */
-                    if (pascal_identifier_equals(type_name, "Int64")) {
+                    if (base_name != NULL && pascal_identifier_equals(base_name, "Int64")) {
                         *out_value = (-9223372036854775807LL - 1); /* INT64_MIN */
-                        return 0;
+                        status = 0;
+                        goto low_cleanup;
                     }
-                    if (pascal_identifier_equals(type_name, "QWord") ||
-                        pascal_identifier_equals(type_name, "UInt64")) {
+                    if (base_name != NULL &&
+                        (pascal_identifier_equals(base_name, "QWord") ||
+                         pascal_identifier_equals(base_name, "UInt64"))) {
                         *out_value = 0LL;
-                        return 0;
+                        status = 0;
+                        goto low_cleanup;
                     }
-                    if (pascal_identifier_equals(type_name, "LongInt") ||
-                        pascal_identifier_equals(type_name, "Integer")) {
+                    if (base_name != NULL &&
+                        (pascal_identifier_equals(base_name, "LongInt") ||
+                         pascal_identifier_equals(base_name, "Integer"))) {
                         *out_value = -2147483648LL; /* INT32_MIN */
-                        return 0;
+                        status = 0;
+                        goto low_cleanup;
                     }
-                    if (pascal_identifier_equals(type_name, "Cardinal") ||
-                        pascal_identifier_equals(type_name, "LongWord") ||
-                        pascal_identifier_equals(type_name, "DWord")) {
+                    if (base_name != NULL &&
+                        (pascal_identifier_equals(base_name, "Cardinal") ||
+                         pascal_identifier_equals(base_name, "LongWord") ||
+                         pascal_identifier_equals(base_name, "DWord"))) {
                         *out_value = 0LL;
-                        return 0;
+                        status = 0;
+                        goto low_cleanup;
                     }
-                    if (pascal_identifier_equals(type_name, "SmallInt")) {
+                    if (base_name != NULL && pascal_identifier_equals(base_name, "SmallInt")) {
                         *out_value = -32768LL; /* INT16_MIN */
-                        return 0;
+                        status = 0;
+                        goto low_cleanup;
                     }
-                    if (pascal_identifier_equals(type_name, "Word")) {
+                    if (base_name != NULL && pascal_identifier_equals(base_name, "Word")) {
                         *out_value = 0LL;
-                        return 0;
+                        status = 0;
+                        goto low_cleanup;
                     }
-                    if (pascal_identifier_equals(type_name, "ShortInt")) {
+                    if (base_name != NULL && pascal_identifier_equals(base_name, "ShortInt")) {
                         *out_value = -128LL; /* INT8_MIN */
-                        return 0;
+                        status = 0;
+                        goto low_cleanup;
                     }
-                    if (pascal_identifier_equals(type_name, "Byte")) {
+                    if (base_name != NULL && pascal_identifier_equals(base_name, "Byte")) {
                         *out_value = 0LL;
-                        return 0;
+                        status = 0;
+                        goto low_cleanup;
                     }
-                    if (pascal_identifier_equals(type_name, "Boolean")) {
+                    if (base_name != NULL && pascal_identifier_equals(base_name, "Boolean")) {
                         *out_value = 0LL;
-                        return 0;
+                        status = 0;
+                        goto low_cleanup;
                     }
-                    if (pascal_identifier_equals(type_name, "Char") ||
-                        pascal_identifier_equals(type_name, "AnsiChar")) {
+                    if (base_name != NULL &&
+                        (pascal_identifier_equals(base_name, "Char") ||
+                         pascal_identifier_equals(base_name, "AnsiChar"))) {
                         *out_value = 0LL;
-                        return 0;
+                        status = 0;
+                        goto low_cleanup;
                     }
-                    fprintf(stderr, "Error: Low(%s) - unsupported type in const expression.\n", arg->expr_data.id);
-                    return 1;
+                    fprintf(stderr, "Error: Low(%s) - unsupported type in const expression.\n",
+                        qualified_name != NULL ? qualified_name : arg->expr_data.id);
+                    status = 1;
+low_cleanup:
+                    if (qualified_name != NULL)
+                        free(qualified_name);
+                    return status;
                 }
                 fprintf(stderr, "Error: Low expects a type identifier as argument.\n");
                 return 1;
@@ -4148,6 +4324,11 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                             ++errors;
                         }
                     }
+                    if (alias_info->kgpc_type != NULL &&
+                        alias_info->kgpc_type->type_alias == NULL)
+                    {
+                        kgpc_type_set_type_alias(alias_info->kgpc_type, alias_info);
+                    }
                     
                     if (alias_info->kgpc_type != NULL)
                     {
@@ -4359,7 +4540,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             HashNode_t *type_node = semcheck_find_type_node_with_unit_flag(symtab,
                                 type_id, tree->tree_data.type_decl_data.defined_in_unit);
                             if (type_node != NULL)
-                                mark_hashnode_unit_info(type_node,
+                                mark_hashnode_unit_info(symtab, type_node,
                                     tree->tree_data.type_decl_data.defined_in_unit,
                                     tree->tree_data.type_decl_data.unit_is_public);
                         }
@@ -4406,7 +4587,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                 HashNode_t *type_node = semcheck_find_type_node_with_unit_flag(symtab,
                                     record_name, tree->tree_data.type_decl_data.defined_in_unit);
                                 if (type_node != NULL)
-                                    mark_hashnode_unit_info(type_node,
+                                    mark_hashnode_unit_info(symtab, type_node,
                                         tree->tree_data.type_decl_data.defined_in_unit,
                                         tree->tree_data.type_decl_data.unit_is_public);
                             }
@@ -4425,7 +4606,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             HashNode_t *type_node = semcheck_find_type_node_with_unit_flag(symtab,
                                 type_id, tree->tree_data.type_decl_data.defined_in_unit);
                             if (type_node != NULL)
-                                mark_hashnode_unit_info(type_node,
+                                mark_hashnode_unit_info(symtab, type_node,
                                     tree->tree_data.type_decl_data.defined_in_unit,
                                     tree->tree_data.type_decl_data.unit_is_public);
                         }
@@ -4478,7 +4659,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                 HashNode_t *type_node = semcheck_find_type_node_with_unit_flag(symtab,
                                     type_id, tree->tree_data.type_decl_data.defined_in_unit);
                                 if (type_node != NULL)
-                                    mark_hashnode_unit_info(type_node,
+                                    mark_hashnode_unit_info(symtab, type_node,
                                         tree->tree_data.type_decl_data.defined_in_unit,
                                         tree->tree_data.type_decl_data.unit_is_public);
                             }
@@ -4506,7 +4687,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                 HashNode_t *type_node = semcheck_find_type_node_with_unit_flag(symtab,
                                     type_id, tree->tree_data.type_decl_data.defined_in_unit);
                                 if (type_node != NULL)
-                                    mark_hashnode_unit_info(type_node,
+                                    mark_hashnode_unit_info(symtab, type_node,
                                         tree->tree_data.type_decl_data.defined_in_unit,
                                         tree->tree_data.type_decl_data.unit_is_public);
                             }
@@ -4569,7 +4750,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                 HashNode_t *type_node = semcheck_find_type_node_with_unit_flag(symtab,
                                     type_id, tree->tree_data.type_decl_data.defined_in_unit);
                                 if (type_node != NULL)
-                                    mark_hashnode_unit_info(type_node,
+                                    mark_hashnode_unit_info(symtab, type_node,
                                         tree->tree_data.type_decl_data.defined_in_unit,
                                         tree->tree_data.type_decl_data.unit_is_public);
                             }
@@ -5833,7 +6014,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                         {
                                             if (record_info->helper_base_type_id != NULL)
                                                 self_type_id = record_info->helper_base_type_id;
-                                            self_is_var = 0;
+                                            self_is_var = semcheck_helper_self_is_var(symtab, self_type_id);
                                         }
                                         ListNode_t *self_ids = CreateListNode(strdup("Self"), LIST_STRING);
                                         if (self_ids != NULL && self_type_id != NULL)
@@ -6587,7 +6768,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 tree->tree_data.type_decl_data.defined_in_unit);
             if (type_node != NULL)
             {
-                mark_hashnode_unit_info(type_node,
+                mark_hashnode_unit_info(symtab, type_node,
                     tree->tree_data.type_decl_data.defined_in_unit,
                     tree->tree_data.type_decl_data.unit_is_public);
             }
@@ -6731,7 +6912,7 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                             fprintf(stderr, "[KGPC] const pushed: %s\n",
                                 tree->tree_data.const_decl_data.id);
                         }
-                        mark_hashnode_unit_info(const_node,
+                        mark_hashnode_unit_info(symtab, const_node,
                             tree->tree_data.const_decl_data.defined_in_unit,
                             tree->tree_data.const_decl_data.unit_is_public);
                     }
@@ -6761,7 +6942,7 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                     HashNode_t *const_node = NULL;
                     if (FindIdent(&const_node, symtab, tree->tree_data.const_decl_data.id) != -1 && const_node != NULL)
                     {
-                        mark_hashnode_unit_info(const_node,
+                        mark_hashnode_unit_info(symtab, const_node,
                             tree->tree_data.const_decl_data.defined_in_unit,
                             tree->tree_data.const_decl_data.unit_is_public);
                     }
@@ -6802,7 +6983,7 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                     HashNode_t *const_node = NULL;
                     if (FindIdent(&const_node, symtab, tree->tree_data.const_decl_data.id) != -1 && const_node != NULL)
                     {
-                        mark_hashnode_unit_info(const_node,
+                        mark_hashnode_unit_info(symtab, const_node,
                             tree->tree_data.const_decl_data.defined_in_unit,
                             tree->tree_data.const_decl_data.unit_is_public);
                     }
@@ -6852,7 +7033,7 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                         {
                             /* Store the procedure name as const_string_value for codegen to use */
                             const_node->const_string_value = strdup(proc_name);
-                            mark_hashnode_unit_info(const_node,
+                            mark_hashnode_unit_info(symtab, const_node,
                                 tree->tree_data.const_decl_data.defined_in_unit,
                                 tree->tree_data.const_decl_data.unit_is_public);
                         }
@@ -6879,7 +7060,7 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                         if (FindIdent(&const_node, symtab, tree->tree_data.const_decl_data.id) != -1 && const_node != NULL)
                         {
                             const_node->const_string_value = strdup(proc_name);
-                            mark_hashnode_unit_info(const_node,
+                            mark_hashnode_unit_info(symtab, const_node,
                                 tree->tree_data.const_decl_data.defined_in_unit,
                                 tree->tree_data.const_decl_data.unit_is_public);
                         }
@@ -6997,7 +7178,7 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                     HashNode_t *const_node = NULL;
                     if (FindIdent(&const_node, symtab, tree->tree_data.const_decl_data.id) != -1 && const_node != NULL)
                     {
-                        mark_hashnode_unit_info(const_node,
+                        mark_hashnode_unit_info(symtab, const_node,
                             tree->tree_data.const_decl_data.defined_in_unit,
                             tree->tree_data.const_decl_data.unit_is_public);
                     }
@@ -8866,7 +9047,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     if (FindIdent(&existing_node, symtab, ids->cur) >= 0 &&
                         existing_node != NULL && existing_node->is_typed_const)
                     {
-                        mark_hashnode_unit_info(existing_node,
+                        mark_hashnode_unit_info(symtab, existing_node,
                             tree->tree_data.var_decl_data.defined_in_unit,
                             tree->tree_data.var_decl_data.unit_is_public);
                         skip_initializer = 1;
@@ -8924,8 +9105,10 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             HashNode_t *var_node = NULL;
                             if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
                             {
-                                var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
-                                mark_hashnode_unit_info(var_node,
+                                var_node->is_var_parameter =
+                                    (tree->tree_data.var_decl_data.is_var_param ||
+                                     tree->tree_data.var_decl_data.is_untyped_param) ? 1 : 0;
+                                mark_hashnode_unit_info(symtab, var_node,
                                     tree->tree_data.var_decl_data.defined_in_unit,
                                     tree->tree_data.var_decl_data.unit_is_public);
                             }
@@ -8968,8 +9151,10 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             HashNode_t *var_node = NULL;
                             if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
                             {
-                                var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
-                                mark_hashnode_unit_info(var_node,
+                                var_node->is_var_parameter =
+                                    (tree->tree_data.var_decl_data.is_var_param ||
+                                     tree->tree_data.var_decl_data.is_untyped_param) ? 1 : 0;
+                                mark_hashnode_unit_info(symtab, var_node,
                                     tree->tree_data.var_decl_data.defined_in_unit,
                                     tree->tree_data.var_decl_data.unit_is_public);
                             }
@@ -9041,8 +9226,10 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                                 HashNode_t *var_node = NULL;
                                 if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
                                 {
-                                    var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
-                                    mark_hashnode_unit_info(var_node,
+                                    var_node->is_var_parameter =
+                                        (tree->tree_data.var_decl_data.is_var_param ||
+                                         tree->tree_data.var_decl_data.is_untyped_param) ? 1 : 0;
+                                    mark_hashnode_unit_info(symtab, var_node,
                                         tree->tree_data.var_decl_data.defined_in_unit,
                                         tree->tree_data.var_decl_data.unit_is_public);
                                 }
@@ -9085,8 +9272,10 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                                 HashNode_t *var_node = NULL;
                                 if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
                                 {
-                                    var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
-                                    mark_hashnode_unit_info(var_node,
+                                    var_node->is_var_parameter =
+                                        (tree->tree_data.var_decl_data.is_var_param ||
+                                         tree->tree_data.var_decl_data.is_untyped_param) ? 1 : 0;
+                                    mark_hashnode_unit_info(symtab, var_node,
                                         tree->tree_data.var_decl_data.defined_in_unit,
                                         tree->tree_data.var_decl_data.unit_is_public);
                                 }
@@ -9119,7 +9308,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                                     HashNode_t *var_node = NULL;
                                     if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
                                     {
-                                        mark_hashnode_unit_info(var_node,
+                                        mark_hashnode_unit_info(symtab, var_node,
                                             tree->tree_data.var_decl_data.defined_in_unit,
                                             tree->tree_data.var_decl_data.unit_is_public);
                                     }
@@ -9179,7 +9368,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                                 HashNode_t *var_node = NULL;
                                 if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
                                 {
-                                    mark_hashnode_unit_info(var_node,
+                                    mark_hashnode_unit_info(symtab, var_node,
                                         tree->tree_data.var_decl_data.defined_in_unit,
                                         tree->tree_data.var_decl_data.unit_is_public);
                                 }
@@ -9267,8 +9456,10 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             HashNode_t *var_node = NULL;
                             if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
                             {
-                                var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
-                                mark_hashnode_unit_info(var_node,
+                                var_node->is_var_parameter =
+                                    (tree->tree_data.var_decl_data.is_var_param ||
+                                     tree->tree_data.var_decl_data.is_untyped_param) ? 1 : 0;
+                                mark_hashnode_unit_info(symtab, var_node,
                                     tree->tree_data.var_decl_data.defined_in_unit,
                                     tree->tree_data.var_decl_data.unit_is_public);
                             }
@@ -9501,8 +9692,10 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     HashNode_t *var_node = NULL;
                     if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
                     {
-                        var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
-                        mark_hashnode_unit_info(var_node,
+                        var_node->is_var_parameter =
+                            (tree->tree_data.var_decl_data.is_var_param ||
+                             tree->tree_data.var_decl_data.is_untyped_param) ? 1 : 0;
+                        mark_hashnode_unit_info(symtab, var_node,
                             tree->tree_data.var_decl_data.defined_in_unit,
                             tree->tree_data.var_decl_data.unit_is_public);
                     }
@@ -9751,16 +9944,20 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 {
                     if (tree->type == TREE_VAR_DECL)
                     {
-                        decl_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
-                        mark_hashnode_unit_info(decl_node,
+                        decl_node->is_var_parameter =
+                            (tree->tree_data.var_decl_data.is_var_param ||
+                             tree->tree_data.var_decl_data.is_untyped_param) ? 1 : 0;
+                        mark_hashnode_unit_info(symtab, decl_node,
                             tree->tree_data.var_decl_data.defined_in_unit,
                             tree->tree_data.var_decl_data.unit_is_public);
                     }
                     else
                     {
-                        mark_hashnode_unit_info(decl_node,
+                        mark_hashnode_unit_info(symtab, decl_node,
                             tree->tree_data.arr_decl_data.defined_in_unit,
                             tree->tree_data.arr_decl_data.unit_is_public);
+                        if (tree->tree_data.arr_decl_data.is_typed_const)
+                            decl_node->is_typed_const = 1;
                     }
                 }
             }
@@ -10453,6 +10650,17 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         
         /* For method implementations, add class vars to scope */
         add_class_vars_to_method_scope(symtab, subprogram->tree_data.subprogram_data.id);
+        /* For nested types (e.g. HeapInc.ThreadState), also add outer class
+         * vars/consts to scope using the full path from mangled_id. */
+        if (subprogram->tree_data.subprogram_data.mangled_id != NULL &&
+            subprogram->tree_data.subprogram_data.id != NULL)
+        {
+            const char *mid = subprogram->tree_data.subprogram_data.mangled_id;
+            const char *id = subprogram->tree_data.subprogram_data.id;
+            /* Only try if mangled_id differs from id (nested type path) */
+            if (strcasecmp(mid, id) != 0)
+                add_class_vars_to_method_scope(symtab, mid);
+        }
         
         if (existing_decl != NULL && existing_decl->type != NULL)
         {
@@ -10558,6 +10766,15 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
 
         /* For method implementations, add class vars to scope */
         add_class_vars_to_method_scope(symtab, subprogram->tree_data.subprogram_data.id);
+        /* For nested types, also add outer class vars/consts via mangled_id */
+        if (subprogram->tree_data.subprogram_data.mangled_id != NULL &&
+            subprogram->tree_data.subprogram_data.id != NULL)
+        {
+            const char *mid = subprogram->tree_data.subprogram_data.mangled_id;
+            const char *id = subprogram->tree_data.subprogram_data.id;
+            if (strcasecmp(mid, id) != 0)
+                add_class_vars_to_method_scope(symtab, mid);
+        }
 
         // **THIS IS THE FIX FOR THE RETURN VALUE**:
         // Use the ORIGINAL name for the internal return variable with KgpcType
@@ -10708,44 +10925,113 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_subprogram %s error after args: %d\n", subprogram->tree_data.subprogram_data.id, return_val);
 #endif
 
+    /* Ensure parameter identifiers are present in scope even if parsing produced
+     * incomplete type info (e.g., untyped const params in helper methods). */
+    {
+        ListNode_t *param_node = subprogram->tree_data.subprogram_data.args_var;
+        while (param_node != NULL)
+        {
+            if (param_node->type == LIST_TREE && param_node->cur != NULL)
+            {
+                Tree_t *param_tree = (Tree_t *)param_node->cur;
+                ListNode_t *ids = NULL;
+                if (param_tree->type == TREE_VAR_DECL)
+                    ids = param_tree->tree_data.var_decl_data.ids;
+                else if (param_tree->type == TREE_ARR_DECL)
+                    ids = param_tree->tree_data.arr_decl_data.ids;
+
+                while (ids != NULL)
+                {
+                    HashNode_t *existing = NULL;
+                    if (FindIdent(&existing, symtab, ids->cur) == -1)
+                    {
+                        KgpcType *param_type = NULL;
+                        if (param_tree->type == TREE_VAR_DECL)
+                        {
+                            param_type = param_tree->tree_data.var_decl_data.cached_kgpc_type;
+                            if (param_type == NULL && param_tree->tree_data.var_decl_data.type_id != NULL)
+                            {
+                                int builtin_tag = semcheck_map_builtin_type_name_local(
+                                    param_tree->tree_data.var_decl_data.type_id);
+                                if (builtin_tag != UNKNOWN_TYPE)
+                                    param_type = create_primitive_type(builtin_tag);
+                            }
+                            PushVarOntoScope_Typed(symtab, (char *)ids->cur, param_type);
+                            if (param_type != NULL &&
+                                param_type != param_tree->tree_data.var_decl_data.cached_kgpc_type)
+                            {
+                                destroy_kgpc_type(param_type);
+                            }
+                        }
+                        else if (param_tree->type == TREE_ARR_DECL)
+                        {
+                            PushArrayOntoScope_Typed(symtab, (char *)ids->cur, NULL);
+                        }
+
+                        if (FindIdent(&existing, symtab, ids->cur) != -1 && existing != NULL)
+                        {
+                            int is_var_param = 0;
+                            int is_untyped = 0;
+                            if (param_tree->type == TREE_VAR_DECL)
+                            {
+                                is_var_param = param_tree->tree_data.var_decl_data.is_var_param;
+                                is_untyped = param_tree->tree_data.var_decl_data.is_untyped_param;
+                            }
+                            existing->is_var_parameter = (is_var_param || is_untyped) ? 1 : 0;
+                        }
+                    }
+                    ids = ids->next;
+                }
+            }
+            param_node = param_node->next;
+        }
+    }
+
     /* Ensure helper methods always have an implicit Self in scope even if the
      * parameter list was parsed without it (e.g., macro-expanded helper types). */
     {
         HashNode_t *self_node = NULL;
-        if (FindIdent(&self_node, symtab, "Self") == -1)
+        const char *owner_id = semcheck_get_current_method_owner();
+        struct RecordType *owner_record = NULL;
+        if (owner_id != NULL)
         {
-            const char *owner_id = semcheck_get_current_method_owner();
-            struct RecordType *owner_record = NULL;
-            if (owner_id != NULL)
+            HashNode_t *owner_node = semcheck_find_preferred_type_node(symtab, owner_id);
+            if (owner_node != NULL)
+                owner_record = get_record_type_from_node(owner_node);
+        }
+        if (owner_record != NULL && owner_record->is_type_helper &&
+            owner_record->helper_base_type_id != NULL)
+        {
+            KgpcType *self_type = NULL;
+            HashNode_t *type_node = semcheck_find_preferred_type_node(symtab,
+                owner_record->helper_base_type_id);
+            if (type_node != NULL && type_node->type != NULL)
             {
-                HashNode_t *owner_node = semcheck_find_preferred_type_node(symtab, owner_id);
-                if (owner_node != NULL)
-                    owner_record = get_record_type_from_node(owner_node);
+                kgpc_type_retain(type_node->type);
+                self_type = type_node->type;
             }
-            if (owner_record != NULL && owner_record->is_type_helper &&
-                owner_record->helper_base_type_id != NULL)
+            else
             {
-                KgpcType *self_type = NULL;
-                HashNode_t *type_node = semcheck_find_preferred_type_node(symtab,
+                int builtin_tag = semcheck_map_builtin_type_name_local(
                     owner_record->helper_base_type_id);
-                if (type_node != NULL && type_node->type != NULL)
-                {
-                    kgpc_type_retain(type_node->type);
-                    self_type = type_node->type;
-                }
-                else
-                {
-                    int builtin_tag = semcheck_map_builtin_type_name_local(
-                        owner_record->helper_base_type_id);
-                    if (builtin_tag != UNKNOWN_TYPE)
-                        self_type = create_primitive_type(builtin_tag);
-                }
+                if (builtin_tag != UNKNOWN_TYPE)
+                    self_type = create_primitive_type(builtin_tag);
+            }
 
-                if (self_type != NULL)
+            if (self_type != NULL)
+            {
+                if (FindIdent(&self_node, symtab, "Self") == -1)
                 {
                     PushVarOntoScope_Typed(symtab, "Self", self_type);
-                    destroy_kgpc_type(self_type);
                 }
+                else if (self_node->type == NULL || !kgpc_type_equals(self_node->type, self_type))
+                {
+                    if (self_node->type != NULL)
+                        destroy_kgpc_type(self_node->type);
+                    kgpc_type_retain(self_type);
+                    self_node->type = self_type;
+                }
+                destroy_kgpc_type(self_type);
             }
         }
     }
@@ -10943,6 +11229,41 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
     }
 
     // --- Name Mangling Logic ---
+    /* Preserve any dotted class prefix from the original mangled_id set by
+     * convert_method_impl (e.g. "TOuter.TInner__DoWork").  This is needed
+     * so that semcheck_get_current_method_owner can walk up to outer classes
+     * when resolving class vars / consts in nested object methods. */
+    char *original_dotted_prefix = NULL;
+    if (subprogram->tree_data.subprogram_data.mangled_id != NULL)
+    {
+        const char *orig = subprogram->tree_data.subprogram_data.mangled_id;
+        const char *orig_sep = strstr(orig, "__");
+        if (orig_sep != NULL)
+        {
+            /* Check if the prefix before __ contains a dot (nested class) */
+            const char *dot = memchr(orig, '.', (size_t)(orig_sep - orig));
+            if (dot != NULL)
+            {
+                /* Extract everything up to and including the last dot */
+                const char *last_dot = orig_sep;
+                while (last_dot > orig && *last_dot != '.')
+                    last_dot--;
+                if (last_dot > orig)
+                {
+                    size_t prefix_len = (size_t)(last_dot - orig) + 1; /* Include the dot */
+                    original_dotted_prefix = (char *)malloc(prefix_len + 1);
+                    if (original_dotted_prefix != NULL)
+                    {
+                        memcpy(original_dotted_prefix, orig, prefix_len);
+                        original_dotted_prefix[prefix_len] = '\0';
+                    }
+                }
+            }
+        }
+        free(subprogram->tree_data.subprogram_data.mangled_id);
+        subprogram->tree_data.subprogram_data.mangled_id = NULL;
+    }
+
     const char *predeclare_name = subprogram->tree_data.subprogram_data.cname_override;
     if (predeclare_name != NULL) {
         subprogram->tree_data.subprogram_data.mangled_id = strdup(predeclare_name);
@@ -10971,6 +11292,25 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
             subprogram->tree_data.subprogram_data.mangled_id = base_mangled;
         }
     }
+
+    /* Re-apply the dotted class prefix so that the owner lookup in
+     * semcheck_subprogram can resolve outer-class vars/consts. */
+    if (original_dotted_prefix != NULL &&
+        subprogram->tree_data.subprogram_data.mangled_id != NULL)
+    {
+        const char *current = subprogram->tree_data.subprogram_data.mangled_id;
+        size_t prefix_len = strlen(original_dotted_prefix);
+        size_t current_len = strlen(current);
+        char *combined = (char *)malloc(prefix_len + current_len + 1);
+        if (combined != NULL)
+        {
+            memcpy(combined, original_dotted_prefix, prefix_len);
+            memcpy(combined + prefix_len, current, current_len + 1);
+            free(subprogram->tree_data.subprogram_data.mangled_id);
+            subprogram->tree_data.subprogram_data.mangled_id = combined;
+        }
+    }
+    free(original_dotted_prefix);
 
     if (getenv("KGPC_DEBUG_PREDECLARE_PROC") != NULL)
     {

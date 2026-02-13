@@ -914,7 +914,6 @@ static int leaf_expr_is_simple(const struct Expression *expr)
         case EXPR_CHAR_CODE:
         case EXPR_BOOL:
         case EXPR_NIL:
-        case EXPR_SET:
             return 1;
         default:
             return 0;
@@ -1798,7 +1797,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                     free_arg_regs();
                     
                     /* Save the allocated instance pointer */
-                    constructor_instance_reg = get_free_reg(get_reg_stack(), &inst_list);
+                    constructor_instance_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
                     if (constructor_instance_reg == NULL)
                     {
                         codegen_report_error(ctx, 
@@ -2415,6 +2414,25 @@ cleanup_constructor:
             return add_inst(inst_list, buffer);
         }
     }
+    else if (expr->type == EXPR_SET)
+    {
+        Register_t *set_reg = NULL;
+        inst_list = codegen_set_literal(expr, inst_list, ctx, &set_reg, 0);
+        if (set_reg == NULL)
+            return inst_list;
+
+        if (set_reg != target_reg)
+        {
+            int is_char_set = expr_is_char_set_ctx(expr, ctx);
+            const char *src_reg = is_char_set ? set_reg->bit_64 : set_reg->bit_32;
+            const char *dst_reg = is_char_set ? target_reg->bit_64 : target_reg->bit_32;
+            snprintf(buffer, sizeof(buffer), "\tmov%c\t%s, %s\n",
+                is_char_set ? 'q' : 'l', src_reg, dst_reg);
+            inst_list = add_inst(inst_list, buffer);
+            free_reg(get_reg_stack(), set_reg);
+        }
+        return inst_list;
+    }
     else if (expr->type == EXPR_STRING)
     {
         if (expr_get_type_tag(expr) == CHAR_TYPE)
@@ -2562,32 +2580,23 @@ cleanup_constructor:
             }
 
             char load_value[80];
-            switch (expr_type)
+            int use_qword = expr_requires_qword(expr) ||
+                codegen_type_uses_qword(expr_type) ||
+                expr_type == UNKNOWN_TYPE;
+            if (use_qword)
             {
-                case STRING_TYPE:
-                case POINTER_TYPE:
-                case PROCEDURE:
-                case FILE_TYPE:
-                case TEXT_TYPE:
-                case REAL_TYPE:
-                case UNKNOWN_TYPE:
-                    snprintf(load_value, sizeof(load_value), "\tmovq\t(%s), %s\n",
-                        target_reg->bit_64, target_reg->bit_64);
-                    break;
-                case LONGINT_TYPE:
-                    // Now 4 bytes, use movl like INT_TYPE
-                    snprintf(load_value, sizeof(load_value), "\tmovl\t(%s), %s\n",
-                        target_reg->bit_64, target_reg->bit_32);
-                    break;
-                case CHAR_TYPE:
-                case BOOL:
-                    snprintf(load_value, sizeof(load_value), "\tmovzbl\t(%s), %s\n",
-                        target_reg->bit_64, target_reg->bit_32);
-                    break;
-                default:
-                    snprintf(load_value, sizeof(load_value), "\tmovl\t(%s), %s\n",
-                        target_reg->bit_64, target_reg->bit_32);
-                    break;
+                snprintf(load_value, sizeof(load_value), "\tmovq\t(%s), %s\n",
+                    target_reg->bit_64, target_reg->bit_64);
+            }
+            else if (expr_type == CHAR_TYPE || expr_type == BOOL)
+            {
+                snprintf(load_value, sizeof(load_value), "\tmovzbl\t(%s), %s\n",
+                    target_reg->bit_64, target_reg->bit_32);
+            }
+            else
+            {
+                snprintf(load_value, sizeof(load_value), "\tmovl\t(%s), %s\n",
+                    target_reg->bit_64, target_reg->bit_32);
             }
 
             inst_list = add_inst(inst_list, load_value);
@@ -3203,10 +3212,17 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                         }
                         else
                         {
-                            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%r10d\n", right);
+                            const char *scratch_reg = "%r10d";
+                            if (left != NULL && strcmp(left, "%r10d") == 0)
+                                scratch_reg = "%r11d";
+                            else if (left != NULL && strcmp(left, "%r11d") == 0)
+                                scratch_reg = "%r10d";
+
+                            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", right, scratch_reg);
                             inst_list = add_inst(inst_list, buffer);
-                            inst_list = add_inst(inst_list, "\tnotl\t%r10d\n");
-                            snprintf(buffer, sizeof(buffer), "\tandl\t%%r10d, %s\n", left);
+                            snprintf(buffer, sizeof(buffer), "\tnotl\t%s\n", scratch_reg);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tandl\t%s, %s\n", scratch_reg, left);
                             inst_list = add_inst(inst_list, buffer);
                         }
                         break;
@@ -3540,8 +3556,39 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                 }
             if(type == STAR)
             {
-                snprintf(buffer, sizeof(buffer), "\timul%c\t%s, %s\n", arith_suffix, op_right, op_left);
-                inst_list = add_inst(inst_list, buffer);
+                int used_temp = 0;
+                Register_t *imm_reg = NULL;
+                if (use_qword_op && op_right != NULL && op_right[0] == '$')
+                {
+                    char *endptr = NULL;
+                    long long imm_value = strtoll(op_right + 1, &endptr, 0);
+                    if (endptr != NULL && *endptr == '\0' &&
+                        (imm_value > INT32_MAX || imm_value < INT32_MIN))
+                    {
+                        imm_reg = get_free_reg(get_reg_stack(), &inst_list);
+                        if (imm_reg == NULL)
+                        {
+                            codegen_report_error(ctx,
+                                "ERROR: Unable to allocate temporary for 64-bit immediate multiplication.");
+                            break;
+                        }
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n",
+                            imm_value, imm_reg->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\timul%c\t%s, %s\n",
+                            arith_suffix, imm_reg->bit_64, op_left);
+                        inst_list = add_inst(inst_list, buffer);
+                        used_temp = 1;
+                    }
+                }
+
+                if (!used_temp)
+                {
+                    snprintf(buffer, sizeof(buffer), "\timul%c\t%s, %s\n", arith_suffix, op_right, op_left);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+                if (imm_reg != NULL)
+                    free_reg(get_reg_stack(), imm_reg);
             }
             else if(type == AND)
             {
@@ -3674,7 +3721,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                 const char *count = use_qword_op ? reg64_to_reg32(op_right, right32, sizeof(right32)) : op_right;
                 snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%ecx\n", count);
                 inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, sizeof(buffer), "\tsar%c\t%%cl, %s\n", arith_suffix, op_left);
+                snprintf(buffer, sizeof(buffer), "\tshr%c\t%%cl, %s\n", arith_suffix, op_left);
                 inst_list = add_inst(inst_list, buffer);
             }
             else if(type == ROL)
