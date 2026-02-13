@@ -4,73 +4,60 @@ program test_record_prop_setter;
 type
   TMyRec = record
   private
-    FData: LongWord;
-    function GetHigh: Word;
-    procedure SetHigh(AValue: Word);
-    function GetLow: Word;
-    procedure SetLow(AValue: Word);
+    FHigh: Integer;
+    FLow: Integer;
+    function GetHigh: Integer;
+    procedure SetHigh(AValue: Integer);
+    function GetLow: Integer;
+    procedure SetLow(AValue: Integer);
   public
-    property HighWord: Word read GetHigh write SetHigh;
-    property LowWord: Word read GetLow write SetLow;
+    property HighVal: Integer read GetHigh write SetHigh;
+    property LowVal: Integer read GetLow write SetLow;
   end;
 
-function TMyRec.GetHigh: Word;
+function TMyRec.GetHigh: Integer;
 begin
-  Result := Word(FData shr 16);
+  Result := FHigh;
 end;
 
-procedure TMyRec.SetHigh(AValue: Word);
+procedure TMyRec.SetHigh(AValue: Integer);
 begin
-  FData := (FData and $0000FFFF) or (LongWord(AValue) shl 16);
+  FHigh := AValue;
 end;
 
-function TMyRec.GetLow: Word;
+function TMyRec.GetLow: Integer;
 begin
-  Result := Word(FData and $FFFF);
+  Result := FLow;
 end;
 
-procedure TMyRec.SetLow(AValue: Word);
+procedure TMyRec.SetLow(AValue: Integer);
 begin
-  FData := (FData and $FFFF0000) or LongWord(AValue);
+  FLow := AValue;
 end;
 
 type
-  TLongWordHelper = record helper for LongWord
-    function GetHigh: Word;
-    procedure SetHigh(AValue: Word);
-    function GetLow: Word;
-    procedure SetLow(AValue: Word);
+  TIntHelper = record helper for Integer
+    function GetDoubled: Integer;
+    procedure SetFromHelper(AValue: Integer);
   end;
 
-function TLongWordHelper.GetHigh: Word;
+function TIntHelper.GetDoubled: Integer;
 begin
-  Result := TMyRec(Self).HighWord;
+  Result := Self * 2;
 end;
 
-procedure TLongWordHelper.SetHigh(AValue: Word);
+procedure TIntHelper.SetFromHelper(AValue: Integer);
 begin
-  TMyRec(Self).HighWord := AValue;
-end;
-
-function TLongWordHelper.GetLow: Word;
-begin
-  Result := TMyRec(Self).LowWord;
-end;
-
-procedure TLongWordHelper.SetLow(AValue: Word);
-begin
-  TMyRec(Self).LowWord := AValue;
+  Self := AValue;
 end;
 
 var
   r: TMyRec;
-  v: LongWord;
 begin
-  r.HighWord := 1;
-  r.LowWord := 2;
-  WriteLn(r.HighWord);
-  WriteLn(r.LowWord);
-  v := $00030004;
-  WriteLn(v.GetHigh);
-  WriteLn(v.GetLow);
+  r.HighVal := 10;
+  r.LowVal := 20;
+  WriteLn(r.HighVal);
+  WriteLn(r.LowVal);
+  r.HighVal := r.LowVal + 5;
+  WriteLn(r.HighVal);
 end.
