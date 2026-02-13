@@ -177,6 +177,17 @@ int semcheck_typecast(int *type_return,
                         int subtype = kgpc_type_get_primitive_tag(points_to);
                         semcheck_set_pointer_info(expr, subtype, NULL);
                     }
+                    else if (points_to->kind == TYPE_KIND_ARRAY)
+                    {
+                        /* Pointer to array: propagate the array type id so that
+                         * dereference can set is_array_expr on the result.
+                         * Look up the pointer alias to get the pointee type name. */
+                        const char *arr_subtype_id = NULL;
+                        struct TypeAlias *ptr_alias = get_type_alias_from_node(target_node);
+                        if (ptr_alias != NULL && ptr_alias->pointer_type_id != NULL)
+                            arr_subtype_id = ptr_alias->pointer_type_id;
+                        semcheck_set_pointer_info(expr, UNKNOWN_TYPE, arr_subtype_id);
+                    }
                 }
             }
             if (target_node != NULL)
@@ -668,7 +679,31 @@ int semcheck_pointer_deref(int *type_return,
             }
             else if (points_to->kind == TYPE_KIND_ARRAY)
             {
-                target_type = semcheck_tag_from_kgpc(points_to);
+                /* Pointer to array: set up array info on the deref result
+                 * so it can be indexed with [i] */
+                target_type = INT_TYPE; /* placeholder; actual element type set below */
+                expr->is_array_expr = 1;
+                expr->array_element_type = UNKNOWN_TYPE;
+                expr->array_element_type_id = NULL;
+
+                KgpcType *elem_type = points_to->info.array_info.element_type;
+                if (elem_type != NULL)
+                {
+                    target_type = semcheck_tag_from_kgpc(elem_type);
+                    if (target_type == UNKNOWN_TYPE)
+                        target_type = INT_TYPE;
+                    expr->array_element_type = semcheck_tag_from_kgpc(elem_type);
+                    if (elem_type->kind == TYPE_KIND_RECORD)
+                        expr->array_element_record_type = kgpc_type_get_record(elem_type);
+                }
+                if (points_to->info.array_info.element_type_id != NULL)
+                    expr->array_element_type_id = strdup(points_to->info.array_info.element_type_id);
+
+                /* Set the resolved KgpcType to the array type */
+                if (expr->resolved_kgpc_type != NULL)
+                    destroy_kgpc_type(expr->resolved_kgpc_type);
+                kgpc_type_retain(points_to);
+                expr->resolved_kgpc_type = points_to;
             }
             else
             {
