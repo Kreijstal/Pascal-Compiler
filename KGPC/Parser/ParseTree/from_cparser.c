@@ -227,8 +227,6 @@ static inline bool is_safe_to_continue(VisitedSet *visited, ast_t *node) {
     
     /* Check if we've visited this node before (circular reference) */
     if (visited_set_contains(visited, node)) {
-        fprintf(stderr, "WARNING: Circular AST reference detected at node %p (type=%d)\n", 
-                (void*)node, node->typ);
         return false;
     }
     
@@ -10007,11 +10005,73 @@ static ListNode_t *convert_expression_list(ast_t *arg_node) {
     ListBuilder builder;
     list_builder_init(&builder);
     
+    /* Pre-check: verify the next chain doesn't have cycles using Floyd's algorithm.
+     * If a cycle is found, break it by setting the back-edge to NULL.
+     * This fixes cycles introduced by the parser's suffix chain construction
+     * (e.g., typecast-then-call patterns like TProc(x)(args)). */
+    {
+        ast_t *slow = arg_node, *fast = arg_node;
+        int has_cycle = 0;
+        while (fast != NULL && fast != ast_nil && fast->next != NULL && fast->next != ast_nil) {
+            slow = slow->next;
+            fast = fast->next->next;
+            if (slow == fast) {
+                has_cycle = 1;
+                break;
+            }
+        }
+        if (has_cycle) {
+            /* Find cycle start using Floyd's phase 2 */
+            slow = arg_node;
+            while (slow != fast) { slow = slow->next; fast = fast->next; }
+            /* Walk around the cycle to find the back-edge */
+            ast_t *cycle_prev = slow;
+            ast_t *cycle_cur = slow->next;
+            while (cycle_cur != slow) {
+                cycle_prev = cycle_cur;
+                cycle_cur = cycle_cur->next;
+            }
+            /* Break the cycle */
+            cycle_prev->next = NULL;
+        }
+    }
+    
     /* Create visited set to detect circular references */
     VisitedSet *visited = visited_set_create();
     if (visited == NULL) {
         fprintf(stderr, "ERROR: Failed to allocate visited set for expression list traversal\n");
         return NULL;
+    }
+    
+    /* Pre-check: verify the next chain doesn't have cycles using Floyd's algorithm */
+    {
+        ast_t *slow = arg_node, *fast = arg_node;
+        int has_cycle = 0;
+        while (fast != NULL && fast != ast_nil && fast->next != NULL && fast->next != ast_nil) {
+            slow = slow->next;
+            fast = fast->next->next;
+            if (slow == fast) {
+                has_cycle = 1;
+                break;
+            }
+        }
+        if (has_cycle) {
+            fprintf(stderr, "PRE-CHECK: Cycle detected in expression list next-chain starting at %p\n", (void*)arg_node);
+            /* Find cycle start */
+            slow = arg_node;
+            while (slow != fast) { slow = slow->next; fast = fast->next; }
+            fprintf(stderr, "  Cycle starts at: %p type=%d line=%d sym=%s\n", (void*)slow,
+                    slow->typ, slow->line, (slow->sym && slow->sym->name) ? slow->sym->name : "?");
+            /* Just dump first few nodes */
+            ast_t *d = arg_node;
+            for (int i = 0; i < 10 && d != NULL && d != ast_nil; i++) {
+                fprintf(stderr, "  [%d] %p type=%d line=%d sym=%s%s\n", i, (void*)d,
+                        d->typ, d->line, (d->sym && d->sym->name) ? d->sym->name : "?",
+                        d == slow ? " <-- CYCLE START" : "");
+                d = d->next;
+                if (d == slow && i > 0) break;
+            }
+        }
     }
     
     ast_t *cur = arg_node;
