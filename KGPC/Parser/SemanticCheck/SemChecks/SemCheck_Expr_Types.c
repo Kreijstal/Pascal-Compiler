@@ -219,6 +219,13 @@ int semcheck_typecast(int *type_return,
                             int subtype = kgpc_type_get_primitive_tag(points_to);
                             semcheck_set_pointer_info(expr, subtype, NULL);
                         }
+                        else if (points_to->kind == TYPE_KIND_ARRAY)
+                        {
+                            const char *arr_subtype_id = NULL;
+                            if (alias != NULL && alias->pointer_type_id != NULL)
+                                arr_subtype_id = alias->pointer_type_id;
+                            semcheck_set_pointer_info(expr, UNKNOWN_TYPE, arr_subtype_id);
+                        }
                     }
                 }
             }
