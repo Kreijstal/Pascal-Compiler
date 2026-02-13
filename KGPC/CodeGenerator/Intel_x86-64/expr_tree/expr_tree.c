@@ -3612,6 +3612,16 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                     if (right64 != NULL)
                         op_right = right64;
                 }
+                else
+                {
+                    /* 32-bit operation: ensure 64-bit registers are narrowed to 32-bit form */
+                    const char *left32 = reg64_to_reg32(left, left64_buf, sizeof(left64_buf));
+                    const char *right32 = reg64_to_reg32(right, right64_buf, sizeof(right64_buf));
+                    if (left32 != NULL)
+                        op_left = left32;
+                    if (right32 != NULL)
+                        op_right = right32;
+                }
             if(type == STAR)
             {
                 int err = 0;
