@@ -251,6 +251,40 @@ ListNode_t *FindAllIdentsInTable(HashTable_t *table, const char *id)
     return found_list;
 }
 
+void HashTable_MoveNodeToBack(HashTable_t *table, HashNode_t *node)
+{
+    if (table == NULL || node == NULL || node->canonical_id == NULL)
+        return;
+
+    int hash = hashpjw(node->canonical_id);
+    ListNode_t *list = table->table[hash];
+    if (list == NULL || list->next == NULL)
+        return;
+
+    ListNode_t *prev = NULL;
+    ListNode_t *cur = list;
+    ListNode_t *tail = list;
+    while (tail->next != NULL)
+        tail = tail->next;
+
+    while (cur != NULL && cur->cur != node)
+    {
+        prev = cur;
+        cur = cur->next;
+    }
+
+    if (cur == NULL || cur == tail)
+        return;
+
+    if (prev == NULL)
+        table->table[hash] = cur->next;
+    else
+        prev->next = cur->next;
+
+    cur->next = NULL;
+    tail->next = cur;
+}
+
 void ResetHashNodeStatus(HashNode_t *hash_node)
 {
     assert(hash_node != NULL);

@@ -1,0 +1,5 @@
+pad=*****alpha::beta::gamma::
+quoted="alpha::beta::gamma::"
+starts=True
+ends=True
+last=17

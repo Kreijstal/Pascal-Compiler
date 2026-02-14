@@ -67,6 +67,13 @@ int semcheck_relop(int *type_return,
         if (type_first == BOOL)
         {
             *type_return = BOOL;
+            semcheck_expr_set_resolved_type(expr, BOOL);
+            KgpcType *bool_type = create_primitive_type(BOOL);
+            if (bool_type != NULL)
+            {
+                semcheck_expr_set_resolved_kgpc_type_shared(expr, bool_type);
+                destroy_kgpc_type(bool_type);
+            }
             return return_val;
         }
         if (is_integer_type(type_first))
@@ -768,6 +775,25 @@ int semcheck_addop(int *type_return,
         }
     }
 
+    /* Pointer arithmetic: pointer +/- integer yields pointer (FPC {$POINTERMATH ON}) */
+    if ((type_first == POINTER_TYPE && is_integer_type(type_second)) ||
+        (is_integer_type(type_first) && type_second == POINTER_TYPE))
+    {
+        *type_return = POINTER_TYPE;
+        if (expr->resolved_kgpc_type != NULL)
+            destroy_kgpc_type(expr->resolved_kgpc_type);
+        expr->resolved_kgpc_type = create_primitive_type(POINTER_TYPE);
+        return return_val;
+    }
+    /* Pointer - pointer yields integer (distance between two pointers) */
+    if (type_first == POINTER_TYPE && type_second == POINTER_TYPE)
+    {
+        *type_return = INT64_TYPE;
+        if (expr->resolved_kgpc_type != NULL)
+            destroy_kgpc_type(expr->resolved_kgpc_type);
+        expr->resolved_kgpc_type = create_primitive_type_with_size(INT64_TYPE, 8);
+        return return_val;
+    }
     /* Checking numeric types */
     if(!types_numeric_compatible(type_first, type_second))
     {
@@ -1231,7 +1257,10 @@ int semcheck_varid(int *type_return,
                     mangled, class_const_scope, (void*)class_const);
             }
             if (class_const_scope >= 0 && class_const != NULL &&
-                class_const->hash_type == HASHTYPE_CONST)
+                (class_const->hash_type == HASHTYPE_CONST ||
+                 class_const->hash_type == HASHTYPE_ARRAY ||
+                 class_const->hash_type == HASHTYPE_VAR ||
+                 class_const->is_typed_const))
             {
                 if (expr->expr_data.id != NULL)
                     free(expr->expr_data.id);
@@ -1240,7 +1269,195 @@ int semcheck_varid(int *type_return,
                 hash_return = class_const;
                 scope_return = class_const_scope;
             }
+            /* For nested types like HeapInc.ThreadState, also try the
+             * outermost class: HeapInc__ConstName */
+            if (class_const_scope == -1)
+            {
+                const char *dot = strchr(owner, '.');
+                if (dot != NULL)
+                {
+                    size_t outer_len = (size_t)(dot - owner);
+                    char outer_mangled[256];
+                    snprintf(outer_mangled, sizeof(outer_mangled), "%.*s__%s",
+                             (int)outer_len, owner, id);
+                    class_const = NULL;
+                    class_const_scope = FindIdent(&class_const, symtab, outer_mangled);
+                    if (class_const_scope >= 0 && class_const != NULL &&
+                        (class_const->hash_type == HASHTYPE_CONST ||
+                         class_const->hash_type == HASHTYPE_ARRAY ||
+                         class_const->hash_type == HASHTYPE_VAR ||
+                         class_const->is_typed_const))
+                    {
+                        if (expr->expr_data.id != NULL)
+                            free(expr->expr_data.id);
+                        expr->expr_data.id = strdup(outer_mangled);
+                        id = expr->expr_data.id;
+                        hash_return = class_const;
+                        scope_return = class_const_scope;
+                    }
+                }
+            }
         }
+        /* Qualified identifier resolution: split dotted identifiers like
+         * THorzRectAlign.Left into prefix (type) + suffix (member).
+         * This handles scoped enum values and unit-qualified constants
+         * in contexts where the parser produces a single flat identifier
+         * (e.g. case labels). */
+        if (scope_return == -1)
+        {
+            assert(id != NULL);
+            const char *dot = strchr(id, '.');
+            if (dot != NULL && dot[1] != '\0')
+            {
+                size_t prefix_len = (size_t)(dot - id);
+                char *prefix = (char *)malloc(prefix_len + 1);
+                const char *suffix = dot + 1;
+                assert(prefix != NULL);
+                memcpy(prefix, id, prefix_len);
+                prefix[prefix_len] = '\0';
+
+                HashNode_t *prefix_node = NULL;
+                int prefix_scope = FindIdent(&prefix_node, symtab, prefix);
+                if (prefix_scope >= 0 && prefix_node != NULL &&
+                    prefix_node->hash_type == HASHTYPE_TYPE)
+                {
+                    struct TypeAlias *type_alias = get_type_alias_from_node(prefix_node);
+                    if (type_alias != NULL && type_alias->is_enum &&
+                        type_alias->enum_literals != NULL)
+                    {
+                        int ordinal = 0;
+                        ListNode_t *literal_node = type_alias->enum_literals;
+                        while (literal_node != NULL)
+                        {
+                            if (literal_node->cur != NULL)
+                            {
+                                char *literal_name = (char *)literal_node->cur;
+                                if (strcasecmp(literal_name, suffix) == 0)
+                                {
+                                    free(prefix);
+                                    expr->type = EXPR_INUM;
+                                    expr->expr_data.i_num = ordinal;
+                                    semcheck_expr_set_resolved_type(expr, ENUM_TYPE);
+                                    if (type_alias->kgpc_type != NULL)
+                                        semcheck_expr_set_resolved_kgpc_type_shared(expr, type_alias->kgpc_type);
+                                    *type_return = ENUM_TYPE;
+                                    return 0;
+                                }
+                            }
+                            ++ordinal;
+                            literal_node = literal_node->next;
+                        }
+                    }
+                    /* Also check for class constants: Type.ConstName */
+                    size_t mangled_len = prefix_len + 2 + strlen(suffix) + 1;
+                    char *mangled_qid = (char *)malloc(mangled_len);
+                    assert(mangled_qid != NULL);
+                    snprintf(mangled_qid, mangled_len, "%s__%s", prefix, suffix);
+                    HashNode_t *class_const_node = NULL;
+                    int cc_scope = FindIdent(&class_const_node, symtab, mangled_qid);
+                    if (cc_scope >= 0 && class_const_node != NULL &&
+                        (class_const_node->hash_type == HASHTYPE_CONST ||
+                         class_const_node->hash_type == HASHTYPE_ARRAY ||
+                         class_const_node->hash_type == HASHTYPE_VAR ||
+                         class_const_node->is_typed_const))
+                    {
+                        free(prefix);
+                        if (expr->expr_data.id != NULL)
+                            free(expr->expr_data.id);
+                        expr->expr_data.id = strdup(mangled_qid);
+                        free(mangled_qid);
+                        id = expr->expr_data.id;
+                        hash_return = class_const_node;
+                        scope_return = cc_scope;
+                        goto resolved;
+                    }
+                    free(mangled_qid);
+                }
+                else if (prefix_scope == -1)
+                {
+                    /* Prefix not found - might be a unit qualifier.
+                     * Try looking up the suffix directly. */
+                    HashNode_t *field_node = NULL;
+                    if (FindIdent(&field_node, symtab, suffix) >= 0 && field_node != NULL)
+                    {
+                        if (field_node->hash_type == HASHTYPE_CONST)
+                        {
+                            free(prefix);
+                            expr->type = EXPR_INUM;
+                            expr->expr_data.i_num = field_node->const_int_value;
+                            semcheck_expr_set_resolved_type(expr, LONGINT_TYPE);
+                            if (field_node->type != NULL)
+                                semcheck_expr_set_resolved_kgpc_type_shared(expr, field_node->type);
+                            *type_return = LONGINT_TYPE;
+                            return 0;
+                        }
+                        else if (field_node->hash_type == HASHTYPE_VAR ||
+                                 field_node->hash_type == HASHTYPE_ARRAY)
+                        {
+                            free(prefix);
+                            char *field_copy = strdup(suffix);
+                            assert(field_copy != NULL);
+                            if (expr->expr_data.id != NULL)
+                                free(expr->expr_data.id);
+                            expr->expr_data.id = field_copy;
+                            id = expr->expr_data.id;
+                            scope_return = FindIdent(&hash_return, symtab, id);
+                            goto resolved;
+                        }
+                    }
+                }
+                free(prefix);
+            }
+        }
+        /* Class property resolution in static methods: if the identifier
+         * matches a class property of the enclosing record, rewrite it
+         * to reference the backing field (read accessor). */
+        if (scope_return == -1 && owner != NULL)
+        {
+            HashNode_t *owner_node = NULL;
+            if (FindIdent(&owner_node, symtab, owner) >= 0 && owner_node != NULL)
+            {
+                struct RecordType *owner_record = get_record_type_from_node(owner_node);
+                if (owner_record != NULL)
+                {
+                    /* Search both 'properties' and 'record_properties' lists */
+                    for (int pp = 0; pp < 2 && scope_return == -1; pp++)
+                    {
+                        ListNode_t *pnode = (pp == 0) ? owner_record->properties
+                                                       : owner_record->record_properties;
+                        while (pnode != NULL)
+                        {
+                            if (pnode->type == LIST_CLASS_PROPERTY && pnode->cur != NULL)
+                            {
+                                struct ClassProperty *cprop = (struct ClassProperty *)pnode->cur;
+                                if (cprop->name != NULL &&
+                                    pascal_identifier_equals(cprop->name, id) &&
+                                    cprop->read_accessor != NULL)
+                                {
+                                    /* Rewrite identifier to reference the backing field */
+                                    HashNode_t *accessor_node = NULL;
+                                    int acc_scope = FindIdent(&accessor_node, symtab,
+                                        cprop->read_accessor);
+                                    if (acc_scope >= 0 && accessor_node != NULL)
+                                    {
+                                        char *new_id = strdup(cprop->read_accessor);
+                                        assert(new_id != NULL);
+                                        free(expr->expr_data.id);
+                                        expr->expr_data.id = new_id;
+                                        id = expr->expr_data.id;
+                                        hash_return = accessor_node;
+                                        scope_return = acc_scope;
+                                    }
+                                    break;
+                                }
+                            }
+                            pnode = pnode->next;
+                        }
+                    }
+                }
+            }
+        }
+resolved:;
     }
     if (getenv("KGPC_DEBUG_RESULT") != NULL && id != NULL &&
         pascal_identifier_equals(id, "Result"))
@@ -1831,6 +2048,42 @@ int semcheck_varid(int *type_return,
                 kgpc_type_is_pointer(hash_return->type))
             {
                 subtype = kgpc_type_get_pointer_subtype_tag(hash_return->type);
+                /* Also try to get the type_id from the KgpcType's points_to info */
+                if (type_id == NULL)
+                {
+                    KgpcType *pts = hash_return->type->info.points_to;
+                    if (pts != NULL && pts->type_alias != NULL && pts->type_alias->alias_name != NULL)
+                        type_id = pts->type_alias->alias_name;
+                }
+            }
+
+            /* If the variable's own type has an alias_name (e.g. "PMyRec"),
+             * look up the corresponding type node to get pointer target info */
+            if (subtype == UNKNOWN_TYPE && alias != NULL && alias->alias_name != NULL)
+            {
+                HashNode_t *type_node = NULL;
+                if (FindIdent(&type_node, symtab, alias->alias_name) != -1 &&
+                    type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+                {
+                    struct TypeAlias *type_alias = get_type_alias_from_node(type_node);
+                    if (type_alias != NULL && type_alias->is_pointer)
+                    {
+                        subtype = type_alias->pointer_type;
+                        type_id = type_alias->pointer_type_id;
+                    }
+                    /* Also check the type node's KgpcType for resolved pointer info */
+                    if (subtype == UNKNOWN_TYPE && type_node->type != NULL &&
+                        kgpc_type_is_pointer(type_node->type))
+                    {
+                        subtype = kgpc_type_get_pointer_subtype_tag(type_node->type);
+                        if (type_id == NULL)
+                        {
+                            KgpcType *pts = type_node->type->info.points_to;
+                            if (pts != NULL && pts->type_alias != NULL && pts->type_alias->alias_name != NULL)
+                                type_id = pts->type_alias->alias_name;
+                        }
+                    }
+                }
             }
             
             if (subtype == UNKNOWN_TYPE && type_id != NULL)

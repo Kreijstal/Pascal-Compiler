@@ -18,6 +18,59 @@ static double funccall_now_ms(void) {
     return (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC;
 }
 
+static void semcheck_set_pointer_info_from_kgpc_type(struct Expression *expr, SymTab_t *symtab, KgpcType *type)
+{
+    if (expr == NULL || type == NULL || !kgpc_type_is_pointer(type))
+        return;
+
+    if (expr->pointer_subtype_id != NULL || expr->pointer_subtype != UNKNOWN_TYPE)
+        return;
+
+    int subtype = UNKNOWN_TYPE;
+    const char *subtype_id = NULL;
+
+    KgpcType *points_to = type->info.points_to;
+    if (points_to != NULL)
+    {
+        if (points_to->kind == TYPE_KIND_RECORD)
+        {
+            struct RecordType *record = kgpc_type_get_record(points_to);
+            if (record != NULL && record->type_id != NULL)
+                subtype_id = record->type_id;
+            subtype = RECORD_TYPE;
+        }
+        else if (points_to->kind == TYPE_KIND_PRIMITIVE)
+        {
+            subtype = points_to->info.primitive_type_tag;
+        }
+        else if (points_to->kind == TYPE_KIND_POINTER)
+        {
+            subtype = POINTER_TYPE;
+        }
+    }
+
+    if (subtype_id == NULL)
+    {
+        struct TypeAlias *alias = kgpc_type_get_type_alias(type);
+        if (alias != NULL && alias->is_pointer)
+        {
+            if (alias->pointer_type_id != NULL)
+                subtype_id = alias->pointer_type_id;
+            if (alias->pointer_type != UNKNOWN_TYPE)
+                subtype = alias->pointer_type;
+            if (subtype == UNKNOWN_TYPE && subtype_id != NULL)
+            {
+                struct RecordType *record = semcheck_lookup_record_type(symtab, subtype_id);
+                if (record != NULL)
+                    subtype = RECORD_TYPE;
+            }
+        }
+    }
+
+    if (subtype != UNKNOWN_TYPE || subtype_id != NULL)
+        semcheck_set_pointer_info(expr, subtype, subtype_id);
+}
+
 static void semcheck_clear_array_linearization(struct Expression *expr)
 {
     if (expr == NULL)
@@ -398,7 +451,8 @@ int semcheck_arrayaccess(int *type_return,
     if (array_expr->resolved_kgpc_type != NULL && kgpc_type_is_array(array_expr->resolved_kgpc_type))
     {
         res_type = kgpc_type_get_array_element_type(array_expr->resolved_kgpc_type);
-        if (res_type != NULL) kgpc_type_retain(res_type);
+        if (res_type != NULL)
+            kgpc_type_retain(res_type);
 
         /* Apply extra indices for multi-dimensional arrays */
         if (expr->expr_data.array_access_data.extra_indices != NULL)
@@ -430,19 +484,6 @@ int semcheck_arrayaccess(int *type_return,
     if (expr->resolved_kgpc_type != NULL)
         destroy_kgpc_type(expr->resolved_kgpc_type);
     expr->resolved_kgpc_type = res_type;
-
-    if (getenv("KGPC_DEBUG_ARRAY_ACCESS") != NULL &&
-        array_expr != NULL &&
-        array_expr->type == EXPR_VAR_ID &&
-        array_expr->expr_data.id != NULL &&
-        pascal_identifier_equals(array_expr->expr_data.id, "FStandardEncodings"))
-    {
-        fprintf(stderr,
-            "[KGPC_DEBUG_ARRAY_ACCESS] base=%s array_kgpc=%s elem_kgpc=%s\n",
-            array_expr->expr_data.id,
-            array_expr->resolved_kgpc_type ? kgpc_type_to_string(array_expr->resolved_kgpc_type) : "<null>",
-            expr->resolved_kgpc_type ? kgpc_type_to_string(expr->resolved_kgpc_type) : "<null>");
-    }
 
     semcheck_compute_array_linearization(symtab, expr, array_expr);
 
@@ -518,6 +559,32 @@ int semcheck_funccall(int *type_return,
             id != NULL ? id : "(null)", expr->line_num);
     }
     if (expr->expr_data.function_call_data.is_procedural_var_call) {
+        /* If call_kgpc_type hasn't been set yet but we have a procedural_var_expr,
+         * evaluate it to determine the type (e.g., for typecast-then-call patterns
+         * like TClassGetter(Getter)() ) */
+        if (expr->expr_data.function_call_data.call_kgpc_type == NULL &&
+            expr->expr_data.function_call_data.procedural_var_expr != NULL)
+        {
+            struct Expression *proc_expr = expr->expr_data.function_call_data.procedural_var_expr;
+            return_val += semcheck_expr_with_type(NULL, symtab, proc_expr, max_scope_lev, NO_MUTATE);
+            /* Try to get the KgpcType from the evaluated expression */
+            KgpcType *resolved = proc_expr->resolved_kgpc_type;
+            if (resolved == NULL || resolved->kind != TYPE_KIND_PROCEDURE)
+            {
+                /* Look up the type by the function call id (which is the typecast type name) */
+                HashNode_t *type_node = NULL;
+                if (id != NULL && FindIdent(&type_node, symtab, id) != -1 &&
+                    type_node != NULL && type_node->type != NULL)
+                {
+                    resolved = type_node->type;
+                }
+            }
+            if (resolved != NULL && resolved->kind == TYPE_KIND_PROCEDURE)
+            {
+                kgpc_type_retain(resolved);
+                expr->expr_data.function_call_data.call_kgpc_type = resolved;
+            }
+        }
         if (type_return != NULL)
         {
             KgpcType *call_type = expr->expr_data.function_call_data.call_kgpc_type;
@@ -657,6 +724,41 @@ int semcheck_funccall(int *type_return,
 #endif
     }
     args_given = expr->expr_data.function_call_data.args_expr;
+
+    if (expr->expr_data.function_call_data.is_method_call_placeholder &&
+        args_given != NULL && args_given->cur != NULL)
+    {
+        struct Expression *first_arg = (struct Expression *)args_given->cur;
+        if (first_arg->type == EXPR_RELOP &&
+            first_arg->expr_data.relop_data.type == NOT &&
+            first_arg->expr_data.relop_data.right == NULL &&
+            first_arg->expr_data.relop_data.left != NULL)
+        {
+            struct Expression *receiver = first_arg->expr_data.relop_data.left;
+            first_arg->expr_data.relop_data.left = NULL;
+            args_given->cur = receiver;
+            destroy_expr(first_arg);
+
+            struct Expression *call_expr = (struct Expression *)calloc(1, sizeof(struct Expression));
+            if (call_expr == NULL)
+            {
+                semcheck_error_with_context("Error on line %d: failed to allocate expression for NOT call fixup.\n",
+                    expr->line_num);
+                *type_return = UNKNOWN_TYPE;
+                return 1;
+            }
+
+            *call_expr = *expr;
+            expr->type = EXPR_RELOP;
+            memset(&expr->expr_data.relop_data, 0, sizeof(expr->expr_data.relop_data));
+            expr->expr_data.relop_data.type = NOT;
+            expr->expr_data.relop_data.left = call_expr;
+            expr->expr_data.relop_data.right = NULL;
+            expr->record_type = NULL;
+            semcheck_expr_set_resolved_type(expr, UNKNOWN_TYPE);
+            return semcheck_relop(type_return, symtab, expr, max_scope_lev, mutating);
+        }
+    }
 
     /* FPC Bootstrap Feature: Handle unit-qualified calls that the parser
      * represents as __Function(UnitName, Args...). Only strip the first
@@ -1369,6 +1471,7 @@ int semcheck_funccall(int *type_return,
                                 destroy_kgpc_type(expr->resolved_kgpc_type);
                             kgpc_type_retain(ret_type);
                             expr->resolved_kgpc_type = ret_type;
+                            semcheck_set_pointer_info_from_kgpc_type(expr, symtab, ret_type);
                         }
                         else if (ret_type != NULL)
                         {
@@ -1597,6 +1700,45 @@ int semcheck_funccall(int *type_return,
 
     if (id != NULL && pascal_identifier_equals(id, "Assigned"))
         return semcheck_builtin_assigned(type_return, symtab, expr, max_scope_lev);
+
+    /* FPC compiler intrinsics: get_frame, get_pc_addr, get_caller_addr, get_caller_frame
+     * These return Pointer and are used for exception handling / stack trace support. */
+    if (id != NULL && (pascal_identifier_equals(id, "get_frame") ||
+                       pascal_identifier_equals(id, "get_pc_addr") ||
+                       pascal_identifier_equals(id, "get_caller_addr") ||
+                       pascal_identifier_equals(id, "get_caller_frame") ||
+                       pascal_identifier_equals(id, "Get_Frame") ||
+                       pascal_identifier_equals(id, "Get_Caller_Addr") ||
+                       pascal_identifier_equals(id, "Get_Caller_Frame")))
+    {
+        /* Type-check any arguments (they should be Pointer) */
+        ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+        while (args != NULL)
+        {
+            struct Expression *arg_expr = (struct Expression *)args->cur;
+            if (arg_expr != NULL)
+            {
+                int arg_type = UNKNOWN_TYPE;
+                return_val += semcheck_expr_legacy_tag(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
+            }
+            args = args->next;
+        }
+        /* Rewrite to runtime stub */
+        free(expr->expr_data.function_call_data.id);
+        expr->expr_data.function_call_data.id = strdup("kgpc_get_frame");
+        if (expr->expr_data.function_call_data.mangled_id != NULL)
+            free(expr->expr_data.function_call_data.mangled_id);
+        expr->expr_data.function_call_data.mangled_id = strdup("kgpc_get_frame");
+        semcheck_reset_function_call_cache(expr);
+        *type_return = POINTER_TYPE;
+        if (expr->resolved_kgpc_type != NULL)
+        {
+            destroy_kgpc_type(expr->resolved_kgpc_type);
+            expr->resolved_kgpc_type = NULL;
+        }
+        expr->resolved_kgpc_type = create_primitive_type(POINTER_TYPE);
+        return return_val;
+    }
 
     if (id != NULL && pascal_identifier_equals(id, "Abs"))
         return semcheck_builtin_abs(type_return, symtab, expr, max_scope_lev);
@@ -2108,7 +2250,7 @@ int semcheck_funccall(int *type_return,
         if (first_arg->resolved_kgpc_type != NULL) {
             KgpcType *owner_type = first_arg->resolved_kgpc_type;
             struct RecordType *record_info = NULL;
-            
+
             if (owner_type->kind == TYPE_KIND_RECORD) {
                 record_info = owner_type->info.record_info;
             } else if (owner_type->kind == TYPE_KIND_POINTER &&
@@ -2116,7 +2258,68 @@ int semcheck_funccall(int *type_return,
                 owner_type->info.points_to->kind == TYPE_KIND_RECORD) {
                 record_info = owner_type->info.points_to->info.record_info;
             }
-            
+
+            /* For "class of T" (metaclass) types, the pointer's pointee may not
+             * have been resolved to TYPE_KIND_RECORD at AST conversion time.
+             * Try multiple strategies to find the record type:
+             * 1. The expression's record_type field (set by record access resolution)
+             * 2. Variable lookup via TypeAlias pointer_type_id
+             * 3. The KgpcType's own type_alias pointer_type_id */
+            if (record_info == NULL && owner_type->kind == TYPE_KIND_POINTER)
+            {
+                /* Strategy 1: expression's record_type */
+                if (first_arg->record_type != NULL)
+                    record_info = first_arg->record_type;
+
+                /* Strategy 2: variable's TypeAlias */
+                if (record_info == NULL && first_arg->type == EXPR_VAR_ID &&
+                    first_arg->expr_data.id != NULL)
+                {
+                    HashNode_t *var_node = NULL;
+                    if (FindIdent(&var_node, symtab, first_arg->expr_data.id) != -1 &&
+                        var_node != NULL)
+                    {
+                        record_info = get_record_type_from_node(var_node);
+                        if (record_info == NULL && var_node->type != NULL &&
+                            var_node->type->type_alias != NULL &&
+                            var_node->type->type_alias->pointer_type_id != NULL)
+                        {
+                            record_info = semcheck_lookup_record_type(symtab,
+                                var_node->type->type_alias->pointer_type_id);
+                        }
+                    }
+                }
+
+                /* Strategy 3: KgpcType's own type_alias */
+                if (record_info == NULL && owner_type->type_alias != NULL &&
+                    owner_type->type_alias->pointer_type_id != NULL)
+                {
+                    record_info = semcheck_lookup_record_type(symtab,
+                        owner_type->type_alias->pointer_type_id);
+                }
+
+                /* Strategy 4: expression's pointer_subtype_id */
+                if (record_info == NULL && first_arg->pointer_subtype_id != NULL)
+                {
+                    record_info = semcheck_lookup_record_type(symtab,
+                        first_arg->pointer_subtype_id);
+                }
+
+                /* Fix the KgpcType's points_to so overload resolution sees the
+                 * correct record type instead of the unresolved primitive placeholder. */
+                if (record_info != NULL && owner_type->info.points_to != NULL &&
+                    owner_type->info.points_to->kind != TYPE_KIND_RECORD)
+                {
+                    KgpcType *old_pointee = owner_type->info.points_to;
+                    KgpcType *new_pointee = create_record_type(record_info);
+                    if (new_pointee != NULL)
+                    {
+                        owner_type->info.points_to = new_pointee;
+                        destroy_kgpc_type(old_pointee);
+                    }
+                }
+            }
+
             if (record_info != NULL && record_info->type_id != NULL) {
                 const char *method_name = id;
                 if (method_name != NULL && strncmp(method_name, "__", 2) == 0)
@@ -2245,6 +2448,93 @@ int semcheck_funccall(int *type_return,
                         /* Continue with normal function call processing using the resolved method */
                         hash_return = method_node;
                         goto method_call_resolved;
+                    }
+
+                    /* Method not found — check if this is a procedural-type field being invoked.
+                     * For example: ThreadManager.ThreadSwitch(...) where ThreadSwitch is a field
+                     * of type TThreadSwitchHandler (a procedural type). */
+                    {
+                        struct RecordField *proc_field = NULL;
+                        if (resolve_record_field(symtab, record_info, method_name,
+                                &proc_field, NULL, expr->line_num, 1 /* silent */) == 0 &&
+                            proc_field != NULL)
+                        {
+                            /* Check if the field actually has a procedural type */
+                            KgpcType *proc_kgpc_type = NULL;
+                            if (proc_field->proc_type != NULL &&
+                                proc_field->proc_type->kind == TYPE_KIND_PROCEDURE)
+                            {
+                                proc_kgpc_type = proc_field->proc_type;
+                            }
+                            else if (proc_field->type_id != NULL)
+                            {
+                                HashNode_t *type_node = NULL;
+                                if (FindIdent(&type_node, symtab, proc_field->type_id) >= 0 &&
+                                    type_node != NULL && type_node->type != NULL &&
+                                    type_node->type->kind == TYPE_KIND_PROCEDURE)
+                                {
+                                    proc_kgpc_type = type_node->type;
+                                }
+                            }
+                            else if (proc_field->type == PROCEDURE)
+                            {
+                                /* Inline procedural type without proc_type or type_id */
+                            }
+
+                            if (proc_kgpc_type != NULL &&
+                                proc_kgpc_type->kind == TYPE_KIND_PROCEDURE)
+                            {
+                                /* Remove first_arg from args list (it becomes part of field access) */
+                                ListNode_t *old_head = args_given;
+                                args_given = old_head->next;
+                                old_head->next = NULL;
+                                old_head->cur = NULL; /* Don't free first_arg, we reuse it */
+                                free(old_head);
+                                expr->expr_data.function_call_data.args_expr = args_given;
+
+                                /* Build a record-access expression: first_arg.field_name */
+                                struct Expression *field_access = mk_recordaccess(
+                                    expr->line_num,
+                                    first_arg,  /* Transfer ownership from args list */
+                                    strdup(method_name));
+                                assert(field_access != NULL);
+
+                                /* Resolve the field access expression to get its procedural type */
+                                KgpcType *field_kgpc = NULL;
+                                semcheck_expr_with_type(&field_kgpc, symtab, field_access, max_scope_lev, NO_MUTATE);
+
+                                /* Set return type from the procedural type */
+                                KgpcType *ret = proc_kgpc_type->info.proc_info.return_type;
+                                if (ret != NULL)
+                                {
+                                    *type_return = semcheck_tag_from_kgpc(ret);
+                                    semcheck_expr_set_resolved_kgpc_type_shared(expr, ret);
+                                }
+                                else
+                                {
+                                    *type_return = PROCEDURE;
+                                    semcheck_expr_set_resolved_type(expr, PROCEDURE);
+                                }
+
+                                /* Convert to procedural variable call */
+                                expr->expr_data.function_call_data.is_procedural_var_call = 1;
+                                expr->expr_data.function_call_data.procedural_var_symbol = NULL;
+                                expr->expr_data.function_call_data.procedural_var_expr = field_access;
+                                expr->expr_data.function_call_data.is_method_call_placeholder = 0;
+                                expr->expr_data.function_call_data.call_kgpc_type = proc_kgpc_type;
+                                kgpc_type_retain(proc_kgpc_type);
+
+                                /* Type-check the arguments */
+                                for (ListNode_t *arg_cur = args_given; arg_cur != NULL; arg_cur = arg_cur->next)
+                                {
+                                    struct Expression *arg = (struct Expression *)arg_cur->cur;
+                                    if (arg != NULL)
+                                        semcheck_expr_with_type(NULL, symtab, arg, max_scope_lev, NO_MUTATE);
+                                }
+
+                                return return_val;
+                            }
+                        }
                     }
                 }
             }
@@ -2423,6 +2713,42 @@ int semcheck_funccall(int *type_return,
                 if (owner_type == NULL && type_node->type != NULL)
                     owner_type = type_node->type;
             }
+        }
+
+        /* Metaclass fallback: when owner_type is pointer-to-primitive(RECORD_TYPE)
+         * or a primitive POINTER_TYPE, try to find the target class from type aliases
+         * or expression metadata. This handles "class of T" constructor calls. */
+        if (record_info == NULL && owner_type != NULL)
+        {
+            /* Case 1: TYPE_KIND_POINTER -> TYPE_KIND_PRIMITIVE(RECORD_TYPE) */
+            if (owner_type->kind == TYPE_KIND_POINTER &&
+                owner_type->info.points_to != NULL &&
+                owner_type->info.points_to->kind == TYPE_KIND_PRIMITIVE &&
+                owner_type->info.points_to->info.primitive_type_tag == RECORD_TYPE)
+            {
+                if (owner_type->type_alias != NULL &&
+                    owner_type->type_alias->pointer_type_id != NULL)
+                    record_info = semcheck_lookup_record_type(symtab,
+                        owner_type->type_alias->pointer_type_id);
+                if (record_info == NULL && first_arg->pointer_subtype_id != NULL)
+                    record_info = semcheck_lookup_record_type(symtab,
+                        first_arg->pointer_subtype_id);
+            }
+            /* Case 2: TYPE_KIND_PRIMITIVE(POINTER_TYPE) - unresolved pointer type */
+            if (record_info == NULL && owner_type->kind == TYPE_KIND_PRIMITIVE &&
+                owner_type->info.primitive_type_tag == POINTER_TYPE)
+            {
+                if (owner_type->type_alias != NULL &&
+                    owner_type->type_alias->pointer_type_id != NULL)
+                    record_info = semcheck_lookup_record_type(symtab,
+                        owner_type->type_alias->pointer_type_id);
+                if (record_info == NULL && first_arg->pointer_subtype_id != NULL)
+                    record_info = semcheck_lookup_record_type(symtab,
+                        first_arg->pointer_subtype_id);
+            }
+            /* Case 3: expression's record_type not yet checked in pointer context */
+            if (record_info == NULL && first_arg->record_type != NULL)
+                record_info = first_arg->record_type;
         }
 
         if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
@@ -2708,6 +3034,98 @@ int semcheck_funccall(int *type_return,
     if (id != NULL) {
         overload_candidates = FindAllIdents(symtab, id);
     }
+    if (overload_candidates == NULL && id != NULL && args_given != NULL)
+    {
+        struct Expression *first_arg = (struct Expression *)args_given->cur;
+        struct RecordType *helper_record = NULL;
+        struct RecordType *actual_method_owner = NULL;
+        int helper_tag = UNKNOWN_TYPE;
+        const char *helper_name = NULL;
+        int arg_type_owned = 0;
+        KgpcType *arg_type = NULL;
+
+        if (first_arg != NULL)
+        {
+            arg_type = semcheck_resolve_expression_kgpc_type(symtab,
+                first_arg, max_scope_lev, NO_MUTATE, &arg_type_owned);
+            if (arg_type != NULL)
+            {
+                helper_tag = semcheck_tag_from_kgpc(arg_type);
+                if (arg_type->kind == TYPE_KIND_PRIMITIVE)
+                    helper_tag = arg_type->info.primitive_type_tag;
+                if (arg_type->kind == TYPE_KIND_RECORD &&
+                    arg_type->info.record_info != NULL &&
+                    arg_type->info.record_info->type_id != NULL)
+                    helper_name = arg_type->info.record_info->type_id;
+
+                struct TypeAlias *alias = kgpc_type_get_type_alias(arg_type);
+                if (alias != NULL)
+                {
+                    if (alias->target_type_id != NULL)
+                        helper_name = alias->target_type_id;
+                    else if (alias->alias_name != NULL)
+                        helper_name = alias->alias_name;
+                }
+            }
+
+            helper_record = semcheck_lookup_type_helper(symtab, helper_tag, helper_name);
+            if (helper_record == NULL && first_arg->type == EXPR_VAR_ID &&
+                first_arg->expr_data.id != NULL)
+            {
+                HashNode_t *var_node = NULL;
+                if (FindIdent(&var_node, symtab, first_arg->expr_data.id) != -1 &&
+                    var_node != NULL)
+                {
+                    struct TypeAlias *var_alias = hashnode_get_type_alias(var_node);
+                    const char *var_helper_name = NULL;
+                    if (var_alias != NULL)
+                    {
+                        if (var_alias->target_type_id != NULL)
+                            var_helper_name = var_alias->target_type_id;
+                        else if (var_alias->alias_name != NULL)
+                            var_helper_name = var_alias->alias_name;
+                    }
+                    if (var_helper_name != NULL)
+                        helper_record = semcheck_lookup_type_helper(symtab,
+                            UNKNOWN_TYPE, var_helper_name);
+                }
+            }
+        }
+
+        if (arg_type_owned && arg_type != NULL)
+            destroy_kgpc_type(arg_type);
+
+        if (helper_record != NULL)
+        {
+            HashNode_t *method_node = semcheck_find_class_method(symtab,
+                helper_record, id, &actual_method_owner);
+            struct RecordType *owner_for_mangle =
+                (actual_method_owner != NULL) ? actual_method_owner : helper_record;
+
+            if (method_node != NULL && owner_for_mangle != NULL &&
+                owner_for_mangle->type_id != NULL)
+            {
+                size_t class_len = strlen(owner_for_mangle->type_id);
+                size_t method_len = strlen(id);
+                char *candidate_name = (char *)malloc(class_len + 2 + method_len + 1);
+                if (candidate_name != NULL)
+                {
+                    snprintf(candidate_name, class_len + 2 + method_len + 1,
+                        "%s__%s", owner_for_mangle->type_id, id);
+                    ListNode_t *candidates = FindAllIdents(symtab, candidate_name);
+                    if (candidates != NULL)
+                    {
+                        overload_candidates = candidates;
+                        if (mangled_name != NULL)
+                            free(mangled_name);
+                        mangled_name = candidate_name;
+                        goto method_call_resolved;
+                    }
+                    free(candidate_name);
+                }
+            }
+        }
+    }
     if (getenv("KGPC_DEBUG_PROC_VAR") != NULL && id != NULL &&
         pascal_identifier_equals(id, "Ctr"))
     {
@@ -2934,6 +3352,23 @@ method_call_resolved:
             *type_return = UNKNOWN_TYPE;
             final_status = ++return_val;
             goto funccall_cleanup;
+        }
+    }
+
+    if (best_match != NULL && overload_candidates != NULL && overload_candidates->next != NULL)
+    {
+        HashNode_t *override_match = NULL;
+        int override_score = 0;
+        int override_count = 0;
+        int override_status = semcheck_resolve_overload(&override_match, &override_score,
+            &override_count, overload_candidates, args_given, symtab, expr,
+            max_scope_lev, prefer_non_builtin);
+        if (override_status == 0 && override_match != NULL && override_count == 1 &&
+            override_match != best_match)
+        {
+            best_match = override_match;
+            best_score = override_score;
+            num_best_matches = override_count;
         }
     }
 
@@ -3417,6 +3852,7 @@ skip_overload_resolution:
                 }
                 if (!skip_override_for_ctor)
                     semcheck_expr_set_resolved_kgpc_type_shared(expr, return_type);
+                semcheck_set_pointer_info_from_kgpc_type(expr, symtab, return_type);
                 if (return_type->kind == TYPE_KIND_ARRAY)
                     semcheck_set_array_info_from_kgpctype(expr, symtab, return_type, expr->line_num);
                 else

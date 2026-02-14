@@ -1,0 +1,33 @@
+Test 1 UTF8: OK
+Test 2 ANSI: OK
+Test 3 SystemEncoding: OK
+Test 4 UTF8 singleton cache: OK
+Test 5 ANSI singleton cache: OK
+Test 6 GetBytes len: 5
+Test 6 GetBytes values: 72 101 108 108 111 
+Test 7 Round-trip result: Hello
+Test 7 Round-trip: OK
+Test 8 GetAnsiBytes slice len: 3
+Test 8 GetAnsiBytes slice result: Hel
+Test 9 GetAnsiBytes empty len: 0
+Test 9 GetAnsiBytes empty: OK
+Test 10 GetAnsiString slice result: CDE
+Test 10 GetAnsiString slice len: 3
+Test 11 GetString slice result: AB
+Test 11 GetString slice len: 2
+Test 12 SystemEncoding: OK
+Test 13 Single char bytes len: 1
+Test 13 Single char result: X
+Test 13 Single char: OK
+Test 14 Unicode bytes len: 5
+Test 14 Unicode result: Café
+Test 14 Unicode: OK
+Test 15 Multiple round-trip result: Test
+Test 15 Multiple round-trip: OK
+Test 16 Large string bytes len: 100
+Test 16 Large string len: 100
+Test 16 Large string: OK
+Test 17 SystemEncoding non-nil: OK
+Test 18 UTF8 bytes for é: 2
+Test 18 ANSI bytes for é: 2
+=== All tests completed ===

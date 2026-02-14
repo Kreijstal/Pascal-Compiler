@@ -85,11 +85,14 @@ struct RecordField
     int array_end;
     int array_element_type;
     char *array_element_type_id;
+    struct RecordType *array_element_record; /* Anonymous record as array element type */
     int array_is_open;
     int is_hidden;
+    int is_class_var;
     int is_pointer;
     int pointer_type;
     char *pointer_type_id;
+    ListNode_t *enum_literals; /* Anonymous enum values for fields like `kind: (a, b, c)` */
 };
 
 struct ClassProperty
@@ -169,7 +172,7 @@ static inline int record_type_is_class(const struct RecordType *record)
 {
     if (record == NULL)
         return 0;
-    if (record->is_class)
+    if (record->is_class || record->is_interface)
         return 1;
     return (record->properties != NULL);
 }

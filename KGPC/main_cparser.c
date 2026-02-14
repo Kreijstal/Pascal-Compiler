@@ -1703,6 +1703,7 @@ int main(int argc, char **argv)
         ConcatList(user_tree->tree_data.program_data.var_declaration, user_vars);
     resolve_pending_generic_aliases(user_tree);
     append_generic_method_clones(user_tree);
+    resolve_pending_generic_subprograms(user_tree);
 
     unit_set_destroy(&visited_units);
 

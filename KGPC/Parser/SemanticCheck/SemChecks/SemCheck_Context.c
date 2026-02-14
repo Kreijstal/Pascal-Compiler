@@ -98,10 +98,10 @@ struct RecordType *semcheck_lookup_type_helper(SymTab_t *symtab,
                     entry->base_type_id != NULL ? entry->base_type_id : "<null>",
                     entry->helper_record && entry->helper_record->type_id ? entry->helper_record->type_id : "<null>");
             }
-            if (base_type_tag != UNKNOWN_TYPE && entry->base_type_tag == base_type_tag)
-                return entry->helper_record;
             if (type_name != NULL && entry->base_type_id != NULL &&
                 pascal_identifier_equals(entry->base_type_id, type_name))
+                return entry->helper_record;
+            if (base_type_tag != UNKNOWN_TYPE && entry->base_type_tag == base_type_tag)
                 return entry->helper_record;
         }
         cur = cur->next;

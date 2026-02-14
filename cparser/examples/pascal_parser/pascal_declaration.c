@@ -3764,10 +3764,20 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     
     combinator_t* forbid_no_body = pnot(has_no_body_directive);
 
+    // Generic type parameter list for program-level functions (e.g., <T, U>)
+    combinator_t* prog_generic_type_params = optional(seq(new_combinator(), PASCAL_T_TYPE_PARAM_LIST,
+        token(match("<")),
+        sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
+        token(match(">")),
+        NULL
+    ));
+
     combinator_t* working_function = seq(new_combinator(), PASCAL_T_FUNCTION_DECL,
         trace("Enter working_function"),
+        optional(token(keyword_ci("generic"))),      // optional generic keyword
         token(keyword_ci("function")),               // function keyword (with word boundary check)
         token(cident(PASCAL_T_IDENTIFIER)),          // function name
+        prog_generic_type_params,                    // optional generic type params <T>
         working_function_param_list,                 // optional parameter list
         return_type,                                 // return type
         token(match(";")),                           // semicolon after signature
@@ -3782,9 +3792,18 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     // Working procedure parser: procedure name [(params)] ; [directives] body ;
     // Does NOT support forward (that's handled by forward_procedure)
     combinator_t* working_procedure_param_list = create_simple_param_list();
+    // Generic type parameter list for program-level procedures (separate instance)
+    combinator_t* prog_proc_generic_type_params = optional(seq(new_combinator(), PASCAL_T_TYPE_PARAM_LIST,
+        token(match("<")),
+        sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
+        token(match(">")),
+        NULL
+    ));
     combinator_t* working_procedure = seq(new_combinator(), PASCAL_T_PROCEDURE_DECL,
+        optional(token(keyword_ci("generic"))),      // optional generic keyword
         token(keyword_ci("procedure")),                // procedure keyword (case-insensitive)
         token(cident(PASCAL_T_IDENTIFIER)),          // procedure name
+        prog_proc_generic_type_params,               // optional generic type params <T>
         working_procedure_param_list,               // optional parameter list
         token(match(";")),                           // semicolon after signature
         forbid_no_body,
@@ -4022,7 +4041,14 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     // Try procedures/functions first to avoid the main block 'begin' being
     // misinterpreted from within a routine when routine directives are present.
     // Then handle declaration sections.
+    combinator_t* generic_prefixed_declaration = seq(new_combinator(), PASCAL_T_NONE,
+        token(keyword_ci("generic")),
+        all_declarations,
+        NULL
+    );
+
     combinator_t* declaration_or_section = multi(new_combinator(), PASCAL_T_NONE,
+        generic_prefixed_declaration,   // generic procedure/function declarations
         all_declarations,   // Procedures/functions (keywords "procedure", "function", etc.)
         create_label_section(),    // Label declarations
         const_section,      // const

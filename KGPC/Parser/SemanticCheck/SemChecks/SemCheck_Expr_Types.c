@@ -14,6 +14,31 @@
 
 #include "SemCheck_Expr_Internal.h"
 
+static char *build_qualified_identifier_from_expr_local(struct Expression *expr)
+{
+    if (expr == NULL)
+        return NULL;
+    if (expr->type == EXPR_VAR_ID && expr->expr_data.id != NULL)
+        return strdup(expr->expr_data.id);
+    if (expr->type != EXPR_RECORD_ACCESS)
+        return NULL;
+
+    struct Expression *record_expr = expr->expr_data.record_access_data.record_expr;
+    char *field_id = expr->expr_data.record_access_data.field_id;
+    if (record_expr == NULL || field_id == NULL)
+        return NULL;
+
+    char *base = build_qualified_identifier_from_expr_local(record_expr);
+    if (base == NULL)
+        return NULL;
+    size_t qualified_len = strlen(base) + 1 + strlen(field_id) + 1;
+    char *qualified = (char *)malloc(qualified_len);
+    if (qualified != NULL)
+        snprintf(qualified, qualified_len, "%s.%s", base, field_id);
+    free(base);
+    return qualified;
+}
+
 int semcheck_typecast(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating)
 {
@@ -26,10 +51,10 @@ int semcheck_typecast(int *type_return,
 
     int error_count = 0;
     int inner_type = UNKNOWN_TYPE;
+    KgpcType *inner_kgpc_type = NULL;
 
     if (expr->expr_data.typecast_data.expr != NULL)
     {
-        KgpcType *inner_kgpc_type = NULL;
         error_count += semcheck_expr_with_type(&inner_kgpc_type, symtab,
             expr->expr_data.typecast_data.expr, max_scope_lev, NO_MUTATE);
         inner_type = semcheck_tag_from_kgpc(inner_kgpc_type);
@@ -74,6 +99,19 @@ int semcheck_typecast(int *type_return,
             expr->expr_data.typecast_data.target_type_id, expr->line_num);
     }
 
+    HashNode_t *array_target_node = NULL;
+    int target_is_array = 0;
+    if (expr->expr_data.typecast_data.target_type_id != NULL)
+    {
+        array_target_node = semcheck_find_preferred_type_node(symtab,
+            expr->expr_data.typecast_data.target_type_id);
+        if (array_target_node != NULL && array_target_node->type != NULL &&
+            array_target_node->type->kind == TYPE_KIND_ARRAY)
+        {
+            target_is_array = 1;
+        }
+    }
+
     if (target_type == UNKNOWN_TYPE &&
         expr->expr_data.typecast_data.target_type_id == NULL)
     {
@@ -115,9 +153,10 @@ int semcheck_typecast(int *type_return,
     {
         /* Resolve full pointer type info so deref preserves record/element types */
         KgpcType *resolved_ptr = NULL;
+        HashNode_t *target_node = NULL;
+        struct TypeAlias *alias = NULL;
         if (expr->expr_data.typecast_data.target_type_id != NULL)
         {
-            HashNode_t *target_node = NULL;
             if (FindIdent(&target_node, symtab, expr->expr_data.typecast_data.target_type_id) >= 0 &&
                 target_node != NULL && target_node->type != NULL)
             {
@@ -138,14 +177,126 @@ int semcheck_typecast(int *type_return,
                         int subtype = kgpc_type_get_primitive_tag(points_to);
                         semcheck_set_pointer_info(expr, subtype, NULL);
                     }
+                    else if (points_to->kind == TYPE_KIND_ARRAY)
+                    {
+                        /* Pointer to array: propagate the array type id so that
+                         * dereference can set is_array_expr on the result.
+                         * Look up the pointer alias to get the pointee type name. */
+                        const char *arr_subtype_id = NULL;
+                        struct TypeAlias *ptr_alias = get_type_alias_from_node(target_node);
+                        if (ptr_alias != NULL && ptr_alias->pointer_type_id != NULL)
+                            arr_subtype_id = ptr_alias->pointer_type_id;
+                        semcheck_set_pointer_info(expr, UNKNOWN_TYPE, arr_subtype_id);
+                    }
+                }
+            }
+            if (target_node != NULL)
+                alias = get_type_alias_from_node(target_node);
+            if (alias != NULL && alias->is_pointer)
+            {
+                KgpcType *alias_type = create_kgpc_type_from_type_alias(alias, symtab);
+                if (alias_type != NULL)
+                {
+                    if (alias->kgpc_type == alias_type)
+                        kgpc_type_retain(alias_type);
+                    if (resolved_ptr != NULL)
+                        destroy_kgpc_type(resolved_ptr);
+                    resolved_ptr = alias_type;
+
+                    if (resolved_ptr->kind == TYPE_KIND_POINTER &&
+                        resolved_ptr->info.points_to != NULL)
+                    {
+                        KgpcType *points_to = resolved_ptr->info.points_to;
+                        if (points_to->kind == TYPE_KIND_RECORD &&
+                            points_to->info.record_info != NULL)
+                        {
+                            semcheck_set_pointer_info(expr, RECORD_TYPE,
+                                points_to->info.record_info->type_id);
+                            expr->record_type = points_to->info.record_info;
+                        }
+                        else if (points_to->kind == TYPE_KIND_PRIMITIVE)
+                        {
+                            int subtype = kgpc_type_get_primitive_tag(points_to);
+                            semcheck_set_pointer_info(expr, subtype, NULL);
+                        }
+                        else if (points_to->kind == TYPE_KIND_ARRAY)
+                        {
+                            const char *arr_subtype_id = NULL;
+                            if (alias != NULL && alias->pointer_type_id != NULL)
+                                arr_subtype_id = alias->pointer_type_id;
+                            semcheck_set_pointer_info(expr, UNKNOWN_TYPE, arr_subtype_id);
+                        }
+                    }
                 }
             }
         }
 
         if (resolved_ptr == NULL)
         {
-            resolved_ptr = create_pointer_type(NULL);
-            semcheck_set_pointer_info(expr, UNKNOWN_TYPE, expr->expr_data.typecast_data.target_type_id);
+            int inferred_subtype = UNKNOWN_TYPE;
+
+            if (inner_kgpc_type != NULL)
+            {
+                if (kgpc_type_is_string(inner_kgpc_type) ||
+                    kgpc_type_is_shortstring(inner_kgpc_type) ||
+                    kgpc_type_is_char(inner_kgpc_type))
+                {
+                    inferred_subtype = CHAR_TYPE;
+                }
+                else if (kgpc_type_is_array(inner_kgpc_type))
+                {
+                    KgpcType *elem = inner_kgpc_type->info.array_info.element_type;
+                    if (elem != NULL && elem->kind == TYPE_KIND_PRIMITIVE &&
+                        elem->info.primitive_type_tag == CHAR_TYPE)
+                    {
+                        inferred_subtype = CHAR_TYPE;
+                    }
+                }
+            }
+
+            if (inferred_subtype != UNKNOWN_TYPE)
+            {
+                KgpcType *points_to = create_primitive_type(inferred_subtype);
+                if (points_to != NULL)
+                {
+                    resolved_ptr = create_pointer_type(points_to);
+                    semcheck_set_pointer_info(expr, inferred_subtype, NULL);
+                }
+                else
+                {
+                    resolved_ptr = create_pointer_type(NULL);
+                    semcheck_set_pointer_info(expr, UNKNOWN_TYPE,
+                        expr->expr_data.typecast_data.target_type_id);
+                }
+            }
+            else
+            {
+                resolved_ptr = create_pointer_type(NULL);
+                semcheck_set_pointer_info(expr, UNKNOWN_TYPE,
+                    expr->expr_data.typecast_data.target_type_id);
+            }
+        }
+        else if (resolved_ptr->kind == TYPE_KIND_PRIMITIVE &&
+            resolved_ptr->info.primitive_type_tag == POINTER_TYPE)
+        {
+            if (expr->pointer_subtype == UNKNOWN_TYPE && inner_kgpc_type != NULL)
+            {
+                if (kgpc_type_is_string(inner_kgpc_type) ||
+                    kgpc_type_is_shortstring(inner_kgpc_type) ||
+                    kgpc_type_is_char(inner_kgpc_type))
+                {
+                    semcheck_set_pointer_info(expr, CHAR_TYPE, NULL);
+                }
+                else if (kgpc_type_is_array(inner_kgpc_type))
+                {
+                    KgpcType *elem = inner_kgpc_type->info.array_info.element_type;
+                    if (elem != NULL && elem->kind == TYPE_KIND_PRIMITIVE &&
+                        elem->info.primitive_type_tag == CHAR_TYPE)
+                    {
+                        semcheck_set_pointer_info(expr, CHAR_TYPE, NULL);
+                    }
+                }
+            }
         }
 
         expr->resolved_kgpc_type = resolved_ptr;
@@ -201,6 +352,20 @@ int semcheck_typecast(int *type_return,
         expr->resolved_kgpc_type = create_primitive_type(target_type);
         semcheck_clear_array_info(expr);
         expr->record_type = NULL;
+    }
+
+    if (target_is_array && array_target_node != NULL && array_target_node->type != NULL)
+    {
+        if (expr->resolved_kgpc_type != NULL)
+        {
+            destroy_kgpc_type(expr->resolved_kgpc_type);
+            expr->resolved_kgpc_type = NULL;
+        }
+        kgpc_type_retain(array_target_node->type);
+        expr->resolved_kgpc_type = array_target_node->type;
+        semcheck_set_array_info_from_kgpctype(expr, symtab, array_target_node->type, expr->line_num);
+        expr->record_type = NULL;
+        *type_return = UNKNOWN_TYPE;
     }
 
     (void)inner_type;
@@ -509,15 +674,61 @@ int semcheck_pointer_deref(int *type_return,
         KgpcType *points_to = pointer_expr->resolved_kgpc_type->info.points_to;
         if (points_to != NULL)
         {
-            long long inferred_size = kgpc_type_sizeof(points_to);
-            if (inferred_size == 1)
-                target_type = CHAR_TYPE;
-            else if (inferred_size == 2)
-                target_type = INT_TYPE;
-            else if (inferred_size > 0 && inferred_size <= 4)
-                target_type = INT_TYPE;
-            else if (inferred_size > 0)
-                target_type = LONGINT_TYPE;
+            /* Check the actual kind of the pointed-to type first */
+            if (kgpc_type_is_record(points_to))
+            {
+                target_type = RECORD_TYPE;
+                expr->record_type = kgpc_type_get_record(points_to);
+            }
+            else if (points_to->kind == TYPE_KIND_POINTER)
+            {
+                target_type = POINTER_TYPE;
+            }
+            else if (points_to->kind == TYPE_KIND_ARRAY)
+            {
+                /* Pointer to array: set up array info on the deref result
+                 * so it can be indexed with [i] */
+                target_type = INT_TYPE; /* placeholder; actual element type set below */
+                expr->is_array_expr = 1;
+                expr->array_element_type = UNKNOWN_TYPE;
+                expr->array_element_type_id = NULL;
+
+                KgpcType *elem_type = points_to->info.array_info.element_type;
+                if (elem_type != NULL)
+                {
+                    target_type = semcheck_tag_from_kgpc(elem_type);
+                    if (target_type == UNKNOWN_TYPE)
+                        target_type = INT_TYPE;
+                    expr->array_element_type = semcheck_tag_from_kgpc(elem_type);
+                    if (elem_type->kind == TYPE_KIND_RECORD)
+                        expr->array_element_record_type = kgpc_type_get_record(elem_type);
+                }
+                if (points_to->info.array_info.element_type_id != NULL)
+                    expr->array_element_type_id = strdup(points_to->info.array_info.element_type_id);
+
+                /* Set the resolved KgpcType to the array type */
+                if (expr->resolved_kgpc_type != NULL)
+                    destroy_kgpc_type(expr->resolved_kgpc_type);
+                kgpc_type_retain(points_to);
+                expr->resolved_kgpc_type = points_to;
+            }
+            else
+            {
+                /* Fall back to tag-based then size-based inference for primitive types */
+                target_type = semcheck_tag_from_kgpc(points_to);
+                if (target_type == UNKNOWN_TYPE)
+                {
+                    long long inferred_size = kgpc_type_sizeof(points_to);
+                    if (inferred_size == 1)
+                        target_type = CHAR_TYPE;
+                    else if (inferred_size == 2)
+                        target_type = INT_TYPE;
+                    else if (inferred_size > 0 && inferred_size <= 4)
+                        target_type = INT_TYPE;
+                    else if (inferred_size > 0)
+                        target_type = LONGINT_TYPE;
+                }
+            }
         }
     }
 
@@ -528,7 +739,9 @@ int semcheck_pointer_deref(int *type_return,
         semcheck_set_pointer_info(expr, POINTER_TYPE, pointer_expr->pointer_subtype_id);
     else if (target_type == RECORD_TYPE)
     {
-        expr->record_type = pointer_expr->record_type;
+        /* Prefer record_type already set from KgpcType resolution above */
+        if (expr->record_type == NULL)
+            expr->record_type = pointer_expr->record_type;
         if (expr->record_type == NULL && pointer_expr->pointer_subtype_id != NULL)
         {
             HashNode_t *target_node = NULL;
@@ -553,6 +766,19 @@ int semcheck_pointer_deref(int *type_return,
     /* Set the expression's resolved type to the pointed-to type.
      * This is critical for code generation to emit correct-sized loads. */
     semcheck_expr_set_resolved_type(expr, target_type);
+
+    /* Propagate KgpcType from the pointer's target for downstream resolution */
+    if (target_type == RECORD_TYPE && pointer_expr->resolved_kgpc_type != NULL &&
+        pointer_expr->resolved_kgpc_type->kind == TYPE_KIND_POINTER)
+    {
+        KgpcType *points_to = pointer_expr->resolved_kgpc_type->info.points_to;
+        if (points_to != NULL && kgpc_type_is_record(points_to))
+        {
+            kgpc_type_retain(points_to);
+            semcheck_expr_set_resolved_kgpc_type_shared(expr, points_to);
+        }
+    }
+
     *type_return = target_type;
     return error_count;
 }
@@ -722,6 +948,69 @@ int semcheck_recordaccess(int *type_return,
         semcheck_error_with_context("Error on line %d, malformed record field access.\n\n", expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
+    }
+
+    if (record_expr->type == EXPR_VAR_ID || record_expr->type == EXPR_RECORD_ACCESS)
+    {
+        char *qualified_id = NULL;
+        if (record_expr->type == EXPR_VAR_ID)
+        {
+            size_t qualified_len = strlen(record_expr->expr_data.id) + 1 + strlen(field_id) + 1;
+            qualified_id = (char *)malloc(qualified_len);
+            if (qualified_id != NULL)
+                snprintf(qualified_id, qualified_len, "%s.%s", record_expr->expr_data.id, field_id);
+        }
+        else
+        {
+            qualified_id = build_qualified_identifier_from_expr_local(record_expr);
+            if (qualified_id != NULL)
+            {
+                size_t qualified_len = strlen(qualified_id) + 1 + strlen(field_id) + 1;
+                char *combined = (char *)malloc(qualified_len);
+                if (combined != NULL)
+                {
+                    snprintf(combined, qualified_len, "%s.%s", qualified_id, field_id);
+                    free(qualified_id);
+                    qualified_id = combined;
+                }
+                else
+                {
+                    free(qualified_id);
+                    qualified_id = NULL;
+                }
+            }
+        }
+
+        if (qualified_id != NULL)
+        {
+            HashNode_t *type_node = NULL;
+            const char *resolved_id = qualified_id;
+            if (FindIdent(&type_node, symtab, qualified_id) < 0 ||
+                type_node == NULL || type_node->hash_type != HASHTYPE_TYPE)
+            {
+                const char *base = semcheck_base_type_name(qualified_id);
+                if (base != NULL && base != qualified_id &&
+                    FindIdent(&type_node, symtab, base) >= 0 &&
+                    type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+                {
+                    resolved_id = base;
+                }
+            }
+
+            if (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+            {
+                destroy_expr(record_expr);
+                free(expr->expr_data.record_access_data.field_id);
+                expr->expr_data.record_access_data.record_expr = NULL;
+                expr->expr_data.record_access_data.field_id = NULL;
+                expr->type = EXPR_VAR_ID;
+                expr->expr_data.id = strdup(resolved_id);
+                free(qualified_id);
+                *type_return = UNKNOWN_TYPE;
+                return 0;
+            }
+            free(qualified_id);
+        }
     }
 
     /* AST TRANSFORMATION FIX: Parser incorrectly parses `-r.x` as `(-r).x` instead of `-(r.x)`.
@@ -1110,65 +1399,6 @@ int semcheck_recordaccess(int *type_return,
             expr->expr_data.relop_data.right = right_expr;
 
             return semcheck_expr_legacy_tag(type_return, symtab, expr, max_scope_lev, mutating);
-        }
-        /* FPC string helper methods: Transform S.Trim into Trim(S), S.Substring(i) into Substring(S, i) etc.
-         * This provides FPC-compatible string method syntax without full type helper infrastructure. */
-        else if (record_type == STRING_TYPE && field_id != NULL)
-        {
-            /* List of known string helper methods that map to SysUtils functions */
-            HashNode_t *func_node = NULL;
-            int is_string_method = 0;
-            if (pascal_identifier_equals(field_id, "Trim") ||
-                pascal_identifier_equals(field_id, "TrimLeft") ||
-                pascal_identifier_equals(field_id, "TrimRight") ||
-                pascal_identifier_equals(field_id, "UpperCase") ||
-                pascal_identifier_equals(field_id, "LowerCase") ||
-                pascal_identifier_equals(field_id, "Length"))
-            {
-                /* These are no-arg methods that take the string as single argument */
-                if (FindIdent(&func_node, symtab, field_id) == 0 &&
-                    func_node != NULL && func_node->hash_type == HASHTYPE_FUNCTION)
-                {
-                    is_string_method = 1;
-                }
-            }
-            else if (pascal_identifier_equals(field_id, "Substring") ||
-                     pascal_identifier_equals(field_id, "IndexOf") ||
-                     pascal_identifier_equals(field_id, "Contains") ||
-                     pascal_identifier_equals(field_id, "StartsWith") ||
-                     pascal_identifier_equals(field_id, "EndsWith"))
-            {
-                /* These methods take additional arguments - handled by method call transformation */
-                if (FindIdent(&func_node, symtab, field_id) == 0 &&
-                    func_node != NULL && func_node->hash_type == HASHTYPE_FUNCTION)
-                {
-                    is_string_method = 1;
-                }
-            }
-            
-            if (is_string_method && func_node != NULL)
-            {
-                /* Transform this record access into a function call: field_id(record_expr)
-                 * This works because the parser converts S.Trim() into a method call with S prepended */
-                char *func_id = strdup(field_id);
-                if (func_id != NULL)
-                {
-                    /* Create a function call expression with the string as first argument */
-                    ListNode_t *args_list = CreateListNode(record_expr, LIST_EXPR);
-                    
-                    expr->type = EXPR_FUNCTION_CALL;
-                    memset(&expr->expr_data.function_call_data, 0, sizeof(expr->expr_data.function_call_data));
-                    expr->expr_data.function_call_data.id = func_id;
-                    expr->expr_data.function_call_data.args_expr = args_list;
-                    expr->expr_data.function_call_data.mangled_id = NULL;
-                    
-                    return semcheck_funccall(type_return, symtab, expr, max_scope_lev, mutating);
-                }
-            }
-            
-            semcheck_error_with_context("Error on line %d, field access requires a record value.\n\n", expr->line_num);
-            *type_return = UNKNOWN_TYPE;
-            return error_count + 1;
         }
         else
         {
@@ -1809,8 +2039,72 @@ int semcheck_recordaccess(int *type_return,
                         }
                         goto FIELD_RESOLVED;
                     }
+
+                    if (mutating != NO_MUTATE)
+                    {
+                        /* For setter method calls on record properties, leave the expression
+                         * as EXPR_RECORD_ACCESS so the assignment handler in
+                         * semcheck_try_property_assignment() can construct the setter call
+                         * with the value argument. Return 0 to suppress "field not found"
+                         * and let the assignment handler take over. */
+                        return 0;
+                    }
+
+                    HashNode_t *method_node = semcheck_find_class_method(symtab, record_info,
+                        accessor, NULL);
+                    if (method_node != NULL)
+                    {
+                        struct Expression *receiver = record_expr;
+                        ListNode_t *arg_node = CreateListNode(receiver, LIST_EXPR);
+                        if (arg_node != NULL)
+                        {
+                            char *method_id = strdup(accessor);
+                            expr->type = EXPR_FUNCTION_CALL;
+                            memset(&expr->expr_data.function_call_data, 0,
+                                sizeof(expr->expr_data.function_call_data));
+                            expr->expr_data.function_call_data.is_method_call_placeholder = 1;
+                            expr->expr_data.function_call_data.id = method_id;
+                            if (method_node->mangled_id != NULL)
+                                expr->expr_data.function_call_data.mangled_id =
+                                    strdup(method_node->mangled_id);
+                            expr->expr_data.function_call_data.resolved_func = method_node;
+                            expr->expr_data.function_call_data.args_expr = arg_node;
+                            expr->record_type = NULL;
+                            semcheck_expr_set_resolved_type(expr, UNKNOWN_TYPE);
+                            return semcheck_funccall(type_return, symtab, expr, max_scope_lev, mutating);
+                        }
+                    }
                 }
             }
+        }
+
+        /* For classes and object types, check if the field is a class/object const
+         * stored with mangled name ClassName__ConstName. */
+        if (record_info != NULL && record_info->type_id != NULL && field_id != NULL)
+        {
+            char *mangled_const = semcheck_mangle_helper_const_id(record_info->type_id, field_id);
+            HashNode_t *const_node = NULL;
+            if (mangled_const != NULL &&
+                FindIdent(&const_node, symtab, mangled_const) >= 0 &&
+                const_node != NULL &&
+                (const_node->hash_type == HASHTYPE_CONST ||
+                 const_node->hash_type == HASHTYPE_ARRAY ||
+                 const_node->hash_type == HASHTYPE_VAR ||
+                 const_node->is_typed_const))
+            {
+                destroy_expr(record_expr);
+                expr->expr_data.record_access_data.record_expr = NULL;
+                if (expr->expr_data.record_access_data.field_id != NULL)
+                {
+                    free(expr->expr_data.record_access_data.field_id);
+                    expr->expr_data.record_access_data.field_id = NULL;
+                }
+                expr->type = EXPR_VAR_ID;
+                expr->expr_data.id = mangled_const;
+                return semcheck_varid(type_return, symtab, expr, max_scope_lev, mutating);
+            }
+            if (mangled_const != NULL)
+                free(mangled_const);
         }
 
         semcheck_error_with_context("Error on line %d, record field %s not found.\n", expr->line_num, field_id);
@@ -2005,7 +2299,12 @@ FIELD_RESOLVED:
     {
         KgpcType *elem_type = NULL;
         int elem_owned = 0;
-        if (field_desc->array_element_type_id != NULL)
+        if (field_desc->array_element_record != NULL)
+        {
+            elem_type = create_record_type(field_desc->array_element_record);
+            elem_owned = 1;
+        }
+        else if (field_desc->array_element_type_id != NULL)
         {
             HashNode_t *elem_node = semcheck_find_type_node_with_kgpc_type(
                 symtab, field_desc->array_element_type_id);
@@ -2027,8 +2326,7 @@ FIELD_RESOLVED:
                 semcheck_expr_set_resolved_kgpc_type_shared(expr, arr_type);
             if (arr_type != NULL)
                 destroy_kgpc_type(arr_type);
-            if (elem_owned && elem_type != NULL)
-                destroy_kgpc_type(elem_type);
+            /* Note: elem_type ownership was transferred to create_array_type, do NOT destroy it here */
         }
     }
 
@@ -2457,6 +2755,20 @@ int semcheck_addressof(int *type_return,
 
     if (inner_type == UNKNOWN_TYPE)
     {
+        if (inner->type == EXPR_VAR_ID && inner->expr_data.id != NULL)
+        {
+            HashNode_t *inner_symbol = NULL;
+            if (FindIdent(&inner_symbol, symtab, inner->expr_data.id) >= 0 &&
+                inner_symbol != NULL && inner_symbol->type == NULL &&
+                inner_symbol->is_var_parameter)
+            {
+                *type_return = POINTER_TYPE;
+                if (expr->resolved_kgpc_type != NULL)
+                    destroy_kgpc_type(expr->resolved_kgpc_type);
+                expr->resolved_kgpc_type = create_pointer_type(NULL);
+                return error_count;
+            }
+        }
         *type_return = UNKNOWN_TYPE;
         return error_count;
     }

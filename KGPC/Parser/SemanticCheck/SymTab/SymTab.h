@@ -101,6 +101,10 @@ int FindIdent(HashNode_t ** hash_return, SymTab_t *symtab, const char *id);
 /* Returns NULL if not found */
 ListNode_t *FindAllIdents(SymTab_t *symtab, const char *id);
 
+/* Searches for all instances of an identifier in the nearest scope that defines it */
+/* Returns NULL if not found */
+ListNode_t *FindAllIdentsInNearestScope(SymTab_t *symtab, const char *id);
+
 /* Pops the current scope */
 void PopScope(SymTab_t *symtab);
 
@@ -110,5 +114,8 @@ void DestroySymTab(SymTab_t *symtab);
 
 /* Prints the table for debugging */
 void PrintSymTab(SymTab_t *symtab, FILE *f, int num_indent);
+
+/* Move a hash node to the back of its bucket list in the nearest scope */
+void SymTab_MoveHashNodeToBack(SymTab_t *symtab, HashNode_t *node);
 
 #endif

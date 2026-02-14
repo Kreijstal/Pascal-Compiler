@@ -1,23 +1,21 @@
 program prelude;
 
-{ Minimal prelude for no-stdlib mode. Core primitive types still come from
-  compiler intrinsics; this file provides the Pascal-level aliases/constants
-  that were previously injected. }
+{ HARD COMPILER BUILTINS ONLY.
+  This file is loaded in --no-stdlib mode BEFORE the FPC RTL system unit.
+  It provides type aliases that the compiler C code references by name
+  but does not register as C builtins.
+
+  DO NOT add class declarations (TObject, TInterfacedObject) or complex
+  record types (TextRec, FileRec, TVarRec) here. Those MUST come from
+  the FPC RTL system unit. Adding incomplete stubs here shadows the
+  proper FPC declarations and causes missing-field errors.
+
+  Primitive types (Byte, Word, Cardinal, Int64, String, Char, Boolean,
+  Pointer, etc.) are registered as C builtins in SemCheck.c and do not
+  need to be declared here either. }
 
 type
-  Byte = 0..255;
-  ShortInt = -128..127;
-  Word = 0..65535;
-  SmallInt = -32768..32767;
-  Cardinal = 0..4294967295;
-  LongWord = Cardinal;
-  DWord = Cardinal;
-
-  QWord = Int64;
-  UInt64 = QWord;
-
-  { Single, Double, Extended are now builtin types with correct sizes }
-
+  { Size/pointer integer aliases - referenced by compiler C code }
   NativeInt = Int64;
   NativeUInt = QWord;
   SizeInt = NativeInt;
@@ -25,6 +23,7 @@ type
   PtrInt = NativeInt;
   PtrUInt = NativeUInt;
 
+  { Character and string aliases - referenced by compiler C code }
   AnsiChar = Char;
   PAnsiChar = ^AnsiChar;
   PPAnsiChar = ^PAnsiChar;
@@ -32,6 +31,7 @@ type
   PPointer = ^Pointer;
   PWideChar = ^WideChar;
 
+  { Pointer type aliases }
   PByte = ^Byte;
   PWord = ^Word;
   PLongInt = ^LongInt;
@@ -45,16 +45,16 @@ type
   PBoolean = ^Boolean;
 
   PText = ^text;
-  TObject = class;
   TClass = class of TObject;
   TypedFile = file;
   TRTLCriticalSection = array[0..39] of Byte;
   TSystemCodePage = Word;
 
   THandle = LongInt;
-  HRESULT = LongInt;  { Windows COM result type }
+  HRESULT = LongInt;
   CodePointer = Pointer;
 
+  { String type aliases - compiler C code checks these names }
   AnsiString = String;
   UnicodeString = String;
   WideString = String;
@@ -69,11 +69,7 @@ type
   TTextBuf = TextBuf;
   PTextBuf = ^TextBuf;
 
-  TObject = class
-  end;
-  TInterfacedObject = class(TObject)
-  end;
-
+  { TGUID - needed for interface support, compiler references fields by name }
   TGUID = record
     D1: LongWord;
     D2: Word;
@@ -81,36 +77,9 @@ type
     D4: array[0..7] of Byte;
   end;
 
-  TextRec = record
-    Handle: THandle;
-    Mode: LongInt;
-    BufSize: SizeInt;
-    PrivateData: SizeInt;
-    BufPos: SizeInt;
-    BufEnd: SizeInt;
-    BufPtr: ^TextBuf;
-    OpenFunc: CodePointer;
-    InOutFunc: CodePointer;
-    FlushFunc: CodePointer;
-    CloseFunc: CodePointer;
-    UserData: array[1..32] of Byte;
-    Name: array[0..255] of AnsiChar;
-    LineEnd: TLineEndStr;
-    Buffer: TextBuf;
-    CodePage: TSystemCodePage;
-  end;
-
   TextFile = text;
 
-  FileRec = record
-    Handle: THandle;
-    Mode: LongInt;
-    RecSize: SizeInt;
-    PrivateData: array[1..64] of Byte;
-    UserData: array[1..32] of Byte;
-    Name: array[0..255] of AnsiChar;
-  end;
-
+  { Numeric type aliases }
   Int8 = ShortInt;
   UInt8 = Byte;
   Int16 = SmallInt;
@@ -148,6 +117,7 @@ const
   vtUnicodeString = 18;
 
 type
+  { TVarRec - needed for array-of-const support }
   PVarRec = ^TVarRec;
   TVarRec = record
     case VType: SizeInt of
@@ -180,8 +150,6 @@ type
 
   TTextLineBreakStyle = (tlbsLF, tlbsCRLF, tlbsCR);
 
-  TSignalState = (ssNotHooked, ssHooked, ssOverridden);
-
   ByteBool = Boolean8;
   WordBool = Boolean16;
   LongBool = Boolean32;
@@ -191,45 +159,8 @@ const
   TextRecNameLength = 256;
   TextRecBufSize = 256;
 
-  LineEnding = #10;
-  sLineBreak = LineEnding;
-  DirectorySeparator: AnsiChar = '/';
-  DriveSeparator: AnsiChar = #0;
-  PathSeparator: AnsiChar = ':';
-  ExtensionSeparator: AnsiChar = '.';
-  AllowDirectorySeparators: set of AnsiChar = ['\', '/'];
-  AllowDriveSeparators: set of AnsiChar = [];
-  MaxPathLen = 4096;
-
-  DefaultSystemCodePage = 65001;
-  DefaultFileSystemCodePage = 65001;
-
-  fmClosed = $D7B0;
-  fmInput = $D7B1;
   fmOutput = $D7B2;
   fmInOut = $D7B3;
-
-  ARG_MAX = 131072;
-  NAME_MAX = 255;
-  PATH_MAX = 4095;
-  SYS_NMLN = 65;
-  SIG_MAXSIG = 128;
-  PRIO_PROCESS = 0;
-  PRIO_PGRP = 1;
-  PRIO_USER = 2;
-  UTSNAME_LENGTH = 65;
-
-  RTL_SIGINT = 0;
-  RTL_SIGFPE = 1;
-  RTL_SIGSEGV = 2;
-  RTL_SIGILL = 3;
-  RTL_SIGBUS = 4;
-  RTL_SIGQUIT = 5;
-  RTL_SIGLAST = RTL_SIGQUIT;
-  RTL_SIGDEFAULT = -1;
-
-var
-  IsLibrary: Boolean = False;
 
 begin
 end.

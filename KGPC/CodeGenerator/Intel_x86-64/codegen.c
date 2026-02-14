@@ -214,6 +214,184 @@ static inline int node_is_class_type(HashNode_t *node)
     return record_type_is_class(record);
 }
 
+static int record_has_class_vars(const struct RecordType *record)
+{
+    if (record == NULL || record->fields == NULL)
+        return 0;
+    ListNode_t *field_node = record->fields;
+    while (field_node != NULL)
+    {
+        if (field_node->type == LIST_RECORD_FIELD && field_node->cur != NULL)
+        {
+            struct RecordField *field = (struct RecordField *)field_node->cur;
+            if (field != NULL && field->is_class_var == 1)
+                return 1;
+        }
+        field_node = field_node->next;
+    }
+    return 0;
+}
+
+static int record_has_class_method_templates(const struct RecordType *record)
+{
+    if (record == NULL || record->method_templates == NULL)
+        return 0;
+    ListNode_t *node = record->method_templates;
+    while (node != NULL)
+    {
+        if (node->type == LIST_METHOD_TEMPLATE && node->cur != NULL)
+        {
+            struct MethodTemplate *templ = (struct MethodTemplate *)node->cur;
+            if (templ->is_class_method || templ->is_static)
+                return 1;
+        }
+        node = node->next;
+    }
+    return 0;
+}
+
+static int record_has_method_decls(const struct RecordType *record)
+{
+    if (record == NULL || record->fields == NULL)
+        return 0;
+    ListNode_t *node = record->fields;
+    while (node != NULL)
+    {
+        if (node->type == LIST_UNSPECIFIED && node->cur != NULL)
+            return 1;
+        node = node->next;
+    }
+    return 0;
+}
+
+static int codegen_class_var_field_size(SymTab_t *symtab, const struct RecordField *field)
+{
+    if (field == NULL)
+        return DOUBLEWORD;
+
+    int field_size = DOUBLEWORD;
+
+    if (field->type_id != NULL)
+    {
+        HashNode_t *type_node = NULL;
+        if (FindIdent(&type_node, symtab, field->type_id) != -1 && type_node != NULL &&
+            type_node->type != NULL)
+        {
+            long long type_size = kgpc_type_sizeof(type_node->type);
+            if (type_size > 0 && type_size <= INT_MAX)
+                field_size = (int)type_size;
+            return field_size;
+        }
+    }
+
+    if (field->is_array)
+    {
+        int elem_size = 0;
+        if (field->array_element_type_id != NULL)
+        {
+            HashNode_t *elem_node = NULL;
+            if (FindIdent(&elem_node, symtab, field->array_element_type_id) != -1 &&
+                elem_node != NULL && elem_node->type != NULL)
+            {
+                long long type_size = kgpc_type_sizeof(elem_node->type);
+                if (type_size > 0 && type_size <= INT_MAX)
+                    elem_size = (int)type_size;
+            }
+        }
+        if (elem_size == 0)
+        {
+            switch (field->array_element_type)
+            {
+                case CHAR_TYPE:
+                case BOOL:
+                case BYTE_TYPE:
+                    elem_size = 1;
+                    break;
+                case WORD_TYPE:
+                    elem_size = 2;
+                    break;
+                case LONGINT_TYPE:
+                case LONGWORD_TYPE:
+                case INT_TYPE:
+                    elem_size = 4;
+                    break;
+                case INT64_TYPE:
+                case QWORD_TYPE:
+                case REAL_TYPE:
+                case STRING_TYPE:
+                case POINTER_TYPE:
+                    elem_size = 8;
+                    break;
+                default:
+                    elem_size = DOUBLEWORD;
+                    break;
+            }
+        }
+        long long count = (long long)field->array_end - (long long)field->array_start + 1;
+        if (count < 0)
+            count = 0;
+        long long total = count * elem_size;
+        if (total > 0 && total <= INT_MAX)
+            field_size = (int)total;
+        return field_size;
+    }
+
+    switch (field->type)
+    {
+        case INT64_TYPE:
+        case REAL_TYPE:
+        case STRING_TYPE:
+        case POINTER_TYPE:
+        case QWORD_TYPE:
+            field_size = 8;
+            break;
+        case CHAR_TYPE:
+        case BOOL:
+        case BYTE_TYPE:
+            field_size = 1;
+            break;
+        case WORD_TYPE:
+            field_size = 2;
+            break;
+        case LONGINT_TYPE:
+        case LONGWORD_TYPE:
+        case INT_TYPE:
+            field_size = DOUBLEWORD;
+            break;
+        default:
+            field_size = DOUBLEWORD;
+            break;
+    }
+
+    return field_size;
+}
+
+static long long codegen_class_var_storage_size(SymTab_t *symtab, const struct RecordType *record_info,
+    int include_all_fields)
+{
+    if (record_info == NULL || record_info->fields == NULL)
+        return 0;
+
+    long long current_offset = 0;
+    ListNode_t *field_node = record_info->fields;
+    while (field_node != NULL)
+    {
+        if (field_node->type == LIST_RECORD_FIELD && field_node->cur != NULL)
+        {
+            struct RecordField *field = (struct RecordField *)field_node->cur;
+            if (field != NULL && (include_all_fields || field->is_class_var == 1))
+            {
+                int field_size = codegen_class_var_field_size(symtab, field);
+                int alignment = (field_size >= 8) ? 8 : ((field_size >= 4) ? 4 : 1);
+                current_offset = (current_offset + alignment - 1) & ~(alignment - 1);
+                current_offset += field_size;
+            }
+        }
+        field_node = field_node->next;
+    }
+    return current_offset;
+}
+
 /* Helper function to get TypeAlias from HashNode */
 static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
 {
@@ -309,11 +487,15 @@ static void codegen_add_class_vars_for_static_method(const char *mangled_name,
         }
     }
     
-    if (record_info == NULL || !record_type_is_class(record_info))
+    if (record_info == NULL)
     {
         free(class_name);
         return;
     }
+    int has_class_vars = record_has_class_vars(record_info);
+    int include_all_fields = 0;
+    if (!has_class_vars)
+        include_all_fields = 1;
     if (record_info->is_type_helper)
     {
         free(class_name);
@@ -349,43 +531,14 @@ static void codegen_add_class_vars_for_static_method(const char *mangled_name,
         struct RecordField *field = (struct RecordField *)field_node->cur;
         if (field != NULL && field->name != NULL && field->name[0] != '\0')
         {
+            if (!include_all_fields && field->is_class_var != 1)
+            {
+                field_node = field_node->next;
+                continue;
+            }
+
             /* Calculate field size */
-            int field_size = DOUBLEWORD;  /* Default 4 bytes */
-            
-            /* Try to get actual size from type */
-            if (field->type_id != NULL)
-            {
-                HashNode_t *type_node = NULL;
-                if (FindIdent(&type_node, symtab, field->type_id) != -1 && type_node != NULL)
-                {
-                    if (type_node->type != NULL)
-                    {
-                        long long type_size = kgpc_type_sizeof(type_node->type);
-                        if (type_size > 0)
-                            field_size = (int)type_size;
-                    }
-                }
-            }
-            else
-            {
-                /* Use primitive type tag */
-                switch (field->type)
-                {
-                    case INT64_TYPE:
-                    case REAL_TYPE:
-                    case STRING_TYPE:
-                    case POINTER_TYPE:
-                        field_size = 8;
-                        break;
-                    case CHAR_TYPE:
-                    case BOOL:
-                        field_size = 1;
-                        break;
-                    default:
-                        field_size = DOUBLEWORD;
-                        break;
-                }
-            }
+            int field_size = codegen_class_var_field_size(symtab, field);
             
             /* Build the static label for this field: ClassName_CLASSVAR+offset */
             /* We register it with offset information */
@@ -1305,7 +1458,14 @@ void codegen_function_header(char *func_name, CodeGenContext *ctx)
     assert(ctx != NULL);
     codegen_emit_function_debug_comments(func_name, ctx);
     fprintf(ctx->output_file, ".globl\t%s\n", func_name);
-    fprintf(ctx->output_file, "%s:\n\tpushq\t%%rbp\n\tmovq\t%%rsp, %%rbp\n", func_name);
+    if (codegen_target_is_windows())
+        fprintf(ctx->output_file, "\t.seh_proc\t%s\n", func_name);
+    fprintf(ctx->output_file, "%s:\n\tpushq\t%%rbp\n", func_name);
+    if (codegen_target_is_windows())
+        fprintf(ctx->output_file, "\t.seh_pushreg\t%%rbp\n");
+    fprintf(ctx->output_file, "\tmovq\t%%rsp, %%rbp\n");
+    if (codegen_target_is_windows())
+        fprintf(ctx->output_file, "\t.seh_setframe\t%%rbp, 0\n");
 
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
@@ -1322,6 +1482,8 @@ void codegen_function_footer(char *func_name, CodeGenContext *ctx)
     assert(func_name != NULL);
     assert(ctx != NULL);
     fprintf(ctx->output_file, "\tnop\n\tleave\n\tret\n");
+    if (codegen_target_is_windows())
+        fprintf(ctx->output_file, "\t.seh_endproc\n");
 
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
@@ -1641,20 +1803,62 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
                     }
 
                     /* Emit writable storage for class vars. */
-                    long long class_var_size = 0;
-                    if (codegen_sizeof_record_type(ctx, record_info, &class_var_size) != 0 ||
-                        class_var_size <= 0)
+                    if (record_type_is_class(record_info) || record_has_class_vars(record_info) ||
+                        record_has_class_method_templates(record_info) || record_has_method_decls(record_info))
                     {
-                        class_var_size = 8;
-                    }
+                        int include_all_fields = (!record_has_class_vars(record_info) &&
+                            (record_has_class_method_templates(record_info) || record_has_method_decls(record_info)));
+                        long long class_var_size = codegen_class_var_storage_size(symtab, record_info,
+                            include_all_fields ? 1 : 0);
+                        if (class_var_size <= 0)
+                            class_var_size = 8;
 
-                    fprintf(ctx->output_file, "\n# Class var storage for %s\n", class_label);
-                    fprintf(ctx->output_file, "\t.data\n");
-                    fprintf(ctx->output_file, "\t.align 8\n");
-                    fprintf(ctx->output_file, ".globl %s_CLASSVAR\n", class_label);
-                    fprintf(ctx->output_file, "%s_CLASSVAR:\n", class_label);
-                    fprintf(ctx->output_file, "\t.zero\t%lld\n", class_var_size);
-                    fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());
+                        fprintf(ctx->output_file, "\n# Class var storage for %s\n", class_label);
+                        fprintf(ctx->output_file, "\t.data\n");
+                        fprintf(ctx->output_file, "\t.align 8\n");
+                        fprintf(ctx->output_file, ".globl %s_CLASSVAR\n", class_label);
+                        fprintf(ctx->output_file, "%s_CLASSVAR:\n", class_label);
+                        fprintf(ctx->output_file, "\t.zero\t%lld\n", class_var_size);
+                        fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());
+                    }
+                }
+                else if (record_info != NULL && !record_type_is_class(record_info) && class_label != NULL)
+                {
+                    int has_class_vars = record_has_class_vars(record_info);
+                    int has_class_methods = record_has_class_method_templates(record_info) ||
+                        record_has_method_decls(record_info);
+                    if (!has_class_vars && !has_class_methods)
+                    {
+                        cur = cur->next;
+                        continue;
+                    }
+                    int already_emitted = 0;
+                    for (int i = 0; i < emitted_count; i++)
+                    {
+                        if (emitted_classes[i] != NULL && strcmp(emitted_classes[i], class_label) == 0)
+                        {
+                            already_emitted = 1;
+                            break;
+                        }
+                    }
+                    if (!already_emitted)
+                    {
+                        if (emitted_count < MAX_EMITTED_CLASSES)
+                            emitted_classes[emitted_count++] = class_label;
+
+                        long long class_var_size = codegen_class_var_storage_size(symtab, record_info,
+                            has_class_vars ? 0 : 1);
+                        if (class_var_size <= 0)
+                            class_var_size = 8;
+
+                        fprintf(ctx->output_file, "\n# Class var storage for record %s\n", class_label);
+                        fprintf(ctx->output_file, "\t.data\n");
+                        fprintf(ctx->output_file, "\t.align 8\n");
+                        fprintf(ctx->output_file, ".globl %s_CLASSVAR\n", class_label);
+                        fprintf(ctx->output_file, "%s_CLASSVAR:\n", class_label);
+                        fprintf(ctx->output_file, "\t.zero\t%lld\n", class_var_size);
+                        fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());
+                    }
                 }
             }
         cur = cur->next;
@@ -1732,7 +1936,13 @@ void codegen_main(char *prgm_name, CodeGenContext *ctx)
     codegen_function_header("main", ctx);
     call_space = codegen_target_is_windows() ? g_stack_home_space_bytes : 32;
     if (call_space > 0)
+    {
         fprintf(ctx->output_file, "\tsubq\t$%d, %%rsp\n", call_space);
+        if (codegen_target_is_windows())
+            fprintf(ctx->output_file, "\t.seh_stackalloc\t%d\n", call_space);
+    }
+    if (codegen_target_is_windows())
+        fprintf(ctx->output_file, "\t.seh_endprologue\n");
     if (codegen_target_is_windows())
     {
         fprintf(ctx->output_file, "\tcall\tkgpc_init_args\n");
@@ -1771,21 +1981,23 @@ void codegen_stack_space(CodeGenContext *ctx)
     if(aligned_space != 0)
     {
         fprintf(ctx->output_file, "\tsubq\t$%d, %%rsp\n", aligned_space);
-        
+        if (codegen_target_is_windows())
+            fprintf(ctx->output_file, "\t.seh_stackalloc\t%d\n", aligned_space);
+
         /* Zero-initialize the allocated stack space to ensure local variables start with zero values.
          * This is critical for code that assumes uninitialized variables are zero (like linked lists).
          * We use rep stosq for efficient zero-filling.
-         * 
+         *
          * Calling conventions differ between platforms:
          * - Windows x64: parameters in rcx, rdx, r8, r9
          * - System V AMD64 (Linux): parameters in rdi, rsi, rdx, rcx, r8, r9
-         * 
+         *
          * rep stosq uses rdi (destination), rax (value), rcx (count)
          * We need to save/restore these registers if they contain parameters.
          * r10 and r11 are caller-saved scratch registers safe to use on both platforms.
          */
         int quadwords = (aligned_space + 7) / 8;  /* Round up to nearest quadword */
-        
+
         if (codegen_target_is_windows())
         {
             /* Windows x64 calling convention: rcx, rdx, r8, r9
@@ -1814,6 +2026,8 @@ void codegen_stack_space(CodeGenContext *ctx)
             fprintf(ctx->output_file, "\tmovq\t%%r11, %%rcx\n");  /* Restore rcx */
         }
     }
+    if (codegen_target_is_windows())
+        fprintf(ctx->output_file, "\t.seh_endprologue\n");
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
@@ -3952,6 +4166,9 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                 while(arg_ids != NULL)
                 {
                     int tree_is_var_param = arg_decl->tree_data.var_decl_data.is_var_param;
+                    int is_untyped_param = arg_decl->tree_data.var_decl_data.is_untyped_param;
+                    if (is_untyped_param)
+                        tree_is_var_param = 1;
                     int symbol_is_var_param = tree_is_var_param;
                     int is_self_param = 0;
                     if (arg_decl->tree_data.var_decl_data.ids != NULL)
@@ -4131,6 +4348,10 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     {
                         is_array_type = 1;
                         type_requires_qword = kgpc_type_uses_qword(cached_arg_type);
+                        struct TypeAlias *alias = kgpc_type_get_type_alias(cached_arg_type);
+                        if (kgpc_type_is_shortstring(cached_arg_type) ||
+                            (alias != NULL && alias->is_shortstring))
+                            is_shortstring_param = 1;
                     }
                     else if (resolved_type_node != NULL && resolved_type_node->type != NULL)
                     {

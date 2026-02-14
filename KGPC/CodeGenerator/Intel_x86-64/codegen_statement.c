@@ -1355,6 +1355,13 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
         if (target_type == UNKNOWN_TYPE)
             target_type = expr_get_type_tag(expr);
         if (inner != NULL &&
+            expr->resolved_kgpc_type != NULL &&
+            kgpc_type_is_array(expr->resolved_kgpc_type))
+        {
+            inst_list = codegen_address_for_expr(inner, inst_list, ctx, out_reg);
+            goto cleanup;
+        }
+        if (inner != NULL &&
             (target_type == RECORD_TYPE || target_type == FILE_TYPE || target_type == TEXT_TYPE || target_type == SHORTSTRING_TYPE))
         {
             inst_list = codegen_address_for_expr(inner, inst_list, ctx, out_reg);
@@ -2680,7 +2687,7 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                             free_arg_regs();
                             
                             /* Save the allocated instance pointer */
-                            constructor_instance_reg = get_free_reg(get_reg_stack(), &inst_list);
+                            constructor_instance_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
                             if (constructor_instance_reg == NULL)
                             {
                                 codegen_report_error(ctx, 
@@ -4798,7 +4805,20 @@ static ListNode_t *codegen_builtin_val(struct Statement *stmt, ListNode_t *inst_
     StackNode_t *code_spill = NULL;
     StackNode_t *code_result_spill = NULL;
 
-    inst_list = codegen_expr_with_result(source_expr, inst_list, ctx, &source_reg);
+    int source_is_shortstring = codegen_expr_is_shortstring_array(source_expr);
+    if (!source_is_shortstring && source_expr != NULL &&
+        expr_get_type_tag(source_expr) == SHORTSTRING_TYPE)
+        source_is_shortstring = 1;
+
+    if (source_is_shortstring)
+    {
+        /* For ShortString sources, get the address instead of the value */
+        inst_list = codegen_address_for_expr(source_expr, inst_list, ctx, &source_reg);
+    }
+    else
+    {
+        inst_list = codegen_expr_with_result(source_expr, inst_list, ctx, &source_reg);
+    }
     if (codegen_had_error(ctx) || source_reg == NULL)
         goto cleanup;
 
@@ -4814,13 +4834,17 @@ static ListNode_t *codegen_builtin_val(struct Statement *stmt, ListNode_t *inst_
     switch (value_expr != NULL ? expr_get_type_tag(value_expr) : UNKNOWN_TYPE)
     {
         case INT_TYPE:
-            call_target = "kgpc_val_integer";
+            call_target = source_is_shortstring ? "kgpc_val_integer_ss" : "kgpc_val_integer";
             break;
         case LONGINT_TYPE:
-            call_target = "kgpc_val_longint";
+        case INT64_TYPE:
+            call_target = source_is_shortstring ? "kgpc_val_longint_ss" : "kgpc_val_longint";
+            break;
+        case QWORD_TYPE:
+            call_target = source_is_shortstring ? "kgpc_val_qword_ss" : "kgpc_val_qword";
             break;
         case REAL_TYPE:
-            call_target = "kgpc_val_real";
+            call_target = source_is_shortstring ? "kgpc_val_real_ss" : "kgpc_val_real";
             break;
         default:
             call_target = NULL;
@@ -6151,6 +6175,94 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
         return inst_list;
     }
 
+    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "Assert"))
+    {
+        /* Assert(condition [, message])
+         * Evaluate the boolean condition. If true, continue execution.
+         * If false, call kgpc_assert_failed(msg, filename, line) which
+         * prints the assertion failure and exits with code 227. */
+        ListNode_t *assert_args = stmt->stmt_data.procedure_call_data.expr_args;
+        struct Expression *cond_expr = (assert_args != NULL) ? (struct Expression *)assert_args->cur : NULL;
+        struct Expression *msg_expr = (assert_args != NULL && assert_args->next != NULL)
+                                      ? (struct Expression *)assert_args->next->cur : NULL;
+
+        if (cond_expr != NULL)
+        {
+            int relop_type = 0;
+            inst_list = codegen_condition_expr(cond_expr, inst_list, ctx, &relop_type);
+
+            /* Generate label for the "pass" path (condition was true) */
+            char pass_label[18];
+            gen_label(pass_label, 18, ctx);
+
+            /* Jump to pass_label if condition is TRUE (non-zero).
+             * codegen_condition_expr with a boolean expr does testl and sets relop_type=NE.
+             * gencode_jmp(NE, inverse=0, ...) emits jne label (jump if not-equal-to-zero = true). */
+            inst_list = gencode_jmp(relop_type, 0, pass_label, inst_list);
+
+            /* Failure path: call kgpc_assert_failed(msg, filename, line)
+             * ABI: Windows uses rcx/rdx/r8, SysV uses rdi/rsi/rdx */
+            const char *arg1_reg = codegen_target_is_windows() ? "%rcx" : "%rdi";
+            const char *arg2_reg = codegen_target_is_windows() ? "%rdx" : "%rsi";
+            const char *arg3_reg_32 = codegen_target_is_windows() ? "%r8d" : "%edx";
+
+            /* Set up message argument (arg1) */
+            if (msg_expr != NULL && msg_expr->type == EXPR_STRING && msg_expr->expr_data.string != NULL)
+            {
+                const char *readonly_section = codegen_readonly_section_directive();
+                char msg_label[64];
+                snprintf(msg_label, sizeof(msg_label), ".LC%d", ctx->write_label_counter++);
+                char escaped_msg[CODEGEN_MAX_INST_BUF];
+                escape_string(escaped_msg, msg_expr->expr_data.string, sizeof(escaped_msg));
+                char rodata_buf[CODEGEN_MAX_INST_BUF + 128];
+                snprintf(rodata_buf, sizeof(rodata_buf), "%s\n%s:\n\t.string \"%s\"\n\t.text\n",
+                         readonly_section, msg_label, escaped_msg);
+                inst_list = add_inst(inst_list, rodata_buf);
+                snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", msg_label, arg1_reg);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else
+            {
+                /* No message provided - pass empty string */
+                const char *readonly_section = codegen_readonly_section_directive();
+                char msg_label[64];
+                snprintf(msg_label, sizeof(msg_label), ".LC%d", ctx->write_label_counter++);
+                char rodata_buf[256];
+                snprintf(rodata_buf, sizeof(rodata_buf), "%s\n%s:\n\t.string \"\"\n\t.text\n",
+                         readonly_section, msg_label);
+                inst_list = add_inst(inst_list, rodata_buf);
+                snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", msg_label, arg1_reg);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            /* filename argument (arg2) - empty for now */
+            {
+                const char *readonly_section = codegen_readonly_section_directive();
+                char fn_label[64];
+                snprintf(fn_label, sizeof(fn_label), ".LC%d", ctx->write_label_counter++);
+                char rodata_buf[256];
+                snprintf(rodata_buf, sizeof(rodata_buf), "%s\n%s:\n\t.string \"\"\n\t.text\n",
+                         readonly_section, fn_label);
+                inst_list = add_inst(inst_list, rodata_buf);
+                snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", fn_label, arg2_reg);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            /* line number argument (arg3) */
+            snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %s\n", stmt->line_num, arg3_reg_32);
+            inst_list = add_inst(inst_list, buffer);
+            /* Zero %eax (no vector regs) and call with shadow space */
+            inst_list = add_inst(inst_list, "\txorl\t%eax, %eax\n");
+            inst_list = codegen_call_with_shadow_space(inst_list, ctx, "kgpc_assert_failed");
+
+            /* Emit pass label */
+            snprintf(buffer, sizeof(buffer), "%s:\n", pass_label);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s (Assert)\n", __func__);
+        #endif
+        return inst_list;
+    }
+
     const char *proc_name_hint = stmt->stmt_data.procedure_call_data.id;
     if (proc_name_hint == NULL)
         proc_name_hint = stmt->stmt_data.procedure_call_data.mangled_id;
@@ -6635,6 +6747,13 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             if (use_qword)
             {
                 int value_is_qword = expr_uses_qword_kgpctype(assign_expr);
+                /* Fallback: check expr type tag for pointer arithmetic / 64-bit ops */
+                if (!value_is_qword && assign_expr != NULL)
+                {
+                    int assign_tag = expr_get_type_tag(assign_expr);
+                    if (codegen_type_uses_qword(assign_tag))
+                        value_is_qword = 1;
+                }
                 if (coerced_to_real)
                     value_is_qword = 1;
                 /* Check for procedural var calls with pointer return type */
@@ -6768,6 +6887,13 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             if (use_qword)
             {
                 int value_is_qword = expr_uses_qword_kgpctype(assign_expr);
+                /* Fallback: check expr type tag for pointer arithmetic / 64-bit ops */
+                if (!value_is_qword && assign_expr != NULL)
+                {
+                    int assign_tag = expr_get_type_tag(assign_expr);
+                    if (codegen_type_uses_qword(assign_tag))
+                        value_is_qword = 1;
+                }
                 if (coerced_to_real)
                     value_is_qword = 1;
                 /* Check for procedural var calls with pointer return type */
@@ -6913,6 +7039,13 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         else if (use_qword)
         {
             int value_is_qword = expr_uses_qword_kgpctype(assign_expr);
+            /* Fallback: check expr type tag for pointer arithmetic / 64-bit ops */
+            if (!value_is_qword && assign_expr != NULL)
+            {
+                int assign_tag = expr_get_type_tag(assign_expr);
+                if (codegen_type_uses_qword(assign_tag))
+                    value_is_qword = 1;
+            }
             if (coerced_to_real)
                 value_is_qword = 1;
             /* Check for procedural var calls with pointer return type */
@@ -7039,6 +7172,13 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         else if (use_qword)
         {
             int value_is_qword = expr_uses_qword_kgpctype(assign_expr);
+            /* Fallback: check expr type tag for pointer arithmetic / 64-bit ops */
+            if (!value_is_qword && assign_expr != NULL)
+            {
+                int assign_tag = expr_get_type_tag(assign_expr);
+                if (codegen_type_uses_qword(assign_tag))
+                    value_is_qword = 1;
+            }
             if (coerced_to_real)
                 value_is_qword = 1;
             /* Check for procedural var calls with pointer return type */
@@ -7166,6 +7306,13 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         else if (codegen_type_uses_qword(var_type_3))
         {
             int value_is_qword = expr_uses_qword_kgpctype(assign_expr);
+            /* Fallback: check expr type tag for pointer arithmetic / 64-bit ops */
+            if (!value_is_qword && assign_expr != NULL)
+            {
+                int assign_tag = expr_get_type_tag(assign_expr);
+                if (codegen_type_uses_qword(assign_tag))
+                    value_is_qword = 1;
+            }
             if (coerced_to_real)
                 value_is_qword = 1;
             /* Check for procedural var calls with pointer return type */
@@ -9078,15 +9225,58 @@ static ListNode_t *codegen_try_except(struct Statement *stmt, ListNode_t *inst_l
     gen_label(except_label, sizeof(except_label), ctx);
     gen_label(after_label, sizeof(after_label), ctx);
 
+    /* ── push a runtime except frame (setjmp) ── */
+    inst_list = add_inst(inst_list, "\t# TRY/EXCEPT: push runtime except frame\n");
+    /* call kgpc_push_except_frame() → returns jmp_buf* in %rax */
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = codegen_call_with_shadow_space(inst_list, ctx, "kgpc_push_except_frame");
+    free_arg_regs();
+
+    /* Spill the jmp_buf pointer to a stack slot so setjmp can use it */
+    StackNode_t *jmpbuf_slot = add_l_t("try_except_jmpbuf");
+    char buffer[96];
+    if (jmpbuf_slot != NULL) {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, -%d(%%rbp)\n", jmpbuf_slot->offset);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    /* call setjmp(jmp_buf*) — argument is in %rax, move to first arg reg */
+    if (codegen_target_is_windows())
+    {
+        /* Windows x64: _setjmp(jmp_buf*, frame_addr) — needs two args.
+         * %rcx = jmp_buf pointer, %rdx = frame pointer (RBP) for SEH unwinding. */
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %%rcx\n\tmovq\t%%rbp, %%rdx\n");
+    }
+    else
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %%rdi\n");
+    inst_list = add_inst(inst_list, buffer);
+    inst_list = codegen_vect_reg(inst_list, 0);
+
+    /* Windows x64: _setjmp requires frame pointer as 2nd arg for SEH unwinding.
+     * Linux: _setjmp avoids saving signal mask for performance. */
+    inst_list = codegen_call_with_shadow_space(inst_list, ctx, "_setjmp");
+    free_arg_regs();
+
+    /* If setjmp returned non-zero, we got here from longjmp → jump to except */
+    inst_list = add_inst(inst_list, "\ttestl\t%eax, %eax\n");
+    snprintf(buffer, sizeof(buffer), "\tjne\t%s\n", except_label);
+    inst_list = add_inst(inst_list, buffer);
+
+    /* ── try body (setjmp returned 0) ── */
     if (!codegen_push_except(ctx, except_label)) {
         return inst_list;
     }
     inst_list = codegen_statement_list(try_stmts, inst_list, ctx, symtab);
-    inst_list = gencode_jmp(NORMAL_JMP, 0, after_label, inst_list);
-
     codegen_pop_except(ctx);
 
-    char buffer[64];
+    /* Pop the runtime except frame (normal exit from try) */
+    inst_list = add_inst(inst_list, "\t# TRY/EXCEPT: pop runtime except frame (normal exit)\n");
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = codegen_call_with_shadow_space(inst_list, ctx, "kgpc_pop_except_frame");
+    free_arg_regs();
+    inst_list = gencode_jmp(NORMAL_JMP, 0, after_label, inst_list);
+
+    /* ── except handler (setjmp returned non-zero, or local raise jumped here) ── */
     snprintf(buffer, sizeof(buffer), "%s:\n", except_label);
     inst_list = add_inst(inst_list, buffer);
 
@@ -9095,7 +9285,11 @@ static ListNode_t *codegen_try_except(struct Statement *stmt, ListNode_t *inst_l
     if (stmt->stmt_data.try_except_data.has_on_clause && 
         stmt->stmt_data.try_except_data.exception_var_name != NULL) {
         
-        /* Push a new scope for the exception variable */
+        /* Push a new scope for the exception variable on the symbol table.
+         * Also add the variable to the stack manager's current scope so
+         * find_label resolves to the correct stack offset.  After the handler,
+         * remove it from the stack manager so lookups of the same name fall
+         * back to any outer variable. */
         PushScope(symtab);
         
         /* Add the exception variable to the stack manager (8 bytes for pointer) */
@@ -9115,7 +9309,10 @@ static ListNode_t *codegen_try_except(struct Statement *stmt, ListNode_t *inst_l
         else
             inst_list = add_inst(inst_list, "\t# EXCEPT block with no handlers\n");
         
-        /* Pop the scope */
+        /* Remove the exception variable from the stack manager so outer
+         * variables with the same name are visible again, then pop the
+         * symbol table scope. */
+        remove_last_l_x(stmt->stmt_data.try_except_data.exception_var_name);
         PopScope(symtab);
     } else {
         /* No exception variable - just generate the except statements normally */
@@ -9157,6 +9354,12 @@ static ListNode_t *codegen_raise(struct Statement *stmt, ListNode_t *inst_list, 
 
     if (except_label != NULL)
     {
+        /* Pop the runtime except frame before local jump to handler */
+        inst_list = add_inst(inst_list, "\t# RAISE: pop runtime except frame (local raise)\n");
+        inst_list = codegen_vect_reg(inst_list, 0);
+        inst_list = codegen_call_with_shadow_space(inst_list, ctx, "kgpc_pop_except_frame");
+        free_arg_regs();
+
         int limit_depth = codegen_current_except_finally_depth(ctx);
         inst_list = codegen_branch_through_finally(ctx, inst_list, symtab, except_label, limit_depth);
         return inst_list;

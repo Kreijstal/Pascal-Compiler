@@ -456,7 +456,7 @@ static combinator_t* make_case_expression(combinator_t** expr_parser) {
     // Note: boolean literals (true/false) must come BEFORE cident to avoid being
     // parsed as identifiers.
     combinator_t* case_func_call = seq(new_combinator(), PASCAL_T_FUNC_CALL,
-        cident(PASCAL_T_IDENTIFIER),
+        pascal_qualified_identifier(PASCAL_T_IDENTIFIER),
         between(token(match("(")), token(match(")")),
             optional(sep_by(lazy(expr_parser), token(match(","))))
         ),
@@ -473,7 +473,7 @@ static combinator_t* make_case_expression(combinator_t** expr_parser) {
         token(create_keyword_parser("true", PASCAL_T_BOOLEAN)),   // Boolean true
         token(create_keyword_parser("false", PASCAL_T_BOOLEAN)),  // Boolean false
         case_func_call,
-        cident(PASCAL_T_IDENTIFIER),
+        pascal_qualified_identifier(PASCAL_T_IDENTIFIER),  // supports dotted identifiers like THorzRectAlign.Left
         between(token(match("(")), token(match(")")), lazy(expr_parser)), // parenthesized expressions
         NULL);
 

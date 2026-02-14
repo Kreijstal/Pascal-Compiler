@@ -77,38 +77,6 @@ static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
     return hashnode_get_type_alias(node);
 }
 
-HashNode_t *semcheck_find_preferred_type_node(SymTab_t *symtab, const char *type_id)
-{
-    if (symtab == NULL || type_id == NULL)
-        return NULL;
-
-    ListNode_t *matches = FindAllIdents(symtab, type_id);
-    if (matches == NULL)
-    {
-        /* Try stripping unit prefix from qualified name like "baseunix.stat" */
-        const char *dot = strrchr(type_id, '.');
-        if (dot != NULL && dot[1] != '\0')
-            matches = FindAllIdents(symtab, (dot + 1));
-    }
-    HashNode_t *best = NULL;
-    ListNode_t *cur = matches;
-    while (cur != NULL)
-    {
-        HashNode_t *node = (HashNode_t *)cur->cur;
-        if (node != NULL && node->hash_type == HASHTYPE_TYPE)
-        {
-            if (best == NULL)
-                best = node;
-            else if (best->defined_in_unit && !node->defined_in_unit)
-                best = node;
-        }
-        cur = cur->next;
-    }
-    if (matches != NULL)
-        DestroyList(matches);
-    return best;
-}
-
 long long sizeof_from_type_tag(int type_tag)
 {
     switch(type_tag)
@@ -791,23 +759,47 @@ int resolve_record_field(SymTab_t *symtab, struct RecordType *record,
     if (record == NULL || field_name == NULL)
         return 1;
 
-    long long offset = 0;
-    int found = 0;
-    long long start_offset = record->is_class ? POINTER_SIZE_BYTES : 0;
-    if (find_field_in_members(symtab, record->fields, field_name, out_field,
-            &offset, start_offset, 0, line_num, &found) != 0)
-        return 1;
-
-    if (!found)
+    /* Walk the inheritance chain (object/class hierarchy) */
+    struct RecordType *current = record;
+    int depth = 0;
+    while (current != NULL && depth < 32) /* guard against infinite loops */
     {
-        if (!silent)
-            semcheck_error_with_context("Error on line %d, record field %s not found.\n", line_num, field_name);
-        return 1;
+        long long offset = 0;
+        int found = 0;
+        long long start_offset = current->is_class ? POINTER_SIZE_BYTES : 0;
+        if (find_field_in_members(symtab, current->fields, field_name, out_field,
+                &offset, start_offset, 0, line_num, &found) != 0)
+            return 1;
+
+        if (found)
+        {
+            if (offset_out != NULL)
+                *offset_out = offset;
+            return 0;
+        }
+
+        /* Try parent type */
+        if (current->parent_class_name != NULL)
+        {
+            HashNode_t *parent_node = NULL;
+            if (FindIdent(&parent_node, symtab, current->parent_class_name) >= 0 &&
+                parent_node != NULL)
+            {
+                struct RecordType *parent_record = hashnode_get_record_type(parent_node);
+                if (parent_record != NULL)
+                {
+                    current = parent_record;
+                    depth++;
+                    continue;
+                }
+            }
+        }
+        break;
     }
 
-    if (offset_out != NULL)
-        *offset_out = offset;
-    return 0;
+    if (!silent)
+        semcheck_error_with_context("Error on line %d, record field %s not found.\n", line_num, field_name);
+    return 1;
 }
 
 int semcheck_compute_record_size(SymTab_t *symtab, struct RecordType *record,
