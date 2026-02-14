@@ -300,9 +300,42 @@ static int semcheck_map_builtin_type_name_local(const char *id)
 
 static int semcheck_helper_self_is_var(SymTab_t *symtab, const char *base_type_id)
 {
-    (void)symtab;
-    (void)base_type_id;
-    return 0;
+    if (base_type_id == NULL)
+        return 0;
+    /* Real/Single/Double/Extended: codegen passes Self by value via SSE. */
+    if (pascal_identifier_equals(base_type_id, "Real") ||
+        pascal_identifier_equals(base_type_id, "Single") ||
+        pascal_identifier_equals(base_type_id, "Double") ||
+        pascal_identifier_equals(base_type_id, "Extended") ||
+        pascal_identifier_equals(base_type_id, "Currency") ||
+        pascal_identifier_equals(base_type_id, "Comp"))
+        return 0;
+    /* String types are heap-allocated pointers — by value is correct. */
+    if (pascal_identifier_equals(base_type_id, "String") ||
+        pascal_identifier_equals(base_type_id, "AnsiString") ||
+        pascal_identifier_equals(base_type_id, "ShortString") ||
+        pascal_identifier_equals(base_type_id, "WideString") ||
+        pascal_identifier_equals(base_type_id, "UnicodeString") ||
+        pascal_identifier_equals(base_type_id, "Char") ||
+        pascal_identifier_equals(base_type_id, "AnsiChar") ||
+        pascal_identifier_equals(base_type_id, "WideChar"))
+        return 0;
+    /* Class and pointer types: Self is already a pointer. */
+    HashNode_t *type_node = NULL;
+    if (FindIdent(&type_node, symtab, base_type_id) == 0 && type_node != NULL)
+    {
+        if (type_node->type != NULL && type_node->type->kind == TYPE_KIND_RECORD)
+        {
+            struct RecordType *rec = type_node->type->info.record_info;
+            if (rec != NULL && rec->is_class)
+                return 0;
+        }
+        if (type_node->type != NULL && type_node->type->kind == TYPE_KIND_POINTER)
+            return 0;
+    }
+    /* Integer/ordinal value types: Self must be passed by reference
+     * so that mutations (Self := Self or ...) persist at the call site. */
+    return 1;
 }
 
 static char *semcheck_dup_type_id_from_ast(ast_t *node)
