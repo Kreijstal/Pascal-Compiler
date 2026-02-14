@@ -9869,6 +9869,25 @@ record_ctor_cleanup:
             {
                 target_type_id = dup_symbol(unwrapped_type);
             }
+            /* Handle qualified identifiers like widestringmanager.UpperUnicodeStringProc
+             * parsed as member access in typecast position */
+            if (target_type == UNKNOWN_TYPE && target_type_id == NULL &&
+                unwrapped_type->typ == PASCAL_T_MEMBER_ACCESS)
+            {
+                ast_t *base = unwrapped_type->child;
+                ast_t *field = (base != NULL) ? base->next : NULL;
+                char *base_name = dup_symbol(base);
+                char *field_name = dup_symbol(field);
+                if (base_name != NULL && field_name != NULL)
+                {
+                    size_t len = strlen(base_name) + 1 + strlen(field_name) + 1;
+                    target_type_id = (char *)malloc(len);
+                    if (target_type_id != NULL)
+                        snprintf(target_type_id, len, "%s.%s", base_name, field_name);
+                }
+                if (base_name != NULL) free(base_name);
+                if (field_name != NULL) free(field_name);
+            }
         }
 
         ListNode_t *args = NULL;
