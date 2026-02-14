@@ -2299,7 +2299,12 @@ FIELD_RESOLVED:
     {
         KgpcType *elem_type = NULL;
         int elem_owned = 0;
-        if (field_desc->array_element_type_id != NULL)
+        if (field_desc->array_element_record != NULL)
+        {
+            elem_type = create_record_type(field_desc->array_element_record);
+            elem_owned = 1;
+        }
+        else if (field_desc->array_element_type_id != NULL)
         {
             HashNode_t *elem_node = semcheck_find_type_node_with_kgpc_type(
                 symtab, field_desc->array_element_type_id);

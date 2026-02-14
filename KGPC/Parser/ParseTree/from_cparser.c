@@ -4002,7 +4002,11 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                             free(nested_id);
                     }
                     if (nested_record != NULL)
-                        destroy_record_type(nested_record);
+                    {
+                        type_info->record_type = nested_record;
+                        type_info->is_record = 1;
+                        type_info->element_type = RECORD_TYPE;
+                    }
                     destroy_type_info_contents(&nested_info);
                 }
                 if (type_info->element_type_id != NULL &&
@@ -4759,6 +4763,8 @@ static ListNode_t *convert_class_field_decl(ast_t *field_decl_node) {
             field_desc->array_end = field_info.end;
             field_desc->array_element_type = field_info.element_type;
             field_desc->array_element_type_id = field_info.element_type_id;
+            field_desc->array_element_record = field_info.record_type;
+            field_info.record_type = NULL;  /* Ownership transferred */
             field_desc->array_is_open = field_info.is_open_array;
             field_info.element_type_id = NULL;  /* Ownership transferred */
             field_desc->is_hidden = 0;

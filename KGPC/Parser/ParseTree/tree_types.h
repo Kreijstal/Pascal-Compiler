@@ -85,6 +85,7 @@ struct RecordField
     int array_end;
     int array_element_type;
     char *array_element_type_id;
+    struct RecordType *array_element_record; /* Anonymous record as array element type */
     int array_is_open;
     int is_hidden;
     int is_class_var;
