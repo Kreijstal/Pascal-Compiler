@@ -36,6 +36,8 @@
 const char *semcheck_type_tag_name(int type_tag);
 int semcheck_typecheck_array_literal(struct Expression *expr, SymTab_t *symtab,
     int max_scope_lev, int expected_type, const char *expected_type_id, int line_num);
+int set_type_from_hashtype(int *type, HashNode_t *hash_node);
+struct RecordType *semcheck_lookup_record_type(SymTab_t *symtab, const char *type_id);
 
 #define SEMSTMT_TIMINGS_ENABLED() (getenv("KGPC_DEBUG_SEMSTMT_TIMINGS") != NULL)
 
@@ -1531,7 +1533,7 @@ static int semcheck_builtin_val(SymTab_t *symtab, struct Statement *stmt, int ma
     struct Expression *source_expr = (struct Expression *)args->cur;
     int source_type = UNKNOWN_TYPE;
     error_count += semcheck_stmt_expr_tag(&source_type, symtab, source_expr, max_scope_lev, NO_MUTATE);
-    if (source_type != STRING_TYPE)
+    if (!is_string_type(source_type) && source_type != CHAR_TYPE)
     {
         semcheck_error_with_context("Error on line %d, Val expects its first argument to be a string.\n",
             stmt->line_num);
@@ -3027,6 +3029,16 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
     } else {
         return_val += semcheck_stmt_expr_tag(&type_first, symtab, var, max_scope_lev, MUTATE);
     }
+
+    /* Check for record property assignment early, before RHS type checking.
+     * This handles plain record (Delphi advanced record) properties with setter methods.
+     * Must happen after LHS is evaluated but before type compatibility checks. */
+    {
+        int property_result = semcheck_try_property_assignment(symtab, stmt, max_scope_lev);
+        if (property_result >= 0)
+            return return_val + property_result;
+    }
+
     if (expr != NULL && expr->type == EXPR_RECORD_CONSTRUCTOR && expr->record_type == NULL)
     {
         struct RecordType *record_type = var != NULL ? var->record_type : NULL;
@@ -3668,7 +3680,7 @@ static int semcheck_try_property_assignment(SymTab_t *symtab,
     if (object_record == NULL)
         object_record = object_expr->record_type;
 
-    if (object_record == NULL || !record_type_is_class(object_record))
+    if (object_record == NULL)
         return -1;
 
     struct RecordType *property_owner = NULL;
@@ -3676,6 +3688,9 @@ static int semcheck_try_property_assignment(SymTab_t *symtab,
         object_record, property_name, &property_owner);
     if (property == NULL || property->write_accessor == NULL)
         return -1;
+
+    if (property_owner == NULL)
+        property_owner = object_record;
 
     struct RecordField *write_field =
         semcheck_find_class_field_including_hidden(symtab,
@@ -3837,34 +3852,60 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     if (proc_id != NULL && !stmt->stmt_data.procedure_call_data.is_method_call_placeholder)
     {
         HashNode_t *self_node = NULL;
-        if (FindIdent(&self_node, symtab, "Self") == 0 && self_node != NULL)
+        struct RecordType *self_record = NULL;
+        if (FindIdent(&self_node, symtab, "Self") != -1 && self_node != NULL)
         {
-            struct RecordType *self_record = semcheck_stmt_get_record_type_from_node(self_node);
-            if (self_record != NULL)
+            self_record = semcheck_stmt_get_record_type_from_node(self_node);
+            if (self_record == NULL)
             {
-                HashNode_t *method_node = semcheck_find_class_method(symtab, self_record, proc_id, NULL);
-                if (method_node != NULL &&
-                    (method_node->hash_type == HASHTYPE_PROCEDURE ||
-                     method_node->hash_type == HASHTYPE_FUNCTION))
+                int self_type_tag = UNKNOWN_TYPE;
+                const char *self_type_name = NULL;
+                set_type_from_hashtype(&self_type_tag, self_node);
+                if (self_node->type != NULL &&
+                    self_node->type->type_alias != NULL &&
+                    self_node->type->type_alias->target_type_id != NULL)
                 {
-                    /* Prepend Self to arguments */
-                    struct Expression *self_expr = mk_varid(stmt->line_num, strdup("Self"));
-                    ListNode_t *self_arg = CreateListNode(self_expr, LIST_EXPR);
-                    self_arg->next = args_given;
-                    stmt->stmt_data.procedure_call_data.expr_args = self_arg;
-                    args_given = self_arg;
+                    self_type_name = self_node->type->type_alias->target_type_id;
+                }
 
-                    /* Update proc_id to mangled name */
-                    size_t class_len = strlen(self_record->type_id);
-                    size_t method_len = strlen(proc_id);
-                    char *new_proc_id = (char *)malloc(class_len + 2 + method_len + 1);
-                    if (new_proc_id != NULL)
-                    {
-                        sprintf(new_proc_id, "%s__%s", self_record->type_id, proc_id);
-                        free(proc_id);
-                        proc_id = new_proc_id;
-                        stmt->stmt_data.procedure_call_data.id = proc_id;
-                    }
+                struct RecordType *helper_record = semcheck_lookup_type_helper(
+                    symtab, self_type_tag, self_type_name);
+                if (helper_record != NULL)
+                    self_record = helper_record;
+            }
+        }
+
+        if (self_record == NULL)
+        {
+            const char *current_owner = semcheck_get_current_method_owner();
+            if (current_owner != NULL)
+                self_record = semcheck_lookup_record_type(symtab, current_owner);
+        }
+
+        if (self_record != NULL)
+        {
+            HashNode_t *method_node = semcheck_find_class_method(symtab, self_record, proc_id, NULL);
+            if (method_node != NULL &&
+                (method_node->hash_type == HASHTYPE_PROCEDURE ||
+                 method_node->hash_type == HASHTYPE_FUNCTION))
+            {
+                /* Prepend Self to arguments */
+                struct Expression *self_expr = mk_varid(stmt->line_num, strdup("Self"));
+                ListNode_t *self_arg = CreateListNode(self_expr, LIST_EXPR);
+                self_arg->next = args_given;
+                stmt->stmt_data.procedure_call_data.expr_args = self_arg;
+                args_given = self_arg;
+
+                /* Update proc_id to mangled name */
+                size_t class_len = strlen(self_record->type_id);
+                size_t method_len = strlen(proc_id);
+                char *new_proc_id = (char *)malloc(class_len + 2 + method_len + 1);
+                if (new_proc_id != NULL)
+                {
+                    sprintf(new_proc_id, "%s__%s", self_record->type_id, proc_id);
+                    free(proc_id);
+                    proc_id = new_proc_id;
+                    stmt->stmt_data.procedure_call_data.id = proc_id;
                 }
             }
         }
@@ -4079,6 +4120,12 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                         recv_record = kgpc_type_get_record(pointee);
                 }
             }
+            /* Also try resolved_kgpc_type directly for record types when record_type is NULL */
+            if (recv_record == NULL && receiver_expr->resolved_kgpc_type != NULL &&
+                receiver_expr->resolved_kgpc_type->kind == TYPE_KIND_RECORD)
+            {
+                recv_record = kgpc_type_get_record(receiver_expr->resolved_kgpc_type);
+            }
             if (recv_record == NULL && receiver_expr->type == EXPR_VAR_ID &&
                 receiver_expr->expr_data.id != NULL)
             {
@@ -4170,7 +4217,7 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                                 semcheck_error_with_context("Error on line %d, call to procedural field %s: expected %d arguments, got %d\n",
                                     stmt->line_num, proc_id, ListLength(formal_params), ListLength(remaining_args));
                                 destroy_expr(proc_expr);
-                                destroy_kgpc_type(proc_type);
+                                /* proc_type already released by destroy_expr via resolved_kgpc_type */
                                 return ++return_val;
                             }
 
@@ -4200,6 +4247,7 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                                 arg_idx++;
                             }
 
+                            kgpc_type_retain(proc_type);
                             stmt->stmt_data.procedure_call_data.call_kgpc_type = proc_type;
                             stmt->stmt_data.procedure_call_data.call_hash_type = HASHTYPE_VAR;
                             stmt->stmt_data.procedure_call_data.is_call_info_valid = 1;
@@ -4290,6 +4338,69 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                     old_head->next = NULL;
                     args_given = stmt->stmt_data.procedure_call_data.expr_args;
                     static_arg_already_removed = 1;
+                }
+            }
+            else
+            {
+                /* Method not found — check if this is a procedural-type field being invoked. */
+                struct RecordField *proc_field = NULL;
+                long long proc_field_offset = 0;
+                if (resolve_record_field(symtab, record_info, method_name,
+                        &proc_field, &proc_field_offset, stmt->line_num, 1 /* silent */) == 0 &&
+                    proc_field != NULL)
+                {
+                    KgpcType *proc_type = NULL;
+                    if (proc_field->proc_type != NULL &&
+                        proc_field->proc_type->kind == TYPE_KIND_PROCEDURE)
+                    {
+                        proc_type = proc_field->proc_type;
+                    }
+                    else if (proc_field->type_id != NULL)
+                    {
+                        HashNode_t *type_node = NULL;
+                        if (FindIdent(&type_node, symtab, proc_field->type_id) >= 0 &&
+                            type_node != NULL && type_node->type != NULL &&
+                            type_node->type->kind == TYPE_KIND_PROCEDURE)
+                        {
+                            proc_type = type_node->type;
+                        }
+                    }
+
+                    if (proc_type != NULL)
+                    {
+                        /* Remove first_arg from args (it becomes part of the field access expr) */
+                        ListNode_t *old_head = args_given;
+                        args_given = old_head->next;
+                        old_head->cur = NULL; /* Don't free first_arg, we reuse it */
+                        free(old_head);
+                        stmt->stmt_data.procedure_call_data.expr_args = args_given;
+
+                        /* Build record access expression for the procedural field */
+                        struct Expression *proc_expr = mk_recordaccess(
+                            stmt->line_num, first_arg, strdup(method_name));
+                        proc_expr->record_type = record_info;
+                        proc_expr->expr_data.record_access_data.field_offset = (int)proc_field_offset;
+                        kgpc_type_retain(proc_type);
+                        proc_expr->resolved_kgpc_type = proc_type;
+
+                        /* Type-check the arguments */
+                        for (ListNode_t *arg_cur = args_given; arg_cur != NULL; arg_cur = arg_cur->next)
+                        {
+                            struct Expression *arg = (struct Expression *)arg_cur->cur;
+                            if (arg != NULL)
+                                semcheck_stmt_expr_tag(NULL, symtab, arg, max_scope_lev, NO_MUTATE);
+                        }
+
+                        kgpc_type_retain(proc_type);
+                        stmt->stmt_data.procedure_call_data.call_kgpc_type = proc_type;
+                        stmt->stmt_data.procedure_call_data.call_hash_type = HASHTYPE_VAR;
+                        stmt->stmt_data.procedure_call_data.is_call_info_valid = 1;
+                        stmt->stmt_data.procedure_call_data.is_procedural_var_call = 1;
+                        stmt->stmt_data.procedure_call_data.procedural_var_symbol = NULL;
+                        stmt->stmt_data.procedure_call_data.procedural_var_expr = proc_expr;
+                        stmt->stmt_data.procedure_call_data.is_method_call_placeholder = 0;
+                        return return_val;
+                    }
                 }
             }
         }

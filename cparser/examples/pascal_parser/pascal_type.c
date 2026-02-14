@@ -2126,6 +2126,7 @@ static ParseResult object_type_fn(input_t* in, void* args, char* parser_name) {
     free_combinator(object_keyword);
 
     // Optional base type: object(BaseType)
+    ast_t* base_type_ast = NULL;
     combinator_t* base_type = optional(seq(new_combinator(), PASCAL_T_NONE,
         token(match("(")),
         create_type_ref_parser(),
@@ -2134,8 +2135,42 @@ static ParseResult object_type_fn(input_t* in, void* args, char* parser_name) {
     ));
     ParseResult base_res = parse(in, base_type);
     if (base_res.is_success) {
-        if (base_res.value.ast != NULL && base_res.value.ast != ast_nil)
-            free_ast(base_res.value.ast);
+        if (base_res.value.ast != NULL && base_res.value.ast != ast_nil) {
+            /* Extract the parent type name from the PASCAL_T_NONE wrapper.
+             * The seq(PASCAL_T_NONE, ...) may carry the identifier on its sym
+             * or as a nested IDENTIFIER child. */
+            ast_t *wrapper = base_res.value.ast;
+            const char *parent_name = NULL;
+
+            /* Method 1: sym on the wrapper itself */
+            if (wrapper->sym != NULL && wrapper->sym->name != NULL)
+                parent_name = wrapper->sym->name;
+
+            /* Method 2: search children recursively for an IDENTIFIER */
+            if (parent_name == NULL) {
+                ast_t *stack[32];
+                int sp = 0;
+                if (wrapper->child != NULL) stack[sp++] = wrapper->child;
+                while (sp > 0 && parent_name == NULL) {
+                    ast_t *cur = stack[--sp];
+                    for (; cur != NULL && parent_name == NULL; cur = cur->next) {
+                        if (cur->typ == PASCAL_T_IDENTIFIER && cur->sym != NULL && cur->sym->name != NULL)
+                            parent_name = cur->sym->name;
+                        else if (cur->child != NULL && sp < 31)
+                            stack[sp++] = cur->child;
+                    }
+                }
+            }
+
+            if (parent_name != NULL) {
+                base_type_ast = new_ast();
+                base_type_ast->typ = PASCAL_T_IDENTIFIER;
+                base_type_ast->sym = sym_lookup(parent_name);
+                base_type_ast->child = NULL;
+                base_type_ast->next = NULL;
+            }
+            free_ast(wrapper);
+        }
     } else {
         discard_failure(base_res);
     }
@@ -2346,7 +2381,13 @@ static ParseResult object_type_fn(input_t* in, void* args, char* parser_name) {
     ast_t* object_ast = new_ast();
     object_ast->typ = pargs->tag;
     object_ast->sym = is_packed ? sym_lookup("packed") : NULL;
-    object_ast->child = fields_ast;
+    if (base_type_ast != NULL) {
+        /* Prepend parent type identifier as first child */
+        base_type_ast->next = fields_ast;
+        object_ast->child = base_type_ast;
+    } else {
+        object_ast->child = fields_ast;
+    }
     object_ast->next = NULL;
 
     set_ast_position(object_ast, in);

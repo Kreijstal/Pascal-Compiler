@@ -177,6 +177,17 @@ int semcheck_typecast(int *type_return,
                         int subtype = kgpc_type_get_primitive_tag(points_to);
                         semcheck_set_pointer_info(expr, subtype, NULL);
                     }
+                    else if (points_to->kind == TYPE_KIND_ARRAY)
+                    {
+                        /* Pointer to array: propagate the array type id so that
+                         * dereference can set is_array_expr on the result.
+                         * Look up the pointer alias to get the pointee type name. */
+                        const char *arr_subtype_id = NULL;
+                        struct TypeAlias *ptr_alias = get_type_alias_from_node(target_node);
+                        if (ptr_alias != NULL && ptr_alias->pointer_type_id != NULL)
+                            arr_subtype_id = ptr_alias->pointer_type_id;
+                        semcheck_set_pointer_info(expr, UNKNOWN_TYPE, arr_subtype_id);
+                    }
                 }
             }
             if (target_node != NULL)
@@ -207,6 +218,13 @@ int semcheck_typecast(int *type_return,
                         {
                             int subtype = kgpc_type_get_primitive_tag(points_to);
                             semcheck_set_pointer_info(expr, subtype, NULL);
+                        }
+                        else if (points_to->kind == TYPE_KIND_ARRAY)
+                        {
+                            const char *arr_subtype_id = NULL;
+                            if (alias != NULL && alias->pointer_type_id != NULL)
+                                arr_subtype_id = alias->pointer_type_id;
+                            semcheck_set_pointer_info(expr, UNKNOWN_TYPE, arr_subtype_id);
                         }
                     }
                 }
@@ -668,7 +686,31 @@ int semcheck_pointer_deref(int *type_return,
             }
             else if (points_to->kind == TYPE_KIND_ARRAY)
             {
-                target_type = semcheck_tag_from_kgpc(points_to);
+                /* Pointer to array: set up array info on the deref result
+                 * so it can be indexed with [i] */
+                target_type = INT_TYPE; /* placeholder; actual element type set below */
+                expr->is_array_expr = 1;
+                expr->array_element_type = UNKNOWN_TYPE;
+                expr->array_element_type_id = NULL;
+
+                KgpcType *elem_type = points_to->info.array_info.element_type;
+                if (elem_type != NULL)
+                {
+                    target_type = semcheck_tag_from_kgpc(elem_type);
+                    if (target_type == UNKNOWN_TYPE)
+                        target_type = INT_TYPE;
+                    expr->array_element_type = semcheck_tag_from_kgpc(elem_type);
+                    if (elem_type->kind == TYPE_KIND_RECORD)
+                        expr->array_element_record_type = kgpc_type_get_record(elem_type);
+                }
+                if (points_to->info.array_info.element_type_id != NULL)
+                    expr->array_element_type_id = strdup(points_to->info.array_info.element_type_id);
+
+                /* Set the resolved KgpcType to the array type */
+                if (expr->resolved_kgpc_type != NULL)
+                    destroy_kgpc_type(expr->resolved_kgpc_type);
+                kgpc_type_retain(points_to);
+                expr->resolved_kgpc_type = points_to;
             }
             else
             {
@@ -1998,6 +2040,16 @@ int semcheck_recordaccess(int *type_return,
                         goto FIELD_RESOLVED;
                     }
 
+                    if (mutating != NO_MUTATE)
+                    {
+                        /* For setter method calls on record properties, leave the expression
+                         * as EXPR_RECORD_ACCESS so the assignment handler in
+                         * semcheck_try_property_assignment() can construct the setter call
+                         * with the value argument. Return 0 to suppress "field not found"
+                         * and let the assignment handler take over. */
+                        return 0;
+                    }
+
                     HashNode_t *method_node = semcheck_find_class_method(symtab, record_info,
                         accessor, NULL);
                     if (method_node != NULL)
@@ -2247,7 +2299,12 @@ FIELD_RESOLVED:
     {
         KgpcType *elem_type = NULL;
         int elem_owned = 0;
-        if (field_desc->array_element_type_id != NULL)
+        if (field_desc->array_element_record != NULL)
+        {
+            elem_type = create_record_type(field_desc->array_element_record);
+            elem_owned = 1;
+        }
+        else if (field_desc->array_element_type_id != NULL)
         {
             HashNode_t *elem_node = semcheck_find_type_node_with_kgpc_type(
                 symtab, field_desc->array_element_type_id);
@@ -2269,8 +2326,7 @@ FIELD_RESOLVED:
                 semcheck_expr_set_resolved_kgpc_type_shared(expr, arr_type);
             if (arr_type != NULL)
                 destroy_kgpc_type(arr_type);
-            if (elem_owned && elem_type != NULL)
-                destroy_kgpc_type(elem_type);
+            /* Note: elem_type ownership was transferred to create_array_type, do NOT destroy it here */
         }
     }
 

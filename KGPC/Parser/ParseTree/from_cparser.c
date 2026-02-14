@@ -227,8 +227,6 @@ static inline bool is_safe_to_continue(VisitedSet *visited, ast_t *node) {
     
     /* Check if we've visited this node before (circular reference) */
     if (visited_set_contains(visited, node)) {
-        fprintf(stderr, "WARNING: Circular AST reference detected at node %p (type=%d)\n", 
-                (void*)node, node->typ);
         return false;
     }
     
@@ -2439,6 +2437,11 @@ static int map_type_name(const char *name, char **type_id_out) {
             *type_id_out = strdup("double");
         return REAL_TYPE;
     }
+    if (strcasecmp(name, "openstring") == 0) {
+        if (type_id_out != NULL)
+            *type_id_out = strdup("shortstring");
+        return SHORTSTRING_TYPE;
+    }
     if (strcasecmp(name, "string") == 0 ||
         strcasecmp(name, "ansistring") == 0 ||
         strcasecmp(name, "widestring") == 0) {
@@ -2515,9 +2518,35 @@ static int map_type_name(const char *name, char **type_id_out) {
 
 static int helper_self_param_is_var(const char *base_type_id, struct SymTab *symtab)
 {
-    (void)base_type_id;
-    (void)symtab;
-    return 0;
+    if (base_type_id == NULL)
+        return 0;
+    /* Real/Single/Double/Extended: codegen passes Self by value via SSE. */
+    int type_tag = map_type_name(base_type_id, NULL);
+    if (type_tag == REAL_TYPE)
+        return 0;
+    /* String types are heap-allocated pointers — by value is correct. */
+    if (type_tag == STRING_TYPE || type_tag == SHORTSTRING_TYPE ||
+        type_tag == CHAR_TYPE)
+        return 0;
+    /* Class and pointer types: Self is already a pointer. */
+    if (symtab != NULL)
+    {
+        HashNode_t *type_node = NULL;
+        if (FindIdent(&type_node, symtab, base_type_id) == 0 && type_node != NULL)
+        {
+            if (type_node->type != NULL && type_node->type->kind == TYPE_KIND_RECORD)
+            {
+                struct RecordType *rec = type_node->type->info.record_info;
+                if (rec != NULL && rec->is_class)
+                    return 0;
+            }
+            if (type_node->type != NULL && type_node->type->kind == TYPE_KIND_POINTER)
+                return 0;
+        }
+    }
+    /* Integer/ordinal value types: Self must be passed by reference
+     * so that mutations (Self := Self or ...) persist at the call site. */
+    return 1;
 }
 
 static struct TypeAlias *helper_self_real_alias(const char *base_type_id)
@@ -3973,7 +4002,11 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                             free(nested_id);
                     }
                     if (nested_record != NULL)
-                        destroy_record_type(nested_record);
+                    {
+                        type_info->record_type = nested_record;
+                        type_info->is_record = 1;
+                        type_info->element_type = RECORD_TYPE;
+                    }
                     destroy_type_info_contents(&nested_info);
                 }
                 if (type_info->element_type_id != NULL &&
@@ -4730,6 +4763,8 @@ static ListNode_t *convert_class_field_decl(ast_t *field_decl_node) {
             field_desc->array_end = field_info.end;
             field_desc->array_element_type = field_info.element_type;
             field_desc->array_element_type_id = field_info.element_type_id;
+            field_desc->array_element_record = field_info.record_type;
+            field_info.record_type = NULL;  /* Ownership transferred */
             field_desc->array_is_open = field_info.is_open_array;
             field_info.element_type_id = NULL;  /* Ownership transferred */
             field_desc->is_hidden = 0;
@@ -5713,6 +5748,22 @@ static ListNode_t *convert_field_decl(ast_t *field_decl_node) {
                 field_desc->pointer_type_id = strdup(field_info.pointer_type_id);
             else
                 field_desc->pointer_type_id = NULL;
+            /* Transfer anonymous enum values for fields like `kind: (a, b, c)` */
+            if (field_info.enum_literals != NULL && name_node->next == NULL)
+            {
+                field_desc->enum_literals = field_info.enum_literals;
+                field_info.enum_literals = NULL;
+            }
+            else if (field_info.enum_literals != NULL)
+            {
+                /* Clone for multi-name fields (e.g. a, b: (x, y, z)) */
+                ListBuilder clone_builder;
+                list_builder_init(&clone_builder);
+                for (ListNode_t *en = field_info.enum_literals; en != NULL; en = en->next)
+                    if (en->cur != NULL)
+                        list_builder_append(&clone_builder, strdup((char *)en->cur), LIST_STRING);
+                field_desc->enum_literals = list_builder_finish(&clone_builder);
+            }
             list_builder_append(&result_builder, field_desc, LIST_RECORD_FIELD);
         } else {
             if (field_name != NULL)
@@ -6093,7 +6144,23 @@ static struct RecordType *convert_record_type_ex(ast_t *record_node, ListNode_t 
     /* Scan for nested type sections in the record */
     ListBuilder nested_type_builder;
     list_builder_init(&nested_type_builder);
-    collect_record_nested_types(record_node->child, &nested_type_builder);
+
+    /* For OBJECT_TYPE, the first child may be the parent type identifier
+     * (inserted by the parser for object(BaseType) syntax).
+     * Extract it before processing members. */
+    char *parent_class_name = NULL;
+    ast_t *members_start = record_node->child;
+    if (record_node->typ == PASCAL_T_OBJECT_TYPE &&
+        members_start != NULL &&
+        members_start->typ == PASCAL_T_IDENTIFIER &&
+        members_start->sym != NULL &&
+        members_start->sym->name != NULL)
+    {
+        parent_class_name = strdup(members_start->sym->name);
+        members_start = members_start->next;
+    }
+
+    collect_record_nested_types(members_start, &nested_type_builder);
 
     if (nested_types_out != NULL)
         *nested_types_out = list_builder_finish(&nested_type_builder);
@@ -6104,17 +6171,18 @@ static struct RecordType *convert_record_type_ex(ast_t *record_node, ListNode_t 
     ListBuilder property_builder;
     list_builder_init(&fields_builder);
     list_builder_init(&property_builder);
-    convert_record_members(record_node->child, &fields_builder, &property_builder);
+    convert_record_members(members_start, &fields_builder, &property_builder);
 
     struct RecordType *record = (struct RecordType *)malloc(sizeof(struct RecordType));
     if (record == NULL) {
         destroy_list(fields_builder.head);
         destroy_list(property_builder.head);
+        free(parent_class_name);
         return NULL;
     }
     record->fields = list_builder_finish(&fields_builder);
     record->properties = NULL;
-    record->parent_class_name = NULL;  /* Regular records don't have parent classes */
+    record->parent_class_name = parent_class_name;
     record->methods = NULL;  /* Regular records don't have methods */
     record->method_templates = NULL;
     record->is_class = 0;
@@ -9332,6 +9400,24 @@ static struct Expression *convert_factor(ast_t *expr_node) {
         if (child != NULL) {
             if (child->typ == PASCAL_T_IDENTIFIER) {
                 id = dup_symbol(child);
+            } else if (child->typ == PASCAL_T_TYPECAST &&
+                       child->child != NULL &&
+                       child->child->typ == PASCAL_T_IDENTIFIER) {
+                /* Handle chained call: TypeName(source)(outer_args)
+                 * Parser creates: FUNC_CALL(TYPECAST(TypeName, source), outer_args)
+                 * Convert the typecast part to an expression, then create a call
+                 * with the outer args that invokes the typecast result. */
+                struct Expression *typecast_expr = convert_expression(child);
+                ast_t *outer_args_start = child->next;
+                ListNode_t *outer_args = convert_expression_list(outer_args_start);
+                /* Create a function call where the callee is the typecast expression */
+                char *type_id = dup_symbol(child->child);
+                struct Expression *call_expr = mk_functioncall(expr_node->line, type_id, outer_args);
+                if (call_expr != NULL) {
+                    call_expr->expr_data.function_call_data.is_procedural_var_call = 1;
+                    call_expr->expr_data.function_call_data.procedural_var_expr = typecast_expr;
+                }
+                return call_expr;
             } else if (child->child != NULL && child->child->typ == PASCAL_T_IDENTIFIER) {
                 id = dup_symbol(child->child);
             }
@@ -9967,11 +10053,73 @@ static ListNode_t *convert_expression_list(ast_t *arg_node) {
     ListBuilder builder;
     list_builder_init(&builder);
     
+    /* Pre-check: verify the next chain doesn't have cycles using Floyd's algorithm.
+     * If a cycle is found, break it by setting the back-edge to NULL.
+     * This fixes cycles introduced by the parser's suffix chain construction
+     * (e.g., typecast-then-call patterns like TProc(x)(args)). */
+    {
+        ast_t *slow = arg_node, *fast = arg_node;
+        int has_cycle = 0;
+        while (fast != NULL && fast != ast_nil && fast->next != NULL && fast->next != ast_nil) {
+            slow = slow->next;
+            fast = fast->next->next;
+            if (slow == fast) {
+                has_cycle = 1;
+                break;
+            }
+        }
+        if (has_cycle) {
+            /* Find cycle start using Floyd's phase 2 */
+            slow = arg_node;
+            while (slow != fast) { slow = slow->next; fast = fast->next; }
+            /* Walk around the cycle to find the back-edge */
+            ast_t *cycle_prev = slow;
+            ast_t *cycle_cur = slow->next;
+            while (cycle_cur != slow) {
+                cycle_prev = cycle_cur;
+                cycle_cur = cycle_cur->next;
+            }
+            /* Break the cycle */
+            cycle_prev->next = NULL;
+        }
+    }
+    
     /* Create visited set to detect circular references */
     VisitedSet *visited = visited_set_create();
     if (visited == NULL) {
         fprintf(stderr, "ERROR: Failed to allocate visited set for expression list traversal\n");
         return NULL;
+    }
+    
+    /* Pre-check: verify the next chain doesn't have cycles using Floyd's algorithm */
+    {
+        ast_t *slow = arg_node, *fast = arg_node;
+        int has_cycle = 0;
+        while (fast != NULL && fast != ast_nil && fast->next != NULL && fast->next != ast_nil) {
+            slow = slow->next;
+            fast = fast->next->next;
+            if (slow == fast) {
+                has_cycle = 1;
+                break;
+            }
+        }
+        if (has_cycle) {
+            fprintf(stderr, "PRE-CHECK: Cycle detected in expression list next-chain starting at %p\n", (void*)arg_node);
+            /* Find cycle start */
+            slow = arg_node;
+            while (slow != fast) { slow = slow->next; fast = fast->next; }
+            fprintf(stderr, "  Cycle starts at: %p type=%d line=%d sym=%s\n", (void*)slow,
+                    slow->typ, slow->line, (slow->sym && slow->sym->name) ? slow->sym->name : "?");
+            /* Just dump first few nodes */
+            ast_t *d = arg_node;
+            for (int i = 0; i < 10 && d != NULL && d != ast_nil; i++) {
+                fprintf(stderr, "  [%d] %p type=%d line=%d sym=%s%s\n", i, (void*)d,
+                        d->typ, d->line, (d->sym && d->sym->name) ? d->sym->name : "?",
+                        d == slow ? " <-- CYCLE START" : "");
+                d = d->next;
+                if (d == slow && i > 0) break;
+            }
+        }
     }
     
     ast_t *cur = arg_node;
@@ -11264,27 +11412,29 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
 
                             /* Find the body */
                             struct Statement *body = NULL;
+                            ListNode_t *op_const_decls = NULL;
+                            ListBuilder op_var_builder; list_builder_init(&op_var_builder);
+                            ListBuilder op_label_builder; list_builder_init(&op_label_builder);
+                            ListNode_t *op_nested_subs = NULL;
+                            ListNode_t *op_type_decls = NULL;
                             ast_t *body_cursor = return_type_node ? return_type_node->next : param_node->next;
                             while (body_cursor != NULL) {
                                 if (body_cursor->typ == PASCAL_T_BEGIN_BLOCK) {
                                     body = convert_block(body_cursor);
                                     break;
                                 } else if (body_cursor->typ == PASCAL_T_FUNCTION_BODY) {
-                                    ListNode_t *ignored_const = NULL;
-                                    ListBuilder ignored_var; list_builder_init(&ignored_var);
-                                    ListBuilder ignored_label; list_builder_init(&ignored_label);
-                                    ListNode_t *ignored_subs = NULL;
-                                    ListNode_t *ignored_types = NULL;
-                                    convert_routine_body(body_cursor, &ignored_const, &ignored_var, &ignored_label,
-                                        &ignored_subs, &body, &ignored_types);
+                                    convert_routine_body(body_cursor, &op_const_decls, &op_var_builder, &op_label_builder,
+                                        &op_nested_subs, &body, &op_type_decls);
                                     break;
                                 }
                                 body_cursor = body_cursor->next;
                             }
 
-                            /* Create the function tree */
-                            Tree_t *tree = mk_function(method_node->line, mangled_name, params, NULL,
-                                NULL, NULL, NULL, NULL, body, return_type, return_type_id, inline_return_type, 0, 0);
+                            /* Create the function tree with local declarations */
+                            ListNode_t *op_var_decls = list_builder_finish(&op_var_builder);
+                            ListNode_t *op_label_decls = list_builder_finish(&op_label_builder);
+                            Tree_t *tree = mk_function(method_node->line, mangled_name, params, op_const_decls,
+                                op_label_decls, op_type_decls, op_var_decls, op_nested_subs, body, return_type, return_type_id, inline_return_type, 0, 0);
                             if (tree != NULL && result_var_name_method != NULL) {
                                 tree->tree_data.subprogram_data.result_var_name = result_var_name_method;
                             } else if (result_var_name_method != NULL) {

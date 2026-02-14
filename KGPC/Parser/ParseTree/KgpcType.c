@@ -781,6 +781,17 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
     {
         KgpcType *lhs_points_to = lhs_type->info.points_to;
         KgpcType *rhs_points_to = rhs_type->info.points_to;
+        if (lhs_points_to == NULL || rhs_points_to == NULL)
+            return 1;
+        if (lhs_points_to->kind == TYPE_KIND_PRIMITIVE &&
+            rhs_points_to->kind == TYPE_KIND_PRIMITIVE)
+        {
+            int lhs_tag = lhs_points_to->info.primitive_type_tag;
+            int rhs_tag = rhs_points_to->info.primitive_type_tag;
+            if ((lhs_tag == CHAR_TYPE || lhs_tag == STRING_TYPE || lhs_tag == SHORTSTRING_TYPE) &&
+                (rhs_tag == CHAR_TYPE || rhs_tag == STRING_TYPE || rhs_tag == SHORTSTRING_TYPE))
+                return 1;
+        }
         if (lhs_points_to != NULL && rhs_points_to != NULL &&
             rhs_points_to->kind == TYPE_KIND_ARRAY)
         {
@@ -1245,6 +1256,13 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
             /* Records are compatible if they are the same record type 
              * or if one is a subclass of the other */
             if (lhs_type->info.record_info == rhs_type->info.record_info)
+                return 1;
+
+            /* Records are compatible if they share the same type_id
+             * (e.g., cloned record types from generic instantiation) */
+            if (lhs_type->info.record_info != NULL && rhs_type->info.record_info != NULL &&
+                lhs_type->info.record_info->type_id != NULL && rhs_type->info.record_info->type_id != NULL &&
+                strcasecmp(lhs_type->info.record_info->type_id, rhs_type->info.record_info->type_id) == 0)
                 return 1;
 
             /* Check inheritance: rhs_type should be assignable to lhs_type if

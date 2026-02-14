@@ -2259,6 +2259,34 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
         *type_return = INT64_TYPE;
         return 0;
     }
+    if (arg_type == BYTE_TYPE)
+    {
+        semcheck_replace_call_with_integer_literal(expr, is_high ? 255LL : 0LL);
+        semcheck_expr_set_resolved_type(expr, BYTE_TYPE);
+        *type_return = BYTE_TYPE;
+        return 0;
+    }
+    if (arg_type == WORD_TYPE)
+    {
+        semcheck_replace_call_with_integer_literal(expr, is_high ? 65535LL : 0LL);
+        semcheck_expr_set_resolved_type(expr, WORD_TYPE);
+        *type_return = WORD_TYPE;
+        return 0;
+    }
+    if (arg_type == LONGWORD_TYPE)
+    {
+        semcheck_replace_call_with_integer_literal(expr, is_high ? 4294967295LL : 0LL);
+        semcheck_expr_set_resolved_type(expr, LONGWORD_TYPE);
+        *type_return = LONGWORD_TYPE;
+        return 0;
+    }
+    if (arg_type == QWORD_TYPE)
+    {
+        semcheck_replace_call_with_integer_literal(expr, is_high ? 9223372036854775807LL : 0LL);
+        semcheck_expr_set_resolved_type(expr, QWORD_TYPE);
+        *type_return = QWORD_TYPE;
+        return 0;
+    }
     if (arg_type == BOOL)
     {
         semcheck_free_call_args(expr->expr_data.function_call_data.args_expr, NULL);

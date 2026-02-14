@@ -74,36 +74,40 @@ struct ClassProperty *semcheck_find_class_property(SymTab_t *symtab,
     struct RecordType *current = record_info;
     while (current != NULL)
     {
-        ListNode_t *node = current->properties;
-        int prop_count = 0;
-        while (node != NULL)
+        /* Search both class properties and record_properties (plain advanced records) */
+        for (int pass = 0; pass < 2; pass++)
         {
-
-            if (node->type == LIST_CLASS_PROPERTY && node->cur != NULL)
+            ListNode_t *node = (pass == 0) ? current->properties : current->record_properties;
+            int prop_count = 0;
+            while (node != NULL)
             {
-                struct ClassProperty *property = (struct ClassProperty *)node->cur;
 
-                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
-                    fprintf(stderr, "[SemCheck]   Found property: '%s'\n",
-                        property->name ? property->name : "<null>");
-                }
-                prop_count++;
-                if (property->name != NULL &&
-                    pascal_identifier_equals(property->name, property_name))
+                if (node->type == LIST_CLASS_PROPERTY && node->cur != NULL)
                 {
+                    struct ClassProperty *property = (struct ClassProperty *)node->cur;
 
                     if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
-                        fprintf(stderr, "[SemCheck]   MATCHED property '%s'!\n", property->name);
+                        fprintf(stderr, "[SemCheck]   Found property: '%s'\n",
+                            property->name ? property->name : "<null>");
                     }
-                    if (owner_out != NULL)
-                        *owner_out = current;
-                    return property;
+                    prop_count++;
+                    if (property->name != NULL &&
+                        pascal_identifier_equals(property->name, property_name))
+                    {
+
+                        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                            fprintf(stderr, "[SemCheck]   MATCHED property '%s'!\n", property->name);
+                        }
+                        if (owner_out != NULL)
+                            *owner_out = current;
+                        return property;
+                    }
                 }
+                node = node->next;
             }
-            node = node->next;
-        }
-        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
-            fprintf(stderr, "[SemCheck]   Searched %d properties in this record, no match\n", prop_count);
+            if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                fprintf(stderr, "[SemCheck]   Searched %d properties (pass %d) in this record, no match\n", prop_count, pass);
+            }
         }
         current = semcheck_lookup_parent_record(symtab, current);
     }

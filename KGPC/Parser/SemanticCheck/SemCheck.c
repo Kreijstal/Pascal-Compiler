@@ -272,6 +272,7 @@ static int semcheck_map_builtin_type_name_local(const char *id)
         pascal_identifier_equals(id, "UIntPtr"))
         return QWORD_TYPE;
     if (pascal_identifier_equals(id, "String") ||
+        pascal_identifier_equals(id, "OpenString") ||
         pascal_identifier_equals(id, "AnsiString") ||
         pascal_identifier_equals(id, "RawByteString") ||
         pascal_identifier_equals(id, "UnicodeString") ||
@@ -299,9 +300,42 @@ static int semcheck_map_builtin_type_name_local(const char *id)
 
 static int semcheck_helper_self_is_var(SymTab_t *symtab, const char *base_type_id)
 {
-    (void)symtab;
-    (void)base_type_id;
-    return 0;
+    if (base_type_id == NULL)
+        return 0;
+    /* Real/Single/Double/Extended: codegen passes Self by value via SSE. */
+    if (pascal_identifier_equals(base_type_id, "Real") ||
+        pascal_identifier_equals(base_type_id, "Single") ||
+        pascal_identifier_equals(base_type_id, "Double") ||
+        pascal_identifier_equals(base_type_id, "Extended") ||
+        pascal_identifier_equals(base_type_id, "Currency") ||
+        pascal_identifier_equals(base_type_id, "Comp"))
+        return 0;
+    /* String types are heap-allocated pointers — by value is correct. */
+    if (pascal_identifier_equals(base_type_id, "String") ||
+        pascal_identifier_equals(base_type_id, "AnsiString") ||
+        pascal_identifier_equals(base_type_id, "ShortString") ||
+        pascal_identifier_equals(base_type_id, "WideString") ||
+        pascal_identifier_equals(base_type_id, "UnicodeString") ||
+        pascal_identifier_equals(base_type_id, "Char") ||
+        pascal_identifier_equals(base_type_id, "AnsiChar") ||
+        pascal_identifier_equals(base_type_id, "WideChar"))
+        return 0;
+    /* Class and pointer types: Self is already a pointer. */
+    HashNode_t *type_node = NULL;
+    if (FindIdent(&type_node, symtab, base_type_id) == 0 && type_node != NULL)
+    {
+        if (type_node->type != NULL && type_node->type->kind == TYPE_KIND_RECORD)
+        {
+            struct RecordType *rec = type_node->type->info.record_info;
+            if (rec != NULL && rec->is_class)
+                return 0;
+        }
+        if (type_node->type != NULL && type_node->type->kind == TYPE_KIND_POINTER)
+            return 0;
+    }
+    /* Integer/ordinal value types: Self must be passed by reference
+     * so that mutations (Self := Self or ...) persist at the call site. */
+    return 1;
 }
 
 static char *semcheck_dup_type_id_from_ast(ast_t *node)
@@ -513,6 +547,33 @@ static ListNode_t *semcheck_create_builtin_param_var(const char *name, int type_
     Tree_t *decl = mk_vardecl(0, ids, type_tag, NULL, 1, 0, NULL, NULL, NULL, NULL);
     if (decl == NULL)
         return NULL;
+
+    return CreateListNode(decl, LIST_TREE);
+}
+
+static ListNode_t *semcheck_create_builtin_param_with_id(const char *name, int type_tag,
+    const char *type_id, int is_var_param)
+{
+    char *param_name = strdup(name);
+    if (param_name == NULL)
+        return NULL;
+
+    ListNode_t *ids = CreateListNode(param_name, LIST_STRING);
+    if (ids == NULL)
+        return NULL;
+
+    char *type_id_copy = NULL;
+    if (type_id != NULL)
+        type_id_copy = strdup(type_id);
+
+    Tree_t *decl = mk_vardecl(0, ids, type_tag, type_id_copy,
+        is_var_param, 0, NULL, NULL, NULL, NULL);
+    if (decl == NULL)
+    {
+        if (type_id_copy != NULL)
+            free(type_id_copy);
+        return NULL;
+    }
 
     return CreateListNode(decl, LIST_TREE);
 }
@@ -4294,6 +4355,93 @@ SymTab_t *start_semcheck(Tree_t *parse_tree, int *sem_result)
     return symtab;
 }
 
+/* Register anonymous enum values from record field declarations.
+ * For fields like `kind: (vInteger, vString, vNone)`, the enum values
+ * must be visible in the enclosing scope. */
+static int register_record_field_enum_literals(SymTab_t *symtab, struct RecordType *record)
+{
+    if (symtab == NULL || record == NULL)
+        return 0;
+
+    int errors = 0;
+    ListNode_t *field_node = record->fields;
+    while (field_node != NULL)
+    {
+        if (field_node->type == LIST_RECORD_FIELD && field_node->cur != NULL)
+        {
+            struct RecordField *field = (struct RecordField *)field_node->cur;
+            if (field->enum_literals != NULL)
+            {
+                KgpcType *enum_type = create_primitive_type(ENUM_TYPE);
+                int ordinal = 0;
+                ListNode_t *lit = field->enum_literals;
+                while (lit != NULL)
+                {
+                    if (lit->cur != NULL)
+                    {
+                        char *name = (char *)lit->cur;
+                        HashNode_t *existing = NULL;
+                        if (FindIdent(&existing, symtab, name) == -1)
+                        {
+                            if (PushConstOntoScope_Typed(symtab, name, ordinal, enum_type) > 0)
+                                ++errors;
+                        }
+                    }
+                    ++ordinal;
+                    lit = lit->next;
+                }
+                if (enum_type != NULL)
+                    kgpc_type_release(enum_type);
+            }
+        }
+        else if (field_node->type == LIST_VARIANT_PART && field_node->cur != NULL)
+        {
+            struct VariantPart *variant = (struct VariantPart *)field_node->cur;
+            /* Check tag field for anonymous enum */
+            if (variant->tag_field != NULL && variant->tag_field->enum_literals != NULL)
+            {
+                KgpcType *enum_type = create_primitive_type(ENUM_TYPE);
+                int ordinal = 0;
+                ListNode_t *lit = variant->tag_field->enum_literals;
+                while (lit != NULL)
+                {
+                    if (lit->cur != NULL)
+                    {
+                        char *name = (char *)lit->cur;
+                        HashNode_t *existing = NULL;
+                        if (FindIdent(&existing, symtab, name) == -1)
+                        {
+                            if (PushConstOntoScope_Typed(symtab, name, ordinal, enum_type) > 0)
+                                ++errors;
+                        }
+                    }
+                    ++ordinal;
+                    lit = lit->next;
+                }
+                if (enum_type != NULL)
+                    kgpc_type_release(enum_type);
+            }
+            /* Recurse into variant branches */
+            ListNode_t *branch_node = variant->branches;
+            while (branch_node != NULL)
+            {
+                if (branch_node->type == LIST_VARIANT_BRANCH && branch_node->cur != NULL)
+                {
+                    struct VariantBranch *branch = (struct VariantBranch *)branch_node->cur;
+                    /* Create a temporary RecordType to recurse */
+                    struct RecordType temp_rec;
+                    memset(&temp_rec, 0, sizeof(temp_rec));
+                    temp_rec.fields = branch->members;
+                    errors += register_record_field_enum_literals(symtab, &temp_rec);
+                }
+                branch_node = branch_node->next;
+            }
+        }
+        field_node = field_node->next;
+    }
+    return errors;
+}
+
 /* Pushes a bunch of type declarations onto the current scope */
 static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
 {
@@ -4436,6 +4584,14 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                         destroy_kgpc_type(inline_enum_type);
                     }
                 }
+            }
+            /* Handle record types with fields that have anonymous enum types */
+            if (tree->type == TREE_TYPE_DECL &&
+                tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD)
+            {
+                struct RecordType *record = tree->tree_data.type_decl_data.info.record;
+                if (record != NULL)
+                    errors += register_record_field_enum_literals(symtab, record);
             }
         }
         cur = cur->next;
@@ -5272,7 +5428,7 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
             struct RecordField *original_field = (struct RecordField *)cur->cur;
             
             /* Clone the field */
-            struct RecordField *cloned_field = (struct RecordField *)malloc(sizeof(struct RecordField));
+            struct RecordField *cloned_field = (struct RecordField *)calloc(1, sizeof(struct RecordField));
             if (cloned_field == NULL)
             {
                 /* Clean up previously allocated fields */
@@ -5307,10 +5463,13 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
                 strdup(original_field->array_element_type_id) : NULL;
             cloned_field->array_is_open = original_field->array_is_open;
             cloned_field->is_hidden = original_field->is_hidden;
+            cloned_field->is_class_var = original_field->is_class_var;
             cloned_field->is_pointer = original_field->is_pointer;
             cloned_field->pointer_type = original_field->pointer_type;
             cloned_field->pointer_type_id = original_field->pointer_type_id ?
                 strdup(original_field->pointer_type_id) : NULL;
+            /* array_element_record is zeroed by calloc — not cloned to avoid double-free */
+            cloned_field->enum_literals = NULL;
             
             /* Create list node for cloned field */
             ListNode_t *new_node = (ListNode_t *)malloc(sizeof(ListNode_t));
@@ -7438,8 +7597,10 @@ void semcheck_add_builtins(SymTab_t *symtab)
         add_builtin_alias_type(symtab, "TSignalState", INT_TYPE, 4);
     }
     add_builtin_from_vartype(symtab, "Char", HASHVAR_CHAR);
+    add_builtin_from_vartype(symtab, "AnsiChar", HASHVAR_CHAR);
     add_builtin_type_owned(symtab, "WideChar", create_primitive_type_with_size(CHAR_TYPE, 2));
     add_builtin_from_vartype(symtab, "String", HASHVAR_PCHAR);
+    add_builtin_from_vartype(symtab, "OpenString", HASHVAR_PCHAR);
     add_builtin_from_vartype(symtab, "AnsiString", HASHVAR_PCHAR);
     add_builtin_string_type_with_alias(symtab, "RawByteString", HASHVAR_PCHAR);
     add_builtin_string_type_with_alias(symtab, "UnicodeString", HASHVAR_PCHAR);
@@ -7451,6 +7612,8 @@ void semcheck_add_builtins(SymTab_t *symtab)
         add_builtin_type_owned(symtab, "PString",
             create_pointer_type(create_primitive_type(STRING_TYPE)));
     }
+    add_builtin_type_owned(symtab, "PAnsiChar",
+        create_pointer_type(create_primitive_type(CHAR_TYPE)));
 
     /* Primitive pointer type */
     add_builtin_type_owned(symtab, "Pointer", create_primitive_type(POINTER_TYPE));
@@ -7584,6 +7747,25 @@ void semcheck_add_builtins(SymTab_t *symtab)
         AddBuiltinProc_Typed(symtab, setstring_name, setstring_type);
         destroy_kgpc_type(setstring_type);
         free(setstring_name);
+    }
+
+    char *pchar_to_shortstr_name = strdup("fpc_pchar_to_shortstr");
+    if (pchar_to_shortstr_name != NULL)
+    {
+        ListNode_t *param_res = semcheck_create_builtin_param_with_id(
+            "res", SHORTSTRING_TYPE, "shortstring", 1);
+        ListNode_t *param_p = semcheck_create_builtin_param_with_id(
+            "p", POINTER_TYPE, "PAnsiChar", 0);
+        if (param_res != NULL)
+        {
+            param_res->next = param_p;
+            KgpcType *proc_type = create_procedure_type(param_res, NULL);
+            assert(proc_type != NULL &&
+                "Failed to create fpc_pchar_to_shortstr procedure type");
+            AddBuiltinProc_Typed(symtab, pchar_to_shortstr_name, proc_type);
+            destroy_kgpc_type(proc_type);
+        }
+        free(pchar_to_shortstr_name);
     }
 
     char *write_name = strdup("write");
@@ -10815,7 +10997,9 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             PushFuncRetOntoScope_Typed(symtab, subprogram->tree_data.subprogram_data.result_var_name, return_kgpc_type);
         }
 
-        /* For class methods, also add an alias using the unmangled method name (suffix after __) */
+        /* For class methods, also add an alias using the unmangled method name (suffix after __).
+         * The mangled id format is ClassName__MethodName; the method name after __ may itself
+         * contain underscores (e.g., _AddRef, _Release), so we use the full suffix. */
         const char *alias_suffix = NULL;
         if (subprogram->tree_data.subprogram_data.id != NULL)
         {
@@ -10825,7 +11009,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         }
         if (alias_suffix != NULL && alias_suffix[0] != '\0')
         {
-            size_t alias_len = strcspn(alias_suffix, "_");
+            size_t alias_len = strlen(alias_suffix);
             if (alias_len > 0 && alias_len < 128)
             {
                 char alias_buf[128];

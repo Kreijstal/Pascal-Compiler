@@ -4348,6 +4348,10 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     {
                         is_array_type = 1;
                         type_requires_qword = kgpc_type_uses_qword(cached_arg_type);
+                        struct TypeAlias *alias = kgpc_type_get_type_alias(cached_arg_type);
+                        if (kgpc_type_is_shortstring(cached_arg_type) ||
+                            (alias != NULL && alias->is_shortstring))
+                            is_shortstring_param = 1;
                     }
                     else if (resolved_type_node != NULL && resolved_type_node->type != NULL)
                     {
