@@ -7404,8 +7404,44 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_build
         (cur->typ == PASCAL_T_TYPE_SPEC ||
          cur->typ == PASCAL_T_ARRAY_TYPE ||
          cur->typ == PASCAL_T_RECORD_TYPE ||
-         cur->typ == PASCAL_T_POINTER_TYPE)) {
-        convert_type_spec(cur, &type_id, NULL, &type_info);
+         cur->typ == PASCAL_T_POINTER_TYPE ||
+         cur->typ == PASCAL_T_PROCEDURE_TYPE ||
+         cur->typ == PASCAL_T_FUNCTION_TYPE)) {
+        int spec_type = convert_type_spec(cur, &type_id, NULL, &type_info);
+        /* For inline procedure/function type constants, create a typed variable.
+         * convert_type_spec returns PROCEDURE but doesn't set type_id for inline
+         * procedure types like: VarClearProc: procedure(var v: TVarData) = nil; */
+        ast_t *unwrapped_cur = cur;
+        if (unwrapped_cur->typ == PASCAL_T_TYPE_SPEC && unwrapped_cur->child != NULL)
+            unwrapped_cur = unwrapped_cur->child;
+        unwrapped_cur = unwrap_pascal_node(unwrapped_cur);
+        if (spec_type == PROCEDURE && type_id == NULL && unwrapped_cur != NULL &&
+            (unwrapped_cur->typ == PASCAL_T_PROCEDURE_TYPE || unwrapped_cur->typ == PASCAL_T_FUNCTION_TYPE)) {
+            ast_t *proc_type_node = unwrapped_cur;
+            cur = cur->next;
+            ast_t *init_value = unwrap_pascal_node(cur);
+            struct Expression *init_expr = convert_expression(init_value);
+            ListNode_t *ids = CreateListNode(id, LIST_STRING);
+            struct Expression *lhs = mk_varid(const_decl_node->line, strdup(id));
+            struct Statement *initializer_stmt = NULL;
+            if (init_expr != NULL)
+                initializer_stmt = mk_varassign(const_decl_node->line, const_decl_node->col,
+                                                 lhs, init_expr);
+            else
+                destroy_expr(lhs);
+            Tree_t *decl = mk_vardecl(const_decl_node->line, ids, PROCEDURE, NULL, 0, 0,
+                                       initializer_stmt, NULL, NULL, NULL);
+            decl->tree_data.var_decl_data.is_typed_const = 1;
+            /* Attach the inline procedure type for proper type checking */
+            KgpcType *proc_kgpc = convert_type_spec_to_kgpctype(proc_type_node, NULL);
+            if (proc_kgpc != NULL) {
+                decl->tree_data.var_decl_data.cached_kgpc_type = proc_kgpc;
+                kgpc_type_retain(proc_kgpc);
+            }
+            list_builder_append(var_builder, decl, LIST_TREE);
+            destroy_type_info_contents(&type_info);
+            return NULL;
+        }
         cur = cur->next;
     } else if (cur != NULL && cur->typ == PASCAL_T_NONE) {
         ast_t *type_node = cur->child;
