@@ -2806,6 +2806,26 @@ char *kgpc_shortstring_to_string(const char *value)
     return kgpc_string_duplicate_length(value + 1, len);
 }
 
+/* FPC_PCHAR_TO_SHORTSTR: Convert a null-terminated C string (PAnsiChar)
+ * to a ShortString (length-prefixed, max 255 chars).
+ * Used by FPC's system unit for pchar-to-shortstring conversions. */
+void FPC_PCHAR_TO_SHORTSTR(char *res, const char *p)
+{
+    if (res == NULL)
+        return;
+    if (p == NULL)
+    {
+        res[0] = 0;
+        return;
+    }
+    size_t len = strlen(p);
+    if (len > 255)
+        len = 255;
+    res[0] = (char)len;
+    if (len > 0)
+        memcpy(res + 1, p, len);
+}
+
 int64_t kgpc_shortstring_length(const char *value)
 {
     if (value == NULL)

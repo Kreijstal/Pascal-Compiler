@@ -11381,27 +11381,29 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
 
                             /* Find the body */
                             struct Statement *body = NULL;
+                            ListNode_t *op_const_decls = NULL;
+                            ListBuilder op_var_builder; list_builder_init(&op_var_builder);
+                            ListBuilder op_label_builder; list_builder_init(&op_label_builder);
+                            ListNode_t *op_nested_subs = NULL;
+                            ListNode_t *op_type_decls = NULL;
                             ast_t *body_cursor = return_type_node ? return_type_node->next : param_node->next;
                             while (body_cursor != NULL) {
                                 if (body_cursor->typ == PASCAL_T_BEGIN_BLOCK) {
                                     body = convert_block(body_cursor);
                                     break;
                                 } else if (body_cursor->typ == PASCAL_T_FUNCTION_BODY) {
-                                    ListNode_t *ignored_const = NULL;
-                                    ListBuilder ignored_var; list_builder_init(&ignored_var);
-                                    ListBuilder ignored_label; list_builder_init(&ignored_label);
-                                    ListNode_t *ignored_subs = NULL;
-                                    ListNode_t *ignored_types = NULL;
-                                    convert_routine_body(body_cursor, &ignored_const, &ignored_var, &ignored_label,
-                                        &ignored_subs, &body, &ignored_types);
+                                    convert_routine_body(body_cursor, &op_const_decls, &op_var_builder, &op_label_builder,
+                                        &op_nested_subs, &body, &op_type_decls);
                                     break;
                                 }
                                 body_cursor = body_cursor->next;
                             }
 
-                            /* Create the function tree */
-                            Tree_t *tree = mk_function(method_node->line, mangled_name, params, NULL,
-                                NULL, NULL, NULL, NULL, body, return_type, return_type_id, inline_return_type, 0, 0);
+                            /* Create the function tree with local declarations */
+                            ListNode_t *op_var_decls = list_builder_finish(&op_var_builder);
+                            ListNode_t *op_label_decls = list_builder_finish(&op_label_builder);
+                            Tree_t *tree = mk_function(method_node->line, mangled_name, params, op_const_decls,
+                                op_label_decls, op_type_decls, op_var_decls, op_nested_subs, body, return_type, return_type_id, inline_return_type, 0, 0);
                             if (tree != NULL && result_var_name_method != NULL) {
                                 tree->tree_data.subprogram_data.result_var_name = result_var_name_method;
                             } else if (result_var_name_method != NULL) {
