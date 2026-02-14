@@ -451,7 +451,8 @@ int semcheck_arrayaccess(int *type_return,
     if (array_expr->resolved_kgpc_type != NULL && kgpc_type_is_array(array_expr->resolved_kgpc_type))
     {
         res_type = kgpc_type_get_array_element_type(array_expr->resolved_kgpc_type);
-        if (res_type != NULL) kgpc_type_retain(res_type);
+        if (res_type != NULL)
+            kgpc_type_retain(res_type);
 
         /* Apply extra indices for multi-dimensional arrays */
         if (expr->expr_data.array_access_data.extra_indices != NULL)
@@ -483,19 +484,6 @@ int semcheck_arrayaccess(int *type_return,
     if (expr->resolved_kgpc_type != NULL)
         destroy_kgpc_type(expr->resolved_kgpc_type);
     expr->resolved_kgpc_type = res_type;
-
-    if (getenv("KGPC_DEBUG_ARRAY_ACCESS") != NULL &&
-        array_expr != NULL &&
-        array_expr->type == EXPR_VAR_ID &&
-        array_expr->expr_data.id != NULL &&
-        pascal_identifier_equals(array_expr->expr_data.id, "FStandardEncodings"))
-    {
-        fprintf(stderr,
-            "[KGPC_DEBUG_ARRAY_ACCESS] base=%s array_kgpc=%s elem_kgpc=%s\n",
-            array_expr->expr_data.id,
-            array_expr->resolved_kgpc_type ? kgpc_type_to_string(array_expr->resolved_kgpc_type) : "<null>",
-            expr->resolved_kgpc_type ? kgpc_type_to_string(expr->resolved_kgpc_type) : "<null>");
-    }
 
     semcheck_compute_array_linearization(symtab, expr, array_expr);
 

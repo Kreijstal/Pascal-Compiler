@@ -4211,7 +4211,7 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                                 semcheck_error_with_context("Error on line %d, call to procedural field %s: expected %d arguments, got %d\n",
                                     stmt->line_num, proc_id, ListLength(formal_params), ListLength(remaining_args));
                                 destroy_expr(proc_expr);
-                                destroy_kgpc_type(proc_type);
+                                /* proc_type already released by destroy_expr via resolved_kgpc_type */
                                 return ++return_val;
                             }
 
@@ -4241,6 +4241,7 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                                 arg_idx++;
                             }
 
+                            kgpc_type_retain(proc_type);
                             stmt->stmt_data.procedure_call_data.call_kgpc_type = proc_type;
                             stmt->stmt_data.procedure_call_data.call_hash_type = HASHTYPE_VAR;
                             stmt->stmt_data.procedure_call_data.is_call_info_valid = 1;

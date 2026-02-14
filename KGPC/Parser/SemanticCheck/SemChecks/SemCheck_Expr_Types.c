@@ -2326,8 +2326,7 @@ FIELD_RESOLVED:
                 semcheck_expr_set_resolved_kgpc_type_shared(expr, arr_type);
             if (arr_type != NULL)
                 destroy_kgpc_type(arr_type);
-            if (elem_owned && elem_type != NULL)
-                destroy_kgpc_type(elem_type);
+            /* Note: elem_type ownership was transferred to create_array_type, do NOT destroy it here */
         }
     }
 
