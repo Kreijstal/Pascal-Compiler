@@ -759,23 +759,47 @@ int resolve_record_field(SymTab_t *symtab, struct RecordType *record,
     if (record == NULL || field_name == NULL)
         return 1;
 
-    long long offset = 0;
-    int found = 0;
-    long long start_offset = record->is_class ? POINTER_SIZE_BYTES : 0;
-    if (find_field_in_members(symtab, record->fields, field_name, out_field,
-            &offset, start_offset, 0, line_num, &found) != 0)
-        return 1;
-
-    if (!found)
+    /* Walk the inheritance chain (object/class hierarchy) */
+    struct RecordType *current = record;
+    int depth = 0;
+    while (current != NULL && depth < 32) /* guard against infinite loops */
     {
-        if (!silent)
-            semcheck_error_with_context("Error on line %d, record field %s not found.\n", line_num, field_name);
-        return 1;
+        long long offset = 0;
+        int found = 0;
+        long long start_offset = current->is_class ? POINTER_SIZE_BYTES : 0;
+        if (find_field_in_members(symtab, current->fields, field_name, out_field,
+                &offset, start_offset, 0, line_num, &found) != 0)
+            return 1;
+
+        if (found)
+        {
+            if (offset_out != NULL)
+                *offset_out = offset;
+            return 0;
+        }
+
+        /* Try parent type */
+        if (current->parent_class_name != NULL)
+        {
+            HashNode_t *parent_node = NULL;
+            if (FindIdent(&parent_node, symtab, current->parent_class_name) >= 0 &&
+                parent_node != NULL)
+            {
+                struct RecordType *parent_record = hashnode_get_record_type(parent_node);
+                if (parent_record != NULL)
+                {
+                    current = parent_record;
+                    depth++;
+                    continue;
+                }
+            }
+        }
+        break;
     }
 
-    if (offset_out != NULL)
-        *offset_out = offset;
-    return 0;
+    if (!silent)
+        semcheck_error_with_context("Error on line %d, record field %s not found.\n", line_num, field_name);
+    return 1;
 }
 
 int semcheck_compute_record_size(SymTab_t *symtab, struct RecordType *record,

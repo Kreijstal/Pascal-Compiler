@@ -6113,7 +6113,23 @@ static struct RecordType *convert_record_type_ex(ast_t *record_node, ListNode_t 
     /* Scan for nested type sections in the record */
     ListBuilder nested_type_builder;
     list_builder_init(&nested_type_builder);
-    collect_record_nested_types(record_node->child, &nested_type_builder);
+
+    /* For OBJECT_TYPE, the first child may be the parent type identifier
+     * (inserted by the parser for object(BaseType) syntax).
+     * Extract it before processing members. */
+    char *parent_class_name = NULL;
+    ast_t *members_start = record_node->child;
+    if (record_node->typ == PASCAL_T_OBJECT_TYPE &&
+        members_start != NULL &&
+        members_start->typ == PASCAL_T_IDENTIFIER &&
+        members_start->sym != NULL &&
+        members_start->sym->name != NULL)
+    {
+        parent_class_name = strdup(members_start->sym->name);
+        members_start = members_start->next;
+    }
+
+    collect_record_nested_types(members_start, &nested_type_builder);
 
     if (nested_types_out != NULL)
         *nested_types_out = list_builder_finish(&nested_type_builder);
@@ -6124,17 +6140,18 @@ static struct RecordType *convert_record_type_ex(ast_t *record_node, ListNode_t 
     ListBuilder property_builder;
     list_builder_init(&fields_builder);
     list_builder_init(&property_builder);
-    convert_record_members(record_node->child, &fields_builder, &property_builder);
+    convert_record_members(members_start, &fields_builder, &property_builder);
 
     struct RecordType *record = (struct RecordType *)malloc(sizeof(struct RecordType));
     if (record == NULL) {
         destroy_list(fields_builder.head);
         destroy_list(property_builder.head);
+        free(parent_class_name);
         return NULL;
     }
     record->fields = list_builder_finish(&fields_builder);
     record->properties = NULL;
-    record->parent_class_name = NULL;  /* Regular records don't have parent classes */
+    record->parent_class_name = parent_class_name;
     record->methods = NULL;  /* Regular records don't have methods */
     record->method_templates = NULL;
     record->is_class = 0;
