@@ -365,6 +365,7 @@ static void destroy_record_field(struct RecordField *field)
     if (field->proc_type != NULL)
         kgpc_type_release(field->proc_type);
     destroy_record_type(field->nested_record);
+    destroy_record_type(field->array_element_record);
     free(field);
 }
 
@@ -1889,7 +1890,7 @@ static struct RecordField *clone_record_field(const struct RecordField *field)
     if (field == NULL)
         return NULL;
 
-    struct RecordField *clone = (struct RecordField *)malloc(sizeof(struct RecordField));
+    struct RecordField *clone = (struct RecordField *)calloc(1, sizeof(struct RecordField));
     assert(clone != NULL);
     clone->name = field->name != NULL ? strdup(field->name) : NULL;
     clone->type = field->type;
@@ -1904,6 +1905,7 @@ static struct RecordField *clone_record_field(const struct RecordField *field)
     clone->array_element_type = field->array_element_type;
     clone->array_element_type_id = field->array_element_type_id != NULL ?
         strdup(field->array_element_type_id) : NULL;
+    clone->array_element_record = clone_record_type(field->array_element_record);
     clone->array_is_open = field->array_is_open;
     clone->is_hidden = field->is_hidden;
     clone->is_class_var = field->is_class_var;

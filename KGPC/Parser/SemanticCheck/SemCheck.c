@@ -5428,7 +5428,7 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
             struct RecordField *original_field = (struct RecordField *)cur->cur;
             
             /* Clone the field */
-            struct RecordField *cloned_field = (struct RecordField *)malloc(sizeof(struct RecordField));
+            struct RecordField *cloned_field = (struct RecordField *)calloc(1, sizeof(struct RecordField));
             if (cloned_field == NULL)
             {
                 /* Clean up previously allocated fields */
@@ -5463,10 +5463,12 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
                 strdup(original_field->array_element_type_id) : NULL;
             cloned_field->array_is_open = original_field->array_is_open;
             cloned_field->is_hidden = original_field->is_hidden;
+            cloned_field->is_class_var = original_field->is_class_var;
             cloned_field->is_pointer = original_field->is_pointer;
             cloned_field->pointer_type = original_field->pointer_type;
             cloned_field->pointer_type_id = original_field->pointer_type_id ?
                 strdup(original_field->pointer_type_id) : NULL;
+            /* array_element_record is zeroed by calloc — not cloned to avoid double-free */
             cloned_field->enum_literals = NULL;
             
             /* Create list node for cloned field */

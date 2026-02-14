@@ -1258,6 +1258,13 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
             if (lhs_type->info.record_info == rhs_type->info.record_info)
                 return 1;
 
+            /* Records are compatible if they share the same type_id
+             * (e.g., cloned record types from generic instantiation) */
+            if (lhs_type->info.record_info != NULL && rhs_type->info.record_info != NULL &&
+                lhs_type->info.record_info->type_id != NULL && rhs_type->info.record_info->type_id != NULL &&
+                strcasecmp(lhs_type->info.record_info->type_id, rhs_type->info.record_info->type_id) == 0)
+                return 1;
+
             /* Check inheritance: rhs_type should be assignable to lhs_type if
              * rhs_type is a subclass of lhs_type */
             if (is_record_subclass(rhs_type->info.record_info, lhs_type->info.record_info, symtab))
