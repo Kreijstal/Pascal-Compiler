@@ -838,6 +838,9 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
             {
                 return semcheck_make_quality(MATCH_EXACT);
             }
+            /* Allow String <-> ShortString for var params (openstring compatibility) */
+            if (are_types_compatible_for_assignment(formal_kgpc, actual_kgpc, symtab))
+                return semcheck_make_quality(MATCH_PROMOTION);
             return semcheck_make_quality(MATCH_INCOMPATIBLE);
         }
         if (actual_tag == formal_tag)

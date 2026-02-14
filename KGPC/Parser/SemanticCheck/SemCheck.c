@@ -7751,7 +7751,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
     if (pchar_to_shortstr_name != NULL)
     {
         ListNode_t *param_res = semcheck_create_builtin_param_with_id(
-            "res", STRING_TYPE, "openstring", 1);
+            "res", SHORTSTRING_TYPE, "shortstring", 1);
         ListNode_t *param_p = semcheck_create_builtin_param_with_id(
             "p", POINTER_TYPE, "PAnsiChar", 0);
         if (param_res != NULL)

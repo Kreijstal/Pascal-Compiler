@@ -8,7 +8,7 @@ procedure fpc_pchar_to_shortstr(var res: openstring; p: PAnsiChar);
 function ConvertAndChecksum(const Prefix: string; p: PAnsiChar;
   out OutShort: ShortString; out Sum: Integer): string;
 var
-  Temp: string;
+  Temp: ShortString;
   Index: Integer;
 begin
   fpc_pchar_to_shortstr(OutShort, p);
