@@ -4120,6 +4120,12 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                         recv_record = kgpc_type_get_record(pointee);
                 }
             }
+            /* Also try resolved_kgpc_type directly for record types when record_type is NULL */
+            if (recv_record == NULL && receiver_expr->resolved_kgpc_type != NULL &&
+                receiver_expr->resolved_kgpc_type->kind == TYPE_KIND_RECORD)
+            {
+                recv_record = kgpc_type_get_record(receiver_expr->resolved_kgpc_type);
+            }
             if (recv_record == NULL && receiver_expr->type == EXPR_VAR_ID &&
                 receiver_expr->expr_data.id != NULL)
             {
@@ -4332,6 +4338,69 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                     old_head->next = NULL;
                     args_given = stmt->stmt_data.procedure_call_data.expr_args;
                     static_arg_already_removed = 1;
+                }
+            }
+            else
+            {
+                /* Method not found — check if this is a procedural-type field being invoked. */
+                struct RecordField *proc_field = NULL;
+                long long proc_field_offset = 0;
+                if (resolve_record_field(symtab, record_info, method_name,
+                        &proc_field, &proc_field_offset, stmt->line_num, 1 /* silent */) == 0 &&
+                    proc_field != NULL)
+                {
+                    KgpcType *proc_type = NULL;
+                    if (proc_field->proc_type != NULL &&
+                        proc_field->proc_type->kind == TYPE_KIND_PROCEDURE)
+                    {
+                        proc_type = proc_field->proc_type;
+                    }
+                    else if (proc_field->type_id != NULL)
+                    {
+                        HashNode_t *type_node = NULL;
+                        if (FindIdent(&type_node, symtab, proc_field->type_id) >= 0 &&
+                            type_node != NULL && type_node->type != NULL &&
+                            type_node->type->kind == TYPE_KIND_PROCEDURE)
+                        {
+                            proc_type = type_node->type;
+                        }
+                    }
+
+                    if (proc_type != NULL)
+                    {
+                        /* Remove first_arg from args (it becomes part of the field access expr) */
+                        ListNode_t *old_head = args_given;
+                        args_given = old_head->next;
+                        old_head->cur = NULL; /* Don't free first_arg, we reuse it */
+                        free(old_head);
+                        stmt->stmt_data.procedure_call_data.expr_args = args_given;
+
+                        /* Build record access expression for the procedural field */
+                        struct Expression *proc_expr = mk_recordaccess(
+                            stmt->line_num, first_arg, strdup(method_name));
+                        proc_expr->record_type = record_info;
+                        proc_expr->expr_data.record_access_data.field_offset = (int)proc_field_offset;
+                        kgpc_type_retain(proc_type);
+                        proc_expr->resolved_kgpc_type = proc_type;
+
+                        /* Type-check the arguments */
+                        for (ListNode_t *arg_cur = args_given; arg_cur != NULL; arg_cur = arg_cur->next)
+                        {
+                            struct Expression *arg = (struct Expression *)arg_cur->cur;
+                            if (arg != NULL)
+                                semcheck_stmt_expr_tag(NULL, symtab, arg, max_scope_lev, NO_MUTATE);
+                        }
+
+                        kgpc_type_retain(proc_type);
+                        stmt->stmt_data.procedure_call_data.call_kgpc_type = proc_type;
+                        stmt->stmt_data.procedure_call_data.call_hash_type = HASHTYPE_VAR;
+                        stmt->stmt_data.procedure_call_data.is_call_info_valid = 1;
+                        stmt->stmt_data.procedure_call_data.is_procedural_var_call = 1;
+                        stmt->stmt_data.procedure_call_data.procedural_var_symbol = NULL;
+                        stmt->stmt_data.procedure_call_data.procedural_var_expr = proc_expr;
+                        stmt->stmt_data.procedure_call_data.is_method_call_placeholder = 0;
+                        return return_val;
+                    }
                 }
             }
         }

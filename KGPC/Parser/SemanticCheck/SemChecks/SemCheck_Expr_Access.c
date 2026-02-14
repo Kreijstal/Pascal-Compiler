@@ -2449,6 +2449,93 @@ int semcheck_funccall(int *type_return,
                         hash_return = method_node;
                         goto method_call_resolved;
                     }
+
+                    /* Method not found — check if this is a procedural-type field being invoked.
+                     * For example: ThreadManager.ThreadSwitch(...) where ThreadSwitch is a field
+                     * of type TThreadSwitchHandler (a procedural type). */
+                    {
+                        struct RecordField *proc_field = NULL;
+                        if (resolve_record_field(symtab, record_info, method_name,
+                                &proc_field, NULL, expr->line_num, 1 /* silent */) == 0 &&
+                            proc_field != NULL)
+                        {
+                            /* Check if the field actually has a procedural type */
+                            KgpcType *proc_kgpc_type = NULL;
+                            if (proc_field->proc_type != NULL &&
+                                proc_field->proc_type->kind == TYPE_KIND_PROCEDURE)
+                            {
+                                proc_kgpc_type = proc_field->proc_type;
+                            }
+                            else if (proc_field->type_id != NULL)
+                            {
+                                HashNode_t *type_node = NULL;
+                                if (FindIdent(&type_node, symtab, proc_field->type_id) >= 0 &&
+                                    type_node != NULL && type_node->type != NULL &&
+                                    type_node->type->kind == TYPE_KIND_PROCEDURE)
+                                {
+                                    proc_kgpc_type = type_node->type;
+                                }
+                            }
+                            else if (proc_field->type == PROCEDURE)
+                            {
+                                /* Inline procedural type without proc_type or type_id */
+                            }
+
+                            if (proc_kgpc_type != NULL &&
+                                proc_kgpc_type->kind == TYPE_KIND_PROCEDURE)
+                            {
+                                /* Remove first_arg from args list (it becomes part of field access) */
+                                ListNode_t *old_head = args_given;
+                                args_given = old_head->next;
+                                old_head->next = NULL;
+                                old_head->cur = NULL; /* Don't free first_arg, we reuse it */
+                                free(old_head);
+                                expr->expr_data.function_call_data.args_expr = args_given;
+
+                                /* Build a record-access expression: first_arg.field_name */
+                                struct Expression *field_access = mk_recordaccess(
+                                    expr->line_num,
+                                    first_arg,  /* Transfer ownership from args list */
+                                    strdup(method_name));
+                                assert(field_access != NULL);
+
+                                /* Resolve the field access expression to get its procedural type */
+                                KgpcType *field_kgpc = NULL;
+                                semcheck_expr_with_type(&field_kgpc, symtab, field_access, max_scope_lev, NO_MUTATE);
+
+                                /* Set return type from the procedural type */
+                                KgpcType *ret = proc_kgpc_type->info.proc_info.return_type;
+                                if (ret != NULL)
+                                {
+                                    *type_return = semcheck_tag_from_kgpc(ret);
+                                    semcheck_expr_set_resolved_kgpc_type_shared(expr, ret);
+                                }
+                                else
+                                {
+                                    *type_return = PROCEDURE;
+                                    semcheck_expr_set_resolved_type(expr, PROCEDURE);
+                                }
+
+                                /* Convert to procedural variable call */
+                                expr->expr_data.function_call_data.is_procedural_var_call = 1;
+                                expr->expr_data.function_call_data.procedural_var_symbol = NULL;
+                                expr->expr_data.function_call_data.procedural_var_expr = field_access;
+                                expr->expr_data.function_call_data.is_method_call_placeholder = 0;
+                                expr->expr_data.function_call_data.call_kgpc_type = proc_kgpc_type;
+                                kgpc_type_retain(proc_kgpc_type);
+
+                                /* Type-check the arguments */
+                                for (ListNode_t *arg_cur = args_given; arg_cur != NULL; arg_cur = arg_cur->next)
+                                {
+                                    struct Expression *arg = (struct Expression *)arg_cur->cur;
+                                    if (arg != NULL)
+                                        semcheck_expr_with_type(NULL, symtab, arg, max_scope_lev, NO_MUTATE);
+                                }
+
+                                return return_val;
+                            }
+                        }
+                    }
                 }
             }
             else
