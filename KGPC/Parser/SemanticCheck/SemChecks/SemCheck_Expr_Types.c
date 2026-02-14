@@ -2593,14 +2593,46 @@ int semcheck_reinterpret_typecast_as_call(int *type_return, SymTab_t *symtab,
         return 1;
 
     HashNode_t *func_node = NULL;
-    if (FindIdent(&func_node, symtab, expr->expr_data.typecast_data.target_type_id) == -1 ||
-        func_node == NULL)
+    int found_func = (FindIdent(&func_node, symtab, expr->expr_data.typecast_data.target_type_id) >= 0 &&
+        func_node != NULL);
+
+    /* For dotted identifiers like "widestringmanager.UpperProc", if the full name
+     * is not found as a function, check if the prefix is a variable/record - the
+     * function call handler will split and resolve it as a record field call. */
+    if (!found_func)
+    {
+        const char *dot = strchr(expr->expr_data.typecast_data.target_type_id, '.');
+        if (dot != NULL && dot[1] != '\0')
+        {
+            size_t prefix_len = (size_t)(dot - expr->expr_data.typecast_data.target_type_id);
+            char *prefix = (char *)malloc(prefix_len + 1);
+            if (prefix != NULL)
+            {
+                memcpy(prefix, expr->expr_data.typecast_data.target_type_id, prefix_len);
+                prefix[prefix_len] = '\0';
+                HashNode_t *prefix_node = NULL;
+                int prefix_found = (FindIdent(&prefix_node, symtab, prefix) >= 0 && prefix_node != NULL);
+                free(prefix);
+                if (prefix_found)
+                    found_func = 1;  /* Let the function call handler resolve the dotted name */
+            }
+        }
+    }
+
+    if (!found_func)
         return 1;
 
-    if (func_node->hash_type != HASHTYPE_FUNCTION &&
+    if (func_node != NULL &&
+        func_node->hash_type != HASHTYPE_FUNCTION &&
         func_node->hash_type != HASHTYPE_PROCEDURE &&
         func_node->hash_type != HASHTYPE_BUILTIN_PROCEDURE)
-        return 1;
+    {
+        /* For dotted identifiers, the func_node may be a variable (record) -
+         * that's OK, the function call handler will resolve the field call */
+        const char *dot = strchr(expr->expr_data.typecast_data.target_type_id, '.');
+        if (dot == NULL)
+            return 1;
+    }
 
     struct Expression *arg_expr = expr->expr_data.typecast_data.expr;
     expr->expr_data.typecast_data.expr = NULL;
