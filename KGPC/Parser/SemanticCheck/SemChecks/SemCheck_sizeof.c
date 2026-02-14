@@ -330,8 +330,8 @@ static int compute_field_size(SymTab_t *symtab, struct RecordField *field,
 
         long long element_size = 0;
         int elem_status = 1;
-        if (field->array_element_type == RECORD_TYPE && field->nested_record != NULL)
-            elem_status = sizeof_from_record(symtab, field->nested_record,
+        if (field->array_element_type == RECORD_TYPE && field->array_element_record != NULL)
+            elem_status = sizeof_from_record(symtab, field->array_element_record,
                 &element_size, depth + 1, line_num);
         else if (field->array_element_type != UNKNOWN_TYPE ||
             field->array_element_type_id != NULL)

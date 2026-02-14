@@ -2198,7 +2198,9 @@ FIELD_RESOLVED:
         }
         else if (expr->array_element_type == RECORD_TYPE)
         {
-            expr->array_element_record_type = field_record;
+            expr->array_element_record_type = field_desc->array_element_record;
+            if (expr->array_element_record_type == NULL)
+                expr->array_element_record_type = field_record;
         }
 
         long long computed_size = 0;

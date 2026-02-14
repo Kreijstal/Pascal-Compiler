@@ -5738,6 +5738,8 @@ static ListNode_t *convert_field_decl(ast_t *field_decl_node) {
             field_desc->array_end = field_info.end;
             field_desc->array_element_type = field_info.element_type;
             field_desc->array_element_type_id = field_info.element_type_id;
+            field_desc->array_element_record = field_info.record_type;
+            field_info.record_type = NULL;  /* Ownership transferred */
             field_desc->array_is_open = field_info.is_open_array;
             field_info.element_type_id = NULL;
             field_desc->is_class_var = is_class_var;
