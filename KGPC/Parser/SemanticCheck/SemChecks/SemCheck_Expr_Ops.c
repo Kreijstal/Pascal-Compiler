@@ -1233,6 +1233,10 @@ int semcheck_varid(int *type_return,
     int with_status = semcheck_with_try_resolve(id, symtab, &with_expr, expr->line_num);
     if (with_status == 0 && with_expr != NULL)
     {
+        if (getenv("KGPC_DEBUG_FIELD") != NULL) {
+            fprintf(stderr, "[SemCheck] WITH resolved '%s' at line %d, with_expr->type=%d\n",
+                id, expr->line_num, with_expr->type);
+        }
         char *field_id = expr->expr_data.id;
         expr->type = EXPR_RECORD_ACCESS;
         expr->expr_data.record_access_data.record_expr = with_expr;
