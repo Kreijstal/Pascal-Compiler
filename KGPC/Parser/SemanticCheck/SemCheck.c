@@ -624,8 +624,12 @@ static void print_error_context(int line_num, int col_num, int source_index)
     fprintf(stderr, "\n");
 }
 
-static int semcheck_parse_line_directive(const char *line, size_t len)
+static int semcheck_parse_line_directive(const char *line, size_t len,
+    char *filename_out, size_t filename_size)
 {
+    if (filename_out != NULL && filename_size > 0)
+        filename_out[0] = '\0';
+
     if (len < 8)
         return -1;
     if (line[0] != '{' || line[1] != '#')
@@ -644,11 +648,33 @@ static int semcheck_parse_line_directive(const char *line, size_t len)
         ++pos;
     }
 
+    /* Parse optional filename in quotes */
+    while (pos < len && (line[pos] == ' ' || line[pos] == '\t'))
+        ++pos;
+
+    if (pos < len && line[pos] == '"' && filename_out != NULL && filename_size > 0)
+    {
+        ++pos; /* Skip opening quote */
+        size_t fname_start = pos;
+        while (pos < len && line[pos] != '"')
+            ++pos;
+        size_t fname_len = pos - fname_start;
+        if (fname_len > 0 && fname_len < filename_size)
+        {
+            memcpy(filename_out, line + fname_start, fname_len);
+            filename_out[fname_len] = '\0';
+        }
+    }
+
     return line_num > 0 ? line_num : -1;
 }
 
-static int semcheck_line_from_source_offset(const char *buffer, size_t length, int source_offset)
+static int semcheck_line_from_source_offset(const char *buffer, size_t length, int source_offset,
+    char *file_out, size_t file_out_size)
 {
+    if (file_out != NULL && file_out_size > 0)
+        file_out[0] = '\0';
+
     if (buffer == NULL || length == 0 || source_offset < 0 || (size_t)source_offset >= length)
         return -1;
 
@@ -668,7 +694,8 @@ static int semcheck_line_from_source_offset(const char *buffer, size_t length, i
             ++line_len;
         }
 
-        int directive_line = semcheck_parse_line_directive(buffer + line_start, line_len);
+        int directive_line = semcheck_parse_line_directive(buffer + line_start, line_len,
+            file_out, file_out_size);
         if (directive_line >= 0)
         {
             int lines_after_directive = 0;
@@ -882,7 +909,9 @@ void semantic_error(int line_num, int col_num, const char *format, ...)
             context_buf = g_semcheck_source_buffer;
             context_buf_len = g_semcheck_source_length;
         }
-        int computed_line = semcheck_line_from_source_offset(context_buf, context_buf_len, effective_source_index);
+        char directive_file[512];
+        int computed_line = semcheck_line_from_source_offset(context_buf, context_buf_len, effective_source_index,
+            directive_file, sizeof(directive_file));
         if (computed_line > 0)
             effective_line = computed_line;
         if (effective_col <= 0 && g_semcheck_error_col > 0)
@@ -919,7 +948,9 @@ void semantic_error_at(int line_num, int col_num, int source_index, const char *
             context_buf = g_semcheck_source_buffer;
             context_buf_len = g_semcheck_source_length;
         }
-        int computed_line = semcheck_line_from_source_offset(context_buf, context_buf_len, source_index);
+        char directive_file[512];
+        int computed_line = semcheck_line_from_source_offset(context_buf, context_buf_len, source_index,
+            directive_file, sizeof(directive_file));
         if (computed_line > 0)
             line_num = computed_line;
     }
@@ -962,9 +993,16 @@ void semcheck_error_with_context_at(int line_num, int col_num, int source_index,
             context_buf = g_semcheck_source_buffer;
             context_buf_len = g_semcheck_source_length;
         }
-        int computed_line = semcheck_line_from_source_offset(context_buf, context_buf_len, source_index);
+        char directive_file[512];
+        int computed_line = semcheck_line_from_source_offset(context_buf, context_buf_len, source_index,
+            directive_file, sizeof(directive_file));
         if (computed_line > 0)
             effective_line = computed_line;
+        if (directive_file[0] != '\0')
+        {
+            /* Print "In include_file:" context before the error */
+            fprintf(stderr, "  In %s:\n", directive_file);
+        }
         if (effective_col <= 0 && g_semcheck_error_col > 0)
             effective_col = g_semcheck_error_col;
     }
@@ -1055,9 +1093,15 @@ void semcheck_error_with_context(const char *format, ...)
             context_buf = g_semcheck_source_buffer;
             context_buf_len = g_semcheck_source_length;
         }
-        int computed_line = semcheck_line_from_source_offset(context_buf, context_buf_len, effective_source_index);
+        char directive_file[512];
+        int computed_line = semcheck_line_from_source_offset(context_buf, context_buf_len, effective_source_index,
+            directive_file, sizeof(directive_file));
         if (computed_line > 0)
             effective_line = computed_line;
+        if (directive_file[0] != '\0')
+        {
+            fprintf(stderr, "  In %s:\n", directive_file);
+        }
         if (g_semcheck_error_col > 0)
             effective_col = g_semcheck_error_col;
     }
