@@ -327,10 +327,12 @@ relop_fallback:
                     }
                 }
 
-                /* Check for dynamic array compared with nil.
+                /* Check for dynamic array or pointer compared with nil.
                  * In Pascal, dynamic arrays can be compared with nil to check if they are empty/uninitialized.
-                 * A := nil; if A = nil then ... */
+                 * A := nil; if A = nil then ...
+                 * Also, any pointer (including class/interface pointers) can be compared with nil. */
                 int dynarray_nil_ok = 0;
+                int pointer_nil_ok = 0;
                 if (!pointer_ok && expr1 != NULL && expr2 != NULL)
                 {
                     KgpcType *kgpc1 = expr1->resolved_kgpc_type;
@@ -341,13 +343,22 @@ relop_fallback:
                         int is_dynarray2 = kgpc_type_is_dynamic_array(kgpc2);
                         int is_nil1 = (kgpc1->kind == TYPE_KIND_POINTER && kgpc1->info.points_to == NULL);
                         int is_nil2 = (kgpc2->kind == TYPE_KIND_POINTER && kgpc2->info.points_to == NULL);
+                        int is_pointer1 = (kgpc1->kind == TYPE_KIND_POINTER);
+                        int is_pointer2 = (kgpc2->kind == TYPE_KIND_POINTER);
+                        int is_record1 = (kgpc1->kind == TYPE_KIND_RECORD);
+                        int is_record2 = (kgpc2->kind == TYPE_KIND_RECORD);
                         
                         if ((is_dynarray1 && is_nil2) || (is_nil1 && is_dynarray2))
                             dynarray_nil_ok = 1;
+                        /* Allow pointer = nil or nil = pointer comparisons.
+                         * Also allow class/interface (record) = nil comparisons since classes are pointer types. */
+                        if ((is_pointer1 && is_nil2) || (is_nil1 && is_pointer2) ||
+                            (is_record1 && is_nil2) || (is_nil1 && is_record2))
+                            pointer_nil_ok = 1;
                     }
                 }
                 
-                if (!numeric_ok && !boolean_ok && !string_ok && !char_ok && !pointer_ok && !enum_ok && !string_pchar_ok && !dynarray_nil_ok
+                if (!numeric_ok && !boolean_ok && !string_ok && !char_ok && !pointer_ok && !enum_ok && !string_pchar_ok && !dynarray_nil_ok && !pointer_nil_ok
                     && type_first != VARIANT_TYPE && type_second != VARIANT_TYPE)
                 {
                     semcheck_error_with_context("Error on line %d, equality comparison requires matching numeric, boolean, string, character, or pointer types!\n\n",
@@ -432,8 +443,9 @@ relop_fallback:
                     }
                 }
 
-                /* Check for dynamic array compared with nil */
+                /* Check for dynamic array or pointer compared with nil */
                 int dynarray_nil_ok = 0;
+                int pointer_nil_ok = 0;
                 if (!pointer_ok && expr1 != NULL && expr2 != NULL)
                 {
                     KgpcType *kgpc1 = expr1->resolved_kgpc_type;
@@ -444,13 +456,20 @@ relop_fallback:
                         int is_dynarray2 = kgpc_type_is_dynamic_array(kgpc2);
                         int is_nil1 = (kgpc1->kind == TYPE_KIND_POINTER && kgpc1->info.points_to == NULL);
                         int is_nil2 = (kgpc2->kind == TYPE_KIND_POINTER && kgpc2->info.points_to == NULL);
+                        int is_pointer1 = (kgpc1->kind == TYPE_KIND_POINTER);
+                        int is_pointer2 = (kgpc2->kind == TYPE_KIND_POINTER);
+                        int is_record1 = (kgpc1->kind == TYPE_KIND_RECORD);
+                        int is_record2 = (kgpc2->kind == TYPE_KIND_RECORD);
                         
                         if ((is_dynarray1 && is_nil2) || (is_nil1 && is_dynarray2))
                             dynarray_nil_ok = 1;
+                        if ((is_pointer1 && is_nil2) || (is_nil1 && is_pointer2) ||
+                            (is_record1 && is_nil2) || (is_nil1 && is_record2))
+                            pointer_nil_ok = 1;
                     }
                 }
 
-                if(!numeric_ok && !string_ok && !char_ok && !pointer_ok && !enum_ok && !string_pchar_ok && !dynarray_nil_ok
+                if(!numeric_ok && !string_ok && !char_ok && !pointer_ok && !enum_ok && !string_pchar_ok && !dynarray_nil_ok && !pointer_nil_ok
                     && type_first != VARIANT_TYPE && type_second != VARIANT_TYPE)
                 {
                     semcheck_error_with_context(
