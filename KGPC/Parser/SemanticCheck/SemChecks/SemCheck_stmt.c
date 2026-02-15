@@ -4600,43 +4600,12 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                 }
                 
                 if (obj_record_type != NULL) {
-                    /* Found the object with a record type. Now find the class name for this type. */
-                
-                /* Search for a type declaration with this RecordType */
-                /* We need to iterate through all identifiers in the symbol table */
-                char *correct_class_name = NULL;
-                
-                /* Walk through symbol table scopes to find matching type */
-                ListNode_t *scope_list = symtab->stack_head;
-                while (scope_list != NULL && correct_class_name == NULL) {
-                    HashTable_t *hash_table = (HashTable_t *)scope_list->cur;
-                    if (hash_table != NULL) {
-                        for (int i = 0; i < TABLE_SIZE && correct_class_name == NULL; i++) {
-                            ListNode_t *bucket = hash_table->table[i];
-                            while (bucket != NULL && correct_class_name == NULL) {
-                                HashNode_t *node = (HashNode_t *)bucket->cur;
-                                if (node != NULL && node->hash_type == HASHTYPE_TYPE && node->type != NULL) {
-                                    /* Check direct record type */
-                                    if (node->type->kind == TYPE_KIND_RECORD &&
-                                        node->type->info.record_info == obj_record_type) {
-                                        correct_class_name = node->id;
-                                        break;
-                                    }
-                                    /* Check class type (pointer to record) */
-                                    else if (node->type->kind == TYPE_KIND_POINTER &&
-                                             node->type->info.points_to != NULL &&
-                                             node->type->info.points_to->kind == TYPE_KIND_RECORD &&
-                                             node->type->info.points_to->info.record_info == obj_record_type) {
-                                        correct_class_name = node->id;
-                                        break;
-                                    }
-                                }
-                                bucket = bucket->next;
-                            }
-                        }
-                    }
-                    scope_list = scope_list->next;
-                }
+                    /* Found the object with a record type. Now find the class name for this type.
+                     * Use the type_id stored directly on the RecordType, which is the canonical
+                     * type name where methods are registered. This avoids issues with type aliases
+                     * (e.g., IInterface = IUnknown) where walking the symbol table might find the
+                     * alias name instead of the original type name. */
+                char *correct_class_name = obj_record_type->type_id;
                 
                 
                 if (correct_class_name != NULL) {
