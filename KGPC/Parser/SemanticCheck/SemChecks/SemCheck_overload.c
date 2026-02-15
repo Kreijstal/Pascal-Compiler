@@ -1228,6 +1228,9 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
 
     int given_count = ListLength(args_given);
 
+    /* Count candidates for disambiguation heuristics */
+    int num_candidates = ListLength(overload_candidates);
+
     ListNode_t *slow = overload_candidates;
     ListNode_t *fast = overload_candidates;
     int guard = 0;
@@ -1637,6 +1640,33 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                     }
                     quality = semcheck_classify_match(arg_tag, arg_kgpc, formal_tag, formal_kgpc,
                         is_var_param, symtab, is_integer_literal);
+
+                    /* Penalize var/out parameters that receive non-addressable expressions
+                     * (literals, computed values). A literal like 1 cannot be passed by
+                     * reference, so the value-param overload should be preferred.
+                     * We demote to MATCH_INCOMPATIBLE so that value-param overloads win.
+                     * NOTE: only for actual var/out, not Self params of constructors. */
+                    if (is_var_param && arg_expr != NULL &&
+                        quality.kind == MATCH_EXACT)
+                    {
+                        if (arg_expr->type != EXPR_VAR_ID)
+                            fprintf(stderr, "[DEBUG] var param non-addressable: arg_expr->type=%d candidate=%s\n",
+                                arg_expr->type, candidate->id ? candidate->id : "?");
+                        int is_addressable = 0;
+                        switch (arg_expr->type)
+                        {
+                            case EXPR_VAR_ID:
+                            case EXPR_ARRAY_ACCESS:
+                            case EXPR_RECORD_ACCESS:
+                            case EXPR_POINTER_DEREF:
+                                is_addressable = 1;
+                                break;
+                            default:
+                                break;
+                        }
+                        if (!is_addressable)
+                            quality = semcheck_make_quality(MATCH_INCOMPATIBLE);
+                    }
 
                     const char *formal_id = semcheck_get_param_type_id(formal_decl);
                     if (formal_id != NULL && is_var_param &&

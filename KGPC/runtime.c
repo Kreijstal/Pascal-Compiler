@@ -1075,6 +1075,32 @@ void kgpc_rtti_check_cast(const kgpc_class_typeinfo *value_type,
     abort();
 }
 
+int kgpc_get_interface(const void *self, const void *guid, void **out_intf)
+{
+    if (self == NULL || guid == NULL || out_intf == NULL)
+        return 0;
+
+    /* Get typeinfo pointer from the object's first field (VMT pointer -> typeinfo at offset 0) */
+    const void *vmt = *(const void * const *)self;
+    if (vmt == NULL)
+        return 0;
+    const kgpc_class_typeinfo *typeinfo = *(const kgpc_class_typeinfo * const *)vmt;
+
+    /* Walk the class hierarchy */
+    while (typeinfo != NULL) {
+        if (typeinfo->interfaces != NULL && typeinfo->num_interfaces > 0) {
+            for (int i = 0; i < typeinfo->num_interfaces; i++) {
+                if (memcmp(&typeinfo->interfaces[i], guid, 16) == 0) {
+                    *out_intf = (void *)self;
+                    return 1;
+                }
+            }
+        }
+        typeinfo = typeinfo->parent;
+    }
+    return 0;
+}
+
 const void *kgpc_class_parent(const void *self)
 {
     if (self == NULL)

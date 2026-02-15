@@ -12,11 +12,21 @@
 #endif
 #endif
 
+typedef struct kgpc_interface_entry {
+    uint32_t guid_d1;
+    uint16_t guid_d2;
+    uint16_t guid_d3;
+    uint8_t  guid_d4[8];
+    const char *name;
+} kgpc_interface_entry;
+
 typedef struct kgpc_class_typeinfo
 {
     const struct kgpc_class_typeinfo *parent;
     const char *class_name;
     const void *vmt;
+    const kgpc_interface_entry *interfaces;
+    int num_interfaces;
 } kgpc_class_typeinfo;
 
 char *kgpc_alloc_empty_string(void);
@@ -44,6 +54,7 @@ int kgpc_directory_create(const char *path);
 int kgpc_directory_remove(const char *path);
 int kgpc_file_rename(const char *old_path, const char *new_path);
 void *__kgpc_default_create(size_t class_size, const void *vmt_ptr);
+int kgpc_get_interface(const void *self, const void *guid, void **out_intf);
 
 /* Console / keyboard helpers used by KGPC RTL units (Crt/Keyboard). */
 void kgpc_clrscr(void);

@@ -458,6 +458,20 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                 if (node->hash_type == HASHTYPE_FUNCTION && mutating != NO_MUTATE &&
                     node->type != NULL)
                 {
+                    /* When assigning to a function name (return value), prefer
+                     * the CURRENT function's return type over any arbitrary
+                     * overload that FindIdent may have returned first.  This
+                     * matters when two overloads differ only in casing (e.g.
+                     * FpFStat vs FPFStat) since Pascal identifiers are
+                     * case-insensitive. */
+                    const char *cur_func = semcheck_get_current_subprogram_id();
+                    if (cur_func != NULL &&
+                        pascal_identifier_equals(expr->expr_data.id, cur_func))
+                    {
+                        KgpcType *cur_ret = semcheck_get_current_subprogram_return_kgpc_type(symtab, owns_type);
+                        if (cur_ret != NULL)
+                            return cur_ret;
+                    }
                     KgpcType *ret_type = kgpc_type_get_return_type(node->type);
                     if (ret_type != NULL)
                     {

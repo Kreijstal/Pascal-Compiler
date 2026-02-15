@@ -166,6 +166,9 @@ struct RecordType
     int default_indexed_element_type; /* Type tag for elements of the default indexed property */
     char *default_indexed_element_type_id; /* Type identifier for elements of the default indexed property */
     ListNode_t *record_properties; /* Properties on plain records (Delphi advanced records), not checked by record_type_is_class */
+    char *guid_string;             /* GUID string for interfaces, e.g. "{12345678-1234-...}" */
+    char **interface_names;        /* Names of interfaces this class implements */
+    int num_interfaces;            /* Number of entries in interface_names */
 };
 
 static inline int record_type_is_class(const struct RecordType *record)

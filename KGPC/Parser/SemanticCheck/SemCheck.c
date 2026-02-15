@@ -10785,18 +10785,38 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             }
         }
         
-        while (cur != NULL && existing_decl == NULL)
+        HashNode_t *first_mangled_match = NULL;
+        while (cur != NULL)
         {
             HashNode_t *candidate = (HashNode_t *)cur->cur;
             if (candidate != NULL && candidate->mangled_id != NULL &&
                 strcmp(candidate->mangled_id, subprogram->tree_data.subprogram_data.mangled_id) == 0)
             {
-                existing_decl = candidate;
-                already_declared = 1;
+                if (first_mangled_match == NULL)
+                    first_mangled_match = candidate;
+                /* When multiple candidates share the same mangled name (e.g.,
+                 * FpFStat and FPFStat both mangle to fpfstat_li), prefer the
+                 * one with an equivalent signature. */
+                if (candidate->type != NULL &&
+                    candidate->type->kind == TYPE_KIND_PROCEDURE &&
+                    candidate->type->info.proc_info.definition != NULL &&
+                    semcheck_subprogram_signatures_equivalent(
+                        subprogram, candidate->type->info.proc_info.definition))
+                {
+                    existing_decl = candidate;
+                    already_declared = 1;
+                    break;
+                }
             }
             cur = cur->next;
         }
-        
+        /* If no signature-exact match found, fall back to the first mangled match */
+        if (existing_decl == NULL && first_mangled_match != NULL)
+        {
+            existing_decl = first_mangled_match;
+            already_declared = 1;
+        }
+
         if (all_matches != NULL)
             DestroyList(all_matches);
     }

@@ -555,6 +555,7 @@ function kgpc_set_current_dir(path: PChar): Integer; cdecl; external name 'kgpc_
 function kgpc_ioresult_peek: Integer; cdecl; external name 'kgpc_ioresult_peek';
 function kgpc_class_name(self: Pointer): PAnsiChar; cdecl; external name 'kgpc_class_name';
 function kgpc_class_parent(self: Pointer): Pointer; cdecl; external name 'kgpc_class_parent';
+function kgpc_get_interface(self: Pointer; guid: Pointer; var intf): Integer; cdecl; external name 'kgpc_get_interface';
 procedure kgpc_string_to_shortstring(var dest; src: PAnsiChar; dest_size: SizeInt); cdecl; external name 'kgpc_string_to_shortstring';
 procedure kgpc_text_assign(var f: text; filename: PAnsiChar); cdecl; external name 'kgpc_text_assign';
 procedure kgpc_text_rewrite(var f: text); cdecl; external name 'kgpc_text_rewrite';
@@ -1169,7 +1170,7 @@ end;
 
 function TObject.GetInterface(const IID: TGUID; out Obj): Boolean;
 begin
-    GetInterface := False;
+    GetInterface := kgpc_get_interface(Pointer(Self), @IID, Obj) <> 0;
 end;
 
 begin

@@ -1882,6 +1882,18 @@ struct RecordType *clone_record_type(const struct RecordType *record_type)
     clone->properties = clone_property_list(record_type->properties);
     clone->record_properties = clone_property_list(record_type->record_properties);
 
+    clone->guid_string = record_type->guid_string ? strdup(record_type->guid_string) : NULL;
+    clone->num_interfaces = record_type->num_interfaces;
+    clone->interface_names = NULL;
+    if (record_type->interface_names != NULL && record_type->num_interfaces > 0) {
+        clone->interface_names = (char **)calloc((size_t)record_type->num_interfaces, sizeof(char *));
+        if (clone->interface_names != NULL) {
+            for (int i = 0; i < record_type->num_interfaces; ++i)
+                clone->interface_names[i] = record_type->interface_names[i] != NULL ?
+                    strdup(record_type->interface_names[i]) : NULL;
+        }
+    }
+
     return clone;
 }
 

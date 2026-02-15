@@ -5445,6 +5445,25 @@ static struct RecordType *convert_class_type_ex(const char *class_name, ast_t *c
         body_start = body_start->next;
     }
 
+    /* Collect additional IDENTIFIER siblings as interface names */
+    int iface_count = 0;
+    int iface_cap = 0;
+    char **iface_names = NULL;
+    {
+        ast_t *scan = body_start;
+        while (scan != NULL && scan->typ == PASCAL_T_IDENTIFIER) {
+            if (scan->sym != NULL && scan->sym->name != NULL) {
+                if (iface_count >= iface_cap) {
+                    iface_cap = (iface_cap == 0) ? 4 : iface_cap * 2;
+                    iface_names = (char **)realloc(iface_names, iface_cap * sizeof(char *));
+                }
+                iface_names[iface_count++] = strdup(scan->sym->name);
+            }
+            scan = scan->next;
+        }
+        body_start = scan;
+    }
+
     if (getenv("KGPC_DEBUG_CLASS_METHODS") != NULL) {
         fprintf(stderr, "[KGPC] convert_class_type: processing class %s\n", class_name ? class_name : "<null>");
         if (body_start != NULL) {
@@ -5500,6 +5519,9 @@ static struct RecordType *convert_class_type_ex(const char *class_name, ast_t *c
     record->default_indexed_element_type = UNKNOWN_TYPE;
     record->default_indexed_element_type_id = NULL;
     record->record_properties = NULL;
+    record->guid_string = NULL;
+    record->interface_names = iface_names;
+    record->num_interfaces = iface_count;
 
     if (parent_class_name == NULL)
     {
@@ -5554,10 +5576,18 @@ static struct RecordType *convert_interface_type_ex(const char *interface_name, 
 
     /* Optional parent interface identifier is stored first if present. */
     char *parent_interface_name = NULL;
+    char *guid_string = NULL;
     ast_t *body_start = interface_node->child;
     if (body_start != NULL && body_start->typ == PASCAL_T_IDENTIFIER) {
         if (body_start->sym != NULL && body_start->sym->name != NULL)
             parent_interface_name = strdup(body_start->sym->name);
+        body_start = body_start->next;
+    }
+
+    /* Optional GUID string follows parent identifier, e.g. ['{...}'] */
+    if (body_start != NULL && body_start->typ == PASCAL_T_STRING) {
+        if (body_start->sym != NULL && body_start->sym->name != NULL)
+            guid_string = strdup(body_start->sym->name);
         body_start = body_start->next;
     }
 
@@ -5599,6 +5629,9 @@ static struct RecordType *convert_interface_type_ex(const char *interface_name, 
     record->default_indexed_element_type = UNKNOWN_TYPE;
     record->default_indexed_element_type_id = NULL;
     record->record_properties = NULL;
+    record->guid_string = guid_string;
+    record->interface_names = NULL;
+    record->num_interfaces = 0;
 
     return record;
 }
@@ -6210,6 +6243,9 @@ static struct RecordType *convert_record_type_ex(ast_t *record_node, ListNode_t 
     record->default_indexed_element_type = UNKNOWN_TYPE;
     record->record_properties = list_builder_finish(&property_builder);
     record->default_indexed_element_type_id = NULL;
+    record->guid_string = NULL;
+    record->interface_names = NULL;
+    record->num_interfaces = 0;
     return record;
 }
 
