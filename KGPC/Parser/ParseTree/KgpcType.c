@@ -731,6 +731,13 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
     if (lhs_type == NULL || rhs_type == NULL)
         return 0;
 
+    /* Variant type auto-coerces to/from any other type */
+    if ((lhs_type->kind == TYPE_KIND_PRIMITIVE && lhs_type->info.primitive_type_tag == VARIANT_TYPE) ||
+        (rhs_type->kind == TYPE_KIND_PRIMITIVE && rhs_type->info.primitive_type_tag == VARIANT_TYPE))
+    {
+        return 1;
+    }
+
     /* Special case: Allow string (primitive) to be assigned to char array */
     /* This is a common Pascal idiom: var s: array[1..20] of char; begin s := 'hello'; end; */
     if (lhs_type->kind == TYPE_KIND_ARRAY &&
@@ -1444,6 +1451,7 @@ const char* kgpc_type_to_string(KgpcType *type) {
                 case WORD_TYPE: return "Word";
                 case LONGWORD_TYPE: return "LongWord";
                 case QWORD_TYPE: return "QWord";
+                case VARIANT_TYPE: return "Variant";
                 default:
                     snprintf(buffer, TYPE_STRING_BUFFER_SIZE, "primitive(%d)", type->info.primitive_type_tag);
                     return buffer;
@@ -2643,6 +2651,7 @@ const char* type_tag_to_string(int type_tag)
         case WORD_TYPE: return "Word";
         case LONGWORD_TYPE: return "LongWord";
         case QWORD_TYPE: return "QWord";
+        case VARIANT_TYPE: return "Variant";
         default:
         {
             static char buf[32];

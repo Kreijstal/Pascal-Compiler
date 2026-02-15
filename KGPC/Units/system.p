@@ -243,13 +243,8 @@ type
   Currency = Int64;              { FPC Currency is Int64 scaled by 10000 }
   PCurrency = ^Currency;
 
-  { Variant type - stub implementation for basic compatibility }
-  { Note: Real Variant type requires complex runtime support for:
-    - Type coercion between different value types
-    - Memory management for string/array variants  
-    - COM interoperability (OleVariant)
-    This stub only provides the type name for parsing purposes. }
-  Variant = String;
+  { Variant and PVariant are registered as built-in types (VARIANT_TYPE, 16 bytes)
+    and auto-coerce to/from any value type.  No Pascal-level alias needed. }
   PVariant = ^Variant;
 
 const

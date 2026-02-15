@@ -916,6 +916,10 @@ void semantic_error(int line_num, int col_num, const char *format, ...)
             directive_file, sizeof(directive_file));
         if (computed_line > 0)
             effective_line = computed_line;
+        if (directive_file[0] != '\0')
+        {
+            fprintf(stderr, "  In %s:\n", directive_file);
+        }
         if (effective_col <= 0 && g_semcheck_error_col > 0)
             effective_col = g_semcheck_error_col;
     }
@@ -955,6 +959,10 @@ void semantic_error_at(int line_num, int col_num, int source_index, const char *
             directive_file, sizeof(directive_file));
         if (computed_line > 0)
             line_num = computed_line;
+        if (directive_file[0] != '\0')
+        {
+            fprintf(stderr, "  In %s:\n", directive_file);
+        }
     }
 
     const char *file_path = semcheck_get_error_path();
@@ -7728,9 +7736,10 @@ void semcheck_add_builtins(SymTab_t *symtab)
     add_builtin_type_owned(symtab, "Double", create_primitive_type_with_size(REAL_TYPE, 8));
     add_builtin_type_owned(symtab, "Extended", create_primitive_type_with_size(REAL_TYPE, 8));
 
-    /* Variant and OleVariant (COM interop) - treated as opaque 16-byte types */
-    add_builtin_type_owned(symtab, "Variant", create_primitive_type_with_size(POINTER_TYPE, 16));
-    add_builtin_type_owned(symtab, "OleVariant", create_primitive_type_with_size(POINTER_TYPE, 16));
+    /* Variant and OleVariant (COM interop) - treated as opaque 16-byte types.
+     * VARIANT_TYPE auto-coerces to/from any value type at the semantic level. */
+    add_builtin_type_owned(symtab, "Variant", create_primitive_type_with_size(VARIANT_TYPE, 16));
+    add_builtin_type_owned(symtab, "OleVariant", create_primitive_type_with_size(VARIANT_TYPE, 16));
 
     /* File/Text primitives (sizes align with system.p TextRec/FileRec layout) */
     char *file_name = strdup("file");

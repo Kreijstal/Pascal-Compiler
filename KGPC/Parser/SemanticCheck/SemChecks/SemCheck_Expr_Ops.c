@@ -339,7 +339,8 @@ relop_fallback:
                     }
                 }
                 
-                if (!numeric_ok && !boolean_ok && !string_ok && !char_ok && !pointer_ok && !enum_ok && !string_pchar_ok && !dynarray_nil_ok)
+                if (!numeric_ok && !boolean_ok && !string_ok && !char_ok && !pointer_ok && !enum_ok && !string_pchar_ok && !dynarray_nil_ok
+                    && type_first != VARIANT_TYPE && type_second != VARIANT_TYPE)
                 {
                     semcheck_error_with_context("Error on line %d, equality comparison requires matching numeric, boolean, string, character, or pointer types!\n\n",
                         expr->line_num);
@@ -441,7 +442,8 @@ relop_fallback:
                     }
                 }
 
-                if(!numeric_ok && !string_ok && !char_ok && !pointer_ok && !enum_ok && !string_pchar_ok && !dynarray_nil_ok)
+                if(!numeric_ok && !string_ok && !char_ok && !pointer_ok && !enum_ok && !string_pchar_ok && !dynarray_nil_ok
+                    && type_first != VARIANT_TYPE && type_second != VARIANT_TYPE)
                 {
                     semcheck_error_with_context(
                         "Error on line %d, expected compatible numeric, string, or character types between relational op!\n\n",
