@@ -624,6 +624,8 @@ static void print_error_context(int line_num, int col_num, int source_index)
     fprintf(stderr, "\n");
 }
 
+#define MAX_DIRECTIVE_FILENAME_LEN 512
+
 static int semcheck_parse_line_directive(const char *line, size_t len,
     char *filename_out, size_t filename_size)
 {
@@ -909,7 +911,7 @@ void semantic_error(int line_num, int col_num, const char *format, ...)
             context_buf = g_semcheck_source_buffer;
             context_buf_len = g_semcheck_source_length;
         }
-        char directive_file[512];
+        char directive_file[MAX_DIRECTIVE_FILENAME_LEN];
         int computed_line = semcheck_line_from_source_offset(context_buf, context_buf_len, effective_source_index,
             directive_file, sizeof(directive_file));
         if (computed_line > 0)
@@ -948,7 +950,7 @@ void semantic_error_at(int line_num, int col_num, int source_index, const char *
             context_buf = g_semcheck_source_buffer;
             context_buf_len = g_semcheck_source_length;
         }
-        char directive_file[512];
+        char directive_file[MAX_DIRECTIVE_FILENAME_LEN];
         int computed_line = semcheck_line_from_source_offset(context_buf, context_buf_len, source_index,
             directive_file, sizeof(directive_file));
         if (computed_line > 0)
@@ -993,7 +995,7 @@ void semcheck_error_with_context_at(int line_num, int col_num, int source_index,
             context_buf = g_semcheck_source_buffer;
             context_buf_len = g_semcheck_source_length;
         }
-        char directive_file[512];
+        char directive_file[MAX_DIRECTIVE_FILENAME_LEN];
         int computed_line = semcheck_line_from_source_offset(context_buf, context_buf_len, source_index,
             directive_file, sizeof(directive_file));
         if (computed_line > 0)
@@ -1093,7 +1095,7 @@ void semcheck_error_with_context(const char *format, ...)
             context_buf = g_semcheck_source_buffer;
             context_buf_len = g_semcheck_source_length;
         }
-        char directive_file[512];
+        char directive_file[MAX_DIRECTIVE_FILENAME_LEN];
         int computed_line = semcheck_line_from_source_offset(context_buf, context_buf_len, effective_source_index,
             directive_file, sizeof(directive_file));
         if (computed_line > 0)
