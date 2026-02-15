@@ -26,6 +26,7 @@ int kgpc_rtti_is(const kgpc_class_typeinfo *value_type,
     const kgpc_class_typeinfo *target_type);
 void kgpc_rtti_check_cast(const kgpc_class_typeinfo *value_type,
     const kgpc_class_typeinfo *target_type);
+const void *kgpc_class_parent(const void *self);
 const char *kgpc_class_name(const void *self);
 int kgpc_ioresult_get_and_clear(void);
 void kgpc_ioresult_set(int value);

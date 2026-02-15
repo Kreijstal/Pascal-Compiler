@@ -5452,6 +5452,13 @@ static struct RecordType *convert_class_type_ex(const char *class_name, ast_t *c
         } else {
             fprintf(stderr, "[KGPC]   body_start is NULL\n");
         }
+        /* Debug: show additional parent identifiers (interfaces) */
+        ast_t *dbg = body_start;
+        while (dbg != NULL && dbg->typ == PASCAL_T_IDENTIFIER) {
+            fprintf(stderr, "[KGPC]   additional parent/interface: %s (type=%d)\n",
+                (dbg->sym && dbg->sym->name) ? dbg->sym->name : "<null>", dbg->typ);
+            dbg = dbg->next;
+        }
     }
 
     collect_class_members(body_start, class_name, &field_builder, &property_builder, &method_template_builder, &nested_type_builder);

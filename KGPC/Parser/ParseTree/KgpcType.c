@@ -1253,7 +1253,7 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
             return 1;
 
         case TYPE_KIND_RECORD:
-            /* Records are compatible if they are the same record type 
+            /* Records are compatible if they are the same record type
              * or if one is a subclass of the other */
             if (lhs_type->info.record_info == rhs_type->info.record_info)
                 return 1;
@@ -1268,6 +1268,13 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
             /* Check inheritance: rhs_type should be assignable to lhs_type if
              * rhs_type is a subclass of lhs_type */
             if (is_record_subclass(rhs_type->info.record_info, lhs_type->info.record_info, symtab))
+                return 1;
+
+            /* Allow assigning a class instance to an interface variable.
+             * In Delphi/FPC, if LHS is an interface and RHS is a class that
+             * implements the interface, the assignment is valid. */
+            if (lhs_type->info.record_info != NULL && lhs_type->info.record_info->is_interface &&
+                rhs_type->info.record_info != NULL && rhs_type->info.record_info->is_class)
                 return 1;
 
             return 0;

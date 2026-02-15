@@ -161,8 +161,10 @@ type
   public
     destructor Destroy; virtual;
     class function ClassName: ShortString; virtual;
+    class function ClassParent: TClass; virtual;
     class procedure GetLastCastErrorInfo(out aFrom, aTo: ShortString); static;
     procedure Free;
+    function GetInterface(const IID: TGUID; out Obj): Boolean;
   end;
   TInterfacedObject = class(TObject)
   protected
@@ -178,6 +180,14 @@ type
     D3: Word;
     D4: array[0..7] of Byte;
   end;
+
+  { IInterface / IUnknown - root interface type }
+  IInterface = interface
+    function QueryInterface(const IID: TGUID; out Obj): HRESULT;
+    function _AddRef: LongInt;
+    function _Release: LongInt;
+  end;
+  IUnknown = IInterface;
 
   TextRec = record
     Handle: THandle;
@@ -549,6 +559,7 @@ function kgpc_get_current_dir: AnsiString; cdecl; external name 'kgpc_get_curren
 function kgpc_set_current_dir(path: PChar): Integer; cdecl; external name 'kgpc_set_current_dir';
 function kgpc_ioresult_peek: Integer; cdecl; external name 'kgpc_ioresult_peek';
 function kgpc_class_name(self: Pointer): PAnsiChar; cdecl; external name 'kgpc_class_name';
+function kgpc_class_parent(self: Pointer): Pointer; cdecl; external name 'kgpc_class_parent';
 procedure kgpc_string_to_shortstring(var dest; src: PAnsiChar; dest_size: SizeInt); cdecl; external name 'kgpc_string_to_shortstring';
 procedure kgpc_text_assign(var f: text; filename: PAnsiChar); cdecl; external name 'kgpc_text_assign';
 procedure kgpc_text_rewrite(var f: text); cdecl; external name 'kgpc_text_rewrite';
@@ -1136,6 +1147,14 @@ begin
         kgpc_string_to_shortstring(ClassName, name_ptr, 256);
 end;
 
+class function TObject.ClassParent: TClass;
+var
+    parent_ptr: Pointer;
+begin
+    parent_ptr := kgpc_class_parent(Self);
+    ClassParent := TClass(parent_ptr);
+end;
+
 class procedure TObject.GetLastCastErrorInfo(out aFrom, aTo: ShortString);
 begin
     aFrom := '';
@@ -1151,6 +1170,11 @@ procedure TObject.Free;
 begin
     if Self <> nil then
         Self.Destroy;
+end;
+
+function TObject.GetInterface(const IID: TGUID; out Obj): Boolean;
+begin
+    GetInterface := False;
 end;
 
 begin

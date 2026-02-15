@@ -1681,6 +1681,9 @@ int semcheck_funccall(int *type_return,
     if (id != NULL && pascal_identifier_equals(id, "Copy"))
         return semcheck_builtin_copy(type_return, symtab, expr, max_scope_lev);
 
+    if (id != NULL && pascal_identifier_equals(id, "Concat"))
+        return semcheck_builtin_concat(type_return, symtab, expr, max_scope_lev);
+
     if (id != NULL && pascal_identifier_equals(id, "Pos"))
         return semcheck_builtin_pos(type_return, symtab, expr, max_scope_lev);
 

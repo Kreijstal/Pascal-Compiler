@@ -1075,6 +1075,34 @@ void kgpc_rtti_check_cast(const kgpc_class_typeinfo *value_type,
     abort();
 }
 
+const void *kgpc_class_parent(const void *self)
+{
+    if (self == NULL)
+        return NULL;
+
+    const kgpc_class_typeinfo *typeinfo = NULL;
+
+    const kgpc_class_typeinfo *candidate = *(const kgpc_class_typeinfo * const *)self;
+    if (candidate != NULL && candidate->vmt == self)
+    {
+        typeinfo = candidate;
+    }
+    else
+    {
+        const void *vmt = *(const void *const *)self;
+        if (vmt != NULL)
+        {
+            const kgpc_class_typeinfo *candidate2 = *(const kgpc_class_typeinfo * const *)vmt;
+            if (candidate2 != NULL && candidate2->vmt == vmt)
+                typeinfo = candidate2;
+        }
+    }
+
+    if (typeinfo != NULL && typeinfo->parent != NULL)
+        return typeinfo->parent->vmt;
+    return NULL;
+}
+
 const char *kgpc_class_name(const void *self)
 {
     if (self == NULL)

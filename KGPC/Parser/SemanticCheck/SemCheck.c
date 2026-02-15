@@ -8217,6 +8217,16 @@ void semcheck_add_builtins(SymTab_t *symtab)
         destroy_kgpc_type(copy_type);
         free(copy_name);
     }
+    char *concat_name = strdup("Concat");
+    if (concat_name != NULL) {
+        KgpcType *return_type = create_primitive_type(STRING_TYPE);
+        assert(return_type != NULL && "Failed to create return type for Concat");
+        KgpcType *concat_type = create_procedure_type(NULL, return_type);
+        assert(concat_type != NULL && "Failed to create Concat function type");
+        AddBuiltinFunction_Typed(symtab, concat_name, concat_type);
+        destroy_kgpc_type(concat_type);
+        free(concat_name);
+    }
     char *eof_name = strdup("EOF");
     if (eof_name != NULL) {
         KgpcType *return_type = kgpc_type_from_var_type(HASHVAR_BOOLEAN);
