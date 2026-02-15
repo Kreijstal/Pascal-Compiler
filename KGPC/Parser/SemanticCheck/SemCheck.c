@@ -902,6 +902,8 @@ void semantic_error(int line_num, int col_num, const char *format, ...)
     if (effective_col <= 0 && g_semcheck_error_col > 0)
         effective_col = g_semcheck_error_col;
 
+    char directive_file[MAX_DIRECTIVE_FILENAME_LEN];
+    directive_file[0] = '\0';
     if (effective_source_index >= 0)
     {
         const char *context_buf = preprocessed_source;
@@ -911,7 +913,6 @@ void semantic_error(int line_num, int col_num, const char *format, ...)
             context_buf = g_semcheck_source_buffer;
             context_buf_len = g_semcheck_source_length;
         }
-        char directive_file[MAX_DIRECTIVE_FILENAME_LEN];
         int computed_line = semcheck_line_from_source_offset(context_buf, context_buf_len, effective_source_index,
             directive_file, sizeof(directive_file));
         if (computed_line > 0)
@@ -924,7 +925,9 @@ void semantic_error(int line_num, int col_num, const char *format, ...)
             effective_col = g_semcheck_error_col;
     }
 
-    const char *file_path = semcheck_get_error_path();
+    const char *file_path = (directive_file[0] != '\0')
+        ? directive_file
+        : semcheck_get_error_path();
     semcheck_print_error_prefix(file_path, effective_line, effective_col);
 
     va_list args;
@@ -945,6 +948,8 @@ void semantic_error_at(int line_num, int col_num, int source_index, const char *
     if (col_num <= 0 && g_semcheck_error_col > 0)
         col_num = g_semcheck_error_col;
 
+    char directive_file[MAX_DIRECTIVE_FILENAME_LEN];
+    directive_file[0] = '\0';
     if (source_index >= 0)
     {
         const char *context_buf = preprocessed_source;
@@ -954,7 +959,6 @@ void semantic_error_at(int line_num, int col_num, int source_index, const char *
             context_buf = g_semcheck_source_buffer;
             context_buf_len = g_semcheck_source_length;
         }
-        char directive_file[MAX_DIRECTIVE_FILENAME_LEN];
         int computed_line = semcheck_line_from_source_offset(context_buf, context_buf_len, source_index,
             directive_file, sizeof(directive_file));
         if (computed_line > 0)
@@ -965,7 +969,9 @@ void semantic_error_at(int line_num, int col_num, int source_index, const char *
         }
     }
 
-    const char *file_path = semcheck_get_error_path();
+    const char *file_path = (directive_file[0] != '\0')
+        ? directive_file
+        : semcheck_get_error_path();
     semcheck_print_error_prefix(file_path, line_num, col_num);
 
     va_list args;
@@ -980,7 +986,6 @@ void semantic_error_at(int line_num, int col_num, int source_index, const char *
 void semcheck_error_with_context_at(int line_num, int col_num, int source_index,
     const char *format, ...)
 {
-    const char *file_path = semcheck_get_error_path();
     size_t context_len = preprocessed_length;
     if (context_len == 0 && preprocessed_source != NULL)
         context_len = strlen(preprocessed_source);
@@ -994,6 +999,8 @@ void semcheck_error_with_context_at(int line_num, int col_num, int source_index,
     if (effective_col <= 0 && g_semcheck_error_col > 0)
         effective_col = g_semcheck_error_col;
 
+    char directive_file[MAX_DIRECTIVE_FILENAME_LEN];
+    directive_file[0] = '\0';
     if (source_index >= 0)
     {
         const char *context_buf = preprocessed_source;
@@ -1003,7 +1010,6 @@ void semcheck_error_with_context_at(int line_num, int col_num, int source_index,
             context_buf = g_semcheck_source_buffer;
             context_buf_len = g_semcheck_source_length;
         }
-        char directive_file[MAX_DIRECTIVE_FILENAME_LEN];
         int computed_line = semcheck_line_from_source_offset(context_buf, context_buf_len, source_index,
             directive_file, sizeof(directive_file));
         if (computed_line > 0)
@@ -1016,6 +1022,10 @@ void semcheck_error_with_context_at(int line_num, int col_num, int source_index,
         if (effective_col <= 0 && g_semcheck_error_col > 0)
             effective_col = g_semcheck_error_col;
     }
+
+    const char *file_path = (directive_file[0] != '\0')
+        ? directive_file
+        : semcheck_get_error_path();
 
     va_list args;
     va_start(args, format);
@@ -1077,7 +1087,6 @@ void semcheck_error_with_context_at(int line_num, int col_num, int source_index,
 /* Helper for legacy error prints that already include "Error on line %d". */
 void semcheck_error_with_context(const char *format, ...)
 {
-    const char *file_path = semcheck_get_error_path();
     size_t context_len = preprocessed_length;
     if (context_len == 0 && preprocessed_source != NULL)
         context_len = strlen(preprocessed_source);
@@ -1094,6 +1103,8 @@ void semcheck_error_with_context(const char *format, ...)
     line_num = va_arg(args_copy, int);
     va_end(args_copy);
 
+    char directive_file[MAX_DIRECTIVE_FILENAME_LEN];
+    directive_file[0] = '\0';
     if (effective_source_index >= 0)
     {
         const char *context_buf = preprocessed_source;
@@ -1103,7 +1114,6 @@ void semcheck_error_with_context(const char *format, ...)
             context_buf = g_semcheck_source_buffer;
             context_buf_len = g_semcheck_source_length;
         }
-        char directive_file[MAX_DIRECTIVE_FILENAME_LEN];
         int computed_line = semcheck_line_from_source_offset(context_buf, context_buf_len, effective_source_index,
             directive_file, sizeof(directive_file));
         if (computed_line > 0)
@@ -1123,6 +1133,10 @@ void semcheck_error_with_context(const char *format, ...)
         effective_line = g_semcheck_error_line;
     if (effective_col <= 0 && g_semcheck_error_col > 0)
         effective_col = g_semcheck_error_col;
+
+    const char *file_path = (directive_file[0] != '\0')
+        ? directive_file
+        : semcheck_get_error_path();
 
     /* If the format starts with "Error on line %d", rewrite that part to use the effective line. */
     semcheck_print_error_prefix(file_path, effective_line, effective_col);
