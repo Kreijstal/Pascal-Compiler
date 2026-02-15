@@ -434,6 +434,20 @@ int semcheck_is_expr(int *type_return,
     {
         is_valid_class = 1;
     }
+    /* Also check via KgpcType for cases where record_type isn't set on the expression */
+    if (!is_valid_class && value_kgpc_type_is != NULL)
+    {
+        KgpcType *inner_is = value_kgpc_type_is;
+        if (inner_is->kind == TYPE_KIND_POINTER && inner_is->info.points_to != NULL)
+            inner_is = inner_is->info.points_to;
+        if (inner_is->kind == TYPE_KIND_RECORD && inner_is->info.record_info != NULL &&
+            record_type_is_class(inner_is->info.record_info))
+        {
+            is_valid_class = 1;
+            if (value_record == NULL)
+                value_record = inner_is->info.record_info;
+        }
+    }
 
     if (!is_valid_class)
     {
@@ -463,6 +477,24 @@ int semcheck_is_expr(int *type_return,
     if (target_record != NULL && record_type_is_class(target_record))
     {
         is_valid_target = 1;
+    }
+    /* Also check via symbol table KgpcType when record type lookup fails */
+    if (!is_valid_target && expr->expr_data.is_data.target_type_id != NULL)
+    {
+        HashNode_t *is_target_node = NULL;
+        if (FindIdent(&is_target_node, symtab, expr->expr_data.is_data.target_type_id) >= 0 &&
+            is_target_node != NULL && is_target_node->type != NULL)
+        {
+            KgpcType *is_tgt = is_target_node->type;
+            if (is_tgt->kind == TYPE_KIND_POINTER && is_tgt->info.points_to != NULL)
+                is_tgt = is_tgt->info.points_to;
+            if (is_tgt->kind == TYPE_KIND_RECORD && is_tgt->info.record_info != NULL &&
+                record_type_is_class(is_tgt->info.record_info))
+            {
+                is_valid_target = 1;
+                target_record = is_tgt->info.record_info;
+            }
+        }
     }
     
     if (!is_valid_target)
