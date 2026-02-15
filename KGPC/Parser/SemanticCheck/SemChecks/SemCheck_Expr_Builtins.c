@@ -835,7 +835,8 @@ int semcheck_builtin_eof(int *type_return, SymTab_t *symtab,
         }
         KgpcType *file_kgpc_type = NULL;
         error_count += semcheck_expr_with_type(&file_kgpc_type, symtab, check_expr, max_scope_lev, NO_MUTATE);
-        if (!kgpc_type_equals_tag(file_kgpc_type, TEXT_TYPE))
+        if (!kgpc_type_equals_tag(file_kgpc_type, TEXT_TYPE) &&
+            !kgpc_type_equals_tag(file_kgpc_type, FILE_TYPE))
         {
             semcheck_error_with_context("Error on line %d, EOF expects a text file argument.\n", expr->line_num);
             error_count++;
