@@ -207,6 +207,35 @@ HashNode_t *FindIdentInTable(HashTable_t *table, const char *id)
     return NULL;
 }
 
+HashNode_t *FindIdentByPrefixInTable(HashTable_t *table, const char *prefix)
+{
+    assert(table != NULL);
+    assert(prefix != NULL);
+
+    char *canonical_prefix = pascal_identifier_lower_dup(prefix);
+    if (canonical_prefix == NULL)
+        return NULL;
+    size_t prefix_len = strlen(canonical_prefix);
+
+    for (int i = 0; i < TABLE_SIZE; ++i)
+    {
+        ListNode_t *cur = table->table[i];
+        while (cur != NULL)
+        {
+            HashNode_t *hash_node = (HashNode_t *)cur->cur;
+            if (strncmp(hash_node->canonical_id, canonical_prefix, prefix_len) == 0)
+            {
+                free(canonical_prefix);
+                return hash_node;
+            }
+            cur = cur->next;
+        }
+    }
+
+    free(canonical_prefix);
+    return NULL;
+}
+
 ListNode_t *FindAllIdentsInTable(HashTable_t *table, const char *id)
 {
     ListNode_t *list, *cur;

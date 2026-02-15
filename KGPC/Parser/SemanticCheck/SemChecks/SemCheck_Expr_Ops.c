@@ -171,6 +171,14 @@ int semcheck_relop(int *type_return,
                             HashNode_t *operator_node = NULL;
                             if (FindIdent(&operator_node, symtab, operator_method) >= 0 && operator_node != NULL)
                             {
+                                /* exact match */
+                            }
+                            else if (FindIdentByPrefix(&operator_node, symtab, operator_method) >= 0 && operator_node != NULL)
+                            {
+                                /* prefix match — return-type-disambiguated name */
+                            }
+                            if (operator_node != NULL)
+                            {
                                 if (operator_node->type != NULL && kgpc_type_is_procedure(operator_node->type))
                                 {
                                     KgpcType *return_type = kgpc_type_get_return_type(operator_node->type);
@@ -704,9 +712,19 @@ int semcheck_addop(int *type_return,
                 {
                     snprintf(operator_method, name_len, "%s__%s", left_type_name, op_suffix);
                     
-                    /* Look up the operator method in the symbol table */
+                    /* Look up the operator method in the symbol table.
+                     * Try exact match first, then prefix match for return-type-suffixed names
+                     * (e.g. tmyint__op_add_tmyint). */
                     HashNode_t *operator_node = NULL;
-                    if (FindIdent(&operator_node, symtab, operator_method) == 0 && operator_node != NULL)
+                    if (FindIdent(&operator_node, symtab, operator_method) >= 0 && operator_node != NULL)
+                    {
+                        /* exact match */
+                    }
+                    else if (FindIdentByPrefix(&operator_node, symtab, operator_method) >= 0 && operator_node != NULL)
+                    {
+                        /* prefix match — return-type-disambiguated name */
+                    }
+                    if (operator_node != NULL)
                     {
                         /* Found the operator overload! */
                         /* Get the return type from the operator method */
@@ -958,9 +976,18 @@ int semcheck_mulop(int *type_return,
                 {
                     snprintf(operator_method, name_len, "%s__%s", left_type_name, op_suffix);
                     
-                    /* Look up the operator method in the symbol table */
+                    /* Look up the operator method in the symbol table.
+                     * Try exact match first, then prefix match for return-type-suffixed names. */
                     HashNode_t *operator_node = NULL;
-                    if (FindIdent(&operator_node, symtab, operator_method) == 0 && operator_node != NULL)
+                    if (FindIdent(&operator_node, symtab, operator_method) >= 0 && operator_node != NULL)
+                    {
+                        /* exact match */
+                    }
+                    else if (FindIdentByPrefix(&operator_node, symtab, operator_method) >= 0 && operator_node != NULL)
+                    {
+                        /* prefix match — return-type-disambiguated name */
+                    }
+                    if (operator_node != NULL)
                     {
                         /* Found the operator overload! */
                         if (operator_node->type != NULL && kgpc_type_is_procedure(operator_node->type))
