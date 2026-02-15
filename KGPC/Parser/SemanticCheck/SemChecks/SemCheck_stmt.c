@@ -3134,28 +3134,35 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
     {
         handled_by_kgpctype = 1;
 
-        if (var != NULL && var->type == EXPR_VAR_ID && var->expr_data.id != NULL &&
-            pascal_identifier_equals(var->expr_data.id, "Result"))
+        if (var != NULL && var->type == EXPR_VAR_ID && var->expr_data.id != NULL)
         {
             const char *cur_id = semcheck_get_current_subprogram_id();
             if (cur_id != NULL)
             {
-                HashNode_t *ret_node = NULL;
-                if (FindIdent(&ret_node, symtab, cur_id) >= 0 &&
-                    ret_node != NULL &&
-                    ret_node->hash_type == HASHTYPE_FUNCTION_RETURN &&
-                    ret_node->type != NULL)
+                /* Check if this is "Result" or the function's own name (Pascal-style
+                 * function result assignment: FuncName := value). Both should use the
+                 * current function's return type directly from the subprogram tree.
+                 * This is critical for case-insensitive overloads where FpFStat and
+                 * FPFStat both exist — FindIdent may resolve to the wrong overload's
+                 * return type entry in the symbol table. */
+                int is_result_assign = pascal_identifier_equals(var->expr_data.id, "Result") ||
+                                       pascal_identifier_equals(var->expr_data.id, cur_id);
+                if (is_result_assign)
                 {
-                    int lhs_is_char = (lhs_kgpctype->kind == TYPE_KIND_PRIMITIVE &&
-                        lhs_kgpctype->info.primitive_type_tag == CHAR_TYPE);
-                    int ret_is_string = (ret_node->type->kind == TYPE_KIND_PRIMITIVE &&
-                        ret_node->type->info.primitive_type_tag == STRING_TYPE);
-                    if (lhs_is_char && ret_is_string)
+                    int ret_owned = 0;
+                    KgpcType *ret_type = semcheck_get_current_subprogram_return_kgpc_type(symtab, &ret_owned);
+                    if (ret_type != NULL &&
+                        !(ret_type->kind == TYPE_KIND_PRIMITIVE && ret_type->info.primitive_type_tag < 0) &&
+                        !are_types_compatible_for_assignment(lhs_kgpctype, ret_type, symtab))
                     {
                         if (lhs_owned && lhs_kgpctype != NULL)
                             destroy_kgpc_type(lhs_kgpctype);
-                        lhs_kgpctype = ret_node->type;
-                        lhs_owned = 0;
+                        lhs_kgpctype = ret_type;
+                        lhs_owned = ret_owned;
+                    }
+                    else if (ret_type != NULL && ret_owned)
+                    {
+                        destroy_kgpc_type(ret_type);
                     }
                 }
             }

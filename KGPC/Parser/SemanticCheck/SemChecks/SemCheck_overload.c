@@ -1645,27 +1645,39 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                      * (literals, computed values). A literal like 1 cannot be passed by
                      * reference, so the value-param overload should be preferred.
                      * We demote to MATCH_INCOMPATIBLE so that value-param overloads win.
-                     * NOTE: only for actual var/out, not Self params of constructors. */
+                     * Skip Self parameters — they are implicit and always valid. */
                     if (is_var_param && arg_expr != NULL &&
                         quality.kind == MATCH_EXACT)
                     {
-                        if (arg_expr->type != EXPR_VAR_ID)
-                            fprintf(stderr, "[DEBUG] var param non-addressable: arg_expr->type=%d candidate=%s\n",
-                                arg_expr->type, candidate->id ? candidate->id : "?");
-                        int is_addressable = 0;
-                        switch (arg_expr->type)
+                        /* Check if this is the Self parameter (implicit first param of methods) */
+                        int is_self_param = 0;
+                        if (formal_decl != NULL && formal_decl->type == TREE_VAR_DECL &&
+                            formal_decl->tree_data.var_decl_data.ids != NULL)
                         {
-                            case EXPR_VAR_ID:
-                            case EXPR_ARRAY_ACCESS:
-                            case EXPR_RECORD_ACCESS:
-                            case EXPR_POINTER_DEREF:
-                                is_addressable = 1;
-                                break;
-                            default:
-                                break;
+                            const char *param_name = (const char *)formal_decl->tree_data.var_decl_data.ids->cur;
+                            if (param_name != NULL && pascal_identifier_equals(param_name, "Self"))
+                                is_self_param = 1;
                         }
-                        if (!is_addressable)
-                            quality = semcheck_make_quality(MATCH_INCOMPATIBLE);
+
+                        if (!is_self_param)
+                        {
+                            int is_addressable = 0;
+                            switch (arg_expr->type)
+                            {
+                                case EXPR_VAR_ID:
+                                case EXPR_ARRAY_ACCESS:
+                                case EXPR_RECORD_ACCESS:
+                                case EXPR_POINTER_DEREF:
+                                case EXPR_FUNCTION_CALL:
+                                case EXPR_TYPECAST:
+                                    is_addressable = 1;
+                                    break;
+                                default:
+                                    break;
+                            }
+                            if (!is_addressable)
+                                quality = semcheck_make_quality(MATCH_INCOMPATIBLE);
+                        }
                     }
 
                     const char *formal_id = semcheck_get_param_type_id(formal_decl);
