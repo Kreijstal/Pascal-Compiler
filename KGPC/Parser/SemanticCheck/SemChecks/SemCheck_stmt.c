@@ -173,19 +173,35 @@ static int semcheck_try_record_assignment_operator(SymTab_t *symtab,
     if (record_type_id == NULL)
         return 0;
 
+    /* Build operator name with return type suffix: {rhs_type}__op_assign_{lhs_type}
+     * This disambiguates overloads like variant__op_assign_byte vs variant__op_assign_real. */
     const char *op_suffix = "op_assign";
-    size_t name_len = strlen(record_type_id) + strlen(op_suffix) + 3;
+    
+    /* Try to get the LHS type name for the suffix */
+    const char *lhs_type_name = kgpc_type_to_string(lhs_type);
+    size_t name_len = strlen(record_type_id) + strlen(op_suffix) + 3
+        + (lhs_type_name != NULL ? strlen(lhs_type_name) + 1 : 0);
     char *operator_method = (char *)malloc(name_len);
     if (operator_method == NULL)
         return 0;
-    snprintf(operator_method, name_len, "%s__%s", record_type_id, op_suffix);
+    if (lhs_type_name != NULL) {
+        snprintf(operator_method, name_len, "%s__%s_%s", record_type_id, op_suffix, lhs_type_name);
+    } else {
+        snprintf(operator_method, name_len, "%s__%s", record_type_id, op_suffix);
+    }
 
     HashNode_t *operator_node = NULL;
     if (FindIdent(&operator_node, symtab, operator_method) != 0 || operator_node == NULL ||
         operator_node->type == NULL || !kgpc_type_is_procedure(operator_node->type))
     {
-        free(operator_method);
-        return 0;
+        /* Fall back to old-style name without return type suffix */
+        snprintf(operator_method, name_len, "%s__%s", record_type_id, op_suffix);
+        if (FindIdent(&operator_node, symtab, operator_method) != 0 || operator_node == NULL ||
+            operator_node->type == NULL || !kgpc_type_is_procedure(operator_node->type))
+        {
+            free(operator_method);
+            return 0;
+        }
     }
 
     KgpcType *return_type = kgpc_type_get_return_type(operator_node->type);

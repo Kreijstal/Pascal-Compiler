@@ -11474,6 +11474,24 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
                                 }
                             }
 
+                            /* Append the return type to the mangled name to
+                             * disambiguate overloads (e.g. variant__op_assign_byte
+                             * vs variant__op_assign_real). */
+                            const char *ret_suffix = return_type_id;
+                            if (ret_suffix == NULL) ret_suffix = result_var_name_method;
+                            if (ret_suffix != NULL) {
+                                size_t new_len = strlen(mangled_name) + strlen(ret_suffix) + 2;
+                                char *new_name = (char *)malloc(new_len);
+                                if (new_name != NULL) {
+                                    snprintf(new_name, new_len, "%s_%s", mangled_name, ret_suffix);
+                                    free(mangled_name);
+                                    mangled_name = new_name;
+                                    if (getenv("KGPC_DEBUG_OPERATOR") != NULL) {
+                                        fprintf(stderr, "[Operator] Standalone operator (with rettype): %s\n", mangled_name);
+                                    }
+                                }
+                            }
+
                             /* Find the body */
                             struct Statement *body = NULL;
                             ListNode_t *op_const_decls = NULL;
@@ -12167,38 +12185,23 @@ static Tree_t *convert_function(ast_t *func_node) {
         }
     }
 
-    /* For standalone operators, derive the mangled name from operator symbol and first param type */
+    /* For standalone operators, save operator info now but defer name mangling
+     * until after the return type is parsed, so we can include the return type
+     * in the mangled name to disambiguate overloads like variant__op_assign_byte
+     * vs variant__op_assign_real. */
+    char *deferred_encoded_op = NULL;
+    const char *deferred_param_type_id = NULL;
     if (is_standalone_operator && operator_symbol != NULL && params != NULL) {
         /* Get the type of the first parameter (params is a list of Tree_t* with TREE_VAR_DECL) */
         Tree_t *first_param = (Tree_t *)params->cur;
         if (getenv("KGPC_DEBUG_OPERATOR") != NULL) {
-            fprintf(stderr, "[Operator] is_standalone_operator=%d operator_symbol=%s params=%p first_param=%p\n",
-                is_standalone_operator, operator_symbol, (void*)params, (void*)first_param);
-            if (first_param != NULL) {
-                fprintf(stderr, "[Operator] first_param->type=%d type_id=%s\n",
-                    first_param->type,
-                    first_param->tree_data.var_decl_data.type_id ?
-                    first_param->tree_data.var_decl_data.type_id : "(null)");
-            }
+            fprintf(stderr, "[Operator] is_standalone_operator=%d operator_symbol=%s\n",
+                is_standalone_operator, operator_symbol);
         }
         if (first_param != NULL && first_param->type == TREE_VAR_DECL &&
             first_param->tree_data.var_decl_data.type_id != NULL) {
-            char *encoded_op = encode_operator_name(operator_symbol);
-            if (encoded_op != NULL) {
-                /* Build mangled name: TypeName__op_suffix */
-                const char *param_type_id = first_param->tree_data.var_decl_data.type_id;
-                size_t name_len = strlen(param_type_id) + strlen(encoded_op) + 3;
-                char *mangled_name = (char *)malloc(name_len);
-                if (mangled_name != NULL) {
-                    snprintf(mangled_name, name_len, "%s__%s", param_type_id, encoded_op);
-                    if (getenv("KGPC_DEBUG_OPERATOR") != NULL) {
-                        fprintf(stderr, "[Operator] mangled name: %s\n", mangled_name);
-                    }
-                    free(id);
-                    id = mangled_name;
-                }
-                free(encoded_op);
-            }
+            deferred_encoded_op = encode_operator_name(operator_symbol);
+            deferred_param_type_id = first_param->tree_data.var_decl_data.type_id;
         }
         free(operator_symbol);
         operator_symbol = NULL;
@@ -12273,6 +12276,35 @@ static Tree_t *convert_function(ast_t *func_node) {
         
         cur = cur->next;
     }
+
+    /* Now that the return type is parsed, build the final mangled name for
+     * standalone operators: ParamType__op_suffix_ReturnType.  This avoids
+     * name collisions when the same param type maps to many return types,
+     * e.g. variant__op_assign_byte vs variant__op_assign_real. */
+    if (deferred_encoded_op != NULL && deferred_param_type_id != NULL) {
+        const char *ret_suffix = return_type_id;
+        if (ret_suffix == NULL) ret_suffix = result_var_name;
+        size_t name_len = strlen(deferred_param_type_id) + strlen(deferred_encoded_op) + 3
+            + (ret_suffix != NULL ? strlen(ret_suffix) + 1 : 0);
+        char *mangled_name = (char *)malloc(name_len);
+        if (mangled_name != NULL) {
+            if (ret_suffix != NULL) {
+                snprintf(mangled_name, name_len, "%s__%s_%s",
+                    deferred_param_type_id, deferred_encoded_op, ret_suffix);
+            } else {
+                snprintf(mangled_name, name_len, "%s__%s",
+                    deferred_param_type_id, deferred_encoded_op);
+            }
+            if (getenv("KGPC_DEBUG_OPERATOR") != NULL) {
+                fprintf(stderr, "[Operator] Standalone operator: %s\n", mangled_name);
+            }
+            free(id);
+            id = mangled_name;
+        }
+        free(deferred_encoded_op);
+        deferred_encoded_op = NULL;
+    }
+    if (deferred_encoded_op != NULL) free(deferred_encoded_op);
 
     ListNode_t *const_decls = NULL;
     ListBuilder var_decls_builder;

@@ -169,7 +169,7 @@ int semcheck_relop(int *type_return,
                             snprintf(operator_method, name_len, "%s__%s", record_type_name, op_suffix);
                             
                             HashNode_t *operator_node = NULL;
-                            if (FindIdent(&operator_node, symtab, operator_method) == 0 && operator_node != NULL)
+                            if (FindIdent(&operator_node, symtab, operator_method) >= 0 && operator_node != NULL)
                             {
                                 if (operator_node->type != NULL && kgpc_type_is_procedure(operator_node->type))
                                 {
