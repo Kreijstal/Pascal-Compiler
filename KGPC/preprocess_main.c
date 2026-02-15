@@ -202,6 +202,12 @@ int main(int argc, char **argv)
     pascal_preprocessor_define(preprocessor, "REGCALL");
     pascal_preprocessor_define(preprocessor, "HASUNIX");
 
+    /* FPU type support - x86-64 supports all floating point types */
+    pascal_preprocessor_define(preprocessor, "SUPPORT_SINGLE");
+    pascal_preprocessor_define(preprocessor, "SUPPORT_DOUBLE");
+    pascal_preprocessor_define(preprocessor, "SUPPORT_EXTENDED");
+    pascal_preprocessor_define(preprocessor, "SUPPORT_COMP");
+
     /* Define Comp as Comp to satisfy {$if not declared(Comp)} check in systemh.inc */
     pascal_preprocessor_define_macro(preprocessor, "Comp", "Comp");
 

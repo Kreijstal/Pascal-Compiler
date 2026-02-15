@@ -669,7 +669,8 @@ int semcheck_funccall(int *type_return,
 
             int prefix_is_unit = semcheck_is_unit_name(prefix);
             HashNode_t *prefix_node = NULL;
-            int prefix_found = (FindIdent(&prefix_node, symtab, prefix) == 0 && prefix_node != NULL);
+            int prefix_scope = FindIdent(&prefix_node, symtab, prefix);
+            int prefix_found = (prefix_scope >= 0 && prefix_node != NULL);
 
             if (!prefix_is_unit && prefix_found)
             {
