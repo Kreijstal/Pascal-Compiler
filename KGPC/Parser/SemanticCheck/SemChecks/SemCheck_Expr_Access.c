@@ -840,7 +840,20 @@ int semcheck_funccall(int *type_return,
                 }
                 else if (first_node->hash_type == HASHTYPE_TYPE)
                 {
-                    can_strip = 0;
+                    /* The first argument is a type name (e.g., TMyObj in TMyObj.PHeader(p)).
+                     * Check if 'id' is a type (nested type) that exists in the symbol table.
+                     * If so, this is a qualified type name used as a typecast (e.g., HeapInc.pCommonHeader(p)^.h).
+                     * Strip the qualifier and treat as a regular typecast. */
+                    HashNode_t *nested_type_node = NULL;
+                    if (id != NULL && FindIdent(&nested_type_node, symtab, id) != -1 &&
+                        nested_type_node != NULL && nested_type_node->hash_type == HASHTYPE_TYPE)
+                    {
+                        can_strip = 1;
+                    }
+                    else
+                    {
+                        can_strip = 0;
+                    }
                 }
                 else if (first_node->type != NULL)
                 {

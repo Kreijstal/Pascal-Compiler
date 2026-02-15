@@ -76,6 +76,32 @@ int semcheck_typecast(int *type_return,
         return error_count;
     }
 
+    /* For qualified type names like "HeapInc.pCommonHeader", strip the prefix.
+     * Nested types inside objects/classes/records are registered in the symbol table
+     * without the qualifier prefix. We must rewrite target_type_id here so that
+     * ALL subsequent lookups (resolve_type_identifier, FindIdent for pointer info,
+     * etc.) use the bare type name. */
+    if (expr->expr_data.typecast_data.target_type_id != NULL)
+    {
+        const char *dot = strchr(expr->expr_data.typecast_data.target_type_id, '.');
+        if (dot != NULL && dot[1] != '\0')
+        {
+            const char *suffix = dot + 1;
+            /* Verify the suffix exists as a type in the symbol table */
+            HashNode_t *suffix_node = NULL;
+            if (FindIdent(&suffix_node, symtab, suffix) != -1 &&
+                suffix_node != NULL && suffix_node->hash_type == HASHTYPE_TYPE)
+            {
+                char *new_id = strdup(suffix);
+                if (new_id != NULL)
+                {
+                    free(expr->expr_data.typecast_data.target_type_id);
+                    expr->expr_data.typecast_data.target_type_id = new_id;
+                }
+            }
+        }
+    }
+
     int target_type = expr->expr_data.typecast_data.target_type;
     int builtin_mapped = semcheck_map_builtin_type_name(symtab,
         expr->expr_data.typecast_data.target_type_id);
