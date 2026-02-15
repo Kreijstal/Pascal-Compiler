@@ -466,6 +466,10 @@ static int types_numeric_compatible(int lhs, int rhs) {
     if (lhs == REAL_TYPE && is_integer_type(rhs))
         return 1;
 
+    /* Integer can accept real (truncation, as in FPC Trunc semantics) */
+    if (is_integer_type(lhs) && rhs == REAL_TYPE)
+        return 1;
+
     /* Integer can accept char (for compatibility) */
     if (is_integer_type(lhs) && rhs == CHAR_TYPE)
         return 1;
