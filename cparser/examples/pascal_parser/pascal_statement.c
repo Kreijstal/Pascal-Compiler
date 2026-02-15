@@ -1057,10 +1057,10 @@ void init_pascal_statement_parser(combinator_t** p) {
 
     // Typecast lvalue with required pointer suffix: PCardinal(@x)^ := 42
     // This requires at least one suffix starting with '^' to be a valid lvalue.
-    // Uses cident to allow any type name (including user-defined pointer types).
+    // Uses pascal_qualified_identifier to allow qualified type names like HeapInc.PHeader(@x)^.
     // The required '^' suffix ensures function calls like strlen(@x) don't match.
     combinator_t* typecast_base = seq(new_combinator(), PASCAL_T_TYPECAST,
-        token(cident(PASCAL_T_IDENTIFIER)),
+        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
         between(token(match("(")), token(match(")")), lazy(expr_parser)),
         NULL
     );
