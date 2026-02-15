@@ -886,17 +886,51 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
         return 0;
     }
 
-    /* Allow class instances to be compatible with untyped Pointer parameters 
-     * This is needed for procedures like FreeAndNil(var Obj: Pointer) */
+    /* Allow untyped pointer (points_to == NULL) to be compatible with any type.
+     * This handles var/out parameters whose pointed-to type couldn't be resolved,
+     * as well as untyped Pointer parameters like FreeAndNil(var Obj: Pointer). */
+    if (lhs_type->kind == TYPE_KIND_POINTER && lhs_type->info.points_to == NULL)
+        return 1;
+    if (rhs_type->kind == TYPE_KIND_POINTER && rhs_type->info.points_to == NULL)
+        return 1;
+
+    /* Allow pointer-to-record := record (var parameter auto-dereference).
+     * When a var parameter of record type is assigned, the LHS is ^record
+     * and the RHS is the record value. Only allow when record types match. */
     if (lhs_type->kind == TYPE_KIND_POINTER && rhs_type->kind == TYPE_KIND_RECORD)
     {
-        /* Check if rhs is a class (classes are always heap-allocated and pointer-compatible) */
-        if (rhs_type->info.record_info != NULL && record_type_is_class(rhs_type->info.record_info))
+        if (lhs_type->info.points_to != NULL &&
+            lhs_type->info.points_to->kind == TYPE_KIND_RECORD)
         {
-            /* Allow if lhs is untyped Pointer (points_to == NULL) */
-            if (lhs_type->info.points_to == NULL)
+            /* Check if record types match */
+            if (kgpc_type_equals(lhs_type->info.points_to, rhs_type))
+                return 1;
+            /* If pointed-to record is a class and rhs is a class, check class hierarchy */
+            if (lhs_type->info.points_to->info.record_info != NULL &&
+                rhs_type->info.record_info != NULL &&
+                record_type_is_class(lhs_type->info.points_to->info.record_info) &&
+                record_type_is_class(rhs_type->info.record_info))
                 return 1;
         }
+        /* Allow class instance to typed/untyped Pointer */
+        if (rhs_type->info.record_info != NULL && record_type_is_class(rhs_type->info.record_info))
+            return 1;
+    }
+    if (rhs_type->kind == TYPE_KIND_POINTER && lhs_type->kind == TYPE_KIND_RECORD)
+    {
+        if (rhs_type->info.points_to != NULL &&
+            rhs_type->info.points_to->kind == TYPE_KIND_RECORD)
+        {
+            if (kgpc_type_equals(rhs_type->info.points_to, lhs_type))
+                return 1;
+            if (rhs_type->info.points_to->info.record_info != NULL &&
+                lhs_type->info.record_info != NULL &&
+                record_type_is_class(rhs_type->info.points_to->info.record_info) &&
+                record_type_is_class(lhs_type->info.record_info))
+                return 1;
+        }
+        if (lhs_type->info.record_info != NULL && record_type_is_class(lhs_type->info.record_info))
+            return 1;
     }
 
     /* If kinds are different, generally incompatible */
@@ -1183,6 +1217,7 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
                             return 1;
                         if (is_record_subclass(rhs_inner->info.record_info, lhs_record_ptr->info.record_info, symtab))
                             return 1;
+                        return 0;  /* Incompatible class for "class of T" */
                     }
                 }
                 
