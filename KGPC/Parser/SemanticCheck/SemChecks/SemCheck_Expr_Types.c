@@ -2943,6 +2943,14 @@ int semcheck_addressof(int *type_return,
         pointed_to_type = create_primitive_type(STRING_TYPE);
     } else if (inner_type == RECORD_TYPE && record_info != NULL) {
         pointed_to_type = create_record_type(record_info);
+    } else if (inner_type == RECORD_TYPE && record_info == NULL) {
+        /* Record type without record_info — use inner's resolved KgpcType if available */
+        if (inner->resolved_kgpc_type != NULL) {
+            pointed_to_type = inner->resolved_kgpc_type;
+            kgpc_type_retain(pointed_to_type);
+        } else {
+            pointed_to_type = create_primitive_type(RECORD_TYPE);
+        }
     } else if (inner_type == POINTER_TYPE) {
         /* For pointer types, get the resolved KgpcType of the inner expression */
         if (inner->resolved_kgpc_type != NULL) {

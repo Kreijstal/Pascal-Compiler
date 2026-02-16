@@ -924,6 +924,13 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
                 record_type_is_class(lhs_type->info.points_to->info.record_info) &&
                 record_type_is_class(rhs_type->info.record_info))
                 return 1;
+            /* Allow ^record := record when record types are both plain (non-class) records.
+             * This handles @operator precedence differences and var param patterns. */
+            if (lhs_type->info.points_to->info.record_info == NULL ||
+                rhs_type->info.record_info == NULL ||
+                (!record_type_is_class(lhs_type->info.points_to->info.record_info) &&
+                 !record_type_is_class(rhs_type->info.record_info)))
+                return 1;
         }
         /* Allow plain record to untyped pointer (points_to == NULL) for var param */
         if (lhs_type->info.points_to == NULL)
@@ -931,6 +938,12 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
         /* Allow class instance to typed/untyped Pointer */
         if (rhs_type->info.record_info != NULL && record_type_is_class(rhs_type->info.record_info))
             return 1;
+    }
+    /* Allow ^record := primitive-with-RECORD_TYPE-tag (parser @-operator precedence workaround) */
+    if (lhs_type->kind == TYPE_KIND_POINTER && rhs_type->kind == TYPE_KIND_PRIMITIVE &&
+        rhs_type->info.primitive_type_tag == RECORD_TYPE)
+    {
+        return 1;
     }
     if (rhs_type->kind == TYPE_KIND_POINTER && lhs_type->kind == TYPE_KIND_RECORD)
     {
