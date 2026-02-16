@@ -369,7 +369,10 @@ relop_fallback:
                     }
                 }
                 
+                int record_ok = (type_first == RECORD_TYPE && type_second == RECORD_TYPE);
+                
                 if (!numeric_ok && !boolean_ok && !string_ok && !char_ok && !pointer_ok && !enum_ok && !string_pchar_ok && !dynarray_nil_ok && !pointer_nil_ok
+                    && !record_ok
                     && type_first != VARIANT_TYPE && type_second != VARIANT_TYPE)
                 {
                     semcheck_error_with_context("Error on line %d, equality comparison requires matching numeric, boolean, string, character, or pointer types!\n\n",
@@ -480,7 +483,10 @@ relop_fallback:
                     }
                 }
 
+                int record_ok = (type_first == RECORD_TYPE && type_second == RECORD_TYPE);
+
                 if(!numeric_ok && !string_ok && !char_ok && !pointer_ok && !enum_ok && !string_pchar_ok && !dynarray_nil_ok && !pointer_nil_ok
+                    && !record_ok
                     && type_first != VARIANT_TYPE && type_second != VARIANT_TYPE)
                 {
                     semcheck_error_with_context(

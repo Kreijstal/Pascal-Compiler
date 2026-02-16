@@ -2533,7 +2533,10 @@ FIELD_RESOLVED:
         semcheck_expr_set_resolved_kgpc_type_shared(expr, field_desc->proc_type);
     }
 
-    expr->record_type = (field_type == RECORD_TYPE) ? field_record : NULL;
+    if (field_type == RECORD_TYPE)
+        expr->record_type = field_record;
+    else if (expr->record_type == NULL)
+        expr->record_type = NULL; /* only clear if not set by pointer-to-class path */
     if (expr->resolved_kgpc_type != NULL &&
         (kgpc_type_is_array(expr->resolved_kgpc_type) ||
          kgpc_type_is_array_of_const(expr->resolved_kgpc_type) ||
