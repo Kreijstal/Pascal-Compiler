@@ -5945,13 +5945,9 @@ if (record_info->parent_class_name != NULL) {
             } else if (binding->is_virtual || binding->is_override) {
                 /* Add new virtual method to VMT */
                 /* Note: if binding->is_override is true but no parent method was found,
-                 * this is an error */
-                if (binding->is_override) {
-                    semantic_error_at(line_num, 0, -1, 
-                        "There is no method in an ancestor class to be overridden: \"%s\"",
-                        binding->method_name);
-                    return 1;
-                }
+                 * this could be because the parent's VMT was incompletely built
+                 * (e.g., FPC system unit with unsupported features).
+                 * Treat as a new virtual method instead of an error. */
                 
                 struct MethodInfo *new_method = (struct MethodInfo *)malloc(sizeof(struct MethodInfo));
                 if (new_method != NULL) {

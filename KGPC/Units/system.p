@@ -65,7 +65,9 @@ type
     class function ClassParent: TClass; virtual;
     class procedure GetLastCastErrorInfo(out aFrom, aTo: ShortString); static;
     procedure Free;
+    procedure FreeInstance; virtual;
     function GetInterface(const IID: TGUID; out Obj): Boolean;
+    function ToString: String; virtual;
   end;
   TClass = class of TObject;
   TypedFile = file;
@@ -1218,6 +1220,16 @@ end;
 function TObject.GetInterface(const IID: TGUID; out Obj): Boolean;
 begin
     GetInterface := kgpc_get_interface(Pointer(Self), @IID, Obj) <> 0;
+end;
+
+procedure TObject.FreeInstance;
+begin
+    { Base implementation - runtime handles actual deallocation }
+end;
+
+function TObject.ToString: String;
+begin
+    ToString := ClassName;
 end;
 
 begin
