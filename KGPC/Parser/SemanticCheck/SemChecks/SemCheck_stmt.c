@@ -4389,10 +4389,14 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                                     if (!((formal_type == LONGINT_TYPE && actual_type == INT_TYPE) ||
                                           (formal_type == INT_TYPE && actual_type == LONGINT_TYPE) ||
                                           (formal_type == POINTER_TYPE) || (actual_type == POINTER_TYPE)))
-                                    {
-                                        fprintf(stderr, "Warning on line %d, argument %d type mismatch in call to procedural field %s\n",
-                                            stmt->line_num, arg_idx + 1, proc_id);
-                                    }
+                                {
+                                    semantic_error_at(stmt->line_num, stmt->col_num, -1,
+                                        "Incompatible types: got \"%s\" expected \"%s\"",
+                                        type_tag_to_string(actual_type),
+                                        type_tag_to_string(formal_type));
+                                    destroy_expr(proc_expr);
+                                    return ++return_val;
+                                }
                                 }
                                 formal = formal->next;
                                 actual = actual->next;

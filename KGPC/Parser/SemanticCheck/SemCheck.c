@@ -582,12 +582,14 @@ static ListNode_t *semcheck_create_builtin_param_with_id(const char *name, int t
 void semcheck_add_builtins(SymTab_t *symtab);
 
 /* Internal helper to print context using either offset or line-based search */
-static void print_error_context(int line_num, int col_num, int source_index)
+static void print_error_context(int line_num, int col_num, int source_index, const char *directive_file)
 {
-    const char *file_path = (file_to_parse != NULL && *file_to_parse != '\0')
-                                ? file_to_parse
-                                : ((preprocessed_path != NULL && *preprocessed_path != '\0') ? preprocessed_path
-                                                                                              : pascal_frontend_current_path());
+    const char *file_path = (directive_file != NULL && directive_file[0] != '\0')
+                                ? directive_file
+                                : ((file_to_parse != NULL && *file_to_parse != '\0')
+                                    ? file_to_parse
+                                    : ((preprocessed_path != NULL && *preprocessed_path != '\0') ? preprocessed_path
+                                                                                                  : pascal_frontend_current_path()));
     if (file_path == NULL)
         file_path = g_semcheck_source_path;
     size_t context_len = preprocessed_length;
@@ -613,8 +615,10 @@ static void print_error_context(int line_num, int col_num, int source_index)
                 col_num,
                 source_index);
         }
-        /* Use offset-based context if available, otherwise fall back to line-based */
+        /* Use offset-based context if available, otherwise fall back to line-based from directive_file */
         int printed = print_source_context_at_offset(context_buf, context_buf_len, source_index, line_num, col_num, 2);
+        if (!printed && directive_file != NULL && directive_file[0] != '\0')
+            printed = semcheck_print_context_from_file(directive_file, line_num, col_num, 2);
         if (!printed)
             printed = semcheck_print_context_from_file(file_path, line_num, col_num, 2);
         if (!printed && file_path != NULL)
@@ -723,6 +727,78 @@ static int semcheck_line_from_source_offset(const char *buffer, size_t length, i
     }
 
     return current_line_at_offset;
+}
+
+/* Find the file that contains a given line number by scanning line directives */
+static void semcheck_file_from_line_number(int line_num, char *file_out, size_t file_out_size)
+{
+    if (file_out == NULL || file_out_size == 0 || line_num <= 0)
+        return;
+    
+    file_out[0] = '\0';
+    
+    const char *buffer = preprocessed_source;
+    size_t length = preprocessed_length;
+    if (buffer == NULL || length == 0)
+    {
+        buffer = g_semcheck_source_buffer;
+        length = g_semcheck_source_length;
+    }
+    if (buffer == NULL || length == 0)
+        return;
+    
+    /* Scan through buffer tracking line directives */
+    int current_line = 1;
+    int last_directive_line = 1;
+    char last_file[512] = "";
+    size_t pos = 0;
+    
+    while (pos < length && current_line <= line_num)
+    {
+        /* Find end of current line */
+        size_t line_start = pos;
+        while (pos < length && buffer[pos] != '\n')
+            ++pos;
+        size_t line_len = pos - line_start;
+        
+        /* Check if this is a line directive */
+        char directive_file[512] = "";
+        int directive_line = semcheck_parse_line_directive(buffer + line_start, line_len,
+            directive_file, sizeof(directive_file));
+        
+        if (directive_line >= 0)
+        {
+            last_directive_line = directive_line;
+            if (directive_file[0] != '\0')
+            {
+                strncpy(last_file, directive_file, sizeof(last_file) - 1);
+                last_file[sizeof(last_file) - 1] = '\0';
+            }
+            current_line = directive_line;
+        }
+        
+        /* Check if we've reached the target line */
+        if (current_line == line_num && last_file[0] != '\0')
+        {
+            strncpy(file_out, last_file, file_out_size - 1);
+            file_out[file_out_size - 1] = '\0';
+            return;
+        }
+        
+        /* Move to next line */
+        if (pos < length && buffer[pos] == '\n')
+        {
+            ++pos;
+            ++current_line;
+        }
+    }
+    
+    /* If we didn't find the exact line, return the last file we saw */
+    if (last_file[0] != '\0')
+    {
+        strncpy(file_out, last_file, file_out_size - 1);
+        file_out[file_out_size - 1] = '\0';
+    }
 }
 
 static int g_semcheck_error_line = 0;
@@ -924,6 +1000,11 @@ void semantic_error(int line_num, int col_num, const char *format, ...)
         if (effective_col <= 0 && g_semcheck_error_col > 0)
             effective_col = g_semcheck_error_col;
     }
+    else if (effective_line > 0)
+    {
+        /* Look up file from line number when source_index is not available */
+        semcheck_file_from_line_number(effective_line, directive_file, sizeof(directive_file));
+    }
 
     const char *file_path = (directive_file[0] != '\0')
         ? directive_file
@@ -936,7 +1017,7 @@ void semantic_error(int line_num, int col_num, const char *format, ...)
     va_end(args);
     fprintf(stderr, "\n");
 
-    print_error_context(effective_line, effective_col, effective_source_index);
+    print_error_context(effective_line, effective_col, effective_source_index, directive_file);
 }
 
 /* Helper function to print semantic error with accurate source context using byte offset */
@@ -968,6 +1049,11 @@ void semantic_error_at(int line_num, int col_num, int source_index, const char *
             fprintf(stderr, "  In %s:\n", directive_file);
         }
     }
+    else if (line_num > 0)
+    {
+        /* Look up file from line number when source_index is not available */
+        semcheck_file_from_line_number(line_num, directive_file, sizeof(directive_file));
+    }
 
     const char *file_path = (directive_file[0] != '\0')
         ? directive_file
@@ -980,7 +1066,7 @@ void semantic_error_at(int line_num, int col_num, int source_index, const char *
     va_end(args);
     fprintf(stderr, "\n");
 
-    print_error_context(line_num, col_num, source_index);
+    print_error_context(line_num, col_num, source_index, directive_file);
 }
 
 void semcheck_error_with_context_at(int line_num, int col_num, int source_index,
@@ -5859,10 +5945,12 @@ if (record_info->parent_class_name != NULL) {
             } else if (binding->is_virtual || binding->is_override) {
                 /* Add new virtual method to VMT */
                 /* Note: if binding->is_override is true but no parent method was found,
-                 * this is an error, but we still add it as a new virtual method */
+                 * this is an error */
                 if (binding->is_override) {
-                    fprintf(stderr, "Warning on line %d: override method '%s' has no virtual parent method, treating as new virtual method\n",
-                            line_num, binding->method_name);
+                    semantic_error_at(line_num, 0, -1, 
+                        "There is no method in an ancestor class to be overridden: \"%s\"",
+                        binding->method_name);
+                    return 1;
                 }
                 
                 struct MethodInfo *new_method = (struct MethodInfo *)malloc(sizeof(struct MethodInfo));

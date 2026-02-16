@@ -1456,8 +1456,11 @@ int semcheck_funccall(int *type_return,
                                       (formal_type == POINTER_TYPE) ||
                                       (actual_type == POINTER_TYPE)))
                                 {
-                                    fprintf(stderr, "Warning on line %d, argument %d type mismatch in call to procedural field %s\n",
-                                        expr->line_num, arg_idx + 1, id);
+                                    semantic_error_at(expr->line_num, expr->col_num, -1,
+                                        "Incompatible types: got \"%s\" expected \"%s\"",
+                                        type_tag_to_string(actual_type),
+                                        type_tag_to_string(formal_type));
+                                    return ++return_val;
                                 }
                             }
                             
@@ -3261,8 +3264,14 @@ int semcheck_funccall(int *type_return,
                           (formal_type == POINTER_TYPE) || /* pointers are flexible */
                           (actual_type == POINTER_TYPE)))
                     {
-                        fprintf(stderr, "Warning on line %d, argument %d type mismatch in call to procedural variable %s\n",
-                            expr->line_num, arg_idx + 1, id);
+                        semantic_error_at(expr->line_num, expr->col_num, -1,
+                            "Incompatible types: got \"%s\" expected \"%s\"",
+                            type_tag_to_string(actual_type),
+                            type_tag_to_string(formal_type));
+                        destroy_list(overload_candidates);
+                        if (mangled_name != NULL) free(mangled_name);
+                        *type_return = UNKNOWN_TYPE;
+                        return ++return_val;
                     }
                 }
                 
