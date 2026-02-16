@@ -4388,7 +4388,17 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                                 {
                                     if (!((formal_type == LONGINT_TYPE && actual_type == INT_TYPE) ||
                                           (formal_type == INT_TYPE && actual_type == LONGINT_TYPE) ||
-                                          (formal_type == POINTER_TYPE) || (actual_type == POINTER_TYPE)))
+                                          (formal_type == POINTER_TYPE) || (actual_type == POINTER_TYPE) ||
+                                          (is_integer_type(formal_type) && is_integer_type(actual_type)) ||
+                                          (formal_type == REAL_TYPE && is_integer_type(actual_type)) ||
+                                          (is_integer_type(formal_type) && actual_type == REAL_TYPE) ||
+                                          (formal_type == VARIANT_TYPE) ||
+                                          (actual_type == VARIANT_TYPE) ||
+                                          (formal_type == RECORD_TYPE) ||
+                                          (actual_type == RECORD_TYPE) ||
+                                          (formal_type == STRING_TYPE && actual_type == CHAR_TYPE) ||
+                                          (formal_type == CHAR_TYPE && actual_type == STRING_TYPE) ||
+                                          (formal_type == SHORTSTRING_TYPE && actual_type == CHAR_TYPE)))
                                 {
                                     semantic_error_at(stmt->line_num, stmt->col_num, -1,
                                         "Incompatible types: got \"%s\" expected \"%s\"",

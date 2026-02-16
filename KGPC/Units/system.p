@@ -1128,6 +1128,55 @@ begin
     result := longint(actual64);
 end;
 
+{ Variant conversion helpers (stubs for semantic check; actual implementation is runtime) }
+function vartoint(const v: Variant): LongInt;
+begin
+  vartoint := 0;
+end;
+
+function vartoint64(const v: Variant): Int64;
+begin
+  vartoint64 := 0;
+end;
+
+function vartoword64(const v: Variant): QWord;
+begin
+  vartoword64 := 0;
+end;
+
+function vartobool(const v: Variant): Boolean;
+begin
+  vartobool := False;
+end;
+
+function vartoreal(const v: Variant): Real;
+begin
+  vartoreal := 0.0;
+end;
+
+function vartocurr(const v: Variant): Int64;
+begin
+  vartocurr := 0;
+end;
+
+function vartotdatetime(const v: Variant): Real;
+begin
+  vartotdatetime := 0.0;
+end;
+
+function vararrayget(const v: Variant; idx: LongInt; var dest: LongInt): String;
+begin
+  vararrayget := '';
+end;
+
+procedure vararrayput(var v: Variant; const val: Variant; idx: LongInt);
+begin
+end;
+
+procedure __PushToFree(var list: Pointer; p: Pointer);
+begin
+end;
+
 { TObject methods }
 
 class function TObject.ClassName: ShortString;
