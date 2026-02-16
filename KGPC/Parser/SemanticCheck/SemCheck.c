@@ -4733,9 +4733,43 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                     if (!(existing->defined_in_unit &&
                           !tree->tree_data.type_decl_data.defined_in_unit))
                     {
-                        /* Already declared, skip */
-                        cur = cur->next;
-                        continue;
+                        /* Check if this is a forward class declaration being completed.
+                         * Forward: "TObject = class;" creates empty class, then full definition follows.
+                         * Allow the full definition to replace the forward declaration. */
+                        int is_forward_class_completion = 0;
+                        if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD)
+                        {
+                            struct RecordType *new_record = tree->tree_data.type_decl_data.info.record;
+                            struct RecordType *existing_record = hashnode_get_record_type(existing);
+                            if (new_record != NULL && new_record->is_class &&
+                                existing_record != NULL && existing_record->is_class)
+                            {
+                                /* Check if existing has only hidden fields (forward decl) */
+                                int has_non_hidden = 0;
+                                ListNode_t *fnode = existing_record->fields;
+                                while (fnode != NULL)
+                                {
+                                    if (fnode->type == LIST_RECORD_FIELD && fnode->cur != NULL)
+                                    {
+                                        struct RecordField *f = (struct RecordField *)fnode->cur;
+                                        if (!record_field_is_hidden(f))
+                                        {
+                                            has_non_hidden = 1;
+                                            break;
+                                        }
+                                    }
+                                    fnode = fnode->next;
+                                }
+                                if (!has_non_hidden && new_record->fields != NULL)
+                                    is_forward_class_completion = 1;
+                            }
+                        }
+                        if (!is_forward_class_completion)
+                        {
+                            /* Already declared, skip */
+                            cur = cur->next;
+                            continue;
+                        }
                     }
                 }
                 
@@ -4743,7 +4777,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                 if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD)
                 {
                     struct RecordType *record_info = tree->tree_data.type_decl_data.info.record;
-                    
+
                     /* Annotate the record with its canonical name if missing */
                     if (record_info != NULL && record_info->type_id == NULL)
                         record_info->type_id = strdup(type_id);
@@ -4762,10 +4796,114 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             tree->tree_data.type_decl_data.kgpc_type = kgpc_type;
                             kgpc_type_retain(kgpc_type);
                         }
-                        
+
                         int result = PushTypeOntoScope_Typed(symtab, (char *)type_id, kgpc_type);
+                        if (getenv("KGPC_DEBUG_FORWARD_CLASS") && record_info != NULL && record_info->is_class)
+                        {
+                            fprintf(stderr, "[FWD-PRE] type='%s' push_result=%d fields=%p\n",
+                                type_id, result, (void *)record_info->fields);
+                            ListNode_t *dbg = record_info->fields;
+                            while (dbg != NULL)
+                            {
+                                if (dbg->type == LIST_RECORD_FIELD && dbg->cur != NULL)
+                                {
+                                    struct RecordField *f = (struct RecordField *)dbg->cur;
+                                    fprintf(stderr, "[FWD-PRE]   field: %s hidden=%d\n",
+                                        f->name ? f->name : "<null>", record_field_is_hidden(f));
+                                }
+                                dbg = dbg->next;
+                            }
+                        }
                         if (result > 0)
-                            errors += result;
+                        {
+                            /* Check if this is a forward class declaration being resolved.
+                             * Forward class: "TObject = class;" creates an empty class,
+                             * then "TObject = class ... end;" provides the full definition.
+                             * Update the existing symbol's type with the full definition. */
+                            if (record_info != NULL && record_info->is_class)
+                            {
+                                HashNode_t *existing = NULL;
+                                int find_result = FindIdent(&existing, symtab, type_id);
+                                if (getenv("KGPC_DEBUG_FORWARD_CLASS"))
+                                    fprintf(stderr, "[FWD] type='%s' find=%d existing=%p hash_type=%d\n",
+                                        type_id, find_result, (void*)existing,
+                                        existing ? existing->hash_type : -1);
+                                if (find_result >= 0 &&
+                                    existing != NULL &&
+                                    existing->hash_type == HASHTYPE_TYPE &&
+                                    existing->type != NULL)
+                                {
+                                    struct RecordType *existing_record = hashnode_get_record_type(existing);
+                                    if (existing_record != NULL && existing_record->is_class)
+                                    {
+                                        /* Check if existing is a forward declaration (only hidden fields) */
+                                        int has_non_hidden_fields = 0;
+                                        ListNode_t *fnode = existing_record->fields;
+                                        while (fnode != NULL)
+                                        {
+                                            if (fnode->type == LIST_RECORD_FIELD && fnode->cur != NULL)
+                                            {
+                                                struct RecordField *f = (struct RecordField *)fnode->cur;
+                                                if (!record_field_is_hidden(f))
+                                                {
+                                                    has_non_hidden_fields = 1;
+                                                    break;
+                                                }
+                                            }
+                                            fnode = fnode->next;
+                                        }
+                                        if (!has_non_hidden_fields && record_info->fields != NULL)
+                                        {
+                                            /* Forward declaration being resolved - update existing record's fields */
+                                            /* Prepend the hidden typeinfo field from existing to new record's fields */
+                                            ListNode_t *existing_fields = existing_record->fields;
+                                            existing_record->fields = record_info->fields;
+                                            /* Re-add hidden fields at front */
+                                            while (existing_fields != NULL)
+                                            {
+                                                ListNode_t *next = existing_fields->next;
+                                                if (existing_fields->type == LIST_RECORD_FIELD && existing_fields->cur != NULL)
+                                                {
+                                                    struct RecordField *f = (struct RecordField *)existing_fields->cur;
+                                                    if (record_field_is_hidden(f))
+                                                    {
+                                                        existing_fields->next = NULL;
+                                                        existing_record->fields = PushListNodeFront(existing_record->fields, existing_fields);
+                                                    }
+                                                    else
+                                                    {
+                                                        /* Non-hidden field from forward decl - shouldn't happen, just free */
+                                                        free(existing_fields);
+                                                    }
+                                                }
+                                                else
+                                                {
+                                                    free(existing_fields);
+                                                }
+                                                existing_fields = next;
+                                            }
+                                            /* Copy over method templates and properties */
+                                            if (record_info->method_templates != NULL)
+                                                existing_record->method_templates = record_info->method_templates;
+                                            if (record_info->properties != NULL)
+                                                existing_record->properties = record_info->properties;
+                                            if (record_info->parent_class_name != NULL && existing_record->parent_class_name == NULL)
+                                                existing_record->parent_class_name = strdup(record_info->parent_class_name);
+                                            if (record_info->interface_names != NULL)
+                                            {
+                                                existing_record->interface_names = record_info->interface_names;
+                                                existing_record->num_interfaces = record_info->num_interfaces;
+                                                record_info->interface_names = NULL;
+                                                record_info->num_interfaces = 0;
+                                            }
+                                            result = 0; /* Suppress the error */
+                                        }
+                                    }
+                                }
+                            }
+                            if (result > 0)
+                                errors += result;
+                        }
                         else
                         {
                             HashNode_t *type_node = semcheck_find_type_node_with_unit_flag(symtab,
@@ -7700,6 +7838,14 @@ void semcheck_add_builtins(SymTab_t *symtab)
         {
             tobject->is_class = 1;
             tobject->type_id = strdup("TObject");
+            /* Add _MonitorData: Pointer field (required by FPC RTL objpas) */
+            struct RecordField *monitor_field = (struct RecordField *)calloc(1, sizeof(struct RecordField));
+            if (monitor_field != NULL)
+            {
+                monitor_field->name = strdup("_MonitorData");
+                monitor_field->type = POINTER_TYPE;
+                tobject->fields = CreateListNode(monitor_field, LIST_RECORD_FIELD);
+            }
             KgpcType *tobject_rec = create_record_type(tobject);
             KgpcType *tobject_type = NULL;
             if (tobject_rec != NULL)

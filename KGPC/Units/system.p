@@ -57,7 +57,16 @@ type
 
   { FPC bootstrap compatibility aliases }
   PText = ^text;
-  TObject = class;
+  TObject = class
+  public
+    _MonitorData: Pointer;
+    destructor Destroy; virtual;
+    class function ClassName: ShortString; virtual;
+    class function ClassParent: TClass; virtual;
+    class procedure GetLastCastErrorInfo(out aFrom, aTo: ShortString); static;
+    procedure Free;
+    function GetInterface(const IID: TGUID; out Obj): Boolean;
+  end;
   TClass = class of TObject;
   TypedFile = file;
   TRTLCriticalSection = array[0..39] of Byte;
@@ -155,17 +164,6 @@ type
   HRESULT = LongInt;  { Windows COM result type }
   CodePointer = Pointer;
   
-  { String types - for FPC bootstrap compatibility }
-  { Root class for ObjPas compatibility }
-  TObject = class
-  public
-    destructor Destroy; virtual;
-    class function ClassName: ShortString; virtual;
-    class function ClassParent: TClass; virtual;
-    class procedure GetLastCastErrorInfo(out aFrom, aTo: ShortString); static;
-    procedure Free;
-    function GetInterface(const IID: TGUID; out Obj): Boolean;
-  end;
   TInterfacedObject = class(TObject)
   protected
     FRefCount : LongInt;
