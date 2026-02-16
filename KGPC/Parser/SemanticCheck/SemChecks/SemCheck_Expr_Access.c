@@ -544,8 +544,8 @@ int resolve_param_type(Tree_t *decl, SymTab_t *symtab)
         if (pascal_identifier_equals(type_id, "ShortString"))
             return SHORTSTRING_TYPE;
 
-        HashNode_t *type_node = NULL;
-        if (FindIdent(&type_node, symtab, type_id) >= 0 && type_node != NULL)
+        HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, type_id);
+        if (type_node != NULL)
         {
             int resolved_type = UNKNOWN_TYPE;
             set_type_from_hashtype(&resolved_type, type_node);
