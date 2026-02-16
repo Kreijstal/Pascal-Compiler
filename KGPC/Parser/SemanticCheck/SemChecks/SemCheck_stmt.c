@@ -3946,6 +3946,105 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                     stmt->stmt_data.procedure_call_data.id = proc_id;
                 }
             }
+            else if (strstr(proc_id, "__") == NULL && self_record != NULL && self_record->type_id != NULL)
+            {
+                /* Check if proc_id is a procedural-type field or property of Self's class.
+                 * This handles patterns like FCallBack(Self,a,b,c) and OnQueryInterface(x,y,z)
+                 * where FCallBack is a field of type TThunkCallBack (procedural type)
+                 * and OnQueryInterface is a property reading from a procedural-type field. */
+                const char *field_name = proc_id;
+                int is_proc_field = 0;
+
+                /* Use semcheck_lookup_record_type to get a safe, validated RecordType from the symbol table,
+                 * since self_record obtained from temp call contexts can have corrupt data */
+                struct RecordType *safe_record = semcheck_lookup_record_type(symtab, self_record->type_id);
+                if (safe_record != NULL)
+                {
+                    for (ListNode_t *f = safe_record->fields; f != NULL; f = f->next)
+                    {
+                        if (f->type != LIST_RECORD_FIELD || f->cur == NULL)
+                            continue;
+                        struct RecordField *rf = (struct RecordField *)f->cur;
+                        if (rf->name == NULL)
+                            continue;
+                        if (strcasecmp(rf->name, field_name) == 0)
+                        {
+                            if (rf->proc_type != NULL)
+                            {
+                                is_proc_field = 1;
+                                break;
+                            }
+                            else if (rf->type_id != NULL)
+                            {
+                                HashNode_t *type_node = NULL;
+                                if (FindIdent(&type_node, symtab, rf->type_id) != -1 &&
+                                    type_node != NULL && type_node->type != NULL &&
+                                    type_node->type->kind == TYPE_KIND_PROCEDURE)
+                                {
+                                    is_proc_field = 1;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if (!is_proc_field)
+                    {
+                        /* Check properties — if a property's read_accessor is a procedural-type field */
+                        struct ClassProperty *prop = semcheck_find_class_property(symtab, safe_record, proc_id, NULL);
+                        if (prop != NULL && prop->read_accessor != NULL)
+                        {
+                            for (ListNode_t *f2 = safe_record->fields; f2 != NULL; f2 = f2->next)
+                            {
+                                if (f2->type != LIST_RECORD_FIELD || f2->cur == NULL)
+                                    continue;
+                                struct RecordField *rf2 = (struct RecordField *)f2->cur;
+                                if (rf2->name == NULL)
+                                    continue;
+                                if (strcasecmp(rf2->name, prop->read_accessor) == 0)
+                                {
+                                    if (rf2->proc_type != NULL)
+                                    {
+                                        is_proc_field = 1;
+                                        field_name = prop->read_accessor;
+                                        break;
+                                    }
+                                    else if (rf2->type_id != NULL)
+                                    {
+                                        HashNode_t *type_node = NULL;
+                                        if (FindIdent(&type_node, symtab, rf2->type_id) != -1 &&
+                                            type_node != NULL && type_node->type != NULL &&
+                                            type_node->type->kind == TYPE_KIND_PROCEDURE)
+                                        {
+                                            is_proc_field = 1;
+                                            field_name = prop->read_accessor;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (is_proc_field)
+                {
+                    /* Convert to Self.field(...) procedural variable call.
+                     * Build a record access expression Self.field and set it as procedural_var_expr */
+                    struct Expression *self_expr = mk_varid(stmt->line_num, strdup("Self"));
+                    struct Expression *field_access = mk_recordaccess(stmt->line_num,
+                        self_expr, strdup(field_name));
+
+                    stmt->stmt_data.procedure_call_data.is_procedural_var_call = 1;
+                    stmt->stmt_data.procedure_call_data.procedural_var_expr = field_access;
+                    stmt->stmt_data.procedure_call_data.call_hash_type = HASHTYPE_VAR;
+
+                    /* Check the expression for type resolution */
+                    int field_tag = UNKNOWN_TYPE;
+                    return_val += semcheck_stmt_expr_tag(&field_tag, symtab, field_access, max_scope_lev, NO_MUTATE);
+
+                    return return_val;
+                }
+            }
         }
     }
 
