@@ -4451,7 +4451,19 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                        owner_type->info.points_to != NULL &&
                        owner_type->info.points_to->kind == TYPE_KIND_RECORD) {
                 record_info = owner_type->info.points_to->info.record_info;
+            } else if (owner_type->kind == TYPE_KIND_POINTER &&
+                       owner_type->info.points_to != NULL &&
+                       owner_type->info.points_to->kind == TYPE_KIND_POINTER &&
+                       owner_type->info.points_to->info.points_to != NULL &&
+                       owner_type->info.points_to->info.points_to->kind == TYPE_KIND_RECORD) {
+                /* Double-pointer deref: pts^^.Method where pts: ^^Record */
+                record_info = owner_type->info.points_to->info.points_to->info.record_info;
             }
+        }
+
+        /* Fallback: use the expression's record_type if set (e.g. from pointer deref chain) */
+        if (record_info == NULL && first_arg->record_type != NULL) {
+            record_info = first_arg->record_type;
         }
 
         if (first_arg->type == EXPR_VAR_ID && first_arg->expr_data.id != NULL)

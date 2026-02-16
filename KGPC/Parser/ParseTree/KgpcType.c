@@ -1007,6 +1007,23 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
         {
             return 1;  /* Untyped Pointer can be assigned to any typed pointer */
         }
+
+        /* Allow integer-to-pointer and pointer-to-integer conversions.
+         * Pascal allows passing integer values where pointer types are expected
+         * in low-level code (e.g., syscall wrappers like Fptime(t) where t: time_t
+         * is passed to a ptime_t parameter). */
+        if (lhs_type->kind == TYPE_KIND_POINTER &&
+            rhs_type->kind == TYPE_KIND_PRIMITIVE &&
+            is_integer_type(rhs_type->info.primitive_type_tag))
+        {
+            return 1;
+        }
+        if (rhs_type->kind == TYPE_KIND_POINTER &&
+            lhs_type->kind == TYPE_KIND_PRIMITIVE &&
+            is_integer_type(lhs_type->info.primitive_type_tag))
+        {
+            return 1;
+        }
         
         return 0;
     }
