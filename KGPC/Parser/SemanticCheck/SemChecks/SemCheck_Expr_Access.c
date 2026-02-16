@@ -4386,6 +4386,22 @@ skip_overload_resolution:
                             type_compatible = 1;
                         }
                     }
+
+                    /* KgpcType-based fallback: when tag-based checks fail, try full
+                     * KgpcType compatibility (handles ^NULL, variant, integer widening, etc.) */
+                    if (!type_compatible && current_arg_expr != NULL)
+                    {
+                        int owns_expected = 0;
+                        KgpcType *expected_kgpc = resolve_type_from_vardecl(arg_decl, symtab, &owns_expected);
+                        KgpcType *arg_kgpc = current_arg_expr->resolved_kgpc_type;
+                        if (expected_kgpc != NULL && arg_kgpc != NULL &&
+                            are_types_compatible_for_assignment(expected_kgpc, arg_kgpc, symtab))
+                        {
+                            type_compatible = 1;
+                        }
+                        if (owns_expected && expected_kgpc != NULL)
+                            destroy_kgpc_type(expected_kgpc);
+                    }
                     
                     if (!type_compatible)
                     {
