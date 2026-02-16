@@ -2279,13 +2279,6 @@ static int semcheck_builtin_new(SymTab_t *symtab, struct Statement *stmt, int ma
         return ++return_val;
     }
 
-    if (target_expr->record_type == NULL && target_expr->pointer_subtype_id != NULL)
-    {
-        HashNode_t *type_node = NULL;
-        if (FindIdent(&type_node, symtab, target_expr->pointer_subtype_id) != -1 && type_node != NULL)
-            target_expr->record_type = hashnode_get_record_type(type_node);
-    }
-
     return return_val;
 }
 
@@ -2592,7 +2585,8 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                 }
                 else
                 {
-                    context_expr->record_type = record_info;
+                    if (context_expr->resolved_kgpc_type == NULL)
+                        context_expr->resolved_kgpc_type = create_record_type(record_info);
                     if (semcheck_with_push(context_expr, record_info) != 0)
                     {
                         ++return_val;
@@ -3062,10 +3056,12 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             return return_val + property_result;
     }
 
-    if (expr != NULL && expr->type == EXPR_RECORD_CONSTRUCTOR && expr->record_type == NULL)
+    if (expr != NULL && expr->type == EXPR_RECORD_CONSTRUCTOR &&
+        (expr->resolved_kgpc_type == NULL ||
+         !kgpc_type_is_record(expr->resolved_kgpc_type)))
     {
-        struct RecordType *record_type = var != NULL ? var->record_type : NULL;
-        if (record_type == NULL && var != NULL && var->resolved_kgpc_type != NULL)
+        struct RecordType *record_type = NULL;
+        if (var != NULL && var->resolved_kgpc_type != NULL)
         {
             KgpcType *lhs_type = var->resolved_kgpc_type;
             if (kgpc_type_is_record(lhs_type))
@@ -3094,7 +3090,17 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                 }
             }
         }
-        expr->record_type = record_type;
+        if (record_type != NULL)
+        {
+            if (expr->resolved_kgpc_type != NULL &&
+                !kgpc_type_is_record(expr->resolved_kgpc_type))
+            {
+                destroy_kgpc_type(expr->resolved_kgpc_type);
+                expr->resolved_kgpc_type = NULL;
+            }
+            if (expr->resolved_kgpc_type == NULL)
+                expr->resolved_kgpc_type = create_record_type(record_type);
+        }
     }
     if (SEMSTMT_TIMINGS_ENABLED()) {
         double t0 = semstmt_now_ms();
@@ -3715,8 +3721,6 @@ static int semcheck_try_property_assignment(SymTab_t *symtab,
 
     struct RecordType *object_record = semcheck_with_resolve_record_type(symtab,
         object_expr, semcheck_tag_from_kgpc(object_expr->resolved_kgpc_type), stmt->line_num);
-    if (object_record == NULL)
-        object_record = object_expr->record_type;
 
     if (object_record == NULL)
         return -1;
@@ -4233,7 +4237,8 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     {
         struct Expression *receiver_expr = (struct Expression *)args_given->cur;
         if (receiver_expr != NULL && receiver_expr->type == EXPR_RECORD_CONSTRUCTOR &&
-            receiver_expr->record_type == NULL)
+            (receiver_expr->resolved_kgpc_type == NULL ||
+             !kgpc_type_is_record(receiver_expr->resolved_kgpc_type)))
         {
             receiver_expr = NULL;
         }
@@ -4243,14 +4248,16 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
             semcheck_stmt_expr_tag(&recv_type, symtab, receiver_expr, max_scope_lev, NO_MUTATE);
 
             struct RecordType *recv_record = NULL;
-            if (recv_type == RECORD_TYPE)
-                recv_record = receiver_expr->record_type;
+            if (recv_type == RECORD_TYPE &&
+                receiver_expr->resolved_kgpc_type != NULL &&
+                receiver_expr->resolved_kgpc_type->kind == TYPE_KIND_RECORD)
+            {
+                recv_record = kgpc_type_get_record(receiver_expr->resolved_kgpc_type);
+            }
             else if (recv_type == POINTER_TYPE)
             {
-                if (receiver_expr->record_type != NULL)
-                    recv_record = receiver_expr->record_type;
-                else if (receiver_expr->resolved_kgpc_type != NULL &&
-                         receiver_expr->resolved_kgpc_type->kind == TYPE_KIND_POINTER)
+                if (receiver_expr->resolved_kgpc_type != NULL &&
+                    receiver_expr->resolved_kgpc_type->kind == TYPE_KIND_POINTER)
                 {
                     KgpcType *pointee = receiver_expr->resolved_kgpc_type->info.points_to;
                     if (pointee != NULL && kgpc_type_is_record(pointee))
@@ -4461,10 +4468,7 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
             }
         }
 
-        /* Fallback: use the expression's record_type if set (e.g. from pointer deref chain) */
-        if (record_info == NULL && first_arg->record_type != NULL) {
-            record_info = first_arg->record_type;
-        }
+        /* Do not rely on legacy record_type metadata; prefer resolved KgpcType only. */
 
         if (first_arg->type == EXPR_VAR_ID && first_arg->expr_data.id != NULL)
         {
@@ -4605,14 +4609,44 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                             class_name = record_type->type_id;
                     }
                 }
-                if (first_arg->record_type != NULL) {
-                    record_type = first_arg->record_type;
-                } else if (first_arg->type == EXPR_VAR_ID) {
+                if (first_arg->type == EXPR_VAR_ID) {
                     /* Look up the variable to get its type */
                     HashNode_t *var_node = NULL;
                     if (FindIdent(&var_node, symtab, first_arg->expr_data.id) != -1 && var_node != NULL &&
                         var_node->type != NULL && var_node->type->kind == TYPE_KIND_RECORD) {
                         record_type = var_node->type->info.record_info;
+                    }
+                }
+
+                /* Prefer resolved KgpcType for deref chains like pts^^.Method(...)
+                 * where legacy record_type metadata may be absent. */
+                if (record_type == NULL && first_arg->resolved_kgpc_type != NULL)
+                {
+                    KgpcType *arg_type = first_arg->resolved_kgpc_type;
+                    if (arg_type->kind == TYPE_KIND_RECORD)
+                    {
+                        record_type = arg_type->info.record_info;
+                    }
+                    else if (arg_type->kind == TYPE_KIND_POINTER &&
+                             arg_type->info.points_to != NULL)
+                    {
+                        KgpcType *pointee = arg_type->info.points_to;
+                        if (pointee->kind == TYPE_KIND_RECORD)
+                            record_type = pointee->info.record_info;
+                        else if (pointee->kind == TYPE_KIND_POINTER &&
+                                 pointee->info.points_to != NULL &&
+                                 pointee->info.points_to->kind == TYPE_KIND_RECORD)
+                            record_type = pointee->info.points_to->info.record_info;
+                    }
+                }
+
+                if (record_type == NULL && first_arg->pointer_subtype_id != NULL)
+                {
+                    HashNode_t *subtype_node = NULL;
+                    if (FindIdent(&subtype_node, symtab, first_arg->pointer_subtype_id) != -1 &&
+                        subtype_node != NULL)
+                    {
+                        record_type = semcheck_stmt_get_record_type_from_node(subtype_node);
                     }
                 }
 
@@ -4689,6 +4723,14 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
         
         if (class_name != NULL && method_name != NULL) {
             int is_static = from_cparser_is_method_static(class_name, method_name);
+            HashNode_t *resolved_method = NULL;
+            HashNode_t *class_node = NULL;
+            if (FindIdent(&class_node, symtab, class_name) != -1 && class_node != NULL)
+            {
+                struct RecordType *class_record = semcheck_stmt_get_record_type_from_node(class_node);
+                if (class_record != NULL)
+                    resolved_method = semcheck_find_class_method(symtab, class_record, method_name, NULL);
+            }
             
             /* If proc_id started with __, update it to include the class name */
             if (method_double_underscore == proc_id) {
@@ -4701,6 +4743,13 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                     proc_id = new_proc_id;
                     stmt->stmt_data.procedure_call_data.id = proc_id;
                 }
+            }
+
+            if (resolved_method != NULL && resolved_method->mangled_id != NULL)
+            {
+                if (stmt->stmt_data.procedure_call_data.mangled_id != NULL)
+                    free(stmt->stmt_data.procedure_call_data.mangled_id);
+                stmt->stmt_data.procedure_call_data.mangled_id = strdup(resolved_method->mangled_id);
             }
             
             if (is_static) {
@@ -5256,8 +5305,12 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                         }
                         else
                         {
-                            fprintf(stderr, "Warning: Could not copy default value for parameter %d of %s\n",
-                                arg_index, proc_id != NULL ? proc_id : "(null)");
+                            semcheck_error_with_context(
+                                "Error on line %d, could not copy default value for parameter %d of %s.\n\n",
+                                stmt->line_num,
+                                arg_index,
+                                proc_id != NULL ? proc_id : "(null)");
+                            return_val++;
                         }
                     }
                     

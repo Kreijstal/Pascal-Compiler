@@ -3212,8 +3212,10 @@ static const char *resolve_type_to_base_name(SymTab_t *symtab, const char *type_
     /* Prevent infinite recursion from circular type definitions */
     if (resolve_type_depth >= MAX_RESOLVE_TYPE_DEPTH)
     {
-        fprintf(stderr, "Warning: Type resolution depth limit reached for type '%s' - possible circular type definition\n", type_name);
-        return type_name;  /* Return as-is to avoid stack overflow */
+        KGPC_SEMCHECK_HARD_ASSERT(0,
+            "type resolution depth limit reached for '%s' (possible circular definition)",
+            type_name);
+        return NULL;
     }
     
     /* First, check if it's already a known primitive type */
@@ -10272,10 +10274,12 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     else if(tree->tree_data.arr_decl_data.type == REAL_TYPE)
                         var_type = HASHVAR_REAL;
                     else {
-                        /* Unknown type - report error and default to real */
-                        fprintf(stderr, "Warning: Unknown array element type %d for %s, defaulting to real\n",
-                                tree->tree_data.arr_decl_data.type,
-                                ids && ids->cur ? (char*)ids->cur : "<unknown>");
+                        semcheck_error_with_context(
+                            "Error on line %d, unknown array element type %d for %s.\n\n",
+                            tree->line_num,
+                            tree->tree_data.arr_decl_data.type,
+                            ids && ids->cur ? (char*)ids->cur : "<unknown>");
+                        return_val++;
                         var_type = HASHVAR_REAL;
                     }
                     

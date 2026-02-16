@@ -4238,47 +4238,35 @@ skip_overload_resolution:
                 }
                 else if(arg_type != expected_type)
                 {
-                    /* Allow integer type conversion (INT_TYPE, LONGINT_TYPE, INT64_TYPE all compatible) */
                     int type_compatible = 0;
-                    if (is_integer_type(arg_type) && is_integer_type(expected_type))
-                    {
-                        type_compatible = 1;
-                    }
-                    else if (expected_type == STRING_TYPE && arg_type == CHAR_TYPE)
-                    {
-                        type_compatible = 1;
-                    }
-                    else if (expected_type == STRING_TYPE && arg_type == SHORTSTRING_TYPE)
-                    {
-                        type_compatible = 1;
-                    }
-                    else if (expected_type == SHORTSTRING_TYPE && arg_type == STRING_TYPE)
-                    {
-                        type_compatible = 1;
-                    }
-                    else if (expected_type == REAL_TYPE && is_integer_type(arg_type))
-                    {
-                        type_compatible = 1;
-                    }
-                    /* For enum types: integer literals and scoped enum literals are compatible with enum parameters */
-                    else if (expected_type == ENUM_TYPE && 
-                             (is_integer_type(arg_type) || arg_type == ENUM_TYPE))
+                    int owns_expected_kgpc = 0;
+                    KgpcType *expected_kgpc = resolve_type_from_vardecl(arg_decl, symtab, &owns_expected_kgpc);
+                    KgpcType *arg_kgpc = current_arg_expr != NULL ? current_arg_expr->resolved_kgpc_type : NULL;
+
+                    /* KgpcType is the primary compatibility mechanism.
+                     * Do not reintroduce legacy type-tag fallback checks here. */
+                    if (expected_kgpc != NULL && arg_kgpc != NULL &&
+                        are_types_compatible_for_assignment(expected_kgpc, arg_kgpc, symtab))
                     {
                         type_compatible = 1;
                     }
                     /* For array of const: accept any array literal - elements are converted to TVarRec */
-                    else if (expected_type == ARRAY_OF_CONST_TYPE &&
+                    if (!type_compatible &&
+                        expected_type == ARRAY_OF_CONST_TYPE &&
                              current_arg_expr != NULL &&
                              current_arg_expr->type == EXPR_ARRAY_LITERAL)
                     {
                         type_compatible = 1;
                     }
-                    /* For complex types (records, files, etc.), if both have the same type tag,
-                     * consider them compatible. The overload resolution already ensured we have
-                     * the right function via name mangling. */
-                    else if (arg_type == expected_type)
+
+                    if (!type_compatible &&
+                        expected_kgpc == NULL &&
+                        expected_type != UNKNOWN_TYPE &&
+                        expected_type != BUILTIN_ANY_TYPE)
                     {
-                        type_compatible = 1;
+                        KGPC_SEMCHECK_HARD_ASSERT(0,
+                            "missing expected KgpcType in argument compatibility: call=%s arg=%d expected_tag=%d",
+                            id != NULL ? id : "<unknown>", cur_arg, expected_type);
                     }
 
                     /* Allow string literals to be passed as PAnsiChar/PChar parameters.
@@ -4300,8 +4288,6 @@ skip_overload_resolution:
                         /* Also check if parameter is a pointer type pointing to char */
                         if (!type_compatible && expected_type == POINTER_TYPE)
                         {
-                            int owns_expected = 0;
-                            KgpcType *expected_kgpc = resolve_type_from_vardecl(arg_decl, symtab, &owns_expected);
                             if (expected_kgpc != NULL && kgpc_type_is_pointer(expected_kgpc))
                             {
                                 KgpcType *points_to = expected_kgpc->info.points_to;
@@ -4312,19 +4298,14 @@ skip_overload_resolution:
                                     type_compatible = 1;
                                 }
                             }
-                            if (owns_expected && expected_kgpc != NULL)
-                                destroy_kgpc_type(expected_kgpc);
                         }
                     }
 
                     /* Allow dynamic array parameters to match when both sides are arrays. */
                     if (!type_compatible && current_arg_expr != NULL)
                     {
-                        int owns_expected = 0;
-                        KgpcType *expected_kgpc = resolve_type_from_vardecl(arg_decl, symtab, &owns_expected);
                         if (expected_kgpc != NULL && expected_kgpc->kind == TYPE_KIND_ARRAY)
                         {
-                            KgpcType *arg_kgpc = current_arg_expr->resolved_kgpc_type;
                             if (arg_kgpc != NULL && arg_kgpc->kind == TYPE_KIND_ARRAY)
                             {
                                 if (are_types_compatible_for_assignment(expected_kgpc, arg_kgpc, symtab))
@@ -4354,8 +4335,6 @@ skip_overload_resolution:
                                 }
                             }
                         }
-                        if (owns_expected && expected_kgpc != NULL)
-                            destroy_kgpc_type(expected_kgpc);
                     }
 
                     if (!type_compatible &&
@@ -4387,21 +4366,8 @@ skip_overload_resolution:
                         }
                     }
 
-                    /* KgpcType-based fallback: when tag-based checks fail, try full
-                     * KgpcType compatibility (handles ^NULL, variant, integer widening, etc.) */
-                    if (!type_compatible && current_arg_expr != NULL)
-                    {
-                        int owns_expected = 0;
-                        KgpcType *expected_kgpc = resolve_type_from_vardecl(arg_decl, symtab, &owns_expected);
-                        KgpcType *arg_kgpc = current_arg_expr->resolved_kgpc_type;
-                        if (expected_kgpc != NULL && arg_kgpc != NULL &&
-                            are_types_compatible_for_assignment(expected_kgpc, arg_kgpc, symtab))
-                        {
-                            type_compatible = 1;
-                        }
-                        if (owns_expected && expected_kgpc != NULL)
-                            destroy_kgpc_type(expected_kgpc);
-                    }
+                    if (owns_expected_kgpc && expected_kgpc != NULL)
+                        destroy_kgpc_type(expected_kgpc);
                     
                     if (!type_compatible)
                     {

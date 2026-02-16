@@ -6,8 +6,28 @@
 #ifndef SEM_CHECK_H
 #define SEM_CHECK_H
 
+#include <stdlib.h>
+#include <stdio.h>
 #include "../ParseTree/tree.h"
 #include "SymTab/SymTab.h"
+
+/*
+ * Semantic-check invariant policy:
+ * Internal compiler invariants must not be softened with "fallback" behavior.
+ * These assertions intentionally abort in all builds so violations are fixed
+ * instead of being hidden behind downgraded diagnostics.
+ */
+#define KGPC_SEMCHECK_HARD_ASSERT(cond, fmt, ...)                                 \
+    do                                                                             \
+    {                                                                              \
+        if (!(cond))                                                               \
+        {                                                                          \
+            fprintf(stderr,                                                        \
+                "FATAL: semcheck invariant failed at %s:%d: " fmt "\n",           \
+                __FILE__, __LINE__, ##__VA_ARGS__);                                \
+            abort();                                                               \
+        }                                                                          \
+    } while (0)
 
 /* The main function for checking a tree */
 /* Return values:

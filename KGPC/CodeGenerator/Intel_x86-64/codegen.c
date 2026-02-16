@@ -2267,6 +2267,11 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                     param_type = effective_type_node->type;
                 if (param_type == NULL && var_info != NULL)
                     param_type = var_info->type;
+                KGPC_COMPILER_HARD_ASSERT(param_type != NULL,
+                    "missing type metadata for local '%s' (declared type '%s')",
+                    (const char *)id_list->cur,
+                    tree->tree_data.var_decl_data.type_id != NULL ?
+                        tree->tree_data.var_decl_data.type_id : "<null>");
 
                 if (param_type != NULL && kgpc_type_is_array(param_type))
                 {
@@ -2306,7 +2311,9 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                                 element_size = (int)record_size;
                             }
                         }
-                        if (element_size <= 0) element_size = 1;
+                        KGPC_COMPILER_HARD_ASSERT(element_size > 0,
+                            "unable to resolve array element size for local '%s'",
+                            (const char *)id_list->cur);
                         array_start = param_type->info.array_info.start_index;
                         total_size = kgpc_type_sizeof(param_type);
                     }

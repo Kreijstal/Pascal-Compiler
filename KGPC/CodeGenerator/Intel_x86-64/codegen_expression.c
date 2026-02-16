@@ -43,6 +43,8 @@ static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
     return hashnode_get_record_type(node);
 }
 
+static long long codegen_sizeof_type_tag(int type_tag);
+
 static int codegen_expr_is_shortstring_array_local(const struct Expression *expr)
 {
     if (expr == NULL)
@@ -1722,12 +1724,21 @@ long long expr_get_array_element_size(const struct Expression *expr, CodeGenCont
     if (expr == NULL)
         return -1;
 
+    int expects_array_metadata = 0;
+    if (expr->is_array_expr || expr->type == EXPR_ARRAY_ACCESS ||
+        expr->type == EXPR_ARRAY_LITERAL || expr->array_element_type != UNKNOWN_TYPE ||
+        expr->array_element_type_id != NULL)
+    {
+        expects_array_metadata = 1;
+    }
+
     if (expr->array_element_type == ARRAY_OF_CONST_TYPE)
         return (long long)sizeof(kgpc_tvarrec);
     
     /* Prefer KgpcType if available */
     if (expr->resolved_kgpc_type != NULL && (kgpc_type_is_array(expr->resolved_kgpc_type) || kgpc_type_is_shortstring(expr->resolved_kgpc_type)))
     {
+        expects_array_metadata = 1;
         if (kgpc_type_is_shortstring(expr->resolved_kgpc_type))
             return 1;
         long long size = kgpc_type_get_array_element_size(expr->resolved_kgpc_type);
@@ -1744,8 +1755,64 @@ long long expr_get_array_element_size(const struct Expression *expr, CodeGenCont
             }
         }
     }
-    
-    /* Fall back to legacy field */
+
+    if (expr->array_element_type != UNKNOWN_TYPE)
+    {
+        long long tag_size = codegen_sizeof_type_tag(expr->array_element_type);
+        if (tag_size > 0)
+            return tag_size;
+    }
+
+    if (ctx != NULL && ctx->symtab != NULL && expr->array_element_type_id != NULL)
+    {
+        HashNode_t *type_node = NULL;
+        if (FindIdent(&type_node, ctx->symtab, expr->array_element_type_id) >= 0 &&
+            type_node != NULL && type_node->type != NULL)
+        {
+            long long node_size = kgpc_type_sizeof(type_node->type);
+            if (node_size > 0)
+                return node_size;
+        }
+    }
+
+    if (expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL &&
+        expr->expr_data.id != NULL)
+    {
+        HashNode_t *var_node = NULL;
+        if (FindIdent(&var_node, ctx->symtab, expr->expr_data.id) >= 0 &&
+            var_node != NULL && var_node->type != NULL &&
+            kgpc_type_is_array(var_node->type))
+        {
+            expects_array_metadata = 1;
+            KgpcType *elem_type = kgpc_type_get_array_element_type_resolved(var_node->type, ctx->symtab);
+            if (elem_type != NULL)
+            {
+                long long elem_size = kgpc_type_sizeof(elem_type);
+                if (elem_size > 0)
+                    return elem_size;
+            }
+        }
+    }
+
+    if (expr->type == EXPR_ARRAY_ACCESS)
+    {
+        const struct Expression *base = expr->expr_data.array_access_data.array_expr;
+        if (base != NULL)
+        {
+            long long base_elem_size = expr_get_array_element_size(base, ctx);
+            if (base_elem_size > 0)
+                return base_elem_size;
+        }
+    }
+
+    if (!expects_array_metadata)
+        return -1;
+
+    /* Hard invariant: metadata gaps must be fixed at source, not silently defaulted. */
+    KGPC_COMPILER_HARD_ASSERT(expr->array_element_size > 0,
+        "unable to determine array element size (expr_type=%d elem_tag=%d elem_type_id=%s)",
+        expr->type, expr->array_element_type,
+        expr->array_element_type_id != NULL ? expr->array_element_type_id : "<null>");
     return expr->array_element_size;
 }
 
@@ -1759,8 +1826,9 @@ static int expr_is_signed_kgpctype(const struct Expression *expr)
     if (type != NULL)
         return kgpc_type_is_signed(type);
     
-    /* Ultimate fallback for legacy compatibility */
-    return codegen_type_is_signed(expr_get_type_tag(expr));
+    KGPC_COMPILER_HARD_ASSERT(0,
+        "expr_is_signed_kgpctype called without resolved KgpcType metadata");
+    return 0;
 }
 
 /* Check if expression uses qword, working with KgpcType */
@@ -4161,9 +4229,8 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
                     /* Fallback for when dimension info is not available or exceeded */
                     long long element_size_ll = 1;
                     int element_size_ok = codegen_get_indexable_element_size(array_expr, ctx, &element_size_ll);
-#ifndef NDEBUG
-                    assert(element_size_ok && "codegen_get_indexable_element_size failed in fallback stride computation");
-#endif
+                    KGPC_COMPILER_HARD_ASSERT(element_size_ok,
+                        "codegen_get_indexable_element_size failed in stride computation");
                     stride = element_size_ll;
                     extra_lower_bound = 1; /* Default to 1-based */
                 }

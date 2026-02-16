@@ -4141,24 +4141,48 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
         return RECORD_TYPE;
     }
 
-    /* Distinct type: type Real = Double - creates a strong alias */
+    /* Distinct type: type Real = Double - creates a strong alias.
+     * The target may be a full type expression (e.g. "type ^TFoo"),
+     * not just an identifier, so recurse through convert_type_spec. */
     if (spec_node->typ == PASCAL_T_DISTINCT_TYPE) {
-        /* The child should be the target type identifier */
+        /* The child is the target type spec */
         ast_t *target = spec_node->child;
         if (target != NULL) {
             target = unwrap_pascal_node(target);
-            if (target != NULL && target->typ == PASCAL_T_IDENTIFIER) {
-                char *dup = dup_symbol(target);
-                int result = map_type_name(dup, type_id_out);
-                if (result == UNKNOWN_TYPE && type_id_out != NULL && *type_id_out == NULL) {
-                    *type_id_out = dup;
-                } else {
-                    free(dup);
+            if (target != NULL) {
+                TypeInfo nested_info = {0};
+                struct RecordType *nested_record = NULL;
+                char *nested_type_id = NULL;
+                int result = convert_type_spec(target, &nested_type_id, &nested_record, &nested_info);
+
+                if (type_info != NULL) {
+                    /* Preserve full structural metadata from the distinct target.
+                     * Distinct aliases remain strong aliases semantically, but they
+                     * must still carry pointer/array/etc. shape for semcheck/codegen. */
+                    destroy_type_info_contents(type_info);
+                    *type_info = nested_info;
+                    memset(&nested_info, 0, sizeof(nested_info));
                 }
+
+                if (record_out != NULL && nested_record != NULL) {
+                    *record_out = nested_record;
+                    nested_record = NULL;
+                }
+
+                if (type_id_out != NULL && *type_id_out == NULL && nested_type_id != NULL) {
+                    *type_id_out = nested_type_id;
+                    nested_type_id = NULL;
+                }
+
+                if (nested_type_id != NULL)
+                    free(nested_type_id);
+                if (nested_record != NULL)
+                    destroy_record_type(nested_record);
+                destroy_type_info_contents(&nested_info);
                 return result;
             }
         }
-        /* Fallback for distinct types with complex target */
+        /* Malformed distinct type target */
         return UNKNOWN_TYPE;
     }
 

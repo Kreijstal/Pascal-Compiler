@@ -641,6 +641,20 @@ int semcheck_pointer_deref(int *type_return,
         max_scope_lev, NO_MUTATE);
     pointer_type = semcheck_tag_from_kgpc(pointer_kgpc_type);
 
+    /* Some pointer aliases lose their tag mapping while still carrying pointer
+     * metadata. Recover pointer-ness from explicit pointer metadata so chained
+     * dereferences (e.g. ^^) keep working. */
+    if (pointer_type != POINTER_TYPE)
+    {
+        if ((pointer_expr->resolved_kgpc_type != NULL &&
+             pointer_expr->resolved_kgpc_type->kind == TYPE_KIND_POINTER) ||
+            pointer_expr->pointer_subtype != UNKNOWN_TYPE ||
+            pointer_expr->pointer_subtype_id != NULL)
+        {
+            pointer_type = POINTER_TYPE;
+        }
+    }
+
     if (pointer_type != POINTER_TYPE)
     {
         semcheck_error_with_context("Error on line %d, dereference operator requires a pointer expression.\\n\\n",
@@ -830,9 +844,23 @@ int semcheck_pointer_deref(int *type_return,
                 struct TypeAlias *alias = get_type_alias_from_node(type_node);
                 if (alias != NULL && alias->is_pointer)
                 {
-                    resolved_subtype = alias->pointer_type;
+                    if (alias->pointer_type != UNKNOWN_TYPE)
+                        resolved_subtype = alias->pointer_type;
                     if (alias->pointer_type_id != NULL)
+                    {
                         resolved_subtype_id = alias->pointer_type_id;
+                        if (resolved_subtype == UNKNOWN_TYPE)
+                        {
+                            struct RecordType *sub_record =
+                                semcheck_lookup_record_type(symtab, alias->pointer_type_id);
+                            if (sub_record != NULL)
+                            {
+                                resolved_subtype = RECORD_TYPE;
+                                if (expr->record_type == NULL)
+                                    expr->record_type = sub_record;
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -870,19 +898,13 @@ int semcheck_pointer_deref(int *type_return,
      * This is critical for code generation to emit correct-sized loads. */
     semcheck_expr_set_resolved_type(expr, target_type);
 
-    /* Propagate KgpcType from the pointer's target for downstream resolution */
-    if (target_type == RECORD_TYPE && pointer_expr->resolved_kgpc_type != NULL &&
+    /* Propagate KgpcType from the pointer's target for downstream resolution.
+     * This is required for chained dereferences and method dispatch on alias pointers. */
+    if (pointer_expr->resolved_kgpc_type != NULL &&
         pointer_expr->resolved_kgpc_type->kind == TYPE_KIND_POINTER)
     {
         KgpcType *points_to = pointer_expr->resolved_kgpc_type->info.points_to;
-        if (points_to != NULL && kgpc_type_is_record(points_to))
-        {
-            kgpc_type_retain(points_to);
-            semcheck_expr_set_resolved_kgpc_type_shared(expr, points_to);
-        }
-        /* Also propagate pointer KgpcType for double-pointer deref chains
-         * (e.g. pts^^.Method where pts: ^pThreadState) */
-        else if (points_to != NULL && points_to->kind == TYPE_KIND_POINTER)
+        if (points_to != NULL)
         {
             kgpc_type_retain(points_to);
             semcheck_expr_set_resolved_kgpc_type_shared(expr, points_to);

@@ -433,9 +433,9 @@ static char* MangleNameFromTypeList(const char* original_name, ListNode_t* type_
     // Normalize function name to lowercase for case-insensitive matching
     // (Pascal is case-insensitive, so Lowercase and LowerCase should produce the same mangled name)
     char* lower_name = str_tolower_dup(original_name);
-    if (lower_name == NULL) {
-        lower_name = strdup(original_name); // fallback
-    }
+    KGPC_SEMCHECK_HARD_ASSERT(lower_name != NULL,
+        "failed to normalize identifier '%s' for mangling",
+        original_name);
     
     if (type_list == NULL) {
         // No args, append _void

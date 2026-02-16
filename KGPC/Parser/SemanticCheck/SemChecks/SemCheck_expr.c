@@ -1191,7 +1191,14 @@ int semcheck_expr_main(SymTab_t *symtab, struct Expression *expr,
 
         case EXPR_RECORD_CONSTRUCTOR:
         {
-            if (expr->record_type == NULL)
+            struct RecordType *ctor_record = expr->record_type;
+            if (ctor_record == NULL && expr->resolved_kgpc_type != NULL &&
+                kgpc_type_is_record(expr->resolved_kgpc_type))
+            {
+                ctor_record = kgpc_type_get_record(expr->resolved_kgpc_type);
+            }
+
+            if (ctor_record == NULL)
             {
                 semcheck_error_with_context("Error on line %d, unable to infer record type for constructor.\n",
                     expr->line_num);
@@ -1201,7 +1208,7 @@ int semcheck_expr_main(SymTab_t *symtab, struct Expression *expr,
             if (!expr->expr_data.record_constructor_data.fields_semchecked)
             {
                 int rc_err = semcheck_typecheck_record_constructor(expr, symtab, max_scope_lev,
-                    expr->record_type, expr->line_num);
+                    ctor_record, expr->line_num);
                 if (rc_err != 0)
                 {
                     *type_return = UNKNOWN_TYPE;
@@ -1209,8 +1216,11 @@ int semcheck_expr_main(SymTab_t *symtab, struct Expression *expr,
                 }
             }
             *type_return = RECORD_TYPE;
-            if (expr->resolved_kgpc_type == NULL && expr->record_type != NULL)
-                semcheck_expr_set_resolved_type(expr, RECORD_TYPE);
+            if (expr->resolved_kgpc_type == NULL)
+            {
+                KgpcType *record_type = create_record_type(ctor_record);
+                semcheck_expr_set_resolved_kgpc_type_shared(expr, record_type);
+            }
             break;
         }
 
