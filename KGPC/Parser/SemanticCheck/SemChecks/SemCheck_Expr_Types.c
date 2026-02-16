@@ -880,6 +880,13 @@ int semcheck_pointer_deref(int *type_return,
             kgpc_type_retain(points_to);
             semcheck_expr_set_resolved_kgpc_type_shared(expr, points_to);
         }
+        /* Also propagate pointer KgpcType for double-pointer deref chains
+         * (e.g. pts^^.Method where pts: ^pThreadState) */
+        else if (points_to != NULL && points_to->kind == TYPE_KIND_POINTER)
+        {
+            kgpc_type_retain(points_to);
+            semcheck_expr_set_resolved_kgpc_type_shared(expr, points_to);
+        }
     }
 
     *type_return = target_type;
