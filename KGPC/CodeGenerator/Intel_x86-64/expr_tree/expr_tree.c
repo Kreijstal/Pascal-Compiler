@@ -3433,12 +3433,14 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                     /* Check if int_reg is an immediate value */
                     if (int_reg[0] == '$')
                     {
-                        /* It's an immediate - compute the scaled value directly */
+                        /* It's an immediate - compute the scaled value directly.
+                         * Use a scratch register that doesn't conflict with ptr_reg. */
                         long long int_val = strtoll(int_reg + 1, NULL, 0);
                         long long scaled_val = int_val * element_size;
-                        snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %%r11\n", scaled_val);
+                        const char *scratch = (ptr_reg != NULL && strcmp(ptr_reg, "%r11") == 0) ? "%r10" : "%r11";
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n", scaled_val, scratch);
                         inst_list = add_inst(inst_list, buffer);
-                        int_reg = "%r11";
+                        int_reg = scratch;
                     }
                     else
                     {
