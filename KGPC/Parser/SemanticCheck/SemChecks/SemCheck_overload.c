@@ -855,6 +855,10 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
 
     if (formal_tag == UNKNOWN_TYPE || formal_tag == BUILTIN_ANY_TYPE)
         return semcheck_make_quality(MATCH_EXACT);
+    /* Variant parameters accept any type, but should never be preferred
+     * over a specific type match in overload resolution. */
+    if (formal_tag == VARIANT_TYPE || actual_tag == VARIANT_TYPE)
+        return semcheck_make_quality(MATCH_CONVERSION);
     /* For pointer types, don't return early - need to compare subtypes */
     if (actual_tag == formal_tag && formal_tag != POINTER_TYPE)
         return semcheck_make_quality(MATCH_EXACT);
