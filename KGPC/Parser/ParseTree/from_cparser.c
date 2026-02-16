@@ -9967,6 +9967,37 @@ record_ctor_cleanup:
                 if (base_name != NULL) free(base_name);
                 if (field_name != NULL) free(field_name);
             }
+            /* Handle generic specialization typecasts like specialize TArray<T>(Result).
+             * Extract the base type name and mangle with type args. */
+            if (target_type == UNKNOWN_TYPE && target_type_id == NULL &&
+                unwrapped_type->typ == PASCAL_T_CONSTRUCTED_TYPE)
+            {
+                char *gen_base = NULL;
+                ListNode_t *gen_args = NULL;
+                if (extract_constructed_type_info(unwrapped_type, &gen_base, &gen_args))
+                {
+                    target_type_id = mangle_specialized_name_from_list(gen_base, gen_args);
+                    free(gen_base);
+                    if (gen_args != NULL) destroy_list(gen_args);
+                }
+                else
+                {
+                    /* Fallback: use base name with $ marker so semcheck knows
+                     * this is an unresolved generic and doesn't error */
+                    ast_t *base_child = unwrapped_type->child;
+                    if (base_child != NULL)
+                        base_child = unwrap_pascal_node(base_child);
+                    char *base = dup_symbol(base_child);
+                    if (base != NULL)
+                    {
+                        size_t len = strlen(base) + 3; /* base + "$T" + NUL */
+                        target_type_id = (char *)malloc(len);
+                        if (target_type_id != NULL)
+                            snprintf(target_type_id, len, "%s$T", base);
+                        free(base);
+                    }
+                }
+            }
         }
 
         ListNode_t *args = NULL;

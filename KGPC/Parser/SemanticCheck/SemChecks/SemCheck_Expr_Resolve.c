@@ -126,6 +126,12 @@ int resolve_type_identifier(int *out_type, SymTab_t *symtab,
     HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, type_id);
     if (type_node == NULL)
     {
+        /* Unresolved generic type (e.g., TArray$T) — treat as identity cast */
+        if (strchr(type_id, '$') != NULL)
+        {
+            *out_type = POINTER_TYPE;
+            return 0;
+        }
         semcheck_error_with_context("Error on line %d, typecast references unknown type %s!\n\n",
             line_num, type_id);
         return 1;

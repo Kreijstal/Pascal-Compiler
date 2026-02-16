@@ -909,6 +909,15 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
             /* Check if record types match */
             if (kgpc_type_equals(lhs_type->info.points_to, rhs_type))
                 return 1;
+            /* Name-based comparison for non-class records (var parameter dereference) */
+            if (lhs_type->info.points_to->info.record_info != NULL &&
+                rhs_type->info.record_info != NULL)
+            {
+                const char *lhs_id = lhs_type->info.points_to->info.record_info->type_id;
+                const char *rhs_id = rhs_type->info.record_info->type_id;
+                if (lhs_id != NULL && rhs_id != NULL && strcasecmp(lhs_id, rhs_id) == 0)
+                    return 1;
+            }
             /* If pointed-to record is a class and rhs is a class, check class hierarchy */
             if (lhs_type->info.points_to->info.record_info != NULL &&
                 rhs_type->info.record_info != NULL &&
@@ -916,6 +925,9 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
                 record_type_is_class(rhs_type->info.record_info))
                 return 1;
         }
+        /* Allow plain record to untyped pointer (points_to == NULL) for var param */
+        if (lhs_type->info.points_to == NULL)
+            return 1;
         /* Allow class instance to typed/untyped Pointer */
         if (rhs_type->info.record_info != NULL && record_type_is_class(rhs_type->info.record_info))
             return 1;
