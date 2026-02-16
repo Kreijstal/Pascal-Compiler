@@ -4190,9 +4190,9 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
 
                 struct RecordField *field_desc = NULL;
                 long long field_offset = 0;
-                if (resolve_record_field(symtab, recv_record, field_lookup, &field_desc,
-                                         &field_offset, stmt->line_num, 1) == 0 &&
-                    field_desc != NULL)
+                int field_found = resolve_record_field(symtab, recv_record, field_lookup, &field_desc,
+                                         &field_offset, stmt->line_num, 1);
+                if (field_found == 0 && field_desc != NULL)
                 {
                     int is_proc_field = (field_desc->type == PROCEDURE);
                     KgpcType *proc_type = NULL;
@@ -4206,6 +4206,21 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                             proc_type = type_node->type;
                             kgpc_type_retain(proc_type);
                             is_proc_field = 1;
+                        }
+                        /* If not found directly, try with class prefix (for nested types) */
+                        if (!is_proc_field && recv_record != NULL && recv_record->type_id != NULL)
+                        {
+                            char qualified[512];
+                            snprintf(qualified, sizeof(qualified), "%s.%s", recv_record->type_id, field_desc->type_id);
+                            type_node = NULL;
+                            if (FindIdent(&type_node, symtab, qualified) == 0 &&
+                                type_node != NULL && type_node->type != NULL &&
+                                type_node->type->kind == TYPE_KIND_PROCEDURE)
+                            {
+                                proc_type = type_node->type;
+                                kgpc_type_retain(proc_type);
+                                is_proc_field = 1;
+                            }
                         }
                     }
                     else if (field_desc->proc_type != NULL &&
@@ -4305,14 +4320,6 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
         }
     }
 
-    /* Check if this is a method call that needs type-based resolution.
-     * Method calls have the pattern: ClassName__MethodName(object, ...)
-     * We need to verify the ClassName matches the object's actual type.
-     * If not, we need to correct it based on the object's type.
-     *
-     * Skip this correction if mangled_id is already set (e.g., for inherited calls
-     * where we explicitly want to call the parent class method).
-     */
     
     /* Check for method call with unresolved name (member-access placeholder) where first arg is the instance. */
     if (stmt->stmt_data.procedure_call_data.is_method_call_placeholder && args_given != NULL) {
@@ -5172,6 +5179,7 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
 
             return return_val + semcheck_call_with_proc_var(symtab, stmt, proc_var, max_scope_lev);
         }
+
 
         /* Build detailed error message with argument types and available overloads */
         {
