@@ -1203,6 +1203,28 @@ static int semcheck_compare_match_quality(int arg_count,
     return 0;
 }
 
+/* Count untyped var params in a candidate's parameter list */
+static int semcheck_count_untyped_params(HashNode_t *candidate)
+{
+    if (candidate == NULL || candidate->type == NULL)
+        return 0;
+    int count = 0;
+    ListNode_t *params = kgpc_type_get_procedure_params(candidate->type);
+    while (params != NULL)
+    {
+        Tree_t *decl = (Tree_t *)params->cur;
+        if (decl != NULL && decl->type == TREE_VAR_DECL)
+        {
+            struct Var *var_info = &decl->tree_data.var_decl_data;
+            if (var_info->type == UNKNOWN_TYPE && var_info->type_id == NULL &&
+                var_info->inline_record_type == NULL)
+                count++;
+        }
+        params = params->next;
+    }
+    return count;
+}
+
 
 int semcheck_resolve_overload(HashNode_t **best_match_out,
     int *best_rank_out,
@@ -1947,9 +1969,29 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                     best_missing = missing_args;
                     continue;
                 }
-                /* True ambiguity: neither is strictly better */
-                num_best++;
-                free(qualities);
+                /* True ambiguity: neither is strictly better.
+                 * As a tiebreaker, prefer candidates with typed parameters
+                 * over those with untyped var params (e.g., FpRead(buf: PAnsiChar)
+                 * is preferred over FpRead(var buf) when both match equally). */
+                int cand_untyped = semcheck_count_untyped_params(candidate);
+                int best_untyped = semcheck_count_untyped_params(best_match);
+                if (cand_untyped < best_untyped)
+                {
+                    free(best_qualities);
+                    best_match = candidate;
+                    best_qualities = qualities;
+                    best_missing = missing_args;
+                    num_best = 1;
+                }
+                else if (best_untyped < cand_untyped)
+                {
+                    free(qualities);
+                }
+                else
+                {
+                    num_best++;
+                    free(qualities);
+                }
             }
         }
     }
