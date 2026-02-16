@@ -303,7 +303,9 @@ int semcheck_arrayaccess(int *type_return,
             else if (kgpc_type_is_pointer(points_to))
             {
                 element_type = POINTER_TYPE;
-                /* Propagate pointer subtype info for chained access */
+                /* Propagate pointer subtype info so subsequent dereferences
+                 * or indexing can resolve the correct element type
+                 * (e.g. for PPAnsiChar^[i], the sub_tag is CHAR_TYPE) */
                 if (points_to->info.points_to != NULL)
                 {
                     int sub_tag = kgpc_type_get_primitive_tag(points_to->info.points_to);
