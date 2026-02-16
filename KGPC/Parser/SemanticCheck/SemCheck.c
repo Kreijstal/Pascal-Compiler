@@ -2159,6 +2159,13 @@ const char *semcheck_get_current_subprogram_id(void)
     return g_semcheck_current_subprogram->tree_data.subprogram_data.id;
 }
 
+const char *semcheck_get_current_subprogram_result_var_name(void)
+{
+    if (g_semcheck_current_subprogram == NULL)
+        return NULL;
+    return g_semcheck_current_subprogram->tree_data.subprogram_data.result_var_name;
+}
+
 KgpcType *semcheck_get_current_subprogram_return_kgpc_type(SymTab_t *symtab, int *owns_type)
 {
     if (owns_type != NULL)

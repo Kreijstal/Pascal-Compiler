@@ -127,9 +127,20 @@ int semcheck_relop(int *type_return,
                 if (!is_integer_type(type_first) && type_first != ENUM_TYPE &&
                     type_first != CHAR_TYPE && type_first != BOOL)
                 {
-                    semcheck_error_with_context("Error on line %d, expected integer operand on left side of IN expression!\n\n",
-                        expr->line_num);
-                    ++return_val;
+                    /* Fallback: check KgpcType for char/integer (e.g. PPAnsiChar^[i] indexing) */
+                    int in_ok = 0;
+                    if (expr1 != NULL && expr1->resolved_kgpc_type != NULL)
+                    {
+                        if (kgpc_type_is_char(expr1->resolved_kgpc_type) ||
+                            kgpc_type_is_integer(expr1->resolved_kgpc_type))
+                            in_ok = 1;
+                    }
+                    if (!in_ok)
+                    {
+                        semcheck_error_with_context("Error on line %d, expected integer operand on left side of IN expression!\n\n",
+                            expr->line_num);
+                        ++return_val;
+                    }
                 }
             }
             else if (relop_type == EQ || relop_type == NE)

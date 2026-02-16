@@ -763,8 +763,17 @@ int semcheck_builtin_strpas(int *type_return, SymTab_t *symtab,
     error_count += semcheck_expr_with_type(&arg_kgpc_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
 
     /* FPC accepts both PChar/PAnsiChar (string-like) pointers */
-    if (error_count == 0 &&
-        !(kgpc_type_is_string(arg_kgpc_type) || kgpc_type_is_pointer(arg_kgpc_type) || kgpc_type_is_char(arg_kgpc_type)))
+    int strpas_arg_ok = kgpc_type_is_string(arg_kgpc_type) ||
+        kgpc_type_is_pointer(arg_kgpc_type) || kgpc_type_is_char(arg_kgpc_type);
+    /* Fallback: check resolved_kgpc_type tag (e.g. argv[l] indexing returns pointer) */
+    if (!strpas_arg_ok && arg_expr != NULL && arg_expr->resolved_kgpc_type != NULL)
+    {
+        if (kgpc_type_equals_tag(arg_expr->resolved_kgpc_type, POINTER_TYPE) ||
+            kgpc_type_equals_tag(arg_expr->resolved_kgpc_type, CHAR_TYPE) ||
+            kgpc_type_equals_tag(arg_expr->resolved_kgpc_type, STRING_TYPE))
+            strpas_arg_ok = 1;
+    }
+    if (error_count == 0 && !strpas_arg_ok)
     {
         semcheck_error_with_context("Error on line %d, StrPas expects a PChar or PAnsiChar argument.\n",
             expr->line_num);

@@ -794,7 +794,52 @@ int semcheck_pointer_deref(int *type_return,
         target_type = LONGINT_TYPE;
 
     if (target_type == POINTER_TYPE)
-        semcheck_set_pointer_info(expr, POINTER_TYPE, pointer_expr->pointer_subtype_id);
+    {
+        /* For double-pointer dereference (e.g. PPAnsiChar^), resolve what the
+         * resulting pointer (PAnsiChar) points to, so that indexing with [i]
+         * can determine the correct element type (Char). */
+        int resolved_subtype = UNKNOWN_TYPE;
+        const char *resolved_subtype_id = pointer_expr->pointer_subtype_id;
+
+        /* Try to resolve from KgpcType chain first */
+        if (pointer_expr->resolved_kgpc_type != NULL &&
+            pointer_expr->resolved_kgpc_type->kind == TYPE_KIND_POINTER &&
+            pointer_expr->resolved_kgpc_type->info.points_to != NULL)
+        {
+            KgpcType *deref_type = pointer_expr->resolved_kgpc_type->info.points_to;
+            if (deref_type->kind == TYPE_KIND_POINTER && deref_type->info.points_to != NULL)
+            {
+                KgpcType *sub_points_to = deref_type->info.points_to;
+                resolved_subtype = semcheck_tag_from_kgpc(sub_points_to);
+                if (resolved_subtype == UNKNOWN_TYPE)
+                {
+                    long long sz = kgpc_type_sizeof(sub_points_to);
+                    if (sz == 1) resolved_subtype = CHAR_TYPE;
+                    else if (sz <= 4) resolved_subtype = INT_TYPE;
+                    else resolved_subtype = LONGINT_TYPE;
+                }
+            }
+        }
+
+        /* If KgpcType didn't help, try resolving from subtype_id */
+        if (resolved_subtype == UNKNOWN_TYPE && resolved_subtype_id != NULL)
+        {
+            HashNode_t *type_node = NULL;
+            if (FindIdent(&type_node, symtab, resolved_subtype_id) != -1 && type_node != NULL)
+            {
+                struct TypeAlias *alias = get_type_alias_from_node(type_node);
+                if (alias != NULL && alias->is_pointer)
+                {
+                    resolved_subtype = alias->pointer_type;
+                    if (alias->pointer_type_id != NULL)
+                        resolved_subtype_id = alias->pointer_type_id;
+                }
+            }
+        }
+
+        semcheck_set_pointer_info(expr, resolved_subtype != UNKNOWN_TYPE ? resolved_subtype : POINTER_TYPE,
+            resolved_subtype_id);
+    }
     else if (target_type == RECORD_TYPE)
     {
         /* Prefer record_type already set from KgpcType resolution above */

@@ -1065,6 +1065,13 @@ static int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, 
     int target_is_shortstring = semcheck_expr_is_shortstring(array_expr);
 
     int target_is_string = (target_type == STRING_TYPE);
+    /* Fallback: check KgpcType for string (e.g. function result vars with overloads) */
+    if (!target_is_string && !target_is_shortstring &&
+        array_expr != NULL && array_expr->resolved_kgpc_type != NULL &&
+        kgpc_type_is_string(array_expr->resolved_kgpc_type))
+    {
+        target_is_string = 1;
+    }
     if (target_is_string)
     {
         int target_is_dynarray = 0;
@@ -3144,17 +3151,25 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                  * current function's return type directly from the subprogram tree.
                  * This is critical for case-insensitive overloads where FpFStat and
                  * FPFStat both exist — FindIdent may resolve to the wrong overload's
-                 * return type entry in the symbol table. */
+                 * return type entry in the symbol table.
+                 * Also check operator result variable name (e.g., "dest" in
+                 * operator :=(src) dest: variant). */
+                const char *result_var = semcheck_get_current_subprogram_result_var_name();
                 int is_result_assign = pascal_identifier_equals(var->expr_data.id, "Result") ||
-                                       pascal_identifier_equals(var->expr_data.id, cur_id);
+                                       pascal_identifier_equals(var->expr_data.id, cur_id) ||
+                                       (result_var != NULL && pascal_identifier_equals(var->expr_data.id, result_var));
                 if (is_result_assign)
                 {
                     int ret_owned = 0;
                     KgpcType *ret_type = semcheck_get_current_subprogram_return_kgpc_type(symtab, &ret_owned);
                     if (ret_type != NULL &&
-                        !(ret_type->kind == TYPE_KIND_PRIMITIVE && ret_type->info.primitive_type_tag < 0) &&
-                        !are_types_compatible_for_assignment(lhs_kgpctype, ret_type, symtab))
+                        !(ret_type->kind == TYPE_KIND_PRIMITIVE && ret_type->info.primitive_type_tag < 0))
                     {
+                        /* Always use the function's declared return type for result
+                         * variable assignments, even if the current LHS type seems
+                         * compatible. This handles cases where FindIdent found a
+                         * different overload's return type entry (e.g., Variant vs
+                         * String for operator overloads with named result vars). */
                         if (lhs_owned && lhs_kgpctype != NULL)
                             destroy_kgpc_type(lhs_kgpctype);
                         lhs_kgpctype = ret_type;

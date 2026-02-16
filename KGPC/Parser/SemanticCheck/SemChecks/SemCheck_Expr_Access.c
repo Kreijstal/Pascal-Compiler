@@ -290,6 +290,33 @@ int semcheck_arrayaccess(int *type_return,
         
         if (element_type == UNKNOWN_TYPE && array_expr->record_type != NULL)
             element_type = RECORD_TYPE;
+
+        /* Fallback: resolve element type from KgpcType (e.g. PPAnsiChar^[i]) */
+        if (element_type == UNKNOWN_TYPE && base_kgpc_type != NULL &&
+            kgpc_type_is_pointer(base_kgpc_type) && base_kgpc_type->info.points_to != NULL)
+        {
+            KgpcType *points_to = base_kgpc_type->info.points_to;
+            if (kgpc_type_is_char(points_to))
+                element_type = CHAR_TYPE;
+            else if (kgpc_type_is_integer(points_to))
+                element_type = kgpc_type_get_primitive_tag(points_to);
+            else if (kgpc_type_is_pointer(points_to))
+            {
+                element_type = POINTER_TYPE;
+                /* Propagate pointer subtype info for chained access */
+                if (points_to->info.points_to != NULL)
+                {
+                    int sub_tag = kgpc_type_get_primitive_tag(points_to->info.points_to);
+                    if (sub_tag != UNKNOWN_TYPE)
+                        expr->pointer_subtype = sub_tag;
+                }
+            }
+            else if (kgpc_type_is_record(points_to))
+            {
+                element_type = RECORD_TYPE;
+                expr->record_type = kgpc_type_get_record(points_to);
+            }
+        }
         
         /* Copy pointer target type info to result */
         if (element_type == POINTER_TYPE && array_expr->pointer_subtype_id != NULL)
