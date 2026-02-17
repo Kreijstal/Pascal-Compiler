@@ -1028,6 +1028,44 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
                 }
             }
 
+            /* String constants need to be emitted to rodata so their address can be taken */
+            if (ctx->symtab != NULL)
+            {
+                HashNode_t *str_const_node = NULL;
+                int str_found = FindIdent(&str_const_node, ctx->symtab, expr->expr_data.id);
+                if (str_found >= 0 && str_const_node != NULL &&
+                    str_const_node->hash_type == HASHTYPE_CONST &&
+                    str_const_node->const_string_value != NULL &&
+                    !(str_const_node->type != NULL && str_const_node->type->kind == TYPE_KIND_PROCEDURE))
+                {
+                    Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                    if (addr_reg == NULL)
+                        addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+                    if (addr_reg == NULL)
+                    {
+                        inst_list = codegen_fail_register(ctx, inst_list, out_reg,
+                            "ERROR: Unable to allocate register for string constant address.");
+                        goto cleanup;
+                    }
+
+                    char label[20];
+                    snprintf(label, 20, ".LC%d", ctx->write_label_counter++);
+                    char add_rodata[1024];
+                    const char *readonly_section = codegen_readonly_section_directive();
+                    /* Simple assembly-safe emit — control chars are rare in constants */
+                    snprintf(add_rodata, 1024, "%s\n%s:\n\t.string \"%s\"\n\t.text\n",
+                        readonly_section, label, str_const_node->const_string_value);
+                    inst_list = add_inst(inst_list, add_rodata);
+
+                    char buffer[96];
+                    snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                        label, addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    *out_reg = addr_reg;
+                    goto cleanup;
+                }
+            }
+
             if (nonlocal_flag() == 1)
             {
                 int offset = 0;

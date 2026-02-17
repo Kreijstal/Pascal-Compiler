@@ -3036,42 +3036,39 @@ ListNode_t *codegen_addressof_leaf(struct Expression *expr, ListNode_t *inst_lis
         }
         else
         {
+            /* Check for string constants before falling through to nonlocal */
+            if (ctx != NULL && ctx->symtab != NULL)
+            {
+                HashNode_t *node = NULL;
+                if (FindIdent(&node, ctx->symtab, inner->expr_data.id) >= 0 &&
+                    node != NULL && node->hash_type == HASHTYPE_CONST &&
+                    node->const_string_value != NULL &&
+                    !(node->type != NULL && node->type->kind == TYPE_KIND_PROCEDURE))
+                {
+                    int label_id = ctx->write_label_counter++;
+                    char str_label[32];
+                    char ptr_label[40];
+                    snprintf(str_label, sizeof(str_label), ".LC%d", label_id);
+                    snprintf(ptr_label, sizeof(ptr_label), ".LC%d_ptr", label_id);
+                    char rodata_buf[1024];
+                    const char *readonly_section = codegen_readonly_section_directive();
+                    char escaped[512];
+                    escape_string(escaped, node->const_string_value, sizeof(escaped));
+                    snprintf(rodata_buf, sizeof(rodata_buf),
+                        "%s\n%s:\n\t.string \"%s\"\n%s:\n\t.quad\t%s\n\t.text\n",
+                        readonly_section, str_label, escaped, ptr_label, str_label);
+                    inst_list = add_inst(inst_list, rodata_buf);
+                    snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                        ptr_label, target_reg->bit_64);
+                    return add_inst(inst_list, buffer);
+                }
+            }
+
             int offset = 0;
             inst_list = codegen_get_nonlocal(inst_list, inner->expr_data.id, &offset);
             snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%s), %s\n", offset, current_non_local_reg64(), target_reg->bit_64);
             return add_inst(inst_list, buffer);
         }
-
-        if (ctx != NULL && ctx->symtab != NULL)
-        {
-            HashNode_t *node = NULL;
-            if (FindIdent(&node, ctx->symtab, inner->expr_data.id) >= 0 &&
-                node != NULL && node->hash_type == HASHTYPE_CONST &&
-                node->const_string_value != NULL &&
-                !(node->type != NULL && node->type->kind == TYPE_KIND_PROCEDURE))
-            {
-                int label_id = ctx->write_label_counter++;
-                char str_label[32];
-                char ptr_label[40];
-                snprintf(str_label, sizeof(str_label), ".LC%d", label_id);
-                snprintf(ptr_label, sizeof(ptr_label), ".LC%d_ptr", label_id);
-                char rodata_buf[1024];
-                const char *readonly_section = codegen_readonly_section_directive();
-                char escaped[512];
-                escape_string(escaped, node->const_string_value, sizeof(escaped));
-                snprintf(rodata_buf, sizeof(rodata_buf),
-                    "%s\n%s:\n\t.string \"%s\"\n%s:\n\t.quad\t%s\n\t.text\n",
-                    readonly_section, str_label, escaped, ptr_label, str_label);
-                inst_list = add_inst(inst_list, rodata_buf);
-                snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
-                    ptr_label, target_reg->bit_64);
-                return add_inst(inst_list, buffer);
-            }
-        }
-
-        codegen_report_error(ctx,
-            "ERROR: Address-of variable resolution failed.");
-        return inst_list;
     }
     else if (inner->type == EXPR_ARRAY_ACCESS)
     {
