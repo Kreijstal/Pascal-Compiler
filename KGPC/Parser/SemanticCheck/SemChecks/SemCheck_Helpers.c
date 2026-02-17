@@ -102,6 +102,43 @@ void semcheck_set_array_info_from_kgpctype(struct Expression *expr, SymTab_t *sy
  * Record Type Lookup
  *===========================================================================*/
 
+static HashNode_t *semcheck_pick_type_node_with_unit_preference(SymTab_t *symtab,
+    const char *type_id, int prefer_unit_defined)
+{
+    if (symtab == NULL || type_id == NULL)
+        return NULL;
+
+    ListNode_t *matches = FindAllIdents(symtab, type_id);
+    HashNode_t *best = NULL;
+    ListNode_t *cur = matches;
+    while (cur != NULL)
+    {
+        HashNode_t *node = (HashNode_t *)cur->cur;
+        if (node != NULL && node->hash_type == HASHTYPE_TYPE)
+        {
+            if (best == NULL)
+            {
+                best = node;
+            }
+            else if (prefer_unit_defined)
+            {
+                if (!best->defined_in_unit && node->defined_in_unit)
+                    best = node;
+            }
+            else
+            {
+                if (best->defined_in_unit && !node->defined_in_unit)
+                    best = node;
+            }
+        }
+        cur = cur->next;
+    }
+
+    if (matches != NULL)
+        DestroyList(matches);
+    return best;
+}
+
 struct RecordType *semcheck_lookup_record_type(SymTab_t *symtab, const char *type_id)
 {
     if (symtab == NULL || type_id == NULL)
@@ -118,12 +155,12 @@ struct RecordType *semcheck_lookup_record_type(SymTab_t *symtab, const char *typ
     struct TypeAlias *alias = get_type_alias_from_node(type_node);
     if (alias != NULL && alias->target_type_id != NULL)
     {
-        HashNode_t *target_node = NULL;
-        if (FindIdent(&target_node, symtab, alias->target_type_id) != -1 &&
-            target_node != NULL)
-        {
+        HashNode_t *target_node = semcheck_pick_type_node_with_unit_preference(symtab,
+            alias->target_type_id, type_node->defined_in_unit);
+        if (target_node == NULL)
+            target_node = semcheck_find_preferred_type_node(symtab, alias->target_type_id);
+        if (target_node != NULL)
             return get_record_type_from_node(target_node);
-        }
     }
 
     return NULL;

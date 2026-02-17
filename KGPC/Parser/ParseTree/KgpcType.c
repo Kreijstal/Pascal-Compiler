@@ -1266,6 +1266,43 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
                         return 0;  /* Incompatible class for "class of T" */
                     }
                 }
+
+                /* Symmetric case: LHS is ^record and RHS is ^(^record).
+                 * This appears in low-level RTTI/VMT code paths where class
+                 * references are represented with one extra indirection. */
+                if (lhs_inner != NULL && lhs_inner->kind == TYPE_KIND_RECORD &&
+                    rhs_inner != NULL && rhs_inner->kind == TYPE_KIND_POINTER)
+                {
+                    KgpcType *rhs_record_ptr = rhs_inner->info.points_to;
+                    if (rhs_record_ptr != NULL && rhs_record_ptr->kind == TYPE_KIND_RECORD)
+                    {
+                        if (lhs_inner->info.record_info == rhs_record_ptr->info.record_info)
+                            return 1;
+                        if (is_record_subclass(rhs_record_ptr->info.record_info,
+                                lhs_inner->info.record_info, symtab))
+                            return 1;
+                        if (is_record_subclass(lhs_inner->info.record_info,
+                                rhs_record_ptr->info.record_info, symtab))
+                            return 1;
+                        return 0;
+                    }
+                }
+
+                /* Variant of the above where LHS still uses primitive(RECORD_TYPE)
+                 * placeholder instead of fully-resolved TYPE_KIND_RECORD. */
+                if (lhs_inner != NULL && lhs_inner->kind == TYPE_KIND_PRIMITIVE &&
+                    lhs_inner->info.primitive_type_tag == RECORD_TYPE &&
+                    rhs_inner != NULL && rhs_inner->kind == TYPE_KIND_POINTER)
+                {
+                    KgpcType *rhs_record_ptr = rhs_inner->info.points_to;
+                    if (rhs_record_ptr != NULL &&
+                        ((rhs_record_ptr->kind == TYPE_KIND_RECORD) ||
+                         (rhs_record_ptr->kind == TYPE_KIND_PRIMITIVE &&
+                          rhs_record_ptr->info.primitive_type_tag == RECORD_TYPE)))
+                    {
+                        return 1;
+                    }
+                }
                 
                 /* Check if both are ^(^record) - class reference to class reference */
                 if (lhs_inner != NULL && lhs_inner->kind == TYPE_KIND_POINTER &&

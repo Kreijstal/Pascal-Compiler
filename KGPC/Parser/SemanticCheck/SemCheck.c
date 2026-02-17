@@ -223,6 +223,25 @@ static const char *semcheck_base_type_name(const char *id)
     return (dot != NULL && dot[1] != '\0') ? (dot + 1) : id;
 }
 
+static int semcheck_is_explicit_unit_qualified_type(const char *id)
+{
+    if (id == NULL)
+        return 0;
+
+    const char *dot = strchr(id, '.');
+    if (dot == NULL || dot == id)
+        return 0;
+
+    size_t prefix_len = (size_t)(dot - id);
+    if (prefix_len == 0 || prefix_len >= 128)
+        return 0;
+
+    char prefix[128];
+    memcpy(prefix, id, prefix_len);
+    prefix[prefix_len] = '\0';
+    return semcheck_is_unit_name(prefix);
+}
+
 static int semcheck_map_builtin_type_name_local(const char *id)
 {
     if (id == NULL)
@@ -1970,6 +1989,7 @@ HashNode_t *semcheck_find_preferred_type_node(SymTab_t *symtab, const char *type
     if (symtab == NULL || type_id == NULL)
         return NULL;
 
+    int prefer_unit_defined = semcheck_is_explicit_unit_qualified_type(type_id);
     ListNode_t *matches = FindAllIdents(symtab, type_id);
     if (matches == NULL && strchr(type_id, '$') != NULL)
     {
@@ -2143,6 +2163,11 @@ HashNode_t *semcheck_find_preferred_type_node(SymTab_t *symtab, const char *type
         {
             if (best == NULL)
                 best = node;
+            else if (prefer_unit_defined)
+            {
+                if (!best->defined_in_unit && node->defined_in_unit)
+                    best = node;
+            }
             else if (best->defined_in_unit && !node->defined_in_unit)
                 best = node;
         }
@@ -10532,7 +10557,9 @@ next_identifier:
                         }
 
                         KgpcType *expr_type = NULL;
-                        if (init_expr->type == EXPR_RECORD_CONSTRUCTOR && init_expr->record_type == NULL)
+                        if (init_expr->type == EXPR_RECORD_CONSTRUCTOR &&
+                            (init_expr->resolved_kgpc_type == NULL ||
+                             !kgpc_type_is_record(init_expr->resolved_kgpc_type)))
                         {
                             struct RecordType *record_type = NULL;
                             if (var_node->type != NULL && kgpc_type_is_record(var_node->type))
@@ -10547,9 +10574,59 @@ next_identifier:
                                 if (FindIdent(&type_node, symtab,
                                         tree->tree_data.var_decl_data.type_id) >= 0 &&
                                     type_node != NULL)
+                                {
                                     record_type = hashnode_get_record_type(type_node);
+                                    if (record_type == NULL && type_node->type != NULL)
+                                    {
+                                        if (kgpc_type_is_record(type_node->type))
+                                            record_type = kgpc_type_get_record(type_node->type);
+                                        else if (kgpc_type_is_pointer(type_node->type) &&
+                                            type_node->type->info.points_to != NULL &&
+                                            kgpc_type_is_record(type_node->type->info.points_to))
+                                            record_type = kgpc_type_get_record(type_node->type->info.points_to);
+                                        else if (type_node->type->type_alias != NULL &&
+                                            type_node->type->type_alias->target_type_id != NULL)
+                                        {
+                                            HashNode_t *target_node = NULL;
+                                            if (FindIdent(&target_node, symtab,
+                                                    type_node->type->type_alias->target_type_id) >= 0 &&
+                                                target_node != NULL)
+                                            {
+                                                record_type = hashnode_get_record_type(target_node);
+                                                if (record_type == NULL && target_node->type != NULL &&
+                                                    kgpc_type_is_record(target_node->type))
+                                                    record_type = kgpc_type_get_record(target_node->type);
+                                            }
+                                        }
+                                    }
+                                }
+                                if (record_type == NULL)
+                                {
+                                    HashNode_t *decl_type_node = NULL;
+                                    if (FindIdent(&decl_type_node, symtab,
+                                            tree->tree_data.var_decl_data.type_id) >= 0 &&
+                                        decl_type_node != NULL)
+                                    {
+                                        record_type = hashnode_get_record_type(decl_type_node);
+                                        if (record_type == NULL && decl_type_node->type != NULL &&
+                                            kgpc_type_is_record(decl_type_node->type))
+                                            record_type = kgpc_type_get_record(decl_type_node->type);
+                                    }
+                                }
                             }
-                            init_expr->record_type = record_type;
+                            if (record_type != NULL)
+                            {
+                                init_expr->record_type = record_type;
+                                KgpcType *record_kgpc = create_record_type(record_type);
+                                if (record_kgpc != NULL)
+                                {
+                                    if (init_expr->resolved_kgpc_type != NULL)
+                                        destroy_kgpc_type(init_expr->resolved_kgpc_type);
+                                    init_expr->resolved_kgpc_type = record_kgpc;
+                                    kgpc_type_retain(record_kgpc);
+                                    destroy_kgpc_type(record_kgpc);
+                                }
+                            }
                         }
                         if (init_expr->type == EXPR_ARRAY_LITERAL &&
                             init_expr->array_element_type == UNKNOWN_TYPE &&

@@ -568,8 +568,13 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
         if (arg_expr != NULL && arg_expr->type == EXPR_RECORD_CONSTRUCTOR)
         {
             resolved_type = HASHVAR_RECORD;
-            if (arg_expr->record_type != NULL && arg_expr->record_type->type_id != NULL)
-                record_type_id = arg_expr->record_type->type_id;
+            if (arg_expr->resolved_kgpc_type != NULL &&
+                kgpc_type_is_record(arg_expr->resolved_kgpc_type))
+            {
+                struct RecordType *record_type = kgpc_type_get_record(arg_expr->resolved_kgpc_type);
+                if (record_type != NULL && record_type->type_id != NULL)
+                    record_type_id = record_type->type_id;
+            }
         }
         else
         {

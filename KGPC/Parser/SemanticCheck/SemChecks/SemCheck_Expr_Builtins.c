@@ -1897,7 +1897,9 @@ int semcheck_builtin_default(int *type_return, SymTab_t *symtab,
             return error_count;
         }
         target_type = semcheck_tag_from_kgpc(resolved_kgpc_type);
-        record_type = arg_expr != NULL ? arg_expr->record_type : NULL;
+        if (arg_expr != NULL && arg_expr->resolved_kgpc_type != NULL &&
+            kgpc_type_is_record(arg_expr->resolved_kgpc_type))
+            record_type = kgpc_type_get_record(arg_expr->resolved_kgpc_type);
         if (arg_expr != NULL && arg_expr->resolved_kgpc_type != NULL)
         {
             target_kgpc_type = arg_expr->resolved_kgpc_type;
@@ -1944,7 +1946,6 @@ int semcheck_builtin_default(int *type_return, SymTab_t *symtab,
     {
         expr->is_default_initializer = 1;
         semcheck_expr_set_resolved_type(expr, target_type);
-        expr->record_type = record_type;
         if (expr->resolved_kgpc_type != NULL)
             destroy_kgpc_type(expr->resolved_kgpc_type);
         if (target_kgpc_type != NULL)

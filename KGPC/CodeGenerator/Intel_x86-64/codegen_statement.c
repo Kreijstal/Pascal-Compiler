@@ -2640,6 +2640,16 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                 {
                     /* Get the class type from the source expression or first argument */
                     struct RecordType *class_record = src_expr->record_type;
+                    if (class_record == NULL && src_expr->resolved_kgpc_type != NULL)
+                    {
+                        KgpcType *src_type = src_expr->resolved_kgpc_type;
+                        if (src_type->kind == TYPE_KIND_RECORD)
+                            class_record = src_type->info.record_info;
+                        else if (src_type->kind == TYPE_KIND_POINTER &&
+                                 src_type->info.points_to != NULL &&
+                                 src_type->info.points_to->kind == TYPE_KIND_RECORD)
+                            class_record = src_type->info.points_to->info.record_info;
+                    }
                     
                     if (class_record == NULL)
                     {
@@ -2648,7 +2658,35 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                         {
                             struct Expression *class_expr = (struct Expression *)first_arg->cur;
                             if (class_expr != NULL)
+                            {
                                 class_record = class_expr->record_type;
+                                if (class_record == NULL && class_expr->resolved_kgpc_type != NULL)
+                                {
+                                    KgpcType *arg_type = class_expr->resolved_kgpc_type;
+                                    if (arg_type->kind == TYPE_KIND_RECORD)
+                                        class_record = arg_type->info.record_info;
+                                    else if (arg_type->kind == TYPE_KIND_POINTER &&
+                                             arg_type->info.points_to != NULL &&
+                                             arg_type->info.points_to->kind == TYPE_KIND_RECORD)
+                                        class_record = arg_type->info.points_to->info.record_info;
+                                }
+                                if (class_record == NULL && class_expr->type == EXPR_VAR_ID &&
+                                    class_expr->expr_data.id != NULL && ctx != NULL && ctx->symtab != NULL)
+                                {
+                                    HashNode_t *class_node = NULL;
+                                    if (FindIdent(&class_node, ctx->symtab, class_expr->expr_data.id) >= 0 &&
+                                        class_node != NULL && class_node->hash_type == HASHTYPE_TYPE &&
+                                        class_node->type != NULL)
+                                    {
+                                        if (class_node->type->kind == TYPE_KIND_RECORD)
+                                            class_record = class_node->type->info.record_info;
+                                        else if (class_node->type->kind == TYPE_KIND_POINTER &&
+                                                 class_node->type->info.points_to != NULL &&
+                                                 class_node->type->info.points_to->kind == TYPE_KIND_RECORD)
+                                            class_record = class_node->type->info.points_to->info.record_info;
+                                    }
+                                }
+                            }
                         }
                     }
                     
@@ -5005,6 +5043,15 @@ static ListNode_t *codegen_builtin_incdec(struct Statement *stmt, ListNode_t *in
     if (target_expr != NULL && target_expr->type == EXPR_VAR_ID)
     {
         StackNode_t *var_node = find_label(target_expr->expr_data.id);
+        if (var_node == NULL && ctx != NULL && ctx->symtab != NULL)
+        {
+            HashNode_t *target_node = NULL;
+            if (FindIdent(&target_node, ctx->symtab, target_expr->expr_data.id) >= 0 &&
+                target_node != NULL && target_node->mangled_id != NULL)
+            {
+                var_node = find_label(target_node->mangled_id);
+            }
+        }
         char buffer[128];
         if (var_node != NULL)
         {
@@ -5041,7 +5088,7 @@ static ListNode_t *codegen_builtin_incdec(struct Statement *stmt, ListNode_t *in
             if (!var_node->is_reference)
                 inst_list = add_inst(inst_list, buffer);
         }
-        else if (nonlocal_flag() == 1)
+        else
         {
             int offset = 0;
             inst_list = codegen_get_nonlocal(inst_list, target_expr->expr_data.id, &offset);
@@ -5050,11 +5097,6 @@ static ListNode_t *codegen_builtin_incdec(struct Statement *stmt, ListNode_t *in
             else
                 snprintf(buffer, sizeof(buffer), "\taddl\t%s, -%d(%s)\n", increment_reg->bit_32, offset, current_non_local_reg64());
             inst_list = add_inst(inst_list, buffer);
-        }
-        else
-        {
-            codegen_report_error(ctx, "ERROR: Unable to locate variable %s for %s.",
-                target_expr->expr_data.id, is_increment ? "Inc" : "Dec");
         }
     }
     else if (target_expr != NULL && target_expr->type == EXPR_ARRAY_ACCESS)
@@ -6407,7 +6449,14 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
     if (assign_expr != NULL && assign_expr->type == EXPR_RECORD_CONSTRUCTOR)
         return codegen_assign_record_value(var_expr, assign_expr, inst_list, ctx);
 
-    if (expr_get_type_tag(var_expr) == RECORD_TYPE)
+    int lhs_is_record_value = 0;
+    KgpcType *lhs_kgpc_type = expr_get_kgpc_type(var_expr);
+    if (lhs_kgpc_type != NULL)
+        lhs_is_record_value = kgpc_type_is_record(lhs_kgpc_type);
+    else if (expr_get_type_tag(var_expr) == RECORD_TYPE && !var_expr->is_array_expr)
+        lhs_is_record_value = 1;
+
+    if (lhs_is_record_value)
         return codegen_assign_record_value(var_expr, assign_expr, inst_list, ctx);
 
     /* Character sets (set of char) need special handling like records due to 32-byte size */
@@ -6436,18 +6485,25 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         {
             HashNode_t *target_node = NULL;
             if (FindIdent(&target_node, ctx->symtab, var_expr->expr_data.id) != -1 &&
-                target_node != NULL &&
-                (target_node->hash_type == HASHTYPE_FUNCTION_RETURN ||
-                 target_node->hash_type == HASHTYPE_FUNCTION))
+                target_node != NULL)
             {
-                long long size_bytes = 0;
-                if (var_expr->resolved_kgpc_type != NULL)
-                    size_bytes = kgpc_type_sizeof(var_expr->resolved_kgpc_type);
-                if (size_bytes <= 0 || size_bytes > INT_MAX)
-                    size_bytes = CODEGEN_POINTER_SIZE_BYTES;
+                if (target_node->mangled_id != NULL)
+                {
+                    var = find_label_with_depth(target_node->mangled_id, &scope_depth);
+                }
+                if (var == NULL &&
+                    (target_node->hash_type == HASHTYPE_FUNCTION_RETURN ||
+                     target_node->hash_type == HASHTYPE_FUNCTION))
+                {
+                    long long size_bytes = 0;
+                    if (var_expr->resolved_kgpc_type != NULL)
+                        size_bytes = kgpc_type_sizeof(var_expr->resolved_kgpc_type);
+                    if (size_bytes <= 0 || size_bytes > INT_MAX)
+                        size_bytes = CODEGEN_POINTER_SIZE_BYTES;
 
-                var = add_l_x(var_expr->expr_data.id, (int)size_bytes);
-                scope_depth = 0;
+                    var = add_l_x(var_expr->expr_data.id, (int)size_bytes);
+                    scope_depth = 0;
+                }
             }
         }
 
@@ -6868,7 +6924,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                 codegen_end_expression(ctx);
             }
         }
-        else if(nonlocal_flag() == 1)
+        else
         {
 
             inst_list = codegen_get_nonlocal(inst_list, var_expr->expr_data.id, &offset);
@@ -6933,18 +6989,6 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             {
                 snprintf(buffer, 50, "\tmovl\t%s, -%d(%s)\n", reg->bit_32, offset, current_non_local_reg64());
             }
-        }
-        else
-        {
-            const char *var_name = (var_expr != NULL && var_expr->type == EXPR_VAR_ID) ?
-                var_expr->expr_data.id : "<unknown>";
-            char errbuf[256];
-            snprintf(errbuf, sizeof(errbuf),
-                "ERROR: Non-local codegen support disabled while accessing %s. Enable with flag '-non-local' after required flags",
-                var_name != NULL ? var_name : "<unknown>");
-            codegen_report_error(ctx, errbuf);
-            free_reg(get_reg_stack(), reg);
-            return inst_list;
         }
         #ifdef DEBUG_CODEGEN
         CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);

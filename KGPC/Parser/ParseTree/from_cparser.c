@@ -6127,14 +6127,20 @@ static struct RecordType *convert_record_type_ex(ast_t *record_node, ListNode_t 
         
         while (base_node != NULL) {
             ast_t *unwrapped = unwrap_pascal_node(base_node);
-            if (unwrapped != NULL &&
-                (unwrapped->typ == PASCAL_T_IDENTIFIER || unwrapped->typ == PASCAL_T_QUALIFIED_IDENTIFIER) &&
-                unwrapped->sym != NULL && unwrapped->sym->name != NULL)
+            ast_t *type_ident = unwrapped;
+            while (type_ident != NULL && type_ident->typ == PASCAL_T_TYPE_SPEC &&
+                type_ident->child != NULL)
+            {
+                type_ident = unwrap_pascal_node(type_ident->child);
+            }
+            if (type_ident != NULL &&
+                (type_ident->typ == PASCAL_T_IDENTIFIER || type_ident->typ == PASCAL_T_QUALIFIED_IDENTIFIER) &&
+                type_ident->sym != NULL && type_ident->sym->name != NULL)
             {
                 if (first_ident == NULL) {
-                    first_ident = unwrapped;
+                    first_ident = type_ident;
                 } else if (second_ident == NULL) {
-                    second_ident = unwrapped;
+                    second_ident = type_ident;
                 }
                 base_node = base_node->next;
                 continue;

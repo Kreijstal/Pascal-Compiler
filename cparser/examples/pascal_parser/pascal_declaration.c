@@ -1445,6 +1445,13 @@ void init_pascal_unit_parser(combinator_t** p) {
         NULL
     );
 
+    combinator_t* helper_base_type_ref = multi(new_combinator(), PASCAL_T_TYPE_SPEC,
+        type_name(PASCAL_T_IDENTIFIER),
+        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        NULL
+    );
+
     combinator_t* type_helper_type = map(seq(new_combinator(), PASCAL_T_RECORD_TYPE,
         helper_kind,
         token(keyword_ci("helper")),
@@ -1455,7 +1462,7 @@ void init_pascal_unit_parser(combinator_t** p) {
             NULL
         )),
         token(keyword_ci("for")),
-        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
+        helper_base_type_ref,
         helper_body,
         token(keyword_ci("end")),
         NULL
@@ -3146,6 +3153,13 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         token(keyword_ci("class")),
         NULL
     );
+    combinator_t* helper_base_type_ref_prog = multi(new_combinator(), PASCAL_T_TYPE_SPEC,
+        type_name(PASCAL_T_IDENTIFIER),
+        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        NULL
+    );
+
     combinator_t* type_helper_type = map(seq(new_combinator(), PASCAL_T_RECORD_TYPE,
         helper_kind,
         token(keyword_ci("helper")),
@@ -3156,19 +3170,18 @@ void init_pascal_complete_program_parser(combinator_t** p) {
             NULL
         )),
         token(keyword_ci("for")),
-        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
+        helper_base_type_ref_prog,
         helper_body,
         token(keyword_ci("end")),
         NULL
     ), mark_type_helper_record);
 
     combinator_t* type_spec = multi(new_combinator(), PASCAL_T_TYPE_SPEC,
-        /* Distinct types must be tried before type-helper parsing. Otherwise
-         * the helper parser can consume the leading 'type' and fail without
-         * allowing fallback on inputs like "= type ^TFoo". */
+        /* Prefer explicit helper syntax first so "type helper for X" is not
+         * consumed by the generic distinct-type parser. */
+        type_helper_type,                               // type helpers (e.g., type helper for Integer)
         distinct_type_spec_prog,                        // distinct types like "type Double" or "type ^TFoo"
         distinct_type_range_spec_prog,                  // distinct types from range like "type 0..$10ffff"
-        type_helper_type,                               // type helpers (e.g., type helper for Integer)
         reference_to_type(PASCAL_T_REFERENCE_TO_TYPE),  // reference to procedure/function
         interface_type(PASCAL_T_INTERFACE_TYPE),        // interface types like interface ... end
         class_of_type(PASCAL_T_CLASS_OF_TYPE),          // class reference types like "class of TObject" (must be before class_type)

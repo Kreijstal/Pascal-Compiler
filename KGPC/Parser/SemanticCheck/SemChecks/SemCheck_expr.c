@@ -79,7 +79,6 @@ struct Expression *clone_expression(const struct Expression *expr)
     clone->line_num = expr->line_num;
     clone->type = expr->type;
     clone->pointer_subtype = expr->pointer_subtype;
-    clone->record_type = expr->record_type;
     
     /* Clone resolved_kgpc_type if present - important for default parameter values
      * that have been transformed (e.g., scoped enum literals to integer constants) */
@@ -1191,7 +1190,9 @@ int semcheck_expr_main(SymTab_t *symtab, struct Expression *expr,
 
         case EXPR_RECORD_CONSTRUCTOR:
         {
-            struct RecordType *ctor_record = expr->record_type;
+            struct RecordType *ctor_record = NULL;
+            if (ctor_record == NULL && expr->record_type != NULL)
+                ctor_record = expr->record_type;
             if (ctor_record == NULL && expr->resolved_kgpc_type != NULL &&
                 kgpc_type_is_record(expr->resolved_kgpc_type))
             {

@@ -172,7 +172,6 @@ int semcheck_arrayaccess(int *type_return,
     semcheck_clear_pointer_info(expr);
     semcheck_clear_array_info(expr);
     semcheck_clear_array_linearization(expr);
-    expr->record_type = NULL;
 
     array_expr = expr->expr_data.array_access_data.array_expr;
     access_expr = expr->expr_data.array_access_data.index_expr;
@@ -236,7 +235,6 @@ int semcheck_arrayaccess(int *type_return,
                 field_access->type = EXPR_RECORD_ACCESS;
                 field_access->expr_data.record_access_data.record_expr = array_expr;
                 field_access->expr_data.record_access_data.field_id = strdup(rec->default_indexed_property);
-                field_access->record_type = rec;
 
                 /* We need to semcheck this new expression so its array info is populated */
                 int field_type = UNKNOWN_TYPE;
@@ -288,9 +286,6 @@ int semcheck_arrayaccess(int *type_return,
                 element_type = resolved_type;
         }
         
-        if (element_type == UNKNOWN_TYPE && array_expr->record_type != NULL)
-            element_type = RECORD_TYPE;
-
         /* Fallback: resolve element type from KgpcType (e.g. PPAnsiChar^[i]) */
         if (element_type == UNKNOWN_TYPE && base_kgpc_type != NULL &&
             kgpc_type_is_pointer(base_kgpc_type) && base_kgpc_type->info.points_to != NULL)
@@ -316,8 +311,23 @@ int semcheck_arrayaccess(int *type_return,
             else if (kgpc_type_is_record(points_to))
             {
                 element_type = RECORD_TYPE;
-                expr->record_type = kgpc_type_get_record(points_to);
+                expr->array_element_record_type = kgpc_type_get_record(points_to);
+                if (expr->array_element_record_type != NULL &&
+                    expr->array_element_record_type->type_id != NULL &&
+                    expr->array_element_type_id == NULL)
+                {
+                    expr->array_element_type_id = strdup(expr->array_element_record_type->type_id);
+                }
             }
+        }
+
+        if (element_type == RECORD_TYPE && expr->array_element_record_type == NULL &&
+            array_expr->pointer_subtype_id != NULL)
+        {
+            expr->array_element_record_type = semcheck_lookup_record_type(symtab,
+                array_expr->pointer_subtype_id);
+            if (expr->array_element_record_type != NULL && expr->array_element_type_id == NULL)
+                expr->array_element_type_id = strdup(array_expr->pointer_subtype_id);
         }
         
         /* Copy pointer target type info to result */
@@ -332,15 +342,8 @@ int semcheck_arrayaccess(int *type_return,
                     expr->pointer_subtype = alias->pointer_type;
                     if (alias->pointer_type_id != NULL)
                         expr->pointer_subtype_id = strdup(alias->pointer_type_id);
-                    if (alias->pointer_type == RECORD_TYPE && alias->pointer_type_id != NULL)
-                        expr->record_type = semcheck_lookup_record_type(symtab, alias->pointer_type_id);
                 }
             }
-        }
-        
-        if (element_type == RECORD_TYPE && array_expr->record_type != NULL)
-        {
-            expr->record_type = array_expr->record_type;
         }
     }
     else
@@ -358,7 +361,6 @@ int semcheck_arrayaccess(int *type_return,
         if (element_type == ARRAY_OF_CONST_TYPE)
         {
             element_type = RECORD_TYPE;
-            expr->record_type = semcheck_lookup_record_type(symtab, "TVarRec");
         }
 
         if (array_expr->array_element_type_id != NULL)
@@ -378,7 +380,6 @@ int semcheck_arrayaccess(int *type_return,
         {
             int pointer_subtype = UNKNOWN_TYPE;
             const char *pointer_subtype_id = NULL;
-            struct RecordType *pointer_record = NULL;
 
             if (array_expr->array_element_type_id != NULL)
             {
@@ -391,8 +392,6 @@ int semcheck_arrayaccess(int *type_return,
                     {
                         pointer_subtype = alias->pointer_type;
                         pointer_subtype_id = alias->pointer_type_id;
-                        if (alias->pointer_type == RECORD_TYPE && alias->pointer_type_id != NULL)
-                            pointer_record = semcheck_lookup_record_type(symtab, alias->pointer_type_id);
                     }
                 }
             }
@@ -424,16 +423,6 @@ int semcheck_arrayaccess(int *type_return,
             }
 
             semcheck_set_pointer_info(expr, pointer_subtype, pointer_subtype_id);
-            if (pointer_subtype == RECORD_TYPE)
-                expr->record_type = pointer_record;
-            else
-                expr->record_type = NULL;
-        }
-        else if (element_type == RECORD_TYPE)
-        {
-            expr->record_type = array_expr->array_element_record_type;
-            if (expr->record_type == NULL && array_expr->array_element_type_id != NULL)
-                expr->record_type = semcheck_lookup_record_type(symtab, array_expr->array_element_type_id);
         }
     }
 
@@ -507,7 +496,22 @@ int semcheck_arrayaccess(int *type_return,
 
     if (res_type == NULL)
     {
-        res_type = create_primitive_type(element_type);
+        if (element_type == RECORD_TYPE)
+        {
+            struct RecordType *fallback_record = NULL;
+            if (expr->array_element_record_type != NULL)
+                fallback_record = expr->array_element_record_type;
+            if (array_expr->array_element_record_type != NULL)
+                fallback_record = array_expr->array_element_record_type;
+            else if (array_expr->array_element_type_id != NULL)
+                fallback_record = semcheck_lookup_record_type(symtab, array_expr->array_element_type_id);
+            else if (array_expr->array_element_type == ARRAY_OF_CONST_TYPE)
+                fallback_record = semcheck_lookup_record_type(symtab, "TVarRec");
+            if (fallback_record != NULL)
+                res_type = create_record_type(fallback_record);
+        }
+        if (res_type == NULL)
+            res_type = create_primitive_type(element_type);
     }
 
     if (expr->resolved_kgpc_type != NULL)
@@ -648,8 +652,7 @@ int semcheck_funccall(int *type_return,
             else if (ret_type != NULL && ret_type->kind == TYPE_KIND_RECORD)
             {
                 *type_return = RECORD_TYPE;
-                semcheck_expr_set_resolved_type(expr, RECORD_TYPE);
-                expr->record_type = kgpc_type_get_record(ret_type);
+                semcheck_expr_set_resolved_kgpc_type_shared(expr, ret_type);
             }
             else if (ret_type != NULL && ret_type->kind == TYPE_KIND_POINTER)
             {
@@ -784,7 +787,6 @@ int semcheck_funccall(int *type_return,
             expr->expr_data.relop_data.type = NOT;
             expr->expr_data.relop_data.left = call_expr;
             expr->expr_data.relop_data.right = NULL;
-            expr->record_type = NULL;
             semcheck_expr_set_resolved_type(expr, UNKNOWN_TYPE);
             return semcheck_relop(type_return, symtab, expr, max_scope_lev, mutating);
         }
@@ -1324,14 +1326,14 @@ int semcheck_funccall(int *type_return,
         struct RecordType *recv_record = NULL;
         if (recv_type == RECORD_TYPE)
         {
-            recv_record = receiver_expr->record_type;
+            if (receiver_expr->resolved_kgpc_type != NULL &&
+                kgpc_type_is_record(receiver_expr->resolved_kgpc_type))
+                recv_record = kgpc_type_get_record(receiver_expr->resolved_kgpc_type);
         }
         else if (recv_type == POINTER_TYPE)
         {
-            if (receiver_expr->record_type != NULL)
-                recv_record = receiver_expr->record_type;
-            else if (receiver_expr->resolved_kgpc_type != NULL &&
-                     receiver_expr->resolved_kgpc_type->kind == TYPE_KIND_POINTER)
+            if (receiver_expr->resolved_kgpc_type != NULL &&
+                receiver_expr->resolved_kgpc_type->kind == TYPE_KIND_POINTER)
             {
                 KgpcType *pointee = receiver_expr->resolved_kgpc_type->info.points_to;
                 if (pointee != NULL && kgpc_type_is_record(pointee))
@@ -1416,7 +1418,6 @@ int semcheck_funccall(int *type_return,
                     proc_expr->expr_data.record_access_data.record_expr = receiver_expr;
                     proc_expr->expr_data.record_access_data.field_id = strdup(field_lookup);
                     proc_expr->expr_data.record_access_data.field_offset = (int)field_offset;
-                    proc_expr->record_type = recv_record;
                     semcheck_expr_set_resolved_type(proc_expr, PROCEDURE);
 
                     /* Validate arguments against the procedural type if available */
@@ -1516,8 +1517,10 @@ int semcheck_funccall(int *type_return,
                         else if (ret_type != NULL && ret_type->kind == TYPE_KIND_RECORD)
                         {
                             *type_return = RECORD_TYPE;
-                            semcheck_expr_set_resolved_type(expr, RECORD_TYPE);
-                            expr->record_type = kgpc_type_get_record(ret_type);
+                            if (expr->resolved_kgpc_type != NULL)
+                                destroy_kgpc_type(expr->resolved_kgpc_type);
+                            kgpc_type_retain(ret_type);
+                            expr->resolved_kgpc_type = ret_type;
                         }
                         else if (ret_type != NULL && ret_type->kind == TYPE_KIND_POINTER)
                         {
@@ -2326,11 +2329,7 @@ int semcheck_funccall(int *type_return,
              * 3. The KgpcType's own type_alias pointer_type_id */
             if (record_info == NULL && owner_type->kind == TYPE_KIND_POINTER)
             {
-                /* Strategy 1: expression's record_type */
-                if (first_arg->record_type != NULL)
-                    record_info = first_arg->record_type;
-
-                /* Strategy 2: variable's TypeAlias */
+                /* Strategy 1: variable's TypeAlias */
                 if (record_info == NULL && first_arg->type == EXPR_VAR_ID &&
                     first_arg->expr_data.id != NULL)
                 {
@@ -2349,7 +2348,7 @@ int semcheck_funccall(int *type_return,
                     }
                 }
 
-                /* Strategy 3: KgpcType's own type_alias */
+                /* Strategy 2: KgpcType's own type_alias */
                 if (record_info == NULL && owner_type->type_alias != NULL &&
                     owner_type->type_alias->pointer_type_id != NULL)
                 {
@@ -2357,7 +2356,7 @@ int semcheck_funccall(int *type_return,
                         owner_type->type_alias->pointer_type_id);
                 }
 
-                /* Strategy 4: expression's pointer_subtype_id */
+                /* Strategy 3: expression's pointer_subtype_id */
                 if (record_info == NULL && first_arg->pointer_subtype_id != NULL)
                 {
                     record_info = semcheck_lookup_record_type(symtab,
@@ -2399,11 +2398,14 @@ int semcheck_funccall(int *type_return,
                         record_info->type_id, method_name, is_static);
                 }
                 
-                    /* Look up the method */
-                    HashNode_t *method_node = semcheck_find_class_method(symtab, record_info, method_name, NULL);
+                    /* Look up the method and capture the actual owner when inherited. */
+                    struct RecordType *actual_method_owner = NULL;
+                    HashNode_t *method_node = semcheck_find_class_method(symtab, record_info,
+                        method_name, &actual_method_owner);
                     
                     /* If method not found on record directly, try record helper */
-                    struct RecordType *effective_record = record_info;
+                    struct RecordType *effective_record =
+                        (actual_method_owner != NULL) ? actual_method_owner : record_info;
                     if (method_node == NULL && !record_type_is_class(record_info) && 
                         record_info->type_id != NULL && !record_info->is_type_helper)
                     {
@@ -2411,10 +2413,13 @@ int semcheck_funccall(int *type_return,
                             UNKNOWN_TYPE, record_info->type_id);
                         if (helper_record != NULL)
                         {
-                            method_node = semcheck_find_class_method(symtab, helper_record, method_name, NULL);
+                            actual_method_owner = NULL;
+                            method_node = semcheck_find_class_method(symtab, helper_record,
+                                method_name, &actual_method_owner);
                             if (method_node != NULL)
                             {
-                                effective_record = helper_record;
+                                effective_record = (actual_method_owner != NULL) ?
+                                    actual_method_owner : helper_record;
                                 is_static = from_cparser_is_method_static(helper_record->type_id, method_name);
                                 if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                                     fprintf(stderr, "[SemCheck] semcheck_funccall: Found method %s via record helper %s\n",
@@ -2436,7 +2441,10 @@ int semcheck_funccall(int *type_return,
                         expr->expr_data.function_call_data.mangled_id =
                             (resolved_method_name != NULL) ? strdup(resolved_method_name) : NULL;
                         
-                        /* Prefer all overloads of the resolved method for scoring. */
+                        /* Prefer all overloads of the resolved method for scoring.
+                         * IMPORTANT: use base method key (Owner__Method), not a fully
+                         * mangled signature, otherwise overload resolution sees only one
+                         * candidate and can pick wrong arity. */
                         char *mangled_method_name = NULL;
                         if (effective_record->type_id != NULL && method_name != NULL)
                         {
@@ -2446,6 +2454,10 @@ int semcheck_funccall(int *type_return,
                             if (mangled_method_name != NULL)
                                 snprintf(mangled_method_name, class_len + 2 + method_len + 1,
                                     "%s__%s", effective_record->type_id, method_name);
+                        }
+                        else if (resolved_method_name != NULL)
+                        {
+                            mangled_method_name = strdup(resolved_method_name);
                         }
 
                         ListNode_t *method_candidates = NULL;
@@ -2489,8 +2501,18 @@ int semcheck_funccall(int *type_return,
 
                         if (mangled_name != NULL)
                             free(mangled_name);
-                        mangled_name = (mangled_method_name != NULL) ? strdup(mangled_method_name)
-                                                                    : (resolved_method_name != NULL ? strdup(resolved_method_name) : NULL);
+                        mangled_name = NULL;
+                        if (mangled_method_name != NULL)
+                        {
+                            mangled_name = MangleFunctionNameFromCallSite(mangled_method_name,
+                                args_given, symtab, max_scope_lev);
+                            if (mangled_name == NULL)
+                                mangled_name = strdup(mangled_method_name);
+                        }
+                        else if (resolved_method_name != NULL)
+                        {
+                            mangled_name = strdup(resolved_method_name);
+                        }
 
                         if (method_candidates != NULL)
                         {
@@ -2633,7 +2655,8 @@ int semcheck_funccall(int *type_return,
                             expr->expr_data.function_call_data.mangled_id =
                                 (resolved_method_name != NULL) ? strdup(resolved_method_name) : NULL;
 
-                            /* Use actual_method_owner for mangled name (for inherited methods from parent helpers) */
+                            /* Use actual_method_owner for base key (Owner__Method) so
+                             * overload resolution can see all overloads on the owner. */
                             struct RecordType *record_for_mangling = (actual_method_owner != NULL) ? actual_method_owner : record_info;
                             char *mangled_method_name = NULL;
                             if (record_for_mangling->type_id != NULL && method_name != NULL)
@@ -2644,6 +2667,10 @@ int semcheck_funccall(int *type_return,
                                 if (mangled_method_name != NULL)
                                     snprintf(mangled_method_name, class_len + 2 + method_len + 1,
                                         "%s__%s", record_for_mangling->type_id, method_name);
+                            }
+                            else if (resolved_method_name != NULL)
+                            {
+                                mangled_method_name = strdup(resolved_method_name);
                             }
 
                             ListNode_t *method_candidates = NULL;
@@ -2682,8 +2709,18 @@ int semcheck_funccall(int *type_return,
 
                             if (mangled_name != NULL)
                                 free(mangled_name);
-                            mangled_name = (mangled_method_name != NULL) ? strdup(mangled_method_name)
-                                                                        : (resolved_method_name != NULL ? strdup(resolved_method_name) : NULL);
+                            mangled_name = NULL;
+                            if (mangled_method_name != NULL)
+                            {
+                                mangled_name = MangleFunctionNameFromCallSite(mangled_method_name,
+                                    args_given, symtab, max_scope_lev);
+                                if (mangled_name == NULL)
+                                    mangled_name = strdup(mangled_method_name);
+                            }
+                            else if (resolved_method_name != NULL)
+                            {
+                                mangled_name = strdup(resolved_method_name);
+                            }
 
                             if (method_candidates != NULL)
                             {
@@ -2718,10 +2755,9 @@ int semcheck_funccall(int *type_return,
         (void)first_arg_type_tag; /* Variable is used for potential debugging */
         
         if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
-             fprintf(stderr, "[SemCheck] semcheck_funccall: first_arg=%p type=%d id=%s record_type=%p resolved_kgpc_type=%p\n", 
+             fprintf(stderr, "[SemCheck] semcheck_funccall: first_arg=%p type=%d id=%s resolved_kgpc_type=%p\n",
                  (void*)first_arg, first_arg->type, 
                  (first_arg->type == EXPR_VAR_ID) ? first_arg->expr_data.id : "N/A",
-                 first_arg->record_type,
                  first_arg->resolved_kgpc_type);
         }
         
@@ -2731,7 +2767,7 @@ int semcheck_funccall(int *type_return,
         /* Wait, if MyException is a TYPE, semcheck_expr returns TYPE_KIND_TYPE? */
         /* Or the type tag of the type? */
         
-        /* Get the record info from either resolved_kgpc_type or record_type */
+        /* Get record info from resolved KgpcType metadata. */
         KgpcType *owner_type = first_arg->resolved_kgpc_type;
         struct RecordType *record_info = NULL;
         
@@ -2745,21 +2781,6 @@ int semcheck_funccall(int *type_return,
              }
         }
         
-        /* Fallback to record_type if resolved_kgpc_type didn't give us a record */
-        if (record_info == NULL && first_arg->record_type != NULL) {
-            record_info = first_arg->record_type;
-            /* Also need to set owner_type for return type determination later */
-            if (owner_type == NULL && record_info != NULL) {
-                /* Look up the type to get its KgpcType */
-                HashNode_t *type_node = NULL;
-                if (record_info->type_id != NULL &&
-                    FindIdent(&type_node, symtab, record_info->type_id) != -1 &&
-                    type_node != NULL && type_node->type != NULL) {
-                    owner_type = type_node->type;
-                }
-            }
-        }
-
         /* If still unresolved and the first arg is a type identifier, resolve it as a type name. */
         if (record_info == NULL && first_arg->type == EXPR_VAR_ID &&
             first_arg->expr_data.id != NULL)
@@ -2805,9 +2826,6 @@ int semcheck_funccall(int *type_return,
                     record_info = semcheck_lookup_record_type(symtab,
                         first_arg->pointer_subtype_id);
             }
-            /* Case 3: expression's record_type not yet checked in pointer context */
-            if (record_info == NULL && first_arg->record_type != NULL)
-                record_info = first_arg->record_type;
         }
 
         if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
@@ -2981,9 +2999,6 @@ int semcheck_funccall(int *type_return,
                             kgpc_type_retain(owner_type);
                             self_placeholder->resolved_kgpc_type = owner_type;
                         }
-                        /* Set record_type for class pointer compatibility */
-                        self_placeholder->record_type = record_info;
-
                         ListNode_t *self_node = CreateListNode(self_placeholder, LIST_EXPR);
                         if (self_node != NULL) {
                             self_node->next = user_args;
@@ -3038,20 +3053,20 @@ int semcheck_funccall(int *type_return,
 
                     semcheck_expr_set_resolved_kgpc_type_shared(expr, ctor_return_type);
                     *type_return = semcheck_tag_from_kgpc(ctor_return_type);
-                    if (ctor_return_type != NULL &&
-                        ctor_return_type->kind == TYPE_KIND_POINTER &&
-                        ctor_return_type->info.points_to != NULL &&
-                        ctor_return_type->info.points_to->kind == TYPE_KIND_RECORD) {
-                        expr->record_type = ctor_return_type->info.points_to->info.record_info;
-                    } else if (ctor_return_type != NULL &&
-                               ctor_return_type->kind == TYPE_KIND_RECORD) {
-                        expr->record_type = ctor_return_type->info.record_info;
-                    }
                     if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                        struct RecordType *debug_record = NULL;
+                        if (ctor_return_type != NULL &&
+                            ctor_return_type->kind == TYPE_KIND_POINTER &&
+                            ctor_return_type->info.points_to != NULL &&
+                            ctor_return_type->info.points_to->kind == TYPE_KIND_RECORD)
+                            debug_record = ctor_return_type->info.points_to->info.record_info;
+                        else if (ctor_return_type != NULL &&
+                                 ctor_return_type->kind == TYPE_KIND_RECORD)
+                            debug_record = ctor_return_type->info.record_info;
                         fprintf(stderr,
                             "[SemCheck] ctor return set: kind=%d record=%s\n",
                             expr->resolved_kgpc_type != NULL ? expr->resolved_kgpc_type->kind : -1,
-                            (expr->record_type != NULL && expr->record_type->type_id != NULL) ? expr->record_type->type_id : "<null>");
+                            (debug_record != NULL && debug_record->type_id != NULL) ? debug_record->type_id : "<null>");
                     }
                     if (return_type_owned && ctor_return_type != NULL)
                         destroy_kgpc_type(ctor_return_type);
@@ -3967,19 +3982,6 @@ skip_overload_resolution:
             semcheck_clear_array_info(expr);
         }
 
-        if (*type_return == RECORD_TYPE)
-        {
-            struct RecordType *record_type = get_record_type_from_node(hash_return);
-            if (record_type != NULL)
-                expr->record_type = record_type;
-            else
-                expr->record_type = NULL;
-        }
-        else
-        {
-            expr->record_type = NULL;
-        }
-
         if (hash_return->type != NULL && hash_return->type->kind == TYPE_KIND_PROCEDURE)
         {
             ListNode_t *formal_params = kgpc_type_get_procedure_params(hash_return->type);
@@ -4499,17 +4501,18 @@ skip_overload_resolution:
                 expr->expr_data.function_call_data.resolved_func->mangled_id != NULL &&
                 strstr(expr->expr_data.function_call_data.resolved_func->mangled_id, "__") != NULL)
             {
-                if (args_to_validate->next == NULL)
+            if (args_to_validate->next == NULL)
+            {
+                struct Expression *only_arg = (struct Expression *)args_to_validate->cur;
+                if (only_arg != NULL &&
+                    ((only_arg->type == EXPR_VAR_ID &&
+                      only_arg->expr_data.id != NULL &&
+                      pascal_identifier_equals(only_arg->expr_data.id, "Self")) ||
+                     only_arg->type == EXPR_NIL))
                 {
-                    struct Expression *only_arg = (struct Expression *)args_to_validate->cur;
-                    if (only_arg != NULL &&
-                        only_arg->type == EXPR_VAR_ID &&
-                        only_arg->expr_data.id != NULL &&
-                        pascal_identifier_equals(only_arg->expr_data.id, "Self"))
-                    {
-                        allow_implicit_self_only = 1;
-                    }
+                    allow_implicit_self_only = 1;
                 }
+            }
             }
             if (allow_implicit_self_only)
             {
