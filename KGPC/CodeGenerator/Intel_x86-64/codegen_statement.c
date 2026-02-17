@@ -591,6 +591,10 @@ static int expr_is_static_array_like(const struct Expression *expr, CodeGenConte
     if (expr == NULL)
         return 0;
 
+    /* Element access is a scalar l-value/r-value, not an array object. */
+    if (expr->type == EXPR_ARRAY_ACCESS)
+        return 0;
+
     if (expr_is_dynamic_array(expr))
         return 0;
 
@@ -1024,6 +1028,79 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
                 }
             }
 
+            /* String constants need to be emitted to rodata so their address can be taken */
+            if (ctx->symtab != NULL)
+            {
+                HashNode_t *str_const_node = NULL;
+                int str_found = FindIdent(&str_const_node, ctx->symtab, expr->expr_data.id);
+                if (str_found >= 0 && str_const_node != NULL &&
+                    str_const_node->hash_type == HASHTYPE_CONST &&
+                    str_const_node->const_string_value != NULL &&
+                    !(str_const_node->type != NULL && str_const_node->type->kind == TYPE_KIND_PROCEDURE))
+                {
+                    Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                    if (addr_reg == NULL)
+                        addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+                    if (addr_reg == NULL)
+                    {
+                        inst_list = codegen_fail_register(ctx, inst_list, out_reg,
+                            "ERROR: Unable to allocate register for string constant address.");
+                        goto cleanup;
+                    }
+
+                    char label[20];
+                    snprintf(label, 20, ".LC%d", ctx->write_label_counter++);
+                    char add_rodata[1024];
+                    const char *readonly_section = codegen_readonly_section_directive();
+                    /* Simple assembly-safe emit — control chars are rare in constants */
+                    snprintf(add_rodata, 1024, "%s\n%s:\n\t.string \"%s\"\n\t.text\n",
+                        readonly_section, label, str_const_node->const_string_value);
+                    inst_list = add_inst(inst_list, add_rodata);
+
+                    char buffer[96];
+                    snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                        label, addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    *out_reg = addr_reg;
+                    goto cleanup;
+                }
+            }
+
+            if (expr->expr_data.id != NULL)
+            {
+                const char *builtin_file_ptr = NULL;
+                if (pascal_identifier_equals(expr->expr_data.id, "stdin"))
+                    builtin_file_ptr = "stdin_ptr";
+                else if (pascal_identifier_equals(expr->expr_data.id, "stdout"))
+                    builtin_file_ptr = "stdout_ptr";
+                else if (pascal_identifier_equals(expr->expr_data.id, "stderr"))
+                    builtin_file_ptr = "stderr_ptr";
+                else if (pascal_identifier_equals(expr->expr_data.id, "Input"))
+                    builtin_file_ptr = "Input_ptr";
+                else if (pascal_identifier_equals(expr->expr_data.id, "Output"))
+                    builtin_file_ptr = "Output_ptr";
+
+                if (builtin_file_ptr != NULL)
+                {
+                    Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                    if (addr_reg == NULL)
+                        addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+                    if (addr_reg == NULL)
+                    {
+                        inst_list = codegen_fail_register(ctx, inst_list, out_reg,
+                            "ERROR: Unable to allocate register for file variable address.");
+                        goto cleanup;
+                    }
+
+                    char buffer[96];
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s(%%rip), %s\n",
+                        builtin_file_ptr, addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    *out_reg = addr_reg;
+                    goto cleanup;
+                }
+            }
+
             if (nonlocal_flag() == 1)
             {
                 int offset = 0;
@@ -1354,6 +1431,13 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
         int target_type = expr->expr_data.typecast_data.target_type;
         if (target_type == UNKNOWN_TYPE)
             target_type = expr_get_type_tag(expr);
+        if (inner != NULL &&
+            expr->resolved_kgpc_type != NULL &&
+            kgpc_type_is_array(expr->resolved_kgpc_type))
+        {
+            inst_list = codegen_address_for_expr(inner, inst_list, ctx, out_reg);
+            goto cleanup;
+        }
         if (inner != NULL &&
             (target_type == RECORD_TYPE || target_type == FILE_TYPE || target_type == TEXT_TYPE || target_type == SHORTSTRING_TYPE))
         {
@@ -2629,6 +2713,16 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                 {
                     /* Get the class type from the source expression or first argument */
                     struct RecordType *class_record = src_expr->record_type;
+                    if (class_record == NULL && src_expr->resolved_kgpc_type != NULL)
+                    {
+                        KgpcType *src_type = src_expr->resolved_kgpc_type;
+                        if (src_type->kind == TYPE_KIND_RECORD)
+                            class_record = src_type->info.record_info;
+                        else if (src_type->kind == TYPE_KIND_POINTER &&
+                                 src_type->info.points_to != NULL &&
+                                 src_type->info.points_to->kind == TYPE_KIND_RECORD)
+                            class_record = src_type->info.points_to->info.record_info;
+                    }
                     
                     if (class_record == NULL)
                     {
@@ -2637,7 +2731,35 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                         {
                             struct Expression *class_expr = (struct Expression *)first_arg->cur;
                             if (class_expr != NULL)
+                            {
                                 class_record = class_expr->record_type;
+                                if (class_record == NULL && class_expr->resolved_kgpc_type != NULL)
+                                {
+                                    KgpcType *arg_type = class_expr->resolved_kgpc_type;
+                                    if (arg_type->kind == TYPE_KIND_RECORD)
+                                        class_record = arg_type->info.record_info;
+                                    else if (arg_type->kind == TYPE_KIND_POINTER &&
+                                             arg_type->info.points_to != NULL &&
+                                             arg_type->info.points_to->kind == TYPE_KIND_RECORD)
+                                        class_record = arg_type->info.points_to->info.record_info;
+                                }
+                                if (class_record == NULL && class_expr->type == EXPR_VAR_ID &&
+                                    class_expr->expr_data.id != NULL && ctx != NULL && ctx->symtab != NULL)
+                                {
+                                    HashNode_t *class_node = NULL;
+                                    if (FindIdent(&class_node, ctx->symtab, class_expr->expr_data.id) >= 0 &&
+                                        class_node != NULL && class_node->hash_type == HASHTYPE_TYPE &&
+                                        class_node->type != NULL)
+                                    {
+                                        if (class_node->type->kind == TYPE_KIND_RECORD)
+                                            class_record = class_node->type->info.record_info;
+                                        else if (class_node->type->kind == TYPE_KIND_POINTER &&
+                                                 class_node->type->info.points_to != NULL &&
+                                                 class_node->type->info.points_to->kind == TYPE_KIND_RECORD)
+                                            class_record = class_node->type->info.points_to->info.record_info;
+                                    }
+                                }
+                            }
                         }
                     }
                     
@@ -2680,7 +2802,7 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                             free_arg_regs();
                             
                             /* Save the allocated instance pointer */
-                            constructor_instance_reg = get_free_reg(get_reg_stack(), &inst_list);
+                            constructor_instance_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
                             if (constructor_instance_reg == NULL)
                             {
                                 codegen_report_error(ctx, 
@@ -3703,7 +3825,7 @@ static ListNode_t *codegen_builtin_setlength(struct Statement *stmt, ListNode_t 
     if (is_field_array)
     {
         struct RecordField *field = codegen_lookup_record_field_expr(array_expr);
-        element_size = 4;
+        element_size = -1;
         if (field != NULL && field->is_array)
         {
             long long elem_size = 0;
@@ -3712,10 +3834,6 @@ static ListNode_t *codegen_builtin_setlength(struct Statement *stmt, ListNode_t 
                 elem_size > 0)
             {
                 element_size = (int)elem_size;
-            }
-            else
-            {
-                element_size = CODEGEN_POINTER_SIZE_BYTES;
             }
         }
         if (array_expr != NULL)
@@ -3731,9 +3849,14 @@ static ListNode_t *codegen_builtin_setlength(struct Statement *stmt, ListNode_t 
                         fallback_size = kgpc_type_sizeof(elem_type);
                 }
             }
-            if (fallback_size > element_size && fallback_size <= INT_MAX)
+            KGPC_COMPILER_HARD_ASSERT(fallback_size > 0,
+                "array expression is missing element-size metadata in SetLength");
+            if (fallback_size <= INT_MAX && (element_size <= 0 || fallback_size > element_size))
                 element_size = (int)fallback_size;
         }
+        KGPC_COMPILER_HARD_ASSERT(element_size > 0,
+            "unable to resolve SetLength field-array element size (field=%s)",
+            (field != NULL && field->name != NULL) ? field->name : "<unknown>");
     }
     else
     {
@@ -4798,7 +4921,20 @@ static ListNode_t *codegen_builtin_val(struct Statement *stmt, ListNode_t *inst_
     StackNode_t *code_spill = NULL;
     StackNode_t *code_result_spill = NULL;
 
-    inst_list = codegen_expr_with_result(source_expr, inst_list, ctx, &source_reg);
+    int source_is_shortstring = codegen_expr_is_shortstring_array(source_expr);
+    if (!source_is_shortstring && source_expr != NULL &&
+        expr_get_type_tag(source_expr) == SHORTSTRING_TYPE)
+        source_is_shortstring = 1;
+
+    if (source_is_shortstring)
+    {
+        /* For ShortString sources, get the address instead of the value */
+        inst_list = codegen_address_for_expr(source_expr, inst_list, ctx, &source_reg);
+    }
+    else
+    {
+        inst_list = codegen_expr_with_result(source_expr, inst_list, ctx, &source_reg);
+    }
     if (codegen_had_error(ctx) || source_reg == NULL)
         goto cleanup;
 
@@ -4814,13 +4950,17 @@ static ListNode_t *codegen_builtin_val(struct Statement *stmt, ListNode_t *inst_
     switch (value_expr != NULL ? expr_get_type_tag(value_expr) : UNKNOWN_TYPE)
     {
         case INT_TYPE:
-            call_target = "kgpc_val_integer";
+            call_target = source_is_shortstring ? "kgpc_val_integer_ss" : "kgpc_val_integer";
             break;
         case LONGINT_TYPE:
-            call_target = "kgpc_val_longint";
+        case INT64_TYPE:
+            call_target = source_is_shortstring ? "kgpc_val_longint_ss" : "kgpc_val_longint";
+            break;
+        case QWORD_TYPE:
+            call_target = source_is_shortstring ? "kgpc_val_qword_ss" : "kgpc_val_qword";
             break;
         case REAL_TYPE:
-            call_target = "kgpc_val_real";
+            call_target = source_is_shortstring ? "kgpc_val_real_ss" : "kgpc_val_real";
             break;
         default:
             call_target = NULL;
@@ -4976,6 +5116,15 @@ static ListNode_t *codegen_builtin_incdec(struct Statement *stmt, ListNode_t *in
     if (target_expr != NULL && target_expr->type == EXPR_VAR_ID)
     {
         StackNode_t *var_node = find_label(target_expr->expr_data.id);
+        if (var_node == NULL && ctx != NULL && ctx->symtab != NULL)
+        {
+            HashNode_t *target_node = NULL;
+            if (FindIdent(&target_node, ctx->symtab, target_expr->expr_data.id) >= 0 &&
+                target_node != NULL && target_node->mangled_id != NULL)
+            {
+                var_node = find_label(target_node->mangled_id);
+            }
+        }
         char buffer[128];
         if (var_node != NULL)
         {
@@ -5012,7 +5161,7 @@ static ListNode_t *codegen_builtin_incdec(struct Statement *stmt, ListNode_t *in
             if (!var_node->is_reference)
                 inst_list = add_inst(inst_list, buffer);
         }
-        else if (nonlocal_flag() == 1)
+        else
         {
             int offset = 0;
             inst_list = codegen_get_nonlocal(inst_list, target_expr->expr_data.id, &offset);
@@ -5021,11 +5170,6 @@ static ListNode_t *codegen_builtin_incdec(struct Statement *stmt, ListNode_t *in
             else
                 snprintf(buffer, sizeof(buffer), "\taddl\t%s, -%d(%s)\n", increment_reg->bit_32, offset, current_non_local_reg64());
             inst_list = add_inst(inst_list, buffer);
-        }
-        else
-        {
-            codegen_report_error(ctx, "ERROR: Unable to locate variable %s for %s.",
-                target_expr->expr_data.id, is_increment ? "Inc" : "Dec");
         }
     }
     else if (target_expr != NULL && target_expr->type == EXPR_ARRAY_ACCESS)
@@ -6151,6 +6295,94 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
         return inst_list;
     }
 
+    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "Assert"))
+    {
+        /* Assert(condition [, message])
+         * Evaluate the boolean condition. If true, continue execution.
+         * If false, call kgpc_assert_failed(msg, filename, line) which
+         * prints the assertion failure and exits with code 227. */
+        ListNode_t *assert_args = stmt->stmt_data.procedure_call_data.expr_args;
+        struct Expression *cond_expr = (assert_args != NULL) ? (struct Expression *)assert_args->cur : NULL;
+        struct Expression *msg_expr = (assert_args != NULL && assert_args->next != NULL)
+                                      ? (struct Expression *)assert_args->next->cur : NULL;
+
+        if (cond_expr != NULL)
+        {
+            int relop_type = 0;
+            inst_list = codegen_condition_expr(cond_expr, inst_list, ctx, &relop_type);
+
+            /* Generate label for the "pass" path (condition was true) */
+            char pass_label[18];
+            gen_label(pass_label, 18, ctx);
+
+            /* Jump to pass_label if condition is TRUE (non-zero).
+             * codegen_condition_expr with a boolean expr does testl and sets relop_type=NE.
+             * gencode_jmp(NE, inverse=0, ...) emits jne label (jump if not-equal-to-zero = true). */
+            inst_list = gencode_jmp(relop_type, 0, pass_label, inst_list);
+
+            /* Failure path: call kgpc_assert_failed(msg, filename, line)
+             * ABI: Windows uses rcx/rdx/r8, SysV uses rdi/rsi/rdx */
+            const char *arg1_reg = codegen_target_is_windows() ? "%rcx" : "%rdi";
+            const char *arg2_reg = codegen_target_is_windows() ? "%rdx" : "%rsi";
+            const char *arg3_reg_32 = codegen_target_is_windows() ? "%r8d" : "%edx";
+
+            /* Set up message argument (arg1) */
+            if (msg_expr != NULL && msg_expr->type == EXPR_STRING && msg_expr->expr_data.string != NULL)
+            {
+                const char *readonly_section = codegen_readonly_section_directive();
+                char msg_label[64];
+                snprintf(msg_label, sizeof(msg_label), ".LC%d", ctx->write_label_counter++);
+                char escaped_msg[CODEGEN_MAX_INST_BUF];
+                escape_string(escaped_msg, msg_expr->expr_data.string, sizeof(escaped_msg));
+                char rodata_buf[CODEGEN_MAX_INST_BUF + 128];
+                snprintf(rodata_buf, sizeof(rodata_buf), "%s\n%s:\n\t.string \"%s\"\n\t.text\n",
+                         readonly_section, msg_label, escaped_msg);
+                inst_list = add_inst(inst_list, rodata_buf);
+                snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", msg_label, arg1_reg);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else
+            {
+                /* No message provided - pass empty string */
+                const char *readonly_section = codegen_readonly_section_directive();
+                char msg_label[64];
+                snprintf(msg_label, sizeof(msg_label), ".LC%d", ctx->write_label_counter++);
+                char rodata_buf[256];
+                snprintf(rodata_buf, sizeof(rodata_buf), "%s\n%s:\n\t.string \"\"\n\t.text\n",
+                         readonly_section, msg_label);
+                inst_list = add_inst(inst_list, rodata_buf);
+                snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", msg_label, arg1_reg);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            /* filename argument (arg2) - empty for now */
+            {
+                const char *readonly_section = codegen_readonly_section_directive();
+                char fn_label[64];
+                snprintf(fn_label, sizeof(fn_label), ".LC%d", ctx->write_label_counter++);
+                char rodata_buf[256];
+                snprintf(rodata_buf, sizeof(rodata_buf), "%s\n%s:\n\t.string \"\"\n\t.text\n",
+                         readonly_section, fn_label);
+                inst_list = add_inst(inst_list, rodata_buf);
+                snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", fn_label, arg2_reg);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            /* line number argument (arg3) */
+            snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %s\n", stmt->line_num, arg3_reg_32);
+            inst_list = add_inst(inst_list, buffer);
+            /* Zero %eax (no vector regs) and call with shadow space */
+            inst_list = add_inst(inst_list, "\txorl\t%eax, %eax\n");
+            inst_list = codegen_call_with_shadow_space(inst_list, ctx, "kgpc_assert_failed");
+
+            /* Emit pass label */
+            snprintf(buffer, sizeof(buffer), "%s:\n", pass_label);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s (Assert)\n", __func__);
+        #endif
+        return inst_list;
+    }
+
     const char *proc_name_hint = stmt->stmt_data.procedure_call_data.id;
     if (proc_name_hint == NULL)
         proc_name_hint = stmt->stmt_data.procedure_call_data.mangled_id;
@@ -6290,7 +6522,14 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
     if (assign_expr != NULL && assign_expr->type == EXPR_RECORD_CONSTRUCTOR)
         return codegen_assign_record_value(var_expr, assign_expr, inst_list, ctx);
 
-    if (expr_get_type_tag(var_expr) == RECORD_TYPE)
+    int lhs_is_record_value = 0;
+    KgpcType *lhs_kgpc_type = expr_get_kgpc_type(var_expr);
+    if (lhs_kgpc_type != NULL)
+        lhs_is_record_value = kgpc_type_is_record(lhs_kgpc_type);
+    else if (expr_get_type_tag(var_expr) == RECORD_TYPE && !var_expr->is_array_expr)
+        lhs_is_record_value = 1;
+
+    if (lhs_is_record_value)
         return codegen_assign_record_value(var_expr, assign_expr, inst_list, ctx);
 
     /* Character sets (set of char) need special handling like records due to 32-byte size */
@@ -6319,18 +6558,25 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         {
             HashNode_t *target_node = NULL;
             if (FindIdent(&target_node, ctx->symtab, var_expr->expr_data.id) != -1 &&
-                target_node != NULL &&
-                (target_node->hash_type == HASHTYPE_FUNCTION_RETURN ||
-                 target_node->hash_type == HASHTYPE_FUNCTION))
+                target_node != NULL)
             {
-                long long size_bytes = 0;
-                if (var_expr->resolved_kgpc_type != NULL)
-                    size_bytes = kgpc_type_sizeof(var_expr->resolved_kgpc_type);
-                if (size_bytes <= 0 || size_bytes > INT_MAX)
-                    size_bytes = CODEGEN_POINTER_SIZE_BYTES;
+                if (target_node->mangled_id != NULL)
+                {
+                    var = find_label_with_depth(target_node->mangled_id, &scope_depth);
+                }
+                if (var == NULL &&
+                    (target_node->hash_type == HASHTYPE_FUNCTION_RETURN ||
+                     target_node->hash_type == HASHTYPE_FUNCTION))
+                {
+                    long long size_bytes = 0;
+                    if (var_expr->resolved_kgpc_type != NULL)
+                        size_bytes = kgpc_type_sizeof(var_expr->resolved_kgpc_type);
+                    if (size_bytes <= 0 || size_bytes > INT_MAX)
+                        size_bytes = CODEGEN_POINTER_SIZE_BYTES;
 
-                var = add_l_x(var_expr->expr_data.id, (int)size_bytes);
-                scope_depth = 0;
+                    var = add_l_x(var_expr->expr_data.id, (int)size_bytes);
+                    scope_depth = 0;
+                }
             }
         }
 
@@ -6635,6 +6881,13 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             if (use_qword)
             {
                 int value_is_qword = expr_uses_qword_kgpctype(assign_expr);
+                /* Fallback: check expr type tag for pointer arithmetic / 64-bit ops */
+                if (!value_is_qword && assign_expr != NULL)
+                {
+                    int assign_tag = expr_get_type_tag(assign_expr);
+                    if (codegen_type_uses_qword(assign_tag))
+                        value_is_qword = 1;
+                }
                 if (coerced_to_real)
                     value_is_qword = 1;
                 /* Check for procedural var calls with pointer return type */
@@ -6744,7 +6997,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                 codegen_end_expression(ctx);
             }
         }
-        else if(nonlocal_flag() == 1)
+        else
         {
 
             inst_list = codegen_get_nonlocal(inst_list, var_expr->expr_data.id, &offset);
@@ -6768,6 +7021,13 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             if (use_qword)
             {
                 int value_is_qword = expr_uses_qword_kgpctype(assign_expr);
+                /* Fallback: check expr type tag for pointer arithmetic / 64-bit ops */
+                if (!value_is_qword && assign_expr != NULL)
+                {
+                    int assign_tag = expr_get_type_tag(assign_expr);
+                    if (codegen_type_uses_qword(assign_tag))
+                        value_is_qword = 1;
+                }
                 if (coerced_to_real)
                     value_is_qword = 1;
                 /* Check for procedural var calls with pointer return type */
@@ -6802,18 +7062,6 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             {
                 snprintf(buffer, 50, "\tmovl\t%s, -%d(%s)\n", reg->bit_32, offset, current_non_local_reg64());
             }
-        }
-        else
-        {
-            const char *var_name = (var_expr != NULL && var_expr->type == EXPR_VAR_ID) ?
-                var_expr->expr_data.id : "<unknown>";
-            char errbuf[256];
-            snprintf(errbuf, sizeof(errbuf),
-                "ERROR: Non-local codegen support disabled while accessing %s. Enable with flag '-non-local' after required flags",
-                var_name != NULL ? var_name : "<unknown>");
-            codegen_report_error(ctx, errbuf);
-            free_reg(get_reg_stack(), reg);
-            return inst_list;
         }
         #ifdef DEBUG_CODEGEN
         CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
@@ -6913,6 +7161,13 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         else if (use_qword)
         {
             int value_is_qword = expr_uses_qword_kgpctype(assign_expr);
+            /* Fallback: check expr type tag for pointer arithmetic / 64-bit ops */
+            if (!value_is_qword && assign_expr != NULL)
+            {
+                int assign_tag = expr_get_type_tag(assign_expr);
+                if (codegen_type_uses_qword(assign_tag))
+                    value_is_qword = 1;
+            }
             if (coerced_to_real)
                 value_is_qword = 1;
             /* Check for procedural var calls with pointer return type */
@@ -7039,6 +7294,13 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         else if (use_qword)
         {
             int value_is_qword = expr_uses_qword_kgpctype(assign_expr);
+            /* Fallback: check expr type tag for pointer arithmetic / 64-bit ops */
+            if (!value_is_qword && assign_expr != NULL)
+            {
+                int assign_tag = expr_get_type_tag(assign_expr);
+                if (codegen_type_uses_qword(assign_tag))
+                    value_is_qword = 1;
+            }
             if (coerced_to_real)
                 value_is_qword = 1;
             /* Check for procedural var calls with pointer return type */
@@ -7166,6 +7428,13 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         else if (codegen_type_uses_qword(var_type_3))
         {
             int value_is_qword = expr_uses_qword_kgpctype(assign_expr);
+            /* Fallback: check expr type tag for pointer arithmetic / 64-bit ops */
+            if (!value_is_qword && assign_expr != NULL)
+            {
+                int assign_tag = expr_get_type_tag(assign_expr);
+                if (codegen_type_uses_qword(assign_tag))
+                    value_is_qword = 1;
+            }
             if (coerced_to_real)
                 value_is_qword = 1;
             /* Check for procedural var calls with pointer return type */
@@ -7272,6 +7541,9 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
      */
     int call_hash_type;  /* HashType enum value */
     struct KgpcType *call_kgpc_type;
+#ifdef DEBUG_CODEGEN
+    HashNode_t *debug_proc_node = NULL;
+#endif
     
     if (stmt->stmt_data.procedure_call_data.is_call_info_valid)
     {
@@ -7289,6 +7561,9 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         /* Fallback: look up the symbol (for old code paths or if semantic checker didn't set it) */
         HashNode_t *proc_node = NULL;
         FindIdent(&proc_node, symtab, unmangled_name);
+#ifdef DEBUG_CODEGEN
+        debug_proc_node = proc_node;
+#endif
         if (proc_node != NULL)
         {
             call_hash_type = proc_node->hash_type;
@@ -7678,23 +7953,25 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
     
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("FATAL: Reached unreachable code in %s - this is a compiler bug!\n", __func__);
-    if (proc_node != NULL) {
+    if (debug_proc_node != NULL) {
         CODEGEN_DEBUG("  proc_name: %s\n", proc_name ? proc_name : "(null)");
         CODEGEN_DEBUG("  unmangled_name: %s\n", unmangled_name ? unmangled_name : "(null)");
         CODEGEN_DEBUG("  hash_type: %d (expected VAR=%d, PROCEDURE=%d, or BUILTIN=%d)\n", 
-                     proc_node->hash_type, HASHTYPE_VAR, HASHTYPE_PROCEDURE, HASHTYPE_BUILTIN_PROCEDURE);
-        CODEGEN_DEBUG("  type: %p\n", (void*)proc_node->type);
-        if (proc_node->type != NULL) {
-            CODEGEN_DEBUG("  type->kind: %d\n", proc_node->type->kind);
+                     debug_proc_node->hash_type, HASHTYPE_VAR, HASHTYPE_PROCEDURE, HASHTYPE_BUILTIN_PROCEDURE);
+        CODEGEN_DEBUG("  type: %p\n", (void*)debug_proc_node->type);
+        if (debug_proc_node->type != NULL) {
+            CODEGEN_DEBUG("  type->kind: %d\n", debug_proc_node->type->kind);
         }
     } else {
         CODEGEN_DEBUG("  proc_node is NULL - semantic checker should have caught this!\n");
     }
     #endif
     
-    /* In debug builds, assert to catch this bug during development */
-    assert(0 && "Unreachable: procedure call with unexpected hash_type or NULL proc_node");
-    
+    KGPC_COMPILER_HARD_ASSERT(0,
+        "unreachable procedure-call state for '%s' (hash_type=%d)",
+        unmangled_name ? unmangled_name : "(unknown)",
+        call_hash_type);
+
     /* In release builds, report a fatal error and stop code generation */
     codegen_report_error(ctx,
         "FATAL: Internal compiler error in procedure call code generation for '%s'. "
@@ -9078,15 +9355,58 @@ static ListNode_t *codegen_try_except(struct Statement *stmt, ListNode_t *inst_l
     gen_label(except_label, sizeof(except_label), ctx);
     gen_label(after_label, sizeof(after_label), ctx);
 
+    /* ── push a runtime except frame (setjmp) ── */
+    inst_list = add_inst(inst_list, "\t# TRY/EXCEPT: push runtime except frame\n");
+    /* call kgpc_push_except_frame() → returns jmp_buf* in %rax */
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = codegen_call_with_shadow_space(inst_list, ctx, "kgpc_push_except_frame");
+    free_arg_regs();
+
+    /* Spill the jmp_buf pointer to a stack slot so setjmp can use it */
+    StackNode_t *jmpbuf_slot = add_l_t("try_except_jmpbuf");
+    char buffer[96];
+    if (jmpbuf_slot != NULL) {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, -%d(%%rbp)\n", jmpbuf_slot->offset);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    /* call setjmp(jmp_buf*) — argument is in %rax, move to first arg reg */
+    if (codegen_target_is_windows())
+    {
+        /* Windows x64: _setjmp(jmp_buf*, frame_addr) — needs two args.
+         * %rcx = jmp_buf pointer, %rdx = frame pointer (RBP) for SEH unwinding. */
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %%rcx\n\tmovq\t%%rbp, %%rdx\n");
+    }
+    else
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %%rdi\n");
+    inst_list = add_inst(inst_list, buffer);
+    inst_list = codegen_vect_reg(inst_list, 0);
+
+    /* Windows x64: _setjmp requires frame pointer as 2nd arg for SEH unwinding.
+     * Linux: _setjmp avoids saving signal mask for performance. */
+    inst_list = codegen_call_with_shadow_space(inst_list, ctx, "_setjmp");
+    free_arg_regs();
+
+    /* If setjmp returned non-zero, we got here from longjmp → jump to except */
+    inst_list = add_inst(inst_list, "\ttestl\t%eax, %eax\n");
+    snprintf(buffer, sizeof(buffer), "\tjne\t%s\n", except_label);
+    inst_list = add_inst(inst_list, buffer);
+
+    /* ── try body (setjmp returned 0) ── */
     if (!codegen_push_except(ctx, except_label)) {
         return inst_list;
     }
     inst_list = codegen_statement_list(try_stmts, inst_list, ctx, symtab);
-    inst_list = gencode_jmp(NORMAL_JMP, 0, after_label, inst_list);
-
     codegen_pop_except(ctx);
 
-    char buffer[64];
+    /* Pop the runtime except frame (normal exit from try) */
+    inst_list = add_inst(inst_list, "\t# TRY/EXCEPT: pop runtime except frame (normal exit)\n");
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = codegen_call_with_shadow_space(inst_list, ctx, "kgpc_pop_except_frame");
+    free_arg_regs();
+    inst_list = gencode_jmp(NORMAL_JMP, 0, after_label, inst_list);
+
+    /* ── except handler (setjmp returned non-zero, or local raise jumped here) ── */
     snprintf(buffer, sizeof(buffer), "%s:\n", except_label);
     inst_list = add_inst(inst_list, buffer);
 
@@ -9095,7 +9415,11 @@ static ListNode_t *codegen_try_except(struct Statement *stmt, ListNode_t *inst_l
     if (stmt->stmt_data.try_except_data.has_on_clause && 
         stmt->stmt_data.try_except_data.exception_var_name != NULL) {
         
-        /* Push a new scope for the exception variable */
+        /* Push a new scope for the exception variable on the symbol table.
+         * Also add the variable to the stack manager's current scope so
+         * find_label resolves to the correct stack offset.  After the handler,
+         * remove it from the stack manager so lookups of the same name fall
+         * back to any outer variable. */
         PushScope(symtab);
         
         /* Add the exception variable to the stack manager (8 bytes for pointer) */
@@ -9115,7 +9439,10 @@ static ListNode_t *codegen_try_except(struct Statement *stmt, ListNode_t *inst_l
         else
             inst_list = add_inst(inst_list, "\t# EXCEPT block with no handlers\n");
         
-        /* Pop the scope */
+        /* Remove the exception variable from the stack manager so outer
+         * variables with the same name are visible again, then pop the
+         * symbol table scope. */
+        remove_last_l_x(stmt->stmt_data.try_except_data.exception_var_name);
         PopScope(symtab);
     } else {
         /* No exception variable - just generate the except statements normally */
@@ -9157,6 +9484,12 @@ static ListNode_t *codegen_raise(struct Statement *stmt, ListNode_t *inst_list, 
 
     if (except_label != NULL)
     {
+        /* Pop the runtime except frame before local jump to handler */
+        inst_list = add_inst(inst_list, "\t# RAISE: pop runtime except frame (local raise)\n");
+        inst_list = codegen_vect_reg(inst_list, 0);
+        inst_list = codegen_call_with_shadow_space(inst_list, ctx, "kgpc_pop_except_frame");
+        free_arg_regs();
+
         int limit_depth = codegen_current_except_finally_depth(ctx);
         inst_list = codegen_branch_through_finally(ctx, inst_list, symtab, except_label, limit_depth);
         return inst_list;

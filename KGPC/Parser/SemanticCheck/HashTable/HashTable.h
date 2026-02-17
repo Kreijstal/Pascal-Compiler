@@ -110,8 +110,14 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id,
 /* Mutating tells whether it's being referenced in an assignment context */
 HashNode_t *FindIdentInTable(HashTable_t *table, const char *id);
 
+/* Searches for any identifier starting with the given prefix. Returns first match or NULL */
+HashNode_t *FindIdentByPrefixInTable(HashTable_t *table, const char *prefix);
+
 /* Searches for all instances of a given identifier in the table. Returns a list of HashNode_t* or NULL if not found */
 ListNode_t *FindAllIdentsInTable(HashTable_t *table, const char *id);
+
+/* Move an existing hash node to the back of its bucket list */
+void HashTable_MoveNodeToBack(HashTable_t *table, HashNode_t *node);
 
 /* Resets hash node mutation and reference status */
 void ResetHashNodeStatus(HashNode_t *hash_node);

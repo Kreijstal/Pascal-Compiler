@@ -9,6 +9,31 @@
 
 #include "SemCheck_Expr_Internal.h"
 
+static char *build_qualified_identifier_from_expr_local(struct Expression *expr)
+{
+    if (expr == NULL)
+        return NULL;
+    if (expr->type == EXPR_VAR_ID && expr->expr_data.id != NULL)
+        return strdup(expr->expr_data.id);
+    if (expr->type != EXPR_RECORD_ACCESS)
+        return NULL;
+
+    struct Expression *record_expr = expr->expr_data.record_access_data.record_expr;
+    char *field_id = expr->expr_data.record_access_data.field_id;
+    if (record_expr == NULL || field_id == NULL)
+        return NULL;
+
+    char *base = build_qualified_identifier_from_expr_local(record_expr);
+    if (base == NULL)
+        return NULL;
+    size_t qualified_len = strlen(base) + 1 + strlen(field_id) + 1;
+    char *qualified = (char *)malloc(qualified_len);
+    if (qualified != NULL)
+        snprintf(qualified, qualified_len, "%s.%s", base, field_id);
+    free(base);
+    return qualified;
+}
+
 /*===========================================================================
  * String/Character Builtins
  *===========================================================================*/
@@ -517,6 +542,75 @@ int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
     return error_count;
 }
 
+int semcheck_builtin_concat(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev)
+{
+    assert(type_return != NULL);
+    assert(symtab != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_FUNCTION_CALL);
+
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    int arg_count = ListLength(args);
+
+    if (arg_count < 2)
+    {
+        semcheck_error_with_context("Error on line %d, Concat expects at least two arguments.\n", expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    /* Validate all arguments are string or char compatible */
+    int error_count = 0;
+    ListNode_t *cur = args;
+    while (cur != NULL)
+    {
+        struct Expression *arg = (struct Expression *)cur->cur;
+        KgpcType *arg_type = NULL;
+        error_count += semcheck_expr_with_type(&arg_type, symtab, arg, max_scope_lev, NO_MUTATE);
+        if (error_count == 0 && arg_type != NULL &&
+            !kgpc_type_is_string(arg_type) && !kgpc_type_is_char(arg_type) &&
+            !semcheck_expr_is_shortstring(arg))
+        {
+            semcheck_error_with_context("Error on line %d, Concat arguments must be string or char.\n", expr->line_num);
+            error_count++;
+        }
+        cur = cur->next;
+    }
+
+    if (error_count > 0)
+    {
+        *type_return = UNKNOWN_TYPE;
+        return error_count;
+    }
+
+    /* Transform Concat(a, b, c, ...) into nested addop: ((a + b) + c) + ...
+     * This reuses the existing string concatenation code path. */
+    cur = args;
+    struct Expression *result = (struct Expression *)cur->cur;
+    cur = cur->next;
+    while (cur != NULL)
+    {
+        struct Expression *next_arg = (struct Expression *)cur->cur;
+        result = mk_addop(expr->line_num, PLUS, result, next_arg);
+        semcheck_expr_set_resolved_type(result, STRING_TYPE);
+        cur = cur->next;
+    }
+
+    /* Replace the function call expression with the addop tree in-place.
+     * Copy the addop data into the original expression node. */
+    expr->type = result->type;
+    expr->expr_data = result->expr_data;
+    expr->resolved_kgpc_type = result->resolved_kgpc_type;
+    semcheck_expr_set_resolved_type(expr, STRING_TYPE);
+
+    /* Free only the outermost wrapper node (inner nodes are reused) */
+    free(result);
+
+    *type_return = STRING_TYPE;
+    return 0;
+}
+
 int semcheck_builtin_pos(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev)
 {
@@ -669,8 +763,17 @@ int semcheck_builtin_strpas(int *type_return, SymTab_t *symtab,
     error_count += semcheck_expr_with_type(&arg_kgpc_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
 
     /* FPC accepts both PChar/PAnsiChar (string-like) pointers */
-    if (error_count == 0 &&
-        !(kgpc_type_is_string(arg_kgpc_type) || kgpc_type_is_pointer(arg_kgpc_type) || kgpc_type_is_char(arg_kgpc_type)))
+    int strpas_arg_ok = kgpc_type_is_string(arg_kgpc_type) ||
+        kgpc_type_is_pointer(arg_kgpc_type) || kgpc_type_is_char(arg_kgpc_type);
+    /* Fallback: check resolved_kgpc_type tag (e.g. argv[l] indexing returns pointer) */
+    if (!strpas_arg_ok && arg_expr != NULL && arg_expr->resolved_kgpc_type != NULL)
+    {
+        if (kgpc_type_equals_tag(arg_expr->resolved_kgpc_type, POINTER_TYPE) ||
+            kgpc_type_equals_tag(arg_expr->resolved_kgpc_type, CHAR_TYPE) ||
+            kgpc_type_equals_tag(arg_expr->resolved_kgpc_type, STRING_TYPE))
+            strpas_arg_ok = 1;
+    }
+    if (error_count == 0 && !strpas_arg_ok)
     {
         semcheck_error_with_context("Error on line %d, StrPas expects a PChar or PAnsiChar argument.\n",
             expr->line_num);
@@ -741,7 +844,8 @@ int semcheck_builtin_eof(int *type_return, SymTab_t *symtab,
         }
         KgpcType *file_kgpc_type = NULL;
         error_count += semcheck_expr_with_type(&file_kgpc_type, symtab, check_expr, max_scope_lev, NO_MUTATE);
-        if (!kgpc_type_equals_tag(file_kgpc_type, TEXT_TYPE))
+        if (!kgpc_type_equals_tag(file_kgpc_type, TEXT_TYPE) &&
+            !kgpc_type_equals_tag(file_kgpc_type, FILE_TYPE))
         {
             semcheck_error_with_context("Error on line %d, EOF expects a text file argument.\n", expr->line_num);
             error_count++;
@@ -1793,7 +1897,9 @@ int semcheck_builtin_default(int *type_return, SymTab_t *symtab,
             return error_count;
         }
         target_type = semcheck_tag_from_kgpc(resolved_kgpc_type);
-        record_type = arg_expr != NULL ? arg_expr->record_type : NULL;
+        if (arg_expr != NULL && arg_expr->resolved_kgpc_type != NULL &&
+            kgpc_type_is_record(arg_expr->resolved_kgpc_type))
+            record_type = kgpc_type_get_record(arg_expr->resolved_kgpc_type);
         if (arg_expr != NULL && arg_expr->resolved_kgpc_type != NULL)
         {
             target_kgpc_type = arg_expr->resolved_kgpc_type;
@@ -1840,7 +1946,6 @@ int semcheck_builtin_default(int *type_return, SymTab_t *symtab,
     {
         expr->is_default_initializer = 1;
         semcheck_expr_set_resolved_type(expr, target_type);
-        expr->record_type = record_type;
         if (expr->resolved_kgpc_type != NULL)
             destroy_kgpc_type(expr->resolved_kgpc_type);
         if (target_kgpc_type != NULL)
@@ -1937,10 +2042,22 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
     }
 
     struct Expression *arg_expr = (struct Expression *)args->cur;
-    if (arg_expr != NULL && arg_expr->type == EXPR_VAR_ID && arg_expr->expr_data.id != NULL)
+    if (arg_expr != NULL && (arg_expr->type == EXPR_VAR_ID || arg_expr->type == EXPR_RECORD_ACCESS))
     {
-        const char *type_name = semcheck_base_type_name(arg_expr->expr_data.id);
-        HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, type_name);
+        char *qualified_name = NULL;
+        const char *type_name = NULL;
+        if (arg_expr->type == EXPR_VAR_ID)
+            type_name = arg_expr->expr_data.id;
+        else
+        {
+            qualified_name = build_qualified_identifier_from_expr_local(arg_expr);
+            type_name = qualified_name;
+        }
+        const char *raw_name = type_name;
+        const char *base_name = semcheck_base_type_name(raw_name);
+        HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, raw_name);
+        if (type_node == NULL && base_name != NULL && base_name != raw_name)
+            type_node = semcheck_find_preferred_type_node(symtab, base_name);
         if (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
         {
             struct TypeAlias *alias = get_type_alias_from_node(type_node);
@@ -1949,7 +2066,17 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
             int have_bounds = 0;
             int result_type = INT_TYPE;
 
-            if (alias != NULL && alias->is_range && alias->range_known)
+            if (alias != NULL && alias->is_enum && alias->enum_literals != NULL)
+            {
+                int count = ListLength(alias->enum_literals);
+                if (count > 0)
+                {
+                    low = 0;
+                    high = count - 1;
+                    have_bounds = 1;
+                }
+            }
+            if (!have_bounds && alias != NULL && alias->is_range && alias->range_known)
             {
                 low = alias->range_start;
                 high = alias->range_end;
@@ -2008,95 +2135,100 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
                     }
                 }
             }
-            else if (pascal_identifier_equals(type_name, "Int64"))
+            else if (base_name != NULL && pascal_identifier_equals(base_name, "Int64"))
             {
                 low = (-9223372036854775807LL - 1);
                 high = 9223372036854775807LL;
                 have_bounds = 1;
                 result_type = INT64_TYPE;
             }
-            else if (pascal_identifier_equals(type_name, "QWord") ||
-                     pascal_identifier_equals(type_name, "UInt64"))
+            else if (base_name != NULL &&
+                     (pascal_identifier_equals(base_name, "QWord") ||
+                      pascal_identifier_equals(base_name, "UInt64")))
             {
                 low = 0;
                 high = (long long)0xFFFFFFFFFFFFFFFFULL;
                 have_bounds = 1;
                 result_type = INT64_TYPE;
             }
-            else if (pascal_identifier_equals(type_name, "NativeUInt") ||
-                     pascal_identifier_equals(type_name, "SizeUInt") ||
-                     pascal_identifier_equals(type_name, "PtrUInt"))
+            else if (base_name != NULL &&
+                     (pascal_identifier_equals(base_name, "NativeUInt") ||
+                      pascal_identifier_equals(base_name, "SizeUInt") ||
+                      pascal_identifier_equals(base_name, "PtrUInt")))
             {
                 low = 0;
                 high = (long long)0xFFFFFFFFFFFFFFFFULL;
                 have_bounds = 1;
                 result_type = INT64_TYPE;
             }
-            else if (pascal_identifier_equals(type_name, "NativeInt") ||
-                     pascal_identifier_equals(type_name, "SizeInt") ||
-                     pascal_identifier_equals(type_name, "PtrInt"))
+            else if (base_name != NULL &&
+                     (pascal_identifier_equals(base_name, "NativeInt") ||
+                      pascal_identifier_equals(base_name, "SizeInt") ||
+                      pascal_identifier_equals(base_name, "PtrInt")))
             {
                 low = (-9223372036854775807LL - 1);
                 high = 9223372036854775807LL;
                 have_bounds = 1;
                 result_type = INT64_TYPE;
             }
-            else if (pascal_identifier_equals(type_name, "LongInt"))
+            else if (base_name != NULL && pascal_identifier_equals(base_name, "LongInt"))
             {
                 low = -2147483648LL;
                 high = 2147483647LL;
                 have_bounds = 1;
                 result_type = LONGINT_TYPE;
             }
-            else if (pascal_identifier_equals(type_name, "Integer"))
+            else if (base_name != NULL && pascal_identifier_equals(base_name, "Integer"))
             {
                 low = -2147483648LL;
                 high = 2147483647LL;
                 have_bounds = 1;
                 result_type = INT_TYPE;
             }
-            else if (pascal_identifier_equals(type_name, "Cardinal") ||
-                     pascal_identifier_equals(type_name, "LongWord") ||
-                     pascal_identifier_equals(type_name, "DWord"))
+            else if (base_name != NULL &&
+                     (pascal_identifier_equals(base_name, "Cardinal") ||
+                      pascal_identifier_equals(base_name, "LongWord") ||
+                      pascal_identifier_equals(base_name, "DWord")))
             {
                 low = 0;
                 high = 4294967295LL;
                 have_bounds = 1;
                 result_type = INT64_TYPE;
             }
-            else if (pascal_identifier_equals(type_name, "SmallInt"))
+            else if (base_name != NULL && pascal_identifier_equals(base_name, "SmallInt"))
             {
                 low = -32768LL;
                 high = 32767LL;
                 have_bounds = 1;
             }
-            else if (pascal_identifier_equals(type_name, "Word"))
+            else if (base_name != NULL && pascal_identifier_equals(base_name, "Word"))
             {
                 low = 0;
                 high = 65535LL;
                 have_bounds = 1;
             }
-            else if (pascal_identifier_equals(type_name, "ShortInt"))
+            else if (base_name != NULL && pascal_identifier_equals(base_name, "ShortInt"))
             {
                 low = -128LL;
                 high = 127LL;
                 have_bounds = 1;
             }
-            else if (pascal_identifier_equals(type_name, "Byte"))
+            else if (base_name != NULL && pascal_identifier_equals(base_name, "Byte"))
             {
                 low = 0;
                 high = 255LL;
                 have_bounds = 1;
             }
-            else if (pascal_identifier_equals(type_name, "Boolean"))
+            else if (base_name != NULL && pascal_identifier_equals(base_name, "Boolean"))
             {
                 low = 0;
                 high = 1;
                 have_bounds = 1;
                 result_type = BOOL;
             }
-            else if (pascal_identifier_equals(type_name, "Char") ||
-                     pascal_identifier_equals(type_name, "AnsiChar"))
+            else if (base_name != NULL &&
+                     (pascal_identifier_equals(base_name, "Char") ||
+                      pascal_identifier_equals(base_name, "AnsiChar")))
             {
                 low = 0;
                 high = 255;
@@ -2108,10 +2240,14 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
             {
                 semcheck_replace_call_with_integer_literal(expr, is_high ? high : low);
                 semcheck_expr_set_resolved_type(expr, result_type);
+                if (qualified_name != NULL)
+                    free(qualified_name);
                 *type_return = result_type;
                 return 0;
             }
         }
+        if (qualified_name != NULL)
+            free(qualified_name);
     }
 
     KgpcType *arg_kgpc_type = NULL;
@@ -2201,6 +2337,34 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
         semcheck_replace_call_with_integer_literal(expr, is_high ? 9223372036854775807LL : (-9223372036854775807LL - 1));
         semcheck_expr_set_resolved_type(expr, INT64_TYPE);
         *type_return = INT64_TYPE;
+        return 0;
+    }
+    if (arg_type == BYTE_TYPE)
+    {
+        semcheck_replace_call_with_integer_literal(expr, is_high ? 255LL : 0LL);
+        semcheck_expr_set_resolved_type(expr, BYTE_TYPE);
+        *type_return = BYTE_TYPE;
+        return 0;
+    }
+    if (arg_type == WORD_TYPE)
+    {
+        semcheck_replace_call_with_integer_literal(expr, is_high ? 65535LL : 0LL);
+        semcheck_expr_set_resolved_type(expr, WORD_TYPE);
+        *type_return = WORD_TYPE;
+        return 0;
+    }
+    if (arg_type == LONGWORD_TYPE)
+    {
+        semcheck_replace_call_with_integer_literal(expr, is_high ? 4294967295LL : 0LL);
+        semcheck_expr_set_resolved_type(expr, LONGWORD_TYPE);
+        *type_return = LONGWORD_TYPE;
+        return 0;
+    }
+    if (arg_type == QWORD_TYPE)
+    {
+        semcheck_replace_call_with_integer_literal(expr, is_high ? 9223372036854775807LL : 0LL);
+        semcheck_expr_set_resolved_type(expr, QWORD_TYPE);
+        *type_return = QWORD_TYPE;
         return 0;
     }
     if (arg_type == BOOL)

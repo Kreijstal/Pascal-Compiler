@@ -360,9 +360,12 @@ static void destroy_record_field(struct RecordField *field)
         free(field->array_element_type_id);
     if (field->pointer_type_id != NULL)
         free(field->pointer_type_id);
+    if (field->enum_literals != NULL)
+        destroy_list(field->enum_literals);
     if (field->proc_type != NULL)
         kgpc_type_release(field->proc_type);
     destroy_record_type(field->nested_record);
+    destroy_record_type(field->array_element_record);
     free(field);
 }
 
@@ -1246,6 +1249,15 @@ void destroy_tree(Tree_t *tree)
           destroy_list(tree->tree_data.subprogram_data.subprograms);
 
           destroy_stmt(tree->tree_data.subprogram_data.statement_list);
+          if (tree->tree_data.subprogram_data.generic_type_params != NULL) {
+              for (int i = 0; i < tree->tree_data.subprogram_data.num_generic_type_params; i++)
+                  free(tree->tree_data.subprogram_data.generic_type_params[i]);
+              free(tree->tree_data.subprogram_data.generic_type_params);
+          }
+          if (tree->tree_data.subprogram_data.generic_template_ast != NULL)
+              free_ast(tree->tree_data.subprogram_data.generic_template_ast);
+          if (tree->tree_data.subprogram_data.result_var_name != NULL)
+              free(tree->tree_data.subprogram_data.result_var_name);
           break;
 
         case TREE_VAR_DECL:
@@ -1870,6 +1882,18 @@ struct RecordType *clone_record_type(const struct RecordType *record_type)
     clone->properties = clone_property_list(record_type->properties);
     clone->record_properties = clone_property_list(record_type->record_properties);
 
+    clone->guid_string = record_type->guid_string ? strdup(record_type->guid_string) : NULL;
+    clone->num_interfaces = record_type->num_interfaces;
+    clone->interface_names = NULL;
+    if (record_type->interface_names != NULL && record_type->num_interfaces > 0) {
+        clone->interface_names = (char **)calloc((size_t)record_type->num_interfaces, sizeof(char *));
+        if (clone->interface_names != NULL) {
+            for (int i = 0; i < record_type->num_interfaces; ++i)
+                clone->interface_names[i] = record_type->interface_names[i] != NULL ?
+                    strdup(record_type->interface_names[i]) : NULL;
+        }
+    }
+
     return clone;
 }
 
@@ -1878,7 +1902,7 @@ static struct RecordField *clone_record_field(const struct RecordField *field)
     if (field == NULL)
         return NULL;
 
-    struct RecordField *clone = (struct RecordField *)malloc(sizeof(struct RecordField));
+    struct RecordField *clone = (struct RecordField *)calloc(1, sizeof(struct RecordField));
     assert(clone != NULL);
     clone->name = field->name != NULL ? strdup(field->name) : NULL;
     clone->type = field->type;
@@ -1893,12 +1917,15 @@ static struct RecordField *clone_record_field(const struct RecordField *field)
     clone->array_element_type = field->array_element_type;
     clone->array_element_type_id = field->array_element_type_id != NULL ?
         strdup(field->array_element_type_id) : NULL;
+    clone->array_element_record = clone_record_type(field->array_element_record);
     clone->array_is_open = field->array_is_open;
     clone->is_hidden = field->is_hidden;
+    clone->is_class_var = field->is_class_var;
     clone->is_pointer = field->is_pointer;
     clone->pointer_type = field->pointer_type;
     clone->pointer_type_id = field->pointer_type_id != NULL ?
         strdup(field->pointer_type_id) : NULL;
+    clone->enum_literals = NULL; /* enum_literals are not cloned - they're registered at declaration */
     return clone;
 }
 
@@ -2434,6 +2461,7 @@ struct Statement *mk_procedurecall(int line_num, char *id, ListNode_t *expr_args
     new_stmt->stmt_data.procedure_call_data.is_procedural_var_call = 0;
     new_stmt->stmt_data.procedure_call_data.procedural_var_symbol = NULL;
     new_stmt->stmt_data.procedure_call_data.procedural_var_expr = NULL;
+    new_stmt->stmt_data.procedure_call_data.is_method_call_placeholder = 0;
 
     return new_stmt;
 }

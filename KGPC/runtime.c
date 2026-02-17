@@ -8,6 +8,7 @@
 #include <stddef.h>
 #include <math.h>
 #include <errno.h>
+#include <setjmp.h>
 
 #include "runtime_internal.h"
 #include <sys/stat.h>
@@ -69,6 +70,45 @@ static char *kgpc_apply_field_width(char *value, int64_t width);
 int64_t kgpc_current_exception = 0;
 static __thread int kgpc_ioresult = 0;
 static int kgpc_threading_used = 0;
+
+/* ────────── setjmp/longjmp exception frame stack ────────── */
+
+typedef struct kgpc_except_frame {
+    jmp_buf buf;
+} kgpc_except_frame;
+
+#define KGPC_EXCEPT_STACK_INIT 8
+
+static kgpc_except_frame *kgpc_except_stack = NULL;
+static int kgpc_except_stack_depth = 0;
+static int kgpc_except_stack_capacity = 0;
+
+jmp_buf *kgpc_push_except_frame(void)
+{
+    if (kgpc_except_stack_depth >= kgpc_except_stack_capacity) {
+        int new_cap = (kgpc_except_stack_capacity > 0)
+                      ? kgpc_except_stack_capacity * 2
+                      : KGPC_EXCEPT_STACK_INIT;
+        kgpc_except_frame *new_stack =
+            (kgpc_except_frame *)realloc(kgpc_except_stack,
+                                         sizeof(kgpc_except_frame) * (size_t)new_cap);
+        if (new_stack == NULL) {
+            fprintf(stderr, "KGPC runtime: except frame stack allocation failed\n");
+            exit(EXIT_FAILURE);
+        }
+        kgpc_except_stack = new_stack;
+        kgpc_except_stack_capacity = new_cap;
+    }
+    return &kgpc_except_stack[kgpc_except_stack_depth++].buf;
+}
+
+void kgpc_pop_except_frame(void)
+{
+    if (kgpc_except_stack_depth > 0)
+        kgpc_except_stack_depth--;
+}
+
+/* ────────── end exception frame stack ────────── */
 
 int kgpc_ioresult_get_and_clear(void)
 {
@@ -1035,6 +1075,101 @@ void kgpc_rtti_check_cast(const kgpc_class_typeinfo *value_type,
     abort();
 }
 
+int kgpc_get_interface(const void *self, const void *guid, void **out_intf)
+{
+    if (self == NULL || guid == NULL || out_intf == NULL)
+        return 0;
+
+    /* Get typeinfo pointer from the object's first field (VMT pointer -> typeinfo at offset 0) */
+    const void *vmt = *(const void * const *)self;
+    if (vmt == NULL)
+        return 0;
+    const kgpc_class_typeinfo *typeinfo = *(const kgpc_class_typeinfo * const *)vmt;
+
+    /* Walk the class hierarchy */
+    while (typeinfo != NULL) {
+        if (typeinfo->interfaces != NULL && typeinfo->num_interfaces > 0) {
+            for (int i = 0; i < typeinfo->num_interfaces; i++) {
+                if (memcmp(&typeinfo->interfaces[i], guid, 16) == 0) {
+                    *out_intf = (void *)self;
+                    return 1;
+                }
+            }
+        }
+        typeinfo = typeinfo->parent;
+    }
+    return 0;
+}
+
+const void *kgpc_class_parent(const void *self)
+{
+    if (self == NULL)
+        return NULL;
+
+    const kgpc_class_typeinfo *typeinfo = NULL;
+
+    const kgpc_class_typeinfo *candidate = *(const kgpc_class_typeinfo * const *)self;
+    if (candidate != NULL && candidate->vmt == self)
+    {
+        typeinfo = candidate;
+    }
+    else
+    {
+        const void *vmt = *(const void *const *)self;
+        if (vmt != NULL)
+        {
+            const kgpc_class_typeinfo *candidate2 = *(const kgpc_class_typeinfo * const *)vmt;
+            if (candidate2 != NULL && candidate2->vmt == vmt)
+                typeinfo = candidate2;
+        }
+    }
+
+    if (typeinfo != NULL && typeinfo->parent != NULL)
+        return typeinfo->parent->vmt;
+    return NULL;
+}
+
+const char *kgpc_class_name(const void *self)
+{
+    if (self == NULL)
+        return "";
+
+    const kgpc_class_typeinfo *typeinfo = NULL;
+
+    const kgpc_class_typeinfo *candidate = *(const kgpc_class_typeinfo * const *)self;
+    if (candidate != NULL && candidate->vmt == self)
+    {
+        typeinfo = candidate;
+    }
+    else
+    {
+        const void *vmt = *(const void *const *)self;
+        if (vmt != NULL)
+        {
+            const kgpc_class_typeinfo *candidate2 = *(const kgpc_class_typeinfo * const *)vmt;
+            if (candidate2 != NULL && candidate2->vmt == vmt)
+                typeinfo = candidate2;
+        }
+    }
+
+    if (typeinfo != NULL && typeinfo->class_name != NULL)
+        return typeinfo->class_name;
+    return "";
+}
+
+void kgpc_assert_failed(const char *msg, const char *filename, int line)
+{
+    if (msg != NULL && msg[0] != '\0')
+        fprintf(stderr, "Assertion failed: %s", msg);
+    else
+        fprintf(stderr, "Assertion failed");
+    if (filename != NULL && filename[0] != '\0')
+        fprintf(stderr, " (%s, line %d)", filename, line);
+    fprintf(stderr, "\n");
+    fflush(stderr);
+    exit(227);
+}
+
 int kgpc_printf(const char *format, ...) {
     va_list args;
     va_start(args, format);
@@ -1935,6 +2070,15 @@ void kgpc_write_real(KGPCTextRec *file, int width, int precision, int64_t value_
 
 void kgpc_raise(int64_t value)
 {
+    kgpc_current_exception = value;
+
+    /* If there is an active except frame, longjmp to it */
+    if (kgpc_except_stack_depth > 0) {
+        kgpc_except_stack_depth--;
+        longjmp(kgpc_except_stack[kgpc_except_stack_depth].buf, 1);
+    }
+
+    /* No except frame — truly unhandled */
     if (value == 0)
         fprintf(stderr, "Unhandled exception raised.\n");
     else
@@ -1968,6 +2112,16 @@ void kgpc_dispose(void **target)
         free(*target);
         *target = NULL;
     }
+}
+
+void Finalize(void *value)
+{
+    (void)value;
+}
+
+void Initialize(void *value)
+{
+    (void)value;
 }
 
 /* Generic default constructor for classes without explicit constructors */
@@ -2704,6 +2858,26 @@ char *kgpc_shortstring_to_string(const char *value)
 
     unsigned char len = (unsigned char)value[0];
     return kgpc_string_duplicate_length(value + 1, len);
+}
+
+/* FPC_PCHAR_TO_SHORTSTR: Convert a null-terminated C string (PAnsiChar)
+ * to a ShortString (length-prefixed, max 255 chars).
+ * Used by FPC's system unit for pchar-to-shortstring conversions. */
+void FPC_PCHAR_TO_SHORTSTR(char *res, const char *p)
+{
+    if (res == NULL)
+        return;
+    if (p == NULL)
+    {
+        res[0] = 0;
+        return;
+    }
+    size_t len = strlen(p);
+    if (len > 255)
+        len = 255;
+    res[0] = (char)len;
+    if (len > 0)
+        memcpy(res + 1, p, len);
 }
 
 int64_t kgpc_shortstring_length(const char *value)
@@ -3916,17 +4090,11 @@ char *kgpc_exclude_trailing_path_delim(const char *path)
         return kgpc_alloc_empty_string();
     size_t end = len;
     while (end > 0 && kgpc_is_path_delim_char(path[end - 1]))
-    {
-        if (end == 1)
-            break;
-        if (end == 3 && path[1] == ':' && kgpc_is_path_delim_char(path[2]))
-            break;
         --end;
-    }
+    if (end == 0)
+        return kgpc_alloc_empty_string();
     if (end == len)
         return kgpc_string_duplicate(path);
-    if (end == 0)
-        end = 1;
     return kgpc_string_duplicate_length(path, end);
 }
 
@@ -3959,6 +4127,37 @@ static long long kgpc_val_parse_integer(const char *text, long long min_value,
         return 1;
 
     if (errno == ERANGE || value < min_value || value > max_value)
+        return kgpc_val_error_position(text, endptr);
+
+    const char *rest = kgpc_val_skip_trailing_whitespace(endptr);
+    if (rest != NULL && *rest != '\0')
+        return kgpc_val_error_position(text, rest);
+
+    if (out_value != NULL)
+        *out_value = value;
+    return 0;
+}
+
+static long long kgpc_val_parse_unsigned(const char *text, unsigned long long max_value,
+    unsigned long long *out_value)
+{
+    if (text == NULL)
+        text = "";
+
+    const char *ptr = text;
+    while (*ptr != '\0' && isspace((unsigned char)*ptr))
+        ++ptr;
+
+    if (*ptr == '-')
+        return kgpc_val_error_position(text, ptr);
+
+    errno = 0;
+    char *endptr = NULL;
+    unsigned long long value = strtoull(ptr, &endptr, 10);
+    if (endptr == ptr)
+        return 1;
+
+    if (errno == ERANGE || value > max_value)
         return kgpc_val_error_position(text, endptr);
 
     const char *rest = kgpc_val_skip_trailing_whitespace(endptr);
@@ -4011,6 +4210,15 @@ long long kgpc_val_longint(const char *text, int64_t *out_value)
     return code;
 }
 
+long long kgpc_val_qword(const char *text, uint64_t *out_value)
+{
+    unsigned long long parsed = 0;
+    long long code = kgpc_val_parse_unsigned(text, ULLONG_MAX, &parsed);
+    if (code == 0 && out_value != NULL)
+        *out_value = (uint64_t)parsed;
+    return code;
+}
+
 long long kgpc_val_real(const char *text, double *out_value)
 {
     double parsed = 0.0;
@@ -4018,6 +4226,62 @@ long long kgpc_val_real(const char *text, double *out_value)
     if (code == 0 && out_value != NULL)
         *out_value = parsed;
     return code;
+}
+
+/* ShortString versions of Val: take a ShortString pointer (length byte + chars) */
+static const char *kgpc_shortstr_to_cstr(const unsigned char *ss, char *buf, int bufsize)
+{
+    if (ss == NULL)
+        return "";
+    int len = ss[0];
+    if (len >= bufsize)
+        len = bufsize - 1;
+    memcpy(buf, ss + 1, len);
+    buf[len] = '\0';
+    return buf;
+}
+
+long long kgpc_val_integer_ss(const unsigned char *ss, int32_t *out_value)
+{
+    char buf[256];
+    return kgpc_val_integer(kgpc_shortstr_to_cstr(ss, buf, sizeof(buf)), out_value);
+}
+
+long long kgpc_val_longint_ss(const unsigned char *ss, int64_t *out_value)
+{
+    char buf[256];
+    return kgpc_val_longint(kgpc_shortstr_to_cstr(ss, buf, sizeof(buf)), out_value);
+}
+
+long long kgpc_val_qword_ss(const unsigned char *ss, uint64_t *out_value)
+{
+    char buf[256];
+    return kgpc_val_qword(kgpc_shortstr_to_cstr(ss, buf, sizeof(buf)), out_value);
+}
+
+long long kgpc_val_real_ss(const unsigned char *ss, double *out_value)
+{
+    char buf[256];
+    return kgpc_val_real(kgpc_shortstr_to_cstr(ss, buf, sizeof(buf)), out_value);
+}
+
+int64_t bsrqword_i64(uint64_t value)
+{
+    if (value == 0)
+        return -1;
+    return (int64_t)(63u - (uint64_t)__builtin_clzll(value));
+}
+
+int64_t bsfqword_i64(uint64_t value)
+{
+    if (value == 0)
+        return -1;
+    return (int64_t)__builtin_ctzll(value);
+}
+
+int64_t popcnt_i64(uint64_t value)
+{
+    return (int64_t)__builtin_popcountll(value);
 }
 
 /* Chr function - returns a character value as an integer */
@@ -5368,12 +5632,12 @@ int kgpc_file_exists(const char *path)
     struct _stat st;
     if (_stat(path, &st) != 0)
         return 0;
-    return (_S_IFREG & st.st_mode) && (_S_IFMT & st.st_mode);
+    return !(_S_IFDIR & st.st_mode);
 #else
     struct stat st;
     if (stat(path, &st) != 0)
         return 0;
-    return S_ISREG(st.st_mode);
+    return !S_ISDIR(st.st_mode);
 #endif
 }
 
@@ -6004,4 +6268,24 @@ void __kgpc_abstract_method_error(void)
 {
     fprintf(stderr, "Runtime error: Abstract method called\n");
     abort();
+}
+
+/* FPC compiler intrinsic stubs: get_frame, get_pc_addr, etc.
+ * These return the current stack frame pointer for exception handling.
+ * The _void suffix variant is needed because KGPC's codegen mangles
+ * zero-argument functions with _void. */
+void *kgpc_get_frame(void)
+{
+    return __builtin_frame_address(0);
+}
+
+void *kgpc_get_frame_void(void)
+{
+    return __builtin_frame_address(0);
+}
+
+void *kgpc_get_frame_p(void *frame)
+{
+    (void)frame;
+    return __builtin_frame_address(0);
 }

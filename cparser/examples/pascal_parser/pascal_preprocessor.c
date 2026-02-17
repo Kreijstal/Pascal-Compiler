@@ -96,6 +96,7 @@ static bool preprocess_buffer_internal(PascalPreprocessor *pp,
                                        char **error_message);
 static bool read_file_contents(const char *filename, char **buffer, size_t *length, char **error_message);
 static bool define_symbol(PascalPreprocessor *pp, const char *symbol);
+static bool define_symbol_const(PascalPreprocessor *pp, const char *name, const char *value);
 static bool undefine_symbol(PascalPreprocessor *pp, const char *symbol);
 static bool symbol_is_defined(const PascalPreprocessor *pp, const char *symbol);
 static void trim(char **begin, char **end);
@@ -177,6 +178,10 @@ bool pascal_preprocessor_define_macro(PascalPreprocessor *pp, const char *symbol
     bool result = define_symbol(pp, combined);
     free(combined);
     return result;
+}
+
+bool pascal_preprocessor_define_const(PascalPreprocessor *pp, const char *symbol, const char *value) {
+    return define_symbol_const(pp, symbol, value);
 }
 
 bool pascal_preprocessor_undefine(PascalPreprocessor *pp, const char *symbol) {
@@ -397,6 +402,93 @@ static bool preprocess_buffer_internal(PascalPreprocessor *pp,
                     return false;
                 }
                 continue;
+            }
+            if (c == '{') {
+                size_t close = i + 1;
+                bool has_newline = false;
+                bool has_nested = false;
+                for (; close < length; ++close) {
+                    if (input[close] == '\n' || input[close] == '\r') {
+                        has_newline = true;
+                        break;
+                    }
+                    if (input[close] == '{') {
+                        has_nested = true;
+                        break;
+                    }
+                    if (input[close] == '}') {
+                        break;
+                    }
+                }
+                if (!has_newline && !has_nested && close < length && input[close] == '}') {
+                    const char *p = input + i + 1;
+                    const char *end = input + close;
+                    while (p < end && isspace((unsigned char)*p))
+                        ++p;
+                    const char *id1_start = p;
+                    if (p < end && (isalpha((unsigned char)*p) || *p == '_')) {
+                        ++p;
+                        while (p < end && (isalnum((unsigned char)*p) || *p == '_'))
+                            ++p;
+                        const char *id1_end = p;
+                        while (p < end && isspace((unsigned char)*p))
+                            ++p;
+                        if (p + 1 < end && p[0] == ':' && p[1] == '=') {
+                            p += 2;
+                            while (p < end && isspace((unsigned char)*p))
+                                ++p;
+                            const char *id2_start = p;
+                            if (p < end && (isalpha((unsigned char)*p) || *p == '_')) {
+                                ++p;
+                                while (p < end && (isalnum((unsigned char)*p) || *p == '_'))
+                                    ++p;
+                                const char *id2_end = p;
+                                while (p < end && isspace((unsigned char)*p))
+                                    ++p;
+                                if (p == end) {
+                                    size_t next = close + 1;
+                                    while (next < length && (input[next] == ' ' || input[next] == '\t'))
+                                        ++next;
+                                    if (next < length && input[next] == '(') {
+                                        if (pp->flatten_only || current_branch_active(conditions)) {
+                                            bool should_emit_directive = false;
+                                            if (need_line_directive && filename != NULL && depth > 0) {
+                                                if (i == 0 || input[i - 1] == '\n' || last_emitted_line == 0) {
+                                                    should_emit_directive = true;
+                                                }
+                                            }
+                                            if (should_emit_directive) {
+                                                if (!emit_line_directive(output, current_line, filename)) {
+                                                    return set_error(error_message, "out of memory");
+                                                }
+                                                need_line_directive = false;
+                                            }
+                                            for (const char *cur = id1_start; cur < id1_end; ++cur) {
+                                                if (!string_builder_append_char(output, *cur)) {
+                                                    return set_error(error_message, "out of memory");
+                                                }
+                                            }
+                                            if (!string_builder_append_char(output, ':') ||
+                                                !string_builder_append_char(output, '=')) {
+                                                return set_error(error_message, "out of memory");
+                                            }
+                                            for (const char *cur = id2_start; cur < id2_end; ++cur) {
+                                                if (!string_builder_append_char(output, *cur)) {
+                                                    return set_error(error_message, "out of memory");
+                                                }
+                                            }
+                                            last_emitted_line = current_line;
+                                        } else {
+                                            need_line_directive = true;
+                                        }
+                                        i = close;
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -1662,6 +1754,44 @@ static bool define_symbol(PascalPreprocessor *pp, const char *symbol) {
     pp->defines[pp->define_count].name = name_part;
     pp->defines[pp->define_count].value = value_part;
     pp->defines[pp->define_count].is_macro = is_macro;
+    pp->define_count++;
+    return true;
+}
+
+/* Define a symbol with a value but is_macro = false, so it's available for {$if}
+ * evaluation via get_symbol_value() but NOT for text replacement via get_macro_value(). */
+static bool define_symbol_const(PascalPreprocessor *pp, const char *name, const char *value) {
+    if (!pp || !name || !value) return false;
+
+    char *name_part = strdup(name);
+    char *value_part = strdup(value);
+    if (!name_part || !value_part) {
+        free(name_part);
+        free(value_part);
+        return false;
+    }
+    uppercase(name_part);
+
+    /* Update existing entry if present */
+    for (size_t i = 0; i < pp->define_count; ++i) {
+        if (strcmp(pp->defines[i].name, name_part) == 0) {
+            free(pp->defines[i].value);
+            pp->defines[i].value = value_part;
+            pp->defines[i].is_macro = false;
+            free(name_part);
+            return true;
+        }
+    }
+
+    if (!ensure_capacity((void **)&pp->defines, sizeof(DefineEntry), &pp->define_capacity, pp->define_count + 1)) {
+        free(name_part);
+        free(value_part);
+        return false;
+    }
+
+    pp->defines[pp->define_count].name = name_part;
+    pp->defines[pp->define_count].value = value_part;
+    pp->defines[pp->define_count].is_macro = false;
     pp->define_count++;
     return true;
 }

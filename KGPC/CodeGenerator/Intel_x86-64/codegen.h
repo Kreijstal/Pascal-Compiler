@@ -134,6 +134,25 @@ static inline const char *codegen_readonly_section_directive(void)
 #include "../../Parser/SemanticCheck/SymTab/SymTab.h"
 
 /*
+ * Compiler invariant policy:
+ * For internal compiler assumptions, do not silently continue with fallbacks.
+ * These checks intentionally hard-crash in all builds (including release) so
+ * invariant violations are fixed at the source instead of being masked.
+ * Do not downgrade these to debug-only assert() or warning paths.
+ */
+#define KGPC_COMPILER_HARD_ASSERT(cond, fmt, ...)                                \
+    do                                                                            \
+    {                                                                             \
+        if (!(cond))                                                              \
+        {                                                                         \
+            fprintf(stderr,                                                        \
+                "FATAL: compiler invariant failed at %s:%d: " fmt "\n",          \
+                __FILE__, __LINE__, ##__VA_ARGS__);                               \
+            abort();                                                              \
+        }                                                                         \
+    } while (0)
+
+/*
     The context for the code generator.
     This struct holds all the state that was previously global,
     allowing for a more modular and re-entrant design.

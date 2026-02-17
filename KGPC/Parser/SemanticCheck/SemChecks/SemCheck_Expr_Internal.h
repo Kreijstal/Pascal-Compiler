@@ -386,6 +386,8 @@ int semcheck_builtin_length(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev);
 int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev);
+int semcheck_builtin_concat(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev);
 int semcheck_builtin_pos(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev);
 int semcheck_builtin_strpas(int *type_return, SymTab_t *symtab,

@@ -19,8 +19,7 @@ end;
 var
   C: TCounter;
 begin
-  { Static method called via mangled name with dummy instance }
-  { TODO: Support TCounter.PrintHello; syntax for true static call }
+  { Static method called via record type qualifier }
   C.Value := 0;
-  TCounter__PrintHello(C);
+  TCounter.PrintHello;
 end.
