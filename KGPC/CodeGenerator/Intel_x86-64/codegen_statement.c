@@ -1066,6 +1066,41 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
                 }
             }
 
+            if (expr->expr_data.id != NULL)
+            {
+                const char *builtin_file_ptr = NULL;
+                if (pascal_identifier_equals(expr->expr_data.id, "stdin"))
+                    builtin_file_ptr = "stdin_ptr";
+                else if (pascal_identifier_equals(expr->expr_data.id, "stdout"))
+                    builtin_file_ptr = "stdout_ptr";
+                else if (pascal_identifier_equals(expr->expr_data.id, "stderr"))
+                    builtin_file_ptr = "stderr_ptr";
+                else if (pascal_identifier_equals(expr->expr_data.id, "Input"))
+                    builtin_file_ptr = "Input_ptr";
+                else if (pascal_identifier_equals(expr->expr_data.id, "Output"))
+                    builtin_file_ptr = "Output_ptr";
+
+                if (builtin_file_ptr != NULL)
+                {
+                    Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                    if (addr_reg == NULL)
+                        addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+                    if (addr_reg == NULL)
+                    {
+                        inst_list = codegen_fail_register(ctx, inst_list, out_reg,
+                            "ERROR: Unable to allocate register for file variable address.");
+                        goto cleanup;
+                    }
+
+                    char buffer[96];
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s(%%rip), %s\n",
+                        builtin_file_ptr, addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    *out_reg = addr_reg;
+                    goto cleanup;
+                }
+            }
+
             if (nonlocal_flag() == 1)
             {
                 int offset = 0;
