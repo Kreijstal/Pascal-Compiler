@@ -1794,23 +1794,80 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         /* For constructors, allocate memory for the instance */
         if (is_constructor)
         {
-            /* Try to get class size from expression's record_type first */
-            struct RecordType *class_record = expr->record_type;
-            
-            CODEGEN_DEBUG("DEBUG Constructor: expr->record_type=%p\n", (void *)class_record);
-            
-            /* If not available, try to get it from the first argument (class type) */
-            if (class_record == NULL)
+            struct RecordType *class_record = NULL;
+            int ctor_type_receiver = 0;
+
+            /* Allocate constructor instances for constructor-call forms where the
+             * first argument is either a type receiver (TClass.Create) or a
+             * semcheck-injected Self placeholder with resolved class pointer type. */
+            ListNode_t *first_arg = expr->expr_data.function_call_data.args_expr;
+            if (first_arg != NULL && first_arg->cur != NULL)
             {
-                ListNode_t *first_arg = expr->expr_data.function_call_data.args_expr;
-                if (first_arg != NULL && first_arg->cur != NULL)
+                struct Expression *class_expr = (struct Expression *)first_arg->cur;
+                if (class_expr != NULL && class_expr->resolved_kgpc_type != NULL)
                 {
-                    struct Expression *class_expr = (struct Expression *)first_arg->cur;
-                    if (class_expr != NULL)
-                        class_record = class_expr->record_type;
-                    
-                    CODEGEN_DEBUG("DEBUG Constructor: first_arg class_expr=%p, class_record=%p\n", 
-                        (void *)class_expr, (void *)class_record);
+                    KgpcType *class_type = class_expr->resolved_kgpc_type;
+                    if (kgpc_type_is_pointer(class_type) &&
+                        class_type->info.points_to != NULL &&
+                        kgpc_type_is_record(class_type->info.points_to))
+                    {
+                        class_record = class_type->info.points_to->info.record_info;
+                        ctor_type_receiver = (class_record != NULL);
+                    }
+                    else if (kgpc_type_is_record(class_type))
+                    {
+                        class_record = class_type->info.record_info;
+                        ctor_type_receiver = (class_record != NULL);
+                    }
+                }
+
+                if (!ctor_type_receiver && class_expr != NULL &&
+                    class_expr->type == EXPR_VAR_ID &&
+                    class_expr->expr_data.id != NULL && ctx != NULL && ctx->symtab != NULL)
+                {
+                    HashNode_t *class_node = NULL;
+                    if (FindIdent(&class_node, ctx->symtab, class_expr->expr_data.id) >= 0 &&
+                        class_node != NULL && class_node->hash_type == HASHTYPE_TYPE &&
+                        class_node->type != NULL)
+                    {
+                        if (class_node->type->kind == TYPE_KIND_RECORD)
+                            class_record = class_node->type->info.record_info;
+                        else if (class_node->type->kind == TYPE_KIND_POINTER &&
+                                 class_node->type->info.points_to != NULL &&
+                                 class_node->type->info.points_to->kind == TYPE_KIND_RECORD)
+                            class_record = class_node->type->info.points_to->info.record_info;
+                        ctor_type_receiver = (class_record != NULL);
+                    }
+                }
+            }
+
+            /* Fallback: derive owner class from mangled method name prefix. */
+            if (!ctor_type_receiver && func_mangled_name != NULL && ctx != NULL && ctx->symtab != NULL)
+            {
+                const char *sep = strstr(func_mangled_name, "__");
+                if (sep != NULL && sep > func_mangled_name)
+                {
+                    size_t owner_len = (size_t)(sep - func_mangled_name);
+                    char *owner_id = (char *)malloc(owner_len + 1);
+                    if (owner_id != NULL)
+                    {
+                        memcpy(owner_id, func_mangled_name, owner_len);
+                        owner_id[owner_len] = '\0';
+
+                        HashNode_t *owner_node = NULL;
+                        if (FindIdent(&owner_node, ctx->symtab, owner_id) >= 0 &&
+                            owner_node != NULL && owner_node->type != NULL)
+                        {
+                            if (owner_node->type->kind == TYPE_KIND_RECORD)
+                                class_record = owner_node->type->info.record_info;
+                            else if (owner_node->type->kind == TYPE_KIND_POINTER &&
+                                     owner_node->type->info.points_to != NULL &&
+                                     owner_node->type->info.points_to->kind == TYPE_KIND_RECORD)
+                                class_record = owner_node->type->info.points_to->info.record_info;
+                            ctor_type_receiver = (class_record != NULL);
+                        }
+                        free(owner_id);
+                    }
                 }
             }
             
@@ -1826,7 +1883,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 }
             }
             
-            if (class_record != NULL && record_type_is_class(class_record))
+            if (ctor_type_receiver && class_record != NULL)
             {
                 /* Get the size of the class instance */
                 long long instance_size = 0;
@@ -1957,10 +2014,10 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         if (proc_name_hint == NULL)
             proc_name_hint = mangled_name_hint;
 
-        if (is_constructor) {
+        if (is_constructor && getenv("KGPC_DEBUG_CODEGEN") != NULL) {
             int args_count = 0;
             for (ListNode_t *c = args_to_pass; c != NULL; c = c->next) args_count++;
-            fprintf(stderr, "[CODEGEN] Constructor %s: args_to_pass has %d arguments, arg_start_index=%d\n",
+            fprintf(stderr, "[CodeGen] Constructor %s args=%d arg_start=%d\n",
                 proc_name_hint ? proc_name_hint : "(null)", args_count, arg_start_index);
         }
 
@@ -3124,19 +3181,29 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                         }
                     }
                 }
-                else if(nonlocal_flag() == 1)
-                {
-                    inst_list = codegen_get_nonlocal(inst_list, expr->expr_data.id, &offset);
-                    snprintf(buffer, buf_len, "-%d(%s)", offset, current_non_local_reg64());
-                }
                 else
                 {
-                    /* Check if this is a VMT label (global symbol ending with "_VMT") */
+                    if (found && node != NULL && node->mangled_id != NULL)
+                    {
+                        StackNode_t *mangled_stack_node = find_label(node->mangled_id);
+                        if (mangled_stack_node != NULL)
+                        {
+                            if (mangled_stack_node->is_static)
+                            {
+                                const char *label = (mangled_stack_node->static_label != NULL) ?
+                                    mangled_stack_node->static_label : mangled_stack_node->label;
+                                snprintf(buffer, buf_len, "%s(%%rip)", label);
+                                break;
+                            }
+                            snprintf(buffer, buf_len, "-%d(%%rbp)", mangled_stack_node->offset);
+                            break;
+                        }
+                    }
+
                     const char *var_name = expr != NULL ? expr->expr_data.id : "<unknown>";
                     size_t name_len = var_name != NULL ? strlen(var_name) : 0;
                     int is_vmt_label = (name_len > 4 && strcmp(var_name + name_len - 4, "_VMT") == 0);
-                    
-                    /* Check if this is a builtin file variable (stdin, stdout, stderr, Input, Output) */
+
                     int is_builtin_file = 0;
                     const char *global_ptr_name = NULL;
                     if (var_name != NULL)
@@ -3167,24 +3234,19 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                             global_ptr_name = "Output_ptr";
                         }
                     }
-                    
+
                     if (is_vmt_label)
                     {
-                        /* VMT is a global label - use RIP-relative addressing */
                         snprintf(buffer, buf_len, "%s(%%rip)", var_name);
                     }
                     else if (is_builtin_file)
                     {
-                        /* Builtin file variable - load from global runtime pointer */
                         snprintf(buffer, buf_len, "%s(%%rip)", global_ptr_name);
                     }
                     else
                     {
-                        fprintf(stderr,
-                            "ERROR: Non-local codegen support disabled while accessing %s.\n",
-                            var_name != NULL ? var_name : "<unknown>");
-                        fprintf(stderr, "Enable with flag '-non-local' after required flags\n");
-                        exit(1);
+                        inst_list = codegen_get_nonlocal(inst_list, expr->expr_data.id, &offset);
+                        snprintf(buffer, buf_len, "-%d(%s)", offset, current_non_local_reg64());
                     }
                 }
             }
@@ -3433,12 +3495,14 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                     /* Check if int_reg is an immediate value */
                     if (int_reg[0] == '$')
                     {
-                        /* It's an immediate - compute the scaled value directly */
+                        /* It's an immediate - compute the scaled value directly.
+                         * Use a scratch register that doesn't conflict with ptr_reg. */
                         long long int_val = strtoll(int_reg + 1, NULL, 0);
                         long long scaled_val = int_val * element_size;
-                        snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %%r11\n", scaled_val);
+                        const char *scratch = (ptr_reg != NULL && strcmp(ptr_reg, "%r11") == 0) ? "%r10" : "%r11";
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n", scaled_val, scratch);
                         inst_list = add_inst(inst_list, buffer);
-                        int_reg = "%r11";
+                        int_reg = scratch;
                     }
                     else
                     {

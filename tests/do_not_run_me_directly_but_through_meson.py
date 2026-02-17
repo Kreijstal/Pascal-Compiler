@@ -1394,7 +1394,7 @@ class TestCompiler(unittest.TestCase):
         self.assertIn("unterminated conditional", stderr)
 
     def test_error_reports_path(self):
-        """Compiler errors should include the source path prefix."""
+        """Compiler errors should include the source path prefix, using the include file when applicable."""
         input_file, asm_file, _ = self._get_test_paths(
             "tdd_error_path_in_include"
         )
@@ -1403,7 +1403,9 @@ class TestCompiler(unittest.TestCase):
             run_compiler(input_file, asm_file)
 
         stderr = cm.exception.stderr or ""
-        self.assertIn(f"{input_file}:", stderr)
+        # The error is in the include file, so the error prefix should show the include file path
+        include_file = input_file.replace(".p", ".inc")
+        self.assertIn(f"{include_file}:", stderr)
         lower = stderr.lower()
         self.assertTrue(
             "type mismatch" in lower or "incompatible types" in lower,

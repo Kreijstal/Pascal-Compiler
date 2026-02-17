@@ -466,6 +466,10 @@ static int types_numeric_compatible(int lhs, int rhs) {
     if (lhs == REAL_TYPE && is_integer_type(rhs))
         return 1;
 
+    /* Integer can accept real (truncation, as in FPC Trunc semantics) */
+    if (is_integer_type(lhs) && rhs == REAL_TYPE)
+        return 1;
+
     /* Integer can accept char (for compatibility) */
     if (is_integer_type(lhs) && rhs == CHAR_TYPE)
         return 1;
@@ -731,6 +735,13 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
     if (lhs_type == NULL || rhs_type == NULL)
         return 0;
 
+    /* Variant type auto-coerces to/from any other type */
+    if ((lhs_type->kind == TYPE_KIND_PRIMITIVE && lhs_type->info.primitive_type_tag == VARIANT_TYPE) ||
+        (rhs_type->kind == TYPE_KIND_PRIMITIVE && rhs_type->info.primitive_type_tag == VARIANT_TYPE))
+    {
+        return 1;
+    }
+
     /* Special case: Allow string (primitive) to be assigned to char array */
     /* This is a common Pascal idiom: var s: array[1..20] of char; begin s := 'hello'; end; */
     if (lhs_type->kind == TYPE_KIND_ARRAY &&
@@ -879,17 +890,76 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
         return 0;
     }
 
-    /* Allow class instances to be compatible with untyped Pointer parameters 
-     * This is needed for procedures like FreeAndNil(var Obj: Pointer) */
+    /* Allow untyped pointer (points_to == NULL) to be compatible with any type.
+     * This handles var/out parameters whose pointed-to type couldn't be resolved,
+     * as well as untyped Pointer parameters like FreeAndNil(var Obj: Pointer). */
+    if (lhs_type->kind == TYPE_KIND_POINTER && lhs_type->info.points_to == NULL)
+        return 1;
+    if (rhs_type->kind == TYPE_KIND_POINTER && rhs_type->info.points_to == NULL)
+        return 1;
+
+    /* Allow pointer-to-record := record (var parameter auto-dereference).
+     * When a var parameter of record type is assigned, the LHS is ^record
+     * and the RHS is the record value. Only allow when record types match. */
     if (lhs_type->kind == TYPE_KIND_POINTER && rhs_type->kind == TYPE_KIND_RECORD)
     {
-        /* Check if rhs is a class (classes are always heap-allocated and pointer-compatible) */
-        if (rhs_type->info.record_info != NULL && record_type_is_class(rhs_type->info.record_info))
+        if (lhs_type->info.points_to != NULL &&
+            lhs_type->info.points_to->kind == TYPE_KIND_RECORD)
         {
-            /* Allow if lhs is untyped Pointer (points_to == NULL) */
-            if (lhs_type->info.points_to == NULL)
+            /* Check if record types match */
+            if (kgpc_type_equals(lhs_type->info.points_to, rhs_type))
+                return 1;
+            /* Name-based comparison for non-class records (var parameter dereference) */
+            if (lhs_type->info.points_to->info.record_info != NULL &&
+                rhs_type->info.record_info != NULL)
+            {
+                const char *lhs_id = lhs_type->info.points_to->info.record_info->type_id;
+                const char *rhs_id = rhs_type->info.record_info->type_id;
+                if (lhs_id != NULL && rhs_id != NULL && strcasecmp(lhs_id, rhs_id) == 0)
+                    return 1;
+            }
+            /* If pointed-to record is a class and rhs is a class, check class hierarchy */
+            if (lhs_type->info.points_to->info.record_info != NULL &&
+                rhs_type->info.record_info != NULL &&
+                record_type_is_class(lhs_type->info.points_to->info.record_info) &&
+                record_type_is_class(rhs_type->info.record_info))
+                return 1;
+            /* Allow ^record := record when record types are both plain (non-class) records.
+             * This handles @operator precedence differences and var param patterns. */
+            if (lhs_type->info.points_to->info.record_info == NULL ||
+                rhs_type->info.record_info == NULL ||
+                (!record_type_is_class(lhs_type->info.points_to->info.record_info) &&
+                 !record_type_is_class(rhs_type->info.record_info)))
                 return 1;
         }
+        /* Allow plain record to untyped pointer (points_to == NULL) for var param */
+        if (lhs_type->info.points_to == NULL)
+            return 1;
+        /* Allow class instance to typed/untyped Pointer */
+        if (rhs_type->info.record_info != NULL && record_type_is_class(rhs_type->info.record_info))
+            return 1;
+    }
+    /* Allow ^record := primitive-with-RECORD_TYPE-tag (parser @-operator precedence workaround) */
+    if (lhs_type->kind == TYPE_KIND_POINTER && rhs_type->kind == TYPE_KIND_PRIMITIVE &&
+        rhs_type->info.primitive_type_tag == RECORD_TYPE)
+    {
+        return 1;
+    }
+    if (rhs_type->kind == TYPE_KIND_POINTER && lhs_type->kind == TYPE_KIND_RECORD)
+    {
+        if (rhs_type->info.points_to != NULL &&
+            rhs_type->info.points_to->kind == TYPE_KIND_RECORD)
+        {
+            if (kgpc_type_equals(rhs_type->info.points_to, lhs_type))
+                return 1;
+            if (rhs_type->info.points_to->info.record_info != NULL &&
+                lhs_type->info.record_info != NULL &&
+                record_type_is_class(rhs_type->info.points_to->info.record_info) &&
+                record_type_is_class(lhs_type->info.record_info))
+                return 1;
+        }
+        if (lhs_type->info.record_info != NULL && record_type_is_class(lhs_type->info.record_info))
+            return 1;
     }
 
     /* If kinds are different, generally incompatible */
@@ -936,6 +1006,23 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
             lhs_type->kind == TYPE_KIND_POINTER)
         {
             return 1;  /* Untyped Pointer can be assigned to any typed pointer */
+        }
+
+        /* Allow integer-to-pointer and pointer-to-integer conversions.
+         * Pascal allows passing integer values where pointer types are expected
+         * in low-level code (e.g., syscall wrappers like Fptime(t) where t: time_t
+         * is passed to a ptime_t parameter). */
+        if (lhs_type->kind == TYPE_KIND_POINTER &&
+            rhs_type->kind == TYPE_KIND_PRIMITIVE &&
+            is_integer_type(rhs_type->info.primitive_type_tag))
+        {
+            return 1;
+        }
+        if (rhs_type->kind == TYPE_KIND_POINTER &&
+            lhs_type->kind == TYPE_KIND_PRIMITIVE &&
+            is_integer_type(lhs_type->info.primitive_type_tag))
+        {
+            return 1;
         }
         
         return 0;
@@ -1176,6 +1263,44 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
                             return 1;
                         if (is_record_subclass(rhs_inner->info.record_info, lhs_record_ptr->info.record_info, symtab))
                             return 1;
+                        return 0;  /* Incompatible class for "class of T" */
+                    }
+                }
+
+                /* Symmetric case: LHS is ^record and RHS is ^(^record).
+                 * This appears in low-level RTTI/VMT code paths where class
+                 * references are represented with one extra indirection. */
+                if (lhs_inner != NULL && lhs_inner->kind == TYPE_KIND_RECORD &&
+                    rhs_inner != NULL && rhs_inner->kind == TYPE_KIND_POINTER)
+                {
+                    KgpcType *rhs_record_ptr = rhs_inner->info.points_to;
+                    if (rhs_record_ptr != NULL && rhs_record_ptr->kind == TYPE_KIND_RECORD)
+                    {
+                        if (lhs_inner->info.record_info == rhs_record_ptr->info.record_info)
+                            return 1;
+                        if (is_record_subclass(rhs_record_ptr->info.record_info,
+                                lhs_inner->info.record_info, symtab))
+                            return 1;
+                        if (is_record_subclass(lhs_inner->info.record_info,
+                                rhs_record_ptr->info.record_info, symtab))
+                            return 1;
+                        return 0;
+                    }
+                }
+
+                /* Variant of the above where LHS still uses primitive(RECORD_TYPE)
+                 * placeholder instead of fully-resolved TYPE_KIND_RECORD. */
+                if (lhs_inner != NULL && lhs_inner->kind == TYPE_KIND_PRIMITIVE &&
+                    lhs_inner->info.primitive_type_tag == RECORD_TYPE &&
+                    rhs_inner != NULL && rhs_inner->kind == TYPE_KIND_POINTER)
+                {
+                    KgpcType *rhs_record_ptr = rhs_inner->info.points_to;
+                    if (rhs_record_ptr != NULL &&
+                        ((rhs_record_ptr->kind == TYPE_KIND_RECORD) ||
+                         (rhs_record_ptr->kind == TYPE_KIND_PRIMITIVE &&
+                          rhs_record_ptr->info.primitive_type_tag == RECORD_TYPE)))
+                    {
+                        return 1;
                     }
                 }
                 
@@ -1253,7 +1378,7 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
             return 1;
 
         case TYPE_KIND_RECORD:
-            /* Records are compatible if they are the same record type 
+            /* Records are compatible if they are the same record type
              * or if one is a subclass of the other */
             if (lhs_type->info.record_info == rhs_type->info.record_info)
                 return 1;
@@ -1268,6 +1393,13 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
             /* Check inheritance: rhs_type should be assignable to lhs_type if
              * rhs_type is a subclass of lhs_type */
             if (is_record_subclass(rhs_type->info.record_info, lhs_type->info.record_info, symtab))
+                return 1;
+
+            /* Allow assigning a class instance to an interface variable.
+             * In Delphi/FPC, if LHS is an interface and RHS is a class that
+             * implements the interface, the assignment is valid. */
+            if (lhs_type->info.record_info != NULL && lhs_type->info.record_info->is_interface &&
+                rhs_type->info.record_info != NULL && rhs_type->info.record_info->is_class)
                 return 1;
 
             return 0;
@@ -1437,6 +1569,7 @@ const char* kgpc_type_to_string(KgpcType *type) {
                 case WORD_TYPE: return "Word";
                 case LONGWORD_TYPE: return "LongWord";
                 case QWORD_TYPE: return "QWord";
+                case VARIANT_TYPE: return "Variant";
                 default:
                     snprintf(buffer, TYPE_STRING_BUFFER_SIZE, "primitive(%d)", type->info.primitive_type_tag);
                     return buffer;
@@ -2636,6 +2769,7 @@ const char* type_tag_to_string(int type_tag)
         case WORD_TYPE: return "Word";
         case LONGWORD_TYPE: return "LongWord";
         case QWORD_TYPE: return "QWord";
+        case VARIANT_TYPE: return "Variant";
         default:
         {
             static char buf[32];

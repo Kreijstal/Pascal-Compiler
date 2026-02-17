@@ -57,7 +57,18 @@ type
 
   { FPC bootstrap compatibility aliases }
   PText = ^text;
-  TObject = class;
+  TObject = class
+  public
+    _MonitorData: Pointer;
+    destructor Destroy; virtual;
+    class function ClassName: ShortString; virtual;
+    class function ClassParent: TClass; virtual;
+    class procedure GetLastCastErrorInfo(out aFrom, aTo: ShortString); static;
+    procedure Free;
+    procedure FreeInstance; virtual;
+    function GetInterface(const IID: TGUID; out Obj): Boolean;
+    function ToString: String; virtual;
+  end;
   TClass = class of TObject;
   TypedFile = file;
   TRTLCriticalSection = array[0..39] of Byte;
@@ -155,15 +166,6 @@ type
   HRESULT = LongInt;  { Windows COM result type }
   CodePointer = Pointer;
   
-  { String types - for FPC bootstrap compatibility }
-  { Root class for ObjPas compatibility }
-  TObject = class
-  public
-    destructor Destroy; virtual;
-    class function ClassName: ShortString; virtual;
-    class procedure GetLastCastErrorInfo(out aFrom, aTo: ShortString); static;
-    procedure Free;
-  end;
   TInterfacedObject = class(TObject)
   protected
     FRefCount : LongInt;
@@ -178,6 +180,14 @@ type
     D3: Word;
     D4: array[0..7] of Byte;
   end;
+
+  { IInterface / IUnknown - root interface type }
+  IInterface = interface
+    function QueryInterface(const IID: TGUID; out Obj): HRESULT;
+    function _AddRef: LongInt;
+    function _Release: LongInt;
+  end;
+  IUnknown = IInterface;
 
   TextRec = record
     Handle: THandle;
@@ -233,13 +243,8 @@ type
   Currency = Int64;              { FPC Currency is Int64 scaled by 10000 }
   PCurrency = ^Currency;
 
-  { Variant type - stub implementation for basic compatibility }
-  { Note: Real Variant type requires complex runtime support for:
-    - Type coercion between different value types
-    - Memory management for string/array variants  
-    - COM interoperability (OleVariant)
-    This stub only provides the type name for parsing purposes. }
-  Variant = String;
+  { Variant and PVariant are registered as built-in types (VARIANT_TYPE, 16 bytes)
+    and auto-coerce to/from any value type.  No Pascal-level alias needed. }
   PVariant = ^Variant;
 
 const
@@ -549,6 +554,8 @@ function kgpc_get_current_dir: AnsiString; cdecl; external name 'kgpc_get_curren
 function kgpc_set_current_dir(path: PChar): Integer; cdecl; external name 'kgpc_set_current_dir';
 function kgpc_ioresult_peek: Integer; cdecl; external name 'kgpc_ioresult_peek';
 function kgpc_class_name(self: Pointer): PAnsiChar; cdecl; external name 'kgpc_class_name';
+function kgpc_class_parent(self: Pointer): Pointer; cdecl; external name 'kgpc_class_parent';
+function kgpc_get_interface(self: Pointer; guid: Pointer; var intf): Integer; cdecl; external name 'kgpc_get_interface';
 procedure kgpc_string_to_shortstring(var dest; src: PAnsiChar; dest_size: SizeInt); cdecl; external name 'kgpc_string_to_shortstring';
 procedure kgpc_text_assign(var f: text; filename: PAnsiChar); cdecl; external name 'kgpc_text_assign';
 procedure kgpc_text_rewrite(var f: text); cdecl; external name 'kgpc_text_rewrite';
@@ -1123,6 +1130,55 @@ begin
     result := longint(actual64);
 end;
 
+{ Variant conversion helpers (stubs for semantic check; actual implementation is runtime) }
+function vartoint(const v: Variant): LongInt;
+begin
+  vartoint := 0;
+end;
+
+function vartoint64(const v: Variant): Int64;
+begin
+  vartoint64 := 0;
+end;
+
+function vartoword64(const v: Variant): QWord;
+begin
+  vartoword64 := 0;
+end;
+
+function vartobool(const v: Variant): Boolean;
+begin
+  vartobool := False;
+end;
+
+function vartoreal(const v: Variant): Real;
+begin
+  vartoreal := 0.0;
+end;
+
+function vartocurr(const v: Variant): Int64;
+begin
+  vartocurr := 0;
+end;
+
+function vartotdatetime(const v: Variant): Real;
+begin
+  vartotdatetime := 0.0;
+end;
+
+function vararrayget(const v: Variant; idx: LongInt; var dest: LongInt): String;
+begin
+  vararrayget := '';
+end;
+
+procedure vararrayput(var v: Variant; const val: Variant; idx: LongInt);
+begin
+end;
+
+procedure __PushToFree(var list: Pointer; p: Pointer);
+begin
+end;
+
 { TObject methods }
 
 class function TObject.ClassName: ShortString;
@@ -1134,6 +1190,14 @@ begin
         ClassName := ''
     else
         kgpc_string_to_shortstring(ClassName, name_ptr, 256);
+end;
+
+class function TObject.ClassParent: TClass;
+var
+    parent_ptr: Pointer;
+begin
+    parent_ptr := kgpc_class_parent(Self);
+    ClassParent := TClass(parent_ptr);
 end;
 
 class procedure TObject.GetLastCastErrorInfo(out aFrom, aTo: ShortString);
@@ -1151,6 +1215,21 @@ procedure TObject.Free;
 begin
     if Self <> nil then
         Self.Destroy;
+end;
+
+function TObject.GetInterface(const IID: TGUID; out Obj): Boolean;
+begin
+    GetInterface := kgpc_get_interface(Pointer(Self), @IID, Obj) <> 0;
+end;
+
+procedure TObject.FreeInstance;
+begin
+    { Base implementation - runtime handles actual deallocation }
+end;
+
+function TObject.ToString: String;
+begin
+    ToString := ClassName;
 end;
 
 begin

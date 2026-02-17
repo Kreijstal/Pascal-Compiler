@@ -263,8 +263,8 @@ static int get_field_alignment(SymTab_t *symtab, struct RecordField *field, int 
     if (field->is_array)
     {
         /* Static arrays align to their element type, not total size */
-        if (field->array_element_type == RECORD_TYPE && field->nested_record != NULL)
-            status = sizeof_from_record(symtab, field->nested_record, &elem_size, depth + 1, line_num);
+        if (field->array_element_type == RECORD_TYPE && field->array_element_record != NULL)
+            status = sizeof_from_record(symtab, field->array_element_record, &elem_size, depth + 1, line_num);
         else if (field->array_element_type != UNKNOWN_TYPE || field->array_element_type_id != NULL)
             status = sizeof_from_type_ref(symtab, field->array_element_type, field->array_element_type_id,
                 &elem_size, depth + 1, line_num);
@@ -274,14 +274,29 @@ static int get_field_alignment(SymTab_t *symtab, struct RecordField *field, int 
     else if (field->nested_record != NULL)
     {
         status = sizeof_from_record(symtab, field->nested_record, &elem_size, depth + 1, line_num);
+        if (status == 0 && elem_size == 0)
+            elem_size = 1;
+    }
+    else if (field->type == RECORD_TYPE && field->type_id == NULL)
+    {
+        /* Explicit anonymous placeholder records such as `name: record end;`
+         * are valid zero-sized fields in FPC RTL declarations. */
+        elem_size = 1;
+        status = 0;
     }
     else
     {
         status = sizeof_from_type_ref(symtab, field->type, field->type_id, &elem_size, depth + 1, line_num);
     }
 
-    if (status != 0 || elem_size <= 0)
-        return 1; /* fallback to minimal alignment */
+    KGPC_SEMCHECK_HARD_ASSERT(status == 0 && elem_size > 0,
+        "failed to resolve field alignment for '%s' (type=%d, type_id=%s, is_array=%d, nested_record=%p, array_elem_record=%p)",
+        field->name != NULL ? field->name : "<unnamed>",
+        field->type,
+        field->type_id != NULL ? field->type_id : "<null>",
+        field->is_array,
+        (void *)field->nested_record,
+        (void *)field->array_element_record);
 
     if (elem_size > POINTER_SIZE_BYTES)
         return POINTER_SIZE_BYTES;
@@ -330,8 +345,8 @@ static int compute_field_size(SymTab_t *symtab, struct RecordField *field,
 
         long long element_size = 0;
         int elem_status = 1;
-        if (field->array_element_type == RECORD_TYPE && field->nested_record != NULL)
-            elem_status = sizeof_from_record(symtab, field->nested_record,
+        if (field->array_element_type == RECORD_TYPE && field->array_element_record != NULL)
+            elem_status = sizeof_from_record(symtab, field->array_element_record,
                 &element_size, depth + 1, line_num);
         else if (field->array_element_type != UNKNOWN_TYPE ||
             field->array_element_type_id != NULL)
@@ -358,6 +373,14 @@ static int compute_field_size(SymTab_t *symtab, struct RecordField *field,
 
     if (field->nested_record != NULL)
         return sizeof_from_record(symtab, field->nested_record, size_out, depth + 1, line_num);
+
+    if (field->type == RECORD_TYPE && field->type_id == NULL)
+    {
+        /* Explicit anonymous placeholder records such as `name: record end;`
+         * intentionally carry no payload bytes. */
+        *size_out = 0;
+        return 0;
+    }
 
     return sizeof_from_type_ref(symtab, field->type, field->type_id, size_out, depth + 1, line_num);
 }

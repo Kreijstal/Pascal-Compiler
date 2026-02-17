@@ -1747,6 +1747,80 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
                         emitted_classes[emitted_count++] = class_label;
                     }
 
+                    /* Emit interface entry table if this class implements interfaces */
+                    int actual_iface_count = 0;
+                    if (record_info->num_interfaces > 0) {
+                        fprintf(ctx->output_file, "\n# Interface table for class %s\n", class_label);
+                        fprintf(ctx->output_file, "\t.align 8\n");
+                        fprintf(ctx->output_file, "%s_INTERFACES:\n", class_label);
+                        for (int iidx = 0; iidx < record_info->num_interfaces; iidx++) {
+                            const char *iface_name = record_info->interface_names[iidx];
+                            if (iface_name == NULL) continue;
+                            /* Look up the interface type to get its GUID */
+                            HashNode_t *iface_node = NULL;
+                            struct RecordType *iface_record = NULL;
+                            if (FindIdent(&iface_node, symtab, iface_name) == 0 && iface_node != NULL) {
+                                iface_record = get_record_type_from_node(iface_node);
+                                if (iface_record == NULL && iface_node->type != NULL &&
+                                    iface_node->type->kind == TYPE_KIND_POINTER &&
+                                    iface_node->type->info.points_to != NULL &&
+                                    iface_node->type->info.points_to->kind == TYPE_KIND_RECORD)
+                                    iface_record = iface_node->type->info.points_to->info.record_info;
+                            }
+                            const char *guid = (iface_record != NULL) ? iface_record->guid_string : NULL;
+                            unsigned long d1 = 0; unsigned int d2 = 0, d3 = 0;
+                            unsigned char d4[8] = {0};
+                            if (guid != NULL) {
+                                /* Parse GUID string: {D1-D2-D3-D4A-D4B} */
+                                const char *p = guid;
+                                if (*p == '\'') p++;
+                                if (*p == '{') p++;
+                                d1 = strtoul(p, NULL, 16);
+                                p = strchr(p, '-'); if (p) p++;
+                                d2 = (unsigned int)strtoul(p ? p : "", NULL, 16);
+                                if (p) p = strchr(p, '-'); if (p) p++;
+                                d3 = (unsigned int)strtoul(p ? p : "", NULL, 16);
+                                if (p) p = strchr(p, '-'); if (p) p++;
+                                if (p) {
+                                    /* D4[0..1] from the 4-char group before last dash */
+                                    unsigned long d4ab = strtoul(p, NULL, 16);
+                                    d4[0] = (unsigned char)((d4ab >> 8) & 0xFF);
+                                    d4[1] = (unsigned char)(d4ab & 0xFF);
+                                    p = strchr(p, '-'); if (p) p++;
+                                    if (p) {
+                                        /* D4[2..7] from the final 12-char group */
+                                        int b;
+                                        for (b = 2; b < 8; b++) {
+                                            char hx[3];
+                                            hx[0] = 0; hx[1] = 0; hx[2] = 0;
+                                            if (*p && *(p+1)) {
+                                                hx[0] = *p++; hx[1] = *p++;
+                                                d4[b] = (unsigned char)strtoul(hx, NULL, 16);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            fprintf(ctx->output_file, "\t# Entry for %s\n", iface_name);
+                            fprintf(ctx->output_file, "\t.long\t0x%08lX\n", d1);
+                            fprintf(ctx->output_file, "\t.short\t0x%04X\n", (unsigned)d2);
+                            fprintf(ctx->output_file, "\t.short\t0x%04X\n", (unsigned)d3);
+                            fprintf(ctx->output_file, "\t.byte\t0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X\n",
+                                d4[0], d4[1], d4[2], d4[3], d4[4], d4[5], d4[6], d4[7]);
+                            /* Padding to align the name pointer to 8 bytes.
+                             * GUID is 4+2+2+8 = 16 bytes, already aligned. */
+                            fprintf(ctx->output_file, "\t.quad\t__iface_name_%s_%s\n", class_label, iface_name);
+                            actual_iface_count++;
+                        }
+                        /* Emit interface name strings */
+                        for (int iidx = 0; iidx < record_info->num_interfaces; iidx++) {
+                            const char *iface_name = record_info->interface_names[iidx];
+                            if (iface_name == NULL) continue;
+                            fprintf(ctx->output_file, "__iface_name_%s_%s:\n", class_label, iface_name);
+                            fprintf(ctx->output_file, "\t.string \"%s\"\n", iface_name);
+                        }
+                    }
+
                     fprintf(ctx->output_file, "\n# RTTI for class %s\n", class_label);
                     fprintf(ctx->output_file, "\t.align 8\n");
                     fprintf(ctx->output_file, ".globl %s_TYPEINFO\n", class_label);
@@ -1761,6 +1835,12 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
                     fprintf(ctx->output_file, "\t.quad\t%s\n", name_label);
                     /* Always emit VMT reference, even if no methods */
                     fprintf(ctx->output_file, "\t.quad\t%s_VMT\n", class_label);
+                    /* Interface table pointer and count */
+                    if (actual_iface_count > 0)
+                        fprintf(ctx->output_file, "\t.quad\t%s_INTERFACES\n", class_label);
+                    else
+                        fprintf(ctx->output_file, "\t.quad\t0\n");
+                    fprintf(ctx->output_file, "\t.quad\t%d\n", actual_iface_count);
                     {
                         char escaped_label[CODEGEN_MAX_INST_BUF];
                         escape_string(escaped_label, class_label, sizeof(escaped_label));
@@ -2187,6 +2267,11 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                     param_type = effective_type_node->type;
                 if (param_type == NULL && var_info != NULL)
                     param_type = var_info->type;
+                KGPC_COMPILER_HARD_ASSERT(param_type != NULL,
+                    "missing type metadata for local '%s' (declared type '%s')",
+                    (const char *)id_list->cur,
+                    tree->tree_data.var_decl_data.type_id != NULL ?
+                        tree->tree_data.var_decl_data.type_id : "<null>");
 
                 if (param_type != NULL && kgpc_type_is_array(param_type))
                 {
@@ -2226,7 +2311,9 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                                 element_size = (int)record_size;
                             }
                         }
-                        if (element_size <= 0) element_size = 1;
+                        KGPC_COMPILER_HARD_ASSERT(element_size > 0,
+                            "unable to resolve array element size for local '%s'",
+                            (const char *)id_list->cur);
                         array_start = param_type->info.array_info.start_index;
                         total_size = kgpc_type_sizeof(param_type);
                     }

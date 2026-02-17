@@ -79,7 +79,6 @@ struct Expression *clone_expression(const struct Expression *expr)
     clone->line_num = expr->line_num;
     clone->type = expr->type;
     clone->pointer_subtype = expr->pointer_subtype;
-    clone->record_type = expr->record_type;
     
     /* Clone resolved_kgpc_type if present - important for default parameter values
      * that have been transformed (e.g., scoped enum literals to integer constants) */
@@ -458,6 +457,20 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                 if (node->hash_type == HASHTYPE_FUNCTION && mutating != NO_MUTATE &&
                     node->type != NULL)
                 {
+                    /* When assigning to a function name (return value), prefer
+                     * the CURRENT function's return type over any arbitrary
+                     * overload that FindIdent may have returned first.  This
+                     * matters when two overloads differ only in casing (e.g.
+                     * FpFStat vs FPFStat) since Pascal identifiers are
+                     * case-insensitive. */
+                    const char *cur_func = semcheck_get_current_subprogram_id();
+                    if (cur_func != NULL &&
+                        pascal_identifier_equals(expr->expr_data.id, cur_func))
+                    {
+                        KgpcType *cur_ret = semcheck_get_current_subprogram_return_kgpc_type(symtab, owns_type);
+                        if (cur_ret != NULL)
+                            return cur_ret;
+                    }
                     KgpcType *ret_type = kgpc_type_get_return_type(node->type);
                     if (ret_type != NULL)
                     {
@@ -1177,7 +1190,16 @@ int semcheck_expr_main(SymTab_t *symtab, struct Expression *expr,
 
         case EXPR_RECORD_CONSTRUCTOR:
         {
-            if (expr->record_type == NULL)
+            struct RecordType *ctor_record = NULL;
+            if (ctor_record == NULL && expr->record_type != NULL)
+                ctor_record = expr->record_type;
+            if (ctor_record == NULL && expr->resolved_kgpc_type != NULL &&
+                kgpc_type_is_record(expr->resolved_kgpc_type))
+            {
+                ctor_record = kgpc_type_get_record(expr->resolved_kgpc_type);
+            }
+
+            if (ctor_record == NULL)
             {
                 semcheck_error_with_context("Error on line %d, unable to infer record type for constructor.\n",
                     expr->line_num);
@@ -1187,7 +1209,7 @@ int semcheck_expr_main(SymTab_t *symtab, struct Expression *expr,
             if (!expr->expr_data.record_constructor_data.fields_semchecked)
             {
                 int rc_err = semcheck_typecheck_record_constructor(expr, symtab, max_scope_lev,
-                    expr->record_type, expr->line_num);
+                    ctor_record, expr->line_num);
                 if (rc_err != 0)
                 {
                     *type_return = UNKNOWN_TYPE;
@@ -1195,8 +1217,11 @@ int semcheck_expr_main(SymTab_t *symtab, struct Expression *expr,
                 }
             }
             *type_return = RECORD_TYPE;
-            if (expr->resolved_kgpc_type == NULL && expr->record_type != NULL)
-                semcheck_expr_set_resolved_type(expr, RECORD_TYPE);
+            if (expr->resolved_kgpc_type == NULL)
+            {
+                KgpcType *record_type = create_record_type(ctor_record);
+                semcheck_expr_set_resolved_kgpc_type_shared(expr, record_type);
+            }
             break;
         }
 

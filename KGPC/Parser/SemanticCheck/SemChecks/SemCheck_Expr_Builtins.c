@@ -542,6 +542,75 @@ int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
     return error_count;
 }
 
+int semcheck_builtin_concat(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev)
+{
+    assert(type_return != NULL);
+    assert(symtab != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_FUNCTION_CALL);
+
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    int arg_count = ListLength(args);
+
+    if (arg_count < 2)
+    {
+        semcheck_error_with_context("Error on line %d, Concat expects at least two arguments.\n", expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    /* Validate all arguments are string or char compatible */
+    int error_count = 0;
+    ListNode_t *cur = args;
+    while (cur != NULL)
+    {
+        struct Expression *arg = (struct Expression *)cur->cur;
+        KgpcType *arg_type = NULL;
+        error_count += semcheck_expr_with_type(&arg_type, symtab, arg, max_scope_lev, NO_MUTATE);
+        if (error_count == 0 && arg_type != NULL &&
+            !kgpc_type_is_string(arg_type) && !kgpc_type_is_char(arg_type) &&
+            !semcheck_expr_is_shortstring(arg))
+        {
+            semcheck_error_with_context("Error on line %d, Concat arguments must be string or char.\n", expr->line_num);
+            error_count++;
+        }
+        cur = cur->next;
+    }
+
+    if (error_count > 0)
+    {
+        *type_return = UNKNOWN_TYPE;
+        return error_count;
+    }
+
+    /* Transform Concat(a, b, c, ...) into nested addop: ((a + b) + c) + ...
+     * This reuses the existing string concatenation code path. */
+    cur = args;
+    struct Expression *result = (struct Expression *)cur->cur;
+    cur = cur->next;
+    while (cur != NULL)
+    {
+        struct Expression *next_arg = (struct Expression *)cur->cur;
+        result = mk_addop(expr->line_num, PLUS, result, next_arg);
+        semcheck_expr_set_resolved_type(result, STRING_TYPE);
+        cur = cur->next;
+    }
+
+    /* Replace the function call expression with the addop tree in-place.
+     * Copy the addop data into the original expression node. */
+    expr->type = result->type;
+    expr->expr_data = result->expr_data;
+    expr->resolved_kgpc_type = result->resolved_kgpc_type;
+    semcheck_expr_set_resolved_type(expr, STRING_TYPE);
+
+    /* Free only the outermost wrapper node (inner nodes are reused) */
+    free(result);
+
+    *type_return = STRING_TYPE;
+    return 0;
+}
+
 int semcheck_builtin_pos(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev)
 {
@@ -694,8 +763,17 @@ int semcheck_builtin_strpas(int *type_return, SymTab_t *symtab,
     error_count += semcheck_expr_with_type(&arg_kgpc_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
 
     /* FPC accepts both PChar/PAnsiChar (string-like) pointers */
-    if (error_count == 0 &&
-        !(kgpc_type_is_string(arg_kgpc_type) || kgpc_type_is_pointer(arg_kgpc_type) || kgpc_type_is_char(arg_kgpc_type)))
+    int strpas_arg_ok = kgpc_type_is_string(arg_kgpc_type) ||
+        kgpc_type_is_pointer(arg_kgpc_type) || kgpc_type_is_char(arg_kgpc_type);
+    /* Fallback: check resolved_kgpc_type tag (e.g. argv[l] indexing returns pointer) */
+    if (!strpas_arg_ok && arg_expr != NULL && arg_expr->resolved_kgpc_type != NULL)
+    {
+        if (kgpc_type_equals_tag(arg_expr->resolved_kgpc_type, POINTER_TYPE) ||
+            kgpc_type_equals_tag(arg_expr->resolved_kgpc_type, CHAR_TYPE) ||
+            kgpc_type_equals_tag(arg_expr->resolved_kgpc_type, STRING_TYPE))
+            strpas_arg_ok = 1;
+    }
+    if (error_count == 0 && !strpas_arg_ok)
     {
         semcheck_error_with_context("Error on line %d, StrPas expects a PChar or PAnsiChar argument.\n",
             expr->line_num);
@@ -766,7 +844,8 @@ int semcheck_builtin_eof(int *type_return, SymTab_t *symtab,
         }
         KgpcType *file_kgpc_type = NULL;
         error_count += semcheck_expr_with_type(&file_kgpc_type, symtab, check_expr, max_scope_lev, NO_MUTATE);
-        if (!kgpc_type_equals_tag(file_kgpc_type, TEXT_TYPE))
+        if (!kgpc_type_equals_tag(file_kgpc_type, TEXT_TYPE) &&
+            !kgpc_type_equals_tag(file_kgpc_type, FILE_TYPE))
         {
             semcheck_error_with_context("Error on line %d, EOF expects a text file argument.\n", expr->line_num);
             error_count++;
@@ -1818,7 +1897,9 @@ int semcheck_builtin_default(int *type_return, SymTab_t *symtab,
             return error_count;
         }
         target_type = semcheck_tag_from_kgpc(resolved_kgpc_type);
-        record_type = arg_expr != NULL ? arg_expr->record_type : NULL;
+        if (arg_expr != NULL && arg_expr->resolved_kgpc_type != NULL &&
+            kgpc_type_is_record(arg_expr->resolved_kgpc_type))
+            record_type = kgpc_type_get_record(arg_expr->resolved_kgpc_type);
         if (arg_expr != NULL && arg_expr->resolved_kgpc_type != NULL)
         {
             target_kgpc_type = arg_expr->resolved_kgpc_type;
@@ -1865,7 +1946,6 @@ int semcheck_builtin_default(int *type_return, SymTab_t *symtab,
     {
         expr->is_default_initializer = 1;
         semcheck_expr_set_resolved_type(expr, target_type);
-        expr->record_type = record_type;
         if (expr->resolved_kgpc_type != NULL)
             destroy_kgpc_type(expr->resolved_kgpc_type);
         if (target_kgpc_type != NULL)

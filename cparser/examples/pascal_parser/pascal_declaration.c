@@ -1445,6 +1445,13 @@ void init_pascal_unit_parser(combinator_t** p) {
         NULL
     );
 
+    combinator_t* helper_base_type_ref = multi(new_combinator(), PASCAL_T_TYPE_SPEC,
+        type_name(PASCAL_T_IDENTIFIER),
+        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        NULL
+    );
+
     combinator_t* type_helper_type = map(seq(new_combinator(), PASCAL_T_RECORD_TYPE,
         helper_kind,
         token(keyword_ci("helper")),
@@ -1455,7 +1462,7 @@ void init_pascal_unit_parser(combinator_t** p) {
             NULL
         )),
         token(keyword_ci("for")),
-        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
+        helper_base_type_ref,
         helper_body,
         token(keyword_ci("end")),
         NULL
@@ -1500,9 +1507,15 @@ void init_pascal_unit_parser(combinator_t** p) {
         token(match(")")),
         NULL
     ));
+    combinator_t* distinct_type_target = multi(new_combinator(), PASCAL_T_NONE,
+        pointer_spec,                                           /* type ^TFoo */
+        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),/* type Unit.TFoo */
+        token(cident(PASCAL_T_IDENTIFIER)),                     /* type TFoo */
+        NULL
+    );
     combinator_t* distinct_type_spec = seq(new_combinator(), PASCAL_T_DISTINCT_TYPE,
         token(keyword_ci("type")),
-        token(cident(PASCAL_T_IDENTIFIER)),
+        distinct_type_target,
         distinct_type_codepage_param,  /* optional (CODEPAGE) */
         NULL
     );
@@ -3113,9 +3126,15 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         token(match(")")),
         NULL
     ));
+    combinator_t* distinct_type_target_prog = multi(new_combinator(), PASCAL_T_NONE,
+        pointer_type(PASCAL_T_POINTER_TYPE),                    /* type ^TFoo */
+        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),/* type Unit.TFoo */
+        token(cident(PASCAL_T_IDENTIFIER)),                     /* type TFoo */
+        NULL
+    );
     combinator_t* distinct_type_spec_prog = seq(new_combinator(), PASCAL_T_DISTINCT_TYPE,
         token(keyword_ci("type")),
-        token(cident(PASCAL_T_IDENTIFIER)),
+        distinct_type_target_prog,
         distinct_type_codepage_param_prog,  /* optional (CODEPAGE) */
         NULL
     );
@@ -3134,6 +3153,13 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         token(keyword_ci("class")),
         NULL
     );
+    combinator_t* helper_base_type_ref_prog = multi(new_combinator(), PASCAL_T_TYPE_SPEC,
+        type_name(PASCAL_T_IDENTIFIER),
+        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        NULL
+    );
+
     combinator_t* type_helper_type = map(seq(new_combinator(), PASCAL_T_RECORD_TYPE,
         helper_kind,
         token(keyword_ci("helper")),
@@ -3144,15 +3170,17 @@ void init_pascal_complete_program_parser(combinator_t** p) {
             NULL
         )),
         token(keyword_ci("for")),
-        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
+        helper_base_type_ref_prog,
         helper_body,
         token(keyword_ci("end")),
         NULL
     ), mark_type_helper_record);
 
     combinator_t* type_spec = multi(new_combinator(), PASCAL_T_TYPE_SPEC,
+        /* Prefer explicit helper syntax first so "type helper for X" is not
+         * consumed by the generic distinct-type parser. */
         type_helper_type,                               // type helpers (e.g., type helper for Integer)
-        distinct_type_spec_prog,                        // distinct types like "type Double"
+        distinct_type_spec_prog,                        // distinct types like "type Double" or "type ^TFoo"
         distinct_type_range_spec_prog,                  // distinct types from range like "type 0..$10ffff"
         reference_to_type(PASCAL_T_REFERENCE_TO_TYPE),  // reference to procedure/function
         interface_type(PASCAL_T_INTERFACE_TYPE),        // interface types like interface ... end

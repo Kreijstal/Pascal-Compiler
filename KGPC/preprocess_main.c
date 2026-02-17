@@ -202,6 +202,12 @@ int main(int argc, char **argv)
     pascal_preprocessor_define(preprocessor, "REGCALL");
     pascal_preprocessor_define(preprocessor, "HASUNIX");
 
+    /* FPU type support - x86-64 supports all floating point types */
+    pascal_preprocessor_define(preprocessor, "SUPPORT_SINGLE");
+    pascal_preprocessor_define(preprocessor, "SUPPORT_DOUBLE");
+    pascal_preprocessor_define(preprocessor, "SUPPORT_EXTENDED");
+    pascal_preprocessor_define(preprocessor, "SUPPORT_COMP");
+
     /* Define Comp as Comp to satisfy {$if not declared(Comp)} check in systemh.inc */
     pascal_preprocessor_define_macro(preprocessor, "Comp", "Comp");
 
@@ -213,29 +219,31 @@ int main(int argc, char **argv)
     pascal_preprocessor_define(preprocessor, "ENDIAN_LITTLE");
     
     /* Define constants for heap.inc to avoid {$ERROR} 
-       These are derived from Pascal constants that the preprocessor cannot evaluate */
-    pascal_preprocessor_define_macro(preprocessor, "FixedArenaOffsetShift", "5");
-    pascal_preprocessor_define_macro(preprocessor, "VarSizeQuant", "32");
-    pascal_preprocessor_define_macro(preprocessor, "FirstVarRangeP2", "10");
-    pascal_preprocessor_define_macro(preprocessor, "FirstVarStepP2", "5");
-    pascal_preprocessor_define_macro(preprocessor, "VarSizeClassesCount", "10");
-    pascal_preprocessor_define_macro(preprocessor, "MaxFixedHeaderAndPayload", "544");
-    pascal_preprocessor_define_macro(preprocessor, "MaxVarHeaderAndPayload", "1048096");
-    pascal_preprocessor_define_macro(preprocessor, "CommonHeaderSize", "4");
-    pascal_preprocessor_define_macro(preprocessor, "MinFixedHeaderAndPayload", "16");
-    pascal_preprocessor_define_macro(preprocessor, "MinSearchableVarHeaderAndPayload", "576");
+       These are compile-time constants available for {$if} evaluation
+       but NOT for text replacement, since they also appear as Pascal
+       constant declarations in the FPC RTL source. */
+    pascal_preprocessor_define_const(preprocessor, "FixedArenaOffsetShift", "5");
+    pascal_preprocessor_define_const(preprocessor, "VarSizeQuant", "32");
+    pascal_preprocessor_define_const(preprocessor, "FirstVarRangeP2", "10");
+    pascal_preprocessor_define_const(preprocessor, "FirstVarStepP2", "5");
+    pascal_preprocessor_define_const(preprocessor, "VarSizeClassesCount", "10");
+    pascal_preprocessor_define_const(preprocessor, "MaxFixedHeaderAndPayload", "544");
+    pascal_preprocessor_define_const(preprocessor, "MaxVarHeaderAndPayload", "1048096");
+    pascal_preprocessor_define_const(preprocessor, "CommonHeaderSize", "4");
+    pascal_preprocessor_define_const(preprocessor, "MinFixedHeaderAndPayload", "16");
+    pascal_preprocessor_define_const(preprocessor, "MinSearchableVarHeaderAndPayload", "576");
     
     /* Heap constants from heap.inc (computed at compile time in FPC) */
-    pascal_preprocessor_define_macro(preprocessor, "FixedSizesCount", "16");
-    pascal_preprocessor_define_macro(preprocessor, "SizeIndexBits", "4"); /* 1 + trunc(ln(15)/ln(2)) = 4 */
-    pascal_preprocessor_define_macro(preprocessor, "SizeIndexMask", "15"); /* (1 << 4) - 1 = 15 */
-    pascal_preprocessor_define_macro(preprocessor, "FixedBitPos", "4");
-    pascal_preprocessor_define_macro(preprocessor, "VarSizesPerClass", "32");
-    pascal_preprocessor_define_macro(preprocessor, "VarSizesCount", "320"); /* VarSizeClassesCount * VarSizesPerClass = 10 * 32 */
-    pascal_preprocessor_define_macro(preprocessor, "L0BinSize", "32");
+    pascal_preprocessor_define_const(preprocessor, "FixedSizesCount", "16");
+    pascal_preprocessor_define_const(preprocessor, "SizeIndexBits", "4"); /* 1 + trunc(ln(15)/ln(2)) = 4 */
+    pascal_preprocessor_define_const(preprocessor, "SizeIndexMask", "15"); /* (1 << 4) - 1 = 15 */
+    pascal_preprocessor_define_const(preprocessor, "FixedBitPos", "4");
+    pascal_preprocessor_define_const(preprocessor, "VarSizesPerClass", "32");
+    pascal_preprocessor_define_const(preprocessor, "VarSizesCount", "320"); /* VarSizeClassesCount * VarSizesPerClass = 10 * 32 */
+    pascal_preprocessor_define_const(preprocessor, "L0BinSize", "32");
     
     /* System constants */
-    pascal_preprocessor_define_macro(preprocessor, "maxExitCode", "255");
+    pascal_preprocessor_define_const(preprocessor, "maxExitCode", "255");
 #endif
 
 #if defined(__x86_64__)

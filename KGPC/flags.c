@@ -11,8 +11,8 @@
 
 /* Flag for turning on non-local variable chasing */
 /* Set with '-non-local' */
-/* WARNING: Currently buggy */
-int FLAG_NON_LOCAL_CHASING = 0;
+/* Non-local access is required by RTL/bootstrap units; keep it enabled by default. */
+int FLAG_NON_LOCAL_CHASING = 1;
 
 /* Flag for turning on optimizations */
 /* Set with -O1 and -O2 */

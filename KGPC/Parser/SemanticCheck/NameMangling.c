@@ -433,9 +433,9 @@ static char* MangleNameFromTypeList(const char* original_name, ListNode_t* type_
     // Normalize function name to lowercase for case-insensitive matching
     // (Pascal is case-insensitive, so Lowercase and LowerCase should produce the same mangled name)
     char* lower_name = str_tolower_dup(original_name);
-    if (lower_name == NULL) {
-        lower_name = strdup(original_name); // fallback
-    }
+    KGPC_SEMCHECK_HARD_ASSERT(lower_name != NULL,
+        "failed to normalize identifier '%s' for mangling",
+        original_name);
     
     if (type_list == NULL) {
         // No args, append _void
@@ -568,8 +568,13 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
         if (arg_expr != NULL && arg_expr->type == EXPR_RECORD_CONSTRUCTOR)
         {
             resolved_type = HASHVAR_RECORD;
-            if (arg_expr->record_type != NULL && arg_expr->record_type->type_id != NULL)
-                record_type_id = arg_expr->record_type->type_id;
+            if (arg_expr->resolved_kgpc_type != NULL &&
+                kgpc_type_is_record(arg_expr->resolved_kgpc_type))
+            {
+                struct RecordType *record_type = kgpc_type_get_record(arg_expr->resolved_kgpc_type);
+                if (record_type != NULL && record_type->type_id != NULL)
+                    record_type_id = record_type->type_id;
+            }
         }
         else
         {

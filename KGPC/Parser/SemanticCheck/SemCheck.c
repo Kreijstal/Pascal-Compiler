@@ -223,6 +223,25 @@ static const char *semcheck_base_type_name(const char *id)
     return (dot != NULL && dot[1] != '\0') ? (dot + 1) : id;
 }
 
+static int semcheck_is_explicit_unit_qualified_type(const char *id)
+{
+    if (id == NULL)
+        return 0;
+
+    const char *dot = strchr(id, '.');
+    if (dot == NULL || dot == id)
+        return 0;
+
+    size_t prefix_len = (size_t)(dot - id);
+    if (prefix_len == 0 || prefix_len >= 128)
+        return 0;
+
+    char prefix[128];
+    memcpy(prefix, id, prefix_len);
+    prefix[prefix_len] = '\0';
+    return semcheck_is_unit_name(prefix);
+}
+
 static int semcheck_map_builtin_type_name_local(const char *id)
 {
     if (id == NULL)
@@ -582,12 +601,14 @@ static ListNode_t *semcheck_create_builtin_param_with_id(const char *name, int t
 void semcheck_add_builtins(SymTab_t *symtab);
 
 /* Internal helper to print context using either offset or line-based search */
-static void print_error_context(int line_num, int col_num, int source_index)
+static void print_error_context(int line_num, int col_num, int source_index, const char *directive_file)
 {
-    const char *file_path = (file_to_parse != NULL && *file_to_parse != '\0')
-                                ? file_to_parse
-                                : ((preprocessed_path != NULL && *preprocessed_path != '\0') ? preprocessed_path
-                                                                                              : pascal_frontend_current_path());
+    const char *file_path = (directive_file != NULL && directive_file[0] != '\0')
+                                ? directive_file
+                                : ((file_to_parse != NULL && *file_to_parse != '\0')
+                                    ? file_to_parse
+                                    : ((preprocessed_path != NULL && *preprocessed_path != '\0') ? preprocessed_path
+                                                                                                  : pascal_frontend_current_path()));
     if (file_path == NULL)
         file_path = g_semcheck_source_path;
     size_t context_len = preprocessed_length;
@@ -613,8 +634,10 @@ static void print_error_context(int line_num, int col_num, int source_index)
                 col_num,
                 source_index);
         }
-        /* Use offset-based context if available, otherwise fall back to line-based */
+        /* Use offset-based context if available, otherwise fall back to line-based from directive_file */
         int printed = print_source_context_at_offset(context_buf, context_buf_len, source_index, line_num, col_num, 2);
+        if (!printed && directive_file != NULL && directive_file[0] != '\0')
+            printed = semcheck_print_context_from_file(directive_file, line_num, col_num, 2);
         if (!printed)
             printed = semcheck_print_context_from_file(file_path, line_num, col_num, 2);
         if (!printed && file_path != NULL)
@@ -624,8 +647,14 @@ static void print_error_context(int line_num, int col_num, int source_index)
     fprintf(stderr, "\n");
 }
 
-static int semcheck_parse_line_directive(const char *line, size_t len)
+#define MAX_DIRECTIVE_FILENAME_LEN 512
+
+static int semcheck_parse_line_directive(const char *line, size_t len,
+    char *filename_out, size_t filename_size)
 {
+    if (filename_out != NULL && filename_size > 0)
+        filename_out[0] = '\0';
+
     if (len < 8)
         return -1;
     if (line[0] != '{' || line[1] != '#')
@@ -644,11 +673,33 @@ static int semcheck_parse_line_directive(const char *line, size_t len)
         ++pos;
     }
 
+    /* Parse optional filename in quotes */
+    while (pos < len && (line[pos] == ' ' || line[pos] == '\t'))
+        ++pos;
+
+    if (pos < len && line[pos] == '"' && filename_out != NULL && filename_size > 0)
+    {
+        ++pos; /* Skip opening quote */
+        size_t fname_start = pos;
+        while (pos < len && line[pos] != '"')
+            ++pos;
+        size_t fname_len = pos - fname_start;
+        if (fname_len > 0 && fname_len < filename_size)
+        {
+            memcpy(filename_out, line + fname_start, fname_len);
+            filename_out[fname_len] = '\0';
+        }
+    }
+
     return line_num > 0 ? line_num : -1;
 }
 
-static int semcheck_line_from_source_offset(const char *buffer, size_t length, int source_offset)
+static int semcheck_line_from_source_offset(const char *buffer, size_t length, int source_offset,
+    char *file_out, size_t file_out_size)
 {
+    if (file_out != NULL && file_out_size > 0)
+        file_out[0] = '\0';
+
     if (buffer == NULL || length == 0 || source_offset < 0 || (size_t)source_offset >= length)
         return -1;
 
@@ -668,7 +719,8 @@ static int semcheck_line_from_source_offset(const char *buffer, size_t length, i
             ++line_len;
         }
 
-        int directive_line = semcheck_parse_line_directive(buffer + line_start, line_len);
+        int directive_line = semcheck_parse_line_directive(buffer + line_start, line_len,
+            file_out, file_out_size);
         if (directive_line >= 0)
         {
             int lines_after_directive = 0;
@@ -694,6 +746,78 @@ static int semcheck_line_from_source_offset(const char *buffer, size_t length, i
     }
 
     return current_line_at_offset;
+}
+
+/* Find the file that contains a given line number by scanning line directives */
+static void semcheck_file_from_line_number(int line_num, char *file_out, size_t file_out_size)
+{
+    if (file_out == NULL || file_out_size == 0 || line_num <= 0)
+        return;
+    
+    file_out[0] = '\0';
+    
+    const char *buffer = preprocessed_source;
+    size_t length = preprocessed_length;
+    if (buffer == NULL || length == 0)
+    {
+        buffer = g_semcheck_source_buffer;
+        length = g_semcheck_source_length;
+    }
+    if (buffer == NULL || length == 0)
+        return;
+    
+    /* Scan through buffer tracking line directives */
+    int current_line = 1;
+    int last_directive_line = 1;
+    char last_file[512] = "";
+    size_t pos = 0;
+    
+    while (pos < length && current_line <= line_num)
+    {
+        /* Find end of current line */
+        size_t line_start = pos;
+        while (pos < length && buffer[pos] != '\n')
+            ++pos;
+        size_t line_len = pos - line_start;
+        
+        /* Check if this is a line directive */
+        char directive_file[512] = "";
+        int directive_line = semcheck_parse_line_directive(buffer + line_start, line_len,
+            directive_file, sizeof(directive_file));
+        
+        if (directive_line >= 0)
+        {
+            last_directive_line = directive_line;
+            if (directive_file[0] != '\0')
+            {
+                strncpy(last_file, directive_file, sizeof(last_file) - 1);
+                last_file[sizeof(last_file) - 1] = '\0';
+            }
+            current_line = directive_line;
+        }
+        
+        /* Check if we've reached the target line */
+        if (current_line == line_num && last_file[0] != '\0')
+        {
+            strncpy(file_out, last_file, file_out_size - 1);
+            file_out[file_out_size - 1] = '\0';
+            return;
+        }
+        
+        /* Move to next line */
+        if (pos < length && buffer[pos] == '\n')
+        {
+            ++pos;
+            ++current_line;
+        }
+    }
+    
+    /* If we didn't find the exact line, return the last file we saw */
+    if (last_file[0] != '\0')
+    {
+        strncpy(file_out, last_file, file_out_size - 1);
+        file_out[file_out_size - 1] = '\0';
+    }
 }
 
 static int g_semcheck_error_line = 0;
@@ -873,6 +997,8 @@ void semantic_error(int line_num, int col_num, const char *format, ...)
     if (effective_col <= 0 && g_semcheck_error_col > 0)
         effective_col = g_semcheck_error_col;
 
+    char directive_file[MAX_DIRECTIVE_FILENAME_LEN];
+    directive_file[0] = '\0';
     if (effective_source_index >= 0)
     {
         const char *context_buf = preprocessed_source;
@@ -882,14 +1008,26 @@ void semantic_error(int line_num, int col_num, const char *format, ...)
             context_buf = g_semcheck_source_buffer;
             context_buf_len = g_semcheck_source_length;
         }
-        int computed_line = semcheck_line_from_source_offset(context_buf, context_buf_len, effective_source_index);
+        int computed_line = semcheck_line_from_source_offset(context_buf, context_buf_len, effective_source_index,
+            directive_file, sizeof(directive_file));
         if (computed_line > 0)
             effective_line = computed_line;
+        if (directive_file[0] != '\0')
+        {
+            fprintf(stderr, "  In %s:\n", directive_file);
+        }
         if (effective_col <= 0 && g_semcheck_error_col > 0)
             effective_col = g_semcheck_error_col;
     }
+    else if (effective_line > 0)
+    {
+        /* Look up file from line number when source_index is not available */
+        semcheck_file_from_line_number(effective_line, directive_file, sizeof(directive_file));
+    }
 
-    const char *file_path = semcheck_get_error_path();
+    const char *file_path = (directive_file[0] != '\0')
+        ? directive_file
+        : semcheck_get_error_path();
     semcheck_print_error_prefix(file_path, effective_line, effective_col);
 
     va_list args;
@@ -898,7 +1036,7 @@ void semantic_error(int line_num, int col_num, const char *format, ...)
     va_end(args);
     fprintf(stderr, "\n");
 
-    print_error_context(effective_line, effective_col, effective_source_index);
+    print_error_context(effective_line, effective_col, effective_source_index, directive_file);
 }
 
 /* Helper function to print semantic error with accurate source context using byte offset */
@@ -910,6 +1048,8 @@ void semantic_error_at(int line_num, int col_num, int source_index, const char *
     if (col_num <= 0 && g_semcheck_error_col > 0)
         col_num = g_semcheck_error_col;
 
+    char directive_file[MAX_DIRECTIVE_FILENAME_LEN];
+    directive_file[0] = '\0';
     if (source_index >= 0)
     {
         const char *context_buf = preprocessed_source;
@@ -919,12 +1059,24 @@ void semantic_error_at(int line_num, int col_num, int source_index, const char *
             context_buf = g_semcheck_source_buffer;
             context_buf_len = g_semcheck_source_length;
         }
-        int computed_line = semcheck_line_from_source_offset(context_buf, context_buf_len, source_index);
+        int computed_line = semcheck_line_from_source_offset(context_buf, context_buf_len, source_index,
+            directive_file, sizeof(directive_file));
         if (computed_line > 0)
             line_num = computed_line;
+        if (directive_file[0] != '\0')
+        {
+            fprintf(stderr, "  In %s:\n", directive_file);
+        }
+    }
+    else if (line_num > 0)
+    {
+        /* Look up file from line number when source_index is not available */
+        semcheck_file_from_line_number(line_num, directive_file, sizeof(directive_file));
     }
 
-    const char *file_path = semcheck_get_error_path();
+    const char *file_path = (directive_file[0] != '\0')
+        ? directive_file
+        : semcheck_get_error_path();
     semcheck_print_error_prefix(file_path, line_num, col_num);
 
     va_list args;
@@ -933,13 +1085,12 @@ void semantic_error_at(int line_num, int col_num, int source_index, const char *
     va_end(args);
     fprintf(stderr, "\n");
 
-    print_error_context(line_num, col_num, source_index);
+    print_error_context(line_num, col_num, source_index, directive_file);
 }
 
 void semcheck_error_with_context_at(int line_num, int col_num, int source_index,
     const char *format, ...)
 {
-    const char *file_path = semcheck_get_error_path();
     size_t context_len = preprocessed_length;
     if (context_len == 0 && preprocessed_source != NULL)
         context_len = strlen(preprocessed_source);
@@ -953,6 +1104,8 @@ void semcheck_error_with_context_at(int line_num, int col_num, int source_index,
     if (effective_col <= 0 && g_semcheck_error_col > 0)
         effective_col = g_semcheck_error_col;
 
+    char directive_file[MAX_DIRECTIVE_FILENAME_LEN];
+    directive_file[0] = '\0';
     if (source_index >= 0)
     {
         const char *context_buf = preprocessed_source;
@@ -962,12 +1115,22 @@ void semcheck_error_with_context_at(int line_num, int col_num, int source_index,
             context_buf = g_semcheck_source_buffer;
             context_buf_len = g_semcheck_source_length;
         }
-        int computed_line = semcheck_line_from_source_offset(context_buf, context_buf_len, source_index);
+        int computed_line = semcheck_line_from_source_offset(context_buf, context_buf_len, source_index,
+            directive_file, sizeof(directive_file));
         if (computed_line > 0)
             effective_line = computed_line;
+        if (directive_file[0] != '\0')
+        {
+            /* Print "In include_file:" context before the error */
+            fprintf(stderr, "  In %s:\n", directive_file);
+        }
         if (effective_col <= 0 && g_semcheck_error_col > 0)
             effective_col = g_semcheck_error_col;
     }
+
+    const char *file_path = (directive_file[0] != '\0')
+        ? directive_file
+        : semcheck_get_error_path();
 
     va_list args;
     va_start(args, format);
@@ -1029,7 +1192,6 @@ void semcheck_error_with_context_at(int line_num, int col_num, int source_index,
 /* Helper for legacy error prints that already include "Error on line %d". */
 void semcheck_error_with_context(const char *format, ...)
 {
-    const char *file_path = semcheck_get_error_path();
     size_t context_len = preprocessed_length;
     if (context_len == 0 && preprocessed_source != NULL)
         context_len = strlen(preprocessed_source);
@@ -1046,6 +1208,8 @@ void semcheck_error_with_context(const char *format, ...)
     line_num = va_arg(args_copy, int);
     va_end(args_copy);
 
+    char directive_file[MAX_DIRECTIVE_FILENAME_LEN];
+    directive_file[0] = '\0';
     if (effective_source_index >= 0)
     {
         const char *context_buf = preprocessed_source;
@@ -1055,9 +1219,14 @@ void semcheck_error_with_context(const char *format, ...)
             context_buf = g_semcheck_source_buffer;
             context_buf_len = g_semcheck_source_length;
         }
-        int computed_line = semcheck_line_from_source_offset(context_buf, context_buf_len, effective_source_index);
+        int computed_line = semcheck_line_from_source_offset(context_buf, context_buf_len, effective_source_index,
+            directive_file, sizeof(directive_file));
         if (computed_line > 0)
             effective_line = computed_line;
+        if (directive_file[0] != '\0')
+        {
+            fprintf(stderr, "  In %s:\n", directive_file);
+        }
         if (g_semcheck_error_col > 0)
             effective_col = g_semcheck_error_col;
     }
@@ -1069,6 +1238,10 @@ void semcheck_error_with_context(const char *format, ...)
         effective_line = g_semcheck_error_line;
     if (effective_col <= 0 && g_semcheck_error_col > 0)
         effective_col = g_semcheck_error_col;
+
+    const char *file_path = (directive_file[0] != '\0')
+        ? directive_file
+        : semcheck_get_error_path();
 
     /* If the format starts with "Error on line %d", rewrite that part to use the effective line. */
     semcheck_print_error_prefix(file_path, effective_line, effective_col);
@@ -1816,6 +1989,7 @@ HashNode_t *semcheck_find_preferred_type_node(SymTab_t *symtab, const char *type
     if (symtab == NULL || type_id == NULL)
         return NULL;
 
+    int prefer_unit_defined = semcheck_is_explicit_unit_qualified_type(type_id);
     ListNode_t *matches = FindAllIdents(symtab, type_id);
     if (matches == NULL && strchr(type_id, '$') != NULL)
     {
@@ -1989,6 +2163,11 @@ HashNode_t *semcheck_find_preferred_type_node(SymTab_t *symtab, const char *type
         {
             if (best == NULL)
                 best = node;
+            else if (prefer_unit_defined)
+            {
+                if (!best->defined_in_unit && node->defined_in_unit)
+                    best = node;
+            }
             else if (best->defined_in_unit && !node->defined_in_unit)
                 best = node;
         }
@@ -2089,6 +2268,13 @@ const char *semcheck_get_current_subprogram_id(void)
     if (g_semcheck_current_subprogram == NULL)
         return NULL;
     return g_semcheck_current_subprogram->tree_data.subprogram_data.id;
+}
+
+const char *semcheck_get_current_subprogram_result_var_name(void)
+{
+    if (g_semcheck_current_subprogram == NULL)
+        return NULL;
+    return g_semcheck_current_subprogram->tree_data.subprogram_data.result_var_name;
 }
 
 KgpcType *semcheck_get_current_subprogram_return_kgpc_type(SymTab_t *symtab, int *owns_type)
@@ -3051,8 +3237,10 @@ static const char *resolve_type_to_base_name(SymTab_t *symtab, const char *type_
     /* Prevent infinite recursion from circular type definitions */
     if (resolve_type_depth >= MAX_RESOLVE_TYPE_DEPTH)
     {
-        fprintf(stderr, "Warning: Type resolution depth limit reached for type '%s' - possible circular type definition\n", type_name);
-        return type_name;  /* Return as-is to avoid stack overflow */
+        KGPC_SEMCHECK_HARD_ASSERT(0,
+            "type resolution depth limit reached for '%s' (possible circular definition)",
+            type_name);
+        return NULL;
     }
     
     /* First, check if it's already a known primitive type */
@@ -4658,9 +4846,43 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                     if (!(existing->defined_in_unit &&
                           !tree->tree_data.type_decl_data.defined_in_unit))
                     {
-                        /* Already declared, skip */
-                        cur = cur->next;
-                        continue;
+                        /* Check if this is a forward class declaration being completed.
+                         * Forward: "TObject = class;" creates empty class, then full definition follows.
+                         * Allow the full definition to replace the forward declaration. */
+                        int is_forward_class_completion = 0;
+                        if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD)
+                        {
+                            struct RecordType *new_record = tree->tree_data.type_decl_data.info.record;
+                            struct RecordType *existing_record = hashnode_get_record_type(existing);
+                            if (new_record != NULL && new_record->is_class &&
+                                existing_record != NULL && existing_record->is_class)
+                            {
+                                /* Check if existing has only hidden fields (forward decl) */
+                                int has_non_hidden = 0;
+                                ListNode_t *fnode = existing_record->fields;
+                                while (fnode != NULL)
+                                {
+                                    if (fnode->type == LIST_RECORD_FIELD && fnode->cur != NULL)
+                                    {
+                                        struct RecordField *f = (struct RecordField *)fnode->cur;
+                                        if (!record_field_is_hidden(f))
+                                        {
+                                            has_non_hidden = 1;
+                                            break;
+                                        }
+                                    }
+                                    fnode = fnode->next;
+                                }
+                                if (!has_non_hidden && new_record->fields != NULL)
+                                    is_forward_class_completion = 1;
+                            }
+                        }
+                        if (!is_forward_class_completion)
+                        {
+                            /* Already declared, skip */
+                            cur = cur->next;
+                            continue;
+                        }
                     }
                 }
                 
@@ -4668,7 +4890,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                 if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD)
                 {
                     struct RecordType *record_info = tree->tree_data.type_decl_data.info.record;
-                    
+
                     /* Annotate the record with its canonical name if missing */
                     if (record_info != NULL && record_info->type_id == NULL)
                         record_info->type_id = strdup(type_id);
@@ -4687,10 +4909,114 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             tree->tree_data.type_decl_data.kgpc_type = kgpc_type;
                             kgpc_type_retain(kgpc_type);
                         }
-                        
+
                         int result = PushTypeOntoScope_Typed(symtab, (char *)type_id, kgpc_type);
+                        if (getenv("KGPC_DEBUG_FORWARD_CLASS") && record_info != NULL && record_info->is_class)
+                        {
+                            fprintf(stderr, "[FWD-PRE] type='%s' push_result=%d fields=%p\n",
+                                type_id, result, (void *)record_info->fields);
+                            ListNode_t *dbg = record_info->fields;
+                            while (dbg != NULL)
+                            {
+                                if (dbg->type == LIST_RECORD_FIELD && dbg->cur != NULL)
+                                {
+                                    struct RecordField *f = (struct RecordField *)dbg->cur;
+                                    fprintf(stderr, "[FWD-PRE]   field: %s hidden=%d\n",
+                                        f->name ? f->name : "<null>", record_field_is_hidden(f));
+                                }
+                                dbg = dbg->next;
+                            }
+                        }
                         if (result > 0)
-                            errors += result;
+                        {
+                            /* Check if this is a forward class declaration being resolved.
+                             * Forward class: "TObject = class;" creates an empty class,
+                             * then "TObject = class ... end;" provides the full definition.
+                             * Update the existing symbol's type with the full definition. */
+                            if (record_info != NULL && record_info->is_class)
+                            {
+                                HashNode_t *existing = NULL;
+                                int find_result = FindIdent(&existing, symtab, type_id);
+                                if (getenv("KGPC_DEBUG_FORWARD_CLASS"))
+                                    fprintf(stderr, "[FWD] type='%s' find=%d existing=%p hash_type=%d\n",
+                                        type_id, find_result, (void*)existing,
+                                        existing ? existing->hash_type : -1);
+                                if (find_result >= 0 &&
+                                    existing != NULL &&
+                                    existing->hash_type == HASHTYPE_TYPE &&
+                                    existing->type != NULL)
+                                {
+                                    struct RecordType *existing_record = hashnode_get_record_type(existing);
+                                    if (existing_record != NULL && existing_record->is_class)
+                                    {
+                                        /* Check if existing is a forward declaration (only hidden fields) */
+                                        int has_non_hidden_fields = 0;
+                                        ListNode_t *fnode = existing_record->fields;
+                                        while (fnode != NULL)
+                                        {
+                                            if (fnode->type == LIST_RECORD_FIELD && fnode->cur != NULL)
+                                            {
+                                                struct RecordField *f = (struct RecordField *)fnode->cur;
+                                                if (!record_field_is_hidden(f))
+                                                {
+                                                    has_non_hidden_fields = 1;
+                                                    break;
+                                                }
+                                            }
+                                            fnode = fnode->next;
+                                        }
+                                        if (!has_non_hidden_fields && record_info->fields != NULL)
+                                        {
+                                            /* Forward declaration being resolved - update existing record's fields */
+                                            /* Prepend the hidden typeinfo field from existing to new record's fields */
+                                            ListNode_t *existing_fields = existing_record->fields;
+                                            existing_record->fields = record_info->fields;
+                                            /* Re-add hidden fields at front */
+                                            while (existing_fields != NULL)
+                                            {
+                                                ListNode_t *next = existing_fields->next;
+                                                if (existing_fields->type == LIST_RECORD_FIELD && existing_fields->cur != NULL)
+                                                {
+                                                    struct RecordField *f = (struct RecordField *)existing_fields->cur;
+                                                    if (record_field_is_hidden(f))
+                                                    {
+                                                        existing_fields->next = NULL;
+                                                        existing_record->fields = PushListNodeFront(existing_record->fields, existing_fields);
+                                                    }
+                                                    else
+                                                    {
+                                                        /* Non-hidden field from forward decl - shouldn't happen, just free */
+                                                        free(existing_fields);
+                                                    }
+                                                }
+                                                else
+                                                {
+                                                    free(existing_fields);
+                                                }
+                                                existing_fields = next;
+                                            }
+                                            /* Copy over method templates and properties */
+                                            if (record_info->method_templates != NULL)
+                                                existing_record->method_templates = record_info->method_templates;
+                                            if (record_info->properties != NULL)
+                                                existing_record->properties = record_info->properties;
+                                            if (record_info->parent_class_name != NULL && existing_record->parent_class_name == NULL)
+                                                existing_record->parent_class_name = strdup(record_info->parent_class_name);
+                                            if (record_info->interface_names != NULL)
+                                            {
+                                                existing_record->interface_names = record_info->interface_names;
+                                                existing_record->num_interfaces = record_info->num_interfaces;
+                                                record_info->interface_names = NULL;
+                                                record_info->num_interfaces = 0;
+                                            }
+                                            result = 0; /* Suppress the error */
+                                        }
+                                    }
+                                }
+                            }
+                            if (result > 0)
+                                errors += result;
+                        }
                         else
                         {
                             HashNode_t *type_node = semcheck_find_type_node_with_unit_flag(symtab,
@@ -5646,11 +5972,9 @@ if (record_info->parent_class_name != NULL) {
             } else if (binding->is_virtual || binding->is_override) {
                 /* Add new virtual method to VMT */
                 /* Note: if binding->is_override is true but no parent method was found,
-                 * this is an error, but we still add it as a new virtual method */
-                if (binding->is_override) {
-                    fprintf(stderr, "Warning on line %d: override method '%s' has no virtual parent method, treating as new virtual method\n",
-                            line_num, binding->method_name);
-                }
+                 * this could be because the parent's VMT was incompletely built
+                 * (e.g., FPC system unit with unsupported features).
+                 * Treat as a new virtual method instead of an error. */
                 
                 struct MethodInfo *new_method = (struct MethodInfo *)malloc(sizeof(struct MethodInfo));
                 if (new_method != NULL) {
@@ -7625,6 +7949,14 @@ void semcheck_add_builtins(SymTab_t *symtab)
         {
             tobject->is_class = 1;
             tobject->type_id = strdup("TObject");
+            /* Add _MonitorData: Pointer field (required by FPC RTL objpas) */
+            struct RecordField *monitor_field = (struct RecordField *)calloc(1, sizeof(struct RecordField));
+            if (monitor_field != NULL)
+            {
+                monitor_field->name = strdup("_MonitorData");
+                monitor_field->type = POINTER_TYPE;
+                tobject->fields = CreateListNode(monitor_field, LIST_RECORD_FIELD);
+            }
             KgpcType *tobject_rec = create_record_type(tobject);
             KgpcType *tobject_type = NULL;
             if (tobject_rec != NULL)
@@ -7682,9 +8014,10 @@ void semcheck_add_builtins(SymTab_t *symtab)
     add_builtin_type_owned(symtab, "Double", create_primitive_type_with_size(REAL_TYPE, 8));
     add_builtin_type_owned(symtab, "Extended", create_primitive_type_with_size(REAL_TYPE, 8));
 
-    /* Variant and OleVariant (COM interop) - treated as opaque 16-byte types */
-    add_builtin_type_owned(symtab, "Variant", create_primitive_type_with_size(POINTER_TYPE, 16));
-    add_builtin_type_owned(symtab, "OleVariant", create_primitive_type_with_size(POINTER_TYPE, 16));
+    /* Variant and OleVariant (COM interop) - treated as opaque 16-byte types.
+     * VARIANT_TYPE auto-coerces to/from any value type at the semantic level. */
+    add_builtin_type_owned(symtab, "Variant", create_primitive_type_with_size(VARIANT_TYPE, 16));
+    add_builtin_type_owned(symtab, "OleVariant", create_primitive_type_with_size(VARIANT_TYPE, 16));
 
     /* File/Text primitives (sizes align with system.p TextRec/FileRec layout) */
     char *file_name = strdup("file");
@@ -8170,6 +8503,16 @@ void semcheck_add_builtins(SymTab_t *symtab)
         AddBuiltinFunction_Typed(symtab, copy_name, copy_type);
         destroy_kgpc_type(copy_type);
         free(copy_name);
+    }
+    char *concat_name = strdup("Concat");
+    if (concat_name != NULL) {
+        KgpcType *return_type = create_primitive_type(STRING_TYPE);
+        assert(return_type != NULL && "Failed to create return type for Concat");
+        KgpcType *concat_type = create_procedure_type(NULL, return_type);
+        assert(concat_type != NULL && "Failed to create Concat function type");
+        AddBuiltinFunction_Typed(symtab, concat_name, concat_type);
+        destroy_kgpc_type(concat_type);
+        free(concat_name);
     }
     char *eof_name = strdup("EOF");
     if (eof_name != NULL) {
@@ -9956,10 +10299,12 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     else if(tree->tree_data.arr_decl_data.type == REAL_TYPE)
                         var_type = HASHVAR_REAL;
                     else {
-                        /* Unknown type - report error and default to real */
-                        fprintf(stderr, "Warning: Unknown array element type %d for %s, defaulting to real\n",
-                                tree->tree_data.arr_decl_data.type,
-                                ids && ids->cur ? (char*)ids->cur : "<unknown>");
+                        semcheck_error_with_context(
+                            "Error on line %d, unknown array element type %d for %s.\n\n",
+                            tree->line_num,
+                            tree->tree_data.arr_decl_data.type,
+                            ids && ids->cur ? (char*)ids->cur : "<unknown>");
+                        return_val++;
                         var_type = HASHVAR_REAL;
                     }
                     
@@ -10212,7 +10557,9 @@ next_identifier:
                         }
 
                         KgpcType *expr_type = NULL;
-                        if (init_expr->type == EXPR_RECORD_CONSTRUCTOR && init_expr->record_type == NULL)
+                        if (init_expr->type == EXPR_RECORD_CONSTRUCTOR &&
+                            (init_expr->resolved_kgpc_type == NULL ||
+                             !kgpc_type_is_record(init_expr->resolved_kgpc_type)))
                         {
                             struct RecordType *record_type = NULL;
                             if (var_node->type != NULL && kgpc_type_is_record(var_node->type))
@@ -10227,9 +10574,59 @@ next_identifier:
                                 if (FindIdent(&type_node, symtab,
                                         tree->tree_data.var_decl_data.type_id) >= 0 &&
                                     type_node != NULL)
+                                {
                                     record_type = hashnode_get_record_type(type_node);
+                                    if (record_type == NULL && type_node->type != NULL)
+                                    {
+                                        if (kgpc_type_is_record(type_node->type))
+                                            record_type = kgpc_type_get_record(type_node->type);
+                                        else if (kgpc_type_is_pointer(type_node->type) &&
+                                            type_node->type->info.points_to != NULL &&
+                                            kgpc_type_is_record(type_node->type->info.points_to))
+                                            record_type = kgpc_type_get_record(type_node->type->info.points_to);
+                                        else if (type_node->type->type_alias != NULL &&
+                                            type_node->type->type_alias->target_type_id != NULL)
+                                        {
+                                            HashNode_t *target_node = NULL;
+                                            if (FindIdent(&target_node, symtab,
+                                                    type_node->type->type_alias->target_type_id) >= 0 &&
+                                                target_node != NULL)
+                                            {
+                                                record_type = hashnode_get_record_type(target_node);
+                                                if (record_type == NULL && target_node->type != NULL &&
+                                                    kgpc_type_is_record(target_node->type))
+                                                    record_type = kgpc_type_get_record(target_node->type);
+                                            }
+                                        }
+                                    }
+                                }
+                                if (record_type == NULL)
+                                {
+                                    HashNode_t *decl_type_node = NULL;
+                                    if (FindIdent(&decl_type_node, symtab,
+                                            tree->tree_data.var_decl_data.type_id) >= 0 &&
+                                        decl_type_node != NULL)
+                                    {
+                                        record_type = hashnode_get_record_type(decl_type_node);
+                                        if (record_type == NULL && decl_type_node->type != NULL &&
+                                            kgpc_type_is_record(decl_type_node->type))
+                                            record_type = kgpc_type_get_record(decl_type_node->type);
+                                    }
+                                }
                             }
-                            init_expr->record_type = record_type;
+                            if (record_type != NULL)
+                            {
+                                init_expr->record_type = record_type;
+                                KgpcType *record_kgpc = create_record_type(record_type);
+                                if (record_kgpc != NULL)
+                                {
+                                    if (init_expr->resolved_kgpc_type != NULL)
+                                        destroy_kgpc_type(init_expr->resolved_kgpc_type);
+                                    init_expr->resolved_kgpc_type = record_kgpc;
+                                    kgpc_type_retain(record_kgpc);
+                                    destroy_kgpc_type(record_kgpc);
+                                }
+                            }
                         }
                         if (init_expr->type == EXPR_ARRAY_LITERAL &&
                             init_expr->array_element_type == UNKNOWN_TYPE &&
@@ -10706,18 +11103,38 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             }
         }
         
-        while (cur != NULL && existing_decl == NULL)
+        HashNode_t *first_mangled_match = NULL;
+        while (cur != NULL)
         {
             HashNode_t *candidate = (HashNode_t *)cur->cur;
             if (candidate != NULL && candidate->mangled_id != NULL &&
                 strcmp(candidate->mangled_id, subprogram->tree_data.subprogram_data.mangled_id) == 0)
             {
-                existing_decl = candidate;
-                already_declared = 1;
+                if (first_mangled_match == NULL)
+                    first_mangled_match = candidate;
+                /* When multiple candidates share the same mangled name (e.g.,
+                 * FpFStat and FPFStat both mangle to fpfstat_li), prefer the
+                 * one with an equivalent signature. */
+                if (candidate->type != NULL &&
+                    candidate->type->kind == TYPE_KIND_PROCEDURE &&
+                    candidate->type->info.proc_info.definition != NULL &&
+                    semcheck_subprogram_signatures_equivalent(
+                        subprogram, candidate->type->info.proc_info.definition))
+                {
+                    existing_decl = candidate;
+                    already_declared = 1;
+                    break;
+                }
             }
             cur = cur->next;
         }
-        
+        /* If no signature-exact match found, fall back to the first mangled match */
+        if (existing_decl == NULL && first_mangled_match != NULL)
+        {
+            existing_decl = first_mangled_match;
+            already_declared = 1;
+        }
+
         if (all_matches != NULL)
             DestroyList(all_matches);
     }

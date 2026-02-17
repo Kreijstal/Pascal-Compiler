@@ -67,6 +67,9 @@
 /* Arithmetic operators (extended) */
 #define POWER               43  /* ** operator (overloadable; e.g. scalar product) */
 
+/* Variant type – auto-coerces to/from any value type at runtime */
+#define VARIANT_TYPE        44
+
 /*
  * Type classification utilities
  */

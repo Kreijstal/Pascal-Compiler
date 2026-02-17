@@ -284,6 +284,36 @@ int FindIdent(HashNode_t **hash_return, SymTab_t *symtab, const char *id)
     return return_val;
 }
 
+int FindIdentByPrefix(HashNode_t **hash_return, SymTab_t *symtab, const char *prefix)
+{
+    int return_val = 0;
+    assert(symtab != NULL);
+    assert(prefix != NULL);
+
+    ListNode_t *cur = symtab->stack_head;
+    while (cur != NULL)
+    {
+        HashNode_t *node = FindIdentByPrefixInTable((HashTable_t *)cur->cur, prefix);
+        if (node != NULL)
+        {
+            *hash_return = node;
+            return return_val;
+        }
+        ++return_val;
+        cur = cur->next;
+    }
+
+    HashNode_t *node = FindIdentByPrefixInTable(symtab->builtins, prefix);
+    if (node != NULL)
+    {
+        *hash_return = node;
+        return return_val;
+    }
+
+    *hash_return = NULL;
+    return -1;
+}
+
 /* Searches for all instances of an identifier and returns a list of HashNode_t* */
 /* Returns NULL if not found */
 /* FIXED: Now searches ALL scopes and returns ALL matches for proper overload resolution */

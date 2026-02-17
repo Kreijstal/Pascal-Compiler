@@ -131,6 +131,7 @@ function StrPas(P: PAnsiChar; Len: SizeInt): AnsiString;
 function StrPas(P: PChar; Len: SizeInt): AnsiString;
 function StrLen(P: PAnsiChar): SizeInt;
 function StrPos(Str1, Str2: PAnsiChar): PAnsiChar;
+function StrLIComp(S1, S2: PChar; MaxLen: Integer): Integer;
 function StrRScan(P: PAnsiChar; C: AnsiChar): PAnsiChar;
 function FloatToStr(Value: Real): AnsiString;
 function FloatToStrF(Value: Double; format: TFloatFormat; Precision, Digits: Integer): AnsiString; overload;
@@ -200,6 +201,9 @@ type
 
 { Generic procedure to free an object and set its reference to nil }
 procedure FreeAndNil(var Obj: Pointer);
+
+{ Interface support }
+function Supports(const Instance: TObject; const IID: TGUID; out Intf): Boolean;
 
 implementation
 
@@ -330,6 +334,33 @@ begin
         StrPos := nil
     else
         StrPos := PAnsiChar(PtrUInt(Str1) + PtrUInt(Index - 1));
+end;
+
+function StrLIComp(S1, S2: PChar; MaxLen: Integer): Integer;
+var
+    i: Integer;
+    c1, c2: Char;
+begin
+    StrLIComp := 0;
+    for i := 0 to MaxLen - 1 do
+    begin
+        c1 := S1[i];
+        c2 := S2[i];
+        if (c1 = #0) and (c2 = #0) then
+            exit;
+        { Simple ASCII case folding }
+        if (c1 >= 'a') and (c1 <= 'z') then
+            c1 := Chr(Ord(c1) - 32);
+        if (c2 >= 'a') and (c2 <= 'z') then
+            c2 := Chr(Ord(c2) - 32);
+        if c1 <> c2 then
+        begin
+            StrLIComp := Ord(c1) - Ord(c2);
+            exit;
+        end;
+        if c1 = #0 then
+            exit;
+    end;
 end;
 
 function StrRScan(P: PAnsiChar; C: AnsiChar): PAnsiChar;
@@ -1648,6 +1679,14 @@ begin
         StringToGUID.D4[i] := Byte(value);
         idx := idx + 2;
     end;
+end;
+
+function Supports(const Instance: TObject; const IID: TGUID; out Intf): Boolean;
+begin
+    if Instance = nil then
+        Supports := False
+    else
+        Supports := Instance.GetInterface(IID, Intf);
 end;
 
 end.

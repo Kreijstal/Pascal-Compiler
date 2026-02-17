@@ -160,11 +160,23 @@ struct RecordType *resolve_record_type_for_with(SymTab_t *symtab,
         return NULL;
 
     if (expr_type == RECORD_TYPE)
-        return context_expr->record_type;
+    {
+        if (context_expr->resolved_kgpc_type != NULL &&
+            kgpc_type_is_record(context_expr->resolved_kgpc_type))
+            return kgpc_type_get_record(context_expr->resolved_kgpc_type);
+        return NULL;
+    }
 
     if (expr_type == POINTER_TYPE)
     {
-        struct RecordType *record_info = context_expr->record_type;
+        struct RecordType *record_info = NULL;
+        if (context_expr->resolved_kgpc_type != NULL &&
+            kgpc_type_is_pointer(context_expr->resolved_kgpc_type) &&
+            context_expr->resolved_kgpc_type->info.points_to != NULL &&
+            kgpc_type_is_record(context_expr->resolved_kgpc_type->info.points_to))
+        {
+            record_info = kgpc_type_get_record(context_expr->resolved_kgpc_type->info.points_to);
+        }
         if (record_info == NULL && context_expr->pointer_subtype_id != NULL)
         {
             HashNode_t *target_node = NULL;

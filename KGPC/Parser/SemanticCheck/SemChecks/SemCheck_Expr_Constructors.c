@@ -637,12 +637,36 @@ int semcheck_typecheck_record_constructor(struct Expression *expr, SymTab_t *sym
             }
         }
 
-        if (field->value->type == EXPR_RECORD_CONSTRUCTOR && field->value->record_type == NULL)
+        if (field->value->type == EXPR_RECORD_CONSTRUCTOR &&
+            (field->value->resolved_kgpc_type == NULL ||
+             !kgpc_type_is_record(field->value->resolved_kgpc_type)))
         {
             if (field->field_type == RECORD_TYPE)
-                field->value->record_type = field->field_record_type;
+            {
+                if (field->field_record_type != NULL)
+                {
+                    field->value->record_type = field->field_record_type;
+                    KgpcType *nested_record_type = create_record_type(field->field_record_type);
+                    if (nested_record_type != NULL)
+                    {
+                        semcheck_expr_set_resolved_kgpc_type_shared(field->value, nested_record_type);
+                        destroy_kgpc_type(nested_record_type);
+                    }
+                }
+            }
             else if (field->field_is_array && field->array_element_type == RECORD_TYPE)
-                field->value->record_type = field->array_element_record_type;
+            {
+                if (field->array_element_record_type != NULL)
+                {
+                    field->value->record_type = field->array_element_record_type;
+                    KgpcType *nested_record_type = create_record_type(field->array_element_record_type);
+                    if (nested_record_type != NULL)
+                    {
+                        semcheck_expr_set_resolved_kgpc_type_shared(field->value, nested_record_type);
+                        destroy_kgpc_type(nested_record_type);
+                    }
+                }
+            }
         }
 
         if (field->field_is_array && field->value != NULL)

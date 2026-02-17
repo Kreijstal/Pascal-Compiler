@@ -96,6 +96,7 @@ static bool preprocess_buffer_internal(PascalPreprocessor *pp,
                                        char **error_message);
 static bool read_file_contents(const char *filename, char **buffer, size_t *length, char **error_message);
 static bool define_symbol(PascalPreprocessor *pp, const char *symbol);
+static bool define_symbol_const(PascalPreprocessor *pp, const char *name, const char *value);
 static bool undefine_symbol(PascalPreprocessor *pp, const char *symbol);
 static bool symbol_is_defined(const PascalPreprocessor *pp, const char *symbol);
 static void trim(char **begin, char **end);
@@ -177,6 +178,10 @@ bool pascal_preprocessor_define_macro(PascalPreprocessor *pp, const char *symbol
     bool result = define_symbol(pp, combined);
     free(combined);
     return result;
+}
+
+bool pascal_preprocessor_define_const(PascalPreprocessor *pp, const char *symbol, const char *value) {
+    return define_symbol_const(pp, symbol, value);
 }
 
 bool pascal_preprocessor_undefine(PascalPreprocessor *pp, const char *symbol) {
@@ -1749,6 +1754,44 @@ static bool define_symbol(PascalPreprocessor *pp, const char *symbol) {
     pp->defines[pp->define_count].name = name_part;
     pp->defines[pp->define_count].value = value_part;
     pp->defines[pp->define_count].is_macro = is_macro;
+    pp->define_count++;
+    return true;
+}
+
+/* Define a symbol with a value but is_macro = false, so it's available for {$if}
+ * evaluation via get_symbol_value() but NOT for text replacement via get_macro_value(). */
+static bool define_symbol_const(PascalPreprocessor *pp, const char *name, const char *value) {
+    if (!pp || !name || !value) return false;
+
+    char *name_part = strdup(name);
+    char *value_part = strdup(value);
+    if (!name_part || !value_part) {
+        free(name_part);
+        free(value_part);
+        return false;
+    }
+    uppercase(name_part);
+
+    /* Update existing entry if present */
+    for (size_t i = 0; i < pp->define_count; ++i) {
+        if (strcmp(pp->defines[i].name, name_part) == 0) {
+            free(pp->defines[i].value);
+            pp->defines[i].value = value_part;
+            pp->defines[i].is_macro = false;
+            free(name_part);
+            return true;
+        }
+    }
+
+    if (!ensure_capacity((void **)&pp->defines, sizeof(DefineEntry), &pp->define_capacity, pp->define_count + 1)) {
+        free(name_part);
+        free(value_part);
+        return false;
+    }
+
+    pp->defines[pp->define_count].name = name_part;
+    pp->defines[pp->define_count].value = value_part;
+    pp->defines[pp->define_count].is_macro = false;
     pp->define_count++;
     return true;
 }

@@ -562,12 +562,8 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
     // Define our own dialect symbol and FPC for Lazarus-compatible headers
     const char *default_symbols[] = { 
         "KGPC", "FPC", "FPC_FULLVERSION := 30200", "FPC_VERSION := 3", 
-        "FPC_RELEASE := 2", "maxExitCode := 255", 
-        "FPC_STACKALIGNMENT := 16", "SizeIndexBits := 64", "FixedBitPos := 64", 
-        "VarSizeQuant := 8", "FirstVarStepP2 := 3", "MaxVarHeaderAndPayload := 255", 
-        "MaxFixedHeaderAndPayload := 255", "VarSizesCount := 32", 
-        "MinSearchableVarHeaderAndPayload := 16", "MinFixedHeaderAndPayload := 16", 
-        "CommonHeaderSize := 8",
+        "FPC_RELEASE := 2",
+        "FPC_STACKALIGNMENT := 16",
         // FPC feature flags
         "FPC_HAS_FEATURE_SUPPORT",
         "FPC_HAS_FEATURE_DYNARRAYS", "FPC_HAS_FEATURE_ANSISTRINGS", 
@@ -596,6 +592,32 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
         }
     }
 
+    /* Define compile-time constants for {$if} expression evaluation.
+     * These are available in {$if} but NOT expanded as text-replacement macros,
+     * since they also appear as Pascal constant declarations in the FPC RTL
+     * (e.g. maxExitCode = 255 in sysunixh.inc, heap constants in heap.inc). */
+    struct { const char *name; const char *value; } const_symbols[] = {
+        { "maxExitCode", "255" },
+        { "SizeIndexBits", "64" }, { "FixedBitPos", "64" },
+        { "VarSizeQuant", "8" }, { "FirstVarStepP2", "3" },
+        { "MaxVarHeaderAndPayload", "255" }, { "MaxFixedHeaderAndPayload", "255" },
+        { "VarSizesCount", "32" },
+        { "MinSearchableVarHeaderAndPayload", "16" }, { "MinFixedHeaderAndPayload", "16" },
+        { "CommonHeaderSize", "8" },
+    };
+    for (size_t i = 0; i < sizeof(const_symbols) / sizeof(const_symbols[0]); ++i)
+    {
+        if (!pascal_preprocessor_define_const(preprocessor, const_symbols[i].name, const_symbols[i].value))
+        {
+            char detail[128];
+            snprintf(detail, sizeof(detail), "unable to define constant '%s'", const_symbols[i].name);
+            report_preprocessor_error(error_out, path, detail);
+            pascal_preprocessor_free(preprocessor);
+            free(buffer);
+            return false;
+        }
+    }
+
 /* Define architecture-specific symbols based on the target platform */
 #if INTPTR_MAX >= INT64_MAX
     const char *arch_symbol = "CPU64";
@@ -617,7 +639,7 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
         return false;
     }
     /* Define first_mm_imreg for FPC x86_64 paramgr.pas (CPU register constant from cpubase.pas) */
-    if (!pascal_preprocessor_define(preprocessor, "first_mm_imreg := 32"))
+    if (!pascal_preprocessor_define_const(preprocessor, "first_mm_imreg", "32"))
     {
         report_preprocessor_error(error_out, path, "unable to define first_mm_imreg symbol");
         pascal_preprocessor_free(preprocessor);
@@ -629,7 +651,7 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
      * supported_optimizerswitches for x86_64 includes this (via genericlevel3optimizerswitches).
      * We represent sets as bitmasks: bit N = ordinal N is in set.
      */
-    if (!pascal_preprocessor_define(preprocessor, "cs_opt_use_load_modify_store := 25"))
+    if (!pascal_preprocessor_define_const(preprocessor, "cs_opt_use_load_modify_store", "25"))
     {
         report_preprocessor_error(error_out, path, "unable to define cs_opt_use_load_modify_store");
         pascal_preprocessor_free(preprocessor);
@@ -637,7 +659,7 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
         return false;
     }
     /* Bitmask with at least bit 25 set for supported_optimizerswitches */
-    if (!pascal_preprocessor_define(preprocessor, "supported_optimizerswitches := 33554432"))
+    if (!pascal_preprocessor_define_const(preprocessor, "supported_optimizerswitches", "33554432"))
     {
         report_preprocessor_error(error_out, path, "unable to define supported_optimizerswitches");
         pascal_preprocessor_free(preprocessor);
@@ -645,7 +667,7 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
         return false;
     }
     /* Define max_operands for x86 (4 operands max in x86 instructions) */
-    if (!pascal_preprocessor_define(preprocessor, "max_operands := 4"))
+    if (!pascal_preprocessor_define_const(preprocessor, "max_operands", "4"))
     {
         report_preprocessor_error(error_out, path, "unable to define max_operands");
         pascal_preprocessor_free(preprocessor);
