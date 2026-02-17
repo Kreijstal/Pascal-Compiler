@@ -2667,17 +2667,25 @@ FIELD_RESOLVED:
             destroy_kgpc_type(record_kgpc);
         }
     }
-    if (expr->resolved_kgpc_type != NULL &&
-        (kgpc_type_is_array(expr->resolved_kgpc_type) ||
-         kgpc_type_is_array_of_const(expr->resolved_kgpc_type) ||
-         kgpc_type_is_procedure(expr->resolved_kgpc_type)))
+    int preserve_resolved_kgpc = 0;
+    if (expr->resolved_kgpc_type != NULL)
     {
-        /* Preserve array KgpcType for overload resolution (var params/open arrays). */
+        if (kgpc_type_is_array(expr->resolved_kgpc_type) ||
+            kgpc_type_is_array_of_const(expr->resolved_kgpc_type) ||
+            kgpc_type_is_procedure(expr->resolved_kgpc_type))
+        {
+            /* Preserve array/procedure KgpcType for overload resolution and var/open-array behavior. */
+            preserve_resolved_kgpc = 1;
+        }
+        else if (kgpc_type_equals_tag(expr->resolved_kgpc_type, field_type))
+        {
+            /* Keep richer alias metadata (e.g. Single vs generic Real) when the type tag already matches. */
+            preserve_resolved_kgpc = 1;
+        }
     }
-    else
-    {
+
+    if (!preserve_resolved_kgpc)
         semcheck_expr_set_resolved_type(expr, field_type);
-    }
     *type_return = field_type;
     if (getenv("KGPC_DEBUG_RECORD_FIELD") != NULL &&
         field_id != NULL &&

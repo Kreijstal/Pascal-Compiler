@@ -266,6 +266,18 @@ static int expr_requires_qword(const struct Expression *expr)
     
     /* Check type tag first */
     int type_tag = expr_get_type_tag(expr);
+    if (type_tag == REAL_TYPE)
+    {
+        /* Single-precision reals use 32-bit payloads in GP registers. */
+        if (expr->resolved_kgpc_type != NULL &&
+            kgpc_type_sizeof(expr->resolved_kgpc_type) == 4)
+        {
+            return 0;
+        }
+        if (expr_effective_size_bytes(expr) == 4)
+            return 0;
+        return 1;
+    }
     if (codegen_type_uses_qword(type_tag))
         return 1;
     
@@ -292,17 +304,115 @@ static int expr_requires_qword(const struct Expression *expr)
 static const char *reg32_to_reg64(const char *reg_name, char *buffer, size_t buf_size);
 static const char *reg64_to_reg32(const char *reg_name, char *buffer, size_t buf_size);
 static int expr_is_single_real_local(const struct Expression *expr);
+static int expr_is_single_real_with_symtab(const struct Expression *expr, SymTab_t *symtab);
 
 static int expr_is_single_real_local(const struct Expression *expr)
 {
     if (expr == NULL || !expr_has_type_tag(expr, REAL_TYPE))
         return 0;
 
+    if (expr->type == EXPR_RECORD_ACCESS &&
+        expr->expr_data.record_access_data.record_expr != NULL &&
+        expr->expr_data.record_access_data.field_id != NULL)
+    {
+        struct Expression *record_expr = expr->expr_data.record_access_data.record_expr;
+        struct RecordType *record = record_expr->record_type;
+        if (record == NULL && record_expr->resolved_kgpc_type != NULL &&
+            kgpc_type_is_record(record_expr->resolved_kgpc_type))
+        {
+            record = kgpc_type_get_record(record_expr->resolved_kgpc_type);
+        }
+        if (record == NULL && record_expr->resolved_kgpc_type != NULL &&
+            kgpc_type_is_pointer(record_expr->resolved_kgpc_type) &&
+            record_expr->resolved_kgpc_type->info.points_to != NULL &&
+            kgpc_type_is_record(record_expr->resolved_kgpc_type->info.points_to))
+        {
+            record = kgpc_type_get_record(record_expr->resolved_kgpc_type->info.points_to);
+        }
+        if (record != NULL)
+        {
+            for (ListNode_t *cur = record->fields; cur != NULL; cur = cur->next)
+            {
+                if (cur->type != LIST_RECORD_FIELD || cur->cur == NULL)
+                    continue;
+                struct RecordField *field = (struct RecordField *)cur->cur;
+                if (field->name == NULL ||
+                    !pascal_identifier_equals(field->name, expr->expr_data.record_access_data.field_id))
+                {
+                    continue;
+                }
+                if (field->type_id != NULL && pascal_identifier_equals(field->type_id, "Single"))
+                    return 1;
+                break;
+            }
+        }
+    }
+
     KgpcType *type = expr_get_kgpc_type(expr);
-    if (type == NULL)
+    if (type != NULL && kgpc_type_sizeof(type) == 4)
+        return 1;
+
+    /* Record-field real expressions may be tagged as REAL while physically
+     * stored as Single. Use effective expression size as fallback. */
+    return expr_effective_size_bytes(expr) == 4;
+}
+
+static int expr_is_single_real_with_symtab(const struct Expression *expr, SymTab_t *symtab)
+{
+    if (expr_is_single_real_local(expr))
+        return 1;
+    if (expr == NULL || symtab == NULL || !expr_has_type_tag(expr, REAL_TYPE))
+        return 0;
+    if (expr->type != EXPR_RECORD_ACCESS ||
+        expr->expr_data.record_access_data.record_expr == NULL ||
+        expr->expr_data.record_access_data.field_id == NULL)
+    {
+        return 0;
+    }
+
+    struct Expression *record_expr = expr->expr_data.record_access_data.record_expr;
+    struct RecordType *record = record_expr->record_type;
+    if (record == NULL && record_expr->resolved_kgpc_type != NULL &&
+        kgpc_type_is_record(record_expr->resolved_kgpc_type))
+    {
+        record = kgpc_type_get_record(record_expr->resolved_kgpc_type);
+    }
+    if (record == NULL && record_expr->resolved_kgpc_type != NULL &&
+        kgpc_type_is_pointer(record_expr->resolved_kgpc_type) &&
+        record_expr->resolved_kgpc_type->info.points_to != NULL &&
+        kgpc_type_is_record(record_expr->resolved_kgpc_type->info.points_to))
+    {
+        record = kgpc_type_get_record(record_expr->resolved_kgpc_type->info.points_to);
+    }
+    if (record == NULL)
         return 0;
 
-    return (kgpc_type_sizeof(type) == 4);
+    for (ListNode_t *cur = record->fields; cur != NULL; cur = cur->next)
+    {
+        if (cur->type != LIST_RECORD_FIELD || cur->cur == NULL)
+            continue;
+        struct RecordField *field = (struct RecordField *)cur->cur;
+        if (field->name == NULL ||
+            !pascal_identifier_equals(field->name, expr->expr_data.record_access_data.field_id))
+        {
+            continue;
+        }
+        if (field->type_id != NULL)
+        {
+            if (pascal_identifier_equals(field->type_id, "Single"))
+                return 1;
+            HashNode_t *type_node = NULL;
+            if (FindIdent(&type_node, symtab, field->type_id) == 0 &&
+                type_node != NULL && type_node->type != NULL &&
+                kgpc_type_equals_tag(type_node->type, REAL_TYPE) &&
+                kgpc_type_sizeof(type_node->type) == 4)
+            {
+                return 1;
+            }
+        }
+        return 0;
+    }
+    return 0;
 }
 
 static ListNode_t *emit_store_to_stack(ListNode_t *inst_list, const Register_t *reg,
@@ -443,6 +553,25 @@ static ListNode_t *load_real_operand_into_xmm(CodeGenContext *ctx,
           expr_has_type_tag(operand_expr, INT_TYPE) ||
           expr_has_type_tag(operand_expr, BOOL) ||
           expr_has_type_tag(operand_expr, CHAR_TYPE)));
+    struct Expression *raw_operand_expr = operand_expr;
+    while (raw_operand_expr != NULL &&
+        raw_operand_expr->type == EXPR_TYPECAST &&
+        raw_operand_expr->expr_data.typecast_data.target_type == REAL_TYPE &&
+        raw_operand_expr->expr_data.typecast_data.expr != NULL)
+    {
+        raw_operand_expr = raw_operand_expr->expr_data.typecast_data.expr;
+    }
+    if (operand_is_real && raw_operand_expr != NULL &&
+        (expr_has_type_tag(raw_operand_expr, LONGINT_TYPE) ||
+         expr_has_type_tag(raw_operand_expr, INT_TYPE) ||
+         expr_has_type_tag(raw_operand_expr, BOOL) ||
+         expr_has_type_tag(raw_operand_expr, CHAR_TYPE)))
+    {
+        operand_is_real = 0;
+        operand_is_integer_like = 1;
+        operand_is_longint = expr_uses_qword_kgpctype(raw_operand_expr) ||
+            expr_has_type_tag(raw_operand_expr, LONGINT_TYPE);
+    }
 
     char buffer[192];
     int is_single_real = 0;
@@ -513,6 +642,27 @@ static ListNode_t *load_real_operand_into_xmm(CodeGenContext *ctx,
 
         if (operand[0] == '%')
         {
+            int reg_holds_raw_single = 0;
+            if (is_single_real && operand_expr != NULL)
+            {
+                int et = operand_expr->type;
+                if (et == EXPR_RECORD_ACCESS || et == EXPR_ARRAY_ACCESS ||
+                    et == EXPR_POINTER_DEREF)
+                {
+                    reg_holds_raw_single = 1;
+                }
+            }
+            if (reg_holds_raw_single)
+            {
+                char reg32_buf[16];
+                const char *reg32 = reg64_to_reg32(operand, reg32_buf, sizeof(reg32_buf));
+                if (reg32 == NULL)
+                    reg32 = operand;
+                snprintf(buffer, sizeof(buffer), "\tmovd\t%s, %s\n", reg32, xmm_reg);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tcvtss2sd\t%s, %s\n", xmm_reg, xmm_reg);
+                return add_inst(inst_list, buffer);
+            }
             snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", source_operand, xmm_reg);
             return add_inst(inst_list, buffer);
         }
@@ -567,12 +717,18 @@ static ListNode_t *load_real_operand_into_xmm(CodeGenContext *ctx,
     if (operand_is_longint)
     {
         convert_instr = "cvtsi2sdq";
-        convert_reg = reg32_to_reg64(operand, reg_buf, sizeof(reg_buf));
+        if (operand[0] == '%')
+            convert_reg = reg32_to_reg64(operand, reg_buf, sizeof(reg_buf));
+        else
+            convert_reg = operand;
     }
     else
     {
         convert_instr = "cvtsi2sdl";
-        convert_reg = reg64_to_reg32(operand, reg_buf, sizeof(reg_buf));
+        if (operand[0] == '%')
+            convert_reg = reg64_to_reg32(operand, reg_buf, sizeof(reg_buf));
+        else
+            convert_reg = operand;
     }
     snprintf(buffer, sizeof(buffer), "\t%s\t%s, %s\n", convert_instr, convert_reg, xmm_reg);
     return add_inst(inst_list, buffer);
@@ -2678,7 +2834,7 @@ cleanup_constructor:
             if (!should_deref)
                 return inst_list;
 
-            if (expr_type == REAL_TYPE && expr_is_single_real_local(expr))
+            if (expr_type == REAL_TYPE && expr_is_single_real_with_symtab(expr, ctx != NULL ? ctx->symtab : NULL))
             {
                 char mem_operand[64];
                 snprintf(mem_operand, sizeof(mem_operand), "(%s)", target_reg->bit_64);
@@ -2724,7 +2880,8 @@ cleanup_constructor:
         }
     }
 
-    if (expr_has_type_tag(expr, REAL_TYPE) && expr_is_single_real_local(expr) &&
+    if (expr_has_type_tag(expr, REAL_TYPE) &&
+        expr_is_single_real_with_symtab(expr, ctx != NULL ? ctx->symtab : NULL) &&
         buf_leaf[0] != '$')
     {
         inst_list = load_real_operand_into_xmm(ctx, expr, buf_leaf, "%xmm0", inst_list);
@@ -3076,13 +3233,28 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                     /* Check if this is a real constant */
                     else if (node->type != NULL && kgpc_type_equals_tag(node->type, REAL_TYPE))
                     {
-                        /* Real constant - encode as bit pattern using union for safe type punning */
-                        union {
-                            double d;
-                            int64_t i;
-                        } converter;
-                        converter.d = node->const_real_value;
-                        snprintf(buffer, buf_len, "$%lld", (long long)converter.i);
+                        long long real_size = kgpc_type_sizeof(node->type);
+                        if (real_size == 4)
+                        {
+                            /* Single constant: keep 32-bit IEEE payload so later marshalling
+                             * can move it with movd without losing value bits. */
+                            union {
+                                float f;
+                                uint32_t i;
+                            } converter;
+                            converter.f = (float)node->const_real_value;
+                            snprintf(buffer, buf_len, "$%u", (unsigned)converter.i);
+                        }
+                        else
+                        {
+                            /* Double/Real/Extended constants are materialized as 64-bit payload. */
+                            union {
+                                double d;
+                                int64_t i;
+                            } converter;
+                            converter.d = node->const_real_value;
+                            snprintf(buffer, buf_len, "$%lld", (long long)converter.i);
+                        }
                     }
                     /* Check if this is a set constant that fits in 8 bytes */
                     else if (node->const_set_value != NULL && node->const_set_size > 0 &&
@@ -3263,13 +3435,25 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
 
         case EXPR_RNUM:
         {
-            /* Use union for safe type punning */
-            union {
-                double d;
-                int64_t i;
-            } converter;
-            converter.d = expr->expr_data.r_num;
-            snprintf(buffer, buf_len, "$%lld", (long long)converter.i);
+            if (expr_is_single_real_with_symtab(expr, ctx != NULL ? ctx->symtab : NULL))
+            {
+                union {
+                    float f;
+                    uint32_t i;
+                } converter;
+                converter.f = (float)expr->expr_data.r_num;
+                snprintf(buffer, buf_len, "$%u", (unsigned)converter.i);
+            }
+            else
+            {
+                /* Use union for safe type punning */
+                union {
+                    double d;
+                    int64_t i;
+                } converter;
+                converter.d = expr->expr_data.r_num;
+                snprintf(buffer, buf_len, "$%lld", (long long)converter.i);
+            }
             break;
         }
 
@@ -4271,49 +4455,114 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
 
                     int rhs_loaded = 0;
                     StackNode_t *rhs_spill = NULL;
+                    struct Expression *raw_rhs_expr = right_expr;
+                    while (raw_rhs_expr != NULL &&
+                        raw_rhs_expr->type == EXPR_TYPECAST &&
+                        raw_rhs_expr->expr_data.typecast_data.target_type == REAL_TYPE &&
+                        raw_rhs_expr->expr_data.typecast_data.expr != NULL)
+                    {
+                        raw_rhs_expr = raw_rhs_expr->expr_data.typecast_data.expr;
+                    }
+                    int rhs_tag = (raw_rhs_expr != NULL) ? expr_get_type_tag(raw_rhs_expr) :
+                        ((right_expr != NULL) ? expr_get_type_tag(right_expr) : UNKNOWN_TYPE);
+                    int rhs_is_integer_like = is_integer_type(rhs_tag) || rhs_tag == BOOL ||
+                        rhs_tag == CHAR_TYPE || rhs_tag == ENUM_TYPE;
                     if (right != NULL && right[0] == '$')
                     {
-                        char label[32];
-                        snprintf(label, sizeof(label), ".LC%d", ctx->write_label_counter++);
+                        if (rhs_is_integer_like)
+                        {
+                            Register_t *imm_reg = get_free_reg(get_reg_stack(), &inst_list);
+                            if (imm_reg == NULL)
+                            {
+                                codegen_report_error(ctx, "ERROR: Unable to allocate register for real comparison immediate.");
+                                break;
+                            }
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", right, imm_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tcvtsi2sdq\t%s, %%xmm0\n", imm_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                            free_reg(get_reg_stack(), imm_reg);
+                        }
+                        else
+                        {
+                            char label[32];
+                            snprintf(label, sizeof(label), ".LC%d", ctx->write_label_counter++);
 
-                        const char *readonly_section = codegen_readonly_section_directive();
-                        char rodata_buffer[192];
-                        snprintf(rodata_buffer, sizeof(rodata_buffer), "%s\n%s:\n\t.quad %s\n\t.text\n",
-                            readonly_section, label, right + 1);
-                        inst_list = add_inst(inst_list, rodata_buffer);
+                            const char *readonly_section = codegen_readonly_section_directive();
+                            char rodata_buffer[192];
+                            snprintf(rodata_buffer, sizeof(rodata_buffer), "%s\n%s:\n\t.quad %s\n\t.text\n",
+                                readonly_section, label, right + 1);
+                            inst_list = add_inst(inst_list, rodata_buffer);
 
-                        snprintf(buffer, sizeof(buffer), "\tmovsd\t%s(%%rip), %%xmm0\n", label);
-                        inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tmovsd\t%s(%%rip), %%xmm0\n", label);
+                            inst_list = add_inst(inst_list, buffer);
+                        }
                         rhs_loaded = 1;
                     }
 
                     if (!rhs_loaded)
                     {
-                        if (right != NULL && right[0] == '%')
+                        if (rhs_is_integer_like && right != NULL)
                         {
-                            char right64_buf[16];
-                            const char *right_candidate = right;
-                            if (right32 != NULL)
-                                right_candidate = right32;
-                            const char *right64 = right_candidate;
-                            const char *converted = reg32_to_reg64(right_candidate, right64_buf, sizeof(right64_buf));
-                            if (converted != NULL)
-                                right64 = converted;
-                            if (right64 != NULL && right64[0] == '%')
+                            if (codegen_type_uses_qword(rhs_tag))
                             {
-                                if (rhs_spill == NULL)
-                                    rhs_spill = add_l_t("relop_real_rhs_reg");
-                                if (rhs_spill == NULL)
+                                snprintf(buffer, sizeof(buffer), "\tcvtsi2sdq\t%s, %%xmm0\n", right);
+                                inst_list = add_inst(inst_list, buffer);
+                            }
+                            else
+                            {
+                                snprintf(buffer, sizeof(buffer), "\tcvtsi2sdl\t%s, %%xmm0\n", right);
+                                inst_list = add_inst(inst_list, buffer);
+                            }
+                            rhs_loaded = 1;
+                        }
+                        if (!rhs_loaded && right != NULL && right[0] == '%')
+                        {
+                            if (rhs_is_integer_like)
+                            {
+                                const char *rhs32 = right32 != NULL ? right32 : right;
+                                char rhs64_buf[16];
+                                const char *rhs64 = reg32_to_reg64(rhs32, rhs64_buf, sizeof(rhs64_buf));
+                                if (rhs64 == NULL)
+                                    rhs64 = rhs32;
+                                if (codegen_type_uses_qword(rhs_tag))
                                 {
-                                    codegen_report_error(ctx, "ERROR: Unable to allocate temporary for real comparison.");
-                                    break;
+                                    snprintf(buffer, sizeof(buffer), "\tcvtsi2sdq\t%s, %%xmm0\n", rhs64);
+                                    inst_list = add_inst(inst_list, buffer);
                                 }
-
-                                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", right64, rhs_spill->offset);
-                                inst_list = add_inst(inst_list, buffer);
-                                snprintf(buffer, sizeof(buffer), "\tmovsd\t-%d(%%rbp), %%xmm0\n", rhs_spill->offset);
-                                inst_list = add_inst(inst_list, buffer);
+                                else
+                                {
+                                    snprintf(buffer, sizeof(buffer), "\tcvtsi2sdl\t%s, %%xmm0\n", rhs32);
+                                    inst_list = add_inst(inst_list, buffer);
+                                }
                                 rhs_loaded = 1;
+                            }
+                            else
+                            {
+                                char right64_buf[16];
+                                const char *right_candidate = right;
+                                if (right32 != NULL)
+                                    right_candidate = right32;
+                                const char *right64 = right_candidate;
+                                const char *converted = reg32_to_reg64(right_candidate, right64_buf, sizeof(right64_buf));
+                                if (converted != NULL)
+                                    right64 = converted;
+                                if (right64 != NULL && right64[0] == '%')
+                                {
+                                    if (rhs_spill == NULL)
+                                        rhs_spill = add_l_t("relop_real_rhs_reg");
+                                    if (rhs_spill == NULL)
+                                    {
+                                        codegen_report_error(ctx, "ERROR: Unable to allocate temporary for real comparison.");
+                                        break;
+                                    }
+
+                                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", right64, rhs_spill->offset);
+                                    inst_list = add_inst(inst_list, buffer);
+                                    snprintf(buffer, sizeof(buffer), "\tmovsd\t-%d(%%rbp), %%xmm0\n", rhs_spill->offset);
+                                    inst_list = add_inst(inst_list, buffer);
+                                    rhs_loaded = 1;
+                                }
                             }
                         }
                         if (!rhs_loaded && right != NULL)

@@ -2249,6 +2249,7 @@ static struct TypeAlias* copy_type_alias(const struct TypeAlias *src)
     dst->is_set = src->is_set;
     dst->set_element_type = src->set_element_type;
     dst->is_enum = src->is_enum;
+    dst->enum_is_scoped = src->enum_is_scoped;
     dst->is_file = src->is_file;
     dst->file_type = src->file_type;
     dst->is_range = src->is_range;

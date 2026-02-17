@@ -254,7 +254,9 @@ static int semcheck_map_builtin_type_name_local(const char *id)
         return LONGINT_TYPE;
     if (pascal_identifier_equals(id, "Int64"))
         return INT64_TYPE;
-    if (pascal_identifier_equals(id, "Real"))
+    if (pascal_identifier_equals(id, "Real") ||
+        pascal_identifier_equals(id, "Float") ||
+        pascal_identifier_equals(id, "ValReal"))
         return REAL_TYPE;
     if (pascal_identifier_equals(id, "Single") ||
         pascal_identifier_equals(id, "Double") ||
@@ -323,6 +325,8 @@ static int semcheck_helper_self_is_var(SymTab_t *symtab, const char *base_type_i
         return 0;
     /* Real/Single/Double/Extended: codegen passes Self by value via SSE. */
     if (pascal_identifier_equals(base_type_id, "Real") ||
+        pascal_identifier_equals(base_type_id, "Float") ||
+        pascal_identifier_equals(base_type_id, "ValReal") ||
         pascal_identifier_equals(base_type_id, "Single") ||
         pascal_identifier_equals(base_type_id, "Double") ||
         pascal_identifier_equals(base_type_id, "Extended") ||
@@ -2629,6 +2633,8 @@ static int is_real_type_name(SymTab_t *symtab, const char *type_name)
     const char *name = (resolved != NULL) ? resolved : type_name;
 
     return (pascal_identifier_equals(name, "Real") ||
+            pascal_identifier_equals(name, "Float") ||
+            pascal_identifier_equals(name, "ValReal") ||
             pascal_identifier_equals(name, "Double") ||
             pascal_identifier_equals(name, "Single") ||
             pascal_identifier_equals(name, "Extended") ||
@@ -4649,6 +4655,13 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                 struct TypeAlias *alias_info = &tree->tree_data.type_decl_data.info.alias;
                 if (alias_info != NULL && alias_info->is_enum && alias_info->enum_literals != NULL)
                 {
+                    if (getenv("KGPC_DEBUG_ENUM_LITERALS") != NULL)
+                    {
+                        fprintf(stderr, "[KGPC] enum predeclare %s scoped=%d line=%d\n",
+                            tree->tree_data.type_decl_data.id != NULL ? tree->tree_data.type_decl_data.id : "<anon>",
+                            alias_info->enum_is_scoped,
+                            tree->line_num);
+                    }
                     /* Create ONE shared KgpcType for this enum type if not already created */
                     if (alias_info->kgpc_type == NULL)
                     {
@@ -4665,9 +4678,43 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                     {
                         kgpc_type_set_type_alias(alias_info->kgpc_type, alias_info);
                     }
-                    
-                    if (alias_info->kgpc_type != NULL)
+
+                    /* Scoped enums expose values only through qualified lookup (TEnum.Value),
+                     * so do not inject their literals as global constants in this scope. */
+                    if (alias_info->kgpc_type != NULL && !alias_info->enum_is_scoped)
                     {
+                        int enum_conflicts_with_existing_name = 0;
+                        ListNode_t *scan_literal = alias_info->enum_literals;
+                        while (scan_literal != NULL)
+                        {
+                            if (scan_literal->cur != NULL)
+                            {
+                                const char *scan_name = (const char *)scan_literal->cur;
+                                HashNode_t *existing_scan = NULL;
+                                if (FindIdent(&existing_scan, symtab, (char *)scan_name) != -1 &&
+                                    existing_scan != NULL)
+                                {
+                                    enum_conflicts_with_existing_name = 1;
+                                    break;
+                                }
+                            }
+                            scan_literal = scan_literal->next;
+                        }
+
+                        /* If this enum would collide with any existing identifier in scope,
+                         * force scoped behavior for this declaration instead of emitting
+                         * global literals that are ambiguous by design. */
+                        if (enum_conflicts_with_existing_name)
+                        {
+                            alias_info->enum_is_scoped = 1;
+                            if (getenv("KGPC_DEBUG_ENUM_LITERALS") != NULL)
+                            {
+                                fprintf(stderr, "[KGPC] enum %s forced scoped due to identifier collision\n",
+                                    tree->tree_data.type_decl_data.id != NULL ? tree->tree_data.type_decl_data.id : "<anon>");
+                            }
+                            continue;
+                        }
+
                         int ordinal = 0;
                         ListNode_t *literal_node = alias_info->enum_literals;
                         while (literal_node != NULL)
@@ -6681,6 +6728,18 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                         {
                                             existing->type->info.proc_info.params = CopyListShallow(params);
                                         }
+                                        else if (existing != NULL && existing->type != NULL &&
+                                            existing->type->kind == TYPE_KIND_PROCEDURE &&
+                                            existing->type->info.proc_info.params != NULL &&
+                                            params != NULL)
+                                        {
+                                            /* Keep defaults declared in the type/template declaration
+                                             * when the same signature was already introduced by an
+                                             * implementation header that omits them. */
+                                            copy_default_values_to_impl_params(
+                                                params,
+                                                existing->type->info.proc_info.params);
+                                        }
                                     }
 
                                     if (params != NULL)
@@ -7111,6 +7170,28 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
         }
         else if (already_predeclared)
         {
+            /* If a private/local record type reuses a name that already exists in scope
+             * (e.g. implementation-only tsiginfo shadowing imported tsiginfo), update
+             * the existing symbol's record payload to this declaration instead of silently
+             * discarding the new layout. */
+            if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD &&
+                record_info != NULL &&
+                existing_type != NULL &&
+                existing_type->type != NULL &&
+                !tree->tree_data.type_decl_data.unit_is_public)
+            {
+                if (existing_type->type->kind == TYPE_KIND_RECORD)
+                {
+                    existing_type->type->info.record_info = record_info;
+                }
+                else if (existing_type->type->kind == TYPE_KIND_POINTER &&
+                         existing_type->type->info.points_to != NULL &&
+                         existing_type->type->info.points_to->kind == TYPE_KIND_RECORD)
+                {
+                    existing_type->type->info.points_to->info.record_info = record_info;
+                }
+            }
+
             /* Type was already registered by predeclare_types().
              * We still need to update any additional metadata like array bounds. */
             if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS && alias_info != NULL && 
@@ -8010,6 +8091,8 @@ void semcheck_add_builtins(SymTab_t *symtab)
     add_builtin_type_owned(symtab, "UInt16", create_primitive_type_with_size(WORD_TYPE, 2));
     add_builtin_type_owned(symtab, "Int32", create_primitive_type_with_size(INT_TYPE, 4));
     add_builtin_type_owned(symtab, "UInt32", create_primitive_type_with_size(LONGWORD_TYPE, 4));
+    add_builtin_type_owned(symtab, "Float", create_primitive_type_with_size(REAL_TYPE, 4));
+    add_builtin_type_owned(symtab, "ValReal", create_primitive_type_with_size(REAL_TYPE, 8));
     add_builtin_type_owned(symtab, "Single", create_primitive_type_with_size(REAL_TYPE, 4));
     add_builtin_type_owned(symtab, "Double", create_primitive_type_with_size(REAL_TYPE, 8));
     add_builtin_type_owned(symtab, "Extended", create_primitive_type_with_size(REAL_TYPE, 8));
@@ -11519,6 +11602,44 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             KgpcType *opaque = create_primitive_type(POINTER_TYPE);
             PushTypeOntoScope_Typed(symtab, (char *)tparam, opaque);
             destroy_kgpc_type(opaque);
+        }
+    } else {
+        /* Some parsed method implementations (notably generic class methods in FPC RTL)
+         * may omit explicit generic_type_params metadata even though their signatures
+         * contain placeholders like T/U. Infer only single-letter uppercase params. */
+        ListNode_t *arg_node = subprogram->tree_data.subprogram_data.args_var;
+        while (arg_node != NULL) {
+            if (arg_node->type == LIST_TREE && arg_node->cur != NULL) {
+                Tree_t *arg_tree = (Tree_t *)arg_node->cur;
+                const char *type_id = NULL;
+                if (arg_tree->type == TREE_VAR_DECL)
+                    type_id = arg_tree->tree_data.var_decl_data.type_id;
+                else if (arg_tree->type == TREE_ARR_DECL)
+                    type_id = arg_tree->tree_data.arr_decl_data.type_id;
+                if (type_id != NULL && type_id[0] >= 'A' && type_id[0] <= 'Z' &&
+                    type_id[1] == '\0')
+                {
+                    HashNode_t *existing = NULL;
+                    if (FindIdent(&existing, symtab, type_id) == -1) {
+                        KgpcType *opaque = create_primitive_type(POINTER_TYPE);
+                        PushTypeOntoScope_Typed(symtab, (char *)type_id, opaque);
+                        destroy_kgpc_type(opaque);
+                    }
+                }
+            }
+            arg_node = arg_node->next;
+        }
+
+        const char *ret_type_id = subprogram->tree_data.subprogram_data.return_type_id;
+        if (ret_type_id != NULL && ret_type_id[0] >= 'A' && ret_type_id[0] <= 'Z' &&
+            ret_type_id[1] == '\0')
+        {
+            HashNode_t *existing = NULL;
+            if (FindIdent(&existing, symtab, ret_type_id) == -1) {
+                KgpcType *opaque = create_primitive_type(POINTER_TYPE);
+                PushTypeOntoScope_Typed(symtab, (char *)ret_type_id, opaque);
+                destroy_kgpc_type(opaque);
+            }
         }
     }
     return_val += semcheck_decls(symtab, subprogram->tree_data.subprogram_data.args_var);

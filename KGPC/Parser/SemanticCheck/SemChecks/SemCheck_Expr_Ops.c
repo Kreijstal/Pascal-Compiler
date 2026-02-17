@@ -746,16 +746,18 @@ int semcheck_addop(int *type_return,
         }
     }
 
-    /* Check for operator overloading for record types */
-    if (type_first == RECORD_TYPE && type_second == RECORD_TYPE)
+    /* Check for operator overloading when at least one operand is a record type. */
+    if (type_first == RECORD_TYPE || type_second == RECORD_TYPE)
     {
-        /* Both operands are records - check if they have an operator overload */
         const char *left_type_name = get_expr_type_name(expr1, symtab);
         const char *right_type_name = get_expr_type_name(expr2, symtab);
-        
-        /* Check if both types are the same and we have a type name */
-        if (left_type_name != NULL && right_type_name != NULL &&
-            strcasecmp(left_type_name, right_type_name) == 0)
+        const char *record_type_name = NULL;
+        if (type_first == RECORD_TYPE && left_type_name != NULL)
+            record_type_name = left_type_name;
+        else if (type_second == RECORD_TYPE && right_type_name != NULL)
+            record_type_name = right_type_name;
+
+        if (record_type_name != NULL)
         {
             /* Construct the operator method name */
             const char *op_suffix = NULL;
@@ -999,16 +1001,18 @@ int semcheck_mulop(int *type_return,
         return return_val;
     }
 
-    /* Check for operator overloading for record types */
-    if (type_first == RECORD_TYPE && type_second == RECORD_TYPE)
+    /* Check for operator overloading when at least one operand is a record type. */
+    if (type_first == RECORD_TYPE || type_second == RECORD_TYPE)
     {
-        /* Both operands are records - check if they have an operator overload */
         const char *left_type_name = get_expr_type_name(expr1, symtab);
         const char *right_type_name = get_expr_type_name(expr2, symtab);
-        
-        /* Check if both types are the same and we have a type name */
-        if (left_type_name != NULL && right_type_name != NULL &&
-            strcasecmp(left_type_name, right_type_name) == 0)
+        const char *record_type_name = NULL;
+        if (type_first == RECORD_TYPE && left_type_name != NULL)
+            record_type_name = left_type_name;
+        else if (type_second == RECORD_TYPE && right_type_name != NULL)
+            record_type_name = right_type_name;
+
+        if (record_type_name != NULL)
         {
             /* Construct the operator method name */
             const char *op_suffix = NULL;
@@ -1023,11 +1027,11 @@ int semcheck_mulop(int *type_return,
             if (op_suffix != NULL)
             {
                 /* Build the mangled operator method name: TypeName__op_mul */
-                size_t name_len = strlen(left_type_name) + strlen(op_suffix) + 3;
+                size_t name_len = strlen(record_type_name) + strlen(op_suffix) + 3;
                 char *operator_method = (char *)malloc(name_len);
                 if (operator_method != NULL)
                 {
-                    snprintf(operator_method, name_len, "%s__%s", left_type_name, op_suffix);
+                    snprintf(operator_method, name_len, "%s__%s", record_type_name, op_suffix);
                     
                     /* Look up the operator method in the symbol table.
                      * Try exact match first, then prefix match for return-type-suffixed names. */
@@ -1784,6 +1788,35 @@ resolved:;
                 }
             }
 
+            /* Also try implicit Self member lookup for regular methods (not only
+             * type helpers). This resolves bare identifiers like Size/TopLeft/
+             * BottomRight in record/class methods before reporting undeclared id. */
+            if (with_status != 0 && id != NULL)
+            {
+                HashNode_t *self_node = helper_self_node;
+                if (self_node == NULL)
+                    FindIdent(&self_node, symtab, "Self");
+                if (self_node != NULL)
+                {
+                    struct RecordType *self_record = get_record_type_from_node(self_node);
+                    if (self_record == NULL)
+                        self_record = semcheck_resolve_helper_self_record(symtab, self_node, NULL);
+                    if (self_record == NULL)
+                    {
+                        const char *owner = semcheck_get_current_method_owner();
+                        if (owner != NULL)
+                            self_record = semcheck_lookup_record_type(symtab, owner);
+                    }
+                    if (self_record != NULL)
+                    {
+                        int member_result = semcheck_try_helper_member(type_return, symtab, expr,
+                            max_scope_lev, mutating, self_node, self_record, id);
+                        if (member_result >= 0)
+                            return member_result;
+                    }
+                }
+            }
+
             if (with_status == -1)
             {
                 semantic_error(expr->line_num, expr->col_num,
@@ -1819,6 +1852,33 @@ resolved:;
            which should remain as HASHTYPE_FUNCTION_RETURN access. */
         if(hash_return->hash_type == HASHTYPE_FUNCTION && mutating == NO_MUTATE)
         {
+            /* Prefer implicit Self members over same-named global functions.
+             * Example: inside TRectF methods, bare "BottomRight" should resolve
+             * to Self.BottomRight (property) rather than a global BottomRight(). */
+            if (id != NULL)
+            {
+                HashNode_t *self_node = NULL;
+                if (FindIdent(&self_node, symtab, "Self") == 0 && self_node != NULL)
+                {
+                    struct RecordType *self_record = get_record_type_from_node(self_node);
+                    if (self_record == NULL)
+                        self_record = semcheck_resolve_helper_self_record(symtab, self_node, NULL);
+                    if (self_record == NULL)
+                    {
+                        const char *owner = semcheck_get_current_method_owner();
+                        if (owner != NULL)
+                            self_record = semcheck_lookup_record_type(symtab, owner);
+                    }
+                    if (self_record != NULL)
+                    {
+                        int member_result = semcheck_try_helper_member(type_return, symtab, expr,
+                            max_scope_lev, mutating, self_node, self_record, id);
+                        if (member_result >= 0)
+                            return member_result;
+                    }
+                }
+            }
+
             /* Prefer helper properties when inside a type helper method body. */
             if (id != NULL)
             {
