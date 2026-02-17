@@ -31,6 +31,17 @@ void semcheck_expr_set_resolved_type(struct Expression *expr, int type_tag)
     if (expr == NULL)
         return;
 
+    struct RecordType *resolved_record = NULL;
+    if (expr->resolved_kgpc_type != NULL)
+    {
+        if (kgpc_type_is_record(expr->resolved_kgpc_type))
+            resolved_record = kgpc_type_get_record(expr->resolved_kgpc_type);
+        else if (kgpc_type_is_pointer(expr->resolved_kgpc_type) &&
+            expr->resolved_kgpc_type->info.points_to != NULL &&
+            kgpc_type_is_record(expr->resolved_kgpc_type->info.points_to))
+            resolved_record = kgpc_type_get_record(expr->resolved_kgpc_type->info.points_to);
+    }
+
     if (expr->resolved_kgpc_type != NULL)
     {
         destroy_kgpc_type(expr->resolved_kgpc_type);
@@ -39,8 +50,8 @@ void semcheck_expr_set_resolved_type(struct Expression *expr, int type_tag)
 
     if (type_tag == RECORD_TYPE)
     {
-        if (expr->record_type != NULL)
-            expr->resolved_kgpc_type = create_record_type(expr->record_type);
+        if (resolved_record != NULL)
+            expr->resolved_kgpc_type = create_record_type(resolved_record);
         return;
     }
 
@@ -101,10 +112,6 @@ const char *get_expr_type_name(struct Expression *expr, SymTab_t *symtab)
 {
     if (expr == NULL)
         return NULL;
-    
-    /* Try to get from record_type field (legacy) */
-    if (expr->record_type != NULL && expr->record_type->type_id != NULL)
-        return expr->record_type->type_id;
     
     /* Try to get from resolved_kgpc_type */
     if (expr->resolved_kgpc_type != NULL && kgpc_type_is_record(expr->resolved_kgpc_type))

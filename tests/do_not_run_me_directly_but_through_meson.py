@@ -1393,6 +1393,26 @@ class TestCompiler(unittest.TestCase):
         stderr = cm.exception.stderr or ""
         self.assertIn("unterminated conditional", stderr)
 
+    def test_error_reports_path(self):
+        """Compiler errors should include the source path prefix, using the include file when applicable."""
+        input_file, asm_file, _ = self._get_test_paths(
+            "tdd_error_path_in_include"
+        )
+
+        with self.assertRaises(subprocess.CalledProcessError) as cm:
+            run_compiler(input_file, asm_file)
+
+        stderr = cm.exception.stderr or ""
+        # The error is in the include file, so the error prefix should show the include file path
+        include_file = input_file.replace(".p", ".inc")
+        self.assertIn(f"{include_file}:", stderr)
+        lower = stderr.lower()
+        self.assertTrue(
+            "type mismatch" in lower or "incompatible types" in lower,
+            "Expected type error in compiler output.",
+        )
+        self.assertIn("bad", stderr)
+
     def test_classof_nonclass_target_reports_error(self):
         """'class of Integer' must be rejected - Integer is not a class type."""
         input_file, asm_file, _ = self._get_test_paths("bug_classof_nonclass_target")
@@ -1446,7 +1466,7 @@ class TestCompiler(unittest.TestCase):
         asm = read_file_content(asm_file)
 
         self.assertTrue(any(token in asm for token in ("\tsall\t", "\tshlq\t")))
-        self.assertTrue(any(token in asm for token in ("\tsarl\t", "\tsarq\t")))
+        self.assertTrue(any(token in asm for token in ("\tshrl\t", "\tshrq\t")))
         self.assertTrue(any(token in asm for token in ("\troll\t", "\trolq\t")))
         self.assertTrue(any(token in asm for token in ("\trorl\t", "\trorq\t")))
 
@@ -2662,6 +2682,31 @@ sys.exit(3)
                 asm_file = os.path.join(TEST_OUTPUT_DIR, f"{base_name}.s")
                 flags = UNIT_ONLY_FLAGS.get(base_name)
                 run_compiler(input_file, asm_file, flags=flags)
+
+    def test_assert_failure_exits_227(self):
+        """Assert(False, 'msg') must print the message to stderr and exit with code 227."""
+        input_file = os.path.join(TEST_CASES_DIR, "assert_fail.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "assert_fail.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "assert_fail")
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        process = subprocess.run(
+            [executable_file],
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+        # stdout should show output before the assertion
+        self.assertIn("before assert", process.stdout)
+        # The assertion failure message must appear on stderr
+        self.assertIn("Assertion failed", process.stderr)
+        self.assertIn("this assertion should fail", process.stderr)
+        # Must NOT reach code after the failed assert
+        self.assertNotIn("this should not be printed", process.stdout)
+        # FPC-compatible exit code 227 for assertion failure
+        self.assertEqual(process.returncode, 227)
 
 
 def _discover_and_add_auto_tests():

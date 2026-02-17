@@ -11,6 +11,8 @@ void pascal_preprocessor_free(PascalPreprocessor *pp);
 
 bool pascal_preprocessor_define(PascalPreprocessor *pp, const char *symbol);
 bool pascal_preprocessor_define_macro(PascalPreprocessor *pp, const char *symbol, const char *value);
+/* Define a compile-time constant available for {$if} evaluation but NOT for text replacement */
+bool pascal_preprocessor_define_const(PascalPreprocessor *pp, const char *symbol, const char *value);
 bool pascal_preprocessor_undefine(PascalPreprocessor *pp, const char *symbol);
 bool pascal_preprocessor_is_defined(const PascalPreprocessor *pp, const char *symbol);
 

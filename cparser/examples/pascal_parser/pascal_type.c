@@ -1721,11 +1721,13 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
         NULL
     );
 
-    // Simple procedure header inside a record (with optional class prefix and method directives)
+    // Simple procedure header inside a record (with optional generic/class prefix and method directives)
     combinator_t* adv_proc_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
+        optional(token(keyword_ci("generic"))),
         optional(token(keyword_ci("class"))),
         token(keyword_ci("procedure")),
         token(cident(PASCAL_T_IDENTIFIER)),
+        create_method_type_param_list(),
         create_pascal_param_parser(),
         many(pre_semi_directive),
         token(match(";")),
@@ -1733,11 +1735,13 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
         NULL
     );
 
-    // Simple function header inside a record (with optional class prefix and method directives)
+    // Simple function header inside a record (with optional generic/class prefix and method directives)
     combinator_t* adv_func_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
+        optional(token(keyword_ci("generic"))),
         optional(token(keyword_ci("class"))),
         token(keyword_ci("function")),
         token(cident(PASCAL_T_IDENTIFIER)),
+        create_method_type_param_list(),
         create_pascal_param_parser(),
         token(match(":")),
         create_type_ref_parser(),
@@ -1928,10 +1932,15 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
         while (adv_cur != NULL) {
             ast_t *next_node = adv_cur->next;
             if (adv_cur->typ == PASCAL_T_METHOD_DECL ||
+                adv_cur->typ == PASCAL_T_CONSTRUCTOR_DECL ||
+                adv_cur->typ == PASCAL_T_DESTRUCTOR_DECL ||
                 adv_cur->typ == PASCAL_T_FIELD_DECL ||
                 adv_cur->typ == PASCAL_T_PROPERTY_DECL ||
                 adv_cur->typ == PASCAL_T_NESTED_TYPE_SECTION ||
-                adv_cur->typ == PASCAL_T_CONST_SECTION) {
+                adv_cur->typ == PASCAL_T_CONST_SECTION ||
+                adv_cur->typ == PASCAL_T_VARIANT_PART ||
+                adv_cur->typ == PASCAL_T_CLASS_MEMBER ||
+                adv_cur->typ == PASCAL_T_VAR_SECTION) {
                 adv_cur->next = NULL;
                 if (first_kept == NULL) {
                     first_kept = adv_cur;
@@ -2117,6 +2126,7 @@ static ParseResult object_type_fn(input_t* in, void* args, char* parser_name) {
     free_combinator(object_keyword);
 
     // Optional base type: object(BaseType)
+    ast_t* base_type_ast = NULL;
     combinator_t* base_type = optional(seq(new_combinator(), PASCAL_T_NONE,
         token(match("(")),
         create_type_ref_parser(),
@@ -2125,8 +2135,42 @@ static ParseResult object_type_fn(input_t* in, void* args, char* parser_name) {
     ));
     ParseResult base_res = parse(in, base_type);
     if (base_res.is_success) {
-        if (base_res.value.ast != NULL && base_res.value.ast != ast_nil)
-            free_ast(base_res.value.ast);
+        if (base_res.value.ast != NULL && base_res.value.ast != ast_nil) {
+            /* Extract the parent type name from the PASCAL_T_NONE wrapper.
+             * The seq(PASCAL_T_NONE, ...) may carry the identifier on its sym
+             * or as a nested IDENTIFIER child. */
+            ast_t *wrapper = base_res.value.ast;
+            const char *parent_name = NULL;
+
+            /* Method 1: sym on the wrapper itself */
+            if (wrapper->sym != NULL && wrapper->sym->name != NULL)
+                parent_name = wrapper->sym->name;
+
+            /* Method 2: search children recursively for an IDENTIFIER */
+            if (parent_name == NULL) {
+                ast_t *stack[32];
+                int sp = 0;
+                if (wrapper->child != NULL) stack[sp++] = wrapper->child;
+                while (sp > 0 && parent_name == NULL) {
+                    ast_t *cur = stack[--sp];
+                    for (; cur != NULL && parent_name == NULL; cur = cur->next) {
+                        if (cur->typ == PASCAL_T_IDENTIFIER && cur->sym != NULL && cur->sym->name != NULL)
+                            parent_name = cur->sym->name;
+                        else if (cur->child != NULL && sp < 31)
+                            stack[sp++] = cur->child;
+                    }
+                }
+            }
+
+            if (parent_name != NULL) {
+                base_type_ast = new_ast();
+                base_type_ast->typ = PASCAL_T_IDENTIFIER;
+                base_type_ast->sym = sym_lookup(parent_name);
+                base_type_ast->child = NULL;
+                base_type_ast->next = NULL;
+            }
+            free_ast(wrapper);
+        }
     } else {
         discard_failure(base_res);
     }
@@ -2337,7 +2381,13 @@ static ParseResult object_type_fn(input_t* in, void* args, char* parser_name) {
     ast_t* object_ast = new_ast();
     object_ast->typ = pargs->tag;
     object_ast->sym = is_packed ? sym_lookup("packed") : NULL;
-    object_ast->child = fields_ast;
+    if (base_type_ast != NULL) {
+        /* Prepend parent type identifier as first child */
+        base_type_ast->next = fields_ast;
+        object_ast->child = base_type_ast;
+    } else {
+        object_ast->child = fields_ast;
+    }
     object_ast->next = NULL;
 
     set_ast_position(object_ast, in);
