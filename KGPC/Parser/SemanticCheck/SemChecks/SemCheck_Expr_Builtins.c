@@ -2623,6 +2623,71 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
     return error_count;
 }
 
+int semcheck_builtin_ismanagedtype(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev)
+{
+    assert(type_return != NULL);
+    assert(symtab != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_FUNCTION_CALL);
+
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    if (args == NULL || args->next != NULL)
+    {
+        semcheck_error_with_context("Error on line %d, IsManagedType expects exactly one argument.\n",
+            expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    struct Expression *arg_expr = (struct Expression *)args->cur;
+    KgpcType *arg_kgpc_type = NULL;
+    int error_count = 0;
+    int is_managed = 0;
+
+    if (arg_expr != NULL && arg_expr->type == EXPR_VAR_ID && arg_expr->expr_data.id != NULL)
+    {
+        HashNode_t *type_node = NULL;
+        if (FindIdent(&type_node, symtab, arg_expr->expr_data.id) != -1 &&
+            type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+        {
+            arg_kgpc_type = type_node->type;
+        }
+        else
+        {
+            int builtin_tag = semcheck_map_builtin_type_name(symtab, arg_expr->expr_data.id);
+            if (builtin_tag != UNKNOWN_TYPE)
+            {
+                arg_kgpc_type = create_primitive_type(builtin_tag);
+            }
+        }
+    }
+    else
+    {
+        error_count += semcheck_expr_with_type(&arg_kgpc_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
+    }
+
+    if (error_count != 0 || arg_kgpc_type == NULL)
+    {
+        *type_return = UNKNOWN_TYPE;
+        return (error_count == 0) ? 1 : error_count;
+    }
+
+    int arg_tag = semcheck_tag_from_kgpc(arg_kgpc_type);
+    if (arg_tag == STRING_TYPE || arg_tag == SHORTSTRING_TYPE || arg_tag == VARIANT_TYPE)
+        is_managed = 1;
+    if (kgpc_type_is_dynamic_array(arg_kgpc_type))
+        is_managed = 1;
+
+    semcheck_free_call_args(expr->expr_data.function_call_data.args_expr, NULL);
+    expr->expr_data.function_call_data.args_expr = NULL;
+    expr->type = EXPR_BOOL;
+    expr->expr_data.bool_value = is_managed ? 1 : 0;
+    semcheck_expr_set_resolved_type(expr, BOOL);
+    *type_return = BOOL;
+    return 0;
+}
+
 /*===========================================================================
  * Random/Power Builtins
  *==========================================================================*/

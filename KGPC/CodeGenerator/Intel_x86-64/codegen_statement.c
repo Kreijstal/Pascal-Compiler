@@ -1445,6 +1445,13 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
             goto cleanup;
         }
     }
+    else if (expr->type == EXPR_FUNCTION_CALL && expr_has_type_tag(expr, RECORD_TYPE))
+    {
+        /* Record-valued function calls evaluate to a temporary addressable object
+         * (sret/hidden pointer), which callers may pass by reference. */
+        inst_list = codegen_evaluate_expr(expr, inst_list, ctx, out_reg);
+        goto cleanup;
+    }
     else if (expr->type == EXPR_AS)
     {
         if (expr->expr_data.as_data.expr != NULL)
@@ -6592,9 +6599,30 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         }
 
         int var_type = expr_get_type_tag(var_expr);
+        int assign_type = expr_get_type_tag(assign_expr);
+        int skip_real_coercion = 0;
+        if (var != NULL && var_type == REAL_TYPE)
+        {
+            long long unaligned_size_probe = var->element_size > 0 ? var->element_size : var->size;
+            if (var_expr != NULL && var_expr->type == EXPR_RECORD_ACCESS)
+            {
+                long long field_size_probe = codegen_record_field_effective_size(var_expr, ctx);
+                if (field_size_probe > 0)
+                    unaligned_size_probe = field_size_probe;
+            }
+            if (is_single_float_type(var_type, unaligned_size_probe) &&
+                (is_integer_type(assign_type) || assign_type == BOOL ||
+                 assign_type == CHAR_TYPE || assign_type == ENUM_TYPE))
+            {
+                skip_real_coercion = 1;
+            }
+        }
         int coerced_to_real = 0;
-        inst_list = codegen_maybe_convert_int_like_to_real(var_type, assign_expr,
-            value_reg, inst_list, &coerced_to_real);
+        if (!skip_real_coercion)
+        {
+            inst_list = codegen_maybe_convert_int_like_to_real(var_type, assign_expr,
+                value_reg, inst_list, &coerced_to_real);
+        }
 
         /* Handle string assignment to string variables */
         if (var_type == STRING_TYPE)
@@ -6829,22 +6857,42 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             /* Override for Single type (4-byte float): check actual storage size
              * Use element_size which stores the unaligned size, not size which may be padded */
             long long unaligned_size = var->element_size > 0 ? var->element_size : var->size;
+            if (var_expr != NULL && var_expr->type == EXPR_RECORD_ACCESS)
+            {
+                long long field_size = codegen_record_field_effective_size(var_expr, ctx);
+                if (field_size > 0)
+                    unaligned_size = field_size;
+            }
             int is_single_target = is_single_float_type(var_type, unaligned_size) && !var->is_reference;
             if (is_single_target)
                 use_qword = 0;
-            if (!var->is_reference && var->size >= 8)
+            if (!var->is_reference && var->size >= 8 &&
+                (var_expr == NULL || var_expr->type != EXPR_RECORD_ACCESS))
                 use_qword = 1;
             
             /* For Single targets with real source, convert double to single precision.
              * Only convert if the source expression is a real type (double), not integer etc. */
-            int assign_type = expr_get_type_tag(assign_expr);
             if (is_single_target && assign_type == REAL_TYPE)
             {
-                /* The value in reg is a 64-bit double bit pattern. Convert to 32-bit single. */
-                /* Move to xmm0, convert double to single, move back to integer register */
-                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm0\n", reg->bit_64);
+                int source_is_qword_real = expr_uses_qword_kgpctype(assign_expr);
+                if (source_is_qword_real)
+                {
+                    /* Source is double-width real bits in GP register; narrow to single. */
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm0\n", reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    inst_list = add_inst(inst_list, "\tcvtsd2ss\t%xmm0, %xmm0\n");
+                    snprintf(buffer, sizeof(buffer), "\tmovd\t%%xmm0, %s\n", reg->bit_32);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+            }
+            else if (is_single_target &&
+                (is_integer_type(assign_type) || assign_type == BOOL ||
+                 assign_type == CHAR_TYPE || assign_type == ENUM_TYPE))
+            {
+                /* Integer-like source to Single target requires numeric conversion,
+                 * not raw bit reinterpretation. */
+                snprintf(buffer, sizeof(buffer), "\tcvtsi2ss\t%s, %%xmm0\n", reg->bit_32);
                 inst_list = add_inst(inst_list, buffer);
-                inst_list = add_inst(inst_list, "\tcvtsd2ss\t%xmm0, %xmm0\n");
                 snprintf(buffer, sizeof(buffer), "\tmovd\t%%xmm0, %s\n", reg->bit_32);
                 inst_list = add_inst(inst_list, buffer);
             }
@@ -7279,14 +7327,48 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                 /* no resolved_type mutation in codegen */
             }
         }
-        int coerced_to_real = 0;
-        inst_list = codegen_maybe_convert_int_like_to_real(var_type_2, assign_expr,
-            value_reg, inst_list, &coerced_to_real);
-        int use_qword = codegen_type_uses_qword(var_type_2);
         long long record_element_size = codegen_record_field_effective_size(var_expr, ctx);
+        int is_single_real_field = (var_type_2 == REAL_TYPE && record_element_size == 4);
+        int assign_type = expr_get_type_tag(assign_expr);
+        int assign_is_integer_like = (is_integer_type(assign_type) || assign_type == BOOL ||
+            assign_type == CHAR_TYPE || assign_type == ENUM_TYPE);
+
+        int coerced_to_real = 0;
+        if (!(is_single_real_field && assign_is_integer_like))
+        {
+            inst_list = codegen_maybe_convert_int_like_to_real(var_type_2, assign_expr,
+                value_reg, inst_list, &coerced_to_real);
+        }
+        int use_qword = codegen_type_uses_qword(var_type_2);
+        if (is_single_real_field)
+            use_qword = 0;
         if (!use_qword && record_element_size >= CODEGEN_POINTER_SIZE_BYTES)
             use_qword = 1;
         int use_word = (!use_qword && record_element_size == 2);
+
+        if (is_single_real_field)
+        {
+            if (assign_is_integer_like)
+            {
+                snprintf(buffer, sizeof(buffer), "\tcvtsi2ss\t%s, %%xmm0\n", value_reg->bit_32);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovd\t%%xmm0, %s\n", value_reg->bit_32);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else if (assign_type == REAL_TYPE)
+            {
+                int source_is_qword_real = expr_uses_qword_kgpctype(assign_expr) || coerced_to_real;
+                if (source_is_qword_real)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm0\n", value_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    inst_list = add_inst(inst_list, "\tcvtsd2ss\t%xmm0, %xmm0\n");
+                    snprintf(buffer, sizeof(buffer), "\tmovd\t%%xmm0, %s\n", value_reg->bit_32);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+            }
+        }
+
         if (var_type_2 == STRING_TYPE)
         {
             inst_list = codegen_call_string_assign(inst_list, ctx, addr_reload, value_reg);

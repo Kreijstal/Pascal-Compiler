@@ -48,6 +48,7 @@ struct TypeAlias
     int is_enum_set;           /* Set with inline anonymous enum as element type */
     ListNode_t *inline_enum_values; /* Enum values for inline enum in set type */
     int is_enum;
+    int enum_is_scoped;        /* 1 if declared under {$SCOPEDENUMS ON} */
     ListNode_t *enum_literals;
     int is_file;
     int file_type;

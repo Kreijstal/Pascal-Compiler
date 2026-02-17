@@ -27,6 +27,7 @@
 #include "../SemanticCheck/SymTab/SymTab.h"
 #include "../../identifier_utils.h"
 #include "../pascal_frontend.h"
+#include "../ErrVars.h"
 
 /* ============================================================================
  * Circular Reference Detection for AST Traversal
@@ -267,6 +268,7 @@ typedef struct {
     int is_enum_set;           /* Set with inline anonymous enum as element type */
     ListNode_t *inline_enum_values; /* Enum values for inline enum in set type */
     int is_enum;
+    int enum_is_scoped;
     ListNode_t *enum_literals;
     int is_file;
     int file_type;
@@ -285,6 +287,152 @@ typedef struct {
 
 /* Frontend error counter for errors during AST to tree conversion */
 static int g_frontend_error_count = 0;
+static char *g_scoped_enum_source_path = NULL;
+static char *g_scoped_enum_source_buffer = NULL;
+static size_t g_scoped_enum_source_length = 0;
+
+static void from_cparser_trim_ascii(char *s)
+{
+    if (s == NULL)
+        return;
+    char *start = s;
+    while (*start == ' ' || *start == '\t' || *start == '\r' || *start == '\n')
+        ++start;
+    if (start != s)
+        memmove(s, start, strlen(start) + 1);
+    size_t len = strlen(s);
+    while (len > 0)
+    {
+        char c = s[len - 1];
+        if (c != ' ' && c != '\t' && c != '\r' && c != '\n')
+            break;
+        s[len - 1] = '\0';
+        --len;
+    }
+}
+
+/* Determine SCOPEDENUMS state at a parser line by scanning compiler directives
+ * in the preprocessed source up to that logical line. */
+static int from_cparser_scopedenums_enabled_at_line(int target_line)
+{
+    if (target_line <= 0)
+        return 0;
+
+    const char *buffer = NULL;
+    size_t length = 0;
+
+    if (file_to_parse != NULL && file_to_parse[0] != '\0')
+    {
+        if (g_scoped_enum_source_path == NULL ||
+            strcmp(g_scoped_enum_source_path, file_to_parse) != 0)
+        {
+            FILE *fp = fopen(file_to_parse, "rb");
+            if (fp != NULL)
+            {
+                if (fseek(fp, 0, SEEK_END) == 0)
+                {
+                    long size = ftell(fp);
+                    if (size >= 0 && fseek(fp, 0, SEEK_SET) == 0)
+                    {
+                        char *new_buf = (char *)malloc((size_t)size + 1);
+                        if (new_buf != NULL)
+                        {
+                            size_t read_len = fread(new_buf, 1, (size_t)size, fp);
+                            new_buf[read_len] = '\0';
+
+                            if (g_scoped_enum_source_path != NULL)
+                                free(g_scoped_enum_source_path);
+                            if (g_scoped_enum_source_buffer != NULL)
+                                free(g_scoped_enum_source_buffer);
+
+                            g_scoped_enum_source_path = strdup(file_to_parse);
+                            g_scoped_enum_source_buffer = new_buf;
+                            g_scoped_enum_source_length = read_len;
+                        }
+                    }
+                }
+                fclose(fp);
+            }
+        }
+
+        if (g_scoped_enum_source_path != NULL &&
+            strcmp(g_scoped_enum_source_path, file_to_parse) == 0 &&
+            g_scoped_enum_source_buffer != NULL &&
+            g_scoped_enum_source_length > 0)
+        {
+            buffer = g_scoped_enum_source_buffer;
+            length = g_scoped_enum_source_length;
+        }
+    }
+
+    if (buffer == NULL || length == 0)
+    {
+        buffer = preprocessed_source;
+        length = preprocessed_length;
+    }
+    if (buffer == NULL || length == 0)
+        return 0;
+
+    int scoped = 0;
+    int scoped_stack[64];
+    int scoped_sp = 0;
+    int current_line = 1;
+    size_t pos = 0;
+
+    while (pos < length && current_line <= target_line)
+    {
+        size_t line_start = pos;
+        while (pos < length && buffer[pos] != '\n')
+            ++pos;
+        size_t line_len = pos - line_start;
+
+        if (line_len >= 4 && buffer[line_start] == '{' && buffer[line_start + 1] == '$')
+        {
+            size_t inner_start = line_start + 2;
+            size_t inner_end = line_start + line_len;
+            if (inner_end > inner_start && buffer[inner_end - 1] == '}')
+                --inner_end;
+
+            size_t inner_len = (inner_end > inner_start) ? (inner_end - inner_start) : 0;
+            if (inner_len > 0 && inner_len < 256)
+            {
+                char directive[256];
+                memcpy(directive, buffer + inner_start, inner_len);
+                directive[inner_len] = '\0';
+                from_cparser_trim_ascii(directive);
+
+                if (strcasecmp(directive, "PUSH") == 0)
+                {
+                    if (scoped_sp < (int)(sizeof(scoped_stack) / sizeof(scoped_stack[0])))
+                        scoped_stack[scoped_sp++] = scoped;
+                }
+                else if (strcasecmp(directive, "POP") == 0)
+                {
+                    if (scoped_sp > 0)
+                        scoped = scoped_stack[--scoped_sp];
+                }
+                else if (strncasecmp(directive, "SCOPEDENUMS", 11) == 0)
+                {
+                    const char *arg = directive + 11;
+                    while (*arg == ' ' || *arg == '\t')
+                        ++arg;
+                    if (strcasecmp(arg, "ON") == 0 || strcmp(arg, "+") == 0)
+                        scoped = 1;
+                    else if (strcasecmp(arg, "OFF") == 0 || strcmp(arg, "-") == 0)
+                        scoped = 0;
+                }
+            }
+        }
+
+        if (pos < length && buffer[pos] == '\n')
+        {
+            ++pos;
+            ++current_line;
+        }
+    }
+
+    return scoped;
+}
 
 /* Reset the frontend error counter */
 void from_cparser_reset_error_count(void) {
@@ -2179,6 +2327,7 @@ static void append_specialized_method_clones(Tree_t *decl, ListNode_t **subprogr
 static void rewrite_method_impl_ast(ast_t *method_ast, struct RecordType *record);
 static void substitute_generic_identifier_nodes(ast_t *node, struct RecordType *record);
 static void append_subprogram_node(ListNode_t **dest, Tree_t *tree);
+static int extract_generic_type_params(ast_t *type_param_list, char ***out_params);
 static char *dup_first_identifier_in_node(ast_t *node);
 static char *dup_first_identifier_in_node(ast_t *node);
 
@@ -2432,9 +2581,24 @@ static int map_type_name(const char *name, char **type_id_out) {
             *type_id_out = strdup("real");
         return REAL_TYPE;
     }
+    if (strcasecmp(name, "float") == 0) {
+        if (type_id_out != NULL)
+            *type_id_out = strdup("Float");
+        return REAL_TYPE;
+    }
     if (strcasecmp(name, "double") == 0) {
         if (type_id_out != NULL)
             *type_id_out = strdup("double");
+        return REAL_TYPE;
+    }
+    if (strcasecmp(name, "extended") == 0) {
+        if (type_id_out != NULL)
+            *type_id_out = strdup("Extended");
+        return REAL_TYPE;
+    }
+    if (strcasecmp(name, "valreal") == 0) {
+        if (type_id_out != NULL)
+            *type_id_out = strdup("ValReal");
         return REAL_TYPE;
     }
     if (strcasecmp(name, "openstring") == 0) {
@@ -4101,6 +4265,7 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
     if (spec_node->typ == PASCAL_T_ENUMERATED_TYPE) {
         if (type_info != NULL) {
             type_info->is_enum = 1;
+            type_info->enum_is_scoped = from_cparser_scopedenums_enabled_at_line(spec_node->line);
             ListBuilder enum_builder;
             list_builder_init(&enum_builder);
             ast_t *value = spec_node->child;
@@ -4686,7 +4851,8 @@ static ListNode_t *convert_identifier_list(ast_t **cursor) {
 }
 
 static ListNode_t *convert_field_decl(ast_t *field_decl_node);
-static void convert_record_members(ast_t *node, ListBuilder *builder, ListBuilder *property_builder);
+static void convert_record_members(ast_t *node, ListBuilder *builder,
+    ListBuilder *property_builder, ListBuilder *method_template_builder);
 static struct VariantPart *convert_variant_part(ast_t *variant_node, ListNode_t **out_tag_fields);
 static struct VariantBranch *convert_variant_branch(ast_t *branch_node);
 
@@ -5890,7 +6056,7 @@ static struct VariantBranch *convert_variant_branch(ast_t *branch_node) {
 
     ListBuilder members_builder;
     list_builder_init(&members_builder);
-    convert_record_members(cursor, &members_builder, NULL);
+    convert_record_members(cursor, &members_builder, NULL, NULL);
     branch->members = list_builder_finish(&members_builder);
 
     return branch;
@@ -5984,7 +6150,8 @@ static struct VariantPart *convert_variant_part(ast_t *variant_node, ListNode_t 
     return variant;
 }
 
-static void convert_record_members(ast_t *node, ListBuilder *builder, ListBuilder *property_builder) {
+static void convert_record_members(ast_t *node, ListBuilder *builder,
+    ListBuilder *property_builder, ListBuilder *method_template_builder) {
     for (ast_t *cur = node; cur != NULL; cur = cur->next) {
         if (cur->typ == PASCAL_T_FIELD_DECL) {
             ListNode_t *fields = convert_field_decl(cur);
@@ -6001,6 +6168,11 @@ static void convert_record_members(ast_t *node, ListBuilder *builder, ListBuilde
             /* Store method declaration as a special marker node for operator overloading */
             /* We'll handle this during semantic check when we know the record type name */
             list_builder_append(builder, cur, LIST_UNSPECIFIED);
+            if (method_template_builder != NULL) {
+                struct MethodTemplate *template = create_method_template(cur);
+                if (template != NULL)
+                    list_builder_append(method_template_builder, template, LIST_METHOD_TEMPLATE);
+            }
         } else if (cur->typ == PASCAL_T_PROPERTY_DECL && property_builder != NULL) {
             struct ClassProperty *property = convert_property_decl(cur);
             if (property != NULL)
@@ -6049,7 +6221,7 @@ static void convert_record_members(ast_t *node, ListBuilder *builder, ListBuilde
             }
         } else if (cur->typ == PASCAL_T_CLASS_MEMBER) {
             /* Recurse into CLASS_MEMBER wrappers (e.g. from visibility sections) */
-            convert_record_members(cur->child, builder, property_builder);
+            convert_record_members(cur->child, builder, property_builder, method_template_builder);
         }
     }
 }
@@ -6241,9 +6413,11 @@ static struct RecordType *convert_record_type_ex(ast_t *record_node, ListNode_t 
 
     ListBuilder fields_builder;
     ListBuilder property_builder;
+    ListBuilder method_template_builder;
     list_builder_init(&fields_builder);
     list_builder_init(&property_builder);
-    convert_record_members(members_start, &fields_builder, &property_builder);
+    list_builder_init(&method_template_builder);
+    convert_record_members(members_start, &fields_builder, &property_builder, &method_template_builder);
 
     struct RecordType *record = (struct RecordType *)malloc(sizeof(struct RecordType));
     if (record == NULL) {
@@ -6256,7 +6430,7 @@ static struct RecordType *convert_record_type_ex(ast_t *record_node, ListNode_t 
     record->properties = NULL;
     record->parent_class_name = parent_class_name;
     record->methods = NULL;  /* Regular records don't have methods */
-    record->method_templates = NULL;
+    record->method_templates = list_builder_finish(&method_template_builder);
     record->is_class = 0;
     record->is_interface = 0;
     record->is_type_helper = 0;
@@ -6355,9 +6529,13 @@ static ListNode_t *convert_param(ast_t *param_node) {
     {
         /* ARCHITECTURAL FIX: Pass TypeInfo to preserve array information */
         var_type = convert_type_spec(type_node, &type_id, NULL, &type_info);
-        /* Check for default value node after type spec */
+        /* Check for default value node after type spec.
+         * Some parser shapes wrap optional/default nodes so `type_node->next`
+         * may be NULL even when a default exists. */
         if (type_node->next != NULL && type_node->next->typ == PASCAL_T_DEFAULT_VALUE) {
             default_value_node = type_node->next;
+        } else {
+            default_value_node = find_ast_node_type(param_node, PASCAL_T_DEFAULT_VALUE);
         }
         if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL) {
             fprintf(stderr, "[convert_param] type_node=%p type_node->next=%p next_typ=%d\n",
@@ -8242,6 +8420,7 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
             type_info.inline_enum_values = NULL;
         }
         alias->is_enum = type_info.is_enum;
+        alias->enum_is_scoped = type_info.enum_is_scoped;
         if (type_info.enum_literals != NULL) {
             alias->enum_literals = type_info.enum_literals;
             type_info.enum_literals = NULL;
@@ -9696,6 +9875,7 @@ static struct Expression *convert_expression(ast_t *expr_node) {
     case PASCAL_T_ADD:
     case PASCAL_T_SUB:
     case PASCAL_T_MUL:
+    case PASCAL_T_POWER:
     case PASCAL_T_DIV:
     case PASCAL_T_INTDIV:
     case PASCAL_T_MOD:
@@ -11805,6 +11985,8 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
 
     ListBuilder params_builder;
     list_builder_init(&params_builder);
+    char **generic_type_params = NULL;
+    int num_generic_type_params = 0;
     ListNode_t *const_decls = NULL;
     ListBuilder var_builder;
     list_builder_init(&var_builder);
@@ -11858,6 +12040,11 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
             node = cur;
 
         switch (node->typ) {
+        case PASCAL_T_TYPE_PARAM_LIST:
+            if (num_generic_type_params == 0) {
+                num_generic_type_params = extract_generic_type_params(node, &generic_type_params);
+            }
+            break;
         case PASCAL_T_PARAM_LIST: {
             ast_t *param_cursor = node->child;
             ListNode_t *extra_params = convert_param_list(&param_cursor);
@@ -11915,6 +12102,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
                     
                     if (type_info.is_enum) {
                         inline_return_type->is_enum = 1;
+                        inline_return_type->enum_is_scoped = type_info.enum_is_scoped;
                         inline_return_type->enum_literals = type_info.enum_literals;
                     }
                     
@@ -12017,6 +12205,13 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         {
             tree->tree_data.subprogram_data.mangled_id = strdup(proc_name);
         }
+        if (num_generic_type_params > 0) {
+            tree->tree_data.subprogram_data.generic_type_params = generic_type_params;
+            tree->tree_data.subprogram_data.num_generic_type_params = num_generic_type_params;
+            tree->tree_data.subprogram_data.generic_template_ast = copy_ast(method_node);
+            generic_type_params = NULL;
+            num_generic_type_params = 0;
+        }
     }
 
     record_generic_method_impl(effective_class, method_name, method_node);
@@ -12044,6 +12239,11 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
 
     if (cleaned_class_name != NULL)
         free(cleaned_class_name);
+    if (generic_type_params != NULL) {
+        for (int i = 0; i < num_generic_type_params; i++)
+            free(generic_type_params[i]);
+        free(generic_type_params);
+    }
     free(class_name);
     free(method_name);
     free(effective_class_last);
@@ -12360,6 +12560,7 @@ static Tree_t *convert_function(ast_t *func_node) {
                 
                 if (type_info.is_enum) {
                     inline_return_type->is_enum = 1;
+                    inline_return_type->enum_is_scoped = type_info.enum_is_scoped;
                     inline_return_type->enum_literals = type_info.enum_literals;
                 }
                 

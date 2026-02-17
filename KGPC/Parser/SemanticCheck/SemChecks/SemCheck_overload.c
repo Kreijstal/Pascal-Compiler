@@ -75,6 +75,31 @@ static int semcheck_scope_level_for_candidate(SymTab_t *symtab, HashNode_t *cand
     return INT_MAX / 2;
 }
 
+static int semcheck_total_param_size(ListNode_t *params, SymTab_t *symtab)
+{
+    int total = 0;
+    for (ListNode_t *cur = params; cur != NULL; cur = cur->next)
+    {
+        Tree_t *decl = (Tree_t *)cur->cur;
+        int owns = 0;
+        KgpcType *kg = resolve_type_from_vardecl(decl, symtab, &owns);
+        long long sz = -1;
+        if (kg != NULL)
+            sz = kgpc_type_sizeof(kg);
+        if (owns && kg != NULL)
+            destroy_kgpc_type(kg);
+
+        if (sz <= 0)
+            sz = 1024;
+        if (sz > INT_MAX / 2)
+            sz = INT_MAX / 2;
+        total += (int)sz;
+        if (total > INT_MAX / 2)
+            total = INT_MAX / 2;
+    }
+    return total;
+}
+
 static const char *semcheck_get_param_type_id(Tree_t *decl)
 {
     if (decl == NULL)
@@ -1292,16 +1317,47 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
         ListNode_t *candidate_args = kgpc_type_get_procedure_params(candidate->type);
         int total_params = semcheck_count_total_params(candidate_args);
         int required_params = semcheck_count_required_params(candidate_args);
+        int allow_implicit_leading_self = 0;
 
         if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
             fprintf(stderr, "[SemCheck] semcheck_resolve_overload: candidate %s args=%d required=%d given=%d\n",
                 candidate->id, total_params, required_params, given_count);
         }
 
-        if (!((given_count >= required_params && given_count <= total_params) ||
+        if (candidate_args != NULL && args_given != NULL && args_given->cur != NULL)
+        {
+            Tree_t *first_formal = (Tree_t *)candidate_args->cur;
+            const char *first_formal_name = NULL;
+            if (first_formal != NULL && first_formal->type == TREE_VAR_DECL &&
+                first_formal->tree_data.var_decl_data.ids != NULL)
+                first_formal_name = (const char *)first_formal->tree_data.var_decl_data.ids->cur;
+            else if (first_formal != NULL && first_formal->type == TREE_ARR_DECL &&
+                first_formal->tree_data.arr_decl_data.ids != NULL)
+                first_formal_name = (const char *)first_formal->tree_data.arr_decl_data.ids->cur;
+
+            struct Expression *first_actual = (struct Expression *)args_given->cur;
+            if (first_formal_name != NULL && pascal_identifier_equals(first_formal_name, "Self") &&
+                first_actual != NULL && first_actual->type == EXPR_VAR_ID &&
+                first_actual->expr_data.id != NULL &&
+                pascal_identifier_equals(first_actual->expr_data.id, "Self") &&
+                total_params > 0 && given_count == total_params - 1)
+            {
+                allow_implicit_leading_self = 1;
+            }
+        }
+
+        int arity_matches = ((given_count >= required_params && given_count <= total_params) ||
             (total_params == 0 && given_count > 0 &&
              candidate->type != NULL &&
-             candidate->type->info.proc_info.definition == NULL)))
+             candidate->type->info.proc_info.definition == NULL));
+        if (!arity_matches && allow_implicit_leading_self)
+        {
+            int adj_total = total_params - 1;
+            int adj_required = required_params > 0 ? required_params - 1 : 0;
+            if (given_count >= adj_required && given_count <= adj_total)
+                arity_matches = 1;
+        }
+        if (!arity_matches)
             continue;
 
         MatchQuality *qualities = NULL;
@@ -1314,6 +1370,8 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
 
         int candidate_valid = 1;
         ListNode_t *formal_args = candidate_args;
+        if (allow_implicit_leading_self && formal_args != NULL)
+            formal_args = formal_args->next;
         ListNode_t *call_args = args_given;
         int arg_index = 0;
 
@@ -1929,6 +1987,22 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                     specificity_cmp = cand_int_max < best_int_max ? -1 : 1;
                 else
                 {
+                    int cand_param_size = semcheck_total_param_size(
+                        kgpc_type_get_procedure_params(candidate->type), symtab);
+                    int best_param_size = semcheck_total_param_size(
+                        kgpc_type_get_procedure_params(best_match->type), symtab);
+                    if (cand_param_size != best_param_size)
+                        specificity_cmp = cand_param_size < best_param_size ? -1 : 1;
+                }
+                if (specificity_cmp == 0)
+                {
+                    int cand_builtin = semcheck_candidate_is_builtin(symtab, candidate);
+                    int best_builtin = semcheck_candidate_is_builtin(symtab, best_match);
+                    if (cand_builtin != best_builtin)
+                        specificity_cmp = cand_builtin ? 1 : -1;
+                }
+                if (specificity_cmp == 0)
+                {
                     int cand_sys = semcheck_mangled_is_syscall(candidate->mangled_id);
                     int best_sys = semcheck_mangled_is_syscall(best_match->mangled_id);
                     if (cand_sys != best_sys)
@@ -1955,6 +2029,16 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
             else
             {
                 /* cmp == 0 && missing_args == best_missing: potential ambiguity */
+                if (best_match != NULL &&
+                    best_match->mangled_id != NULL &&
+                    candidate->mangled_id != NULL &&
+                    pascal_identifier_equals(best_match->mangled_id, candidate->mangled_id))
+                {
+                    /* Identical mangled target: treat as duplicate candidate, not ambiguity. */
+                    free(qualities);
+                    continue;
+                }
+
                 int share_sig = 0;
                 if (best_match != NULL)
                     share_sig = semcheck_candidates_share_signature(symtab, best_match, candidate);

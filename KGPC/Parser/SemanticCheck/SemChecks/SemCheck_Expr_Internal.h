@@ -410,6 +410,8 @@ int semcheck_builtin_default(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev);
 int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev);
+int semcheck_builtin_ismanagedtype(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev);
 int semcheck_builtin_unary_real(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev, const char *display_name,
     const char *mangled_name, int result_type);

@@ -44,6 +44,7 @@ static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
 }
 
 static long long codegen_sizeof_type_tag(int type_tag);
+static long long codegen_record_field_effective_size(struct Expression *expr, CodeGenContext *ctx);
 static struct RecordType *codegen_expr_record_type(const struct Expression *expr, SymTab_t *symtab)
 {
     if (expr == NULL)
@@ -64,6 +65,23 @@ static struct RecordType *codegen_expr_record_type(const struct Expression *expr
         HashNode_t *target_node = NULL;
         if (FindIdent(&target_node, symtab, expr->pointer_subtype_id) >= 0 && target_node != NULL)
             return get_record_type_from_node(target_node);
+    }
+
+    if (expr->type == EXPR_VAR_ID && expr->expr_data.id != NULL && symtab != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindIdent(&node, symtab, expr->expr_data.id) >= 0 && node != NULL)
+        {
+            struct RecordType *record = get_record_type_from_node(node);
+            if (record != NULL)
+                return record;
+            if (node->type != NULL && kgpc_type_is_pointer(node->type) &&
+                node->type->info.points_to != NULL &&
+                kgpc_type_is_record(node->type->info.points_to))
+            {
+                return kgpc_type_get_record(node->type->info.points_to);
+            }
+        }
     }
 
     return NULL;
@@ -666,6 +684,13 @@ static int codegen_expr_real_storage_size(const struct Expression *expr, CodeGen
     if (expr == NULL)
         return 8;
 
+    if (expr->type == EXPR_RECORD_ACCESS && ctx != NULL)
+    {
+        long long field_size = codegen_record_field_effective_size((struct Expression *)expr, ctx);
+        if (field_size == 4 || field_size == 8)
+            return (int)field_size;
+    }
+
     KgpcType *type = expr_get_kgpc_type(expr);
     if (type == NULL && ctx != NULL && ctx->symtab != NULL &&
         expr->type == EXPR_VAR_ID && expr->expr_data.id != NULL)
@@ -681,6 +706,15 @@ static int codegen_expr_real_storage_size(const struct Expression *expr, CodeGen
         long long size = kgpc_type_sizeof(type);
         if (size > 0)
             return (int)size;
+    }
+
+    /* Fallback for record fields/properties where resolved KgpcType may only
+     * carry the generic REAL tag while storage is actually Single (4 bytes). */
+    if (expr_has_type_tag(expr, REAL_TYPE))
+    {
+        long long eff_size = expr_effective_size_bytes(expr);
+        if (eff_size == 4 || eff_size == 8)
+            return (int)eff_size;
     }
 
     return 8;
@@ -1914,6 +1948,13 @@ int expr_uses_qword_kgpctype(const struct Expression *expr)
 {
     if (expr == NULL)
         return 0;
+
+    if (expr_has_type_tag(expr, REAL_TYPE))
+    {
+        long long eff_size = expr_effective_size_bytes(expr);
+        if (eff_size == 4)
+            return 0;
+    }
     
     KgpcType *type = expr_get_kgpc_type(expr);
     if (type != NULL)
@@ -2081,6 +2122,10 @@ int codegen_expr_is_addressable(const struct Expression *expr)
         case EXPR_POINTER_DEREF:
         case EXPR_RECORD_CONSTRUCTOR:
             return 1;
+        case EXPR_FUNCTION_CALL:
+            /* Record-valued calls are materialized via hidden sret pointers and can
+             * be addressed by downstream codegen paths. */
+            return expr_has_type_tag(expr, RECORD_TYPE);
         case EXPR_TYPECAST:
             if (expr->expr_data.typecast_data.expr != NULL)
                 return codegen_expr_is_addressable(expr->expr_data.typecast_data.expr);
@@ -2715,7 +2760,8 @@ ListNode_t *codegen_record_field_address(struct Expression *expr, ListNode_t *in
     CodeGenContext *ctx, Register_t **out_reg);
 
 /* Lookup the RecordField metadata for a record access expression */
-static struct RecordField *codegen_lookup_record_field_expr(struct Expression *record_access_expr)
+static struct RecordField *codegen_lookup_record_field_expr(struct Expression *record_access_expr,
+    CodeGenContext *ctx)
 {
     if (record_access_expr == NULL ||
         record_access_expr->type != EXPR_RECORD_ACCESS ||
@@ -2723,9 +2769,10 @@ static struct RecordField *codegen_lookup_record_field_expr(struct Expression *r
         return NULL;
 
     const char *field_id = record_access_expr->expr_data.record_access_data.field_id;
-    struct RecordType *record = codegen_expr_record_type(record_access_expr, NULL);
+    SymTab_t *symtab = (ctx != NULL) ? ctx->symtab : NULL;
+    struct RecordType *record = codegen_expr_record_type(record_access_expr, symtab);
     if (record == NULL && record_access_expr->expr_data.record_access_data.record_expr != NULL)
-        record = codegen_expr_record_type(record_access_expr->expr_data.record_access_data.record_expr, NULL);
+        record = codegen_expr_record_type(record_access_expr->expr_data.record_access_data.record_expr, symtab);
     if (record == NULL)
         return NULL;
 
@@ -2735,7 +2782,7 @@ static struct RecordField *codegen_lookup_record_field_expr(struct Expression *r
         if (cur->type == LIST_RECORD_FIELD && cur->cur != NULL)
         {
             struct RecordField *field = (struct RecordField *)cur->cur;
-            if (field->name != NULL && strcmp(field->name, field_id) == 0)
+            if (field->name != NULL && pascal_identifier_equals(field->name, field_id))
                 return field;
         }
         cur = cur->next;
@@ -2749,17 +2796,38 @@ static long long codegen_record_field_effective_size(struct Expression *expr, Co
     if (expr == NULL || ctx == NULL)
         return expr_effective_size_bytes(expr);
 
-    long long size = expr_effective_size_bytes(expr);
-    struct RecordField *field = codegen_lookup_record_field_expr(expr);
+    struct RecordField *field = codegen_lookup_record_field_expr(expr, ctx);
     long long field_size = 0;
     if (field != NULL && !field->is_array)
     {
+        if (field->type == REAL_TYPE && field->type_id != NULL)
+        {
+            if (pascal_identifier_equals(field->type_id, "Single"))
+                return 4;
+            if (pascal_identifier_equals(field->type_id, "Double") ||
+                pascal_identifier_equals(field->type_id, "Real"))
+                return 8;
+        }
+
+        if (ctx->symtab != NULL && field->type_id != NULL)
+        {
+            HashNode_t *type_node = NULL;
+            if (FindIdent(&type_node, ctx->symtab, field->type_id) == 0 &&
+                type_node != NULL && type_node->type != NULL)
+            {
+                long long type_size = kgpc_type_sizeof(type_node->type);
+                if (type_size > 0)
+                    return type_size;
+            }
+        }
+
         struct RecordType *nested = field->nested_record;
         if (codegen_sizeof_type_reference(ctx, field->type, field->type_id, nested, &field_size) == 0 &&
             field_size > 0)
             return field_size;
     }
 
+    long long size = expr_effective_size_bytes(expr);
     if (size > 0)
         return size;
     return field_size;
@@ -3221,7 +3289,8 @@ ListNode_t *codegen_record_access(struct Expression *expr, ListNode_t *inst_list
 
     char buffer[64];
     long long field_size = codegen_record_field_effective_size(expr, ctx);
-    if (expr_uses_qword_kgpctype(expr) || field_size == 8)
+    int is_single_real_field = (expr_has_type_tag(expr, REAL_TYPE) && field_size == 4);
+    if (!is_single_real_field && (expr_uses_qword_kgpctype(expr) || field_size == 8))
         snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_64);
     else if (field_size == 1 || expr_has_type_tag(expr, CHAR_TYPE))
         snprintf(buffer, sizeof(buffer), "\tmovzbl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
@@ -5145,17 +5214,59 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
 
     if (left_expr != NULL && expr_has_type_tag(left_expr, REAL_TYPE))
     {
-        const char *left_name = register_name_for_type(left_reg, REAL_TYPE);
-        const char *right_name = register_name_for_type(right_reg, REAL_TYPE);
         char true_label[32];
         char done_label[32];
         gen_label(true_label, sizeof(true_label), ctx);
         gen_label(done_label, sizeof(done_label), ctx);
+        long long right_real_size = (right_expr != NULL && expr_has_type_tag(right_expr, REAL_TYPE)) ?
+            codegen_expr_real_storage_size(right_expr, ctx) : 0;
 
+        const char *left_name = register_name_for_type(left_reg, REAL_TYPE);
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm1\n", left_name);
         inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm0\n", right_name);
-        inst_list = add_inst(inst_list, buffer);
+
+        int right_declared_integer_like = 0;
+        if (right_expr != NULL && right_expr->type == EXPR_VAR_ID &&
+            right_expr->expr_data.id != NULL && ctx != NULL && ctx->symtab != NULL)
+        {
+            HashNode_t *right_node = NULL;
+            if (FindIdent(&right_node, ctx->symtab, right_expr->expr_data.id) == 0 &&
+                right_node != NULL && right_node->type != NULL)
+            {
+                int right_declared_tag = codegen_tag_from_kgpc(right_node->type);
+                if (is_integer_type(right_declared_tag) || right_declared_tag == BOOL ||
+                    right_declared_tag == CHAR_TYPE || right_declared_tag == ENUM_TYPE)
+                {
+                    right_declared_integer_like = 1;
+                }
+            }
+        }
+
+        if (right_expr != NULL && expr_has_type_tag(right_expr, REAL_TYPE) &&
+            !right_declared_integer_like)
+        {
+            if (right_real_size == 4)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovd\t%s, %%xmm0\n", right_reg->bit_32);
+                inst_list = add_inst(inst_list, buffer);
+                inst_list = add_inst(inst_list, "\tcvtss2sd\t%xmm0, %xmm0\n");
+            }
+            else
+            {
+                const char *right_name = register_name_for_type(right_reg, REAL_TYPE);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm0\n", right_name);
+                inst_list = add_inst(inst_list, buffer);
+            }
+        }
+        else
+        {
+            int right_tag = (right_expr != NULL) ? expr_get_type_tag(right_expr) : UNKNOWN_TYPE;
+            if (codegen_type_uses_qword(right_tag))
+                snprintf(buffer, sizeof(buffer), "\tcvtsi2sdq\t%s, %%xmm0\n", right_reg->bit_64);
+            else
+                snprintf(buffer, sizeof(buffer), "\tcvtsi2sdl\t%s, %%xmm0\n", right_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+        }
         snprintf(buffer, sizeof(buffer), "\txorl\t%s, %s\n", left_reg->bit_32, left_reg->bit_32);
         inst_list = add_inst(inst_list, buffer);
         inst_list = add_inst(inst_list, "\tucomisd\t%xmm0, %xmm1\n");
@@ -5700,6 +5811,17 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         if (arg_infos != NULL && expected_type == REAL_TYPE)
             arg_infos[arg_num].expected_real_size =
                 codegen_param_real_storage_size(formal_arg_decl, ctx->symtab);
+        int force_runtime_real_qword = 0;
+        if (expected_type == REAL_TYPE)
+        {
+            if ((procedure_name != NULL && strncmp(procedure_name, "kgpc_", 5) == 0) ||
+                (call_mangled != NULL && strncmp(call_mangled, "kgpc_", 5) == 0))
+            {
+                force_runtime_real_qword = 1;
+                if (arg_infos != NULL)
+                    arg_infos[arg_num].expected_real_size = 8;
+            }
+        }
         if (arg_infos != NULL && expected_type == REAL_TYPE)
         {
             int expr_is_real = 0;
@@ -5712,16 +5834,27 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                      arg_expr->expr_data.typecast_data.target_type == REAL_TYPE);
             }
 
-            if (arg_infos[arg_num].expected_real_size == 0 ||
-                (arg_infos[arg_num].expected_real_size == 8 &&
-                 (is_self_param || formal_arg_decl == NULL) && expr_is_real &&
-                 codegen_expr_real_storage_size(arg_expr, ctx) == 4))
+            if (!force_runtime_real_qword && arg_infos[arg_num].expected_real_size == 0)
             {
-                if (expr_is_real)
+                if (is_self_param && expr_is_real)
                 {
                     arg_infos[arg_num].expected_real_size =
                         codegen_expr_real_storage_size(arg_expr, ctx);
                 }
+                else
+                {
+                    /* Without formal metadata, default to double-width real ABI.
+                     * This matches runtime helpers like kgpc_trunc(double). */
+                    arg_infos[arg_num].expected_real_size = 8;
+                }
+            }
+            else if (!force_runtime_real_qword &&
+                arg_infos[arg_num].expected_real_size == 8 &&
+                is_self_param && expr_is_real &&
+                codegen_expr_real_storage_size(arg_expr, ctx) == 4)
+            {
+                arg_infos[arg_num].expected_real_size =
+                    codegen_expr_real_storage_size(arg_expr, ctx);
             }
         }
 
@@ -6826,9 +6959,23 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 }
                 else
                 {
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm0\n", stored_reg->bit_64);
-                    inst_list = add_inst(inst_list, buffer);
-                    inst_list = add_inst(inst_list, "\tcvtsd2ss\t%xmm0, %xmm0\n");
+                    int source_is_single_storage = 0;
+                    if (source_expr != NULL &&
+                        codegen_expr_real_storage_size(source_expr, ctx) == 4)
+                    {
+                        source_is_single_storage = 1;
+                    }
+                    if (source_is_single_storage)
+                    {
+                        snprintf(buffer, sizeof(buffer), "\tmovd\t%s, %%xmm0\n", stored_reg->bit_32);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
+                    else
+                    {
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm0\n", stored_reg->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+                        inst_list = add_inst(inst_list, "\tcvtsd2ss\t%xmm0, %xmm0\n");
+                    }
                 }
                 if (pass_on_stack)
                 {
@@ -6843,6 +6990,37 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 inst_list = add_inst(inst_list, buffer);
                 free_reg(get_reg_stack(), stored_reg);
                 continue;
+            }
+            if (expected_type == REAL_TYPE && expected_real_size == 8 &&
+                arg_infos != NULL && arg_infos[i].assigned_class == ARG_CLASS_SSE)
+            {
+                struct Expression *raw_source_expr = source_expr;
+                while (raw_source_expr != NULL &&
+                    raw_source_expr->type == EXPR_TYPECAST &&
+                    raw_source_expr->expr_data.typecast_data.target_type == REAL_TYPE &&
+                    raw_source_expr->expr_data.typecast_data.expr != NULL)
+                {
+                    raw_source_expr = raw_source_expr->expr_data.typecast_data.expr;
+                }
+                if (raw_source_expr != NULL && raw_source_expr->type == EXPR_RECORD_ACCESS)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovd\t%s, %%xmm0\n", stored_reg->bit_32);
+                    inst_list = add_inst(inst_list, buffer);
+                    inst_list = add_inst(inst_list, "\tcvtss2sd\t%xmm0, %xmm0\n");
+                    if (pass_on_stack)
+                    {
+                        char stack_dest[64];
+                        snprintf(stack_dest, sizeof(stack_dest), "%d(%%rsp)", arg_infos[i].stack_offset);
+                        snprintf(buffer, sizeof(buffer), "\tmovsd\t%%xmm0, %s\n", stack_dest);
+                    }
+                    else
+                    {
+                        snprintf(buffer, sizeof(buffer), "\tmovsd\t%%xmm0, %s\n", arg_reg_char);
+                    }
+                    inst_list = add_inst(inst_list, buffer);
+                    free_reg(get_reg_stack(), stored_reg);
+                    continue;
+                }
             }
             if (needs_int_to_long && arg_infos != NULL &&
                 arg_infos[i].assigned_class == ARG_CLASS_INT)
@@ -6884,9 +7062,24 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                     snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
                         arg_infos[i].spill->offset, temp_reg->bit_64);
                     inst_list = add_inst(inst_list, buffer);
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm0\n", temp_reg->bit_64);
-                    inst_list = add_inst(inst_list, buffer);
-                    inst_list = add_inst(inst_list, "\tcvtsd2ss\t%xmm0, %xmm0\n");
+                    int source_is_single_storage = 0;
+                    if (arg_infos[i].expr != NULL &&
+                        codegen_expr_real_storage_size(arg_infos[i].expr, ctx) == 4)
+                    {
+                        source_is_single_storage = 1;
+                    }
+
+                    if (source_is_single_storage)
+                    {
+                        snprintf(buffer, sizeof(buffer), "\tmovd\t%s, %%xmm0\n", temp_reg->bit_32);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
+                    else
+                    {
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm0\n", temp_reg->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+                        inst_list = add_inst(inst_list, "\tcvtsd2ss\t%xmm0, %xmm0\n");
+                    }
                 }
                 if (pass_on_stack)
                 {
@@ -6921,6 +7114,44 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 }
                 inst_list = add_inst(inst_list, buffer);
                 continue;
+            }
+
+            if (expected_type == REAL_TYPE && expected_real_size == 8 &&
+                arg_infos[i].assigned_class == ARG_CLASS_SSE)
+            {
+                struct Expression *raw_source_expr = arg_infos[i].expr;
+                while (raw_source_expr != NULL &&
+                    raw_source_expr->type == EXPR_TYPECAST &&
+                    raw_source_expr->expr_data.typecast_data.target_type == REAL_TYPE &&
+                    raw_source_expr->expr_data.typecast_data.expr != NULL)
+                {
+                    raw_source_expr = raw_source_expr->expr_data.typecast_data.expr;
+                }
+                if (raw_source_expr != NULL && raw_source_expr->type == EXPR_RECORD_ACCESS)
+                {
+                    temp_reg = get_free_reg(get_reg_stack(), &inst_list);
+                    if (temp_reg == NULL)
+                        return inst_list;
+                    snprintf(buffer, sizeof(buffer), "\tmovl\t-%d(%%rbp), %s\n",
+                        arg_infos[i].spill->offset, temp_reg->bit_32);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovd\t%s, %%xmm0\n", temp_reg->bit_32);
+                    inst_list = add_inst(inst_list, buffer);
+                    inst_list = add_inst(inst_list, "\tcvtss2sd\t%xmm0, %xmm0\n");
+                    if (pass_on_stack)
+                    {
+                        char stack_dest[64];
+                        snprintf(stack_dest, sizeof(stack_dest), "%d(%%rsp)", arg_infos[i].stack_offset);
+                        snprintf(buffer, sizeof(buffer), "\tmovsd\t%%xmm0, %s\n", stack_dest);
+                    }
+                    else
+                    {
+                        snprintf(buffer, sizeof(buffer), "\tmovsd\t%%xmm0, %s\n", arg_reg_char);
+                    }
+                    inst_list = add_inst(inst_list, buffer);
+                    free_reg(get_reg_stack(), temp_reg);
+                    continue;
+                }
             }
 
             if (needs_int_to_long && arg_infos[i].assigned_class == ARG_CLASS_INT)
