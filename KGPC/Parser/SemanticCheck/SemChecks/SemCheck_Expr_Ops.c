@@ -13,6 +13,75 @@
 
 #include "SemCheck_Expr_Internal.h"
 
+static int semcheck_hashnode_is_callable(const HashNode_t *node)
+{
+    if (node == NULL)
+        return 0;
+    return node->hash_type == HASHTYPE_FUNCTION ||
+        node->hash_type == HASHTYPE_PROCEDURE ||
+        node->hash_type == HASHTYPE_BUILTIN_PROCEDURE;
+}
+
+static int semcheck_hashnode_is_value_symbol(const HashNode_t *node)
+{
+    if (node == NULL)
+        return 0;
+    if (semcheck_hashnode_is_callable(node))
+        return 0;
+    if (node->hash_type == HASHTYPE_TYPE)
+        return 0;
+    return 1;
+}
+
+static HashNode_t *semcheck_find_preferred_value_ident(
+    SymTab_t *symtab, const char *id, int *scope_out)
+{
+    if (symtab == NULL || id == NULL)
+        return NULL;
+
+    int scope = 0;
+    for (ListNode_t *cur_scope = symtab->stack_head; cur_scope != NULL; cur_scope = cur_scope->next)
+    {
+        HashTable_t *table = (HashTable_t *)cur_scope->cur;
+        ListNode_t *matches = FindAllIdentsInTable(table, id);
+        if (matches != NULL)
+        {
+            for (ListNode_t *cur = matches; cur != NULL; cur = cur->next)
+            {
+                HashNode_t *candidate = (HashNode_t *)cur->cur;
+                if (semcheck_hashnode_is_value_symbol(candidate))
+                {
+                    if (scope_out != NULL)
+                        *scope_out = scope;
+                    DestroyList(matches);
+                    return candidate;
+                }
+            }
+            DestroyList(matches);
+        }
+        ++scope;
+    }
+
+    ListNode_t *builtin_matches = FindAllIdentsInTable(symtab->builtins, id);
+    if (builtin_matches != NULL)
+    {
+        for (ListNode_t *cur = builtin_matches; cur != NULL; cur = cur->next)
+        {
+            HashNode_t *candidate = (HashNode_t *)cur->cur;
+            if (semcheck_hashnode_is_value_symbol(candidate))
+            {
+                if (scope_out != NULL)
+                    *scope_out = scope;
+                DestroyList(builtin_matches);
+                return candidate;
+            }
+        }
+        DestroyList(builtin_matches);
+    }
+
+    return NULL;
+}
+
 static int semcheck_expr_is_char_array_like(const struct Expression *expr)
 {
     if (expr == NULL)
@@ -1406,6 +1475,50 @@ static int semcheck_try_helper_member(int *type_return, SymTab_t *symtab,
     return -1;
 }
 
+static int semcheck_try_self_field_access(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev, int mutating,
+    HashNode_t *self_node, struct RecordType *self_record, const char *id)
+{
+    if (type_return == NULL || symtab == NULL || expr == NULL || id == NULL ||
+        self_node == NULL || self_record == NULL)
+        return -1;
+
+    struct RecordType *field_owner = NULL;
+    struct RecordField *field = semcheck_find_class_field_including_hidden(symtab,
+        self_record, id, &field_owner);
+    if (field == NULL)
+        return -1;
+
+    char *self_str = strdup("Self");
+    if (self_str == NULL)
+        return -1;
+    struct Expression *self_expr = mk_varid(expr->line_num, self_str);
+    if (self_expr == NULL)
+        return -1;
+
+    if (self_node->type != NULL)
+    {
+        self_expr->resolved_kgpc_type = self_node->type;
+        kgpc_type_retain(self_node->type);
+    }
+    else
+    {
+        KgpcType *self_record_type = create_record_type(self_record);
+        if (self_record_type != NULL)
+            self_expr->resolved_kgpc_type = self_record_type;
+    }
+
+    char *saved_id = expr->expr_data.id;
+    expr->expr_data.id = NULL;
+    expr->type = EXPR_RECORD_ACCESS;
+    memset(&expr->expr_data.record_access_data, 0,
+        sizeof(expr->expr_data.record_access_data));
+    expr->expr_data.record_access_data.record_expr = self_expr;
+    expr->expr_data.record_access_data.field_id = saved_id;
+
+    return semcheck_recordaccess(type_return, symtab, expr, max_scope_lev, mutating);
+}
+
 int semcheck_varid(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating)
 {
@@ -1569,7 +1682,7 @@ int semcheck_varid(int *type_return,
                     }
                     free(mangled_qid);
                 }
-                else if (prefix_scope == -1)
+                else if (prefix_scope == -1 || semcheck_is_unit_name(prefix))
                 {
                     /* Prefix not found - might be a unit qualifier.
                      * Try looking up the suffix directly. */
@@ -1664,6 +1777,18 @@ resolved:;
             (void*)hash_return,
             hash_return != NULL ? hash_return->hash_type : -1,
             hash_return != NULL ? kgpc_type_to_string(hash_return->type) : "<null>");
+    }
+    if (scope_return != -1 && hash_return != NULL &&
+        hash_return->hash_type == HASHTYPE_FUNCTION &&
+        mutating == NO_MUTATE && with_status != 0)
+    {
+        int value_scope = scope_return;
+        HashNode_t *value_node = semcheck_find_preferred_value_ident(symtab, id, &value_scope);
+        if (value_node != NULL)
+        {
+            hash_return = value_node;
+            scope_return = value_scope;
+        }
     }
     if (getenv("KGPC_DEBUG_TYPE_HELPER") != NULL && id != NULL &&
         pascal_identifier_equals(id, "Self"))
@@ -1771,6 +1896,10 @@ resolved:;
             self_record = semcheck_resolve_helper_self_record(symtab,
                 helper_self_node, helper_self_record);
         }
+        int field_result = semcheck_try_self_field_access(type_return, symtab, expr,
+            max_scope_lev, mutating, helper_self_node, self_record, id);
+        if (field_result >= 0)
+            return field_result;
         int helper_result = semcheck_try_helper_member(type_return, symtab, expr,
             max_scope_lev, mutating, helper_self_node, self_record, id);
         if (helper_result >= 0)
@@ -1819,6 +1948,10 @@ resolved:;
                 {
                     struct RecordType *self_record = semcheck_resolve_helper_self_record(symtab,
                         self_node, helper_self_record);
+                    int field_result = semcheck_try_self_field_access(type_return, symtab, expr,
+                        max_scope_lev, mutating, self_node, self_record, id);
+                    if (field_result >= 0)
+                        return field_result;
                     int helper_result = semcheck_try_helper_member(type_return, symtab, expr,
                         max_scope_lev, mutating, self_node, self_record, id);
                     if (helper_result >= 0)
@@ -1924,6 +2057,16 @@ resolved:;
                 semantic_error(expr->line_num, expr->col_num,
                     "unable to resolve WITH context for field \"%s\"", id);
                 ++return_val;
+            }
+            else if (id != NULL && semcheck_is_unit_name(id))
+            {
+                /* Unit identifiers may appear as the left side of unit-qualified
+                 * expressions (UnitName.Member). Let record-access/type checking
+                 * handle the qualified member without emitting a standalone
+                 * undeclared-identifier error for the unit token itself. */
+                *type_return = UNKNOWN_TYPE;
+                semcheck_expr_set_resolved_type(expr, UNKNOWN_TYPE);
+                return return_val;
             }
             else
             {
