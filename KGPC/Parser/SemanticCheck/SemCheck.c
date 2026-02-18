@@ -7864,27 +7864,61 @@ static void prepush_trivial_imported_consts(SymTab_t *symtab, ListNode_t *const_
         /* Handle string constants (EXPR_STRING, EXPR_CHAR_CODE) */
         if (value_expr->type == EXPR_STRING && value_expr->expr_data.string != NULL)
         {
-            PushStringConstOntoScope(symtab, tree->tree_data.const_decl_data.id,
-                value_expr->expr_data.string);
-            HashNode_t *node = NULL;
-            if (FindIdent(&node, symtab, tree->tree_data.const_decl_data.id) >= 0 && node != NULL)
+            const char *string_value = value_expr->expr_data.string;
+            /* Single-character strings are Char type in Pascal */
+            if (strlen(string_value) == 1)
             {
-                mark_hashnode_unit_info(symtab, node,
-                    tree->tree_data.const_decl_data.defined_in_unit,
-                    tree->tree_data.const_decl_data.unit_is_public);
+                long long char_val = (unsigned char)string_value[0];
+                KgpcType *char_type = create_primitive_type(CHAR_TYPE);
+                int push_result = PushConstOntoScope_Typed(symtab,
+                    tree->tree_data.const_decl_data.id, char_val, char_type);
+                destroy_kgpc_type(char_type);
+                if (push_result == 0)
+                {
+                    HashNode_t *node = NULL;
+                    if (FindIdent(&node, symtab, tree->tree_data.const_decl_data.id) >= 0 && node != NULL)
+                    {
+                        node->const_string_value = strdup(string_value);
+                        mark_hashnode_unit_info(symtab, node,
+                            tree->tree_data.const_decl_data.defined_in_unit,
+                            tree->tree_data.const_decl_data.unit_is_public);
+                    }
+                }
+            }
+            else
+            {
+                PushStringConstOntoScope(symtab, tree->tree_data.const_decl_data.id,
+                    string_value);
+                HashNode_t *node = NULL;
+                if (FindIdent(&node, symtab, tree->tree_data.const_decl_data.id) >= 0 && node != NULL)
+                {
+                    mark_hashnode_unit_info(symtab, node,
+                        tree->tree_data.const_decl_data.defined_in_unit,
+                        tree->tree_data.const_decl_data.unit_is_public);
+                }
             }
             continue;
         }
         if (value_expr->type == EXPR_CHAR_CODE)
         {
-            char str[2] = { (char)(value_expr->expr_data.char_code & 0xFF), '\0' };
-            PushStringConstOntoScope(symtab, tree->tree_data.const_decl_data.id, str);
-            HashNode_t *node = NULL;
-            if (FindIdent(&node, symtab, tree->tree_data.const_decl_data.id) >= 0 && node != NULL)
+            /* Push as typed Char constant (matching normal semcheck behavior) */
+            long long char_val = (unsigned char)(value_expr->expr_data.char_code & 0xFF);
+            KgpcType *char_type = create_primitive_type(CHAR_TYPE);
+            int push_result = PushConstOntoScope_Typed(symtab,
+                tree->tree_data.const_decl_data.id, char_val, char_type);
+            destroy_kgpc_type(char_type);
+            if (push_result == 0)
             {
-                mark_hashnode_unit_info(symtab, node,
-                    tree->tree_data.const_decl_data.defined_in_unit,
-                    tree->tree_data.const_decl_data.unit_is_public);
+                HashNode_t *node = NULL;
+                if (FindIdent(&node, symtab, tree->tree_data.const_decl_data.id) >= 0 && node != NULL)
+                {
+                    /* Also set string value like normal semcheck does */
+                    char str[2] = { (char)(char_val & 0xFF), '\0' };
+                    node->const_string_value = strdup(str);
+                    mark_hashnode_unit_info(symtab, node,
+                        tree->tree_data.const_decl_data.defined_in_unit,
+                        tree->tree_data.const_decl_data.unit_is_public);
+                }
             }
             continue;
         }
@@ -7923,8 +7957,27 @@ static void prepush_trivial_imported_consts(SymTab_t *symtab, ListNode_t *const_
             {
                 if (ref->const_string_value != NULL)
                 {
-                    PushStringConstOntoScope(symtab, tree->tree_data.const_decl_data.id,
-                        ref->const_string_value);
+                    const char *sv = ref->const_string_value;
+                    if (strlen(sv) == 1 && ref->type != NULL &&
+                        kgpc_type_equals_tag(ref->type, CHAR_TYPE))
+                    {
+                        /* Reference to a Char const — push as typed Char */
+                        long long char_val = (unsigned char)sv[0];
+                        KgpcType *char_type = create_primitive_type(CHAR_TYPE);
+                        int pr = PushConstOntoScope_Typed(symtab,
+                            tree->tree_data.const_decl_data.id, char_val, char_type);
+                        destroy_kgpc_type(char_type);
+                        if (pr == 0)
+                        {
+                            HashNode_t *n2 = NULL;
+                            if (FindIdent(&n2, symtab, tree->tree_data.const_decl_data.id) >= 0 && n2 != NULL)
+                                n2->const_string_value = strdup(sv);
+                        }
+                    }
+                    else
+                    {
+                        PushStringConstOntoScope(symtab, tree->tree_data.const_decl_data.id, sv);
+                    }
                 }
                 else if (ref->type != NULL && kgpc_type_equals_tag(ref->type, REAL_TYPE))
                     PushRealConstOntoScope(symtab, tree->tree_data.const_decl_data.id, ref->const_real_value);
@@ -7952,7 +8005,7 @@ static void prepush_trivial_imported_consts(SymTab_t *symtab, ListNode_t *const_
                     tree->tree_data.const_decl_data.unit_is_public);
             }
         }
-        else
+        else if (value_expr->type == EXPR_FUNCTION_CALL)
         {
             /* Try full const evaluation silently for expressions like Low()/High() */
             long long val = 0;
@@ -10019,60 +10072,9 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 if (keep_imported_cached)
                 {
                     /* Imported declarations should retain their original resolved type.
-                     * Rebinding in later scopes can corrupt aliases like BaseUnix.TSize.
-                     * However, if the cached type doesn't match the declared primitive type
-                     * (e.g., cached is TYPE_KIND_PROCEDURE from a type helper but declared
-                     * is REAL_TYPE for Single/Double/Extended), correct it. */
-                    int declared_tag = tree->tree_data.var_decl_data.type;
-                    if (declared_tag != UNKNOWN_TYPE)
-                    {
-                        int cached_tag = semcheck_tag_from_kgpc(tree->tree_data.var_decl_data.cached_kgpc_type);
-                        if (cached_tag != declared_tag)
-                        {
-                            int declared_is_primitive = (declared_tag == REAL_TYPE ||
-                                                          declared_tag == INT_TYPE ||
-                                                          declared_tag == LONGINT_TYPE ||
-                                                          declared_tag == INT64_TYPE ||
-                                                          declared_tag == BOOL ||
-                                                          declared_tag == CHAR_TYPE ||
-                                                          declared_tag == BYTE_TYPE ||
-                                                          declared_tag == WORD_TYPE ||
-                                                          declared_tag == LONGWORD_TYPE ||
-                                                          declared_tag == QWORD_TYPE);
-                            if (declared_is_primitive)
-                            {
-                                destroy_kgpc_type(tree->tree_data.var_decl_data.cached_kgpc_type);
-                                tree->tree_data.var_decl_data.cached_kgpc_type = create_primitive_type(declared_tag);
-                            }
-                        }
-                    }
+                     * Rebinding in later scopes can corrupt aliases like BaseUnix.TSize. */
                 }
                 else
-                {
-                /* Guard: if the var decl declares a known primitive type (e.g. Single/Double/Extended
-                 * → REAL_TYPE) but resolved_type has an incompatible kind (e.g. TYPE_KIND_PROCEDURE
-                 * from a type helper), skip the override and let the builtin fallback create the
-                 * correct primitive KgpcType.  This prevents type helper records from shadowing
-                 * their base primitive type. */
-                int declared_tag = tree->tree_data.var_decl_data.type;
-                int resolved_tag = semcheck_tag_from_kgpc(resolved_type->type);
-                int mismatch = 0;
-                if (declared_tag != UNKNOWN_TYPE && declared_tag != resolved_tag)
-                {
-                    int declared_is_primitive = (declared_tag == REAL_TYPE ||
-                                                  declared_tag == INT_TYPE ||
-                                                  declared_tag == LONGINT_TYPE ||
-                                                  declared_tag == INT64_TYPE ||
-                                                  declared_tag == BOOL ||
-                                                  declared_tag == CHAR_TYPE ||
-                                                  declared_tag == BYTE_TYPE ||
-                                                  declared_tag == WORD_TYPE ||
-                                                  declared_tag == LONGWORD_TYPE ||
-                                                  declared_tag == QWORD_TYPE);
-                    if (declared_is_primitive)
-                        mismatch = 1;
-                }
-                if (!mismatch)
                 {
                 /* Clear any pre-existing cached type if we're replacing with resolved type */
                 if (tree->tree_data.var_decl_data.cached_kgpc_type != NULL)
@@ -10082,14 +10084,6 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 }
                 kgpc_type_retain(resolved_type->type);
                 tree->tree_data.var_decl_data.cached_kgpc_type = resolved_type->type;
-                }
-                else
-                {
-                    /* Mismatch: resolved type doesn't match declared primitive type.
-                     * Create the correct primitive KgpcType from the declared tag. */
-                    if (tree->tree_data.var_decl_data.cached_kgpc_type == NULL)
-                        tree->tree_data.var_decl_data.cached_kgpc_type = create_primitive_type(declared_tag);
-                }
                 }
             }
             else if (tree->tree_data.var_decl_data.cached_kgpc_type == NULL &&
@@ -10471,14 +10465,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         
                         /* For non-array type references (e.g., enum, set, file, record), create KgpcType from type_node */
                         KgpcType *var_kgpc_type = NULL;
-                        /* If we already have a cached_kgpc_type (e.g., from the mismatch guard
-                         * for primitive types shadowed by type helpers), prefer it over type_node->type */
-                        if (tree->tree_data.var_decl_data.cached_kgpc_type != NULL)
-                        {
-                            var_kgpc_type = tree->tree_data.var_decl_data.cached_kgpc_type;
-                            func_return = PushVarOntoScope_Typed(symtab, (char *)ids->cur, var_kgpc_type);
-                        }
-                        else if (type_node->type != NULL)
+                        if (type_node->type != NULL)
                         {
                             /* Type node already has a KgpcType - reference it (don't clone) */
                             var_kgpc_type = type_node->type;
