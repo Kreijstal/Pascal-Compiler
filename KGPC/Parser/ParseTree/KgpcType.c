@@ -48,6 +48,40 @@ static HashNode_t *kgpc_find_type_node(SymTab_t *symtab, const char *type_id)
     return NULL;
 }
 
+static HashNode_t *kgpc_find_type_node_with_unit_flag(SymTab_t *symtab,
+    const char *type_id, int defined_in_unit)
+{
+    if (symtab == NULL || type_id == NULL)
+        return NULL;
+
+    HashNode_t *fallback = NULL;
+    ListNode_t *cur = symtab->stack_head;
+    while (cur != NULL)
+    {
+        HashTable_t *table = (HashTable_t *)cur->cur;
+        HashNode_t *node = FindIdentInTable(table, type_id);
+        if (node != NULL && node->hash_type == HASHTYPE_TYPE)
+        {
+            if (node->defined_in_unit == defined_in_unit)
+                return node;
+            if (fallback == NULL)
+                fallback = node;
+        }
+        cur = cur->next;
+    }
+
+    HashNode_t *builtin = FindIdentInTable(symtab->builtins, type_id);
+    if (builtin != NULL && builtin->hash_type == HASHTYPE_TYPE)
+    {
+        if (builtin->defined_in_unit == defined_in_unit)
+            return builtin;
+        if (fallback == NULL)
+            fallback = builtin;
+    }
+
+    return fallback;
+}
+
 /* Forward declarations for TypeAlias copy functions */
 static struct TypeAlias* copy_type_alias(const struct TypeAlias *src);
 static void free_copied_type_alias(struct TypeAlias *alias);
@@ -486,6 +520,15 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
     if (owns_type != NULL)
         *owns_type = 0;
 
+    /* Prefer declaration-time type cache to avoid late scope shadowing
+     * changing the meaning of parameter type identifiers (e.g. TSize). */
+    if (var_decl->type == TREE_VAR_DECL &&
+        var_decl->tree_data.var_decl_data.cached_kgpc_type != NULL)
+    {
+        kgpc_type_retain(var_decl->tree_data.var_decl_data.cached_kgpc_type);
+        return var_decl->tree_data.var_decl_data.cached_kgpc_type;
+    }
+
     /* Handle inline array declarations: var x: array[1..20] of char */
     if (var_decl->type == TREE_ARR_DECL)
     {
@@ -512,7 +555,8 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
         else if (elem_type_id != NULL && symtab != NULL)
         {
             /* Look up named element type in symbol table */
-            struct HashNode *elem_node = kgpc_find_type_node(symtab, elem_type_id);
+            struct HashNode *elem_node = kgpc_find_type_node_with_unit_flag(symtab,
+                elem_type_id, var_decl->tree_data.arr_decl_data.defined_in_unit);
             if (elem_node != NULL && elem_node->type != NULL)
             {
                 elem_type = elem_node->type;
@@ -554,7 +598,8 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
         int pointee_shared = 0;
         if (symtab != NULL)
         {
-            struct HashNode *type_node = kgpc_find_type_node(symtab, type_id);
+            struct HashNode *type_node = kgpc_find_type_node_with_unit_flag(symtab,
+                type_id, var_decl->tree_data.var_decl_data.defined_in_unit);
             if (type_node != NULL && type_node->type != NULL)
             {
                 pointee_type = type_node->type;
@@ -606,7 +651,8 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
     /* Handle named type references using the symbol table */
     if (type_id != NULL && symtab != NULL) {
         /* Look up the named type in the symbol table */
-        struct HashNode *type_node = kgpc_find_type_node(symtab, type_id);
+        struct HashNode *type_node = kgpc_find_type_node_with_unit_flag(symtab,
+            type_id, var_decl->tree_data.var_decl_data.defined_in_unit);
         if (type_node != NULL && type_node->type != NULL) {
             /* Return a shared reference from the symbol table - caller doesn't own it */
             if (owns_type != NULL)

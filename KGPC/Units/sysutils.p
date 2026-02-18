@@ -1243,37 +1243,75 @@ end;
 
 function TStringHelper.PadLeft(ATotalWidth: SizeInt): AnsiString;
 begin
-    Result := SysUtils.PadLeft(Self, ATotalWidth, ' ');
+    Result := Self.PadLeft(ATotalWidth, ' ');
 end;
 
 function TStringHelper.PadLeft(ATotalWidth: SizeInt; PaddingChar: AnsiChar): AnsiString;
+var
+    pad_len: SizeInt;
 begin
-    Result := SysUtils.PadLeft(Self, ATotalWidth, PaddingChar);
+    Result := Self;
+    pad_len := ATotalWidth - Length(Self);
+    if pad_len > 0 then
+        Result := StringOfChar(PaddingChar, pad_len) + Result;
 end;
 
 function TStringHelper.PadRight(ATotalWidth: SizeInt): AnsiString;
 begin
-    Result := SysUtils.PadRight(Self, ATotalWidth, ' ');
+    Result := Self.PadRight(ATotalWidth, ' ');
 end;
 
 function TStringHelper.PadRight(ATotalWidth: SizeInt; PaddingChar: AnsiChar): AnsiString;
+var
+    pad_len: SizeInt;
 begin
-    Result := SysUtils.PadRight(Self, ATotalWidth, PaddingChar);
+    Result := Self;
+    pad_len := ATotalWidth - Length(Self);
+    if pad_len > 0 then
+        Result := Result + StringOfChar(PaddingChar, pad_len);
 end;
 
 function TStringHelper.QuotedString(QuoteChar: AnsiChar): AnsiString;
 begin
-    Result := SysUtils.QuotedString(Self, QuoteChar);
+    Result := StringOfChar(QuoteChar, 1) + Self + StringOfChar(QuoteChar, 1);
 end;
 
 function TStringHelper.StartsWith(const AValue: AnsiString): Boolean;
+var
+    i: Integer;
 begin
-    Result := SysUtils.StartsWith(Self, AValue);
+    if Length(AValue) > Length(Self) then
+    begin
+        Result := False;
+        Exit;
+    end;
+    for i := 1 to Length(AValue) do
+        if Self[i] <> AValue[i] then
+        begin
+            Result := False;
+            Exit;
+        end;
+    Result := True;
 end;
 
 function TStringHelper.EndsWith(const AValue: AnsiString): Boolean;
+var
+    i: Integer;
+    offset: Integer;
 begin
-    Result := SysUtils.EndsWith(Self, AValue);
+    if Length(AValue) > Length(Self) then
+    begin
+        Result := False;
+        Exit;
+    end;
+    offset := Length(Self) - Length(AValue);
+    for i := 1 to Length(AValue) do
+        if Self[offset + i] <> AValue[i] then
+        begin
+            Result := False;
+            Exit;
+        end;
+    Result := True;
 end;
 
 function TStringHelper.Replace(const OldValue, NewValue: AnsiString; Flags: TReplaceFlags): AnsiString;

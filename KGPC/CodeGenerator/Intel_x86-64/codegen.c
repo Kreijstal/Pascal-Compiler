@@ -3190,7 +3190,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
                         &record_return_size) == 0 && record_return_size > 0 &&
                     record_return_size <= INT_MAX)
                 {
-                    has_record_return = 1;
+                    has_record_return = (record_return_size > 8);
                 }
                 else
                 {
@@ -3213,7 +3213,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
                     long long array_size = kgpc_type_sizeof(return_type);
                     if (array_size > 0 && array_size <= INT_MAX)
                     {
-                        has_record_return = 1;
+                        has_record_return = (array_size > 8);
                         record_return_size = array_size;
                     }
                     else
@@ -3243,7 +3243,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
             }
             else
             {
-                has_record_return = 1;
+                has_record_return = (record_return_size > 8);
             }
         }
     }
@@ -3268,7 +3268,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
                     record_return_size > 0 && record_return_size <= INT_MAX)
                 {
                     CODEGEN_DEBUG("DEBUG: Setting has_record_return=1, size=%lld\n", record_return_size);
-                    has_record_return = 1;
+                    has_record_return = (record_return_size > 8);
                 }
             }
             else if (return_type_node->type != NULL &&
@@ -3327,7 +3327,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
                 inline_record, &record_return_size) == 0 &&
             record_return_size > 0 && record_return_size <= INT_MAX)
         {
-            has_record_return = 1;
+            has_record_return = (record_return_size > 8);
         }
     }
 
@@ -3339,7 +3339,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
         long long array_size = kgpc_type_sizeof(func->inline_return_type->kgpc_type);
         if (array_size > 0 && array_size <= INT_MAX)
         {
-            has_record_return = 1;
+            has_record_return = (array_size > 8);
             record_return_size = array_size;
         }
         else

@@ -2039,7 +2039,8 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 }
             }
             
-            if (ctor_type_receiver && class_record != NULL)
+            if (ctor_type_receiver && class_record != NULL &&
+                record_type_is_class(class_record))
             {
                 /* Get the size of the class instance */
                 long long instance_size = 0;
@@ -2540,6 +2541,15 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             {
                 /* For procedural var calls, check call_kgpc_type's return type */
                 int use_qword = expr_uses_qword_kgpctype(expr);
+                if (!use_qword && expr_has_type_tag(expr, RECORD_TYPE))
+                {
+                    long long record_ret_size = 0;
+                    if (codegen_get_record_size(ctx, expr, &record_ret_size) == 0 &&
+                        record_ret_size > 4)
+                    {
+                        use_qword = 1;
+                    }
+                }
                 if (!use_qword && expr->expr_data.function_call_data.is_procedural_var_call &&
                     expr->expr_data.function_call_data.call_kgpc_type != NULL)
                 {

@@ -2378,6 +2378,42 @@ static int semcheck_builtin_halt(SymTab_t *symtab, struct Statement *stmt, int m
     return return_val;
 }
 
+static int semcheck_builtin_error(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    if (stmt == NULL)
+        return 0;
+
+    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+    if (args == NULL || args->next != NULL)
+    {
+        semcheck_error_with_context("Error on line %d, Error expects exactly one argument.\n", stmt->line_num);
+        return 1;
+    }
+
+    int return_val = 0;
+    struct Expression *code_expr = (struct Expression *)args->cur;
+    int code_type = UNKNOWN_TYPE;
+    return_val += semcheck_stmt_expr_tag(&code_type, symtab, code_expr, max_scope_lev, NO_MUTATE);
+
+    /* System.Error(code) follows Halt semantics in our runtime.
+     * Lower to Halt so existing mangling/codegen/runtime paths are reused. */
+    if (!pascal_identifier_equals(stmt->stmt_data.procedure_call_data.id, "Halt"))
+    {
+        char *halt_name = strdup("Halt");
+        if (halt_name == NULL)
+        {
+            semcheck_error_with_context("Error on line %d, failed to rewrite Error call to Halt.\n", stmt->line_num);
+            return return_val + 1;
+        }
+
+        free(stmt->stmt_data.procedure_call_data.id);
+        stmt->stmt_data.procedure_call_data.id = halt_name;
+    }
+
+    return_val += semcheck_set_stmt_call_mangled_id(symtab, stmt, max_scope_lev);
+    return return_val;
+}
+
 static int semcheck_builtin_getmem(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
     if (stmt == NULL)
@@ -4087,6 +4123,12 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
         struct Expression *first_arg = (struct Expression *)args_given->cur;
         if (first_arg != NULL && first_arg->type == EXPR_VAR_ID && first_arg->expr_data.id != NULL)
         {
+            /* Keep unit qualifiers out of the type-receiver fast path.
+             * Calls like System.Error(...) should be handled by the unit-qualified
+             * rewrite below, not rewritten as TypeName__MethodName. */
+            if (semcheck_is_unit_name(first_arg->expr_data.id))
+                goto skip_type_receiver_rewrite;
+
             HashNode_t *type_node = NULL;
             if (FindIdent(&type_node, symtab, first_arg->expr_data.id) >= 0 &&
                 type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
@@ -4117,14 +4159,16 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
             }
         }
     }
+skip_type_receiver_rewrite:
 
     /* FPC Bootstrap Feature: Handle unit-qualified procedure calls.
      * When the parser sees Unit.Procedure(args), it creates a procedure call with id "__Procedure"
      * and passes Unit as the first argument (as if it were a method call).
      * We need to detect this pattern and transform it back to a direct procedure call.
      *
-     * Pattern: proc_id starts with "__", first arg is a VAR_ID that doesn't exist in symbol table
-     * (it's the unit name), and the procedure name (without "__" prefix) exists in symbol table.
+     * Pattern: proc_id starts with "__", first arg is a VAR_ID that names a known unit
+     * (preferred) or is unresolved in the symbol table (fallback heuristic), and the procedure
+     * name (without "__" prefix) exists in symbol table.
      */
     if (proc_id != NULL && strncmp(proc_id, "__", 2) == 0 && args_given != NULL)
     {
@@ -4133,12 +4177,20 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
         {
             char *potential_unit_name = first_arg->expr_data.id;
             HashNode_t *unit_check = NULL;
+            int is_unit_qualifier = semcheck_is_unit_name(potential_unit_name);
 
-            /* Check if the first argument is NOT a known variable (i.e., it's a unit qualifier) */
-            if (FindIdent(&unit_check, symtab, potential_unit_name) == -1)
+            /* Prefer explicit unit-name recognition; keep unresolved-name fallback for
+             * parser shapes where unit qualifiers are not injected into symbol tables. */
+            if (!is_unit_qualifier &&
+                FindIdent(&unit_check, symtab, potential_unit_name) == -1)
             {
-                /* First arg is not a known identifier - might be a unit qualifier.
-                 * Try to look up the procedure name without the "__" prefix. */
+                is_unit_qualifier = 1;
+            }
+
+            if (is_unit_qualifier)
+            {
+                /* Unit-qualified call; try to resolve the real procedure name
+                 * without the "__" prefix. */
                 char *real_proc_name = strdup(proc_id + 2);  /* Skip the "__" prefix */
                 if (real_proc_name == NULL)
                 {
@@ -4353,6 +4405,12 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     int handled_builtin = 0;
     return_val += try_resolve_builtin_procedure(symtab, stmt, "Halt",
         semcheck_builtin_halt, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
+
+    handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "Error",
+        semcheck_builtin_error, max_scope_lev, &handled_builtin);
     if (handled_builtin)
         return return_val;
 

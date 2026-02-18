@@ -119,6 +119,7 @@ function fpFork: cint; external;
 function fpExecve(path: PAnsiChar; argv, envp: PPAnsiChar): cint; external;
 procedure fpExit(status: cint); external;
 function fpGetErrno: cint; external;
+function fpGetCwd(path: PAnsiChar; len: size_t): PAnsiChar; external;
 function fpsigaction(sig: cint; act, oact: PSigActionRec): cint; external;
 function fpgettimeofday(tv: Pointer; tz: Pointer): cint; external;
 function fpnanosleep(req, rem: Pointer): cint; external;

@@ -1445,7 +1445,11 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
             goto cleanup;
         }
     }
-    else if (expr->type == EXPR_FUNCTION_CALL && expr_has_type_tag(expr, RECORD_TYPE))
+    else if (expr->type == EXPR_FUNCTION_CALL &&
+        (expr_has_type_tag(expr, RECORD_TYPE) || expr_has_type_tag(expr, SHORTSTRING_TYPE) ||
+         (expr->resolved_kgpc_type != NULL &&
+          expr->resolved_kgpc_type->kind == TYPE_KIND_ARRAY &&
+          !kgpc_type_is_dynamic_array(expr->resolved_kgpc_type))))
     {
         /* Record-valued function calls evaluate to a temporary addressable object
          * (sret/hidden pointer), which callers may pass by reference. */
@@ -2689,16 +2693,35 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                 return inst_list;
             }
 
-            int call_returns_record = expr_returns_sret(src_expr);
+            int call_returns_sret = expr_returns_sret(src_expr);
+            int call_returns_record = call_returns_sret;
             if (!call_returns_record && func_type != NULL &&
                 kgpc_type_is_procedure(func_type))
             {
                 KgpcType *return_type = kgpc_type_get_return_type(func_type);
-                if (return_type != NULL && (kgpc_type_is_record(return_type) ||
-                    (return_type->kind == TYPE_KIND_ARRAY &&
-                     !kgpc_type_is_dynamic_array(return_type))))
+                if (return_type != NULL &&
+                    (kgpc_type_is_record(return_type) ||
+                     (return_type->kind == TYPE_KIND_ARRAY &&
+                      !kgpc_type_is_dynamic_array(return_type)) ||
+                     kgpc_type_is_shortstring(return_type) ||
+                     (return_type->type_alias != NULL && return_type->type_alias->is_shortstring)))
+                {
                     call_returns_record = 1;
+                }
             }
+            if (!call_returns_record && src_expr->resolved_kgpc_type != NULL)
+            {
+                KgpcType *src_type = src_expr->resolved_kgpc_type;
+                if (kgpc_type_is_record(src_type) ||
+                    (src_type->kind == TYPE_KIND_ARRAY &&
+                     !kgpc_type_is_dynamic_array(src_type)) ||
+                    (src_type->type_alias != NULL && src_type->type_alias->is_shortstring))
+                {
+                    call_returns_record = 1;
+                }
+            }
+            if (!call_returns_sret && call_returns_record && record_size > 8)
+                call_returns_sret = 1;
 
             /* Detect constructors even if the static type isn't a record (e.g., pointer return). */
             int is_constructor = 0;
@@ -2710,6 +2733,23 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                     is_constructor = 1;
                 else if (pascal_identifier_equals(func_mangled_name, "Create"))
                     is_constructor = 1;
+            }
+
+            /* Record static factories can also be named Create but they are not
+             * class constructors and must not use constructor/sret calling paths. */
+            if (is_constructor && expr_has_type_tag(dest_expr, RECORD_TYPE))
+                is_constructor = 0;
+            if (is_constructor && func_type != NULL && kgpc_type_is_procedure(func_type))
+            {
+                KgpcType *ret_type = kgpc_type_get_return_type(func_type);
+                if (ret_type == NULL ||
+                    !kgpc_type_is_pointer(ret_type) ||
+                    ret_type->info.points_to == NULL ||
+                    !kgpc_type_is_record(ret_type->info.points_to) ||
+                    !record_type_is_class(ret_type->info.points_to->info.record_info))
+                {
+                    is_constructor = 0;
+                }
             }
 
             if (call_returns_record || is_constructor)
@@ -2879,21 +2919,60 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                     }
                 }
                 
-                /* Normal record-returning function (non-constructor) */
-                const char *ret_ptr_reg = current_arg_reg64(0);
-                if (ret_ptr_reg == NULL)
+                /* Normal record-returning function via sret pointer. */
+                if (call_returns_sret)
                 {
-                    codegen_report_error(ctx,
-                        "ERROR: Unable to determine register for record return pointer.");
+                    const char *ret_ptr_reg = current_arg_reg64(0);
+                    if (ret_ptr_reg == NULL)
+                    {
+                        codegen_report_error(ctx,
+                            "ERROR: Unable to determine register for record return pointer.");
+                        free_reg(get_reg_stack(), dest_reg);
+                        return inst_list;
+                    }
+
+                    StackNode_t *dest_save_slot = add_l_x("__record_call_dest__", CODEGEN_POINTER_SIZE_BYTES);
+                    if (dest_save_slot == NULL)
+                    {
+                        codegen_report_error(ctx,
+                            "ERROR: Unable to reserve stack slot for record return destination.");
+                        free_reg(get_reg_stack(), dest_reg);
+                        return inst_list;
+                    }
+
+                    char buffer[128];
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                        dest_reg->bit_64, dest_save_slot->offset);
+                    inst_list = add_inst(inst_list, buffer);
+
+                    inst_list = codegen_pass_arguments(
+                        src_expr->expr_data.function_call_data.args_expr, inst_list, ctx,
+                        func_type,
+                        src_expr->expr_data.function_call_data.id, 1, src_expr);
+
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                        dest_save_slot->offset, ret_ptr_reg);
+                    inst_list = add_inst(inst_list, buffer);
+
+                    snprintf(buffer, sizeof(buffer), "\tcall\t%s\n",
+                        src_expr->expr_data.function_call_data.mangled_id);
+                    inst_list = add_inst(inst_list, buffer);
+                    inst_list = codegen_cleanup_call_stack(inst_list, ctx);
+                    codegen_release_function_call_mangled_id(src_expr);
+
                     free_reg(get_reg_stack(), dest_reg);
                     return inst_list;
                 }
+            }
 
-                StackNode_t *dest_save_slot = add_l_x("__record_call_dest__", CODEGEN_POINTER_SIZE_BYTES);
+            /* Small record returns (<= 8 bytes) are returned in registers, not via sret.
+             * Materialize the call result into a register and store the raw value bytes
+             * directly into the destination record slot. */
+            if (!is_constructor && call_returns_record && record_size <= 8)
+            {
+                StackNode_t *dest_save_slot = add_l_x("__small_record_dest__", CODEGEN_POINTER_SIZE_BYTES);
                 if (dest_save_slot == NULL)
                 {
-                    codegen_report_error(ctx,
-                        "ERROR: Unable to reserve stack slot for record return destination.");
                     free_reg(get_reg_stack(), dest_reg);
                     return inst_list;
                 }
@@ -2902,22 +2981,37 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                 snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
                     dest_reg->bit_64, dest_save_slot->offset);
                 inst_list = add_inst(inst_list, buffer);
+                free_reg(get_reg_stack(), dest_reg);
+                dest_reg = NULL;
 
-                inst_list = codegen_pass_arguments(
-                    src_expr->expr_data.function_call_data.args_expr, inst_list, ctx,
-                    func_type,
-                    src_expr->expr_data.function_call_data.id, 1, src_expr);
+                Register_t *value_reg = NULL;
+                inst_list = codegen_expr_with_result(src_expr, inst_list, ctx, &value_reg);
+                if (codegen_had_error(ctx) || value_reg == NULL)
+                {
+                    if (value_reg != NULL)
+                        free_reg(get_reg_stack(), value_reg);
+                    return inst_list;
+                }
 
+                dest_reg = get_free_reg(get_reg_stack(), &inst_list);
+                if (dest_reg == NULL)
+                {
+                    free_reg(get_reg_stack(), value_reg);
+                    return inst_list;
+                }
                 snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-                    dest_save_slot->offset, ret_ptr_reg);
+                    dest_save_slot->offset, dest_reg->bit_64);
                 inst_list = add_inst(inst_list, buffer);
 
-                snprintf(buffer, sizeof(buffer), "\tcall\t%s\n",
-                    src_expr->expr_data.function_call_data.mangled_id);
+                if (record_size <= 4)
+                    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, (%s)\n",
+                        value_reg->bit_32, dest_reg->bit_64);
+                else
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n",
+                        value_reg->bit_64, dest_reg->bit_64);
                 inst_list = add_inst(inst_list, buffer);
-                inst_list = codegen_cleanup_call_stack(inst_list, ctx);
-                codegen_release_function_call_mangled_id(src_expr);
 
+                free_reg(get_reg_stack(), value_reg);
                 free_reg(get_reg_stack(), dest_reg);
                 return inst_list;
             }
@@ -3048,6 +3142,58 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
             return inst_list;
         }
 
+        if (src_expr->type == EXPR_FUNCTION_CALL)
+        {
+            Register_t *src_addr_reg = NULL;
+            inst_list = codegen_address_for_expr(src_expr, inst_list, ctx, &src_addr_reg);
+            if (!codegen_had_error(ctx) && src_addr_reg != NULL)
+            {
+                Register_t *count_reg = get_free_reg(get_reg_stack(), &inst_list);
+                if (count_reg == NULL)
+                {
+                    free_reg(get_reg_stack(), src_addr_reg);
+                    free_reg(get_reg_stack(), dest_reg);
+                    return codegen_fail_register(ctx, inst_list, NULL,
+                        "ERROR: Unable to allocate register for function-call record copy size.");
+                }
+
+                char copy_buf[128];
+                snprintf(copy_buf, sizeof(copy_buf), "\tmovq\t$%lld, %s\n",
+                    record_size > 0 ? record_size : 1, count_reg->bit_64);
+                inst_list = add_inst(inst_list, copy_buf);
+
+                if (codegen_target_is_windows())
+                {
+                    snprintf(copy_buf, sizeof(copy_buf), "\tmovq\t%s, %%rcx\n", dest_reg->bit_64);
+                    inst_list = add_inst(inst_list, copy_buf);
+                    snprintf(copy_buf, sizeof(copy_buf), "\tmovq\t%s, %%rdx\n", src_addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, copy_buf);
+                    snprintf(copy_buf, sizeof(copy_buf), "\tmovq\t%s, %%r8\n", count_reg->bit_64);
+                    inst_list = add_inst(inst_list, copy_buf);
+                }
+                else
+                {
+                    snprintf(copy_buf, sizeof(copy_buf), "\tmovq\t%s, %%rdi\n", dest_reg->bit_64);
+                    inst_list = add_inst(inst_list, copy_buf);
+                    snprintf(copy_buf, sizeof(copy_buf), "\tmovq\t%s, %%rsi\n", src_addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, copy_buf);
+                    snprintf(copy_buf, sizeof(copy_buf), "\tmovq\t%s, %%rdx\n", count_reg->bit_64);
+                    inst_list = add_inst(inst_list, copy_buf);
+                }
+
+                inst_list = codegen_vect_reg(inst_list, 0);
+                inst_list = add_inst(inst_list, "\tcall\tkgpc_memcpy_wrapper\n");
+                free_arg_regs();
+
+                free_reg(get_reg_stack(), count_reg);
+                free_reg(get_reg_stack(), src_addr_reg);
+                free_reg(get_reg_stack(), dest_reg);
+                return inst_list;
+            }
+            if (src_addr_reg != NULL)
+                free_reg(get_reg_stack(), src_addr_reg);
+        }
+
         codegen_report_error(ctx,
             "ERROR: Unsupported record-valued source expression (type=%d).", src_expr ? src_expr->type : -1);
         free_reg(get_reg_stack(), dest_reg);
@@ -3145,18 +3291,7 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
         }
     }
 
-    Register_t *count_reg = get_free_reg(get_reg_stack(), &inst_list);
-    if (count_reg == NULL)
-    {
-        free_reg(get_reg_stack(), dest_reg);
-        free_reg(get_reg_stack(), src_reg);
-        return codegen_fail_register(ctx, inst_list, NULL,
-            "ERROR: Unable to allocate register for record copy size.");
-    }
-
     char buffer[128];
-    snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n", record_size, count_reg->bit_64);
-    inst_list = add_inst(inst_list, buffer);
 
     if (codegen_target_is_windows())
     {
@@ -3164,7 +3299,7 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
         inst_list = add_inst(inst_list, buffer);
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", src_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r8\n", count_reg->bit_64);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %%r8\n", record_size);
         inst_list = add_inst(inst_list, buffer);
     }
     else
@@ -3173,7 +3308,7 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
         inst_list = add_inst(inst_list, buffer);
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", src_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", count_reg->bit_64);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %%rdx\n", record_size);
         inst_list = add_inst(inst_list, buffer);
     }
 
@@ -3182,7 +3317,6 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
 
     free_reg(get_reg_stack(), dest_reg);
     free_reg(get_reg_stack(), src_reg);
-    free_reg(get_reg_stack(), count_reg);
     free_arg_regs();
     return inst_list;
 }
@@ -6545,7 +6679,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
 
     /* ShortStrings need record-like handling when assigned from function calls
      * because they use SRET (struct return) convention */
-    if (codegen_expr_is_shortstring_array(var_expr) &&
+    if ((expr_get_type_tag(var_expr) == SHORTSTRING_TYPE ||
+         codegen_expr_is_shortstring_array(var_expr)) &&
         !expr_is_dynamic_array(var_expr) &&
         assign_expr != NULL && assign_expr->type == EXPR_FUNCTION_CALL)
         return codegen_assign_record_value(var_expr, assign_expr, inst_list, ctx);
@@ -6867,23 +7002,21 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             if (is_single_target)
                 use_qword = 0;
             if (!var->is_reference && var->size >= 8 &&
-                (var_expr == NULL || var_expr->type != EXPR_RECORD_ACCESS))
+                (var_expr == NULL || var_expr->type != EXPR_RECORD_ACCESS) &&
+                !is_single_target)
                 use_qword = 1;
             
             /* For Single targets with real source, convert double to single precision.
              * Only convert if the source expression is a real type (double), not integer etc. */
             if (is_single_target && assign_type == REAL_TYPE)
             {
-                int source_is_qword_real = expr_uses_qword_kgpctype(assign_expr);
-                if (source_is_qword_real)
-                {
-                    /* Source is double-width real bits in GP register; narrow to single. */
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm0\n", reg->bit_64);
-                    inst_list = add_inst(inst_list, buffer);
-                    inst_list = add_inst(inst_list, "\tcvtsd2ss\t%xmm0, %xmm0\n");
-                    snprintf(buffer, sizeof(buffer), "\tmovd\t%%xmm0, %s\n", reg->bit_32);
-                    inst_list = add_inst(inst_list, buffer);
-                }
+                /* Real expressions are materialized at double precision in registers.
+                 * Narrow to Single before storing into a Single target. */
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm0\n", reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                inst_list = add_inst(inst_list, "\tcvtsd2ss\t%xmm0, %xmm0\n");
+                snprintf(buffer, sizeof(buffer), "\tmovd\t%%xmm0, %s\n", reg->bit_32);
+                inst_list = add_inst(inst_list, buffer);
             }
             else if (is_single_target &&
                 (is_integer_type(assign_type) || assign_type == BOOL ||
