@@ -1193,11 +1193,8 @@ begin
 end;
 
 class function TObject.ClassParent: TClass;
-var
-    parent_ptr: Pointer;
 begin
-    parent_ptr := kgpc_class_parent(Self);
-    ClassParent := TClass(parent_ptr);
+    ClassParent := kgpc_class_parent(Self);
 end;
 
 class procedure TObject.GetLastCastErrorInfo(out aFrom, aTo: ShortString);
@@ -1228,8 +1225,14 @@ begin
 end;
 
 function TObject.ToString: String;
+var
+    name_ptr: PAnsiChar;
 begin
-    ToString := ClassName;
+    name_ptr := kgpc_class_name(Self);
+    if name_ptr = nil then
+        ToString := ''
+    else
+        ToString := name_ptr;
 end;
 
 begin

@@ -788,29 +788,11 @@ static void mark_unit_subprograms(ListNode_t *sub_list)
         {
             Tree_t *sub = (Tree_t *)node->cur;
             if (sub->type == TREE_SUBPROGRAM)
-            {
                 sub->tree_data.subprogram_data.defined_in_unit = 1;
-                ListNode_t *arg = sub->tree_data.subprogram_data.args_var;
-                while (arg != NULL)
-                {
-                    if (arg->type == LIST_TREE && arg->cur != NULL)
-                    {
-                        Tree_t *decl = (Tree_t *)arg->cur;
-                        if (decl->type == TREE_VAR_DECL)
-                            decl->tree_data.var_decl_data.defined_in_unit = 1;
-                        else if (decl->type == TREE_ARR_DECL)
-                            decl->tree_data.arr_decl_data.defined_in_unit = 1;
-                    }
-                    arg = arg->next;
-                }
-            }
         }
         node = node->next;
     }
 }
-
-/* Move only exported/interface subprogram declarations (no body) out of a unit
- * subprogram list. Implementation bodies must not leak into importing units. */
 
 static void mark_unit_type_decls(ListNode_t *type_list, int is_public)
 {
@@ -1038,9 +1020,36 @@ static void merge_unit_into_target(Tree_t *target, Tree_t *unit_tree)
     *var_list = ConcatList(*var_list, unit_tree->tree_data.unit_data.interface_var_decls);
     unit_tree->tree_data.unit_data.interface_var_decls = NULL;
 
-    /* Do NOT merge implementation declarations from imported units.
-     * Only interface symbols are visible to unit consumers. Keeping impl-local
-     * types/vars/consts out prevents name collisions (e.g. tsiginfo). */
+    mark_unit_type_decls(unit_tree->tree_data.unit_data.implementation_type_decls, 0);
+    if (getenv("KGPC_DEBUG_TFPG") != NULL) {
+        ListNode_t *dbg = unit_tree->tree_data.unit_data.implementation_type_decls;
+        while (dbg != NULL) {
+            if (dbg->type == LIST_TREE) {
+                Tree_t *decl = (Tree_t *)dbg->cur;
+                if (decl != NULL && decl->type == TREE_TYPE_DECL &&
+                    decl->tree_data.type_decl_data.id != NULL)
+                {
+                    fprintf(stderr, "[KGPC] merging impl type %s from unit %s\n",
+                            decl->tree_data.type_decl_data.id,
+                            unit_tree->tree_data.unit_data.unit_id != NULL ?
+                                unit_tree->tree_data.unit_data.unit_id : "<unknown>");
+                }
+            }
+            dbg = dbg->next;
+        }
+    }
+    /* Append implementation types to keep dependencies ahead of targets. */
+    *type_list = ConcatList(*type_list, unit_tree->tree_data.unit_data.implementation_type_decls);
+    unit_tree->tree_data.unit_data.implementation_type_decls = NULL;
+
+    mark_unit_const_decls(unit_tree->tree_data.unit_data.implementation_const_decls, 0);
+    /* Append implementation constants to keep dependencies ahead of targets. */
+    *const_list = ConcatList(*const_list, unit_tree->tree_data.unit_data.implementation_const_decls);
+    unit_tree->tree_data.unit_data.implementation_const_decls = NULL;
+
+    mark_unit_var_decls(unit_tree->tree_data.unit_data.implementation_var_decls, 0);
+    *var_list = ConcatList(*var_list, unit_tree->tree_data.unit_data.implementation_var_decls);
+    unit_tree->tree_data.unit_data.implementation_var_decls = NULL;
 
     mark_unit_subprograms(unit_tree->tree_data.unit_data.subprograms);
     *sub_list = ConcatList(*sub_list, unit_tree->tree_data.unit_data.subprograms);
@@ -1438,9 +1447,6 @@ int main(int argc, char **argv)
         /* Load used units */
         UnitSet visited_units;
         unit_set_init(&visited_units);
-        if (user_tree->tree_data.unit_data.unit_id != NULL)
-            unit_set_add(&visited_units,
-                lowercase_copy(user_tree->tree_data.unit_data.unit_id));
         
         /* NOTE: For FPC compatibility, system types (SizeInt, PAnsiChar, etc.)
          * are now included in the system prelude and available to all compilations.
