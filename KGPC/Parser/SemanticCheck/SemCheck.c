@@ -19,8 +19,12 @@
 #include <time.h>
 #ifndef _WIN32
 #include <strings.h>
+#include <unistd.h>
+#include <fcntl.h>
 #else
 #define strcasecmp _stricmp
+#include <io.h>
+#include <fcntl.h>
 #endif
 #include <math.h>
 #include "SemCheck.h"
@@ -8007,13 +8011,23 @@ static void prepush_trivial_imported_consts(SymTab_t *symtab, ListNode_t *const_
         }
         else if (value_expr->type == EXPR_FUNCTION_CALL)
         {
-            /* Try full const evaluation silently for expressions like Low()/High() */
+            /* Try full const evaluation silently for expressions like Low()/High().
+             * Redirect stderr fd to suppress error messages from failed evaluations. */
             long long val = 0;
-            FILE *saved_stderr = stderr;
-            stderr = fopen("/dev/null", "w");
+            int saved_fd = -1;
+#ifdef _WIN32
+            saved_fd = _dup(2);
+            { FILE *devnull = fopen("NUL", "w"); if (devnull) { _dup2(_fileno(devnull), 2); fclose(devnull); } }
+#else
+            saved_fd = dup(2);
+            { int devnull = open("/dev/null", O_WRONLY); if (devnull >= 0) { dup2(devnull, 2); close(devnull); } }
+#endif
             int ok = evaluate_const_expr(symtab, value_expr, &val);
-            fclose(stderr);
-            stderr = saved_stderr;
+#ifdef _WIN32
+            if (saved_fd >= 0) { _dup2(saved_fd, 2); _close(saved_fd); }
+#else
+            if (saved_fd >= 0) { dup2(saved_fd, 2); close(saved_fd); }
+#endif
             if (ok == 0)
             {
                 PushConstOntoScope(symtab, tree->tree_data.const_decl_data.id, val);
@@ -8029,10 +8043,19 @@ static void prepush_trivial_imported_consts(SymTab_t *symtab, ListNode_t *const_
             {
                 /* Also try real const evaluation */
                 double rval = 0.0;
-                stderr = fopen("/dev/null", "w");
+#ifdef _WIN32
+                saved_fd = _dup(2);
+                { FILE *devnull = fopen("NUL", "w"); if (devnull) { _dup2(_fileno(devnull), 2); fclose(devnull); } }
+#else
+                saved_fd = dup(2);
+                { int devnull = open("/dev/null", O_WRONLY); if (devnull >= 0) { dup2(devnull, 2); close(devnull); } }
+#endif
                 ok = evaluate_real_const_expr(symtab, value_expr, &rval);
-                fclose(stderr);
-                stderr = saved_stderr;
+#ifdef _WIN32
+                if (saved_fd >= 0) { _dup2(saved_fd, 2); _close(saved_fd); }
+#else
+                if (saved_fd >= 0) { dup2(saved_fd, 2); close(saved_fd); }
+#endif
                 if (ok == 0)
                 {
                     PushRealConstOntoScope(symtab, tree->tree_data.const_decl_data.id, rval);
