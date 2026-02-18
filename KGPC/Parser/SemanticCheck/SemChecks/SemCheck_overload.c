@@ -198,7 +198,21 @@ int semcheck_candidates_share_signature(SymTab_t *symtab, HashNode_t *a, HashNod
         int type_a = resolve_param_type(decl_a, symtab);
         int type_b = resolve_param_type(decl_b, symtab);
         if (type_a != type_b)
-            return 0;
+        {
+            int owns_a = 0;
+            int owns_b = 0;
+            int same_kgpc = 0;
+            KgpcType *kg_a = resolve_type_from_vardecl(decl_a, symtab, &owns_a);
+            KgpcType *kg_b = resolve_type_from_vardecl(decl_b, symtab, &owns_b);
+            if (kg_a != NULL && kg_b != NULL && kgpc_type_equals(kg_a, kg_b))
+                same_kgpc = 1;
+            if (owns_a && kg_a != NULL)
+                destroy_kgpc_type(kg_a);
+            if (owns_b && kg_b != NULL)
+                destroy_kgpc_type(kg_b);
+            if (!same_kgpc && !are_primitive_tags_compatible(type_a, type_b))
+                return 0;
+        }
         if (type_a == POINTER_TYPE)
         {
             const char *id_a = semcheck_get_param_type_id(decl_a);
@@ -1239,6 +1253,26 @@ static int semcheck_compare_match_quality(int arg_count,
     return 0;
 }
 
+static int semcheck_quality_penalty_sum(int arg_count, const MatchQuality *q)
+{
+    if (q == NULL || arg_count <= 0)
+        return 0;
+
+    int total = 0;
+    for (int i = 0; i < arg_count; ++i)
+    {
+        int p = 0;
+        p += q[i].kind * 100;
+        p += q[i].int_promo_rank * 10;
+        p += q[i].char_promo_rank * 10;
+        p -= q[i].exact_type_id ? 3 : 0;
+        p -= q[i].exact_pointer_subtype ? 2 : 0;
+        p -= q[i].exact_array_elem ? 1 : 0;
+        total += p;
+    }
+    return total;
+}
+
 /* Count untyped var params in a candidate's parameter list */
 static int semcheck_count_untyped_params(HashNode_t *candidate)
 {
@@ -2092,7 +2126,25 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                 else
                 {
                     num_best++;
-                    free(qualities);
+                    /* Mixed partial-order tie: choose lower aggregate penalty
+                     * before declaring true ambiguity. This helps pick the
+                     * more specific candidate in bootstrap overload sets where
+                     * alias/pointer exactness and promotions otherwise produce
+                     * non-dominating vectors. */
+                    int cand_penalty = semcheck_quality_penalty_sum(given_count, qualities);
+                    int best_penalty = semcheck_quality_penalty_sum(given_count, best_qualities);
+                    if (cand_penalty < best_penalty)
+                    {
+                        free(best_qualities);
+                        best_match = candidate;
+                        best_qualities = qualities;
+                        best_missing = missing_args;
+                        num_best = 1;
+                    }
+                    else
+                    {
+                        free(qualities);
+                    }
                 }
             }
         }

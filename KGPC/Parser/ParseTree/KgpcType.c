@@ -55,6 +55,7 @@ static HashNode_t *kgpc_find_type_node_with_unit_flag(SymTab_t *symtab,
         return NULL;
 
     HashNode_t *fallback = NULL;
+    HashNode_t *fallback_outermost = NULL;
     ListNode_t *cur = symtab->stack_head;
     while (cur != NULL)
     {
@@ -66,6 +67,7 @@ static HashNode_t *kgpc_find_type_node_with_unit_flag(SymTab_t *symtab,
                 return node;
             if (fallback == NULL)
                 fallback = node;
+            fallback_outermost = node;
         }
         cur = cur->next;
     }
@@ -77,6 +79,17 @@ static HashNode_t *kgpc_find_type_node_with_unit_flag(SymTab_t *symtab,
             return builtin;
         if (fallback == NULL)
             fallback = builtin;
+    }
+
+    /* Imported declarations should prefer unit-defined symbols, but if absent
+     * they must bind to outer/prelude types rather than local shadows.
+     * Example: prefer UnixType.TSize over local Types.TSize; if UnixType.TSize
+     * is absent, still allow global System aliases. */
+    if (defined_in_unit)
+    {
+        if (builtin != NULL && builtin->hash_type == HASHTYPE_TYPE)
+            return builtin;
+        return fallback_outermost;
     }
 
     return fallback;
@@ -584,6 +597,26 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
 
     int var_type_tag = var_decl->tree_data.var_decl_data.type;
     const char *type_id = var_decl->tree_data.var_decl_data.type_id;
+    int is_imported_decl = var_decl->tree_data.var_decl_data.defined_in_unit;
+
+    /* In imported Unix/C declarations, "TSize/tsize" should resolve to
+     * the C alias (size_t), not to local GUI record types with the same name. */
+    if (is_imported_decl && type_id != NULL &&
+        (pascal_identifier_equals(type_id, "TSize") || pascal_identifier_equals(type_id, "tsize")) &&
+        symtab != NULL)
+    {
+        struct HashNode *size_node = kgpc_find_type_node_with_unit_flag(symtab, "size_t", 1);
+        if (size_node == NULL)
+            size_node = kgpc_find_type_node(symtab, "size_t");
+        if (size_node != NULL && size_node->type != NULL &&
+            size_node->type->kind != TYPE_KIND_RECORD)
+        {
+            if (owns_type != NULL)
+                *owns_type = 0;
+            kgpc_type_retain(size_node->type);
+            return size_node->type;
+        }
+    }
 
     if (var_type_tag == ARRAY_OF_CONST_TYPE)
     {
@@ -717,11 +750,39 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
             return create_primitive_type(builtin_tag);
         }
         
-        if (var_type_tag == UNKNOWN_TYPE || var_type_tag == -1)
+        /* Named type lookup failed. For imported declarations, do not fall
+         * back to legacy aggregate tags (record/array/etc): that can silently
+         * reinterpret aliased names (e.g. TSize) as unrelated local types.
+         * Primitive tags remain safe to materialize directly. */
+        if (is_imported_decl)
         {
-            /* If we couldn't resolve the named type, return NULL */
-            return NULL;
+            switch (var_type_tag)
+            {
+                case BOOL:
+                case CHAR_TYPE:
+                case STRING_TYPE:
+                case SHORTSTRING_TYPE:
+                case POINTER_TYPE:
+                case FILE_TYPE:
+                case TEXT_TYPE:
+                case REAL_TYPE:
+                case INT_TYPE:
+                case LONGINT_TYPE:
+                case INT64_TYPE:
+                case BYTE_TYPE:
+                case WORD_TYPE:
+                case LONGWORD_TYPE:
+                case QWORD_TYPE:
+                    if (owns_type != NULL)
+                        *owns_type = 1;
+                    return create_primitive_type(var_type_tag);
+                default:
+                    return NULL;
+            }
         }
+
+        if (var_type_tag == UNKNOWN_TYPE || var_type_tag == -1)
+            return NULL;
     }
 
     /* For primitive types, create a KgpcType - caller owns this */

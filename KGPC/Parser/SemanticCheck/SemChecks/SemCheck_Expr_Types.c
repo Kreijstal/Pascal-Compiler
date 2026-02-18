@@ -1317,10 +1317,11 @@ int semcheck_recordaccess(int *type_return,
     {
         char *unit_id = record_expr->expr_data.id;
         HashNode_t *unit_check = NULL;
+        int unit_is_qualifier = semcheck_is_unit_name(unit_id);
         
         /* Check if the "unit name" identifier exists in symbol table */
         int find_result = FindIdent(&unit_check, symtab, unit_id);
-        if (find_result == -1)
+        if (find_result == -1 || unit_is_qualifier)
         {
             /* Identifier not found - might be a unit qualifier.
              * Try to look up the field_id directly as it may be an exported constant/var. */
@@ -1518,15 +1519,6 @@ int semcheck_recordaccess(int *type_return,
     }
     else if (record_type == POINTER_TYPE)
     {
-        if (record_info == NULL && record_expr->pointer_subtype_id != NULL)
-        {
-            HashNode_t *target_node = NULL;
-            if (FindIdent(&target_node, symtab, record_expr->pointer_subtype_id) != -1 &&
-                target_node != NULL)
-            {
-                record_info = get_record_type_from_node(target_node);
-            }
-        }
         /* Try resolved KgpcType pointer target */
         if (record_info == NULL && record_expr->resolved_kgpc_type != NULL &&
             record_expr->resolved_kgpc_type->kind == TYPE_KIND_POINTER) {
@@ -1534,6 +1526,15 @@ int semcheck_recordaccess(int *type_return,
             if (pointee != NULL && kgpc_type_is_record(pointee)) {
                 record_info = kgpc_type_get_record(pointee);
             }
+        }
+        if (record_info == NULL && record_expr->pointer_subtype_id != NULL)
+        {
+            HashNode_t *target_node =
+                semcheck_find_type_node_with_kgpc_type(symtab, record_expr->pointer_subtype_id);
+            if (target_node == NULL)
+                FindIdent(&target_node, symtab, record_expr->pointer_subtype_id);
+            if (target_node != NULL)
+                record_info = get_record_type_from_node(target_node);
         }
 
         if (record_info == NULL)
@@ -1629,7 +1630,8 @@ int semcheck_recordaccess(int *type_return,
 
     if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
         fprintf(stderr, "[SemCheck] semcheck_recordaccess: record_info=%p, is_class=%d\n",
-            record_info, record_info ? record_type_is_class(record_info) : -1);
+            record_info,
+            record_info ? record_type_is_class(record_info) : -1);
     }
 
     if (record_info == NULL)
@@ -1648,6 +1650,34 @@ int semcheck_recordaccess(int *type_return,
     int silent_mode = 1;  /* Always use silent mode - we'll print a better error later if needed */
     if (resolve_record_field(symtab, record_info, field_id, &field_desc,
             &field_offset, expr->line_num, silent_mode) != 0 || field_desc == NULL)
+    {
+        if (record_info != NULL && record_info->type_id != NULL)
+        {
+            ListNode_t *type_matches = FindAllIdents(symtab, record_info->type_id);
+            for (ListNode_t *mcur = type_matches; mcur != NULL; mcur = mcur->next)
+            {
+                HashNode_t *mnode = (HashNode_t *)mcur->cur;
+                if (mnode == NULL || mnode->hash_type != HASHTYPE_TYPE)
+                    continue;
+                struct RecordType *alt_record = get_record_type_from_node(mnode);
+                if (alt_record == NULL || alt_record == record_info)
+                    continue;
+                struct RecordField *alt_field = NULL;
+                long long alt_offset = 0;
+                if (resolve_record_field(symtab, alt_record, field_id, &alt_field,
+                        &alt_offset, expr->line_num, 1) == 0 && alt_field != NULL)
+                {
+                    record_info = alt_record;
+                    field_desc = alt_field;
+                    field_offset = alt_offset;
+                    break;
+                }
+            }
+            if (type_matches != NULL)
+                DestroyList(type_matches);
+        }
+    }
+    if (field_desc == NULL)
     {
         if (record_type_is_class(record_info) || record_info->is_type_helper)
         {
