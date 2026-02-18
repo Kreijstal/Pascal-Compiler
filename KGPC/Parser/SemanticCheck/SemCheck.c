@@ -9819,9 +9819,6 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     const char *dot = strrchr(owner_tail, '.');
                     if (dot != NULL && dot[1] != '\0')
                         owner_tail = dot + 1;
-                    const char *dollar = strrchr(owner_tail, '$');
-                    if (dollar != NULL && dollar[1] != '\0')
-                        owner_tail = dollar + 1;
                 }
                 if (owner_id != NULL &&
                     (pascal_identifier_equals(decl_type_id, owner_id) ||
@@ -12586,7 +12583,8 @@ int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scop
         Tree_t *child = (Tree_t *)cur->cur;
         if (child != NULL &&
             child->tree_data.subprogram_data.defined_in_unit &&
-            child->tree_data.subprogram_data.statement_list != NULL)
+            child->tree_data.subprogram_data.statement_list != NULL &&
+            getenv("KGPC_SKIP_IMPORTED_IMPL_BODIES") != NULL)
         {
             /* Imported unit implementation bodies are not part of the consumer
              * unit's semantic pass. Keep declarations (pass 1) but skip bodies. */
