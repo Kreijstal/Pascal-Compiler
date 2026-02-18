@@ -1501,6 +1501,10 @@ int main(int argc, char **argv)
 
         int sem_result = 0;
         double sem_start = track_time ? current_time_seconds() : 0.0;
+        if (g_skip_stdlib)
+            setenv("KGPC_SKIP_IMPORTED_IMPL_BODIES", "1", 1);
+        else
+            unsetenv("KGPC_SKIP_IMPORTED_IMPL_BODIES");
         SymTab_t *symtab = start_semcheck(user_tree, &sem_result);
         if (track_time)
             g_time_semantic += current_time_seconds() - sem_start;
@@ -1712,6 +1716,10 @@ int main(int argc, char **argv)
     
     int sem_result = 0;
     double sem_start = track_time ? current_time_seconds() : 0.0;
+    if (g_skip_stdlib)
+        setenv("KGPC_SKIP_IMPORTED_IMPL_BODIES", "1", 1);
+    else
+        unsetenv("KGPC_SKIP_IMPORTED_IMPL_BODIES");
     SymTab_t *symtab = start_semcheck(user_tree, &sem_result);
     if (track_time)
         g_time_semantic += current_time_seconds() - sem_start;
