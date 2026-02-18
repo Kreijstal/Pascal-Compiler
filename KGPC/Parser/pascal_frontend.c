@@ -577,7 +577,9 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
         "FPC_HAS_FEATURE_EXITCODE", "FPC_HAS_FEATURE_RESOURCES",
         "FPC_HAS_FEATURE_COMMANDARGS", "FPC_HAS_FEATURE_PROCESSES",
         "FPC_HAS_FEATURE_THREADING", "FPC_HAS_FEATURE_DYNLIBS",
-        "FPC_HAS_FEATURE_OBJECTIVEC1", "FPC_HAS_FEATURE_STACKCHECK"
+        "FPC_HAS_FEATURE_OBJECTIVEC1", "FPC_HAS_FEATURE_STACKCHECK",
+        // FPC floating-point type availability (x86_64 supports all three)
+        "FPC_HAS_TYPE_SINGLE", "FPC_HAS_TYPE_DOUBLE", "FPC_HAS_TYPE_EXTENDED"
     };
     for (size_t i = 0; i < sizeof(default_symbols) / sizeof(default_symbols[0]); ++i)
     {
