@@ -154,6 +154,84 @@ static void semcheck_compute_array_linearization(SymTab_t *symtab,
     }
 }
 
+static int semcheck_candidate_is_owner_method(HashNode_t *candidate, const char *owner_type_id)
+{
+    if (candidate == NULL || owner_type_id == NULL || owner_type_id[0] == '\0')
+        return 0;
+
+    if (candidate->mangled_id == NULL)
+        return 0;
+
+    size_t owner_len = strlen(owner_type_id);
+    return strncmp(candidate->mangled_id, owner_type_id, owner_len) == 0 &&
+        candidate->mangled_id[owner_len] == '_' &&
+        candidate->mangled_id[owner_len + 1] == '_';
+}
+
+static ListNode_t *semcheck_find_outer_idents_excluding_owner_methods(
+    SymTab_t *symtab, const char *id, const char *owner_type_id)
+{
+    if (symtab == NULL || id == NULL || owner_type_id == NULL || owner_type_id[0] == '\0')
+        return NULL;
+
+    for (ListNode_t *scope = symtab->stack_head; scope != NULL; scope = scope->next)
+    {
+        HashTable_t *table = (HashTable_t *)scope->cur;
+        if (table == NULL)
+            continue;
+
+        ListNode_t *matches = FindAllIdentsInTable(table, (char *)id);
+        if (matches == NULL)
+            continue;
+
+        ListNode_t *filtered = NULL;
+        ListNode_t *tail = NULL;
+        for (ListNode_t *cur = matches; cur != NULL; cur = cur->next)
+        {
+            HashNode_t *candidate = (HashNode_t *)cur->cur;
+            if (semcheck_candidate_is_owner_method(candidate, owner_type_id))
+                continue;
+
+            ListNode_t *node = CreateListNode(candidate, LIST_UNSPECIFIED);
+            if (node == NULL)
+                continue;
+            if (filtered == NULL)
+                filtered = node;
+            else
+                tail->next = node;
+            tail = node;
+        }
+        DestroyList(matches);
+
+        if (filtered != NULL)
+            return filtered;
+    }
+
+    ListNode_t *builtin_matches = FindAllIdentsInTable(symtab->builtins, (char *)id);
+    if (builtin_matches == NULL)
+        return NULL;
+
+    ListNode_t *filtered_builtins = NULL;
+    ListNode_t *tail = NULL;
+    for (ListNode_t *cur = builtin_matches; cur != NULL; cur = cur->next)
+    {
+        HashNode_t *candidate = (HashNode_t *)cur->cur;
+        if (semcheck_candidate_is_owner_method(candidate, owner_type_id))
+            continue;
+
+        ListNode_t *node = CreateListNode(candidate, LIST_UNSPECIFIED);
+        if (node == NULL)
+            continue;
+        if (filtered_builtins == NULL)
+            filtered_builtins = node;
+        else
+            tail->next = node;
+        tail = node;
+    }
+    DestroyList(builtin_matches);
+    return filtered_builtins;
+}
+
 
 /** ARRAY_ACCESS **/
 int semcheck_arrayaccess(int *type_return,
@@ -1183,6 +1261,25 @@ int semcheck_funccall(int *type_return,
 
                     if (method_node != NULL)
                     {
+                        int method_is_overloaded = 0;
+                        if (self_record != NULL && self_record->type_id != NULL && id != NULL)
+                        {
+                            char overload_name[256];
+                            snprintf(overload_name, sizeof(overload_name), "%s__%s",
+                                self_record->type_id, id);
+                            ListNode_t *method_overloads = FindAllIdents(symtab, overload_name);
+                            if (method_overloads != NULL)
+                            {
+                                method_is_overloaded = (method_overloads->next != NULL);
+                                DestroyList(method_overloads);
+                            }
+                        }
+                        if (method_is_overloaded && mangled_name != NULL)
+                        {
+                            free(mangled_name);
+                            mangled_name = NULL;
+                        }
+
                         const char *method_owner_name = NULL;
                         char owner_buf[256];
                         if (method_node->mangled_id != NULL)
@@ -1232,9 +1329,11 @@ int semcheck_funccall(int *type_return,
                             expr->expr_data.function_call_data.args_expr = self_arg;
                             args_given = self_arg;
                         }
-                        if (expr->expr_data.function_call_data.resolved_func == NULL)
+                        if (!method_is_overloaded &&
+                            expr->expr_data.function_call_data.resolved_func == NULL)
                             expr->expr_data.function_call_data.resolved_func = method_node;
-                        if (expr->expr_data.function_call_data.mangled_id == NULL)
+                        if (!method_is_overloaded &&
+                            expr->expr_data.function_call_data.mangled_id == NULL)
                         {
                             const char *resolved_name = method_node->mangled_id ?
                                 method_node->mangled_id :
@@ -1243,7 +1342,7 @@ int semcheck_funccall(int *type_return,
                                 expr->expr_data.function_call_data.mangled_id = strdup(resolved_name);
                         }
                         /* Set call_kgpc_type for correct calling convention (e.g., float Self in xmm0) */
-                        if (method_node->type != NULL) {
+                        if (!method_is_overloaded && method_node->type != NULL) {
                             semcheck_expr_set_call_kgpc_type(expr, method_node->type, 0);
                             expr->expr_data.function_call_data.call_hash_type = method_node->hash_type;
                             expr->expr_data.function_call_data.is_call_info_valid = 1;
@@ -2090,6 +2189,14 @@ int semcheck_funccall(int *type_return,
                 }
                 if (method_node != NULL)
                 {
+                    int method_is_overloaded = (method_candidates != NULL &&
+                        method_candidates->next != NULL);
+                    if (method_is_overloaded && mangled_name != NULL)
+                    {
+                        free(mangled_name);
+                        mangled_name = NULL;
+                    }
+
                     if (is_static_owner_method && args_given != NULL && args_given->cur != NULL)
                     {
                         struct Expression *first_arg = (struct Expression *)args_given->cur;
@@ -2244,22 +2351,33 @@ int semcheck_funccall(int *type_return,
                         }
                     }
 
-                    set_type_from_hashtype(type_return, method_node);
-                    semcheck_expr_set_resolved_kgpc_type_shared(expr, method_node->type);
-                    expr->expr_data.function_call_data.resolved_func = method_node;
-                    const char *resolved_method_name = (method_node->mangled_id != NULL) ?
-                        method_node->mangled_id : method_node->id;
-                    if (expr->expr_data.function_call_data.mangled_id != NULL)
-                        free(expr->expr_data.function_call_data.mangled_id);
-                    expr->expr_data.function_call_data.mangled_id =
-                        (resolved_method_name != NULL) ? strdup(resolved_method_name) : NULL;
+                    if (!method_is_overloaded)
+                    {
+                        set_type_from_hashtype(type_return, method_node);
+                        semcheck_expr_set_resolved_kgpc_type_shared(expr, method_node->type);
+                        expr->expr_data.function_call_data.resolved_func = method_node;
+                        const char *resolved_method_name = (method_node->mangled_id != NULL) ?
+                            method_node->mangled_id : method_node->id;
+                        if (expr->expr_data.function_call_data.mangled_id != NULL)
+                            free(expr->expr_data.function_call_data.mangled_id);
+                        expr->expr_data.function_call_data.mangled_id =
+                            (resolved_method_name != NULL) ? strdup(resolved_method_name) : NULL;
 
-                    if (mangled_name != NULL)
-                        free(mangled_name);
-                    /* Keep the exact selected overload mangled id so overload resolution
-                     * cannot drift to a different same-named method. */
-                    mangled_name = (resolved_method_name != NULL) ? strdup(resolved_method_name)
-                                                                  : (mangled_method_name != NULL ? strdup(mangled_method_name) : NULL);
+                        if (mangled_name != NULL)
+                            free(mangled_name);
+                        /* Keep the exact selected overload mangled id so overload resolution
+                         * cannot drift to a different same-named method. */
+                        mangled_name = (resolved_method_name != NULL) ? strdup(resolved_method_name)
+                                                                      : (mangled_method_name != NULL ? strdup(mangled_method_name) : NULL);
+                    }
+                    else
+                    {
+                        if (expr->expr_data.function_call_data.mangled_id != NULL)
+                        {
+                            free(expr->expr_data.function_call_data.mangled_id);
+                            expr->expr_data.function_call_data.mangled_id = NULL;
+                        }
+                    }
 
                     if (method_candidates != NULL)
                     {
@@ -3222,6 +3340,35 @@ int semcheck_funccall(int *type_return,
 
     if (id != NULL) {
         overload_candidates = FindAllIdents(symtab, id);
+    }
+    if (id != NULL && args_given != NULL)
+    {
+        struct Expression *first_arg = (struct Expression *)args_given->cur;
+        int explicit_self_first = (first_arg != NULL &&
+            first_arg->type == EXPR_VAR_ID &&
+            first_arg->expr_data.id != NULL &&
+            pascal_identifier_equals(first_arg->expr_data.id, "Self"));
+
+        if (explicit_self_first)
+        {
+            const char *current_owner = semcheck_get_current_method_owner();
+            struct RecordType *owner_record = NULL;
+            if (current_owner != NULL)
+                owner_record = semcheck_lookup_record_type(symtab, current_owner);
+
+            if (owner_record != NULL && owner_record->is_type_helper &&
+                owner_record->type_id != NULL)
+            {
+                ListNode_t *filtered = semcheck_find_outer_idents_excluding_owner_methods(
+                    symtab, id, owner_record->type_id);
+                if (filtered != NULL)
+                {
+                    if (overload_candidates != NULL)
+                        destroy_list(overload_candidates);
+                    overload_candidates = filtered;
+                }
+            }
+        }
     }
     if (overload_candidates == NULL && id != NULL && args_given != NULL)
     {

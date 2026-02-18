@@ -70,10 +70,36 @@ except ValueError:
     TEST_CASE_TIMEOUT = 300
 
 # Number of parallel workers for test execution (0 = sequential).
+DEFAULT_PARALLEL_WORKERS = max(1, (os.cpu_count() or 1) * 5)
 try:
-    PARALLEL_WORKERS = int(os.environ.get("KGPC_PARALLEL_WORKERS", "0"))
+    PARALLEL_WORKERS = int(
+        os.environ.get("KGPC_PARALLEL_WORKERS", str(DEFAULT_PARALLEL_WORKERS))
+    )
 except ValueError:
-    PARALLEL_WORKERS = 0
+    PARALLEL_WORKERS = DEFAULT_PARALLEL_WORKERS
+
+# Cap concurrent compiler subprocesses in parallel test mode to avoid
+# non-deterministic codegen failures under extreme process pressure.
+DEFAULT_COMPILER_PARALLEL_LIMIT = 1
+try:
+    COMPILER_PARALLEL_LIMIT = int(
+        os.environ.get(
+            "KGPC_COMPILER_PARALLEL_LIMIT", str(DEFAULT_COMPILER_PARALLEL_LIMIT)
+        )
+    )
+except ValueError:
+    COMPILER_PARALLEL_LIMIT = DEFAULT_COMPILER_PARALLEL_LIMIT
+COMPILER_PARALLEL_LIMIT = max(1, COMPILER_PARALLEL_LIMIT)
+COMPILER_PARALLEL_SEMAPHORE = threading.BoundedSemaphore(COMPILER_PARALLEL_LIMIT)
+
+DEFAULT_TAP_MAX_WORKERS = 8
+try:
+    TAP_MAX_WORKERS = int(
+        os.environ.get("KGPC_TAP_MAX_WORKERS", str(DEFAULT_TAP_MAX_WORKERS))
+    )
+except ValueError:
+    TAP_MAX_WORKERS = DEFAULT_TAP_MAX_WORKERS
+TAP_MAX_WORKERS = max(1, TAP_MAX_WORKERS)
 
 # Meson exposes toggleable behaviour via environment variables so CI can
 # selectively disable particularly slow checks such as the valgrind leak test.
@@ -451,7 +477,8 @@ def run_compiler(input_file, output_file, flags=None):
             "text": True,
             "timeout": COMPILER_TIMEOUT,
         }
-        result = subprocess.run(command, **run_kwargs)
+        with COMPILER_PARALLEL_SEMAPHORE:
+            result = subprocess.run(command, **run_kwargs)
         duration = time.perf_counter() - start
         for line in result.stderr.splitlines():
             if line.startswith("KGPC_LINK_ARGS:"):
@@ -658,12 +685,48 @@ def _flatten_tests(test):
         yield test
 
 
-def _run_single_test_with_timeout(test, timeout, log_stream):
+def _prepare_parallel_class_fixtures(tests, log_stream=None):
+    """Run setUpClass once per class; return (class_errors, setup_ok_classes)."""
+    class_order = []
+    seen = set()
+    for test in tests:
+        cls = test.__class__
+        if cls not in seen:
+            seen.add(cls)
+            class_order.append(cls)
+
+    class_errors = {}
+    setup_ok_classes = []
+    for cls in class_order:
+        try:
+            cls.setUpClass()
+            setup_ok_classes.append(cls)
+        except Exception:
+            class_errors[cls] = traceback.format_exc()
+            if log_stream is not None:
+                log_stream.write(f"[PARALLEL] setUpClass failed for {cls.__name__}\n")
+                log_stream.flush()
+    return class_errors, setup_ok_classes
+
+
+def _cleanup_parallel_class_fixtures(setup_ok_classes, log_stream=None):
+    """Run tearDownClass for classes whose setUpClass succeeded."""
+    for cls in reversed(setup_ok_classes):
+        try:
+            cls.tearDownClass()
+        except Exception:
+            if log_stream is not None:
+                log_stream.write(f"[PARALLEL] tearDownClass failed for {cls.__name__}\n")
+                log_stream.flush()
+
+
+def _run_single_test_with_timeout(test, timeout, log_stream=None):
     """Run a single test with a timeout. Returns (test, result_type, err_info)."""
     test_id = test.id()
     start_time = time.monotonic()
-    log_stream.write(f"[PARALLEL] Starting: {test_id}\n")
-    log_stream.flush()
+    if log_stream is not None:
+        log_stream.write(f"[PARALLEL] Starting: {test_id}\n")
+        log_stream.flush()
 
     result = unittest.TestResult()
     exception_info = None
@@ -696,14 +759,16 @@ def _run_single_test_with_timeout(test, timeout, log_stream):
         # Test timed out
         result_type = "timeout"
         exception_info = f"Test timed out after {timeout} seconds"
-        log_stream.write(f"[PARALLEL] TIMEOUT: {test_id} (after {elapsed:.1f}s)\n")
-        log_stream.flush()
+        if log_stream is not None:
+            log_stream.write(f"[PARALLEL] TIMEOUT: {test_id} (after {elapsed:.1f}s)\n")
+            log_stream.flush()
         # Note: We cannot forcibly kill the thread, but we can continue
         # The thread will be left as a daemon and cleaned up on exit
     else:
         status = result_type.upper()
-        log_stream.write(f"[PARALLEL] Finished: {test_id} [{status}] ({elapsed:.1f}s)\n")
-        log_stream.flush()
+        if log_stream is not None:
+            log_stream.write(f"[PARALLEL] Finished: {test_id} [{status}] ({elapsed:.1f}s)\n")
+            log_stream.flush()
 
     return test, result_type, exception_info, elapsed
 
@@ -749,11 +814,14 @@ class ParallelTestRunner:
         self.stream.flush()
 
         result.startTestRun()
+        setup_ok_classes = []
         try:
+            class_errors, setup_ok_classes = _prepare_parallel_class_fixtures(tests, self.stream)
             with concurrent.futures.ThreadPoolExecutor(max_workers=self.workers) as executor:
                 futures = {
                     executor.submit(_run_single_test_with_timeout, t, self.timeout, self.stream): t
                     for t in tests
+                    if t.__class__ not in class_errors
                 }
                 for future in concurrent.futures.as_completed(futures):
                     try:
@@ -764,7 +832,11 @@ class ParallelTestRunner:
                         test_case = futures[future]
                         result.errors.append((test_case, traceback.format_exc()))
                         result.testsRun += 1
+                for t in tests:
+                    if t.__class__ in class_errors:
+                        result.add_result(t, "error", class_errors[t.__class__], 0.0)
         finally:
+            _cleanup_parallel_class_fixtures(setup_ok_classes, self.stream)
             result.stopTestRun()
 
         # Print summary
@@ -772,6 +844,109 @@ class ParallelTestRunner:
         self.stream.write(f"[PARALLEL] Failures: {len(result.failures)}, Errors: {len(result.errors)}, Skipped: {len(result.skipped)}\n")
         self.stream.flush()
 
+        return result
+
+
+class TAPParallelTestResult(unittest.TestResult):
+    """TAP-compatible aggregate result for parallel execution."""
+
+    def __init__(self):
+        super().__init__()
+        self.test_timings = []
+
+    def add_result(self, test, result_type, err_info, elapsed):
+        self.testsRun += 1
+        self.test_timings.append((test.id(), elapsed, result_type.upper()))
+        if result_type == "success":
+            return
+        if result_type == "failure":
+            self.failures.append((test, err_info))
+            return
+        if result_type == "error" or result_type == "timeout":
+            self.errors.append((test, err_info))
+            return
+        if result_type == "skipped":
+            self.skipped.append((test, err_info))
+
+
+class TAPParallelTestRunner:
+    """Run tests in parallel and emit TAP output deterministically."""
+
+    def __init__(self, workers=4, timeout=300, stream=None):
+        self.workers = workers
+        self.timeout = timeout
+        self.stream = stream or sys.stdout
+
+    def _emit(self, line):
+        self.stream.write(f"{line}\n")
+        self.stream.flush()
+
+    def _emit_diagnostic(self, text):
+        for raw_line in str(text).rstrip().splitlines():
+            self._emit(f"# {raw_line}")
+
+    def run(self, test):
+        tests = list(_flatten_tests(test))
+        result = TAPParallelTestResult()
+        result.startTestRun()
+        self._emit(f"1..{len(tests)}")
+        effective_workers = max(1, min(self.workers, TAP_MAX_WORKERS))
+
+        completed = {}
+        setup_ok_classes = []
+        try:
+            class_errors, setup_ok_classes = _prepare_parallel_class_fixtures(tests)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=effective_workers) as executor:
+                future_to_index = {
+                    executor.submit(_run_single_test_with_timeout, t, self.timeout): idx
+                    for idx, t in enumerate(tests)
+                    if t.__class__ not in class_errors
+                }
+                for future in concurrent.futures.as_completed(future_to_index):
+                    idx = future_to_index[future]
+                    test_case = tests[idx]
+                    try:
+                        completed[idx] = future.result()
+                    except Exception:
+                        completed[idx] = (
+                            test_case,
+                            "error",
+                            traceback.format_exc(),
+                            0.0,
+                        )
+            for idx, t in enumerate(tests):
+                if t.__class__ in class_errors and idx not in completed:
+                    completed[idx] = (
+                        t,
+                        "error",
+                        class_errors[t.__class__],
+                        0.0,
+                    )
+
+            for idx, test_case in enumerate(tests):
+                if idx in completed:
+                    test_obj, result_type, err_info, elapsed = completed[idx]
+                else:
+                    test_obj = test_case
+                    result_type = "error"
+                    err_info = "Internal error: missing parallel test result"
+                    elapsed = 0.0
+                result.add_result(test_obj, result_type, err_info, elapsed)
+                test_name = test_obj.id()
+                tap_index = idx + 1
+                if result_type == "success":
+                    self._emit(f"ok {tap_index} - {test_name}")
+                elif result_type == "skipped":
+                    self._emit(f"ok {tap_index} - {test_name} # SKIP {err_info}")
+                else:
+                    self._emit(f"not ok {tap_index} - {test_name}")
+                    label = "Failure" if result_type == "failure" else "Error"
+                    self._emit_diagnostic(f"{label}:")
+                    if err_info is not None:
+                        self._emit_diagnostic(err_info)
+        finally:
+            _cleanup_parallel_class_fixtures(setup_ok_classes)
+            result.stopTestRun()
         return result
 
 
@@ -2757,8 +2932,8 @@ def _discover_and_add_auto_tests():
                         self.skipTest("Unix fork() test not supported on MinGW (requires Cygwin/MSYS for fork)")
                 
                 input_file = os.path.join(TEST_CASES_DIR, f"{test_base_name}.p")
-                asm_file = os.path.join(TEST_OUTPUT_DIR, f"{test_base_name}.s")
-                executable_file = os.path.join(TEST_OUTPUT_DIR, test_base_name)
+                asm_file = os.path.join(TEST_OUTPUT_DIR, f"{test_base_name}_auto.s")
+                executable_file = os.path.join(TEST_OUTPUT_DIR, f"{test_base_name}_auto")
                 expected_output_file = os.path.join(TEST_CASES_DIR, f"{test_base_name}.expected")
                 input_data_file = os.path.join(INPUT_DATA_DIR, f"{test_base_name}.input")
 
@@ -2919,8 +3094,16 @@ def main():
         sys.exit(2)
 
     if args.tap or os.environ.get("KGPC_TEST_PROTOCOL", "").lower() == "tap":
-        suite = _load_suite()
-        runner = TAPTestRunner()
+        if remaining:
+            suite = unittest.defaultTestLoader.loadTestsFromNames(
+                remaining, sys.modules[__name__]
+            )
+        else:
+            suite = _load_suite()
+        if parallel_workers > 0:
+            runner = TAPParallelTestRunner(workers=parallel_workers, timeout=test_timeout)
+        else:
+            runner = TAPTestRunner()
         result = runner.run(suite)
         sys.exit(0 if result.wasSuccessful() else 1)
 

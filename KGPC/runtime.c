@@ -6172,6 +6172,11 @@ ssize_t fpWrite(int fd, const void *buf, size_t count)
     return write(fd, buf, count);
 }
 
+char *fpGetCwd(char *path, size_t len)
+{
+    return getcwd(path, len);
+}
+
 off_t fplSeek(int fd, off_t offset, int whence)
 {
     return lseek(fd, offset, whence);
@@ -6250,6 +6255,13 @@ ssize_t fpWrite(int fd, const void *buf, size_t count)
     /* _write takes unsigned int count on Windows, handle large counts by capping */
     unsigned int safe_count = (count > UINT_MAX) ? UINT_MAX : (unsigned int)count;
     return (ssize_t)_write(fd, buf, safe_count);
+}
+
+char *fpGetCwd(char *path, size_t len)
+{
+    if (path == NULL || len == 0)
+        return NULL;
+    return _getcwd(path, (int)len);
 }
 
 off_t fplSeek(int fd, off_t offset, int whence)

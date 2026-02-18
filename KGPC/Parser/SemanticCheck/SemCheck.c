@@ -4683,38 +4683,6 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                      * so do not inject their literals as global constants in this scope. */
                     if (alias_info->kgpc_type != NULL && !alias_info->enum_is_scoped)
                     {
-                        int enum_conflicts_with_existing_name = 0;
-                        ListNode_t *scan_literal = alias_info->enum_literals;
-                        while (scan_literal != NULL)
-                        {
-                            if (scan_literal->cur != NULL)
-                            {
-                                const char *scan_name = (const char *)scan_literal->cur;
-                                HashNode_t *existing_scan = NULL;
-                                if (FindIdent(&existing_scan, symtab, (char *)scan_name) != -1 &&
-                                    existing_scan != NULL)
-                                {
-                                    enum_conflicts_with_existing_name = 1;
-                                    break;
-                                }
-                            }
-                            scan_literal = scan_literal->next;
-                        }
-
-                        /* If this enum would collide with any existing identifier in scope,
-                         * force scoped behavior for this declaration instead of emitting
-                         * global literals that are ambiguous by design. */
-                        if (enum_conflicts_with_existing_name)
-                        {
-                            alias_info->enum_is_scoped = 1;
-                            if (getenv("KGPC_DEBUG_ENUM_LITERALS") != NULL)
-                            {
-                                fprintf(stderr, "[KGPC] enum %s forced scoped due to identifier collision\n",
-                                    tree->tree_data.type_decl_data.id != NULL ? tree->tree_data.type_decl_data.id : "<anon>");
-                            }
-                            continue;
-                        }
-
                         int ordinal = 0;
                         ListNode_t *literal_node = alias_info->enum_literals;
                         while (literal_node != NULL)
@@ -4735,10 +4703,17 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                                         ++ordinal;
                                         continue;
                                     }
-                                    /* Different value - this is a real conflict */
+                                    /* Imported unit collisions are allowed: keep first visible literal. */
+                                    if (tree->tree_data.type_decl_data.defined_in_unit)
+                                    {
+                                        literal_node = literal_node->next;
+                                        ++ordinal;
+                                        continue;
+                                    }
+                                    /* Different value in local declarations is a real conflict. */
                                     semcheck_error_with_context(
-                                            "Error on line %d, redeclaration of enum literal %s with different value!\n",
-                                            tree->line_num, literal_name);
+                                        "Error on line %d, redeclaration of enum literal %s with different value!\n",
+                                        tree->line_num, literal_name);
                                     ++errors;
                                     literal_node = literal_node->next;
                                     ++ordinal;
@@ -4793,10 +4768,16 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                                         ++ordinal;
                                         continue;
                                     }
-                                    /* Different value - this is a real conflict */
+                                    if (tree->tree_data.type_decl_data.defined_in_unit)
+                                    {
+                                        literal_node = literal_node->next;
+                                        ++ordinal;
+                                        continue;
+                                    }
+                                    /* Different value in local declarations is a real conflict. */
                                     semcheck_error_with_context(
-                                            "Error on line %d, redeclaration of inline enum literal %s with different value!\n",
-                                            tree->line_num, literal_name);
+                                        "Error on line %d, redeclaration of inline enum literal %s with different value!\n",
+                                        tree->line_num, literal_name);
                                     ++errors;
                                     literal_node = literal_node->next;
                                     ++ordinal;
@@ -7876,6 +7857,32 @@ static void add_builtin_string_type_with_alias(SymTab_t *symtab, const char *nam
     add_builtin_type_owned(symtab, name, t);
 }
 
+static int semcheck_has_symbol(SymTab_t *symtab, const char *name)
+{
+    HashNode_t *node = NULL;
+    if (symtab == NULL || name == NULL)
+        return 0;
+    return (FindIdent(&node, symtab, (char *)name) >= 0 && node != NULL);
+}
+
+static void ensure_builtin_char_const_if_missing(SymTab_t *symtab, const char *name, int value)
+{
+    if (!semcheck_has_symbol(symtab, name))
+        AddBuiltinCharConst(symtab, name, value);
+}
+
+static void ensure_builtin_int_const_if_missing(SymTab_t *symtab, const char *name, long long value)
+{
+    if (!semcheck_has_symbol(symtab, name))
+        AddBuiltinIntConst(symtab, name, value);
+}
+
+static void ensure_builtin_alias_type_if_missing(SymTab_t *symtab, const char *name, int base_type, int storage_size)
+{
+    if (!semcheck_has_symbol(symtab, name))
+        add_builtin_alias_type(symtab, name, base_type, storage_size);
+}
+
 void semcheck_add_builtins(SymTab_t *symtab)
 {
 
@@ -7916,6 +7923,19 @@ void semcheck_add_builtins(SymTab_t *symtab)
         AddBuiltinIntConst(symtab, "ssHooked", 1);
         AddBuiltinIntConst(symtab, "ssOverridden", 2);
     }
+
+    /* Bootstrap stability guard:
+     * Some stdlib unit compile paths (notably RTL bootstrap units) may reference
+     * these core symbols before imported declarations are visible in the current
+     * semcheck pass. Seed only what is missing; never overwrite parsed symbols. */
+    ensure_builtin_char_const_if_missing(symtab, "DirectorySeparator", '/');
+    ensure_builtin_char_const_if_missing(symtab, "DriveSeparator", 0);
+    ensure_builtin_char_const_if_missing(symtab, "PathSeparator", ':');
+    ensure_builtin_char_const_if_missing(symtab, "ExtensionSeparator", '.');
+    ensure_builtin_int_const_if_missing(symtab, "MaxPathLen", 4096);
+    ensure_builtin_int_const_if_missing(symtab, "reRangeError", 4);
+    ensure_builtin_int_const_if_missing(symtab, "reInvalidCast", 10);
+    ensure_builtin_alias_type_if_missing(symtab, "RTLString", STRING_TYPE, 0);
     
     /* Integer boundary constants - required by FPC's objpas.pp and system.pp */
     {
@@ -8235,6 +8255,14 @@ void semcheck_add_builtins(SymTab_t *symtab)
         AddBuiltinProc_Typed(symtab, halt_name, halt_type);
         destroy_kgpc_type(halt_type);
         free(halt_name);
+    }
+    char *error_name = strdup("Error");
+    if (error_name != NULL) {
+        KgpcType *error_type = create_procedure_type(NULL, NULL);
+        assert(error_type != NULL && "Failed to create Error procedure type");
+        AddBuiltinProc_Typed(symtab, error_name, error_type);
+        destroy_kgpc_type(error_type);
+        free(error_name);
     }
     char *assign_name = strdup("Assign");
     if (assign_name != NULL) {
@@ -9597,8 +9625,18 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 tree->tree_data.var_decl_data.type_id);
         if (tree->type == TREE_VAR_DECL)
         {
+            int keep_imported_cached =
+                (tree->tree_data.var_decl_data.defined_in_unit &&
+                 tree->tree_data.var_decl_data.cached_kgpc_type != NULL);
             if (resolved_type != NULL && resolved_type->type != NULL)
             {
+                if (keep_imported_cached)
+                {
+                    /* Imported declarations should retain their original resolved type.
+                     * Rebinding in later scopes can corrupt aliases like BaseUnix.TSize. */
+                }
+                else
+                {
                 /* Clear any pre-existing cached type if we're replacing with resolved type */
                 if (tree->tree_data.var_decl_data.cached_kgpc_type != NULL)
                 {
@@ -9607,6 +9645,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 }
                 kgpc_type_retain(resolved_type->type);
                 tree->tree_data.var_decl_data.cached_kgpc_type = resolved_type->type;
+                }
             }
             else if (tree->tree_data.var_decl_data.cached_kgpc_type == NULL &&
                      resolved_type == NULL && tree->tree_data.var_decl_data.type_id != NULL)

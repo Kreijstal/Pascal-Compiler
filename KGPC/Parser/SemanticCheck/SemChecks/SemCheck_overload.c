@@ -796,7 +796,14 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
     int is_integer_literal)
 {
     if (formal_tag == UNKNOWN_TYPE || formal_tag == BUILTIN_ANY_TYPE)
+    {
+        /* Untyped formals are permissive, but when the actual is also unknown
+         * (e.g. forwarding an untyped const parameter), prefer typed overloads
+         * to avoid self-recursive overload selection. */
+        if (actual_tag == UNKNOWN_TYPE && actual_kgpc == NULL)
+            return semcheck_make_quality(MATCH_CONVERSION);
         return semcheck_make_quality(MATCH_EXACT);
+    }
 
     if (is_var_param)
     {
@@ -879,7 +886,11 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
     }
 
     if (formal_tag == UNKNOWN_TYPE || formal_tag == BUILTIN_ANY_TYPE)
+    {
+        if (actual_tag == UNKNOWN_TYPE && actual_kgpc == NULL)
+            return semcheck_make_quality(MATCH_CONVERSION);
         return semcheck_make_quality(MATCH_EXACT);
+    }
     /* Variant parameters accept any type, but should never be preferred
      * over a specific type match in overload resolution. */
     if (formal_tag == VARIANT_TYPE || actual_tag == VARIANT_TYPE)
@@ -1241,8 +1252,15 @@ static int semcheck_count_untyped_params(HashNode_t *candidate)
         if (decl != NULL && decl->type == TREE_VAR_DECL)
         {
             struct Var *var_info = &decl->tree_data.var_decl_data;
-            if (var_info->type == UNKNOWN_TYPE && var_info->type_id == NULL &&
-                var_info->inline_record_type == NULL)
+            if (var_info->is_untyped_param ||
+                (var_info->type == UNKNOWN_TYPE && var_info->type_id == NULL &&
+                 var_info->inline_record_type == NULL))
+                count++;
+        }
+        else if (decl != NULL && decl->type == TREE_ARR_DECL)
+        {
+            struct Array *arr_info = &decl->tree_data.arr_decl_data;
+            if (arr_info->type == UNKNOWN_TYPE && arr_info->type_id == NULL)
                 count++;
         }
         params = params->next;

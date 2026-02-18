@@ -2012,8 +2012,46 @@ int expr_returns_sret(const struct Expression *expr)
     if (expr == NULL)
         return 0;
 
+    if (expr->type == EXPR_FUNCTION_CALL &&
+        expr->expr_data.function_call_data.call_kgpc_type != NULL &&
+        kgpc_type_is_procedure(expr->expr_data.function_call_data.call_kgpc_type))
+    {
+        KgpcType *ret_type = kgpc_type_get_return_type(
+            expr->expr_data.function_call_data.call_kgpc_type);
+        if (ret_type != NULL)
+        {
+            if (kgpc_type_is_shortstring(ret_type) ||
+                (ret_type->type_alias != NULL && ret_type->type_alias->is_shortstring))
+            {
+                /* Keep caller ABI aligned with function codegen, which lowers
+                 * shortstring returns through a hidden destination pointer. */
+                return 1;
+            }
+
+            if (kgpc_type_is_record(ret_type) ||
+                (ret_type->kind == TYPE_KIND_ARRAY &&
+                 !kgpc_type_is_dynamic_array(ret_type)) ||
+                (ret_type->type_alias != NULL && ret_type->type_alias->is_shortstring))
+            {
+                long long ret_size = kgpc_type_sizeof(ret_type);
+                if (ret_size > 0)
+                    return ret_size > 8;
+            }
+            return 0;
+        }
+    }
+
     if (expr_has_type_tag(expr, RECORD_TYPE))
+    {
+        KgpcType *record_type = expr_get_kgpc_type(expr);
+        if (record_type != NULL)
+        {
+            long long size = kgpc_type_sizeof(record_type);
+            if (size > 0)
+                return size > 8;
+        }
         return 1;
+    }
 
     /* ShortStrings are passed via SRET because they're small fixed-size arrays */
     if (expr_has_type_tag(expr, SHORTSTRING_TYPE))
@@ -2123,9 +2161,9 @@ int codegen_expr_is_addressable(const struct Expression *expr)
         case EXPR_RECORD_CONSTRUCTOR:
             return 1;
         case EXPR_FUNCTION_CALL:
-            /* Record-valued calls are materialized via hidden sret pointers and can
-             * be addressed by downstream codegen paths. */
-            return expr_has_type_tag(expr, RECORD_TYPE);
+            /* Function-call expressions are addressable only when they are lowered
+             * through a hidden sret return buffer. */
+            return expr_returns_sret(expr);
         case EXPR_TYPECAST:
             if (expr->expr_data.typecast_data.expr != NULL)
                 return codegen_expr_is_addressable(expr->expr_data.typecast_data.expr);
@@ -6490,13 +6528,6 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             }
             else if (arg_expr != NULL && expr_has_type_tag(arg_expr, RECORD_TYPE))
             {
-                if (!codegen_expr_is_addressable(arg_expr))
-                {
-                    codegen_report_error(ctx,
-                        "ERROR: Unsupported record argument expression.");
-                    return inst_list;
-                }
-
                 long long record_size = 0;
                 if (codegen_get_record_size(ctx, arg_expr, &record_size) != 0 || record_size < 0)
                 {
@@ -6523,9 +6554,55 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 }
 
                 Register_t *src_reg = NULL;
-                inst_list = codegen_address_for_expr(arg_expr, inst_list, ctx, &src_reg);
-                if (codegen_had_error(ctx) || src_reg == NULL)
-                    return inst_list;
+                if (codegen_expr_is_addressable(arg_expr))
+                {
+                    inst_list = codegen_address_for_expr(arg_expr, inst_list, ctx, &src_reg);
+                    if (codegen_had_error(ctx) || src_reg == NULL)
+                        return inst_list;
+                }
+                else
+                {
+                    if (arg_expr->type == EXPR_FUNCTION_CALL && expr_returns_sret(arg_expr))
+                    {
+                        inst_list = codegen_address_for_expr(arg_expr, inst_list, ctx, &src_reg);
+                        if (codegen_had_error(ctx) || src_reg == NULL)
+                            return inst_list;
+                    }
+                    else if (record_size > 8)
+                    {
+                        codegen_report_error(ctx,
+                            "ERROR: Unsupported record argument expression.");
+                        return inst_list;
+                    }
+                    else
+                    {
+                        Register_t *value_reg = NULL;
+                        inst_list = codegen_expr_with_result(arg_expr, inst_list, ctx, &value_reg);
+                        if (codegen_had_error(ctx) || value_reg == NULL)
+                            return inst_list;
+
+                        char materialize_buf[128];
+                        if (record_size <= 4)
+                            snprintf(materialize_buf, sizeof(materialize_buf), "\tmovl\t%s, -%d(%%rbp)\n",
+                                value_reg->bit_32, temp_slot->offset);
+                        else
+                            snprintf(materialize_buf, sizeof(materialize_buf), "\tmovq\t%s, -%d(%%rbp)\n",
+                                value_reg->bit_64, temp_slot->offset);
+                        inst_list = add_inst(inst_list, materialize_buf);
+                        free_reg(get_reg_stack(), value_reg);
+
+                        src_reg = get_free_reg(get_reg_stack(), &inst_list);
+                        if (src_reg == NULL)
+                        {
+                            codegen_report_error(ctx,
+                                "ERROR: Unable to allocate register for record argument address.");
+                            return inst_list;
+                        }
+                        snprintf(materialize_buf, sizeof(materialize_buf), "\tleaq\t-%d(%%rbp), %s\n",
+                            temp_slot->offset, src_reg->bit_64);
+                        inst_list = add_inst(inst_list, materialize_buf);
+                    }
+                }
 
                 Register_t *size_reg = get_free_reg(get_reg_stack(), &inst_list);
                 if (size_reg == NULL)
@@ -6714,6 +6791,20 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 int is_real_arg = (expected_type == REAL_TYPE);
                 int is_xmm = (top_reg->bit_64 != NULL &&
                               strncmp(top_reg->bit_64, "%xmm", 4) == 0);
+                int is_single_record_payload = 0;
+                if (is_real_arg && expected_real_size == 4 && arg_expr != NULL)
+                {
+                    struct Expression *raw_arg_expr = arg_expr;
+                    while (raw_arg_expr != NULL &&
+                        raw_arg_expr->type == EXPR_TYPECAST &&
+                        raw_arg_expr->expr_data.typecast_data.target_type == REAL_TYPE &&
+                        raw_arg_expr->expr_data.typecast_data.expr != NULL)
+                    {
+                        raw_arg_expr = raw_arg_expr->expr_data.typecast_data.expr;
+                    }
+                    is_single_record_payload =
+                        (raw_arg_expr != NULL && raw_arg_expr->type == EXPR_RECORD_ACCESS);
+                }
                 if (is_real_arg && is_xmm)
                 {
                     if (expected_real_size == 4)
@@ -6735,7 +6826,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                     snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
                         top_reg->bit_64, arg_spill->offset);
                     inst_list = add_inst(inst_list, buffer);
-                    arg_infos[arg_num].spill_is_single = 0;
+                    arg_infos[arg_num].spill_is_single = is_single_record_payload;
                 }
                 free_reg(get_reg_stack(), top_reg);
                 
@@ -6959,23 +7050,9 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 }
                 else
                 {
-                    int source_is_single_storage = 0;
-                    if (source_expr != NULL &&
-                        codegen_expr_real_storage_size(source_expr, ctx) == 4)
-                    {
-                        source_is_single_storage = 1;
-                    }
-                    if (source_is_single_storage)
-                    {
-                        snprintf(buffer, sizeof(buffer), "\tmovd\t%s, %%xmm0\n", stored_reg->bit_32);
-                        inst_list = add_inst(inst_list, buffer);
-                    }
-                    else
-                    {
-                        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm0\n", stored_reg->bit_64);
-                        inst_list = add_inst(inst_list, buffer);
-                        inst_list = add_inst(inst_list, "\tcvtsd2ss\t%xmm0, %xmm0\n");
-                    }
+                    /* Direct GP-backed Single arguments are carried as 32-bit payloads. */
+                    snprintf(buffer, sizeof(buffer), "\tmovd\t%s, %%xmm0\n", stored_reg->bit_32);
+                    inst_list = add_inst(inst_list, buffer);
                 }
                 if (pass_on_stack)
                 {
@@ -7048,7 +7125,9 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             if (expected_type == REAL_TYPE && expected_real_size == 4 &&
                 arg_infos[i].assigned_class == ARG_CLASS_SSE)
             {
-                if (arg_infos[i].spill_is_single)
+                int source_is_single_payload = arg_infos[i].spill_is_single;
+
+                if (source_is_single_payload)
                 {
                     snprintf(buffer, sizeof(buffer), "\tmovss\t-%d(%%rbp), %%xmm0\n",
                         arg_infos[i].spill->offset);
@@ -7062,24 +7141,9 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                     snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
                         arg_infos[i].spill->offset, temp_reg->bit_64);
                     inst_list = add_inst(inst_list, buffer);
-                    int source_is_single_storage = 0;
-                    if (arg_infos[i].expr != NULL &&
-                        codegen_expr_real_storage_size(arg_infos[i].expr, ctx) == 4)
-                    {
-                        source_is_single_storage = 1;
-                    }
-
-                    if (source_is_single_storage)
-                    {
-                        snprintf(buffer, sizeof(buffer), "\tmovd\t%s, %%xmm0\n", temp_reg->bit_32);
-                        inst_list = add_inst(inst_list, buffer);
-                    }
-                    else
-                    {
-                        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm0\n", temp_reg->bit_64);
-                        inst_list = add_inst(inst_list, buffer);
-                        inst_list = add_inst(inst_list, "\tcvtsd2ss\t%xmm0, %xmm0\n");
-                    }
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm0\n", temp_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    inst_list = add_inst(inst_list, "\tcvtsd2ss\t%xmm0, %xmm0\n");
                 }
                 if (pass_on_stack)
                 {
