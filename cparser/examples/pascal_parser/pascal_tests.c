@@ -880,6 +880,29 @@ void test_pascal_inherited_expression(void) {
     free_input(input);
 }
 
+void test_pascal_inherited_expression_no_method(void) {
+    combinator_t* p = create_expression_parser();
+    input_t* input = new_input();
+    const char* expr = "inherited";
+    input->buffer = strdup(expr);
+    input->length = strlen(expr);
+
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    TEST_ASSERT(input->start == input->length);
+
+    if (res.is_success) {
+        TEST_ASSERT(res.value.ast->typ == PASCAL_T_FUNC_CALL);
+        TEST_ASSERT(res.value.ast->child != NULL);
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+
+    free(input->buffer);
+    free_input(input);
+}
+
 void test_pascal_specialize_typecast_expression(void) {
     combinator_t* p = create_expression_parser();
     input_t* input = new_input();
@@ -5521,6 +5544,7 @@ TEST_LIST = {
     { "test_pascal_function_call_with_escaped_quote", test_pascal_function_call_with_escaped_quote },
     { "test_pascal_call_chaining_proc_cast", test_pascal_call_chaining_proc_cast },
     { "test_pascal_inherited_expression", test_pascal_inherited_expression },
+    { "test_pascal_inherited_expression_no_method", test_pascal_inherited_expression_no_method },
     { "test_pascal_specialize_typecast_expression", test_pascal_specialize_typecast_expression },
     { "test_pascal_string_literal", test_pascal_string_literal },
     { "test_pascal_function_call_no_args", test_pascal_function_call_no_args },

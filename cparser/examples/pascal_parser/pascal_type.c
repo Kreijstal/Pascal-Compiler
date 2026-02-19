@@ -484,10 +484,10 @@ combinator_t* class_type(tag_t tag) {
     // Type reference for field declarations, method return types, etc.
     combinator_t* type_ref = create_type_ref_parser();
 
-    // Field declaration: field_name: Type;
-    combinator_t* field_name = token(cident(PASCAL_T_IDENTIFIER));
+    // Field declaration: field_name[, field_name...]: Type;
+    combinator_t* field_names = sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(",")));
     combinator_t* field_decl = seq(new_combinator(), PASCAL_T_FIELD_DECL,
-        field_name,
+        field_names,
         token(match(":")),
         type_ref,
         token(match(";")),
@@ -544,9 +544,42 @@ combinator_t* class_type(tag_t tag) {
     // Interface method delegation inside class:
     //   function TFunc<T1, TResult>.Invoke = Bind;
     //   procedure IFoo.Bar = Baz;
+    //
+    // The owner part must stop before ".Method". Reusing create_type_ref_parser()
+    // is too greedy (it can consume dotted identifiers including the member name),
+    // so parse a focused owner: identifier with optional generic args.
+    combinator_t** delegation_type_arg_ref = (combinator_t**)safe_malloc(sizeof(combinator_t*));
+    *delegation_type_arg_ref = new_combinator();
+
+    combinator_t* delegation_type_arg_list = seq(new_combinator(), PASCAL_T_TYPE_ARG_LIST,
+        token(match("<")),
+        sep_by(lazy(delegation_type_arg_ref), token(match(","))),
+        token(match(">")),
+        NULL
+    );
+    combinator_t* delegation_constructed_type = seq(new_combinator(), PASCAL_T_CONSTRUCTED_TYPE,
+        token(cident(PASCAL_T_IDENTIFIER)),
+        NULL
+    );
+    combinator_t* delegation_constructed_owner = seq(new_combinator(), PASCAL_T_NONE,
+        delegation_constructed_type,
+        delegation_type_arg_list,
+        NULL
+    );
+    multi(*delegation_type_arg_ref, PASCAL_T_NONE,
+        delegation_constructed_owner,
+        token(pascal_qualified_identifier(PASCAL_T_TYPE_ARG)),
+        NULL
+    );
+    combinator_t* delegation_owner = multi(new_combinator(), PASCAL_T_NONE,
+        delegation_constructed_owner,
+        token(cident(PASCAL_T_IDENTIFIER)),
+        NULL
+    );
+
     combinator_t* procedure_delegation_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
         token(keyword_ci("procedure")),
-        create_type_ref_parser(),
+        delegation_owner,
         token(match(".")),
         token(cident(PASCAL_T_IDENTIFIER)),
         token(match("=")),
@@ -557,7 +590,7 @@ combinator_t* class_type(tag_t tag) {
 
     combinator_t* function_delegation_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
         token(keyword_ci("function")),
-        create_type_ref_parser(),
+        delegation_owner,
         token(match(".")),
         token(cident(PASCAL_T_IDENTIFIER)),
         token(match("=")),
@@ -591,10 +624,19 @@ combinator_t* class_type(tag_t tag) {
     );
 
     // Property declaration: property Name: Type read ReadField write WriteField; [default;]
+    combinator_t* property_indexer_modifier = optional(multi(new_combinator(), PASCAL_T_NONE,
+        token(keyword_ci("const")),
+        token(keyword_ci("var")),
+        token(keyword_ci("out")),
+        token(keyword_ci("constref")),
+        NULL
+    ));
+
     combinator_t* property_indexer = optional(between(
         token(match("[")),
         token(match("]")),
         sep_by(seq(new_combinator(), PASCAL_T_NONE,
+            property_indexer_modifier,
             sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
             token(match(":")),
             create_record_field_type_spec(),
@@ -1012,12 +1054,36 @@ combinator_t* interface_type(tag_t tag) {
         NULL
     );
 
-    // Property declaration: property Name: Type read ReadField write WriteField;
+    // Property declaration: property Name[: Type] [read/write ...] [; default;]
+    combinator_t* interface_property_indexer_modifier = optional(multi(new_combinator(), PASCAL_T_NONE,
+        token(keyword_ci("const")),
+        token(keyword_ci("var")),
+        token(keyword_ci("out")),
+        token(keyword_ci("constref")),
+        NULL
+    ));
+
+    combinator_t* interface_property_indexer = optional(between(
+        token(match("[")),
+        token(match("]")),
+        sep_by(seq(new_combinator(), PASCAL_T_NONE,
+            interface_property_indexer_modifier,
+            sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
+            token(match(":")),
+            create_record_field_type_spec(),
+            NULL
+        ), token(match(";")))
+    ));
+
     combinator_t* property_decl = seq(new_combinator(), PASCAL_T_PROPERTY_DECL,
         token(keyword_ci("property")),
         token(cident(PASCAL_T_IDENTIFIER)), // property name
-        token(match(":")),
-        create_type_ref_parser(),  // Support both simple and constructed types
+        interface_property_indexer,
+        optional(seq(new_combinator(), PASCAL_T_NONE,
+            token(match(":")),
+            create_type_ref_parser(),  // Support both simple and constructed types
+            NULL
+        )),
         optional(seq(new_combinator(), PASCAL_T_NONE,
             token(keyword_ci("read")),
             token(cident(PASCAL_T_IDENTIFIER)), // read field/method
@@ -1029,6 +1095,12 @@ combinator_t* interface_type(tag_t tag) {
             NULL
         )),
         token(match(";")),
+        optional(seq(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("default")),
+            optional(token(integer(PASCAL_T_INTEGER))),
+            token(match(";")),
+            NULL
+        )),
         NULL
     );
 
@@ -1050,10 +1122,15 @@ combinator_t* interface_type(tag_t tag) {
         sep_by(create_type_ref_parser(), token(match(",")))
     ));
 
-    // Optional GUID attribute list: ['{...}']
+    // Optional GUID/attribute list: ['{...}'] or [SGUIDObserved]
+    combinator_t* interface_guid_item = multi(new_combinator(), PASCAL_T_NONE,
+        token(pascal_string(PASCAL_T_STRING)),
+        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
+        NULL
+    );
     combinator_t* interface_guid = optional(seq(new_combinator(), PASCAL_T_NONE,
         token(match("[")),
-        sep_by(token(pascal_string(PASCAL_T_STRING)), token(match(","))),
+        sep_by(interface_guid_item, token(match(","))),
         token(match("]")),
         NULL
     ));

@@ -1358,7 +1358,7 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
     combinator_t* boolean_true = map(token(keyword_ci("true")), wrap_true_literal);
     combinator_t* boolean_false = map(token(keyword_ci("false")), wrap_false_literal);
 
-    // Inherited expression: inherited MethodName [ (args) ]
+    // Inherited expression: inherited [MethodName [ (args) ]]
     combinator_t* inherited_arg_list = between(
         token(match("(")),
         token(match(")")),
@@ -1366,7 +1366,7 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
     );
     combinator_t* inherited_expr = seq(new_combinator(), PASCAL_T_FUNC_CALL,
         token(keyword_ci("inherited")),
-        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
+        optional(token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER))),
         optional(inherited_arg_list),
         NULL
     );
