@@ -11,6 +11,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <limits.h>
+#include <ctype.h>
 #include "../codegen.h"
 #include "expr_tree.h"
 #include "../register_types.h"
@@ -109,14 +110,16 @@ static char *escape_string_for_assembly(const char *input)
     if (input == NULL)
         return NULL;
 
-    /* Calculate maximum possible escaped length */
+    /* Worst case: every char becomes \xHH */
     size_t len = strlen(input);
-    char *escaped = (char *)malloc(len * 2 + 1); /* Worst case: every char needs escaping */
+    size_t max_len = len * 4 + 1;
+    char *escaped = (char *)malloc(max_len);
     if (escaped == NULL)
         return NULL;
 
     char *dest = escaped;
-    const char *src = input;
+    const unsigned char *src = (const unsigned char *)input;
+    size_t remaining = max_len;
 
     while (*src != '\0')
     {
@@ -125,25 +128,45 @@ static char *escape_string_for_assembly(const char *input)
             case '"':
                 *dest++ = '\\';
                 *dest++ = '"';
+                remaining -= 2;
                 break;
             case '\\':
                 *dest++ = '\\';
                 *dest++ = '\\';
+                remaining -= 2;
                 break;
             case '\n':
                 *dest++ = '\\';
                 *dest++ = 'n';
+                remaining -= 2;
                 break;
             case '\t':
                 *dest++ = '\\';
                 *dest++ = 't';
+                remaining -= 2;
                 break;
             case '\r':
                 *dest++ = '\\';
                 *dest++ = 'r';
+                remaining -= 2;
                 break;
             default:
-                *dest++ = *src;
+                if (isprint(*src))
+                {
+                    *dest++ = (char)*src;
+                    --remaining;
+                }
+                else
+                {
+                    int written = snprintf(dest, remaining, "\\x%02X", *src);
+                    if (written < 0 || (size_t)written >= remaining)
+                    {
+                        *dest = '\0';
+                        return escaped;
+                    }
+                    dest += written;
+                    remaining -= (size_t)written;
+                }
                 break;
         }
         src++;
