@@ -79,6 +79,8 @@ static ast_t *g_interface_type_section_ast = NULL;
 static ast_t *g_implementation_type_section_ast = NULL;
 static ast_t *g_interface_section_ast = NULL;
 static ast_t *g_implementation_section_ast = NULL;
+/* Method context for expression conversion (e.g., bare "inherited" expressions). */
+static const char *g_current_method_name = NULL;
 
 static void register_type_helper_mapping(const char *helper_id, const char *base_type_id)
 {
@@ -134,6 +136,15 @@ static const char *lookup_type_helper_base(const char *helper_id)
         }
         cur = cur->next;
     }
+    return NULL;
+}
+
+static const char *ast_symbol_name(ast_t *node)
+{
+    if (node == NULL)
+        return NULL;
+    if (node->sym != NULL && node->sym->name != NULL)
+        return node->sym->name;
     return NULL;
 }
 
@@ -9757,9 +9768,14 @@ static struct Expression *convert_factor(ast_t *expr_node) {
     case PASCAL_T_FUNC_CALL: {
         ast_t *child = expr_node->child;
         char *id = NULL;
+        int inherited_call = 0;
         if (child != NULL) {
             if (child->typ == PASCAL_T_IDENTIFIER) {
-                id = dup_symbol(child);
+                const char *name = ast_symbol_name(child);
+                if (name != NULL && strcasecmp(name, "inherited") == 0)
+                    inherited_call = 1;
+                else
+                    id = dup_symbol(child);
             } else if (child->typ == PASCAL_T_TYPECAST &&
                        child->child != NULL &&
                        child->child->typ == PASCAL_T_IDENTIFIER) {
@@ -9779,9 +9795,40 @@ static struct Expression *convert_factor(ast_t *expr_node) {
                 }
                 return call_expr;
             } else if (child->child != NULL && child->child->typ == PASCAL_T_IDENTIFIER) {
-                id = dup_symbol(child->child);
+                const char *name = ast_symbol_name(child->child);
+                if (name != NULL && strcasecmp(name, "inherited") == 0)
+                    inherited_call = 1;
+                else
+                    id = dup_symbol(child->child);
             }
             child = child->next;
+        }
+        if (id == NULL) {
+            for (ast_t *scan = expr_node->child; scan != NULL; scan = scan->next) {
+                ast_t *node = unwrap_pascal_node(scan);
+                if (node == NULL)
+                    node = scan;
+                if (node == NULL)
+                    continue;
+                if (node->typ == PASCAL_T_ARG_LIST)
+                    break;
+                if (node->typ == PASCAL_T_IDENTIFIER) {
+                    const char *name = ast_symbol_name(node);
+                    if (name == NULL)
+                        continue;
+                    if (strcasecmp(name, "inherited") == 0) {
+                        inherited_call = 1;
+                        continue;
+                    }
+                    id = strdup(name);
+                    break;
+                }
+            }
+        }
+        if (id == NULL && g_current_method_name != NULL) {
+            /* cparser encodes bare "inherited" as FUNC_CALL with an empty child node.
+             * In method bodies, that means "inherited <current-method-name>". */
+            id = strdup(g_current_method_name);
         }
         ListNode_t *args = convert_expression_list(child);
         return mk_functioncall(expr_node->line, id, args);
@@ -12103,6 +12150,8 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         list_builder_append(&params_builder, self_param, LIST_TREE);
     }
 
+    const char *prev_method_name_ctx = g_current_method_name;
+    g_current_method_name = method_name;
     cur = qualified->next;
     while (cur != NULL) {
         ast_t *node = unwrap_pascal_node(cur);
@@ -12300,6 +12349,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         free(class_name);
         free(method_name);
         free(effective_class_last);
+        g_current_method_name = prev_method_name_ctx;
         return NULL;
     }
     
@@ -12317,6 +12367,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     free(class_name);
     free(method_name);
     free(effective_class_last);
+    g_current_method_name = prev_method_name_ctx;
     return tree;
 }
 

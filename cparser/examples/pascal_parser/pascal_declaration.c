@@ -248,6 +248,8 @@ static bool looks_like_range_literal(const input_t* in, int pos) {
         limit = length;
     }
     bool in_string = false;
+    int paren_depth = 0;
+    int bracket_depth = 0;
     while (pos < limit) {
         unsigned char ch = (unsigned char)buffer[pos];
         if (in_string) {
@@ -293,10 +295,35 @@ static bool looks_like_range_literal(const input_t* in, int pos) {
             }
             continue;
         }
-        if (ch == ';' || ch == ')' || ch == ',') {
+        if (ch == '(') {
+            paren_depth++;
+            pos++;
+            continue;
+        }
+        if (ch == ')') {
+            if (paren_depth > 0) {
+                paren_depth--;
+                pos++;
+                continue;
+            }
             break;
         }
-        if (ch == '.' && pos + 1 < length && buffer[pos + 1] == '.') {
+        if (ch == '[') {
+            bracket_depth++;
+            pos++;
+            continue;
+        }
+        if (ch == ']') {
+            if (bracket_depth > 0)
+                bracket_depth--;
+            pos++;
+            continue;
+        }
+        if ((ch == ';' || ch == ',') && paren_depth == 0 && bracket_depth == 0) {
+            break;
+        }
+        if (ch == '.' && pos + 1 < length && buffer[pos + 1] == '.' &&
+            paren_depth == 0 && bracket_depth == 0) {
             return true;
         }
         pos++;
@@ -2700,17 +2727,17 @@ void init_pascal_unit_parser(combinator_t** p) {
     combinator_t* interface_declarations = many(interface_declaration);
     
     combinator_t* procedure_definitions = multi(new_combinator(), PASCAL_T_NONE,
-        headeronly_procedure_decl,
         method_procedure_impl,
         procedure_impl,
+        headeronly_procedure_decl,
         NULL
     );
     set_combinator_name(procedure_definitions, "procedure_definition_choice");
 
     combinator_t* function_definitions = multi(new_combinator(), PASCAL_T_NONE,
-        headeronly_function_decl,
         method_function_impl,
         function_impl,
+        headeronly_function_decl,
         NULL
     );
     set_combinator_name(function_definitions, "function_definition_choice");
