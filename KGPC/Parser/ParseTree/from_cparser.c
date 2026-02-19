@@ -7694,6 +7694,26 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_build
             return NULL;
         }
         cur = cur->next;
+    } else if (cur != NULL && cur->typ == PASCAL_T_IDENTIFIER &&
+               cur->sym != NULL && cur->sym->name != NULL &&
+               cur->next != NULL) {
+        /* Bare identifier as type annotation (common in record/class const sections).
+         * AST: IDENTIFIER("Single") -> REAL("1.5")
+         * The identifier is the type name, the next sibling is the value.
+         * Only consume when map_type_name recognizes it as a known type
+         * to avoid misinterpreting keywords like "set" in "set of TEnum". */
+        char *type_name = dup_symbol(cur);
+        if (type_name != NULL) {
+            int mapped = map_type_name(type_name, &type_id);
+            if (mapped != UNKNOWN_TYPE || type_id != NULL) {
+                /* Known type name — consume and advance */
+                free(type_name);
+                cur = cur->next;
+            } else {
+                /* Not a known type — don't consume, let later handlers deal with it */
+                free(type_name);
+            }
+        }
     } else if (cur != NULL && cur->typ == PASCAL_T_NONE) {
         ast_t *type_node = cur->child;
         while (type_node != NULL &&
@@ -9016,6 +9036,11 @@ static void append_class_const_decls_from_type_decl(ast_t *type_decl_node,
     if (class_spec == NULL)
         return;
 
+    /* Skip if this is a type helper — append_helper_const_decls_from_type_decl
+     * already handles const sections for helpers with proper mangling. */
+    if (find_helper_record_spec(type_decl_node) != NULL)
+        return;
+
     ListNode_t **tail = const_decls;
     while (*tail != NULL)
         tail = &(*tail)->next;
@@ -9233,7 +9258,9 @@ static void append_helper_const_decls_from_type_decl(ast_t *type_decl_node,
             continue;
 
         ListNode_t *helper_consts = NULL;
+        ListNode_t **var_tail_before = var_builder->tail_next;
         append_const_decls_from_section(node, &helper_consts, var_builder, type_section);
+        ListNode_t *new_var_nodes = (var_tail_before != NULL) ? *var_tail_before : NULL;
 
         ListNode_t *const_cur = helper_consts;
         while (const_cur != NULL)
@@ -9257,6 +9284,49 @@ static void append_helper_const_decls_from_type_decl(ast_t *type_decl_node,
             *tail = const_cur;
             tail = &const_cur->next;
             const_cur = next;
+        }
+
+        /* Also rename any typed var decls that were appended to var_builder
+         * from this const section (e.g., MaxValue : Single = ...) */
+        for (ListNode_t *iter = new_var_nodes; iter != NULL; iter = iter->next)
+        {
+            Tree_t *decl = (Tree_t *)iter->cur;
+            if (decl == NULL)
+                continue;
+            if (decl->type == TREE_VAR_DECL)
+            {
+                for (ListNode_t *id_node = decl->tree_data.var_decl_data.ids;
+                     id_node != NULL; id_node = id_node->next)
+                {
+                    if (id_node->type == LIST_STRING && id_node->cur != NULL)
+                    {
+                        char *old_id = (char *)id_node->cur;
+                        char *mangled = mangle_helper_const_name(helper_id, old_id);
+                        if (mangled != NULL)
+                        {
+                            free(id_node->cur);
+                            id_node->cur = mangled;
+                        }
+                    }
+                }
+            }
+            else if (decl->type == TREE_ARR_DECL)
+            {
+                for (ListNode_t *id_node = decl->tree_data.arr_decl_data.ids;
+                     id_node != NULL; id_node = id_node->next)
+                {
+                    if (id_node->type == LIST_STRING && id_node->cur != NULL)
+                    {
+                        char *old_id = (char *)id_node->cur;
+                        char *mangled = mangle_helper_const_name(helper_id, old_id);
+                        if (mangled != NULL)
+                        {
+                            free(id_node->cur);
+                            id_node->cur = mangled;
+                        }
+                    }
+                }
+            }
         }
     }
 }

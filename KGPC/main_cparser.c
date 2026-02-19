@@ -18,6 +18,20 @@
 #ifndef _WIN32
 #include <unistd.h>
 #endif
+
+/* Portable setenv/unsetenv for Windows */
+#ifdef _WIN32
+static int setenv(const char *name, const char *value, int overwrite)
+{
+    (void)overwrite;
+    return _putenv_s(name, value);
+}
+static int unsetenv(const char *name)
+{
+    return _putenv_s(name, "");
+}
+#endif
+
 #include <ctype.h>
 #include <stdbool.h>
 #include <time.h>
