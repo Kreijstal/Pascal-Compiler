@@ -18,6 +18,20 @@
 #ifndef _WIN32
 #include <unistd.h>
 #endif
+
+/* Portable setenv/unsetenv for Windows */
+#ifdef _WIN32
+static int setenv(const char *name, const char *value, int overwrite)
+{
+    (void)overwrite;
+    return _putenv_s(name, value);
+}
+static int unsetenv(const char *name)
+{
+    return _putenv_s(name, "");
+}
+#endif
+
 #include <ctype.h>
 #include <stdbool.h>
 #include <time.h>
@@ -794,6 +808,54 @@ static void mark_unit_subprograms(ListNode_t *sub_list)
     }
 }
 
+static ListNode_t *extract_public_subprograms(ListNode_t **sub_list)
+{
+    if (sub_list == NULL)
+        return NULL;
+
+    ListNode_t *public_head = NULL;
+    ListNode_t *public_tail = NULL;
+    ListNode_t *prev = NULL;
+    ListNode_t *cur = *sub_list;
+
+    while (cur != NULL)
+    {
+        ListNode_t *next = cur->next;
+        int is_public = 0;
+        if (cur->type == LIST_TREE && cur->cur != NULL)
+        {
+            Tree_t *sub = (Tree_t *)cur->cur;
+            if (sub->type == TREE_SUBPROGRAM &&
+                sub->tree_data.subprogram_data.unit_is_public)
+            {
+                is_public = 1;
+            }
+        }
+
+        if (is_public)
+        {
+            if (prev != NULL)
+                prev->next = next;
+            else
+                *sub_list = next;
+
+            cur->next = NULL;
+            if (public_tail != NULL)
+                public_tail->next = cur;
+            else
+                public_head = cur;
+            public_tail = cur;
+        }
+        else
+        {
+            prev = cur;
+        }
+        cur = next;
+    }
+
+    return public_head;
+}
+
 static void mark_unit_type_decls(ListNode_t *type_list, int is_public)
 {
     ListNode_t *node = type_list;
@@ -1020,40 +1082,9 @@ static void merge_unit_into_target(Tree_t *target, Tree_t *unit_tree)
     *var_list = ConcatList(*var_list, unit_tree->tree_data.unit_data.interface_var_decls);
     unit_tree->tree_data.unit_data.interface_var_decls = NULL;
 
-    mark_unit_type_decls(unit_tree->tree_data.unit_data.implementation_type_decls, 0);
-    if (getenv("KGPC_DEBUG_TFPG") != NULL) {
-        ListNode_t *dbg = unit_tree->tree_data.unit_data.implementation_type_decls;
-        while (dbg != NULL) {
-            if (dbg->type == LIST_TREE) {
-                Tree_t *decl = (Tree_t *)dbg->cur;
-                if (decl != NULL && decl->type == TREE_TYPE_DECL &&
-                    decl->tree_data.type_decl_data.id != NULL)
-                {
-                    fprintf(stderr, "[KGPC] merging impl type %s from unit %s\n",
-                            decl->tree_data.type_decl_data.id,
-                            unit_tree->tree_data.unit_data.unit_id != NULL ?
-                                unit_tree->tree_data.unit_data.unit_id : "<unknown>");
-                }
-            }
-            dbg = dbg->next;
-        }
-    }
-    /* Append implementation types to keep dependencies ahead of targets. */
-    *type_list = ConcatList(*type_list, unit_tree->tree_data.unit_data.implementation_type_decls);
-    unit_tree->tree_data.unit_data.implementation_type_decls = NULL;
-
-    mark_unit_const_decls(unit_tree->tree_data.unit_data.implementation_const_decls, 0);
-    /* Append implementation constants to keep dependencies ahead of targets. */
-    *const_list = ConcatList(*const_list, unit_tree->tree_data.unit_data.implementation_const_decls);
-    unit_tree->tree_data.unit_data.implementation_const_decls = NULL;
-
-    mark_unit_var_decls(unit_tree->tree_data.unit_data.implementation_var_decls, 0);
-    *var_list = ConcatList(*var_list, unit_tree->tree_data.unit_data.implementation_var_decls);
-    unit_tree->tree_data.unit_data.implementation_var_decls = NULL;
-
-    mark_unit_subprograms(unit_tree->tree_data.unit_data.subprograms);
-    *sub_list = ConcatList(*sub_list, unit_tree->tree_data.unit_data.subprograms);
-    unit_tree->tree_data.unit_data.subprograms = NULL;
+    ListNode_t *public_subs = extract_public_subprograms(&unit_tree->tree_data.unit_data.subprograms);
+    mark_unit_subprograms(public_subs);
+    *sub_list = ConcatList(*sub_list, public_subs);
 
     /* Only programs accumulate initialization/finalization */
     if (target->type == TREE_PROGRAM_TYPE) {
@@ -1501,6 +1532,10 @@ int main(int argc, char **argv)
 
         int sem_result = 0;
         double sem_start = track_time ? current_time_seconds() : 0.0;
+        if (g_skip_stdlib)
+            setenv("KGPC_SKIP_IMPORTED_IMPL_BODIES", "1", 1);
+        else
+            unsetenv("KGPC_SKIP_IMPORTED_IMPL_BODIES");
         SymTab_t *symtab = start_semcheck(user_tree, &sem_result);
         if (track_time)
             g_time_semantic += current_time_seconds() - sem_start;
@@ -1712,6 +1747,10 @@ int main(int argc, char **argv)
     
     int sem_result = 0;
     double sem_start = track_time ? current_time_seconds() : 0.0;
+    if (g_skip_stdlib)
+        setenv("KGPC_SKIP_IMPORTED_IMPL_BODIES", "1", 1);
+    else
+        unsetenv("KGPC_SKIP_IMPORTED_IMPL_BODIES");
     SymTab_t *symtab = start_semcheck(user_tree, &sem_result);
     if (track_time)
         g_time_semantic += current_time_seconds() - sem_start;

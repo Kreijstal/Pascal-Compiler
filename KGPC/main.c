@@ -184,7 +184,22 @@ static void mark_unit_subprograms(ListNode_t *sub_list)
         {
             Tree_t *sub = (Tree_t *)node->cur;
             if (sub->type == TREE_SUBPROGRAM)
+            {
                 sub->tree_data.subprogram_data.defined_in_unit = 1;
+                ListNode_t *arg = sub->tree_data.subprogram_data.args_var;
+                while (arg != NULL)
+                {
+                    if (arg->type == LIST_TREE && arg->cur != NULL)
+                    {
+                        Tree_t *decl = (Tree_t *)arg->cur;
+                        if (decl->type == TREE_VAR_DECL)
+                            decl->tree_data.var_decl_data.defined_in_unit = 1;
+                        else if (decl->type == TREE_ARR_DECL)
+                            decl->tree_data.arr_decl_data.defined_in_unit = 1;
+                    }
+                    arg = arg->next;
+                }
+            }
         }
         node = node->next;
     }

@@ -52,6 +52,12 @@ void serialize_expression_recursive(FILE *fp, struct Expression *expr) {
                 fprintf(fp, "NULL\n");
             serialize_expression_recursive(fp, expr->expr_data.typecast_data.expr);
             break;
+        case EXPR_TYPEINFO:
+            if (expr->expr_data.typeinfo_data.type_id != NULL)
+                fprintf(fp, "%s\n", expr->expr_data.typeinfo_data.type_id);
+            else
+                fprintf(fp, "NULL\n");
+            break;
         default:
             fprintf(fp, "UNKNOWN\n");
     }

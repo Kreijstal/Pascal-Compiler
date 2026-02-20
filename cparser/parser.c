@@ -2111,6 +2111,16 @@ static void free_combinator_recursive(combinator_t* comb, visited_set* visited, 
                 }
                 break;
             }
+            case COMB_EXPR_LVALUE: {
+                expr_lvalue_args_t* args = (expr_lvalue_args_t*)comb->args;
+                if (args != NULL) {
+                    if (args->expr_parser != NULL) {
+                        free_combinator_recursive(args->expr_parser, visited, extras);
+                    }
+                    free(args);
+                }
+                break;
+            }
             case COMB_CLASS_MEMBER_DISPATCH: {
                 class_member_dispatch_args_t* args = (class_member_dispatch_args_t*)comb->args;
                 if (args != NULL) {

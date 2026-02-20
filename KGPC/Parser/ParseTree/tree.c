@@ -364,6 +364,8 @@ static void destroy_record_field(struct RecordField *field)
         destroy_list(field->enum_literals);
     if (field->proc_type != NULL)
         kgpc_type_release(field->proc_type);
+    if (field->array_element_kgpc_type != NULL)
+        kgpc_type_release(field->array_element_kgpc_type);
     destroy_record_type(field->nested_record);
     destroy_record_type(field->array_element_record);
     free(field);
@@ -1117,6 +1119,11 @@ void expr_print(struct Expression *expr, FILE *f, int num_indent)
           expr_print(expr->expr_data.as_data.expr, f, num_indent + 1);
           --num_indent;
           break;
+        case EXPR_TYPEINFO:
+          fprintf(f, "[TYPEINFO:%s]\n",
+              expr->expr_data.typeinfo_data.type_id != NULL ?
+              expr->expr_data.typeinfo_data.type_id : "<unknown>");
+          break;
 
         default:
           fprintf(stderr, "BAD TYPE IN expr_print! type=%d\n", expr->type);
@@ -1286,6 +1293,8 @@ void destroy_tree(Tree_t *tree)
           destroy_list(tree->tree_data.arr_decl_data.ids);
           if (tree->tree_data.arr_decl_data.type_id != NULL)
             free(tree->tree_data.arr_decl_data.type_id);
+          if (tree->tree_data.arr_decl_data.inline_record_type != NULL)
+              destroy_record_type(tree->tree_data.arr_decl_data.inline_record_type);
           if (tree->tree_data.arr_decl_data.range_str != NULL)
             free(tree->tree_data.arr_decl_data.range_str);
           if (tree->tree_data.arr_decl_data.initializer != NULL)
@@ -1718,6 +1727,13 @@ void destroy_expr(struct Expression *expr)
               expr->expr_data.as_data.target_type_id = NULL;
           }
           break;
+        case EXPR_TYPEINFO:
+          if (expr->expr_data.typeinfo_data.type_id != NULL)
+          {
+              free(expr->expr_data.typeinfo_data.type_id);
+              expr->expr_data.typeinfo_data.type_id = NULL;
+          }
+          break;
 
         case EXPR_ADDR_OF_PROC:
           /* Nothing to free - procedure_symbol is a reference, not owned */
@@ -1918,6 +1934,9 @@ static struct RecordField *clone_record_field(const struct RecordField *field)
     clone->array_element_type_id = field->array_element_type_id != NULL ?
         strdup(field->array_element_type_id) : NULL;
     clone->array_element_record = clone_record_type(field->array_element_record);
+    clone->array_element_kgpc_type = field->array_element_kgpc_type;
+    if (clone->array_element_kgpc_type != NULL)
+        kgpc_type_retain(clone->array_element_kgpc_type);
     clone->array_is_open = field->array_is_open;
     clone->is_hidden = field->is_hidden;
     clone->is_class_var = field->is_class_var;
@@ -2266,6 +2285,7 @@ Tree_t *mk_typealiasdecl(int line_num, char *id, int is_array, int actual_type, 
     alias->is_enum_set = 0;
     alias->inline_enum_values = NULL;
     alias->is_enum = 0;
+    alias->enum_is_scoped = 0;
     alias->enum_literals = NULL;
     alias->is_file = 0;
     alias->file_type = UNKNOWN_TYPE;
@@ -2313,6 +2333,7 @@ Tree_t *mk_arraydecl(int line_num, ListNode_t *ids, int type, char *type_id, int
     new_tree->tree_data.arr_decl_data.ids = ids;
     new_tree->tree_data.arr_decl_data.type = type;
     new_tree->tree_data.arr_decl_data.type_id = type_id;
+    new_tree->tree_data.arr_decl_data.inline_record_type = NULL;
     new_tree->tree_data.arr_decl_data.s_range = start;
     new_tree->tree_data.arr_decl_data.e_range = end;
     new_tree->tree_data.arr_decl_data.range_str = range_str;
@@ -3189,6 +3210,7 @@ static void clear_type_alias_fields(struct TypeAlias *alias)
     }
     alias->is_char_alias = 0;
     alias->is_shortstring = 0;
+    alias->enum_is_scoped = 0;
     alias->is_range = 0;
     alias->range_known = 0;
     alias->range_start = 0;
