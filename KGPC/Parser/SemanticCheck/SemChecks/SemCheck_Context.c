@@ -213,6 +213,11 @@ int semcheck_with_try_resolve(const char *field_id, SymTab_t *symtab,
         if (resolve_record_field(symtab, entry->record_type, field_id,
                 &field_desc, &offset, line_num, 1) == 0 && field_desc != NULL)
         {
+            if (pascal_identifier_equals(field_id, "Pos"))
+                fprintf(stderr, "[DEBUG] WITH resolved 'Pos' as field in record '%s', type=%d, name='%s'\n",
+                    entry->record_type->type_id ? entry->record_type->type_id : "<anon>",
+                    field_desc->type,
+                    field_desc->name ? field_desc->name : "<null>");
             struct Expression *clone = clone_expression(entry->context_expr);
             if (clone == NULL)
                 return -1;

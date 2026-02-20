@@ -1942,6 +1942,14 @@ int semcheck_recordaccess(int *type_return,
                     }
 
                     /* Transform record access into an explicit method call: receiver.Method() */
+                    if (pascal_identifier_equals(field_id, "Pos")) {
+                        const char *cur_sub = semcheck_get_current_subprogram_id();
+                        fprintf(stderr, "[DEBUG] semcheck_recordaccess transforming Pos to FUNC_CALL, line=%d, record_type='%s', cur_sub='%s'\n",
+                            expr->line_num, record_info->type_id ? record_info->type_id : "<null>",
+                            cur_sub ? cur_sub : "(null)");
+                        if (record_expr && record_expr->type == EXPR_VAR_ID)
+                            fprintf(stderr, "[DEBUG]   receiver: VAR_ID '%s'\n", record_expr->expr_data.id ? record_expr->expr_data.id : "<null>");
+                    }
                     char *method_id = (method_node->mangled_id != NULL) ?
                         strdup(method_node->mangled_id) :
                         ((field_id != NULL) ? strdup(field_id) : NULL);

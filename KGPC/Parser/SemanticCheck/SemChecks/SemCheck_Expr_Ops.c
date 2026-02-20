@@ -1534,6 +1534,11 @@ int semcheck_varid(int *type_return,
     semcheck_clear_pointer_info(expr);
     semcheck_clear_array_info(expr);
 
+    if (pascal_identifier_equals(id, "Pos")) {
+        const char *cur_sub = semcheck_get_current_subprogram_id();
+        fprintf(stderr, "[DEBUG] semcheck_varid: id='Pos' line=%d cur_sub='%s' mutating=%d\n",
+            expr->line_num, cur_sub ? cur_sub : "(null)", mutating);
+    }
     struct Expression *with_expr = NULL;
     int with_status = semcheck_with_try_resolve(id, symtab, &with_expr, expr->line_num);
     if (with_status == 0 && with_expr != NULL)
