@@ -1373,12 +1373,21 @@ static bool read_file_contents(const char *filename, char **buffer, size_t *leng
         free(data);
         return set_error(error_message, "failed to read '%s'", filename);
     }
-    data[read] = '\0';
+    size_t final_len = read;
+    if (final_len >= 3 &&
+        (unsigned char)data[0] == 0xEF &&
+        (unsigned char)data[1] == 0xBB &&
+        (unsigned char)data[2] == 0xBF)
+    {
+        memmove(data, data + 3, final_len - 3);
+        final_len -= 3;
+    }
+    data[final_len] = '\0';
     if (buffer) {
         *buffer = data;
     }
     if (length) {
-        *length = read;
+        *length = final_len;
     }
     return true;
 }

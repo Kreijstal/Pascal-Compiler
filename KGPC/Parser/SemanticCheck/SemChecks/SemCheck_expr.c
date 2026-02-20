@@ -1061,6 +1061,12 @@ int semcheck_expr_main(SymTab_t *symtab, struct Expression *expr,
         case EXPR_FUNCTION_CALL:
             return_val += semcheck_funccall(type_return, symtab, expr, max_scope_lev, mutating);
             break;
+        case EXPR_TYPEINFO:
+            *type_return = POINTER_TYPE;
+            semcheck_expr_set_resolved_type(expr, POINTER_TYPE);
+            if (expr->resolved_kgpc_type == NULL)
+                expr->resolved_kgpc_type = create_pointer_type(NULL);
+            break;
         case EXPR_POINTER_DEREF:
             return_val += semcheck_pointer_deref(type_return, symtab, expr, max_scope_lev, mutating);
             break;

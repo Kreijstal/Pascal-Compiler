@@ -44,6 +44,15 @@ static int expr_tree_tag_from_kgpc(const KgpcType *type)
         return PROCEDURE;
     return UNKNOWN_TYPE;
 }
+
+static void codegen_enum_typeinfo_label(const char *type_id, char *buffer, size_t size)
+{
+    if (buffer == NULL || size == 0)
+        return;
+    char sanitized[CODEGEN_MAX_INST_BUF];
+    codegen_sanitize_identifier_for_label(type_id, sanitized, sizeof(sanitized));
+    snprintf(buffer, size, "__kgpc_enum_typeinfo_%s", sanitized);
+}
 #include "../../../Parser/ParseTree/type_tags.h"
 #include "../../../Parser/SemanticCheck/HashTable/HashTable.h"
 #include "../../../Parser/SemanticCheck/SymTab/SymTab.h"
@@ -1068,6 +1077,7 @@ expr_node_t *build_expr_tree(struct Expression *expr)
         case EXPR_POINTER_DEREF:
         case EXPR_ADDR:
         case EXPR_ADDR_OF_PROC:
+        case EXPR_TYPEINFO:
         case EXPR_ANONYMOUS_FUNCTION:
         case EXPR_ANONYMOUS_PROCEDURE:
             new_node->left_expr = NULL;
@@ -1145,6 +1155,7 @@ static int leaf_expr_is_simple(const struct Expression *expr)
         case EXPR_CHAR_CODE:
         case EXPR_BOOL:
         case EXPR_NIL:
+        case EXPR_TYPEINFO:
             return 1;
         default:
             return 0;
@@ -2766,6 +2777,19 @@ cleanup_constructor:
         snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", label, target_reg->bit_64);
         return add_inst(inst_list, buffer);
     }
+    else if (expr->type == EXPR_TYPEINFO)
+    {
+        const char *type_id = expr->expr_data.typeinfo_data.type_id;
+        if (type_id == NULL || type_id[0] == '\0')
+        {
+            codegen_report_error(ctx, "ERROR: TypeInfo missing type identifier.");
+            return inst_list;
+        }
+        char label[CODEGEN_MAX_INST_BUF];
+        codegen_enum_typeinfo_label(type_id, label, sizeof(label));
+        snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", label, target_reg->bit_64);
+        return add_inst(inst_list, buffer);
+    }
 
     inst_list = gencode_leaf_var(expr, inst_list, ctx, buf_leaf, sizeof(buf_leaf));
 
@@ -3457,6 +3481,17 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
             }
 
             break;
+
+        case EXPR_TYPEINFO:
+        {
+            const char *type_id = expr->expr_data.typeinfo_data.type_id;
+            if (type_id == NULL || type_id[0] == '\0')
+                type_id = "unknown";
+            char label[CODEGEN_MAX_INST_BUF];
+            codegen_enum_typeinfo_label(type_id, label, sizeof(label));
+            snprintf(buffer, buf_len, "%s(%%rip)", label);
+            break;
+        }
 
         case EXPR_INUM:
             snprintf(buffer, buf_len, "$%lld", expr->expr_data.i_num);

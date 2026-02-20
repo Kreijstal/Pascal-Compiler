@@ -79,6 +79,20 @@ git clone https://github.com/fpc/FPCSource
   -I./FPCSource/packages/rtl-objpas/src/inc
 ```
 
+### typinfo.pp (flags required)
+```bash
+./build/KGPC/kgpc ./FPCSource/rtl/objpas/typinfo.pp /tmp/typinfo.s \
+  --no-stdlib \
+  -I./FPCSource/rtl/unix \
+  -I./FPCSource/rtl/objpas \
+  -I./FPCSource/rtl/objpas/sysutils \
+  -I./FPCSource/rtl/inc \
+  -I./FPCSource/rtl/linux \
+  -I./FPCSource/rtl/linux/x86_64 \
+  -I./FPCSource/rtl/x86_64 \
+  -I./FPCSource/packages/rtl-objpas/src/inc
+```
+
 ## Units with Compilation Errors
 
 - `baseunix.pp` - **0 errors**
@@ -89,7 +103,7 @@ git clone https://github.com/fpc/FPCSource
 - `fgl.pp` - **0 errors**
 - `sysconst.pp` - **0 errors**
 - `rtlconsts.pp` - **0 errors**
-- `typinfo.pp` - **0 errors**
+- `typinfo.pp` - **errors (see flags above)**
 
 ## Meson Test Suite
 

@@ -122,6 +122,8 @@ static inline const char *codegen_readonly_section_directive(void)
     return codegen_target_is_windows() ? "\t.section\t.rdata,\"dr\"" : "\t.section\t.rodata";
 }
 
+void codegen_sanitize_identifier_for_label(const char *value, char *buffer, size_t size);
+
 #define NORMAL_JMP -1
 
 #include <stdlib.h>

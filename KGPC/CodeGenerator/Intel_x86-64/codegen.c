@@ -1275,7 +1275,7 @@ static void codegen_emit_function_debug_comments(const char *func_name, CodeGenC
         "static-link=%s", needs_link ? "required" : "not-required");
 }
 
-static void codegen_sanitize_identifier_for_label(const char *value, char *buffer, size_t size)
+void codegen_sanitize_identifier_for_label(const char *value, char *buffer, size_t size)
 {
     if (buffer == NULL || size == 0)
         return;
@@ -1314,6 +1314,157 @@ static char *codegen_make_program_var_label(CodeGenContext *ctx, const char *nam
     snprintf(buffer, sizeof(buffer), "__kgpc_program_var_%s_%d",
         sanitized, ++ctx->global_data_counter);
     return strdup(buffer);
+}
+
+static void codegen_emit_enum_typeinfo_for_alias(CodeGenContext *ctx, const char *type_name,
+    struct TypeAlias *alias)
+{
+    if (ctx == NULL || ctx->output_file == NULL || type_name == NULL || alias == NULL)
+        return;
+    if (!alias->is_enum || alias->enum_literals == NULL)
+        return;
+
+    int count = ListLength(alias->enum_literals);
+    if (count <= 0)
+        return;
+
+    char type_label[CODEGEN_MAX_INST_BUF];
+    codegen_sanitize_identifier_for_label(type_name, type_label, sizeof(type_label));
+
+    char typeinfo_label[CODEGEN_MAX_INST_BUF];
+    snprintf(typeinfo_label, sizeof(typeinfo_label), "__kgpc_enum_typeinfo_%s", type_label);
+
+    fprintf(ctx->output_file, "\n# Enum RTTI for %s\n", type_name);
+    fprintf(ctx->output_file, "\t.align 8\n");
+    fprintf(ctx->output_file, ".globl %s\n", typeinfo_label);
+    fprintf(ctx->output_file, "%s:\n", typeinfo_label);
+    fprintf(ctx->output_file, "\t.long\t%d\n", count);
+    fprintf(ctx->output_file, "\t.long\t0\n");
+
+    int index = 0;
+    for (ListNode_t *lit = alias->enum_literals; lit != NULL; lit = lit->next, ++index)
+    {
+        char name_label[CODEGEN_MAX_INST_BUF];
+        snprintf(name_label, sizeof(name_label), "__kgpc_enum_%s_name_%d", type_label, index);
+        fprintf(ctx->output_file, "\t.quad\t%s\n", name_label);
+    }
+
+    index = 0;
+    for (ListNode_t *lit = alias->enum_literals; lit != NULL; lit = lit->next, ++index)
+    {
+        const char *literal = (lit->cur != NULL) ? (const char *)lit->cur : "";
+        char name_label[CODEGEN_MAX_INST_BUF];
+        snprintf(name_label, sizeof(name_label), "__kgpc_enum_%s_name_%d", type_label, index);
+        char escaped_literal[CODEGEN_MAX_INST_BUF];
+        escape_string(escaped_literal, literal, sizeof(escaped_literal));
+        fprintf(ctx->output_file, "%s:\n", name_label);
+        fprintf(ctx->output_file, "\t.string \"%s\"\n", escaped_literal);
+    }
+}
+
+static void codegen_emit_enum_typeinfo_from_table(CodeGenContext *ctx, HashTable_t *table,
+    int emit_unit_types, const char **emitted_labels, int *emitted_count, int *emitted_any)
+{
+    if (ctx == NULL || table == NULL)
+        return;
+
+    for (int i = 0; i < TABLE_SIZE; ++i)
+    {
+        ListNode_t *entry = table->table[i];
+        while (entry != NULL)
+        {
+            HashNode_t *node = (HashNode_t *)entry->cur;
+            entry = entry->next;
+            if (node == NULL || node->hash_type != HASHTYPE_TYPE)
+                continue;
+
+            if (emit_unit_types)
+            {
+                if (!node->defined_in_unit)
+                    continue;
+            }
+            else
+            {
+                if (node->defined_in_unit)
+                    continue;
+            }
+
+            if (node->type == NULL)
+                continue;
+
+            struct TypeAlias *alias = kgpc_type_get_type_alias(node->type);
+            if (alias == NULL || !alias->is_enum || alias->enum_literals == NULL)
+                continue;
+
+            const char *type_name = (alias->alias_name != NULL) ? alias->alias_name : node->id;
+            if (type_name == NULL || type_name[0] == '\0')
+                continue;
+
+            char type_label[CODEGEN_MAX_INST_BUF];
+            codegen_sanitize_identifier_for_label(type_name, type_label, sizeof(type_label));
+            char label[CODEGEN_MAX_INST_BUF];
+            snprintf(label, sizeof(label), "__kgpc_enum_typeinfo_%s", type_label);
+
+            int already_emitted = 0;
+            for (int idx = 0; idx < *emitted_count; ++idx)
+            {
+                if (emitted_labels[idx] != NULL && strcmp(emitted_labels[idx], label) == 0)
+                {
+                    already_emitted = 1;
+                    break;
+                }
+            }
+            if (already_emitted)
+                continue;
+
+            if (*emitted_count < 512)
+            {
+                emitted_labels[*emitted_count] = strdup(label);
+                if (emitted_labels[*emitted_count] != NULL)
+                    (*emitted_count)++;
+            }
+
+            if (emitted_any != NULL && !(*emitted_any))
+            {
+                fprintf(ctx->output_file, "\n# Enum RTTI metadata\n");
+                fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());
+                *emitted_any = 1;
+            }
+
+            codegen_emit_enum_typeinfo_for_alias(ctx, type_name, alias);
+        }
+    }
+}
+
+static void codegen_emit_enum_typeinfo(CodeGenContext *ctx, SymTab_t *symtab, int emit_unit_types)
+{
+    if (ctx == NULL || symtab == NULL)
+        return;
+
+    const char *emitted_labels[512];
+    int emitted_count = 0;
+    int emitted_any = 0;
+    for (int i = 0; i < 512; ++i)
+        emitted_labels[i] = NULL;
+
+    if (symtab->builtins != NULL)
+        codegen_emit_enum_typeinfo_from_table(ctx, symtab->builtins, emit_unit_types,
+            emitted_labels, &emitted_count, &emitted_any);
+
+    ListNode_t *scope = symtab->stack_head;
+    while (scope != NULL)
+    {
+        HashTable_t *table = (HashTable_t *)scope->cur;
+        codegen_emit_enum_typeinfo_from_table(ctx, table, emit_unit_types,
+            emitted_labels, &emitted_count, &emitted_any);
+        scope = scope->next;
+    }
+
+    if (emitted_any)
+        fprintf(ctx->output_file, ".text\n");
+
+    for (int i = 0; i < emitted_count; ++i)
+        free((void *)emitted_labels[i]);
 }
 
 /* Generates a label */
@@ -1524,6 +1675,7 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
 
     codegen_program_header(input_file_name, ctx);
     codegen_rodata(ctx);
+    codegen_emit_enum_typeinfo(ctx, symtab, 0);
     codegen_vmt(ctx, symtab, tree);
 
     prgm_name = codegen_program(tree, ctx, symtab);
@@ -1575,6 +1727,7 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
 
     codegen_program_header(input_file_name, ctx);
     codegen_rodata(ctx);
+    codegen_emit_enum_typeinfo(ctx, symtab, 1);
 
     /* Generate code for unit subprograms */
     codegen_subprograms(tree->tree_data.unit_data.subprograms, ctx, symtab);

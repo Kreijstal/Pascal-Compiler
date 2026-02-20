@@ -146,6 +146,7 @@ typedef struct Tree
             ListNode_t *ids;
             int type; /* Int, or real */
             char *type_id;
+            struct RecordType *inline_record_type;
 
             int s_range;
             int e_range;

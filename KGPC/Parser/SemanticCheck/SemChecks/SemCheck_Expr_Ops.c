@@ -251,6 +251,12 @@ int semcheck_relop(int *type_return,
             }
             else if (relop_type == EQ || relop_type == NE)
             {
+                if (type_first == SET_TYPE && type_second == SET_TYPE)
+                {
+                    semcheck_expr_set_resolved_type(expr, BOOL);
+                    *type_return = BOOL;
+                    return return_val;
+                }
                 /* Check for operator overloading for record types first */
                 if ((type_first == RECORD_TYPE && type_second == RECORD_TYPE) ||
                     (type_first == RECORD_TYPE && type_second == POINTER_TYPE))
@@ -2079,6 +2085,56 @@ resolved:;
     }
     else
     {
+        int force_function_result = 0;
+        if (id != NULL && semcheck_current_subprogram_is_function())
+        {
+            const char *cur_id = semcheck_get_current_subprogram_id();
+            const char *result_var = semcheck_get_current_subprogram_result_var_name();
+            const char *alias_suffix = NULL;
+            const char *method_base = NULL;
+            size_t method_base_len = 0;
+            if (cur_id != NULL)
+            {
+                const char *sep = strstr(cur_id, "__");
+                if (sep != NULL && sep[2] != '\0')
+                    alias_suffix = sep + 2;
+                if (sep != NULL && sep[2] != '\0')
+                {
+                    const char *name_start = sep + 2;
+                    const char *end = strstr(name_start, "_u_");
+                    if (end == NULL)
+                        end = strchr(name_start, '_');
+                    if (end != NULL && end > name_start)
+                    {
+                        method_base = name_start;
+                        method_base_len = (size_t)(end - name_start);
+                    }
+                    else if (end == NULL)
+                    {
+                        method_base = name_start;
+                        method_base_len = strlen(name_start);
+                    }
+                }
+            }
+            if (pascal_identifier_equals(id, "Result") ||
+                (cur_id != NULL && pascal_identifier_equals(id, cur_id)) ||
+                (alias_suffix != NULL && pascal_identifier_equals(id, alias_suffix)) ||
+                (result_var != NULL && pascal_identifier_equals(id, result_var)))
+            {
+                force_function_result = 1;
+            }
+            else if (method_base != NULL && method_base_len > 0)
+            {
+                char *method_name = strndup(method_base, method_base_len);
+                if (method_name != NULL)
+                {
+                    if (pascal_identifier_equals(id, method_name))
+                        force_function_result = 1;
+                    free(method_name);
+                }
+            }
+        }
+
         if (getenv("KGPC_DEBUG_SEMCHECK") != NULL &&
             id != NULL && strcmp(id, "DefaultComparer") == 0)
         {
@@ -2095,7 +2151,7 @@ resolved:;
            When mutating == NO_MUTATE, we're reading the function's return value.
            When mutating != NO_MUTATE, we're inside the function assigning to its return value,
            which should remain as HASHTYPE_FUNCTION_RETURN access. */
-        if(hash_return->hash_type == HASHTYPE_FUNCTION && mutating == NO_MUTATE)
+        if(hash_return->hash_type == HASHTYPE_FUNCTION && mutating == NO_MUTATE && !force_function_result)
         {
             /* Prefer implicit Self members over same-named global functions.
              * Example: inside TRectF methods, bare "BottomRight" should resolve
@@ -2356,10 +2412,22 @@ resolved:;
                 ++return_val;
             }
         }
-        int is_function_result = (mutating != NO_MUTATE &&
-            hash_return->hash_type == HASHTYPE_FUNCTION);
+        int is_function_result = (force_function_result ||
+            (mutating != NO_MUTATE && hash_return->hash_type == HASHTYPE_FUNCTION));
 
         KgpcType *effective_type = hash_return->type;
+        if (force_function_result)
+        {
+            int ret_owned = 0;
+            KgpcType *ret_type = semcheck_get_current_subprogram_return_kgpc_type(symtab, &ret_owned);
+            if (ret_type != NULL)
+            {
+                effective_type = ret_type;
+                semcheck_expr_set_resolved_kgpc_type_shared(expr, ret_type);
+                if (ret_owned)
+                    destroy_kgpc_type(ret_type);
+            }
+        }
         int node_is_array = 0;
         if (is_function_result)
         {
@@ -2369,6 +2437,11 @@ resolved:;
                 KgpcType *ret_type = kgpc_type_get_return_type(hash_return->type);
                 if (ret_type != NULL)
                     effective_type = ret_type;
+            }
+            if (effective_type != NULL &&
+                (kgpc_type_is_array(effective_type) || kgpc_type_is_array_of_const(effective_type)))
+            {
+                node_is_array = 1;
             }
         }
         else
@@ -2412,8 +2485,23 @@ resolved:;
             }
         }
         set_type_from_hashtype(type_return, hash_return);
+        if ((force_function_result || is_function_result) && effective_type != NULL)
+        {
+            int effective_tag = semcheck_tag_from_kgpc(effective_type);
+            if (effective_tag != UNKNOWN_TYPE)
+                *type_return = effective_tag;
+        }
         if (node_is_array)
-            semcheck_set_array_info_from_hashnode(expr, symtab, hash_return, expr->line_num);
+        {
+            if (is_function_result && effective_type != NULL)
+            {
+                semcheck_set_array_info_from_kgpctype(expr, symtab, effective_type, expr->line_num);
+            }
+            else
+            {
+                semcheck_set_array_info_from_hashnode(expr, symtab, hash_return, expr->line_num);
+            }
+        }
         else
             semcheck_clear_array_info(expr);
         int force_shortstring = 0;

@@ -72,6 +72,8 @@ int semcheck_typecast(int *type_return,
         }
         expr->expr_data.typecast_data.target_type = inner_type;
         semcheck_expr_set_resolved_type(expr, inner_type);
+        if (inner_kgpc_type != NULL)
+            semcheck_expr_set_resolved_kgpc_type_shared(expr, inner_kgpc_type);
         *type_return = inner_type;
         return error_count;
     }
@@ -1903,6 +1905,9 @@ int semcheck_recordaccess(int *type_return,
                             /* Find the best overload: one that requires exactly args_for_call params */
                             ListNode_t *cur = all_methods;
                             HashNode_t *best_match = NULL;
+                            HashNode_t *fallback_match = NULL;
+                            int fallback_required = -1;
+                            int fallback_total = -1;
                             
                             while (cur != NULL) {
                                 HashNode_t *candidate = (HashNode_t *)cur->cur;
@@ -1914,6 +1919,15 @@ int semcheck_recordaccess(int *type_return,
                                     ListNode_t *params = kgpc_type_get_procedure_params(candidate->type);
                                     int total_params = semcheck_count_total_params(params);
                                     int required_params = semcheck_count_required_params(params);
+
+                                    if (fallback_match == NULL ||
+                                        required_params < fallback_required ||
+                                        (required_params == fallback_required && total_params < fallback_total))
+                                    {
+                                        fallback_match = candidate;
+                                        fallback_required = required_params;
+                                        fallback_total = total_params;
+                                    }
                                     
                                     /* Check if this overload accepts args_for_call arguments */
                                     if (args_for_call >= required_params && args_for_call <= total_params) {
@@ -1935,6 +1949,8 @@ int semcheck_recordaccess(int *type_return,
                             
                             if (best_match != NULL) {
                                 method_node = best_match;
+                            } else if (fallback_match != NULL) {
+                                method_node = fallback_match;
                             }
                             
                             DestroyList(all_methods);
@@ -1942,29 +1958,38 @@ int semcheck_recordaccess(int *type_return,
                     }
 
                     /* Transform record access into an explicit method call: receiver.Method() */
-                    char *method_id = (method_node->mangled_id != NULL) ?
-                        strdup(method_node->mangled_id) :
-                        ((field_id != NULL) ? strdup(field_id) : NULL);
+                    char *method_id = NULL;
 
                     expr->type = EXPR_FUNCTION_CALL;
                     memset(&expr->expr_data.function_call_data, 0,
                         sizeof(expr->expr_data.function_call_data));
-                    expr->expr_data.function_call_data.is_method_call_placeholder = 0;
-                    expr->expr_data.function_call_data.id = method_id;
-                    if (method_node->mangled_id != NULL)
-                        expr->expr_data.function_call_data.mangled_id =
-                            strdup(method_node->mangled_id);
-                    else if (method_id != NULL)
-                        expr->expr_data.function_call_data.mangled_id = strdup(method_id);
-                    expr->expr_data.function_call_data.resolved_func = method_node;
 
-                    if (is_static_method) {
+                    if (is_static_method)
+                    {
+                        method_id = (method_node->mangled_id != NULL) ?
+                            strdup(method_node->mangled_id) :
+                            ((field_id != NULL) ? strdup(field_id) : NULL);
+                        expr->expr_data.function_call_data.is_method_call_placeholder = 0;
+                        expr->expr_data.function_call_data.mangled_id =
+                            (method_node->mangled_id != NULL) ?
+                                strdup(method_node->mangled_id) :
+                                (method_id != NULL ? strdup(method_id) : NULL);
+                        expr->expr_data.function_call_data.resolved_func = method_node;
                         expr->expr_data.function_call_data.args_expr = NULL;
-                    } else {
+                    }
+                    else
+                    {
+                        method_id = (field_id != NULL) ? strdup(field_id) : NULL;
+                        expr->expr_data.function_call_data.is_method_call_placeholder = 1;
+                        expr->expr_data.function_call_data.mangled_id = NULL;
+                        expr->expr_data.function_call_data.resolved_func = NULL;
+
                         struct Expression *receiver = record_expr;
                         ListNode_t *arg_node = CreateListNode(receiver, LIST_EXPR);
                         expr->expr_data.function_call_data.args_expr = arg_node;
                     }
+
+                    expr->expr_data.function_call_data.id = method_id;
 
                     /* Re-run semantic checking as a function call */
                     semcheck_expr_set_resolved_type(expr, UNKNOWN_TYPE);
@@ -2105,34 +2130,39 @@ int semcheck_recordaccess(int *type_return,
                     }
                     
                     /* Transform record access into an explicit method call */
-                    char *method_id = (method_node->mangled_id != NULL) ?
-                        strdup(method_node->mangled_id) :
-                        ((field_id != NULL) ? strdup(field_id) : NULL);
+                    char *method_id = NULL;
 
                     expr->type = EXPR_FUNCTION_CALL;
                     memset(&expr->expr_data.function_call_data, 0,
                         sizeof(expr->expr_data.function_call_data));
-                    expr->expr_data.function_call_data.is_method_call_placeholder = 0;
-                    expr->expr_data.function_call_data.id = method_id;
-                    if (method_node->mangled_id != NULL)
-                        expr->expr_data.function_call_data.mangled_id =
-                            strdup(method_node->mangled_id);
-                    else if (method_id != NULL)
-                        expr->expr_data.function_call_data.mangled_id = strdup(method_id);
-                    expr->expr_data.function_call_data.resolved_func = method_node;
-                    expr->expr_data.function_call_data.call_hash_type = method_node->hash_type;
-                    semcheck_expr_set_call_kgpc_type(expr, method_node->type, 0);
-                    expr->expr_data.function_call_data.is_call_info_valid = 1;
 
-                    /* For static methods, don't pass a receiver/Self */
-                    if (is_static_method) {
+                    if (is_static_method)
+                    {
+                        method_id = (method_node->mangled_id != NULL) ?
+                            strdup(method_node->mangled_id) :
+                            ((field_id != NULL) ? strdup(field_id) : NULL);
+                        expr->expr_data.function_call_data.is_method_call_placeholder = 0;
+                        expr->expr_data.function_call_data.mangled_id =
+                            (method_node->mangled_id != NULL) ?
+                                strdup(method_node->mangled_id) :
+                                (method_id != NULL ? strdup(method_id) : NULL);
+                        expr->expr_data.function_call_data.resolved_func = method_node;
                         expr->expr_data.function_call_data.args_expr = NULL;
-                    } else {
+                    }
+                    else
+                    {
+                        method_id = (field_id != NULL) ? strdup(field_id) : NULL;
+                        expr->expr_data.function_call_data.is_method_call_placeholder = 1;
+                        expr->expr_data.function_call_data.mangled_id = NULL;
+                        expr->expr_data.function_call_data.resolved_func = NULL;
+
                         /* For instance methods, pass receiver as first argument (Self) */
                         struct Expression *receiver = record_expr;
                         ListNode_t *arg_node = CreateListNode(receiver, LIST_EXPR);
                         expr->expr_data.function_call_data.args_expr = arg_node;
                     }
+
+                    expr->expr_data.function_call_data.id = method_id;
 
                     /* Re-run semantic checking as a function call */
                     semcheck_expr_set_resolved_type(expr, UNKNOWN_TYPE);
@@ -2168,32 +2198,38 @@ int semcheck_recordaccess(int *type_return,
                             is_static_method = from_cparser_is_method_static(type_name, field_id);
                         }
 
-                        char *method_id = (method_node->mangled_id != NULL) ?
-                            strdup(method_node->mangled_id) :
-                            ((field_id != NULL) ? strdup(field_id) : NULL);
+                        char *method_id = NULL;
 
                         expr->type = EXPR_FUNCTION_CALL;
                         memset(&expr->expr_data.function_call_data, 0,
                             sizeof(expr->expr_data.function_call_data));
-                        expr->expr_data.function_call_data.is_method_call_placeholder = 0;
-                        expr->expr_data.function_call_data.id = method_id;
-                        if (method_node->mangled_id != NULL)
-                            expr->expr_data.function_call_data.mangled_id =
-                                strdup(method_node->mangled_id);
-                        else if (method_id != NULL)
-                            expr->expr_data.function_call_data.mangled_id = strdup(method_id);
-                        expr->expr_data.function_call_data.resolved_func = method_node;
-                        expr->expr_data.function_call_data.call_hash_type = method_node->hash_type;
-                        semcheck_expr_set_call_kgpc_type(expr, method_node->type, 0);
-                        expr->expr_data.function_call_data.is_call_info_valid = 1;
 
-                        if (is_static_method) {
+                        if (is_static_method)
+                        {
+                            method_id = (method_node->mangled_id != NULL) ?
+                                strdup(method_node->mangled_id) :
+                                ((field_id != NULL) ? strdup(field_id) : NULL);
+                            expr->expr_data.function_call_data.is_method_call_placeholder = 0;
+                            expr->expr_data.function_call_data.mangled_id =
+                                (method_node->mangled_id != NULL) ?
+                                    strdup(method_node->mangled_id) :
+                                    (method_id != NULL ? strdup(method_id) : NULL);
+                            expr->expr_data.function_call_data.resolved_func = method_node;
                             expr->expr_data.function_call_data.args_expr = NULL;
-                        } else {
+                        }
+                        else
+                        {
+                            method_id = (field_id != NULL) ? strdup(field_id) : NULL;
+                            expr->expr_data.function_call_data.is_method_call_placeholder = 1;
+                            expr->expr_data.function_call_data.mangled_id = NULL;
+                            expr->expr_data.function_call_data.resolved_func = NULL;
+
                             struct Expression *receiver = record_expr;
                             ListNode_t *arg_node = CreateListNode(receiver, LIST_EXPR);
                             expr->expr_data.function_call_data.args_expr = arg_node;
                         }
+
+                        expr->expr_data.function_call_data.id = method_id;
 
                         semcheck_expr_set_resolved_type(expr, UNKNOWN_TYPE);
                         return semcheck_funccall(type_return, symtab, expr, max_scope_lev, mutating);
@@ -2478,6 +2514,45 @@ FIELD_RESOLVED:
             field_type = expr->array_element_type;
         if (expr->array_element_record_type != NULL && field_type == RECORD_TYPE)
             field_record = expr->array_element_record_type;
+
+        if (expr->resolved_kgpc_type == NULL)
+        {
+            KgpcType *element_kgpc = NULL;
+            if (field_desc->array_element_kgpc_type != NULL)
+            {
+                element_kgpc = field_desc->array_element_kgpc_type;
+                kgpc_type_retain(element_kgpc);
+            }
+            else if (expr->array_element_record_type != NULL)
+            {
+                element_kgpc = create_record_type(expr->array_element_record_type);
+            }
+            else if (expr->array_element_type != UNKNOWN_TYPE)
+            {
+                element_kgpc = create_primitive_type(expr->array_element_type);
+            }
+            else if (expr->array_element_type_id != NULL)
+            {
+                HashNode_t *elem_node = semcheck_find_preferred_type_node(symtab,
+                    expr->array_element_type_id);
+                if (elem_node == NULL)
+                    elem_node = semcheck_find_type_node_with_kgpc_type(symtab,
+                        expr->array_element_type_id);
+                if (elem_node != NULL && elem_node->type != NULL)
+                {
+                    element_kgpc = elem_node->type;
+                    kgpc_type_retain(element_kgpc);
+                }
+            }
+
+            if (element_kgpc != NULL)
+            {
+                KgpcType *array_type = create_array_type(element_kgpc,
+                    expr->array_lower_bound, expr->array_upper_bound);
+                semcheck_expr_set_resolved_kgpc_type_shared(expr, array_type);
+                destroy_kgpc_type(array_type);
+            }
+        }
     }
 
     struct TypeAlias *array_alias = NULL;
@@ -2528,7 +2603,16 @@ FIELD_RESOLVED:
             field_type = RECORD_TYPE;
     }
 
-    if (field_type == UNKNOWN_TYPE && field_record == NULL && array_alias == NULL)
+    int resolved_array_type = 0;
+    if (expr->resolved_kgpc_type != NULL &&
+        (kgpc_type_is_array(expr->resolved_kgpc_type) ||
+         kgpc_type_is_array_of_const(expr->resolved_kgpc_type)))
+    {
+        resolved_array_type = 1;
+    }
+
+    if (field_type == UNKNOWN_TYPE && field_record == NULL && array_alias == NULL &&
+        !resolved_array_type)
     {
         semcheck_error_with_context("Error on line %d, unable to resolve type for field %s.\n\n",
             expr->line_num, field_id);
@@ -2536,7 +2620,7 @@ FIELD_RESOLVED:
         return error_count + 1;
     }
 
-    if (field_type == RECORD_TYPE && field_record == NULL)
+    if (field_type == RECORD_TYPE && field_record == NULL && array_alias == NULL)
     {
         semcheck_error_with_context("Error on line %d, missing record definition for field %s.\n\n",
             expr->line_num, field_id);

@@ -97,6 +97,7 @@ typedef enum {
     COMB_VARIANT_TAG,
     COMB_VARIANT_PART,
     COMB_MAIN_BLOCK_CONTENT,
+    COMB_EXPR_LVALUE,
     P_EOI
 } parser_type_t;
 
@@ -257,6 +258,10 @@ typedef struct statement_dispatch_args {
     combinator_t* expr_parser;
     combinator_t* on_handler_parser;
 } statement_dispatch_args_t;
+
+typedef struct expr_lvalue_args {
+    combinator_t* expr_parser;
+} expr_lvalue_args_t;
 
 typedef struct class_member_dispatch_args {
     combinator_t* constructor_parser;

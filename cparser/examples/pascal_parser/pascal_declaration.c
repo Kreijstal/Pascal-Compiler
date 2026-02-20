@@ -11,6 +11,14 @@
 #include <ctype.h>
 #include <stdbool.h>
 
+#define EXTERNAL_DIRECTIVE_KEYWORDS \
+    token(create_keyword_parser("external", PASCAL_T_IDENTIFIER)), \
+    token(create_keyword_parser("weakexternal", PASCAL_T_IDENTIFIER))
+
+#define EXTERNAL_KEYWORD_CI \
+    token(keyword_ci("external")), \
+    token(keyword_ci("weakexternal"))
+
 // Windows compatibility: strndup is not available on Windows
 #ifdef _WIN32
 static char* strndup(const char* s, size_t n)
@@ -1091,14 +1099,17 @@ static ParseResult main_block_content_fn(input_t* in, void* args, char* parser_n
     combinator_t** stmt_parser_ref = mb_args->stmt_parser;
     // Statements in a BEGIN..END block follow the same semicolon rules as any
     // compound statement: statements are separated by semicolons with an optional
-    // trailing semicolon.  Use sep_by/optional to mirror the begin-end handling in
-    // the statement parser so complex statements (like CASE) remain available.
+    // trailing semicolon. Allow empty statements between semicolons (e.g. "stmt; ; stmt").
     combinator_t* leading_semicolons = many(token(match(";")));
 
     combinator_t* stmt_sequence = seq(new_combinator(), PASCAL_T_NONE,
         leading_semicolons,
-        sep_by(lazy(stmt_parser_ref), token(match(";"))),
-        optional(token(match(";"))),
+        many(seq(new_combinator(), PASCAL_T_NONE,
+            optional(lazy(stmt_parser_ref)),
+            token(match(";")),
+            NULL
+        )),
+        optional(lazy(stmt_parser_ref)),
         NULL
     );
 
@@ -1147,19 +1158,38 @@ static ParseResult main_block_content_fn(input_t* in, void* args, char* parser_n
         }
     }
     
-    // CRITICAL FIX: Extract the statement list from the seq result
-    // The seq has: leading_semicolons, sep_by(statements), optional(semicolon)
-    // We want to return just the sep_by result (second child)
+    // Extract the statement list from the seq result.
+    // The seq has: leading_semicolons, many(stmt?;), optional(stmt)
     if (stmt_result.is_success && stmt_result.value.ast != ast_nil && stmt_result.value.ast != NULL) {
         if (stmt_result.value.ast->typ == PASCAL_T_NONE && stmt_result.value.ast->child != NULL) {
-            // Extract the sep_by result (second child)
-            ast_t* sep_by_result = stmt_result.value.ast->child->next;
-            if (sep_by_result != NULL && sep_by_result != ast_nil) {
-                if (debug_flag != NULL) {
-                    fprintf(stderr, "[pascal_parser] Extracting sep_by result from seq\n");
+            ast_t* cursor = stmt_result.value.ast->child;
+            ast_t* repeated = cursor ? cursor->next : NULL;
+            ast_t* trailing = repeated ? repeated->next : NULL;
+            ast_t* stmt_list = NULL;
+
+            for (ast_t* seq_node = repeated; seq_node != NULL && seq_node != ast_nil; seq_node = seq_node->next) {
+                ast_t* stmt = seq_node->child;
+                if (stmt == NULL || stmt == ast_nil) {
+                    continue;
                 }
-                stmt_result.value.ast = sep_by_result;
+                if (stmt_list == NULL || stmt_list == ast_nil) {
+                    stmt_list = stmt;
+                } else {
+                    ast_t* tail = find_tail(stmt_list);
+                    tail->next = stmt;
+                }
             }
+
+            if (trailing != NULL && trailing != ast_nil) {
+                if (stmt_list == NULL || stmt_list == ast_nil) {
+                    stmt_list = trailing;
+                } else {
+                    ast_t* tail = find_tail(stmt_list);
+                    tail->next = trailing;
+                }
+            }
+
+            stmt_result.value.ast = (stmt_list != NULL) ? stmt_list : ast_nil;
         }
     }
     
@@ -1311,7 +1341,7 @@ static combinator_t* create_helper_body_parser(void) {
         token(create_keyword_parser("register", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("safecall", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("pascal", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("external", PASCAL_T_IDENTIFIER)),
+        EXTERNAL_DIRECTIVE_KEYWORDS,
         token(create_keyword_parser("deprecated", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("unimplemented", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("platform", PASCAL_T_IDENTIFIER)),
@@ -1975,10 +2005,14 @@ void init_pascal_unit_parser(combinator_t** p) {
         token(create_keyword_parser("inline", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("overload", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("cdecl", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("pascal", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("mwpascal", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("stdcall", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("register", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("cppdecl", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("oldfpccall", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("export", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("external", PASCAL_T_IDENTIFIER)),
+        EXTERNAL_DIRECTIVE_KEYWORDS,
         token(create_keyword_parser("assembler", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("far", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("near", PASCAL_T_IDENTIFIER)),
@@ -2152,8 +2186,12 @@ void init_pascal_unit_parser(combinator_t** p) {
         token(create_keyword_parser("inline", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("overload", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("cdecl", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("pascal", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("mwpascal", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("stdcall", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("register", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("cppdecl", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("oldfpccall", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("export", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("assembler", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("far", PASCAL_T_IDENTIFIER)),
@@ -2186,7 +2224,7 @@ void init_pascal_unit_parser(combinator_t** p) {
     // Keep this list narrow so directives like inline; don't swallow implementations.
     combinator_t* headeronly_directive_keyword = multi(new_combinator(), PASCAL_T_IDENTIFIER,
         token(create_keyword_parser("forward", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("external", PASCAL_T_IDENTIFIER)),
+        EXTERNAL_DIRECTIVE_KEYWORDS,
         NULL
     );
     combinator_t* headeronly_bracket_external = seq(new_combinator(), PASCAL_T_NONE,
@@ -2625,6 +2663,8 @@ void init_pascal_unit_parser(combinator_t** p) {
     // Initialize the lazy nested procedure/function reference now that impls are defined
     // This allows var sections to appear after nested functions in outer function bodies
     combinator_t* nested_proc_or_func = multi(new_combinator(), PASCAL_T_NONE,
+        headeronly_procedure_decl,
+        headeronly_function_decl,
         procedure_impl,
         function_impl,
         NULL
@@ -2994,8 +3034,12 @@ void init_pascal_method_implementation_parser(combinator_t** p) {
         token(create_keyword_parser("inline", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("overload", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("cdecl", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("pascal", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("mwpascal", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("stdcall", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("register", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("cppdecl", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("oldfpccall", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("experimental", PASCAL_T_IDENTIFIER)),
         NULL
     );
@@ -3616,7 +3660,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         token(create_keyword_parser("stdcall", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("register", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("export", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("external", PASCAL_T_IDENTIFIER)),
+        EXTERNAL_DIRECTIVE_KEYWORDS,
         token(create_keyword_parser("assembler", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("far", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("near", PASCAL_T_IDENTIFIER)),
@@ -3799,7 +3843,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     // Note: assembler is NOT included here - assembler functions have asm...end bodies
     combinator_t* no_body_directive = multi(new_combinator(), PASCAL_T_NONE,
         token(keyword_ci("forward")),
-        token(keyword_ci("external")),
+        EXTERNAL_KEYWORD_CI,
         NULL
     );
     

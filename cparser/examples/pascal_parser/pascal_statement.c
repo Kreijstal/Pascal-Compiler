@@ -196,6 +196,8 @@ typedef struct {
     combinator_t *case_label_list;
 } case_stmt_list_args;
 
+typedef expr_lvalue_args_t expr_lvalue_args;
+
 static bool peek_colon_not_assign(input_t* in) {
     if (in == NULL || in->buffer == NULL) {
         return false;
@@ -468,6 +470,7 @@ static combinator_t* make_case_expression(combinator_t** expr_parser) {
         octal_integer(PASCAL_T_INTEGER),
         integer(PASCAL_T_INTEGER),
         char_literal(PASCAL_T_CHAR),
+        pascal_string(PASCAL_T_STRING),
         control_char_literal(PASCAL_T_CHAR),
         char_code_literal(PASCAL_T_CHAR_CODE),
         token(create_keyword_parser("true", PASCAL_T_BOOLEAN)),   // Boolean true
@@ -652,6 +655,13 @@ static ParseResult statement_dispatch_fn(input_t* in, void* args, char* parser_n
         }
         bool reserved_keyword = is_reserved_keyword_slice(slice, ident_len);
         bool keyword_allowed_as_expr = pascal_keyword_allowed_in_expression(keyword_buf);
+        if (reserved_keyword &&
+            (strcmp(keyword_buf, "procedure") == 0 ||
+             strcmp(keyword_buf, "function") == 0 ||
+             strcmp(keyword_buf, "constructor") == 0 ||
+             strcmp(keyword_buf, "destructor") == 0)) {
+            keyword_allowed_as_expr = false;
+        }
         if (heap_keyword) free(keyword_buf);
         if (keyword_record != NULL &&
             dispatch->keyword_parsers != NULL &&
@@ -696,6 +706,10 @@ static ParseResult statement_dispatch_fn(input_t* in, void* args, char* parser_n
             return parse(in, dispatch->expr_parser);
         }
         return make_failure_v2(in, parser_name, strdup("Unable to dispatch numeric-led statement"), NULL);
+    }
+
+    if (dispatch->assignment_parser != NULL && peek_assignment_operator(in)) {
+        return parse(in, dispatch->assignment_parser);
     }
 
     if (dispatch->expr_parser != NULL) {
@@ -768,6 +782,68 @@ static ast_t* wrap_typecast_deref_lvalue(ast_t* parsed) {
     }
 
     return deref_node;
+}
+
+static ast_t* wrap_paren_deref_lvalue(ast_t* parsed) {
+    if (parsed == NULL || parsed == ast_nil)
+        return parsed;
+
+    ast_t* expr_node = parsed;
+    ast_t* deref_node = expr_node->next;
+
+    if (deref_node == NULL || deref_node == ast_nil)
+        return parsed;
+
+    expr_node->next = NULL;
+
+    ast_t* additional_suffixes = deref_node->next;
+    deref_node->next = NULL;
+    deref_node->child = expr_node;
+
+    if (additional_suffixes != NULL && additional_suffixes != ast_nil) {
+        deref_node->next = additional_suffixes;
+        return build_pointer_lvalue_chain(deref_node);
+    }
+
+    return deref_node;
+}
+
+static bool ast_is_expr_lvalue(ast_t* ast) {
+    if (ast == NULL || ast == ast_nil)
+        return false;
+    switch (ast->typ) {
+        case PASCAL_T_DEREF:
+        case PASCAL_T_ARRAY_ACCESS:
+        case PASCAL_T_MEMBER_ACCESS:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static ParseResult expr_lvalue_fn(input_t* in, void* args, char* parser_name) {
+    expr_lvalue_args* largs = (expr_lvalue_args*)args;
+    if (largs == NULL || largs->expr_parser == NULL) {
+        return make_failure(in, strdup("expr_lvalue parser misconfigured"));
+    }
+
+    InputState state;
+    save_input_state(in, &state);
+
+    ParseResult res = parse(in, largs->expr_parser);
+    if (!res.is_success) {
+        return res;
+    }
+
+    if (!ast_is_expr_lvalue(res.value.ast)) {
+        restore_input_state(in, &state);
+        if (res.value.ast != NULL && res.value.ast != ast_nil) {
+            free_ast(res.value.ast);
+        }
+        return make_failure_v2(in, parser_name, strdup("Expected lvalue expression"), NULL);
+    }
+
+    return res;
 }
 
 static ast_t* wrap_array_lvalue_suffix(ast_t* parsed) {
@@ -1131,6 +1207,21 @@ void init_pascal_statement_parser(combinator_t** p) {
         NULL
     ), build_pointer_lvalue_chain);
 
+    combinator_t* paren_expr_lvalue = map(seq(new_combinator(), PASCAL_T_NONE,
+        between(token(match("(")), token(match(")")), lazy(expr_parser)),
+        pointer_suffix,
+        suffixes,
+        NULL
+    ), wrap_paren_deref_lvalue);
+
+    expr_lvalue_args* expr_lvalue_cfg = (expr_lvalue_args*)safe_malloc(sizeof(expr_lvalue_args));
+    expr_lvalue_cfg->expr_parser = lazy(expr_parser);
+    combinator_t* expr_lvalue = new_combinator();
+    expr_lvalue->type = COMB_EXPR_LVALUE;
+    expr_lvalue->fn = expr_lvalue_fn;
+    expr_lvalue->args = expr_lvalue_cfg;
+    expr_lvalue->name = strdup("expr_lvalue");
+
     combinator_t* lvalue = multi(new_combinator(), PASCAL_T_NONE,
         typecast_lvalue_with_deref,  // Try typecast with deref first (PCardinal(@x)^)
         typecast_lvalue_with_suffixes, // Then typecast with field/array/pointer access
@@ -1138,6 +1229,8 @@ void init_pascal_statement_parser(combinator_t** p) {
         typecast_lvalue_simple,      // Then simple typecast (Integer(x))
         specialize_lvalue_simple,    // specialize T<T>(x) := value
         funcall_lvalue,              // Function call returning reference: unaligned(expr) := 0
+        paren_expr_lvalue,           // (expr)^ := value
+        expr_lvalue,                 // expression lvalues like (ptr+ofs)^ := value
         simple_lvalue,               // Finally simple identifier with optional suffixes
         NULL
     );
@@ -1190,10 +1283,14 @@ void init_pascal_statement_parser(combinator_t** p) {
     );
 
     // Begin-end block: begin [statement_list] end
-    // Simplified statement list parser - just use sep_by with optional trailing semicolon
+    // Statement list parser that allows empty statements between semicolons.
     combinator_t* stmt_list = seq(new_combinator(), PASCAL_T_NONE,
-        sep_by(lazy(stmt_parser), token(match(";"))),     // statements separated by semicolons
-        optional(token(match(";"))),                      // optional trailing semicolon
+        many(seq(new_combinator(), PASCAL_T_NONE,
+            optional(lazy(stmt_parser)),
+            token(match(";")),
+            NULL
+        )),
+        optional(lazy(stmt_parser)),
         NULL
     );
 
@@ -1307,8 +1404,12 @@ void init_pascal_statement_parser(combinator_t** p) {
 
     // Repeat statement: repeat statement_list until expression
     combinator_t* repeat_stmt_list = seq(new_combinator(), PASCAL_T_STATEMENT_LIST,
-        sep_by(lazy(stmt_parser), token(match(";"))),    // statements separated by semicolons
-        optional(token(match(";"))),                     // optional trailing semicolon
+        many(seq(new_combinator(), PASCAL_T_NONE,
+            optional(lazy(stmt_parser)),
+            token(match(";")),
+            NULL
+        )),
+        optional(lazy(stmt_parser)),
         NULL
     );
 
