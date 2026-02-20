@@ -196,8 +196,6 @@ typedef struct {
     combinator_t *case_label_list;
 } case_stmt_list_args;
 
-typedef expr_lvalue_args_t expr_lvalue_args;
-
 static bool peek_colon_not_assign(input_t* in) {
     if (in == NULL || in->buffer == NULL) {
         return false;
@@ -470,7 +468,6 @@ static combinator_t* make_case_expression(combinator_t** expr_parser) {
         octal_integer(PASCAL_T_INTEGER),
         integer(PASCAL_T_INTEGER),
         char_literal(PASCAL_T_CHAR),
-        pascal_string(PASCAL_T_STRING),
         control_char_literal(PASCAL_T_CHAR),
         char_code_literal(PASCAL_T_CHAR_CODE),
         token(create_keyword_parser("true", PASCAL_T_BOOLEAN)),   // Boolean true
@@ -555,6 +552,43 @@ static bool is_statement_boundary_token(input_t* in) {
            (word_len == 7 && strncasecmp(buffer + pos, "finally", 7) == 0);
 }
 
+static bool is_statement_list_boundary_token(input_t* in) {
+    if (in == NULL || in->buffer == NULL) {
+        return false;
+    }
+
+    const char* buffer = in->buffer;
+    int length = in->length > 0 ? in->length : (int)strlen(buffer);
+    int pos = skip_pascal_layout_preview(in, in->start);
+    if (pos >= length) {
+        return true;
+    }
+
+    unsigned char ch = (unsigned char)buffer[pos];
+    if (ch == '.') {
+        return true;
+    }
+    if (!isalpha(ch)) {
+        return false;
+    }
+
+    int cursor = pos;
+    while (cursor < length && (isalnum((unsigned char)buffer[cursor]) || buffer[cursor] == '_')) {
+        cursor++;
+    }
+
+    size_t word_len = (size_t)(cursor - pos);
+    if (word_len == 0) {
+        return false;
+    }
+
+    return (word_len == 3 && strncasecmp(buffer + pos, "end", 3) == 0) ||
+           (word_len == 4 && strncasecmp(buffer + pos, "else", 4) == 0) ||
+           (word_len == 5 && strncasecmp(buffer + pos, "until", 5) == 0) ||
+           (word_len == 6 && strncasecmp(buffer + pos, "except", 6) == 0) ||
+           (word_len == 7 && strncasecmp(buffer + pos, "finally", 7) == 0);
+}
+
 static ast_t* make_empty_statement_node(input_t* in) {
     ast_t* node = new_ast();
     if (node == NULL) {
@@ -576,6 +610,120 @@ static ParseResult empty_statement_fn(input_t* in, void* args, char* parser_name
         return make_failure_v2(in, parser_name, strdup("Empty statement can only appear before boundary tokens (end, else, until, except, finally)"), NULL);
     }
     return make_success(make_empty_statement_node(in));
+}
+
+typedef struct {
+    combinator_t **stmt_parser;
+} stmt_list_args;
+
+static ParseResult statement_list_with_empty_fn(input_t* in, void* args, char* parser_name) {
+    stmt_list_args* slargs = (stmt_list_args*)args;
+    if (slargs == NULL || slargs->stmt_parser == NULL || *slargs->stmt_parser == NULL) {
+        return make_failure_v2(in, parser_name, strdup("Statement list parser misconfigured"), NULL);
+    }
+
+    ast_t* head = NULL;
+    ast_t* tail = NULL;
+    bool parsed_any = false;
+
+    combinator_t* semi = token(match(";"));
+
+    while (1) {
+        if (is_statement_list_boundary_token(in)) {
+            break;
+        }
+
+        InputState stmt_state;
+        save_input_state(in, &stmt_state);
+
+        ParseResult stmt_res = parse(in, *slargs->stmt_parser);
+        if (!stmt_res.is_success || in->start == stmt_state.start) {
+            if (!stmt_res.is_success && stmt_res.value.error != NULL) {
+                free_error(stmt_res.value.error);
+            } else if (stmt_res.is_success) {
+                free_ast(stmt_res.value.ast);
+            }
+            restore_input_state(in, &stmt_state);
+
+            InputState semi_state;
+            save_input_state(in, &semi_state);
+            ParseResult semi_res = parse(in, semi);
+            if (semi_res.is_success) {
+                free_ast(semi_res.value.ast);
+                parsed_any = true;
+                continue;
+            }
+            if (semi_res.value.error != NULL) {
+                free_error(semi_res.value.error);
+            }
+            restore_input_state(in, &semi_state);
+            break;
+        }
+
+        ast_t* stmt_ast = stmt_res.value.ast;
+        if (stmt_ast != NULL && stmt_ast != ast_nil) {
+            if (head == NULL) {
+                head = stmt_ast;
+            } else if (tail != NULL) {
+                tail->next = stmt_ast;
+            }
+            tail = stmt_ast;
+        } else if (stmt_ast == ast_nil) {
+            stmt_ast = NULL;
+        }
+        parsed_any = true;
+
+        while (1) {
+            InputState semi_state;
+            save_input_state(in, &semi_state);
+            ParseResult semi_res = parse(in, semi);
+            if (!semi_res.is_success) {
+                if (semi_res.value.error != NULL) {
+                    free_error(semi_res.value.error);
+                }
+                restore_input_state(in, &semi_state);
+                break;
+            }
+            free_ast(semi_res.value.ast);
+            parsed_any = true;
+            if (is_statement_list_boundary_token(in)) {
+                break;
+            }
+        }
+    }
+
+    free_combinator(semi);
+
+    if (!parsed_any || head == NULL) {
+        return make_success(ast_nil);
+    }
+    return make_success(head);
+}
+
+static ast_t* wrap_statement_list(ast_t* parsed) {
+    ast_t* node = new_ast();
+    if (node == NULL) {
+        return ast_nil;
+    }
+    node->typ = PASCAL_T_STATEMENT_LIST;
+    node->child = (parsed == ast_nil) ? NULL : parsed;
+    node->next = NULL;
+    return node;
+}
+
+combinator_t* make_pascal_stmt_list_parser(combinator_t** stmt_parser) {
+    stmt_list_args* args = (stmt_list_args*)safe_malloc(sizeof(stmt_list_args));
+    args->stmt_parser = stmt_parser;
+    combinator_t* comb = new_combinator();
+    comb->fn = statement_list_with_empty_fn;
+    comb->args = args;
+    comb->name = strdup("statement_list_with_empty");
+    return comb;
+}
+
+static combinator_t* make_pascal_stmt_list_wrapper_parser(combinator_t** stmt_parser) {
+    combinator_t* list_parser = make_pascal_stmt_list_parser(stmt_parser);
+    return map(list_parser, wrap_statement_list);
 }
 
 static ParseResult statement_dispatch_fn(input_t* in, void* args, char* parser_name) {
@@ -1283,16 +1431,8 @@ void init_pascal_statement_parser(combinator_t** p) {
     );
 
     // Begin-end block: begin [statement_list] end
-    // Statement list parser that allows empty statements between semicolons.
-    combinator_t* stmt_list = seq(new_combinator(), PASCAL_T_NONE,
-        many(seq(new_combinator(), PASCAL_T_NONE,
-            optional(lazy(stmt_parser)),
-            token(match(";")),
-            NULL
-        )),
-        optional(lazy(stmt_parser)),
-        NULL
-    );
+    // Statement list parser that tolerates empty statements between semicolons.
+    combinator_t* stmt_list = make_pascal_stmt_list_parser(stmt_parser);
 
     // Pascal allows empty statements represented by standalone semicolons.
     combinator_t* leading_semicolons = many(token(match(";")));
@@ -1403,15 +1543,7 @@ void init_pascal_statement_parser(combinator_t** p) {
     );
 
     // Repeat statement: repeat statement_list until expression
-    combinator_t* repeat_stmt_list = seq(new_combinator(), PASCAL_T_STATEMENT_LIST,
-        many(seq(new_combinator(), PASCAL_T_NONE,
-            optional(lazy(stmt_parser)),
-            token(match(";")),
-            NULL
-        )),
-        optional(lazy(stmt_parser)),
-        NULL
-    );
+    combinator_t* repeat_stmt_list = make_pascal_stmt_list_wrapper_parser(stmt_parser);
 
     combinator_t* repeat_stmt = seq(new_combinator(), PASCAL_T_REPEAT_STMT,
         token(keyword_ci("repeat")),           // repeat keyword (case-insensitive)

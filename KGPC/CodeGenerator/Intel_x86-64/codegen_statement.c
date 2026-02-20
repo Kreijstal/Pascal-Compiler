@@ -5146,11 +5146,12 @@ static ListNode_t *codegen_builtin_val(struct Statement *stmt, ListNode_t *inst_
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", value_addr->bit_64);
         inst_list = add_inst(inst_list, buffer);
     }
-
     inst_list = codegen_vect_reg(inst_list, 0);
     snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", call_target);
     inst_list = add_inst(inst_list, buffer);
 
+    if (code_expr != NULL)
+    {
     if (code_expr != NULL)
     {
         code_result_spill = add_l_t("val_code_result");
@@ -5178,6 +5179,7 @@ static ListNode_t *codegen_builtin_val(struct Statement *stmt, ListNode_t *inst_
             inst_list = add_inst(inst_list, buffer);
             inst_list = add_inst(inst_list, "\tmovl\t%edx, (%rax)\n");
         }
+    }
     }
 
 cleanup:

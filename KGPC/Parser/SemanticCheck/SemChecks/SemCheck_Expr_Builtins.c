@@ -764,8 +764,32 @@ int semcheck_builtin_strpas(int *type_return, SymTab_t *symtab,
 
     /* FPC accepts both PChar/PAnsiChar (string-like) pointers */
     int strpas_arg_ok = kgpc_type_is_string(arg_kgpc_type) ||
-        kgpc_type_is_pointer(arg_kgpc_type) || kgpc_type_is_char(arg_kgpc_type) ||
-        semcheck_expr_is_shortstring(arg_expr);
+        kgpc_type_is_pointer(arg_kgpc_type) || kgpc_type_is_char(arg_kgpc_type);
+    if (!strpas_arg_ok && arg_kgpc_type != NULL && kgpc_type_is_array(arg_kgpc_type))
+    {
+        KgpcType *elem_type = kgpc_type_get_array_element_type_resolved(arg_kgpc_type, symtab);
+        if (elem_type != NULL && kgpc_type_is_char(elem_type))
+            strpas_arg_ok = 1;
+        else if (arg_kgpc_type->type_alias != NULL &&
+            arg_kgpc_type->type_alias->array_element_type == CHAR_TYPE)
+            strpas_arg_ok = 1;
+        else if (arg_kgpc_type->type_alias != NULL &&
+            arg_kgpc_type->type_alias->array_element_type_id != NULL &&
+            (pascal_identifier_equals(arg_kgpc_type->type_alias->array_element_type_id, "AnsiChar") ||
+             pascal_identifier_equals(arg_kgpc_type->type_alias->array_element_type_id, "Char") ||
+             pascal_identifier_equals(arg_kgpc_type->type_alias->array_element_type_id, "WideChar")))
+            strpas_arg_ok = 1;
+    }
+    if (!strpas_arg_ok && arg_expr != NULL && arg_expr->is_array_expr)
+    {
+        if (arg_expr->array_element_type == CHAR_TYPE)
+            strpas_arg_ok = 1;
+        else if (arg_expr->array_element_type_id != NULL &&
+            (pascal_identifier_equals(arg_expr->array_element_type_id, "AnsiChar") ||
+             pascal_identifier_equals(arg_expr->array_element_type_id, "Char") ||
+             pascal_identifier_equals(arg_expr->array_element_type_id, "WideChar")))
+            strpas_arg_ok = 1;
+    }
     /* Fallback: check resolved_kgpc_type tag (e.g. argv[l] indexing returns pointer) */
     if (!strpas_arg_ok && arg_expr != NULL && arg_expr->resolved_kgpc_type != NULL)
     {
@@ -2157,14 +2181,12 @@ int semcheck_builtin_typeinfo(int *type_return, SymTab_t *symtab,
         expr->resolved_kgpc_type = NULL;
     }
     expr->resolved_kgpc_type = create_pointer_type(NULL);
-
     semcheck_expr_set_resolved_type(expr, POINTER_TYPE);
+    *type_return = POINTER_TYPE;
     if (type_name_owned != NULL)
         free(type_name_owned);
-    *type_return = POINTER_TYPE;
     return 0;
 }
-
 int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev, int is_high)
 {
@@ -2623,61 +2645,12 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
 
             if (error_count == 0)
             {
-                int node_hash_type = node->hash_type;
-                if (node_hash_type == HASHTYPE_FUNCTION && arg_id != NULL)
-                {
-                    const char *cur_id = semcheck_get_current_subprogram_id();
-                    const char *result_var = semcheck_get_current_subprogram_result_var_name();
-                    const char *alias_suffix = NULL;
-                    const char *method_base = NULL;
-                    size_t method_base_len = 0;
-                    if (cur_id != NULL)
-                    {
-                        const char *sep = strstr(cur_id, "__");
-                        if (sep != NULL && sep[2] != '\0')
-                            alias_suffix = sep + 2;
-                        if (sep != NULL && sep[2] != '\0')
-                        {
-                            const char *name_start = sep + 2;
-                            const char *end = strstr(name_start, "_u_");
-                            if (end == NULL)
-                                end = strchr(name_start, '_');
-                            if (end != NULL && end > name_start)
-                            {
-                                method_base = name_start;
-                                method_base_len = (size_t)(end - name_start);
-                            }
-                            else if (end == NULL)
-                            {
-                                method_base = name_start;
-                                method_base_len = strlen(name_start);
-                            }
-                        }
-                    }
-                    if ((cur_id != NULL && pascal_identifier_equals(arg_id, cur_id)) ||
-                        (alias_suffix != NULL && pascal_identifier_equals(arg_id, alias_suffix)) ||
-                        (result_var != NULL && pascal_identifier_equals(arg_id, result_var)))
-                    {
-                        node_hash_type = HASHTYPE_FUNCTION_RETURN;
-                    }
-                    else if (method_base != NULL && method_base_len > 0)
-                    {
-                        char *method_name = strndup(method_base, method_base_len);
-                        if (method_name != NULL)
-                        {
-                            if (pascal_identifier_equals(arg_id, method_name))
-                                node_hash_type = HASHTYPE_FUNCTION_RETURN;
-                            free(method_name);
-                        }
-                    }
-                }
-
-                if (node_hash_type == HASHTYPE_VAR || node_hash_type == HASHTYPE_ARRAY ||
-                    node_hash_type == HASHTYPE_CONST || node_hash_type == HASHTYPE_FUNCTION_RETURN)
+                if (node->hash_type == HASHTYPE_VAR || node->hash_type == HASHTYPE_ARRAY ||
+                    node->hash_type == HASHTYPE_CONST || node->hash_type == HASHTYPE_FUNCTION_RETURN)
                 {
                     set_hash_meta(node, NO_MUTATE);
                 }
-                else if (node_hash_type != HASHTYPE_TYPE)
+                else if (node->hash_type != HASHTYPE_TYPE)
                 {
                     semcheck_error_with_context("Error on line %d, SizeOf argument %s is not a data object.\n",
                         expr->line_num, arg_id);

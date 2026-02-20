@@ -1392,15 +1392,7 @@ static int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, 
                 set_hash_meta(array_node, BOTH_MUTATE_REFERENCE);
                 
                 /* Check if it's a dynamic array using KgpcType first, then legacy field */
-                int is_dynamic = 0;
-                if (array_node->type != NULL)
-                {
-                    is_dynamic = kgpc_type_is_dynamic_array(array_node->type);
-                }
-                else
-                {
-                    is_dynamic = hashnode_is_dynamic_array(array_node);
-                }
+                int is_dynamic = hashnode_is_dynamic_array(array_node);
                 
                 if (is_dynamic &&
                     (array_node->hash_type == HASHTYPE_ARRAY ||
@@ -1416,19 +1408,6 @@ static int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, 
             /* Record field access - if semantic check passed, assume it's valid
              * TODO: Could enhance this to verify the field is actually a dynamic array */
             is_valid_array = 1;
-        }
-        else if (array_expr != NULL && array_expr->type == EXPR_ARRAY_ACCESS)
-        {
-            if (array_expr->resolved_kgpc_type != NULL &&
-                kgpc_type_is_array(array_expr->resolved_kgpc_type) &&
-                kgpc_type_is_dynamic_array(array_expr->resolved_kgpc_type))
-            {
-                is_valid_array = 1;
-            }
-            else if (array_expr->is_array_expr && array_expr->array_is_dynamic)
-            {
-                is_valid_array = 1;
-            }
         }
         
         if (!is_valid_array)
@@ -3498,78 +3477,41 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
 
         if (var != NULL && var->type == EXPR_VAR_ID && var->expr_data.id != NULL)
         {
-            if (semcheck_current_subprogram_is_function())
+            const char *cur_id = semcheck_get_current_subprogram_id();
+            if (cur_id != NULL)
             {
-                const char *cur_id = semcheck_get_current_subprogram_id();
-                if (cur_id != NULL)
+                /* Check if this is "Result" or the function's own name (Pascal-style
+                 * function result assignment: FuncName := value). Both should use the
+                 * current function's return type directly from the subprogram tree.
+                 * This is critical for case-insensitive overloads where FpFStat and
+                 * FPFStat both exist — FindIdent may resolve to the wrong overload's
+                 * return type entry in the symbol table.
+                 * Also check operator result variable name (e.g., "dest" in
+                 * operator :=(src) dest: variant). */
+                const char *result_var = semcheck_get_current_subprogram_result_var_name();
+                int is_result_assign = pascal_identifier_equals(var->expr_data.id, "Result") ||
+                                       pascal_identifier_equals(var->expr_data.id, cur_id) ||
+                                       (result_var != NULL && pascal_identifier_equals(var->expr_data.id, result_var));
+                if (is_result_assign)
                 {
-                    /* Check if this is "Result" or the function's own name (Pascal-style
-                     * function result assignment: FuncName := value). Both should use the
-                     * current function's return type directly from the subprogram tree.
-                     * This is critical for case-insensitive overloads where FpFStat and
-                     * FPFStat both exist — FindIdent may resolve to the wrong overload's
-                     * return type entry in the symbol table.
-                     * Also check operator result variable name (e.g., "dest" in
-                     * operator :=(src) dest: variant). */
-                    const char *result_var = semcheck_get_current_subprogram_result_var_name();
-                    const char *alias_suffix = NULL;
-                    const char *method_base = NULL;
-                    size_t method_base_len = 0;
-                    const char *sep = strstr(cur_id, "__");
-                    if (sep != NULL && sep[2] != '\0')
+                    int ret_owned = 0;
+                    KgpcType *ret_type = semcheck_get_current_subprogram_return_kgpc_type(symtab, &ret_owned);
+                    if (ret_type != NULL &&
+                        !(ret_type->kind == TYPE_KIND_PRIMITIVE && ret_type->info.primitive_type_tag < 0))
                     {
-                        alias_suffix = sep + 2;
-                        const char *name_start = sep + 2;
-                        const char *end = strstr(name_start, "_u_");
-                        if (end == NULL)
-                            end = strchr(name_start, '_');
-                        if (end != NULL && end > name_start)
-                        {
-                            method_base = name_start;
-                            method_base_len = (size_t)(end - name_start);
-                        }
-                        else if (end == NULL)
-                        {
-                            method_base = name_start;
-                            method_base_len = strlen(name_start);
-                        }
+                        /* Always use the function's declared return type for result
+                         * variable assignments, even if the current LHS type seems
+                         * compatible. This handles cases where FindIdent found a
+                         * different overload's return type entry (e.g., Variant vs
+                         * String for operator overloads with named result vars). */
+                        if (lhs_owned && lhs_kgpctype != NULL)
+                            destroy_kgpc_type(lhs_kgpctype);
+                        lhs_kgpctype = ret_type;
+                        lhs_owned = ret_owned;
                     }
-
-                    int is_result_assign = pascal_identifier_equals(var->expr_data.id, "Result") ||
-                                           pascal_identifier_equals(var->expr_data.id, cur_id) ||
-                                           (alias_suffix != NULL && pascal_identifier_equals(var->expr_data.id, alias_suffix)) ||
-                                           (result_var != NULL && pascal_identifier_equals(var->expr_data.id, result_var));
-                    if (!is_result_assign && method_base != NULL && method_base_len > 0)
+                    else if (ret_type != NULL && ret_owned)
                     {
-                        char *method_name = strndup(method_base, method_base_len);
-                        if (method_name != NULL)
-                        {
-                            if (pascal_identifier_equals(var->expr_data.id, method_name))
-                                is_result_assign = 1;
-                            free(method_name);
-                        }
-                    }
-                    if (is_result_assign)
-                    {
-                        int ret_owned = 0;
-                        KgpcType *ret_type = semcheck_get_current_subprogram_return_kgpc_type(symtab, &ret_owned);
-                        if (ret_type != NULL &&
-                            !(ret_type->kind == TYPE_KIND_PRIMITIVE && ret_type->info.primitive_type_tag < 0))
-                        {
-                            /* Always use the function's declared return type for result
-                             * variable assignments, even if the current LHS type seems
-                             * compatible. This handles cases where FindIdent found a
-                             * different overload's return type entry (e.g., Variant vs
-                             * String for operator overloads with named result vars). */
-                            if (lhs_owned && lhs_kgpctype != NULL)
-                                destroy_kgpc_type(lhs_kgpctype);
-                            lhs_kgpctype = ret_type;
-                            lhs_owned = ret_owned;
-                        }
-                        else if (ret_type != NULL && ret_owned)
-                        {
-                            destroy_kgpc_type(ret_type);
-                        }
+                        destroy_kgpc_type(ret_type);
                     }
                 }
             }
@@ -4159,6 +4101,7 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     char *mangled_name;
     int static_arg_already_removed = 0;
     int static_method_receiver = 0;
+    int was_unit_qualified = 0;
 
     assert(symtab != NULL);
     assert(stmt != NULL);
@@ -4276,7 +4219,9 @@ skip_type_receiver_rewrite:
                         free(proc_id);
                         proc_id = real_proc_name;
                         stmt->stmt_data.procedure_call_data.id = proc_id;
+                        stmt->stmt_data.procedure_call_data.is_method_call_placeholder = 0;
                         args_given = remaining_args;
+                        was_unit_qualified = 1;
 
                         DestroyList(proc_candidates);
 
@@ -4284,17 +4229,90 @@ skip_type_receiver_rewrite:
                     }
                     else
                     {
-                        /* Procedure not found - free real_proc_name and fall through to report error */
-                        free(real_proc_name);
+                        /* Procedure not found - allow System.Exit without a symbol table entry. */
+                        if (pascal_identifier_equals(real_proc_name, "Exit"))
+                        {
+                            ListNode_t *remaining_args = args_given->next;
+
+                            destroy_expr(first_arg);
+                            args_given->cur = NULL;
+                            free(args_given);
+
+                            stmt->stmt_data.procedure_call_data.expr_args = remaining_args;
+
+                            free(proc_id);
+                            proc_id = real_proc_name;
+                            stmt->stmt_data.procedure_call_data.id = proc_id;
+                            stmt->stmt_data.procedure_call_data.is_method_call_placeholder = 0;
+                            args_given = remaining_args;
+                            was_unit_qualified = 1;
+                        }
+                        else
+                        {
+                            /* Procedure not found - free real_proc_name and fall through to report error */
+                            free(real_proc_name);
+                        }
                     }
                 }
             }
         }
     }
 
+    /* Treat System.Exit (or unqualified Exit) as a built-in procedure call.
+     * This avoids resolving Exit against class methods like TMonitor.Exit. */
+    if (proc_id != NULL &&
+        pascal_identifier_equals(proc_id, "Exit") &&
+        !stmt->stmt_data.procedure_call_data.is_method_call_placeholder)
+    {
+        int arg_count = 0;
+        for (ListNode_t *scan = args_given; scan != NULL; scan = scan->next)
+            ++arg_count;
+
+        if (arg_count > 1)
+        {
+            semcheck_error_with_context("Error on line %d, Exit() expects at most one argument.\n\n",
+                stmt->line_num);
+            return 1;
+        }
+
+        struct Expression *exit_expr = NULL;
+        if (arg_count == 1)
+        {
+            int expr_type = UNKNOWN_TYPE;
+            exit_expr = (struct Expression *)args_given->cur;
+            if (exit_expr != NULL)
+                return_val += semcheck_stmt_expr_tag(&expr_type, symtab, exit_expr, max_scope_lev, 0);
+        }
+
+        /* Transform the procedure call into an Exit statement for codegen. */
+        stmt->type = STMT_EXIT;
+        stmt->stmt_data.exit_data.return_expr = exit_expr;
+        stmt->stmt_data.procedure_call_data.expr_args = NULL;
+        if (stmt->stmt_data.procedure_call_data.id != NULL)
+        {
+            free(stmt->stmt_data.procedure_call_data.id);
+            stmt->stmt_data.procedure_call_data.id = NULL;
+        }
+        if (stmt->stmt_data.procedure_call_data.mangled_id != NULL)
+        {
+            free(stmt->stmt_data.procedure_call_data.mangled_id);
+            stmt->stmt_data.procedure_call_data.mangled_id = NULL;
+        }
+        while (args_given != NULL)
+        {
+            ListNode_t *next = args_given->next;
+            args_given->cur = NULL;
+            free(args_given);
+            args_given = next;
+        }
+
+        return return_val;
+    }
+
     /* If no explicit receiver was provided, but Self is in scope and defines this method,
      * prepend Self so unqualified method calls resolve correctly. */
-    if (proc_id != NULL && !stmt->stmt_data.procedure_call_data.is_method_call_placeholder)
+    if (!was_unit_qualified && proc_id != NULL &&
+        !stmt->stmt_data.procedure_call_data.is_method_call_placeholder)
     {
         HashNode_t *self_node = NULL;
         struct RecordType *self_record = NULL;

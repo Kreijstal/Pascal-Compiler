@@ -131,6 +131,7 @@ UNIT_ONLY_TESTS = {
     "fpc_interface_const_after_external",
     "fpc_qualified_const_import",
     "property_indexed_unit",
+    "tdd_external_unit_var",
     "tdd_variant_shadow_record",
     "unit_cardinal_type",
     "unit_high_type_const",
@@ -1975,6 +1976,9 @@ class TestCompiler(unittest.TestCase):
         executable_file = os.path.join(TEST_OUTPUT_DIR, "real_arithmetic")
 
         run_compiler(input_file, asm_file)
+        self.record_failure_context(
+            input_file=input_file, asm_file=asm_file,
+            executable_file=executable_file)
         self.compile_executable(asm_file, executable_file)
 
         result = subprocess.run(

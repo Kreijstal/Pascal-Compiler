@@ -1466,7 +1466,6 @@ static void codegen_emit_enum_typeinfo(CodeGenContext *ctx, SymTab_t *symtab, in
     for (int i = 0; i < emitted_count; ++i)
         free((void *)emitted_labels[i]);
 }
-
 /* Generates a label */
 void gen_label(char *buf, int buf_len, CodeGenContext *ctx)
 {
@@ -2826,6 +2825,10 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                         target_node != NULL)
                         record_desc = get_record_type_from_node(target_node);
                 }
+            }
+            if (record_desc == NULL && arr->inline_record_type != NULL)
+            {
+                record_desc = arr->inline_record_type;
             }
 
             long long computed_size = 0;

@@ -455,8 +455,6 @@ int semcheck_reinterpret_typecast_as_call(int *type_return, SymTab_t *symtab,
 /* Try indexed property getter */
 int semcheck_try_indexed_property_getter(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
-int semcheck_try_indexed_record_property_getter(int *type_return,
-    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
 
 /* Mangle helper const ID */
 char *semcheck_mangle_helper_const_id(const char *helper_type_id, const char *field_id);

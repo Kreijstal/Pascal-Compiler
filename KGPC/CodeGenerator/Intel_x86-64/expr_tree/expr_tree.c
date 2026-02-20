@@ -119,7 +119,7 @@ static char *escape_string_for_assembly(const char *input)
     if (input == NULL)
         return NULL;
 
-    /* Worst case: every char becomes \xHH */
+    /* Worst case: every char becomes \\xHH */
     size_t len = strlen(input);
     size_t max_len = len * 4 + 1;
     char *escaped = (char *)malloc(max_len);
@@ -3481,17 +3481,6 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
             }
 
             break;
-
-        case EXPR_TYPEINFO:
-        {
-            const char *type_id = expr->expr_data.typeinfo_data.type_id;
-            if (type_id == NULL || type_id[0] == '\0')
-                type_id = "unknown";
-            char label[CODEGEN_MAX_INST_BUF];
-            codegen_enum_typeinfo_label(type_id, label, sizeof(label));
-            snprintf(buffer, buf_len, "%s(%%rip)", label);
-            break;
-        }
 
         case EXPR_INUM:
             snprintf(buffer, buf_len, "$%lld", expr->expr_data.i_num);

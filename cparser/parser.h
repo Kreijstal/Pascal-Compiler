@@ -261,7 +261,7 @@ typedef struct statement_dispatch_args {
 
 typedef struct expr_lvalue_args {
     combinator_t* expr_parser;
-} expr_lvalue_args_t;
+} expr_lvalue_args;
 
 typedef struct class_member_dispatch_args {
     combinator_t* constructor_parser;

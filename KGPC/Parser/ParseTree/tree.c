@@ -364,8 +364,6 @@ static void destroy_record_field(struct RecordField *field)
         destroy_list(field->enum_literals);
     if (field->proc_type != NULL)
         kgpc_type_release(field->proc_type);
-    if (field->array_element_kgpc_type != NULL)
-        kgpc_type_release(field->array_element_kgpc_type);
     destroy_record_type(field->nested_record);
     destroy_record_type(field->array_element_record);
     free(field);
@@ -1934,9 +1932,6 @@ static struct RecordField *clone_record_field(const struct RecordField *field)
     clone->array_element_type_id = field->array_element_type_id != NULL ?
         strdup(field->array_element_type_id) : NULL;
     clone->array_element_record = clone_record_type(field->array_element_record);
-    clone->array_element_kgpc_type = field->array_element_kgpc_type;
-    if (clone->array_element_kgpc_type != NULL)
-        kgpc_type_retain(clone->array_element_kgpc_type);
     clone->array_is_open = field->array_is_open;
     clone->is_hidden = field->is_hidden;
     clone->is_class_var = field->is_class_var;
@@ -2322,7 +2317,7 @@ Tree_t *mk_typealiasdecl(int line_num, char *id, int is_array, int actual_type, 
 }
 
 Tree_t *mk_arraydecl(int line_num, ListNode_t *ids, int type, char *type_id, int start, int end,
-    char *range_str, struct Statement *initializer)
+    char *range_str, struct Statement *initializer, struct RecordType *inline_record_type)
 {
     Tree_t *new_tree;
     new_tree = (Tree_t *)calloc(1, sizeof(Tree_t));
@@ -2333,7 +2328,7 @@ Tree_t *mk_arraydecl(int line_num, ListNode_t *ids, int type, char *type_id, int
     new_tree->tree_data.arr_decl_data.ids = ids;
     new_tree->tree_data.arr_decl_data.type = type;
     new_tree->tree_data.arr_decl_data.type_id = type_id;
-    new_tree->tree_data.arr_decl_data.inline_record_type = NULL;
+    new_tree->tree_data.arr_decl_data.inline_record_type = inline_record_type;
     new_tree->tree_data.arr_decl_data.s_range = start;
     new_tree->tree_data.arr_decl_data.e_range = end;
     new_tree->tree_data.arr_decl_data.range_str = range_str;
@@ -2880,6 +2875,20 @@ struct Expression *mk_recordaccess(int line_num, struct Expression *record_expr,
         struct Expression *inner = record_expr->expr_data.addr_data.expr;
         free(record_expr);
         return mk_addressof(line_num, mk_recordaccess(line_num, inner, field_id));
+    }
+
+    if (record_expr != NULL && record_expr->type == EXPR_POINTER_DEREF)
+    {
+        struct Expression *pointer_expr = record_expr->expr_data.pointer_deref_data.pointer_expr;
+        if (pointer_expr != NULL && pointer_expr->type == EXPR_ADDR)
+        {
+            struct Expression *inner = pointer_expr->expr_data.addr_data.expr;
+            free(pointer_expr);
+            free(record_expr);
+            struct Expression *deref = mk_pointer_deref(line_num, inner);
+            struct Expression *access = mk_recordaccess(line_num, deref, field_id);
+            return mk_addressof(line_num, access);
+        }
     }
 
     struct Expression *new_expr = (struct Expression *)malloc(sizeof(struct Expression));
