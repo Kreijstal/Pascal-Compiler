@@ -5415,6 +5415,7 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
         if (relop_type != NULL)
             *relop_type = NE;
 
+        free_reg(get_reg_stack(), right_reg);
         free_reg(get_reg_stack(), left_reg);
         return inst_list;
     }
