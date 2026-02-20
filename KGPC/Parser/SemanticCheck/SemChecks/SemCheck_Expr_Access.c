@@ -1821,8 +1821,24 @@ int semcheck_funccall(int *type_return,
     if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Concat"))
         return semcheck_builtin_concat(type_return, symtab, expr, max_scope_lev);
 
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Pos"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Pos")) {
+        ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+        int nargs = 0;
+        for (ListNode_t *a = args; a != NULL; a = a->next) nargs++;
+        fprintf(stderr, "[DEBUG] Pos builtin dispatch: is_method_call_placeholder=%d, line=%d, id='%s', nargs=%d\n",
+                expr->expr_data.function_call_data.is_method_call_placeholder, expr->line_num, id, nargs);
+        if (nargs > 0) {
+            struct Expression *arg0 = (struct Expression *)args->cur;
+            fprintf(stderr, "[DEBUG]   arg0 type=%d", arg0->type);
+            if (arg0->type == EXPR_VAR_ID) fprintf(stderr, " id='%s'", arg0->expr_data.id);
+            if (arg0->type == EXPR_FUNCTION_CALL) fprintf(stderr, " func_id='%s'", arg0->expr_data.function_call_data.id);
+            fprintf(stderr, " arg0_line=%d\n", arg0->line_num);
+        }
+        const char *cur_sub = semcheck_get_current_subprogram_id();
+        fprintf(stderr, "[DEBUG]   current_subprogram='%s'\n", cur_sub ? cur_sub : "(null)");
+
         return semcheck_builtin_pos(type_return, symtab, expr, max_scope_lev);
+    }
 
     if (allow_builtins && id != NULL && pascal_identifier_equals(id, "StrPas"))
         return semcheck_builtin_strpas(type_return, symtab, expr, max_scope_lev);
