@@ -82,6 +82,14 @@ static ast_t *g_implementation_section_ast = NULL;
 /* Method context for expression conversion (e.g., bare "inherited" expressions). */
 static const char *g_current_method_name = NULL;
 
+static int is_external_directive(const char *directive)
+{
+    if (directive == NULL)
+        return 0;
+    return (strcasecmp(directive, "external") == 0 ||
+            strcasecmp(directive, "weakexternal") == 0);
+}
+
 static void register_type_helper_mapping(const char *helper_id, const char *base_type_id)
 {
     if (helper_id == NULL || base_type_id == NULL)
@@ -703,6 +711,7 @@ static ast_t *find_type_decl_in_section(ast_t *type_section, const char *type_na
 static int resolve_array_type_info_from_ast(const char *type_name, ast_t *type_section, TypeInfo *out_info, int depth);
 static void resolve_array_bounds(TypeInfo *info, ast_t *type_section, ast_t *const_section, const char *id_for_error);
 static ast_t *find_node_by_type(ast_t *node, int target_type);
+static void substitute_generic_identifiers(ast_t *node, char **params, char **args, int count);
 
 
 /* ClassMethodBinding typedef moved to from_cparser.h */
@@ -1334,6 +1343,128 @@ static struct RecordType *instantiate_generic_record(const char *base_name, List
     if (debug_env != NULL && record->type_id != NULL)
         fprintf(stderr, "[KGPC] instantiated generic record %s\n", record->type_id);
     return record;
+}
+
+static int build_generic_arg_array(ListNode_t *type_args, char ***arg_types_out, int *arg_count_out)
+{
+    if (arg_types_out == NULL || arg_count_out == NULL)
+        return 0;
+    *arg_types_out = NULL;
+    *arg_count_out = 0;
+
+    int arg_count = 0;
+    for (ListNode_t *cur = type_args; cur != NULL; cur = cur->next)
+    {
+        if (cur->type == LIST_STRING && cur->cur != NULL)
+            arg_count++;
+    }
+    if (arg_count == 0)
+        return 0;
+
+    char **arg_types = (char **)calloc((size_t)arg_count, sizeof(char *));
+    if (arg_types == NULL)
+        return 0;
+
+    int idx = 0;
+    ListNode_t *cur = type_args;
+    while (cur != NULL && idx < arg_count) {
+        if (cur->type == LIST_STRING && cur->cur != NULL) {
+            arg_types[idx] = strdup((char *)cur->cur);
+            if (arg_types[idx] == NULL)
+                break;
+            idx++;
+        }
+        cur = cur->next;
+    }
+
+    if (idx != arg_count) {
+        for (int i = 0; i < arg_count; ++i)
+            free(arg_types[i]);
+        free(arg_types);
+        return 0;
+    }
+
+    *arg_types_out = arg_types;
+    *arg_count_out = arg_count;
+    return 1;
+}
+
+static int type_info_has_resolution(const TypeInfo *info)
+{
+    if (info == NULL)
+        return 0;
+    return (info->is_array || info->is_set || info->is_record || info->is_file ||
+            info->is_enum || info->is_range || info->is_pointer ||
+            info->is_class_reference || info->is_array_of_const);
+}
+
+static int resolve_generic_alias_type(const char *base_name, ListNode_t *type_args,
+    char **type_id_out, TypeInfo *type_info, int *result_out)
+{
+    if (base_name == NULL || type_info == NULL)
+        return 0;
+    if (result_out != NULL)
+        *result_out = UNKNOWN_TYPE;
+
+    const char *debug_env = getenv("KGPC_DEBUG_TFPG");
+    GenericTypeDecl *generic = generic_registry_find_decl(base_name);
+    Tree_t *generic_decl_tree = generic != NULL ? generic->original_decl : NULL;
+    ast_t *generic_ast = generic_decl_tree != NULL ?
+        generic_decl_tree->tree_data.type_decl_data.info.generic.original_ast : NULL;
+    if (generic == NULL || generic->record_template != NULL || generic_ast == NULL)
+    {
+        if (debug_env != NULL)
+            fprintf(stderr, "[KGPC] resolve_generic_alias_type skip base=%s generic=%p record_template=%p original_ast=%p\n",
+                base_name, (void *)generic,
+                generic != NULL ? (void *)generic->record_template : NULL,
+                (void *)generic_ast);
+        return 0;
+    }
+
+    char **arg_types = NULL;
+    int arg_count = 0;
+    if (!build_generic_arg_array(type_args, &arg_types, &arg_count))
+        return 0;
+
+    if (arg_count != generic->num_type_params) {
+        if (debug_env != NULL)
+            fprintf(stderr, "[KGPC] resolve_generic_alias_type arg mismatch base=%s got=%d expected=%d\n",
+                base_name, arg_count, generic->num_type_params);
+        for (int i = 0; i < arg_count; ++i)
+            free(arg_types[i]);
+        free(arg_types);
+        return 0;
+    }
+
+    ast_t *ast_copy = copy_ast(generic_ast);
+    if (ast_copy == NULL) {
+        if (debug_env != NULL)
+            fprintf(stderr, "[KGPC] resolve_generic_alias_type copy failed base=%s\n", base_name);
+        for (int i = 0; i < arg_count; ++i)
+            free(arg_types[i]);
+        free(arg_types);
+        return 0;
+    }
+
+    substitute_generic_identifiers(ast_copy, generic->type_parameters, arg_types, arg_count);
+    int result = convert_type_spec(ast_copy, type_id_out, NULL, type_info);
+    if (debug_env != NULL)
+        fprintf(stderr, "[KGPC] resolve_generic_alias_type resolved base=%s result=%d is_array=%d\n",
+            base_name, result, type_info->is_array);
+    free_ast(ast_copy);
+
+    for (int i = 0; i < arg_count; ++i)
+        free(arg_types[i]);
+    free(arg_types);
+
+    if (result_out != NULL)
+        *result_out = result;
+
+    if (result != UNKNOWN_TYPE || type_info_has_resolution(type_info) ||
+        (type_id_out != NULL && *type_id_out != NULL))
+        return 1;
+
+    return 0;
 }
 
 static void record_generic_method_impl(const char *class_name, const char *method_name, ast_t *method_ast)
@@ -4105,6 +4236,19 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                 if (type_args != NULL)
                     destroy_list(type_args);
                 return RECORD_TYPE;
+            }
+
+            if (type_info != NULL) {
+                int alias_result = UNKNOWN_TYPE;
+                if (resolve_generic_alias_type(base_name, type_args, type_id_out, type_info,
+                        &alias_result)) {
+                    if (specialized_name != NULL)
+                        free(specialized_name);
+                    free(base_name);
+                    if (type_args != NULL)
+                        destroy_list(type_args);
+                    return alias_result;
+                }
             }
 
             int can_defer = (g_allow_pending_specializations && type_info != NULL);
@@ -12643,7 +12787,7 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
             if (cur->child != NULL && cur->child->typ == PASCAL_T_IDENTIFIER) {
                 char *directive = dup_symbol(cur->child);
                 if (directive != NULL) {
-                    if (strcasecmp(directive, "external") == 0) {
+                    if (is_external_directive(directive)) {
                         is_external = 1;
                     }
                 }
@@ -12924,7 +13068,7 @@ static Tree_t *convert_function(ast_t *func_node) {
         case PASCAL_T_IDENTIFIER: {
             char *self_sym = dup_symbol(cur);
             if (self_sym != NULL) {
-                if (strcasecmp(self_sym, "external") == 0) {
+                if (is_external_directive(self_sym)) {
                     is_external = 1;
                 }
                 free(self_sym);
@@ -12933,7 +13077,7 @@ static Tree_t *convert_function(ast_t *func_node) {
             if (cur->child != NULL && cur->child->typ == PASCAL_T_IDENTIFIER) {
                 char *directive = dup_symbol(cur->child);
                 if (directive != NULL) {
-                    if (strcasecmp(directive, "external") == 0) {
+                    if (is_external_directive(directive)) {
                         is_external = 1;
                     }
                 }

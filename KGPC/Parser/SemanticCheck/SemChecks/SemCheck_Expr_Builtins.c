@@ -765,6 +765,31 @@ int semcheck_builtin_strpas(int *type_return, SymTab_t *symtab,
     /* FPC accepts both PChar/PAnsiChar (string-like) pointers */
     int strpas_arg_ok = kgpc_type_is_string(arg_kgpc_type) ||
         kgpc_type_is_pointer(arg_kgpc_type) || kgpc_type_is_char(arg_kgpc_type);
+    if (!strpas_arg_ok && arg_kgpc_type != NULL && kgpc_type_is_array(arg_kgpc_type))
+    {
+        KgpcType *elem_type = kgpc_type_get_array_element_type_resolved(arg_kgpc_type, symtab);
+        if (elem_type != NULL && kgpc_type_is_char(elem_type))
+            strpas_arg_ok = 1;
+        else if (arg_kgpc_type->type_alias != NULL &&
+            arg_kgpc_type->type_alias->array_element_type == CHAR_TYPE)
+            strpas_arg_ok = 1;
+        else if (arg_kgpc_type->type_alias != NULL &&
+            arg_kgpc_type->type_alias->array_element_type_id != NULL &&
+            (pascal_identifier_equals(arg_kgpc_type->type_alias->array_element_type_id, "AnsiChar") ||
+             pascal_identifier_equals(arg_kgpc_type->type_alias->array_element_type_id, "Char") ||
+             pascal_identifier_equals(arg_kgpc_type->type_alias->array_element_type_id, "WideChar")))
+            strpas_arg_ok = 1;
+    }
+    if (!strpas_arg_ok && arg_expr != NULL && arg_expr->is_array_expr)
+    {
+        if (arg_expr->array_element_type == CHAR_TYPE)
+            strpas_arg_ok = 1;
+        else if (arg_expr->array_element_type_id != NULL &&
+            (pascal_identifier_equals(arg_expr->array_element_type_id, "AnsiChar") ||
+             pascal_identifier_equals(arg_expr->array_element_type_id, "Char") ||
+             pascal_identifier_equals(arg_expr->array_element_type_id, "WideChar")))
+            strpas_arg_ok = 1;
+    }
     /* Fallback: check resolved_kgpc_type tag (e.g. argv[l] indexing returns pointer) */
     if (!strpas_arg_ok && arg_expr != NULL && arg_expr->resolved_kgpc_type != NULL)
     {
@@ -2023,6 +2048,144 @@ int semcheck_builtin_default(int *type_return, SymTab_t *symtab,
             *type_return = UNKNOWN_TYPE;
             return 1;
     }
+}
+
+int semcheck_builtin_typeinfo(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev)
+{
+    assert(type_return != NULL);
+    assert(symtab != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_FUNCTION_CALL);
+
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    if (args == NULL || args->next != NULL)
+    {
+        semcheck_error_with_context("Error on line %d, TypeInfo expects exactly one argument.\n",
+            expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    struct Expression *arg_expr = (struct Expression *)args->cur;
+    struct TypeAlias *alias = NULL;
+    const char *type_name = NULL;
+    char *qualified_name = NULL;
+    char *type_name_owned = NULL;
+
+    if (arg_expr != NULL && (arg_expr->type == EXPR_VAR_ID || arg_expr->type == EXPR_RECORD_ACCESS))
+    {
+        if (arg_expr->type == EXPR_VAR_ID)
+            type_name = arg_expr->expr_data.id;
+        else
+        {
+            qualified_name = build_qualified_identifier_from_expr_local(arg_expr);
+            type_name = qualified_name;
+        }
+
+        if (type_name != NULL)
+        {
+            const char *raw_name = type_name;
+            const char *base_name = semcheck_base_type_name(raw_name);
+            HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, raw_name);
+            if (type_node == NULL && base_name != NULL && base_name != raw_name)
+                type_node = semcheck_find_preferred_type_node(symtab, base_name);
+            if (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+            {
+                alias = get_type_alias_from_node(type_node);
+                if (alias == NULL && type_node->type != NULL)
+                    alias = kgpc_type_get_type_alias(type_node->type);
+                if (alias != NULL && alias->alias_name != NULL)
+                    type_name = alias->alias_name;
+                else if (type_node->id != NULL)
+                    type_name = type_node->id;
+            }
+        }
+    }
+
+    if (qualified_name != NULL)
+    {
+        if (type_name == qualified_name)
+        {
+            type_name_owned = strdup(qualified_name);
+            type_name = type_name_owned;
+        }
+        free(qualified_name);
+        qualified_name = NULL;
+    }
+
+    if (alias == NULL)
+    {
+        KgpcType *resolved_type = NULL;
+        int error_count = semcheck_expr_with_type(&resolved_type, symtab, arg_expr,
+            max_scope_lev, NO_MUTATE);
+        if (error_count != 0)
+        {
+            if (type_name_owned != NULL)
+                free(type_name_owned);
+            *type_return = UNKNOWN_TYPE;
+            return error_count;
+        }
+        if (resolved_type != NULL)
+            alias = kgpc_type_get_type_alias(resolved_type);
+        if (alias != NULL && alias->alias_name != NULL)
+            type_name = alias->alias_name;
+    }
+
+    if (alias == NULL || !alias->is_enum || alias->enum_literals == NULL)
+    {
+        semcheck_error_with_context("Error on line %d, TypeInfo currently supports enum types only.\n",
+            expr->line_num);
+        if (type_name_owned != NULL)
+            free(type_name_owned);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    semcheck_free_call_args(expr->expr_data.function_call_data.args_expr, NULL);
+    expr->expr_data.function_call_data.args_expr = NULL;
+    if (expr->expr_data.function_call_data.id != NULL)
+    {
+        free(expr->expr_data.function_call_data.id);
+        expr->expr_data.function_call_data.id = NULL;
+    }
+    if (expr->expr_data.function_call_data.mangled_id != NULL)
+    {
+        free(expr->expr_data.function_call_data.mangled_id);
+        expr->expr_data.function_call_data.mangled_id = NULL;
+    }
+    semcheck_reset_function_call_cache(expr);
+
+    expr->type = EXPR_TYPEINFO;
+    if (expr->expr_data.typeinfo_data.type_id != NULL)
+    {
+        free(expr->expr_data.typeinfo_data.type_id);
+        expr->expr_data.typeinfo_data.type_id = NULL;
+    }
+    if (type_name != NULL)
+        expr->expr_data.typeinfo_data.type_id = strdup(type_name);
+    else
+        expr->expr_data.typeinfo_data.type_id = strdup("unknown");
+    if (expr->expr_data.typeinfo_data.type_id == NULL)
+    {
+        fprintf(stderr, "Error: failed to allocate TypeInfo label string.\n");
+        if (type_name_owned != NULL)
+            free(type_name_owned);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    if (expr->resolved_kgpc_type != NULL)
+    {
+        destroy_kgpc_type(expr->resolved_kgpc_type);
+        expr->resolved_kgpc_type = NULL;
+    }
+    expr->resolved_kgpc_type = create_pointer_type(NULL);
+    semcheck_expr_set_resolved_type(expr, POINTER_TYPE);
+    *type_return = POINTER_TYPE;
+    if (type_name_owned != NULL)
+        free(type_name_owned);
+    return 0;
 }
 int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev, int is_high)

@@ -1117,6 +1117,11 @@ void expr_print(struct Expression *expr, FILE *f, int num_indent)
           expr_print(expr->expr_data.as_data.expr, f, num_indent + 1);
           --num_indent;
           break;
+        case EXPR_TYPEINFO:
+          fprintf(f, "[TYPEINFO:%s]\n",
+              expr->expr_data.typeinfo_data.type_id != NULL ?
+              expr->expr_data.typeinfo_data.type_id : "<unknown>");
+          break;
 
         default:
           fprintf(stderr, "BAD TYPE IN expr_print! type=%d\n", expr->type);
@@ -1716,6 +1721,13 @@ void destroy_expr(struct Expression *expr)
           {
               free(expr->expr_data.as_data.target_type_id);
               expr->expr_data.as_data.target_type_id = NULL;
+          }
+          break;
+        case EXPR_TYPEINFO:
+          if (expr->expr_data.typeinfo_data.type_id != NULL)
+          {
+              free(expr->expr_data.typeinfo_data.type_id);
+              expr->expr_data.typeinfo_data.type_id = NULL;
           }
           break;
 

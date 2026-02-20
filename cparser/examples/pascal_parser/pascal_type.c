@@ -2384,6 +2384,8 @@ static ParseResult object_type_fn(input_t* in, void* args, char* parser_name) {
         NULL
     );
 
+    combinator_t* property_decl = create_property_decl_parser();
+
     // Visibility sections (public/private/protected)
     combinator_t* visibility_keyword = multi(new_combinator(), PASCAL_T_ACCESS_MODIFIER,
         token(keyword_ci("private")),
@@ -2480,6 +2482,7 @@ static ParseResult object_type_fn(input_t* in, void* args, char* parser_name) {
         destructor_decl,
         method_procedure_decl,
         method_function_decl,
+        property_decl,
         field_decl,
         NULL
     );

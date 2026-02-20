@@ -1392,15 +1392,7 @@ static int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, 
                 set_hash_meta(array_node, BOTH_MUTATE_REFERENCE);
                 
                 /* Check if it's a dynamic array using KgpcType first, then legacy field */
-                int is_dynamic = 0;
-                if (array_node->type != NULL)
-                {
-                    is_dynamic = kgpc_type_is_dynamic_array(array_node->type);
-                }
-                else
-                {
-                    is_dynamic = hashnode_is_dynamic_array(array_node);
-                }
+                int is_dynamic = hashnode_is_dynamic_array(array_node);
                 
                 if (is_dynamic &&
                     (array_node->hash_type == HASHTYPE_ARRAY ||
@@ -1809,10 +1801,10 @@ static int semcheck_builtin_val(SymTab_t *symtab, struct Statement *stmt, int ma
         return 0;
 
     ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
-    if (args == NULL || args->next == NULL || args->next->next == NULL ||
-        args->next->next->next != NULL)
+    int arg_count = ListLength(args);
+    if (args == NULL || (arg_count != 2 && arg_count != 3))
     {
-        semcheck_error_with_context("Error on line %d, Val expects exactly three arguments.\n",
+        semcheck_error_with_context("Error on line %d, Val expects two or three arguments.\n",
             stmt->line_num);
         return 1;
     }
@@ -1840,14 +1832,17 @@ static int semcheck_builtin_val(SymTab_t *symtab, struct Statement *stmt, int ma
         ++error_count;
     }
 
-    struct Expression *code_expr = (struct Expression *)args->next->next->cur;
-    int code_type = UNKNOWN_TYPE;
-    error_count += semcheck_stmt_expr_tag(&code_type, symtab, code_expr, max_scope_lev, MUTATE);
-    if (!is_integer_type(code_type))
+    if (arg_count == 3)
     {
-        semcheck_error_with_context("Error on line %d, Val code argument must be an integer variable.\n",
-            stmt->line_num);
-        ++error_count;
+        struct Expression *code_expr = (struct Expression *)args->next->next->cur;
+        int code_type = UNKNOWN_TYPE;
+        error_count += semcheck_stmt_expr_tag(&code_type, symtab, code_expr, max_scope_lev, MUTATE);
+        if (!is_integer_type(code_type))
+        {
+            semcheck_error_with_context("Error on line %d, Val code argument must be an integer variable.\n",
+                stmt->line_num);
+            ++error_count;
+        }
     }
 
     return error_count;
@@ -4234,8 +4229,29 @@ skip_type_receiver_rewrite:
                     }
                     else
                     {
-                        /* Procedure not found - free real_proc_name and fall through to report error */
-                        free(real_proc_name);
+                        /* Procedure not found - allow System.Exit without a symbol table entry. */
+                        if (pascal_identifier_equals(real_proc_name, "Exit"))
+                        {
+                            ListNode_t *remaining_args = args_given->next;
+
+                            destroy_expr(first_arg);
+                            args_given->cur = NULL;
+                            free(args_given);
+
+                            stmt->stmt_data.procedure_call_data.expr_args = remaining_args;
+
+                            free(proc_id);
+                            proc_id = real_proc_name;
+                            stmt->stmt_data.procedure_call_data.id = proc_id;
+                            stmt->stmt_data.procedure_call_data.is_method_call_placeholder = 0;
+                            args_given = remaining_args;
+                            was_unit_qualified = 1;
+                        }
+                        else
+                        {
+                            /* Procedure not found - free real_proc_name and fall through to report error */
+                            free(real_proc_name);
+                        }
                     }
                 }
             }
@@ -4259,13 +4275,37 @@ skip_type_receiver_rewrite:
             return 1;
         }
 
+        struct Expression *exit_expr = NULL;
         if (arg_count == 1)
         {
             int expr_type = UNKNOWN_TYPE;
-            struct Expression *arg_expr = (struct Expression *)args_given->cur;
-            if (arg_expr != NULL)
-                return_val += semcheck_stmt_expr_tag(&expr_type, symtab, arg_expr, max_scope_lev, 0);
+            exit_expr = (struct Expression *)args_given->cur;
+            if (exit_expr != NULL)
+                return_val += semcheck_stmt_expr_tag(&expr_type, symtab, exit_expr, max_scope_lev, 0);
         }
+
+        /* Transform the procedure call into an Exit statement for codegen. */
+        stmt->type = STMT_EXIT;
+        stmt->stmt_data.exit_data.return_expr = exit_expr;
+        stmt->stmt_data.procedure_call_data.expr_args = NULL;
+        if (stmt->stmt_data.procedure_call_data.id != NULL)
+        {
+            free(stmt->stmt_data.procedure_call_data.id);
+            stmt->stmt_data.procedure_call_data.id = NULL;
+        }
+        if (stmt->stmt_data.procedure_call_data.mangled_id != NULL)
+        {
+            free(stmt->stmt_data.procedure_call_data.mangled_id);
+            stmt->stmt_data.procedure_call_data.mangled_id = NULL;
+        }
+        while (args_given != NULL)
+        {
+            ListNode_t *next = args_given->next;
+            args_given->cur = NULL;
+            free(args_given);
+            args_given = next;
+        }
+
         return return_val;
     }
 
