@@ -408,8 +408,6 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev, int is_high);
 int semcheck_builtin_default(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev);
-int semcheck_builtin_typeinfo(int *type_return, SymTab_t *symtab,
-    struct Expression *expr, int max_scope_lev);
 int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev);
 int semcheck_builtin_ismanagedtype(int *type_return, SymTab_t *symtab,
@@ -454,8 +452,6 @@ int semcheck_reinterpret_typecast_as_call(int *type_return, SymTab_t *symtab,
 
 /* Try indexed property getter */
 int semcheck_try_indexed_property_getter(int *type_return,
-    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
-int semcheck_try_indexed_record_property_getter(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
 
 /* Mangle helper const ID */

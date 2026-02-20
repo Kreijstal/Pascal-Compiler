@@ -46,9 +46,6 @@ type
     EConvertError = class(Exception)
     end;
 
-    EArgumentException = class(Exception)
-    end;
-
     TEncoding = class
     public
         class function UTF8: TEncoding; static;
@@ -106,8 +103,6 @@ function AnsiUpperCase(const S: AnsiString): AnsiString;
 function AnsiLowerCase(const S: AnsiString): AnsiString;
 function CompareText(const S1, S2: AnsiString): Integer;
 function SameText(const S1, S2: AnsiString): Boolean;
-function ShortCompareText(const S1, S2: ShortString): Integer;
-function ShortCompareText(const S1, S2: ShortString): Integer;
 function StringReplace(const S, OldPattern, NewPattern: AnsiString): AnsiString;
 function StringReplace(const S, OldPattern, NewPattern: AnsiString; Flags: TReplaceFlags): AnsiString;
 function BoolToStr(B: Boolean; UseBoolStrs: Boolean): AnsiString;
@@ -693,11 +688,6 @@ end;
 function SameText(const S1, S2: AnsiString): Boolean;
 begin
     SameText := CompareText(S1, S2) = 0;
-end;
-
-function ShortCompareText(const S1, S2: ShortString): Integer;
-begin
-    ShortCompareText := CompareText(AnsiString(S1), AnsiString(S2));
 end;
 
 function StringReplace(const S, OldPattern, NewPattern: AnsiString): AnsiString;

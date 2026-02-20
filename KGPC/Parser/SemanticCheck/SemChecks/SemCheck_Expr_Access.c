@@ -273,13 +273,6 @@ int semcheck_arrayaccess(int *type_return,
                 return return_val + property_result;
         }
     }
-    else if (array_expr->type == EXPR_RECORD_ACCESS)
-    {
-        int property_result = semcheck_try_indexed_record_property_getter(type_return, symtab,
-            expr, max_scope_lev, mutating);
-        if (property_result >= 0)
-            return return_val + property_result;
-    }
 
     int base_type = UNKNOWN_TYPE;
     KgpcType *base_kgpc_type = NULL;
@@ -603,9 +596,6 @@ int semcheck_arrayaccess(int *type_return,
         destroy_kgpc_type(expr->resolved_kgpc_type);
     expr->resolved_kgpc_type = res_type;
 
-    if (res_type != NULL && kgpc_type_is_array(res_type))
-        semcheck_set_array_info_from_kgpctype(expr, symtab, res_type, expr->line_num);
-
     semcheck_compute_array_linearization(symtab, expr, array_expr);
 
     return return_val;
@@ -819,47 +809,6 @@ int semcheck_funccall(int *type_return,
 
             free(prefix);
         }
-    }
-    if (id != NULL && pascal_identifier_equals(id, "unaligned"))
-    {
-        ListNode_t *unaligned_args = expr->expr_data.function_call_data.args_expr;
-        struct Expression *arg_expr = (unaligned_args != NULL) ?
-            (struct Expression *)unaligned_args->cur : NULL;
-
-        if (arg_expr == NULL || (unaligned_args != NULL && unaligned_args->next != NULL))
-        {
-            semcheck_error_with_context("Error on line %d, unaligned requires exactly one argument.\n\n",
-                expr->line_num);
-            if (type_return != NULL)
-                *type_return = UNKNOWN_TYPE;
-            return 1;
-        }
-
-        KgpcType *arg_kgpc_type = NULL;
-        int error_count = semcheck_expr_with_type(&arg_kgpc_type, symtab,
-            arg_expr, max_scope_lev, mutating);
-        int arg_tag = semcheck_tag_from_kgpc(arg_kgpc_type);
-
-        if (expr->expr_data.function_call_data.id != NULL)
-            free(expr->expr_data.function_call_data.id);
-        if (expr->expr_data.function_call_data.mangled_id != NULL)
-            free(expr->expr_data.function_call_data.mangled_id);
-        if (expr->expr_data.function_call_data.args_expr != NULL)
-            DestroyList(expr->expr_data.function_call_data.args_expr);
-
-        expr->type = EXPR_TYPECAST;
-        memset(&expr->expr_data, 0, sizeof(expr->expr_data));
-        expr->expr_data.typecast_data.target_type_id = strdup("unaligned");
-        expr->expr_data.typecast_data.target_type = arg_tag;
-        expr->expr_data.typecast_data.expr = arg_expr;
-
-        if (type_return != NULL)
-            *type_return = arg_tag;
-        semcheck_expr_set_resolved_type(expr, arg_tag);
-        if (arg_kgpc_type != NULL)
-            semcheck_expr_set_resolved_kgpc_type_shared(expr, arg_kgpc_type);
-
-        return error_count;
     }
     if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
         fprintf(stderr, "[SemCheck] semcheck_funccall: id='%s'\n", id != NULL ? id : "(null)");
@@ -1699,8 +1648,6 @@ int semcheck_funccall(int *type_return,
         return semcheck_builtin_sizeof(type_return, symtab, expr, max_scope_lev);
     if (id != NULL && pascal_identifier_equals(id, "IsManagedType"))
         return semcheck_builtin_ismanagedtype(type_return, symtab, expr, max_scope_lev);
-    if (id != NULL && pascal_identifier_equals(id, "TypeInfo"))
-        return semcheck_builtin_typeinfo(type_return, symtab, expr, max_scope_lev);
 
     if (id != NULL && pascal_identifier_equals(id, "GetMem"))
     {
@@ -1849,59 +1796,55 @@ int semcheck_funccall(int *type_return,
         return 0;
     }
 
-    int allow_builtins = !expr->expr_data.function_call_data.is_method_call_placeholder;
-    if (allow_builtins)
+    if (id != NULL && pascal_identifier_equals(id, "Chr"))
+        return semcheck_builtin_chr(type_return, symtab, expr, max_scope_lev);
+
+    if (id != NULL && pascal_identifier_equals(id, "Ord"))
+        return semcheck_builtin_ord(type_return, symtab, expr, max_scope_lev);
+
+    if (id != NULL && pascal_identifier_equals(id, "Pred"))
+        return semcheck_builtin_predsucc(type_return, symtab, expr, max_scope_lev, 0);
+
+    if (id != NULL && pascal_identifier_equals(id, "Succ"))
+        return semcheck_builtin_predsucc(type_return, symtab, expr, max_scope_lev, 1);
+
+    if (id != NULL && pascal_identifier_equals(id, "Length"))
+        return semcheck_builtin_length(type_return, symtab, expr, max_scope_lev);
+
+    if (id != NULL && pascal_identifier_equals(id, "Copy"))
+        return semcheck_builtin_copy(type_return, symtab, expr, max_scope_lev);
+
+    if (id != NULL && pascal_identifier_equals(id, "Concat"))
+        return semcheck_builtin_concat(type_return, symtab, expr, max_scope_lev);
+
+    if (id != NULL && pascal_identifier_equals(id, "Pos"))
+        return semcheck_builtin_pos(type_return, symtab, expr, max_scope_lev);
+
+    if (id != NULL && pascal_identifier_equals(id, "StrPas"))
+        return semcheck_builtin_strpas(type_return, symtab, expr, max_scope_lev);
+
+    if (id != NULL && pascal_identifier_equals(id, "EOF"))
+        return semcheck_builtin_eof(type_return, symtab, expr, max_scope_lev);
+    if (id != NULL && pascal_identifier_equals(id, "EOLN"))
+        return semcheck_builtin_eoln(type_return, symtab, expr, max_scope_lev);
+
+    if (id != NULL && pascal_identifier_equals(id, "Low"))
+        return semcheck_builtin_lowhigh(type_return, symtab, expr, max_scope_lev, 0);
+
+    if (id != NULL && pascal_identifier_equals(id, "High"))
+        return semcheck_builtin_lowhigh(type_return, symtab, expr, max_scope_lev, 1);
+
+    if (id != NULL && pascal_identifier_equals(id, "Default"))
+        return semcheck_builtin_default(type_return, symtab, expr, max_scope_lev);
+
+    /* Internal runtime function for open/dynamic array High - already resolved */
+    if (id != NULL && strcmp(id, "kgpc_dynarray_compute_high") == 0)
     {
-        if (id != NULL && pascal_identifier_equals(id, "Chr"))
-            return semcheck_builtin_chr(type_return, symtab, expr, max_scope_lev);
-
-        if (id != NULL && pascal_identifier_equals(id, "Ord"))
-            return semcheck_builtin_ord(type_return, symtab, expr, max_scope_lev);
-
-        if (id != NULL && pascal_identifier_equals(id, "Pred"))
-            return semcheck_builtin_predsucc(type_return, symtab, expr, max_scope_lev, 0);
-
-        if (id != NULL && pascal_identifier_equals(id, "Succ"))
-            return semcheck_builtin_predsucc(type_return, symtab, expr, max_scope_lev, 1);
-
-        if (id != NULL && pascal_identifier_equals(id, "Length"))
-            return semcheck_builtin_length(type_return, symtab, expr, max_scope_lev);
-
-        if (id != NULL && pascal_identifier_equals(id, "Copy"))
-            return semcheck_builtin_copy(type_return, symtab, expr, max_scope_lev);
-
-        if (id != NULL && pascal_identifier_equals(id, "Concat"))
-            return semcheck_builtin_concat(type_return, symtab, expr, max_scope_lev);
-
-        if (id != NULL && pascal_identifier_equals(id, "Pos"))
-            return semcheck_builtin_pos(type_return, symtab, expr, max_scope_lev);
-
-        if (id != NULL && pascal_identifier_equals(id, "StrPas"))
-            return semcheck_builtin_strpas(type_return, symtab, expr, max_scope_lev);
-
-        if (id != NULL && pascal_identifier_equals(id, "EOF"))
-            return semcheck_builtin_eof(type_return, symtab, expr, max_scope_lev);
-        if (id != NULL && pascal_identifier_equals(id, "EOLN"))
-            return semcheck_builtin_eoln(type_return, symtab, expr, max_scope_lev);
-
-        if (id != NULL && pascal_identifier_equals(id, "Low"))
-            return semcheck_builtin_lowhigh(type_return, symtab, expr, max_scope_lev, 0);
-
-        if (id != NULL && pascal_identifier_equals(id, "High"))
-            return semcheck_builtin_lowhigh(type_return, symtab, expr, max_scope_lev, 1);
-
-        if (id != NULL && pascal_identifier_equals(id, "Default"))
-            return semcheck_builtin_default(type_return, symtab, expr, max_scope_lev);
-
-        /* Internal runtime function for open/dynamic array High - already resolved */
-        if (id != NULL && strcmp(id, "kgpc_dynarray_compute_high") == 0)
-        {
-            /* This function was already set up by semcheck_builtin_lowhigh for dynamic arrays.
-             * Just confirm it returns LONGINT_TYPE and proceed. */
-            semcheck_expr_set_resolved_type(expr, LONGINT_TYPE);
-            *type_return = LONGINT_TYPE;
-            return 0;
-        }
+        /* This function was already set up by semcheck_builtin_lowhigh for dynamic arrays.
+         * Just confirm it returns LONGINT_TYPE and proceed. */
+        semcheck_expr_set_resolved_type(expr, LONGINT_TYPE);
+        *type_return = LONGINT_TYPE;
+        return 0;
     }
 
     if (id != NULL && pascal_identifier_equals(id, "Assigned"))
@@ -5020,92 +4963,6 @@ int semcheck_try_indexed_property_getter(int *type_return,
     expr->expr_data.function_call_data.mangled_id = NULL;
     semcheck_reset_function_call_cache(expr);
 
-    destroy_expr(array_expr);
-
-    return semcheck_funccall(type_return, symtab, expr, max_scope_lev, mutating);
-}
-
-int semcheck_try_indexed_record_property_getter(int *type_return,
-    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating)
-{
-    if (type_return == NULL || symtab == NULL || expr == NULL)
-        return -1;
-    if (mutating != NO_MUTATE)
-        return -1;
-    if (expr->type != EXPR_ARRAY_ACCESS)
-        return -1;
-
-    struct Expression *array_expr = expr->expr_data.array_access_data.array_expr;
-    struct Expression *index_expr = expr->expr_data.array_access_data.index_expr;
-    if (array_expr == NULL || index_expr == NULL)
-        return -1;
-    if (array_expr->type != EXPR_RECORD_ACCESS)
-        return -1;
-
-    struct Expression *record_expr = array_expr->expr_data.record_access_data.record_expr;
-    const char *field_id = array_expr->expr_data.record_access_data.field_id;
-    if (record_expr == NULL || field_id == NULL)
-        return -1;
-
-    KgpcType *record_kgpc_type = NULL;
-    semcheck_expr_with_type(&record_kgpc_type, symtab, record_expr, max_scope_lev, mutating);
-
-    struct RecordType *record_info = NULL;
-    if (record_kgpc_type != NULL && kgpc_type_is_pointer(record_kgpc_type) &&
-        record_kgpc_type->info.points_to != NULL &&
-        kgpc_type_is_record(record_kgpc_type->info.points_to))
-    {
-        record_info = kgpc_type_get_record(record_kgpc_type->info.points_to);
-    }
-    else if (record_kgpc_type != NULL && kgpc_type_is_record(record_kgpc_type))
-    {
-        record_info = kgpc_type_get_record(record_kgpc_type);
-    }
-    else if (record_kgpc_type != NULL && record_kgpc_type->type_alias != NULL)
-    {
-        const char *alias_target = record_kgpc_type->type_alias->target_type_id;
-        const char *alias_name = record_kgpc_type->type_alias->alias_name;
-        if (alias_target != NULL)
-            record_info = semcheck_lookup_record_type(symtab, alias_target);
-        if (record_info == NULL && alias_name != NULL)
-            record_info = semcheck_lookup_record_type(symtab, alias_name);
-    }
-
-    if (record_info == NULL)
-        return -1;
-
-    struct RecordType *owner_record = NULL;
-    struct ClassProperty *property = semcheck_find_class_property(symtab, record_info, field_id, &owner_record);
-    if (property == NULL || !property->is_indexed)
-        return -1;
-
-    const char *accessor = property->read_accessor;
-    if (accessor == NULL)
-        return -1;
-
-    HashNode_t *method_node = semcheck_find_class_method(symtab, record_info, accessor, NULL);
-    if (method_node == NULL)
-        return -1;
-
-    ListNode_t *args = CreateListNode(record_expr, LIST_EXPR);
-    if (args == NULL)
-        return -1;
-    ListNode_t *index_node = CreateListNode(index_expr, LIST_EXPR);
-    if (index_node == NULL)
-        return -1;
-    args->next = index_node;
-
-    expr->type = EXPR_FUNCTION_CALL;
-    memset(&expr->expr_data.function_call_data, 0, sizeof(expr->expr_data.function_call_data));
-    expr->expr_data.function_call_data.is_method_call_placeholder = 1;
-    expr->expr_data.function_call_data.id = strdup(accessor);
-    if (method_node->mangled_id != NULL)
-        expr->expr_data.function_call_data.mangled_id = strdup(method_node->mangled_id);
-    expr->expr_data.function_call_data.resolved_func = method_node;
-    expr->expr_data.function_call_data.args_expr = args;
-    semcheck_expr_set_resolved_type(expr, UNKNOWN_TYPE);
-
-    array_expr->expr_data.record_access_data.record_expr = NULL;
     destroy_expr(array_expr);
 
     return semcheck_funccall(type_return, symtab, expr, max_scope_lev, mutating);

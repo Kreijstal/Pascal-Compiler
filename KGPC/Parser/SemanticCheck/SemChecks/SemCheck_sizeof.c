@@ -85,6 +85,14 @@ long long sizeof_from_type_tag(int type_tag)
             return 4;
         case LONGINT_TYPE:
             return 4;
+        case REAL_TYPE:
+            return 8;
+        case STRING_TYPE:
+            return POINTER_SIZE_BYTES;
+        case INT64_TYPE:
+            return 8;
+        case CHAR_TYPE:
+            return 1;
         case BYTE_TYPE:
             return 1;
         case WORD_TYPE:
@@ -93,12 +101,6 @@ long long sizeof_from_type_tag(int type_tag)
             return 4;
         case QWORD_TYPE:
             return 8;
-        case REAL_TYPE:
-            return 8;
-        case STRING_TYPE:
-            return POINTER_SIZE_BYTES;
-        case CHAR_TYPE:
-            return 1;
         case BOOL:
             /*
              * Standalone booleans occupy 4 bytes to keep stack accesses aligned,

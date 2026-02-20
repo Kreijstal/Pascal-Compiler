@@ -1,6 +1,6 @@
 # FPC Bootstrap Analysis
 
-## Status: sysutils.pp compiles with ~73 errors (target: 0)
+## Status: system.pp compiles with 0 errors (158 warnings)
 
 ## Prerequisites
 
@@ -11,9 +11,81 @@ git clone https://github.com/fpc/FPCSource
 
 ## Build Commands
 
+### system.pp (0 errors, 158 warnings)
+```bash
+./build/KGPC/kgpc ./FPCSource/rtl/linux/system.pp /tmp/system.s \
+  --no-stdlib \
+  -I./FPCSource/rtl/inc \
+  -I./FPCSource/rtl/x86_64 \
+  -I./FPCSource/rtl/unix \
+  -I./FPCSource/rtl/linux \
+  -I./FPCSource/rtl/linux/x86_64
+```
+
+### unixtype.pp (0 errors)
+```bash
+./build/KGPC/kgpc ./FPCSource/rtl/unix/unixtype.pp /tmp/unixtype.s \
+  --no-stdlib \
+  -I./FPCSource/rtl/unix \
+  -I./FPCSource/rtl/objpas \
+  -I./FPCSource/rtl/inc \
+  -I./FPCSource/rtl/linux \
+  -I./FPCSource/rtl/linux/x86_64 \
+  -I./FPCSource/rtl/x86_64
+```
+
+### ctypes.pp (0 errors)
+```bash
+./build/KGPC/kgpc ./FPCSource/rtl/inc/ctypes.pp /tmp/ctypes.s \
+  --no-stdlib \
+  -I./FPCSource/rtl/unix \
+  -I./FPCSource/rtl/objpas \
+  -I./FPCSource/rtl/inc \
+  -I./FPCSource/rtl/linux \
+  -I./FPCSource/rtl/linux/x86_64 \
+  -I./FPCSource/rtl/x86_64
+```
+
 ### baseunix.pp (0 errors)
 ```bash
 ./build/KGPC/kgpc ./FPCSource/rtl/unix/baseunix.pp /tmp/baseunix.s \
+  --no-stdlib \
+  -I./FPCSource/rtl/unix \
+  -I./FPCSource/rtl/objpas \
+  -I./FPCSource/rtl/inc \
+  -I./FPCSource/rtl/linux \
+  -I./FPCSource/rtl/linux/x86_64 \
+  -I./FPCSource/rtl/x86_64
+```
+
+### objpas.pp (0 errors)
+```bash
+./build/KGPC/kgpc ./FPCSource/rtl/objpas/objpas.pp /tmp/objpas.s \
+  --no-stdlib \
+  -I./FPCSource/rtl/unix \
+  -I./FPCSource/rtl/objpas \
+  -I./FPCSource/rtl/inc \
+  -I./FPCSource/rtl/linux \
+  -I./FPCSource/rtl/linux/x86_64 \
+  -I./FPCSource/rtl/x86_64
+```
+
+### sysconst.pp (0 errors)
+```bash
+./build/KGPC/kgpc ./FPCSource/rtl/objpas/sysconst.pp /tmp/sysconst.s \
+  --no-stdlib \
+  -I./FPCSource/rtl/unix \
+  -I./FPCSource/rtl/objpas \
+  -I./FPCSource/rtl/objpas/sysutils \
+  -I./FPCSource/rtl/inc \
+  -I./FPCSource/rtl/linux \
+  -I./FPCSource/rtl/linux/x86_64 \
+  -I./FPCSource/rtl/x86_64
+```
+
+### unix.pp (0 errors)
+```bash
+./build/KGPC/kgpc ./FPCSource/rtl/unix/unix.pp /tmp/unix.s \
   --no-stdlib \
   -I./FPCSource/rtl/unix \
   -I./FPCSource/rtl/objpas \
@@ -79,20 +151,6 @@ git clone https://github.com/fpc/FPCSource
   -I./FPCSource/packages/rtl-objpas/src/inc
 ```
 
-### typinfo.pp (flags required)
-```bash
-./build/KGPC/kgpc ./FPCSource/rtl/objpas/typinfo.pp /tmp/typinfo.s \
-  --no-stdlib \
-  -I./FPCSource/rtl/unix \
-  -I./FPCSource/rtl/objpas \
-  -I./FPCSource/rtl/objpas/sysutils \
-  -I./FPCSource/rtl/inc \
-  -I./FPCSource/rtl/linux \
-  -I./FPCSource/rtl/linux/x86_64 \
-  -I./FPCSource/rtl/x86_64 \
-  -I./FPCSource/packages/rtl-objpas/src/inc
-```
-
 ## Units with Compilation Errors
 
 - `baseunix.pp` - **0 errors**
@@ -103,7 +161,12 @@ git clone https://github.com/fpc/FPCSource
 - `fgl.pp` - **0 errors**
 - `sysconst.pp` - **0 errors**
 - `rtlconsts.pp` - **0 errors**
-- `typinfo.pp` - **errors (see flags above)**
+- `typinfo.pp` - **0 errors**
+
+## Flags
+
+- `--no-stdlib` loads the minimal KGPC prelude and then compiles the FPC RTL
+  unit directly (required for `system.pp` and the bootstrap sequence).
 
 ## Meson Test Suite
 

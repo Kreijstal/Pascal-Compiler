@@ -247,19 +247,9 @@ static char *read_file(const char *path, size_t *out_len)
         return NULL;
     }
 
-    size_t final_len = (size_t)len;
-    if (final_len >= 3 &&
-        (unsigned char)buffer[0] == 0xEF &&
-        (unsigned char)buffer[1] == 0xBB &&
-        (unsigned char)buffer[2] == 0xBF)
-    {
-        memmove(buffer, buffer + 3, final_len - 3);
-        final_len -= 3;
-    }
-
-    buffer[final_len] = '\0';
+    buffer[len] = '\0';
     if (out_len != NULL)
-        *out_len = final_len;
+        *out_len = (size_t)len;
 
     return buffer;
 }
@@ -280,6 +270,13 @@ static void set_preprocessed_context(const char *buffer, size_t length, const ch
 
     if (buffer == NULL || length == 0)
         return;
+
+    const unsigned char *ubytes = (const unsigned char *)buffer;
+    if (length >= 3 && ubytes[0] == 0xEF && ubytes[1] == 0xBB && ubytes[2] == 0xBF)
+    {
+        buffer += 3;
+        length -= 3;
+    }
 
     preprocessed_source = (char *)malloc(length + 1);
     if (preprocessed_source == NULL)
@@ -775,6 +772,17 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
     free(buffer);
     buffer = preprocessed_buffer;
     length = preprocessed_length;
+
+    if (length >= 3)
+    {
+        unsigned char *ubytes = (unsigned char *)buffer;
+        if (ubytes[0] == 0xEF && ubytes[1] == 0xBB && ubytes[2] == 0xBF)
+        {
+            memmove(buffer, buffer + 3, length - 3);
+            length -= 3;
+            buffer[length] = '\0';
+        }
+    }
     set_preprocessed_context(buffer, length, path);
 
     /* Detect {$MODE objfpc} in the preprocessed source.

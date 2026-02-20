@@ -172,7 +172,6 @@ static void mark_expr_calls(struct Expression *expr, SubprogramMap *map) {
         case EXPR_CHAR_CODE:
         case EXPR_BOOL:
         case EXPR_NIL:
-        case EXPR_TYPEINFO:
         case EXPR_ANONYMOUS_FUNCTION:
         case EXPR_ANONYMOUS_PROCEDURE:
             return;

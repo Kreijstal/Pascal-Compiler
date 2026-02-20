@@ -764,8 +764,7 @@ int semcheck_builtin_strpas(int *type_return, SymTab_t *symtab,
 
     /* FPC accepts both PChar/PAnsiChar (string-like) pointers */
     int strpas_arg_ok = kgpc_type_is_string(arg_kgpc_type) ||
-        kgpc_type_is_pointer(arg_kgpc_type) || kgpc_type_is_char(arg_kgpc_type) ||
-        semcheck_expr_is_shortstring(arg_expr);
+        kgpc_type_is_pointer(arg_kgpc_type) || kgpc_type_is_char(arg_kgpc_type);
     /* Fallback: check resolved_kgpc_type tag (e.g. argv[l] indexing returns pointer) */
     if (!strpas_arg_ok && arg_expr != NULL && arg_expr->resolved_kgpc_type != NULL)
     {
@@ -2025,146 +2024,6 @@ int semcheck_builtin_default(int *type_return, SymTab_t *symtab,
             return 1;
     }
 }
-
-int semcheck_builtin_typeinfo(int *type_return, SymTab_t *symtab,
-    struct Expression *expr, int max_scope_lev)
-{
-    assert(type_return != NULL);
-    assert(symtab != NULL);
-    assert(expr != NULL);
-    assert(expr->type == EXPR_FUNCTION_CALL);
-
-    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
-    if (args == NULL || args->next != NULL)
-    {
-        semcheck_error_with_context("Error on line %d, TypeInfo expects exactly one argument.\n",
-            expr->line_num);
-        *type_return = UNKNOWN_TYPE;
-        return 1;
-    }
-
-    struct Expression *arg_expr = (struct Expression *)args->cur;
-    struct TypeAlias *alias = NULL;
-    const char *type_name = NULL;
-    char *qualified_name = NULL;
-    char *type_name_owned = NULL;
-
-    if (arg_expr != NULL && (arg_expr->type == EXPR_VAR_ID || arg_expr->type == EXPR_RECORD_ACCESS))
-    {
-        if (arg_expr->type == EXPR_VAR_ID)
-            type_name = arg_expr->expr_data.id;
-        else
-        {
-            qualified_name = build_qualified_identifier_from_expr_local(arg_expr);
-            type_name = qualified_name;
-        }
-
-        if (type_name != NULL)
-        {
-            const char *raw_name = type_name;
-            const char *base_name = semcheck_base_type_name(raw_name);
-            HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, raw_name);
-            if (type_node == NULL && base_name != NULL && base_name != raw_name)
-                type_node = semcheck_find_preferred_type_node(symtab, base_name);
-            if (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
-            {
-                alias = get_type_alias_from_node(type_node);
-                if (alias == NULL && type_node->type != NULL)
-                    alias = kgpc_type_get_type_alias(type_node->type);
-                if (alias != NULL && alias->alias_name != NULL)
-                    type_name = alias->alias_name;
-                else if (type_node->id != NULL)
-                    type_name = type_node->id;
-            }
-        }
-    }
-
-    if (qualified_name != NULL)
-    {
-        if (type_name == qualified_name)
-        {
-            type_name_owned = strdup(qualified_name);
-            type_name = type_name_owned;
-        }
-        free(qualified_name);
-        qualified_name = NULL;
-    }
-
-    if (alias == NULL)
-    {
-        KgpcType *resolved_type = NULL;
-        int error_count = semcheck_expr_with_type(&resolved_type, symtab, arg_expr,
-            max_scope_lev, NO_MUTATE);
-        if (error_count != 0)
-        {
-            if (type_name_owned != NULL)
-                free(type_name_owned);
-            *type_return = UNKNOWN_TYPE;
-            return error_count;
-        }
-        if (resolved_type != NULL)
-            alias = kgpc_type_get_type_alias(resolved_type);
-        if (alias != NULL && alias->alias_name != NULL)
-            type_name = alias->alias_name;
-    }
-
-    if (alias == NULL || !alias->is_enum || alias->enum_literals == NULL)
-    {
-        semcheck_error_with_context("Error on line %d, TypeInfo currently supports enum types only.\n",
-            expr->line_num);
-        if (type_name_owned != NULL)
-            free(type_name_owned);
-        *type_return = UNKNOWN_TYPE;
-        return 1;
-    }
-
-    semcheck_free_call_args(expr->expr_data.function_call_data.args_expr, NULL);
-    expr->expr_data.function_call_data.args_expr = NULL;
-    if (expr->expr_data.function_call_data.id != NULL)
-    {
-        free(expr->expr_data.function_call_data.id);
-        expr->expr_data.function_call_data.id = NULL;
-    }
-    if (expr->expr_data.function_call_data.mangled_id != NULL)
-    {
-        free(expr->expr_data.function_call_data.mangled_id);
-        expr->expr_data.function_call_data.mangled_id = NULL;
-    }
-    semcheck_reset_function_call_cache(expr);
-
-    expr->type = EXPR_TYPEINFO;
-    if (expr->expr_data.typeinfo_data.type_id != NULL)
-    {
-        free(expr->expr_data.typeinfo_data.type_id);
-        expr->expr_data.typeinfo_data.type_id = NULL;
-    }
-    if (type_name != NULL)
-        expr->expr_data.typeinfo_data.type_id = strdup(type_name);
-    else
-        expr->expr_data.typeinfo_data.type_id = strdup("unknown");
-    if (expr->expr_data.typeinfo_data.type_id == NULL)
-    {
-        fprintf(stderr, "Error: failed to allocate TypeInfo label string.\n");
-        if (type_name_owned != NULL)
-            free(type_name_owned);
-        *type_return = UNKNOWN_TYPE;
-        return 1;
-    }
-
-    if (expr->resolved_kgpc_type != NULL)
-    {
-        destroy_kgpc_type(expr->resolved_kgpc_type);
-        expr->resolved_kgpc_type = NULL;
-    }
-    expr->resolved_kgpc_type = create_pointer_type(NULL);
-
-    semcheck_expr_set_resolved_type(expr, POINTER_TYPE);
-    if (type_name_owned != NULL)
-        free(type_name_owned);
-    *type_return = POINTER_TYPE;
-    return 0;
-}
-
 int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev, int is_high)
 {
@@ -2623,61 +2482,12 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
 
             if (error_count == 0)
             {
-                int node_hash_type = node->hash_type;
-                if (node_hash_type == HASHTYPE_FUNCTION && arg_id != NULL)
-                {
-                    const char *cur_id = semcheck_get_current_subprogram_id();
-                    const char *result_var = semcheck_get_current_subprogram_result_var_name();
-                    const char *alias_suffix = NULL;
-                    const char *method_base = NULL;
-                    size_t method_base_len = 0;
-                    if (cur_id != NULL)
-                    {
-                        const char *sep = strstr(cur_id, "__");
-                        if (sep != NULL && sep[2] != '\0')
-                            alias_suffix = sep + 2;
-                        if (sep != NULL && sep[2] != '\0')
-                        {
-                            const char *name_start = sep + 2;
-                            const char *end = strstr(name_start, "_u_");
-                            if (end == NULL)
-                                end = strchr(name_start, '_');
-                            if (end != NULL && end > name_start)
-                            {
-                                method_base = name_start;
-                                method_base_len = (size_t)(end - name_start);
-                            }
-                            else if (end == NULL)
-                            {
-                                method_base = name_start;
-                                method_base_len = strlen(name_start);
-                            }
-                        }
-                    }
-                    if ((cur_id != NULL && pascal_identifier_equals(arg_id, cur_id)) ||
-                        (alias_suffix != NULL && pascal_identifier_equals(arg_id, alias_suffix)) ||
-                        (result_var != NULL && pascal_identifier_equals(arg_id, result_var)))
-                    {
-                        node_hash_type = HASHTYPE_FUNCTION_RETURN;
-                    }
-                    else if (method_base != NULL && method_base_len > 0)
-                    {
-                        char *method_name = strndup(method_base, method_base_len);
-                        if (method_name != NULL)
-                        {
-                            if (pascal_identifier_equals(arg_id, method_name))
-                                node_hash_type = HASHTYPE_FUNCTION_RETURN;
-                            free(method_name);
-                        }
-                    }
-                }
-
-                if (node_hash_type == HASHTYPE_VAR || node_hash_type == HASHTYPE_ARRAY ||
-                    node_hash_type == HASHTYPE_CONST || node_hash_type == HASHTYPE_FUNCTION_RETURN)
+                if (node->hash_type == HASHTYPE_VAR || node->hash_type == HASHTYPE_ARRAY ||
+                    node->hash_type == HASHTYPE_CONST || node->hash_type == HASHTYPE_FUNCTION_RETURN)
                 {
                     set_hash_meta(node, NO_MUTATE);
                 }
-                else if (node_hash_type != HASHTYPE_TYPE)
+                else if (node->hash_type != HASHTYPE_TYPE)
                 {
                     semcheck_error_with_context("Error on line %d, SizeOf argument %s is not a data object.\n",
                         expr->line_num, arg_id);
