@@ -893,6 +893,20 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
         return 1;
     }
 
+    /* Allow assigning typed pointers to/from generic Pointer. */
+    if (lhs_type->kind == TYPE_KIND_PRIMITIVE &&
+        lhs_type->info.primitive_type_tag == POINTER_TYPE &&
+        rhs_type->kind == TYPE_KIND_POINTER)
+    {
+        return 1;
+    }
+    if (rhs_type->kind == TYPE_KIND_PRIMITIVE &&
+        rhs_type->info.primitive_type_tag == POINTER_TYPE &&
+        lhs_type->kind == TYPE_KIND_POINTER)
+    {
+        return 1;
+    }
+
     /* Allow pointer-to-array to be assigned to pointer-to-element when element types match.
      * This supports idioms like: pchar := @char_array; */
     if (lhs_type->kind == TYPE_KIND_POINTER && rhs_type->kind == TYPE_KIND_POINTER)

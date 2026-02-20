@@ -925,6 +925,25 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
             }
             break;
         }
+        case EXPR_ADDR:
+        {
+            if (expr->resolved_kgpc_type != NULL)
+            {
+                if (owns_type != NULL)
+                    *owns_type = 0;
+                return expr->resolved_kgpc_type;
+            }
+
+            int tmp_type = UNKNOWN_TYPE;
+            semcheck_addressof(&tmp_type, symtab, expr, max_scope_lev, mutating);
+            if (expr->resolved_kgpc_type != NULL)
+            {
+                if (owns_type != NULL)
+                    *owns_type = 0;
+                return expr->resolved_kgpc_type;
+            }
+            break;
+        }
         case EXPR_TYPECAST:
         {
             const char *target_id = expr->expr_data.typecast_data.target_type_id;

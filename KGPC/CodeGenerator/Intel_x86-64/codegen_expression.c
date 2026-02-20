@@ -5556,7 +5556,6 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
     #endif
     CODEGEN_DEBUG("DEBUG: Generating non-local access for %s\n", var_id);
 
-    assert(inst_list != NULL);
     assert(var_id != NULL);
     assert(offset != NULL);
 
