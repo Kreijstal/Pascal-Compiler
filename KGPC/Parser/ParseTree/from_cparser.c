@@ -6924,11 +6924,14 @@ static ListNode_t *convert_param(ast_t *param_node) {
             int element_type = type_info.element_type;
             char *element_type_id = type_info.element_type_id != NULL ? strdup(type_info.element_type_id) : NULL;
             char *range_str = NULL;
+            struct RecordType *inline_record = type_info.record_type;
+            if (inline_record != NULL)
+                type_info.record_type = NULL;
             if (type_info.array_dimensions != NULL && type_info.array_dimensions->cur != NULL) {
                 range_str = strdup((char *)type_info.array_dimensions->cur);
             }
             param_decl = mk_arraydecl(param_node->line, id_node, element_type, element_type_id,
-                                      type_info.start, type_info.end, range_str, NULL);
+                                      type_info.start, type_info.end, range_str, NULL, inline_record);
             if (param_decl != NULL)
                 param_decl->tree_data.arr_decl_data.is_shortstring = type_info.is_shortstring;
             /* Set var parameter flag on array declaration */
@@ -7193,6 +7196,9 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
     if (type_info.is_array) {
         int element_type = type_info.element_type;
         char *element_type_id = type_info.element_type_id;
+        struct RecordType *inline_record = type_info.record_type;
+        if (inline_record != NULL)
+            type_info.record_type = NULL;
         
         /* Handle optional initializer for arrays */
         struct Statement *initializer_stmt = NULL;
@@ -7263,7 +7269,8 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
         }
         
         Tree_t *decl = mk_arraydecl(decl_node->line, ids, element_type, element_type_id,
-                                    type_info.start, type_info.end, range_str, initializer_stmt);
+                                    type_info.start, type_info.end, range_str, initializer_stmt,
+                                    inline_record);
         if (decl != NULL)
             decl->tree_data.arr_decl_data.is_shortstring = type_info.is_shortstring;
         type_info.element_type_id = NULL;
@@ -7952,8 +7959,12 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
     if (type_info->array_dimensions != NULL && type_info->array_dimensions->cur != NULL) {
         range_str = strdup((char *)type_info->array_dimensions->cur);
     }
+    struct RecordType *inline_record = type_info->record_type;
+    if (inline_record != NULL)
+        type_info->record_type = NULL;
     Tree_t *array_decl = mk_arraydecl(const_decl_node->line, ids, type_info->element_type,
-                                      type_info->element_type_id, start, end, range_str, initializer);
+                                      type_info->element_type_id, start, end, range_str, initializer,
+                                      inline_record);
     type_info->element_type_id = NULL;
 
     if (type_info->array_dimensions != NULL) {

@@ -1291,6 +1291,8 @@ void destroy_tree(Tree_t *tree)
           destroy_list(tree->tree_data.arr_decl_data.ids);
           if (tree->tree_data.arr_decl_data.type_id != NULL)
             free(tree->tree_data.arr_decl_data.type_id);
+          if (tree->tree_data.arr_decl_data.inline_record_type != NULL)
+              destroy_record_type(tree->tree_data.arr_decl_data.inline_record_type);
           if (tree->tree_data.arr_decl_data.range_str != NULL)
             free(tree->tree_data.arr_decl_data.range_str);
           if (tree->tree_data.arr_decl_data.initializer != NULL)
@@ -2315,7 +2317,7 @@ Tree_t *mk_typealiasdecl(int line_num, char *id, int is_array, int actual_type, 
 }
 
 Tree_t *mk_arraydecl(int line_num, ListNode_t *ids, int type, char *type_id, int start, int end,
-    char *range_str, struct Statement *initializer)
+    char *range_str, struct Statement *initializer, struct RecordType *inline_record_type)
 {
     Tree_t *new_tree;
     new_tree = (Tree_t *)calloc(1, sizeof(Tree_t));
@@ -2326,6 +2328,7 @@ Tree_t *mk_arraydecl(int line_num, ListNode_t *ids, int type, char *type_id, int
     new_tree->tree_data.arr_decl_data.ids = ids;
     new_tree->tree_data.arr_decl_data.type = type;
     new_tree->tree_data.arr_decl_data.type_id = type_id;
+    new_tree->tree_data.arr_decl_data.inline_record_type = inline_record_type;
     new_tree->tree_data.arr_decl_data.s_range = start;
     new_tree->tree_data.arr_decl_data.e_range = end;
     new_tree->tree_data.arr_decl_data.range_str = range_str;

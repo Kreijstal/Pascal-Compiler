@@ -10901,6 +10901,14 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 }
                 
                 /* If element type not resolved from type_id, use primitive type */
+                if (element_type == NULL && !is_array_of_const &&
+                    tree->tree_data.arr_decl_data.inline_record_type != NULL)
+                {
+                    element_type = create_record_type(tree->tree_data.arr_decl_data.inline_record_type);
+                    element_type_borrowed = 0;
+                }
+
+                /* If element type not resolved from type_id, use primitive type */
                 if (element_type == NULL && !is_array_of_const)
                 {
                     if(tree->tree_data.arr_decl_data.type == INT_TYPE)
@@ -10929,6 +10937,20 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     
                     element_type = kgpc_type_from_var_type(var_type);
                     assert(element_type != NULL && "Array element type must be createable from VarType");
+                }
+
+                if (element_type != NULL && kgpc_type_is_record(element_type))
+                {
+                    struct RecordType *element_record = kgpc_type_get_record(element_type);
+                    if (element_record != NULL && !element_record->has_cached_size)
+                    {
+                        long long record_size = 0;
+                        if (semcheck_compute_record_size(symtab, element_record, &record_size,
+                                tree->line_num) != 0)
+                        {
+                            return_val += 1;
+                        }
+                    }
                 }
                 
                 /* Resolve array bounds from constant identifiers if necessary.

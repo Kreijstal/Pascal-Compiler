@@ -1798,45 +1798,47 @@ int semcheck_funccall(int *type_return,
         return 0;
     }
 
-    if (id != NULL && pascal_identifier_equals(id, "Chr"))
+    int allow_builtins = !expr->expr_data.function_call_data.is_method_call_placeholder;
+
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Chr"))
         return semcheck_builtin_chr(type_return, symtab, expr, max_scope_lev);
 
-    if (id != NULL && pascal_identifier_equals(id, "Ord"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Ord"))
         return semcheck_builtin_ord(type_return, symtab, expr, max_scope_lev);
 
-    if (id != NULL && pascal_identifier_equals(id, "Pred"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Pred"))
         return semcheck_builtin_predsucc(type_return, symtab, expr, max_scope_lev, 0);
 
-    if (id != NULL && pascal_identifier_equals(id, "Succ"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Succ"))
         return semcheck_builtin_predsucc(type_return, symtab, expr, max_scope_lev, 1);
 
-    if (id != NULL && pascal_identifier_equals(id, "Length"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Length"))
         return semcheck_builtin_length(type_return, symtab, expr, max_scope_lev);
 
-    if (id != NULL && pascal_identifier_equals(id, "Copy"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Copy"))
         return semcheck_builtin_copy(type_return, symtab, expr, max_scope_lev);
 
-    if (id != NULL && pascal_identifier_equals(id, "Concat"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Concat"))
         return semcheck_builtin_concat(type_return, symtab, expr, max_scope_lev);
 
-    if (id != NULL && pascal_identifier_equals(id, "Pos"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Pos"))
         return semcheck_builtin_pos(type_return, symtab, expr, max_scope_lev);
 
-    if (id != NULL && pascal_identifier_equals(id, "StrPas"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "StrPas"))
         return semcheck_builtin_strpas(type_return, symtab, expr, max_scope_lev);
 
-    if (id != NULL && pascal_identifier_equals(id, "EOF"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "EOF"))
         return semcheck_builtin_eof(type_return, symtab, expr, max_scope_lev);
-    if (id != NULL && pascal_identifier_equals(id, "EOLN"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "EOLN"))
         return semcheck_builtin_eoln(type_return, symtab, expr, max_scope_lev);
 
-    if (id != NULL && pascal_identifier_equals(id, "Low"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Low"))
         return semcheck_builtin_lowhigh(type_return, symtab, expr, max_scope_lev, 0);
 
-    if (id != NULL && pascal_identifier_equals(id, "High"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "High"))
         return semcheck_builtin_lowhigh(type_return, symtab, expr, max_scope_lev, 1);
 
-    if (id != NULL && pascal_identifier_equals(id, "Default"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Default"))
         return semcheck_builtin_default(type_return, symtab, expr, max_scope_lev);
 
     /* Internal runtime function for open/dynamic array High - already resolved */
