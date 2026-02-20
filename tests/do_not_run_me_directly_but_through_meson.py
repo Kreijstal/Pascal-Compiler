@@ -1976,6 +1976,9 @@ class TestCompiler(unittest.TestCase):
         executable_file = os.path.join(TEST_OUTPUT_DIR, "real_arithmetic")
 
         run_compiler(input_file, asm_file)
+        self._set_artifact_context(
+            input_file=input_file, asm_file=asm_file,
+            executable_file=executable_file)
         self.compile_executable(asm_file, executable_file)
 
         result = subprocess.run(
