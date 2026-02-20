@@ -87,7 +87,6 @@ struct RecordField
     int array_element_type;
     char *array_element_type_id;
     struct RecordType *array_element_record; /* Anonymous record as array element type */
-    struct KgpcType *array_element_kgpc_type; /* Array element type for nested arrays */
     int array_is_open;
     int is_hidden;
     int is_class_var;
@@ -397,7 +396,6 @@ enum ExprType {
     EXPR_TYPECAST,
     EXPR_IS,
     EXPR_AS,
-    EXPR_TYPEINFO,
     EXPR_ADDR_OF_PROC,
     EXPR_ANONYMOUS_FUNCTION,
     EXPR_ANONYMOUS_PROCEDURE
@@ -566,12 +564,6 @@ struct Expression
             char *target_type_id;
             struct RecordType *target_record_type;
         } as_data;
-
-        /* TypeInfo intrinsic */
-        struct TypeInfo
-        {
-            char *type_id;
-        } typeinfo_data;
 
         /* Address of procedure */
         struct AddrOfProc

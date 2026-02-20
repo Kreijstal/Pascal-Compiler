@@ -63,25 +63,13 @@ type
     destructor Destroy; virtual;
     class function ClassName: ShortString; virtual;
     class function ClassParent: TClass; virtual;
-    class function ClassInfo: Pointer; virtual;
-    class function ClassType: TClass; virtual;
-    class function InheritsFrom(aClass: TClass): Boolean; virtual;
     class procedure GetLastCastErrorInfo(out aFrom, aTo: ShortString); static;
     procedure Free;
     procedure FreeInstance; virtual;
     function GetInterface(const IID: TGUID; out Obj): Boolean;
-    function ClassInfo: Pointer; virtual;
-    function ClassType: TClass; virtual;
-    function InheritsFrom(aClass: TClass): Boolean; virtual;
     function ToString: String; virtual;
   end;
   TClass = class of TObject;
-  PVmt = ^TVmt;
-  TVmt = record
-    vParent: PVmt;
-    vMethodTable: Pointer;
-    vFieldTable: Pointer;
-  end;
   TypedFile = file;
   TRTLCriticalSection = array[0..39] of Byte;
   
@@ -100,51 +88,12 @@ type
     scpFileSystemSingleByte
   );
 
-  { RTTI kind enum (TypInfo bootstrap compatibility) }
-  TTypeKind = (
-    tkUnknown,
-    tkInteger,
-    tkChar,
-    tkEnumeration,
-    tkFloat,
-    tkSet,
-    tkMethod,
-    tkSString,
-    tkLString,
-    tkAString,
-    tkWString,
-    tkVariant,
-    tkArray,
-    tkRecord,
-    tkInterface,
-    tkClass,
-    tkObject,
-    tkWChar,
-    tkBool,
-    tkInt64,
-    tkQWord,
-    tkDynArray,
-    tkInterfaceRaw,
-    tkProcVar,
-    tkUString,
-    tkUChar,
-    tkHelper,
-    tkFile,
-    tkClassRef,
-    tkPointer
-  );
-
-  TVisibilityClass = (vcPrivate, vcProtected, vcPublic, vcPublished);
-  TVisibilityClasses = set of TVisibilityClass;
-
   { String types - for FPC bootstrap compatibility }
   AnsiString = String;
   UnicodeString = String;
   WideString = String;
   RawByteString = String;   { Alias for String type - KGPC doesn't distinguish encoding }
-  RTLString = AnsiString;
   PAnsiString = ^AnsiString;
-  PUnicodeString = ^UnicodeString;
   PString = ^String;
   { ShortString: length-prefixed string[255] compatible layout.
     Note: most bootstrap-compatible aliases live in KGPC/stdlib.p (the implicit prelude). }
@@ -216,13 +165,6 @@ type
   THandle = LongInt;
   HRESULT = LongInt;  { Windows COM result type }
   CodePointer = Pointer;
-  PCodePointer = ^CodePointer;
-
-  TMethod = record
-    Code: CodePointer;
-    Data: Pointer;
-  end;
-  PMethod = ^TMethod;
   
   TInterfacedObject = class(TObject)
   protected
@@ -245,19 +187,7 @@ type
     function _AddRef: LongInt;
     function _Release: LongInt;
   end;
-  PInterface = ^IInterface;
   IUnknown = IInterface;
-
-  TCustomAttribute = class
-  end;
-
-  TResourceStringRecord = record
-    Name: AnsiString;
-    DefaultValue: RTLString;
-    CurrentValue: RTLString;
-    HashValue: LongWord;
-  end;
-  PResourceStringRecord = ^TResourceStringRecord;
 
   TextRec = record
     Handle: THandle;
@@ -1050,11 +980,6 @@ begin
     move_impl(source, dest, count);
 end;
 
-procedure CopyArray(source, dest: Pointer; typeinfo: Pointer; count: SizeInt);
-begin
-    { Placeholder implementation for bootstrap compatibility. }
-end;
-
 procedure fillchar_impl(var dest; count: longint; value: integer);
 begin
     assembler;
@@ -1272,33 +1197,6 @@ begin
     ClassParent := kgpc_class_parent(Self);
 end;
 
-class function TObject.ClassInfo: Pointer;
-begin
-    ClassInfo := nil;
-end;
-
-class function TObject.ClassType: TClass;
-begin
-    ClassType := Self;
-end;
-
-class function TObject.InheritsFrom(aClass: TClass): Boolean;
-var
-    current: TClass;
-begin
-    current := Self;
-    while current <> nil do
-    begin
-        if current = aClass then
-        begin
-            InheritsFrom := True;
-            exit;
-        end;
-        current := current.ClassParent;
-    end;
-    InheritsFrom := False;
-end;
-
 class procedure TObject.GetLastCastErrorInfo(out aFrom, aTo: ShortString);
 begin
     aFrom := '';
@@ -1319,21 +1217,6 @@ end;
 function TObject.GetInterface(const IID: TGUID; out Obj): Boolean;
 begin
     GetInterface := kgpc_get_interface(Pointer(Self), @IID, Obj) <> 0;
-end;
-
-function TObject.ClassInfo: Pointer;
-begin
-    ClassInfo := Self.ClassType.ClassInfo;
-end;
-
-function TObject.ClassType: TClass;
-begin
-    ClassType := TClass(PPointer(Self)^);
-end;
-
-function TObject.InheritsFrom(aClass: TClass): Boolean;
-begin
-    InheritsFrom := Self.ClassType.InheritsFrom(aClass);
 end;
 
 procedure TObject.FreeInstance;

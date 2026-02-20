@@ -1501,15 +1501,6 @@ int codegen_type_is_signed(int type_tag)
     }
 }
 
-static void codegen_enum_typeinfo_label(const char *type_id, char *buffer, size_t size)
-{
-    if (buffer == NULL || size == 0)
-        return;
-    char sanitized[CODEGEN_MAX_INST_BUF];
-    codegen_sanitize_identifier_for_label(type_id, sanitized, sizeof(sanitized));
-    snprintf(buffer, size, "__kgpc_enum_typeinfo_%s", sanitized);
-}
-
 /* Helper to get KgpcType from expression, preferring resolved_kgpc_type.
  * Returns the KgpcType if available, or creates a temporary one from legacy fields.
  * Returns NULL if type cannot be determined.
@@ -1544,8 +1535,6 @@ KgpcType* expr_get_kgpc_type(const struct Expression *expr)
             tag = BOOL;
             break;
         case EXPR_NIL:
-            return create_pointer_type(NULL);
-        case EXPR_TYPEINFO:
             return create_pointer_type(NULL);
         case EXPR_RECORD_CONSTRUCTOR:
         {
@@ -2933,37 +2922,6 @@ static ListNode_t *codegen_expr_tree_value(struct Expression *expr, ListNode_t *
     {
         if (expr->type == EXPR_IS)
             return codegen_emit_is_expr(expr, inst_list, ctx, out_reg);
-        if (expr->type == EXPR_TYPEINFO)
-        {
-            const char *type_id = expr->expr_data.typeinfo_data.type_id;
-            if (type_id == NULL || type_id[0] == '\0')
-            {
-                codegen_report_error(ctx, "ERROR: TypeInfo missing type identifier.");
-                if (out_reg != NULL)
-                    *out_reg = NULL;
-                return inst_list;
-            }
-
-            Register_t *tmp_reg = codegen_try_get_reg(&inst_list, ctx, "typeinfo");
-            if (tmp_reg == NULL)
-            {
-                if (out_reg != NULL)
-                    *out_reg = NULL;
-                return inst_list;
-            }
-
-            char label[CODEGEN_MAX_INST_BUF];
-            codegen_enum_typeinfo_label(type_id, label, sizeof(label));
-            char buffer[CODEGEN_MAX_INST_BUF];
-            snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", label, tmp_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-
-            if (out_reg != NULL)
-                *out_reg = tmp_reg;
-            else
-                free_reg(get_reg_stack(), tmp_reg);
-            return inst_list;
-        }
         if (expr->type == EXPR_ARRAY_LITERAL)
         {
             Register_t *tmp_reg = NULL;
@@ -3934,13 +3892,6 @@ ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGen
             return inst_list;
         case EXPR_ADDR_OF_PROC:
             CODEGEN_DEBUG("DEBUG: Processing address-of-procedure expression\n");
-            inst_list = codegen_expr_via_tree(expr, inst_list, ctx);
-            #ifdef DEBUG_CODEGEN
-            CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
-            #endif
-            return inst_list;
-        case EXPR_TYPEINFO:
-            CODEGEN_DEBUG("DEBUG: Processing typeinfo expression\n");
             inst_list = codegen_expr_via_tree(expr, inst_list, ctx);
             #ifdef DEBUG_CODEGEN
             CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
@@ -5556,6 +5507,7 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
     #endif
     CODEGEN_DEBUG("DEBUG: Generating non-local access for %s\n", var_id);
 
+    assert(inst_list != NULL);
     assert(var_id != NULL);
     assert(offset != NULL);
 
