@@ -82,6 +82,14 @@ static ast_t *g_implementation_section_ast = NULL;
 /* Method context for expression conversion (e.g., bare "inherited" expressions). */
 static const char *g_current_method_name = NULL;
 
+static int is_external_directive(const char *directive)
+{
+    if (directive == NULL)
+        return 0;
+    return (strcasecmp(directive, "external") == 0 ||
+            strcasecmp(directive, "weakexternal") == 0);
+}
+
 static void register_type_helper_mapping(const char *helper_id, const char *base_type_id)
 {
     if (helper_id == NULL || base_type_id == NULL)
@@ -294,13 +302,18 @@ typedef struct {
     long long range_start;
     long long range_end;
     int is_class_reference;  /* For "class of T" types */
+    KgpcType *element_kgpc_type; /* Nested array element type info */
 } TypeInfo;
+
+static int select_range_primitive_tag(const TypeInfo *info);
 
 /* Frontend error counter for errors during AST to tree conversion */
 static int g_frontend_error_count = 0;
 static char *g_scoped_enum_source_path = NULL;
 static char *g_scoped_enum_source_buffer = NULL;
 static size_t g_scoped_enum_source_length = 0;
+
+static void substitute_generic_identifiers(ast_t *node, char **params, char **args, int count);
 
 static void from_cparser_trim_ascii(char *s)
 {
@@ -525,6 +538,10 @@ static void destroy_type_info_contents(TypeInfo *info) {
     if (info->record_type != NULL) {
         destroy_record_type(info->record_type);
         info->record_type = NULL;
+    }
+    if (info->element_kgpc_type != NULL) {
+        destroy_kgpc_type(info->element_kgpc_type);
+        info->element_kgpc_type = NULL;
     }
 }
 
@@ -1333,6 +1350,123 @@ static struct RecordType *instantiate_generic_record(const char *base_name, List
     if (debug_env != NULL && record->type_id != NULL)
         fprintf(stderr, "[KGPC] instantiated generic record %s\n", record->type_id);
     return record;
+}
+
+static int build_generic_arg_array(ListNode_t *type_args, char ***arg_types_out, int *arg_count_out)
+{
+    if (arg_types_out == NULL || arg_count_out == NULL)
+        return 0;
+    *arg_types_out = NULL;
+    *arg_count_out = 0;
+
+    int arg_count = ListLength(type_args);
+    if (arg_count <= 0)
+        return 0;
+
+    char **arg_types = (char **)calloc((size_t)arg_count, sizeof(char *));
+    if (arg_types == NULL)
+        return 0;
+
+    int idx = 0;
+    ListNode_t *cur = type_args;
+    while (cur != NULL && idx < arg_count) {
+        if (cur->type == LIST_STRING && cur->cur != NULL) {
+            arg_types[idx] = strdup((char *)cur->cur);
+            if (arg_types[idx] == NULL)
+                break;
+            idx++;
+        }
+        cur = cur->next;
+    }
+
+    if (idx != arg_count) {
+        for (int i = 0; i < arg_count; ++i)
+            free(arg_types[i]);
+        free(arg_types);
+        return 0;
+    }
+
+    *arg_types_out = arg_types;
+    *arg_count_out = arg_count;
+    return 1;
+}
+
+static int type_info_has_resolution(const TypeInfo *info)
+{
+    if (info == NULL)
+        return 0;
+    return (info->is_array || info->is_set || info->is_record || info->is_file ||
+            info->is_enum || info->is_range || info->is_pointer ||
+            info->is_class_reference || info->is_array_of_const);
+}
+
+static int resolve_generic_alias_type(const char *base_name, ListNode_t *type_args,
+    char **type_id_out, TypeInfo *type_info, int *result_out)
+{
+    if (base_name == NULL || type_info == NULL)
+        return 0;
+    if (result_out != NULL)
+        *result_out = UNKNOWN_TYPE;
+
+    const char *debug_env = getenv("KGPC_DEBUG_TFPG");
+    GenericTypeDecl *generic = generic_registry_find_decl(base_name);
+    Tree_t *generic_decl_tree = generic != NULL ? generic->original_decl : NULL;
+    ast_t *generic_ast = generic_decl_tree != NULL ?
+        generic_decl_tree->tree_data.type_decl_data.info.generic.original_ast : NULL;
+    if (generic == NULL || generic->record_template != NULL || generic_ast == NULL)
+    {
+        if (debug_env != NULL)
+            fprintf(stderr, "[KGPC] resolve_generic_alias_type skip base=%s generic=%p record_template=%p original_ast=%p\n",
+                base_name, (void *)generic,
+                generic != NULL ? (void *)generic->record_template : NULL,
+                (void *)generic_ast);
+        return 0;
+    }
+
+    char **arg_types = NULL;
+    int arg_count = 0;
+    if (!build_generic_arg_array(type_args, &arg_types, &arg_count))
+        return 0;
+
+    if (arg_count != generic->num_type_params) {
+        if (debug_env != NULL)
+            fprintf(stderr, "[KGPC] resolve_generic_alias_type arg mismatch base=%s got=%d expected=%d\n",
+                base_name, arg_count, generic->num_type_params);
+        for (int i = 0; i < arg_count; ++i)
+            free(arg_types[i]);
+        free(arg_types);
+        return 0;
+    }
+
+    ast_t *ast_copy = copy_ast(generic_ast);
+    if (ast_copy == NULL) {
+        if (debug_env != NULL)
+            fprintf(stderr, "[KGPC] resolve_generic_alias_type copy failed base=%s\n", base_name);
+        for (int i = 0; i < arg_count; ++i)
+            free(arg_types[i]);
+        free(arg_types);
+        return 0;
+    }
+
+    substitute_generic_identifiers(ast_copy, generic->type_parameters, arg_types, arg_count);
+    int result = convert_type_spec(ast_copy, type_id_out, NULL, type_info);
+    if (debug_env != NULL)
+        fprintf(stderr, "[KGPC] resolve_generic_alias_type resolved base=%s result=%d is_array=%d\n",
+            base_name, result, type_info->is_array);
+    free_ast(ast_copy);
+
+    for (int i = 0; i < arg_count; ++i)
+        free(arg_types[i]);
+    free(arg_types);
+
+    if (result_out != NULL)
+        *result_out = result;
+
+    if (result != UNKNOWN_TYPE || type_info_has_resolution(type_info) ||
+        (type_id_out != NULL && *type_id_out != NULL))
+        return 1;
+
+    return 0;
 }
 
 static void record_generic_method_impl(const char *class_name, const char *method_name, ast_t *method_ast)
@@ -2918,6 +3052,7 @@ static int resolve_enum_type_range_from_ast(const char *type_name, ast_t *type_s
 static int resolve_const_int_from_ast_internal(const char *identifier, ast_t *const_section,
                                                int fallback_value, int depth);
 static int evaluate_const_int_expr(ast_t *expr, int *out_value, int depth);
+static const char *resolve_const_string_from_ast_internal(const char *identifier, ast_t *const_section, int depth);
 static int resolve_const_int_in_node(const char *identifier, ast_t *node,
                                      ast_t *const_section, int *out_value, int depth) {
     if (node == NULL)
@@ -2978,6 +3113,42 @@ static int resolve_const_int_in_node(const char *identifier, ast_t *node,
     if (resolve_const_int_in_node(identifier, node->next, const_section, out_value, depth) == 0)
         return 0;
     return -1;
+}
+
+static const char *resolve_const_string_in_node(const char *identifier, ast_t *node,
+                                                ast_t *const_section, int depth) {
+    if (node == NULL || identifier == NULL)
+        return NULL;
+    if (depth > 32)
+        return NULL;
+
+    if (node->typ == PASCAL_T_CONST_DECL) {
+        ast_t *id_node = node->child;
+        if (id_node != NULL && id_node->sym != NULL && id_node->sym->name != NULL) {
+            if (strcasecmp(id_node->sym->name, identifier) == 0) {
+                ast_t *value_node = id_node->next;
+                if (value_node != NULL && value_node->typ == PASCAL_T_TYPE_SPEC)
+                    value_node = value_node->next;
+                value_node = unwrap_pascal_node(value_node);
+
+                if (value_node != NULL && value_node->typ == PASCAL_T_STRING &&
+                    value_node->sym != NULL && value_node->sym->name != NULL) {
+                    return value_node->sym->name;
+                }
+
+                if (value_node != NULL && value_node->typ == PASCAL_T_IDENTIFIER &&
+                    value_node->sym != NULL && value_node->sym->name != NULL &&
+                    strcasecmp(value_node->sym->name, identifier) != 0) {
+                    return resolve_const_string_from_ast_internal(value_node->sym->name, const_section, depth + 1);
+                }
+            }
+        }
+    }
+
+    const char *found = resolve_const_string_in_node(identifier, node->child, const_section, depth);
+    if (found != NULL)
+        return found;
+    return resolve_const_string_in_node(identifier, node->next, const_section, depth);
 }
 
 static int resolve_enum_type_range_in_section_chain(const char *type_name, ast_t *section_root,
@@ -3313,6 +3484,32 @@ static int resolve_const_int_from_ast_internal(const char *identifier, ast_t *co
 
 static int resolve_const_int_from_ast(const char *identifier, ast_t *const_section, int fallback_value) {
     return resolve_const_int_from_ast_internal(identifier, const_section, fallback_value, 0);
+}
+
+static const char *resolve_const_string_from_ast_internal(const char *identifier, ast_t *const_section, int depth) {
+    if (identifier == NULL || const_section == NULL)
+        return NULL;
+    if (depth > 32)
+        return NULL;
+
+    if (g_const_sections != NULL) {
+        for (ListNode_t *cur = g_const_sections; cur != NULL; cur = cur->next) {
+            ast_t *section = (ast_t *)cur->cur;
+            const char *resolved = resolve_const_string_in_node(identifier,
+                                                                section != NULL ? section->child : NULL,
+                                                                section,
+                                                                depth);
+            if (resolved != NULL)
+                return resolved;
+        }
+    } else {
+        return resolve_const_string_in_node(identifier, const_section->child, const_section, depth);
+    }
+    return NULL;
+}
+
+static const char *resolve_const_string_from_ast(const char *identifier, ast_t *const_section) {
+    return resolve_const_string_from_ast_internal(identifier, const_section, 0);
 }
 
 /* Evaluate simple const expression like "NUM-1" or "NUM+1" */
@@ -3827,6 +4024,7 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
         type_info->range_known = 0;
         type_info->range_start = 0;
         type_info->range_end = 0;
+        type_info->element_kgpc_type = NULL;
     }
 
     if (type_spec == NULL)
@@ -3946,6 +4144,19 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                 return RECORD_TYPE;
             }
 
+            if (type_info != NULL) {
+                int alias_result = UNKNOWN_TYPE;
+                if (resolve_generic_alias_type(base_name, type_args, type_id_out, type_info,
+                        &alias_result)) {
+                    if (specialized_name != NULL)
+                        free(specialized_name);
+                    free(base_name);
+                    if (type_args != NULL)
+                        destroy_list(type_args);
+                    return alias_result;
+                }
+            }
+
             int can_defer = (g_allow_pending_specializations && type_info != NULL);
             if (can_defer) {
                 if (type_info != NULL) {
@@ -4001,7 +4212,9 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
             type_info->range_known = (have_start && have_end);
         }
 
-        return UNKNOWN_TYPE;
+        if (type_info != NULL)
+            return select_range_primitive_tag(type_info);
+        return INT_TYPE;
     }
     if (spec_node->typ == PASCAL_T_ARRAY_TYPE) {
         if (type_info != NULL) {
@@ -4141,11 +4354,11 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
 
             type_info->array_dimensions = list_builder_finish(&dims_builder);
 
-            if (element_node != NULL) {
-                if (element_node->typ == PASCAL_T_IDENTIFIER) {
-                    char *dup = dup_symbol(element_node);
-                    if (dup != NULL && strcasecmp(dup, "const") == 0) {
-                        type_info->is_array_of_const = 1;
+                if (element_node != NULL) {
+                    if (element_node->typ == PASCAL_T_IDENTIFIER) {
+                        char *dup = dup_symbol(element_node);
+                        if (dup != NULL && strcasecmp(dup, "const") == 0) {
+                            type_info->is_array_of_const = 1;
                         type_info->element_type = ARRAY_OF_CONST_TYPE;
                         type_info->is_open_array = 1;
                         free(dup);
@@ -4176,17 +4389,63 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                         else if (nested_id != NULL)
                             free(nested_id);
                     }
-                    if (nested_record != NULL)
-                    {
-                        type_info->record_type = nested_record;
-                        type_info->is_record = 1;
-                        type_info->element_type = RECORD_TYPE;
+                        if (nested_record != NULL)
+                        {
+                            type_info->record_type = nested_record;
+                            type_info->is_record = 1;
+                            type_info->element_type = RECORD_TYPE;
+                        }
+                        if (nested_info.is_array)
+                        {
+                            if (type_info->element_type_id != NULL)
+                            {
+                                free(type_info->element_type_id);
+                                type_info->element_type_id = NULL;
+                            }
+                            if (type_info->record_type != NULL)
+                            {
+                                destroy_record_type(type_info->record_type);
+                                type_info->record_type = NULL;
+                                type_info->is_record = 0;
+                            }
+                            type_info->element_type = UNKNOWN_TYPE;
+                            if (type_info->element_kgpc_type == NULL)
+                                type_info->element_kgpc_type =
+                                    convert_type_spec_to_kgpctype(element_node, NULL);
+                        }
+                        destroy_type_info_contents(&nested_info);
+                    } else if (element_node->typ == PASCAL_T_ARRAY_TYPE) {
+                        KgpcType *nested_array = convert_type_spec_to_kgpctype(element_node, NULL);
+                        if (nested_array != NULL)
+                        {
+                            if (type_info->element_type_id != NULL)
+                            {
+                                free(type_info->element_type_id);
+                                type_info->element_type_id = NULL;
+                            }
+                            type_info->element_type = UNKNOWN_TYPE;
+                            type_info->element_kgpc_type = nested_array;
+                        }
+                    } else if (element_node->typ == PASCAL_T_RECORD_TYPE ||
+                               element_node->typ == PASCAL_T_OBJECT_TYPE) {
+                        char *nested_id = NULL;
+                        struct RecordType *nested_record = NULL;
+                        TypeInfo nested_info = {0};
+                        int mapped = convert_type_spec(element_node, &nested_id, &nested_record, &nested_info);
+                        (void)mapped;
+                        if (nested_record != NULL)
+                        {
+                            type_info->record_type = nested_record;
+                            type_info->is_record = 1;
+                            type_info->element_type = RECORD_TYPE;
+                        }
+                        if (nested_id != NULL)
+                            free(nested_id);
+                        destroy_type_info_contents(&nested_info);
                     }
-                    destroy_type_info_contents(&nested_info);
-                }
-                if (type_info->element_type_id != NULL &&
-                    strcasecmp(type_info->element_type_id, "const") == 0)
-                {
+                    if (type_info->element_type_id != NULL &&
+                        strcasecmp(type_info->element_type_id, "const") == 0)
+                    {
                     free(type_info->element_type_id);
                     type_info->element_type_id = NULL;
                     type_info->is_array_of_const = 1;
@@ -4953,6 +5212,15 @@ static ListNode_t *convert_class_field_decl(ast_t *field_decl_node) {
             }
         }
 
+        KgpcType *element_kgpc_copy = field_info.element_kgpc_type;
+        if (element_kgpc_copy != NULL)
+        {
+            if (name_node->next == NULL)
+                field_info.element_kgpc_type = NULL;
+            else
+                kgpc_type_retain(element_kgpc_copy);
+        }
+
         struct RecordField *field_desc = (struct RecordField *)calloc(1, sizeof(struct RecordField));
         if (field_desc != NULL) {
             field_desc->name = field_name;
@@ -4965,6 +5233,7 @@ static ListNode_t *convert_class_field_decl(ast_t *field_decl_node) {
             field_desc->array_element_type = field_info.element_type;
             field_desc->array_element_type_id = field_info.element_type_id;
             field_desc->array_element_record = field_info.record_type;
+            field_desc->array_element_kgpc_type = element_kgpc_copy;
             field_info.record_type = NULL;  /* Ownership transferred */
             field_desc->array_is_open = field_info.is_open_array;
             field_info.element_type_id = NULL;  /* Ownership transferred */
@@ -4983,6 +5252,8 @@ static ListNode_t *convert_class_field_decl(ast_t *field_decl_node) {
                 free(field_name);
             if (type_id_copy != NULL)
                 free(type_id_copy);
+            if (element_kgpc_copy != NULL)
+                kgpc_type_release(element_kgpc_copy);
             destroy_record_type(nested_copy);
         }
 
@@ -4995,6 +5266,8 @@ static ListNode_t *convert_class_field_decl(ast_t *field_decl_node) {
         free(field_type_id);
     if (nested_record != NULL)
         destroy_record_type(nested_record);
+    if (field_info.element_kgpc_type != NULL)
+        destroy_kgpc_type(field_info.element_kgpc_type);
 
     return list_builder_finish(&result);
 }
@@ -5965,6 +6238,15 @@ static ListNode_t *convert_field_decl(ast_t *field_decl_node) {
             }
         }
 
+        KgpcType *element_kgpc_copy = field_info.element_kgpc_type;
+        if (element_kgpc_copy != NULL)
+        {
+            if (name_node->next == NULL)
+                field_info.element_kgpc_type = NULL;
+            else
+                kgpc_type_retain(element_kgpc_copy);
+        }
+
         struct RecordField *field_desc = (struct RecordField *)calloc(1, sizeof(struct RecordField));
         if (field_desc != NULL) {
             field_desc->name = field_name;
@@ -5980,6 +6262,7 @@ static ListNode_t *convert_field_decl(ast_t *field_decl_node) {
             field_desc->array_element_type = field_info.element_type;
             field_desc->array_element_type_id = field_info.element_type_id;
             field_desc->array_element_record = field_info.record_type;
+            field_desc->array_element_kgpc_type = element_kgpc_copy;
             field_info.record_type = NULL;  /* Ownership transferred */
             field_desc->array_is_open = field_info.is_open_array;
             field_info.element_type_id = NULL;
@@ -6013,6 +6296,8 @@ static ListNode_t *convert_field_decl(ast_t *field_decl_node) {
                 free(field_name);
             if (type_id_copy != NULL)
                 free(type_id_copy);
+            if (element_kgpc_copy != NULL)
+                kgpc_type_release(element_kgpc_copy);
             destroy_record_type(nested_copy);
         }
 
@@ -6614,6 +6899,11 @@ static ListNode_t *convert_param(ast_t *param_node) {
                                       type_info.start, type_info.end, range_str, NULL);
             if (param_decl != NULL)
                 param_decl->tree_data.arr_decl_data.is_shortstring = type_info.is_shortstring;
+            if (param_decl != NULL && type_info.record_type != NULL)
+            {
+                param_decl->tree_data.arr_decl_data.inline_record_type = type_info.record_type;
+                type_info.record_type = NULL;
+            }
             /* Set var parameter flag on array declaration */
             if (is_var_param && param_decl != NULL)
                 param_decl->tree_data.arr_decl_data.type = var_type; // Store this for compatibility
@@ -6949,6 +7239,11 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
                                     type_info.start, type_info.end, range_str, initializer_stmt);
         if (decl != NULL)
             decl->tree_data.arr_decl_data.is_shortstring = type_info.is_shortstring;
+        if (decl != NULL && type_info.record_type != NULL)
+        {
+            decl->tree_data.arr_decl_data.inline_record_type = type_info.record_type;
+            type_info.record_type = NULL;
+        }
         type_info.element_type_id = NULL;
         destroy_type_info_contents(&type_info);
         return decl;
@@ -7271,19 +7566,39 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
 
     ast_t *tuple_node = value_node;
     int is_string_initializer = 0;
+    const char *string_initializer_value = NULL;
     if (tuple_node == NULL) {
         fprintf(stderr, "ERROR: Const array %s must use tuple syntax for its initializer.\n",
                 *id_ptr);
         return -1;
     }
+    int is_char_array = (type_info->element_type == CHAR_TYPE);
+    int is_widechar_array = (type_info->element_type_id != NULL &&
+                             strcasecmp(type_info->element_type_id, "widechar") == 0);
     if (tuple_node->typ == PASCAL_T_STRING) {
-        int is_char_array = (type_info->element_type == CHAR_TYPE);
-        int is_widechar_array = (type_info->element_type_id != NULL &&
-                                 strcasecmp(type_info->element_type_id, "widechar") == 0);
         if (is_char_array || is_widechar_array) {
             is_string_initializer = 1;
+            if (tuple_node->sym != NULL)
+                string_initializer_value = tuple_node->sym->name;
         } else {
             fprintf(stderr, "ERROR: Const array %s string initializer requires a char array type.\n",
+                    *id_ptr);
+            return -1;
+        }
+    } else if (tuple_node->typ == PASCAL_T_IDENTIFIER && tuple_node->sym != NULL &&
+               tuple_node->sym->name != NULL) {
+        const char *resolved = resolve_const_string_from_ast(tuple_node->sym->name, const_section);
+        if (resolved != NULL) {
+            if (is_char_array || is_widechar_array) {
+                is_string_initializer = 1;
+                string_initializer_value = resolved;
+            } else {
+                fprintf(stderr, "ERROR: Const array %s string initializer requires a char array type.\n",
+                        *id_ptr);
+                return -1;
+            }
+        } else {
+            fprintf(stderr, "ERROR: Const array %s must use tuple syntax for its initializer.\n",
                     *id_ptr);
             return -1;
         }
@@ -7306,8 +7621,8 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
 
     int actual_count = 0;
     if (is_string_initializer) {
-        if (tuple_node->sym != NULL && tuple_node->sym->name != NULL)
-            actual_count = (int)strlen(tuple_node->sym->name);
+        if (string_initializer_value != NULL)
+            actual_count = (int)strlen(string_initializer_value);
     } else {
         for (ast_t *elem = tuple_node->child; elem != NULL; elem = elem->next)
             ++actual_count;
@@ -7419,7 +7734,7 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
     }
 
     if (is_string_initializer) {
-        const char *str = (tuple_node->sym != NULL) ? tuple_node->sym->name : NULL;
+        const char *str = string_initializer_value;
         if (str == NULL)
             str = "";
         for (int i = 0; i < actual_count; ++i) {
@@ -7623,6 +7938,11 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
     }
     Tree_t *array_decl = mk_arraydecl(const_decl_node->line, ids, type_info->element_type,
                                       type_info->element_type_id, start, end, range_str, initializer);
+    if (array_decl != NULL && type_info->record_type != NULL)
+    {
+        array_decl->tree_data.arr_decl_data.inline_record_type = type_info->record_type;
+        type_info->record_type = NULL;
+    }
     type_info->element_type_id = NULL;
 
     if (type_info->array_dimensions != NULL) {
@@ -8520,7 +8840,15 @@ static Tree_t *convert_generic_type_decl(ast_t *type_decl_node) {
         return NULL;
 
     ast_t *param_list = id_node->next;
+    while (param_list != NULL && param_list->typ == PASCAL_T_NONE && param_list->child != NULL)
+        param_list = param_list->child;
     ast_t *type_spec_node = param_list != NULL ? param_list->next : NULL;
+    while (type_spec_node != NULL && type_spec_node->typ == PASCAL_T_NONE && type_spec_node->child != NULL)
+        type_spec_node = type_spec_node->child;
+    if (type_spec_node != NULL && type_spec_node->typ != PASCAL_T_TYPE_SPEC)
+        type_spec_node = find_ast_node_type(type_decl_node, PASCAL_T_TYPE_SPEC);
+    if (type_spec_node == NULL)
+        type_spec_node = find_ast_node_type(type_decl_node, PASCAL_T_TYPE_SPEC);
     if (getenv("KGPC_DEBUG_GENERIC_CLONES") != NULL)
         fprintf(stderr, "[KGPC] convert_generic_type_decl %s (type_spec_node=%p typ=%d)\n",
             id, (void *)type_spec_node, type_spec_node != NULL ? type_spec_node->typ : -1);
@@ -9769,6 +10097,47 @@ static struct Expression *convert_factor(ast_t *expr_node) {
         ast_t *child = expr_node->child;
         char *id = NULL;
         int inherited_call = 0;
+        if (child != NULL && child->typ == PASCAL_T_MEMBER_ACCESS)
+        {
+            ast_t *base_node = child->child;
+            ast_t *field_node = (base_node != NULL) ? base_node->next : NULL;
+            ast_t *field_unwrapped = unwrap_pascal_node(field_node);
+            char *method_id = NULL;
+            if (field_unwrapped != NULL &&
+                (field_unwrapped->typ == PASCAL_T_IDENTIFIER ||
+                 field_unwrapped->typ == PASCAL_T_BOOLEAN))
+            {
+                method_id = dup_symbol(field_unwrapped);
+            }
+            if (method_id != NULL && base_node != NULL)
+            {
+                struct Expression *base_expr = convert_expression(base_node);
+                if (base_expr != NULL)
+                {
+                    ListNode_t *args = convert_expression_list(child->next);
+                    ListNode_t *base_node_list = CreateListNode(base_expr, LIST_EXPR);
+                    if (base_node_list != NULL)
+                    {
+                        if (args == NULL)
+                        {
+                            args = base_node_list;
+                        }
+                        else
+                        {
+                            args = PushListNodeFront(args, base_node_list);
+                        }
+                    }
+
+                    struct Expression *call_expr = mk_functioncall(expr_node->line, method_id, args);
+                    if (call_expr != NULL)
+                    {
+                        call_expr->expr_data.function_call_data.is_method_call_placeholder = 1;
+                        return call_expr;
+                    }
+                }
+                free(method_id);
+            }
+        }
         if (child != NULL) {
             if (child->typ == PASCAL_T_IDENTIFIER) {
                 const char *name = ast_symbol_name(child);
@@ -10730,6 +11099,28 @@ static struct Expression *convert_member_access(ast_t *node) {
     return convert_member_access_chain(node->line, record_expr, field_node);
 }
 
+static struct Expression *wrap_addr_over_suffix_chain(struct Expression *expr,
+    struct Expression *base_expr)
+{
+    if (expr == NULL || base_expr == NULL)
+        return expr;
+    if (base_expr->type != EXPR_POINTER_DEREF)
+        return expr;
+
+    struct Expression *pointer_expr = base_expr->expr_data.pointer_deref_data.pointer_expr;
+    if (pointer_expr == NULL || pointer_expr->type != EXPR_ADDR)
+        return expr;
+
+    struct Expression *addr_expr = pointer_expr;
+    struct Expression *addr_inner = addr_expr->expr_data.addr_data.expr;
+    if (addr_inner == NULL)
+        return expr;
+
+    base_expr->expr_data.pointer_deref_data.pointer_expr = addr_inner;
+    addr_expr->expr_data.addr_data.expr = expr;
+    return addr_expr;
+}
+
 static struct Expression *convert_member_access_chain(int line,
     struct Expression *base_expr, ast_t *field_node) {
     if (base_expr == NULL)
@@ -10899,7 +11290,10 @@ static struct Expression *convert_member_access_chain(int line,
             destroy_expr(base_expr);
             return NULL;
         }
-        return mk_recordaccess(node_line, base_expr, field_id);
+        struct Expression *record_expr = mk_recordaccess(node_line, base_expr, field_id);
+        if (record_expr == NULL)
+            return NULL;
+        return wrap_addr_over_suffix_chain(record_expr, base_expr);
     }
     case PASCAL_T_BOOLEAN: {
         /* Handle scoped enum literals like TUseBoolStrs.False or TUseBoolStrs.True
@@ -10911,7 +11305,10 @@ static struct Expression *convert_member_access_chain(int line,
             destroy_expr(base_expr);
             return NULL;
         }
-        return mk_recordaccess(node_line, base_expr, field_id);
+        struct Expression *record_expr = mk_recordaccess(node_line, base_expr, field_id);
+        if (record_expr == NULL)
+            return NULL;
+        return wrap_addr_over_suffix_chain(record_expr, base_expr);
     }
     case PASCAL_T_ARRAY_ACCESS: {
         ast_t *array_base = unwrapped->child;
@@ -10960,7 +11357,7 @@ static struct Expression *convert_member_access_chain(int line,
             result->expr_data.array_access_data.extra_indices = extra_indices;
         }
 
-        return result;
+        return wrap_addr_over_suffix_chain(result, field_expr);
     }
     case PASCAL_T_MEMBER_ACCESS: {
         ast_t *inner_base = unwrapped->child;
@@ -10975,7 +11372,21 @@ static struct Expression *convert_member_access_chain(int line,
         struct Expression *target = convert_member_access_chain(node_line, base_expr, inner);
         if (target == NULL)
             return NULL;
-        return mk_pointer_deref(node_line, target);
+        struct Expression *deref_expr = mk_pointer_deref(node_line, target);
+        if (deref_expr == NULL)
+            return NULL;
+        if (target->type == EXPR_ADDR)
+        {
+            struct Expression *addr_expr = target;
+            struct Expression *addr_inner = addr_expr->expr_data.addr_data.expr;
+            if (addr_inner != NULL)
+            {
+                deref_expr->expr_data.pointer_deref_data.pointer_expr = addr_inner;
+                addr_expr->expr_data.addr_data.expr = deref_expr;
+                return addr_expr;
+            }
+        }
+        return deref_expr;
     }
     default:
         break;
@@ -10989,7 +11400,10 @@ static struct Expression *convert_member_access_chain(int line,
                 destroy_expr(base_expr);
                 return NULL;
             }
-            return mk_recordaccess(node_line, base_expr, field_id);
+            struct Expression *record_expr = mk_recordaccess(node_line, base_expr, field_id);
+            if (record_expr == NULL)
+                return NULL;
+            return wrap_addr_over_suffix_chain(record_expr, base_expr);
         }
     }
 
@@ -11129,6 +11543,32 @@ static struct Statement *convert_method_call_statement(ast_t *member_node, ast_t
     if (method_name == NULL)
         return NULL;
 
+    char *object_name = dup_symbol(unwrap_pascal_node(object_node));
+    ListNode_t *preconverted_args = NULL;
+    if (object_name != NULL && method_name != NULL &&
+        pascal_identifier_equals(object_name, "system") &&
+        pascal_identifier_equals(method_name, "exit"))
+    {
+        preconverted_args = convert_expression_list(args_start);
+        if (preconverted_args == NULL)
+        {
+            free(method_name);
+            free(object_name);
+            return mk_exit(member_node->line);
+        }
+        if (preconverted_args->next == NULL)
+        {
+            struct Expression *return_expr = (struct Expression *)preconverted_args->cur;
+            preconverted_args->cur = NULL;
+            DestroyList(preconverted_args);
+            free(method_name);
+            free(object_name);
+            return mk_exit_with_value(member_node->line, return_expr);
+        }
+    }
+    if (object_name != NULL)
+        free(object_name);
+
     /* For method calls, we need the object's type to determine which class's
      * method to call. However, at parse time we don't have full type information.
      * 
@@ -11175,8 +11615,13 @@ static struct Statement *convert_method_call_statement(ast_t *member_node, ast_t
     list_builder_append(&arg_builder, object_expr, LIST_EXPR);
 
     if (args_start != NULL) {
-        ListNode_t *converted_args = convert_expression_list(args_start);
+        ListNode_t *converted_args = preconverted_args != NULL ?
+            preconverted_args : convert_expression_list(args_start);
         list_builder_extend(&arg_builder, converted_args);
+        preconverted_args = NULL;
+    } else if (preconverted_args != NULL) {
+        list_builder_extend(&arg_builder, preconverted_args);
+        preconverted_args = NULL;
     }
 
     ListNode_t *args = list_builder_finish(&arg_builder);
@@ -12505,7 +12950,7 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
             if (cur->child != NULL && cur->child->typ == PASCAL_T_IDENTIFIER) {
                 char *directive = dup_symbol(cur->child);
                 if (directive != NULL) {
-                    if (strcasecmp(directive, "external") == 0) {
+                    if (is_external_directive(directive)) {
                         is_external = 1;
                     }
                 }
@@ -12786,7 +13231,7 @@ static Tree_t *convert_function(ast_t *func_node) {
         case PASCAL_T_IDENTIFIER: {
             char *self_sym = dup_symbol(cur);
             if (self_sym != NULL) {
-                if (strcasecmp(self_sym, "external") == 0) {
+                if (is_external_directive(self_sym)) {
                     is_external = 1;
                 }
                 free(self_sym);
@@ -12795,7 +13240,7 @@ static Tree_t *convert_function(ast_t *func_node) {
             if (cur->child != NULL && cur->child->typ == PASCAL_T_IDENTIFIER) {
                 char *directive = dup_symbol(cur->child);
                 if (directive != NULL) {
-                    if (strcasecmp(directive, "external") == 0) {
+                    if (is_external_directive(directive)) {
                         is_external = 1;
                     }
                 }

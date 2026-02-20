@@ -131,6 +131,7 @@ UNIT_ONLY_TESTS = {
     "fpc_interface_const_after_external",
     "fpc_qualified_const_import",
     "property_indexed_unit",
+    "tdd_variant_shadow_record",
     "unit_cardinal_type",
     "unit_high_type_const",
     "unit_longword_type",
@@ -141,7 +142,9 @@ UNIT_ONLY_TESTS = {
     "unit_include_init_section",
 }
 
-UNIT_ONLY_FLAGS = {}
+UNIT_ONLY_FLAGS = {
+    "tdd_variant_shadow_record": ["--no-stdlib"],
+}
 
 
 def _sanitize_test_identifier(name):

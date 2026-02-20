@@ -2377,6 +2377,12 @@ const char *semcheck_get_current_subprogram_result_var_name(void)
     return g_semcheck_current_subprogram->tree_data.subprogram_data.result_var_name;
 }
 
+int semcheck_current_subprogram_is_function(void)
+{
+    return (g_semcheck_current_subprogram != NULL &&
+        g_semcheck_current_subprogram->tree_data.subprogram_data.sub_type == TREE_SUBPROGRAM_FUNC);
+}
+
 KgpcType *semcheck_get_current_subprogram_return_kgpc_type(SymTab_t *symtab, int *owns_type)
 {
     if (owns_type != NULL)
@@ -5921,6 +5927,9 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
             cloned_field->array_element_type_id = original_field->array_element_type_id ? 
                 strdup(original_field->array_element_type_id) : NULL;
             cloned_field->array_is_open = original_field->array_is_open;
+            cloned_field->array_element_kgpc_type = original_field->array_element_kgpc_type;
+            if (cloned_field->array_element_kgpc_type != NULL)
+                kgpc_type_retain(cloned_field->array_element_kgpc_type);
             cloned_field->is_hidden = original_field->is_hidden;
             cloned_field->is_class_var = original_field->is_class_var;
             cloned_field->is_pointer = original_field->is_pointer;
@@ -5952,6 +5961,8 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
                     free(field->array_element_type_id);
                     if (field->proc_type != NULL)
                         kgpc_type_release(field->proc_type);
+                    if (field->array_element_kgpc_type != NULL)
+                        kgpc_type_release(field->array_element_kgpc_type);
                     free(field);
                     free(temp);
                 }
@@ -10868,32 +10879,41 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 /* If element type not resolved from type_id, use primitive type */
                 if (element_type == NULL && !is_array_of_const)
                 {
-                    if(tree->tree_data.arr_decl_data.type == INT_TYPE)
-                        var_type = HASHVAR_INTEGER;
-                    else if(tree->tree_data.arr_decl_data.type == LONGINT_TYPE)
-                        var_type = HASHVAR_LONGINT;
-                    else if(tree->tree_data.arr_decl_data.type == BOOL)
-                        var_type = HASHVAR_BOOLEAN;
-                    else if(tree->tree_data.arr_decl_data.type == STRING_TYPE)
-                        var_type = HASHVAR_PCHAR;
-                    else if(tree->tree_data.arr_decl_data.type == SHORTSTRING_TYPE)
-                        var_type = HASHVAR_PCHAR;  /* ShortString is array of char */
-                    else if(tree->tree_data.arr_decl_data.type == CHAR_TYPE)
-                        var_type = HASHVAR_CHAR;
-                    else if(tree->tree_data.arr_decl_data.type == REAL_TYPE)
-                        var_type = HASHVAR_REAL;
-                    else {
-                        semcheck_error_with_context(
-                            "Error on line %d, unknown array element type %d for %s.\n\n",
-                            tree->line_num,
-                            tree->tree_data.arr_decl_data.type,
-                            ids && ids->cur ? (char*)ids->cur : "<unknown>");
-                        return_val++;
-                        var_type = HASHVAR_REAL;
+                    if (tree->tree_data.arr_decl_data.type == RECORD_TYPE &&
+                        tree->tree_data.arr_decl_data.inline_record_type != NULL)
+                    {
+                        element_type = create_record_type(
+                            tree->tree_data.arr_decl_data.inline_record_type);
                     }
-                    
-                    element_type = kgpc_type_from_var_type(var_type);
-                    assert(element_type != NULL && "Array element type must be createable from VarType");
+                    if (element_type == NULL)
+                    {
+                        if(tree->tree_data.arr_decl_data.type == INT_TYPE)
+                            var_type = HASHVAR_INTEGER;
+                        else if(tree->tree_data.arr_decl_data.type == LONGINT_TYPE)
+                            var_type = HASHVAR_LONGINT;
+                        else if(tree->tree_data.arr_decl_data.type == BOOL)
+                            var_type = HASHVAR_BOOLEAN;
+                        else if(tree->tree_data.arr_decl_data.type == STRING_TYPE)
+                            var_type = HASHVAR_PCHAR;
+                        else if(tree->tree_data.arr_decl_data.type == SHORTSTRING_TYPE)
+                            var_type = HASHVAR_PCHAR;  /* ShortString is array of char */
+                        else if(tree->tree_data.arr_decl_data.type == CHAR_TYPE)
+                            var_type = HASHVAR_CHAR;
+                        else if(tree->tree_data.arr_decl_data.type == REAL_TYPE)
+                            var_type = HASHVAR_REAL;
+                        else {
+                            semcheck_error_with_context(
+                                "Error on line %d, unknown array element type %d for %s.\n\n",
+                                tree->line_num,
+                                tree->tree_data.arr_decl_data.type,
+                                ids && ids->cur ? (char*)ids->cur : "<unknown>");
+                            return_val++;
+                            var_type = HASHVAR_REAL;
+                        }
+                        
+                        element_type = kgpc_type_from_var_type(var_type);
+                        assert(element_type != NULL && "Array element type must be createable from VarType");
+                    }
                 }
                 
                 /* Resolve array bounds from constant identifiers if necessary.
@@ -11728,14 +11748,28 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                  * FpFStat and FPFStat both mangle to fpfstat_li), prefer the
                  * one with an equivalent signature. */
                 if (candidate->type != NULL &&
-                    candidate->type->kind == TYPE_KIND_PROCEDURE &&
-                    candidate->type->info.proc_info.definition != NULL &&
-                    semcheck_subprogram_signatures_equivalent(
-                        subprogram, candidate->type->info.proc_info.definition))
+                    candidate->type->kind == TYPE_KIND_PROCEDURE)
                 {
-                    existing_decl = candidate;
-                    already_declared = 1;
-                    break;
+                    Tree_t *candidate_def = candidate->type->info.proc_info.definition;
+                    int signature_match = 0;
+                    if (candidate_def != NULL)
+                    {
+                        signature_match = semcheck_subprogram_signatures_equivalent(
+                            subprogram, candidate_def);
+                    }
+                    else
+                    {
+                        signature_match = semcheck_param_list_equivalent(
+                            subprogram->tree_data.subprogram_data.args_var,
+                            candidate->type->info.proc_info.params);
+                    }
+
+                    if (signature_match)
+                    {
+                        existing_decl = candidate;
+                        already_declared = 1;
+                        break;
+                    }
                 }
             }
             cur = cur->next;
@@ -11889,13 +11923,40 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     else // Function
     {
         KgpcType *return_kgpc_type = NULL;
+        KgpcType *computed_return = NULL;
 
         /* Reuse the type created during predeclaration when possible. */
+        int reuse_existing_decl = 0;
         if (already_declared && existing_decl != NULL &&
             existing_decl->type != NULL &&
             existing_decl->type->kind == TYPE_KIND_PROCEDURE)
         {
-            return_kgpc_type = kgpc_type_get_return_type(existing_decl->type);
+            reuse_existing_decl = semcheck_param_list_equivalent(
+                subprogram->tree_data.subprogram_data.args_var,
+                existing_decl->type->info.proc_info.params);
+        }
+
+        computed_return = build_function_return_type(subprogram, symtab, &return_val, 0);
+#ifdef DEBUG
+        if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_subprogram %s error after build_function_return_type: %d\n", subprogram->tree_data.subprogram_data.id, return_val);
+#endif
+        if (reuse_existing_decl && existing_decl != NULL && existing_decl->type != NULL)
+        {
+            KgpcType *existing_return = kgpc_type_get_return_type(existing_decl->type);
+            if (existing_return != NULL && computed_return != NULL &&
+                kgpc_type_equals(existing_return, computed_return))
+            {
+                return_kgpc_type = existing_return;
+                if (computed_return != existing_return)
+                    destroy_kgpc_type(computed_return);
+            }
+            else
+            {
+                return_kgpc_type = computed_return;
+                if (existing_return != NULL && existing_return != return_kgpc_type)
+                    existing_decl->type->info.proc_info.return_type = return_kgpc_type;
+            }
+
             if (subprogram->tree_data.subprogram_data.statement_list != NULL)
             {
                 Tree_t *prev_def = existing_decl->type->info.proc_info.definition;
@@ -11909,15 +11970,9 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                 existing_decl->type->info.proc_info.params,
                 subprogram->tree_data.subprogram_data.args_var);
         }
-
-        /* If the predeclare step could not resolve the type (e.g., inline array),
-         * build it now and update the existing declaration. */
-        if (return_kgpc_type == NULL)
+        else
         {
-            return_kgpc_type = build_function_return_type(subprogram, symtab, &return_val, 0);
-#ifdef DEBUG
-            if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_subprogram %s error after build_function_return_type: %d\n", subprogram->tree_data.subprogram_data.id, return_val);
-#endif
+            return_kgpc_type = computed_return;
         }
 
         KgpcType *func_type = NULL;
@@ -12045,8 +12100,10 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                 memcpy(alias_buf, alias_suffix, alias_len);
                 alias_buf[alias_len] = '\0';
 
-                HashNode_t *suffix_check = NULL;
-                if (FindIdent(&suffix_check, symtab, alias_buf) == -1)
+                HashTable_t *cur_hash = (HashTable_t *)symtab->stack_head->cur;
+                HashNode_t *suffix_check = (cur_hash != NULL) ?
+                    FindIdentInTable(cur_hash, alias_buf) : NULL;
+                if (suffix_check == NULL)
                     PushFuncRetOntoScope_Typed(symtab, alias_buf, return_kgpc_type);
             }
         }

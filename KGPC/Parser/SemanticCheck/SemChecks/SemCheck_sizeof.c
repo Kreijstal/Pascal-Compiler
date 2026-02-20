@@ -85,6 +85,14 @@ long long sizeof_from_type_tag(int type_tag)
             return 4;
         case LONGINT_TYPE:
             return 4;
+        case BYTE_TYPE:
+            return 1;
+        case WORD_TYPE:
+            return 2;
+        case LONGWORD_TYPE:
+            return 4;
+        case QWORD_TYPE:
+            return 8;
         case REAL_TYPE:
             return 8;
         case STRING_TYPE:

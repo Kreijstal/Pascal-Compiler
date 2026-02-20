@@ -247,9 +247,19 @@ static char *read_file(const char *path, size_t *out_len)
         return NULL;
     }
 
-    buffer[len] = '\0';
+    size_t final_len = (size_t)len;
+    if (final_len >= 3 &&
+        (unsigned char)buffer[0] == 0xEF &&
+        (unsigned char)buffer[1] == 0xBB &&
+        (unsigned char)buffer[2] == 0xBF)
+    {
+        memmove(buffer, buffer + 3, final_len - 3);
+        final_len -= 3;
+    }
+
+    buffer[final_len] = '\0';
     if (out_len != NULL)
-        *out_len = (size_t)len;
+        *out_len = final_len;
 
     return buffer;
 }

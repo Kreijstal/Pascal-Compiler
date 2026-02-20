@@ -480,6 +480,74 @@ static combinator_t* create_method_return_type_parser(void) {
     );
 }
 
+static combinator_t* create_property_decl_parser(void) {
+    combinator_t* property_indexer_modifier = optional(multi(new_combinator(), PASCAL_T_NONE,
+        token(keyword_ci("const")),
+        token(keyword_ci("var")),
+        token(keyword_ci("out")),
+        token(keyword_ci("constref")),
+        NULL
+    ));
+
+    combinator_t* property_indexer = optional(between(
+        token(match("[")),
+        token(match("]")),
+        sep_by(seq(new_combinator(), PASCAL_T_NONE,
+            property_indexer_modifier,
+            sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
+            token(match(":")),
+            create_record_field_type_spec(),
+            NULL
+        ), token(match(";")))
+    ));
+
+    return seq(new_combinator(), PASCAL_T_PROPERTY_DECL,
+        optional(token(keyword_ci("class"))),  // Support class properties
+        token(keyword_ci("property")),
+        token(cident(PASCAL_T_IDENTIFIER)), // property name
+        property_indexer,
+        optional(seq(new_combinator(), PASCAL_T_NONE,
+            token(match(":")),
+            create_type_ref_parser(),  // Support both simple and constructed types
+            NULL
+        )),
+        optional(seq(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("read")),
+            token(cident(PASCAL_T_IDENTIFIER)), // read field/method
+            NULL
+        )),
+        optional(seq(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("write")),
+            token(cident(PASCAL_T_IDENTIFIER)), // write field/method
+            NULL
+        )),
+        optional(seq(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("stored")),
+            token(cident(PASCAL_T_IDENTIFIER)),
+            NULL
+        )),
+        optional(seq(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("implements")),
+            sep_by(create_type_ref_parser(), token(match(","))),
+            NULL
+        )),
+        optional(seq(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("default")),
+            optional(token(integer(PASCAL_T_INTEGER))),
+            NULL
+        )),
+        token(match(";")),
+        // Optional trailing "default;" directive used in FGL-like properties
+        optional(seq(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("default")),
+            optional(token(integer(PASCAL_T_INTEGER))),
+            token(match(";")),
+            NULL
+        )),
+        NULL
+    );
+}
+
 combinator_t* class_type(tag_t tag) {
     // Type reference for field declarations, method return types, etc.
     combinator_t* type_ref = create_type_ref_parser();
@@ -624,71 +692,7 @@ combinator_t* class_type(tag_t tag) {
     );
 
     // Property declaration: property Name: Type read ReadField write WriteField; [default;]
-    combinator_t* property_indexer_modifier = optional(multi(new_combinator(), PASCAL_T_NONE,
-        token(keyword_ci("const")),
-        token(keyword_ci("var")),
-        token(keyword_ci("out")),
-        token(keyword_ci("constref")),
-        NULL
-    ));
-
-    combinator_t* property_indexer = optional(between(
-        token(match("[")),
-        token(match("]")),
-        sep_by(seq(new_combinator(), PASCAL_T_NONE,
-            property_indexer_modifier,
-            sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
-            token(match(":")),
-            create_record_field_type_spec(),
-            NULL
-        ), token(match(";")))
-    ));
-
-    combinator_t* property_decl = seq(new_combinator(), PASCAL_T_PROPERTY_DECL,
-        optional(token(keyword_ci("class"))),  // Support class properties
-        token(keyword_ci("property")),
-        token(cident(PASCAL_T_IDENTIFIER)), // property name
-        property_indexer,
-        optional(seq(new_combinator(), PASCAL_T_NONE,
-            token(match(":")),
-            create_type_ref_parser(),  // Support both simple and constructed types
-            NULL
-        )),
-        optional(seq(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("read")),
-            token(cident(PASCAL_T_IDENTIFIER)), // read field/method
-            NULL
-        )),
-        optional(seq(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("write")),
-            token(cident(PASCAL_T_IDENTIFIER)), // write field/method
-            NULL
-        )),
-        optional(seq(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("stored")),
-            token(cident(PASCAL_T_IDENTIFIER)),
-            NULL
-        )),
-        optional(seq(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("implements")),
-            sep_by(create_type_ref_parser(), token(match(","))),
-            NULL
-        )),
-        optional(seq(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("default")),
-            optional(token(integer(PASCAL_T_INTEGER))),
-            NULL
-        )),
-        token(match(";")),
-        // Optional trailing "default;" directive used in FGL-like properties
-        optional(seq(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("default")),
-            optional(token(integer(PASCAL_T_INTEGER))),
-            token(match(";")),
-            NULL
-        )),
-        NULL
-    );
+    combinator_t* property_decl = create_property_decl_parser();
 
     class_member_dispatch_args_t* class_dispatch = (class_member_dispatch_args_t*)safe_malloc(sizeof(class_member_dispatch_args_t));
     class_dispatch->constructor_parser = constructor_decl;
@@ -1845,26 +1849,8 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
         NULL
     );
 
-    // Simple property declaration inside a record (e.g., property Current: T read GetCurrent;)
-    combinator_t* adv_property_decl = seq(new_combinator(), PASCAL_T_PROPERTY_DECL,
-        optional(token(keyword_ci("class"))),
-        token(keyword_ci("property")),
-        token(cident(PASCAL_T_IDENTIFIER)),
-        token(match(":")),
-        create_type_ref_parser(),
-        optional(seq(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("read")),
-            token(cident(PASCAL_T_IDENTIFIER)),
-            NULL
-        )),
-        optional(seq(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("write")),
-            token(cident(PASCAL_T_IDENTIFIER)),
-            NULL
-        )),
-        token(match(";")),
-        NULL
-    );
+    // Property declaration inside a record (supports modifiers and default directives)
+    combinator_t* adv_property_decl = create_property_decl_parser();
 
     // Constructor/destructor headers inside a record (with optional class prefix and method directives)
     combinator_t* adv_ctor_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
@@ -2070,8 +2056,15 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
             NULL
         ));
 
+        combinator_t* tail_field_attribute = many(seq(new_combinator(), PASCAL_T_NONE,
+            token(match("[")),
+            sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
+            token(match("]")),
+            NULL
+        ));
+
         combinator_t* tail_field_decl = seq(new_combinator(), PASCAL_T_FIELD_DECL,
-            field_attribute,
+            tail_field_attribute,
             tail_field_name_list,
             token(match(":")),
             tail_field_type,
@@ -2418,6 +2411,8 @@ static ParseResult object_type_fn(input_t* in, void* args, char* parser_name) {
         NULL
     );
 
+    combinator_t* property_decl = create_property_decl_parser();
+
     combinator_t* object_member = multi(new_combinator(), PASCAL_T_NONE,
         visibility_keyword,
         nested_type_section,
@@ -2429,6 +2424,7 @@ static ParseResult object_type_fn(input_t* in, void* args, char* parser_name) {
         destructor_decl,
         method_procedure_decl,
         method_function_decl,
+        property_decl,
         field_decl,
         NULL
     );

@@ -92,56 +92,8 @@ type
   Currency = Int64;
   PCurrency = ^Currency;
 
-  Variant = String;
-  PVariant = ^Variant;
-
-const
-  vtInteger = 0;
-  vtBoolean = 1;
-  vtChar = 2;
-  vtExtended = 3;
-  vtString = 4;
-  vtPointer = 5;
-  vtPChar = 6;
-  vtObject = 7;
-  vtClass = 8;
-  vtWideChar = 9;
-  vtPWideChar = 10;
-  vtAnsiString = 11;
-  vtCurrency = 12;
-  vtVariant = 13;
-  vtInterface = 14;
-  vtWideString = 15;
-  vtInt64 = 16;
-  vtQWord = 17;
-  vtUnicodeString = 18;
 
 type
-  { TVarRec - needed for array-of-const support }
-  PVarRec = ^TVarRec;
-  TVarRec = record
-    case VType: SizeInt of
-      vtInteger: (VInteger: LongInt);
-      vtBoolean: (VBoolean: Boolean);
-      vtChar: (VChar: AnsiChar);
-      vtWideChar: (VWideChar: WideChar);
-      vtExtended: (VExtended: PExtended);
-      vtString: (VString: PShortString);
-      vtPointer: (VPointer: Pointer);
-      vtPChar: (VPChar: PAnsiChar);
-      vtObject: (VObject: TObject);
-      vtClass: (VClass: TClass);
-      vtPWideChar: (VPWideChar: PWideChar);
-      vtAnsiString: (VAnsiString: Pointer);
-      vtCurrency: (VCurrency: PCurrency);
-      vtVariant: (VVariant: PVariant);
-      vtInterface: (VInterface: Pointer);
-      vtWideString: (VWideString: Pointer);
-      vtInt64: (VInt64: PInt64);
-      vtUnicodeString: (VUnicodeString: Pointer);
-      vtQWord: (VQWord: PQWord);
-  end;
-
   PShortString = ^ShortString;
   PDouble = ^Double;
   PSingle = ^Single;

@@ -59,5 +59,6 @@ int semcheck_is_unit_name(const char *name);
 const char *semcheck_get_current_subprogram_id(void);
 const char *semcheck_get_current_subprogram_result_var_name(void);
 KgpcType *semcheck_get_current_subprogram_return_kgpc_type(struct SymTab *symtab, int *owns_type);
+int semcheck_current_subprogram_is_function(void);
 
 #endif

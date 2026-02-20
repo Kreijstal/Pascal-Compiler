@@ -5045,16 +5045,16 @@ static ListNode_t *codegen_builtin_val(struct Statement *stmt, ListNode_t *inst_
         return inst_list;
 
     ListNode_t *args_expr = stmt->stmt_data.procedure_call_data.expr_args;
-    if (args_expr == NULL || args_expr->next == NULL || args_expr->next->next == NULL ||
-        args_expr->next->next->next != NULL)
+    int arg_count = ListLength(args_expr);
+    if (args_expr == NULL || (arg_count != 2 && arg_count != 3))
     {
-        codegen_report_error(ctx, "ERROR: Val expects three arguments.");
+        codegen_report_error(ctx, "ERROR: Val expects two or three arguments.");
         return inst_list;
     }
 
     struct Expression *source_expr = (struct Expression *)args_expr->cur;
     struct Expression *value_expr = (struct Expression *)args_expr->next->cur;
-    struct Expression *code_expr = (struct Expression *)args_expr->next->next->cur;
+    struct Expression *code_expr = (arg_count == 3) ? (struct Expression *)args_expr->next->next->cur : NULL;
 
     Register_t *source_reg = NULL;
     Register_t *value_addr = NULL;
@@ -5083,9 +5083,12 @@ static ListNode_t *codegen_builtin_val(struct Statement *stmt, ListNode_t *inst_
     if (codegen_had_error(ctx) || value_addr == NULL)
         goto cleanup;
 
-    inst_list = codegen_address_for_expr(code_expr, inst_list, ctx, &code_addr);
-    if (codegen_had_error(ctx) || code_addr == NULL)
-        goto cleanup;
+    if (code_expr != NULL)
+    {
+        inst_list = codegen_address_for_expr(code_expr, inst_list, ctx, &code_addr);
+        if (codegen_had_error(ctx) || code_addr == NULL)
+            goto cleanup;
+    }
 
     const char *call_target = NULL;
     switch (value_expr != NULL ? expr_get_type_tag(value_expr) : UNKNOWN_TYPE)
@@ -5114,17 +5117,21 @@ static ListNode_t *codegen_builtin_val(struct Statement *stmt, ListNode_t *inst_
         goto cleanup;
     }
 
-    code_spill = add_l_t("val_code_ptr");
-    if (code_spill == NULL)
+    if (code_expr != NULL)
     {
-        codegen_report_error(ctx, "ERROR: Unable to allocate temporary for Val code argument.");
-        goto cleanup;
+        code_spill = add_l_t("val_code_ptr");
+        if (code_spill == NULL)
+        {
+            codegen_report_error(ctx, "ERROR: Unable to allocate temporary for Val code argument.");
+            goto cleanup;
+        }
+
+        char buffer[128];
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", code_addr->bit_64, code_spill->offset);
+        inst_list = add_inst(inst_list, buffer);
     }
 
     char buffer[128];
-    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", code_addr->bit_64, code_spill->offset);
-    inst_list = add_inst(inst_list, buffer);
-
     if (codegen_target_is_windows())
     {
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", source_reg->bit_64);
@@ -6588,6 +6595,14 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
 
     var_expr = stmt->stmt_data.var_assign_data.var;
     assign_expr = stmt->stmt_data.var_assign_data.expr;
+
+    if (var_expr != NULL && var_expr->type == EXPR_TYPECAST &&
+        var_expr->expr_data.typecast_data.target_type_id != NULL &&
+        pascal_identifier_equals(var_expr->expr_data.typecast_data.target_type_id, "unaligned") &&
+        var_expr->expr_data.typecast_data.expr != NULL)
+    {
+        var_expr = var_expr->expr_data.typecast_data.expr;
+    }
 
     if (getenv("KGPC_DEBUG_CODEGEN") != NULL)
     {
