@@ -1,6 +1,6 @@
 # FPC Bootstrap Analysis
 
-## Status: system.pp compiles with 0 errors (158 warnings)
+## Status: system.pp compiles with 0 errors (158 warnings); next blocker is heaptrc.pp (codegen assertion)
 
 ## Prerequisites
 
@@ -14,6 +14,17 @@ git clone https://github.com/fpc/FPCSource
 ### system.pp (0 errors, 158 warnings)
 ```bash
 ./build/KGPC/kgpc ./FPCSource/rtl/linux/system.pp /tmp/system.s \
+  --no-stdlib \
+  -I./FPCSource/rtl/inc \
+  -I./FPCSource/rtl/x86_64 \
+  -I./FPCSource/rtl/unix \
+  -I./FPCSource/rtl/linux \
+  -I./FPCSource/rtl/linux/x86_64
+```
+
+### heaptrc.pp (codegen assertion)
+```bash
+./build/KGPC/kgpc ./FPCSource/rtl/inc/heaptrc.pp /tmp/heaptrc.s \
   --no-stdlib \
   -I./FPCSource/rtl/inc \
   -I./FPCSource/rtl/x86_64 \
@@ -153,20 +164,13 @@ git clone https://github.com/fpc/FPCSource
 
 ## Units with Compilation Errors
 
-- `baseunix.pp` - **0 errors**
-- `sysutils.pp` - **0 errors** (with `--no-stdlib`)
-- `classes.pp` - **0 errors**
-- `types.pp` - **0 errors**
-- `math.pp` - **0 errors**
-- `fgl.pp` - **0 errors**
-- `sysconst.pp` - **0 errors**
-- `rtlconsts.pp` - **0 errors**
-- `typinfo.pp` - **0 errors**
+- `heaptrc.pp` - **codegen assertion** in `codegen_get_nonlocal` after successful semantic checks
 
 ## Flags
 
 - `--no-stdlib` loads the minimal KGPC prelude and then compiles the FPC RTL
-  unit directly (required for `system.pp` and the bootstrap sequence).
+  unit directly (required for `system.pp` and the bootstrap sequence so FPC’s
+  `system.pp` is used instead of the KGPC stdlib).
 
 ## Meson Test Suite
 

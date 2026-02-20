@@ -2874,6 +2874,20 @@ struct Expression *mk_recordaccess(int line_num, struct Expression *record_expr,
         return mk_addressof(line_num, mk_recordaccess(line_num, inner, field_id));
     }
 
+    if (record_expr != NULL && record_expr->type == EXPR_POINTER_DEREF)
+    {
+        struct Expression *pointer_expr = record_expr->expr_data.pointer_deref_data.pointer_expr;
+        if (pointer_expr != NULL && pointer_expr->type == EXPR_ADDR)
+        {
+            struct Expression *inner = pointer_expr->expr_data.addr_data.expr;
+            free(pointer_expr);
+            free(record_expr);
+            struct Expression *deref = mk_pointer_deref(line_num, inner);
+            struct Expression *access = mk_recordaccess(line_num, deref, field_id);
+            return mk_addressof(line_num, access);
+        }
+    }
+
     struct Expression *new_expr = (struct Expression *)malloc(sizeof(struct Expression));
     assert(new_expr != NULL);
 
