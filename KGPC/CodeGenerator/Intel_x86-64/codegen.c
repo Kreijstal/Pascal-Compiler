@@ -2826,6 +2826,10 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                         record_desc = get_record_type_from_node(target_node);
                 }
             }
+            if (record_desc == NULL && arr->inline_record_type != NULL)
+            {
+                record_desc = arr->inline_record_type;
+            }
 
             long long computed_size = 0;
             int element_size = 0;
