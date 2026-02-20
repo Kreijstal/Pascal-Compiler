@@ -2802,9 +2802,11 @@ int semcheck_try_reinterpret_as_typecast(int *type_return,
     if (target_type == UNKNOWN_TYPE)
         target_type = semcheck_map_builtin_type_name(symtab, id);
 
+    int is_unaligned_cast = pascal_identifier_equals(id, "unaligned");
     int is_type_identifier =
         (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE) ||
-        (target_type != UNKNOWN_TYPE);
+        (target_type != UNKNOWN_TYPE) ||
+        is_unaligned_cast;
     if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
     {
         fprintf(stderr, "[SemCheck] try_typecast id=%s type_node=%p hash_type=%d target_type=%d\n",

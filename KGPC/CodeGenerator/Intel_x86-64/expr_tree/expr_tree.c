@@ -11,6 +11,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <limits.h>
+#include <ctype.h>
 #include "../codegen.h"
 #include "expr_tree.h"
 #include "../register_types.h"
@@ -42,6 +43,15 @@ static int expr_tree_tag_from_kgpc(const KgpcType *type)
     if (kgpc_type_is_procedure((KgpcType *)type))
         return PROCEDURE;
     return UNKNOWN_TYPE;
+}
+
+static void codegen_enum_typeinfo_label(const char *type_id, char *buffer, size_t size)
+{
+    if (buffer == NULL || size == 0)
+        return;
+    char sanitized[CODEGEN_MAX_INST_BUF];
+    codegen_sanitize_identifier_for_label(type_id, sanitized, sizeof(sanitized));
+    snprintf(buffer, size, "__kgpc_enum_typeinfo_%s", sanitized);
 }
 #include "../../../Parser/ParseTree/type_tags.h"
 #include "../../../Parser/SemanticCheck/HashTable/HashTable.h"
@@ -109,14 +119,16 @@ static char *escape_string_for_assembly(const char *input)
     if (input == NULL)
         return NULL;
 
-    /* Calculate maximum possible escaped length */
+    /* Worst case: every char becomes \\xHH */
     size_t len = strlen(input);
-    char *escaped = (char *)malloc(len * 2 + 1); /* Worst case: every char needs escaping */
+    size_t max_len = len * 4 + 1;
+    char *escaped = (char *)malloc(max_len);
     if (escaped == NULL)
         return NULL;
 
     char *dest = escaped;
-    const char *src = input;
+    const unsigned char *src = (const unsigned char *)input;
+    size_t remaining = max_len;
 
     while (*src != '\0')
     {
@@ -125,25 +137,45 @@ static char *escape_string_for_assembly(const char *input)
             case '"':
                 *dest++ = '\\';
                 *dest++ = '"';
+                remaining -= 2;
                 break;
             case '\\':
                 *dest++ = '\\';
                 *dest++ = '\\';
+                remaining -= 2;
                 break;
             case '\n':
                 *dest++ = '\\';
                 *dest++ = 'n';
+                remaining -= 2;
                 break;
             case '\t':
                 *dest++ = '\\';
                 *dest++ = 't';
+                remaining -= 2;
                 break;
             case '\r':
                 *dest++ = '\\';
                 *dest++ = 'r';
+                remaining -= 2;
                 break;
             default:
-                *dest++ = *src;
+                if (isprint(*src))
+                {
+                    *dest++ = (char)*src;
+                    --remaining;
+                }
+                else
+                {
+                    int written = snprintf(dest, remaining, "\\x%02X", *src);
+                    if (written < 0 || (size_t)written >= remaining)
+                    {
+                        *dest = '\0';
+                        return escaped;
+                    }
+                    dest += written;
+                    remaining -= (size_t)written;
+                }
                 break;
         }
         src++;
@@ -1045,6 +1077,7 @@ expr_node_t *build_expr_tree(struct Expression *expr)
         case EXPR_POINTER_DEREF:
         case EXPR_ADDR:
         case EXPR_ADDR_OF_PROC:
+        case EXPR_TYPEINFO:
         case EXPR_ANONYMOUS_FUNCTION:
         case EXPR_ANONYMOUS_PROCEDURE:
             new_node->left_expr = NULL;
@@ -1122,6 +1155,7 @@ static int leaf_expr_is_simple(const struct Expression *expr)
         case EXPR_CHAR_CODE:
         case EXPR_BOOL:
         case EXPR_NIL:
+        case EXPR_TYPEINFO:
             return 1;
         default:
             return 0;
@@ -2740,6 +2774,19 @@ cleanup_constructor:
         }
         
         inst_list = add_inst(inst_list, add_rodata);
+        snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", label, target_reg->bit_64);
+        return add_inst(inst_list, buffer);
+    }
+    else if (expr->type == EXPR_TYPEINFO)
+    {
+        const char *type_id = expr->expr_data.typeinfo_data.type_id;
+        if (type_id == NULL || type_id[0] == '\0')
+        {
+            codegen_report_error(ctx, "ERROR: TypeInfo missing type identifier.");
+            return inst_list;
+        }
+        char label[CODEGEN_MAX_INST_BUF];
+        codegen_enum_typeinfo_label(type_id, label, sizeof(label));
         snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", label, target_reg->bit_64);
         return add_inst(inst_list, buffer);
     }
