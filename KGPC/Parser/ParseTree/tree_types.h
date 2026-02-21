@@ -250,6 +250,7 @@ struct Statement
             struct HashNode *procedural_var_symbol; /* Symbol for procedural var (if any) */
             struct Expression *procedural_var_expr; /* Expression yielding procedure pointer */
             int is_method_call_placeholder;  /* 1 if created from member access and needs method resolution */
+            char *placeholder_method_name;   /* Bare method name when is_method_call_placeholder=1 (e.g. "Create") */
             int arg0_is_dynarray_descriptor; /* 1 if arg0 should be passed as dynarray descriptor */
         } procedure_call_data;
 
@@ -485,6 +486,7 @@ struct Expression
             struct HashNode *procedural_var_symbol;  /* Symbol for the procedural variable */
             struct Expression *procedural_var_expr;  /* Expression yielding a function pointer (for record fields, etc.) */
             int is_method_call_placeholder;          /* 1 if created from member access and needs method resolution */
+            char *placeholder_method_name;           /* Bare method name when is_method_call_placeholder=1 (e.g. "Create") */
             int is_virtual_call;                     /* 1 if this is a virtual method call (needs VMT dispatch) */
             int vmt_index;                           /* VMT index for virtual calls (-1 if not set) */
             char *self_class_name;                   /* Class name for VMT lookup in virtual calls */

@@ -1263,6 +1263,14 @@ void destroy_tree(Tree_t *tree)
               free_ast(tree->tree_data.subprogram_data.generic_template_ast);
           if (tree->tree_data.subprogram_data.result_var_name != NULL)
               free(tree->tree_data.subprogram_data.result_var_name);
+          if (tree->tree_data.subprogram_data.method_name != NULL)
+              free(tree->tree_data.subprogram_data.method_name);
+          if (tree->tree_data.subprogram_data.owner_class != NULL)
+              free(tree->tree_data.subprogram_data.owner_class);
+          if (tree->tree_data.subprogram_data.owner_class_full != NULL)
+              free(tree->tree_data.subprogram_data.owner_class_full);
+          if (tree->tree_data.subprogram_data.owner_class_outer != NULL)
+              free(tree->tree_data.subprogram_data.owner_class_outer);
           break;
 
         case TREE_VAR_DECL:
@@ -1384,6 +1392,8 @@ void destroy_stmt(struct Statement *stmt)
               destroy_kgpc_type(stmt->stmt_data.procedure_call_data.call_kgpc_type);
               stmt->stmt_data.procedure_call_data.call_kgpc_type = NULL;
           }
+          if (stmt->stmt_data.procedure_call_data.placeholder_method_name != NULL)
+              free(stmt->stmt_data.procedure_call_data.placeholder_method_name);
           break;
 
         case STMT_EXPR:
@@ -1611,6 +1621,8 @@ void destroy_expr(struct Expression *expr)
               destroy_kgpc_type(expr->expr_data.function_call_data.call_kgpc_type);
               expr->expr_data.function_call_data.call_kgpc_type = NULL;
           }
+          if (expr->expr_data.function_call_data.placeholder_method_name != NULL)
+              free(expr->expr_data.function_call_data.placeholder_method_name);
           break;
 
         case EXPR_INUM:
@@ -2478,6 +2490,7 @@ struct Statement *mk_procedurecall(int line_num, char *id, ListNode_t *expr_args
     new_stmt->stmt_data.procedure_call_data.procedural_var_symbol = NULL;
     new_stmt->stmt_data.procedure_call_data.procedural_var_expr = NULL;
     new_stmt->stmt_data.procedure_call_data.is_method_call_placeholder = 0;
+    new_stmt->stmt_data.procedure_call_data.placeholder_method_name = NULL;
 
     return new_stmt;
 }
@@ -2771,6 +2784,7 @@ static void init_expression(struct Expression *expr, int line_num, enum ExprType
     expr->expr_data.function_call_data.procedural_var_symbol = NULL;
     expr->expr_data.function_call_data.procedural_var_expr = NULL;
     expr->expr_data.function_call_data.is_method_call_placeholder = 0;
+    expr->expr_data.function_call_data.placeholder_method_name = NULL;
     expr->expr_data.function_call_data.is_virtual_call = 0;
     expr->expr_data.function_call_data.vmt_index = -1;
     expr->expr_data.function_call_data.self_class_name = NULL;
@@ -2962,6 +2976,7 @@ struct Expression *mk_functioncall(int line_num, char *id, ListNode_t *args)
     new_expr->expr_data.function_call_data.procedural_var_symbol = NULL;
     new_expr->expr_data.function_call_data.procedural_var_expr = NULL;
     new_expr->expr_data.function_call_data.is_method_call_placeholder = 0;
+    new_expr->expr_data.function_call_data.placeholder_method_name = NULL;
 
     return new_expr;
 }

@@ -200,6 +200,9 @@ typedef struct {
     int current_subprogram_lexical_depth;
     const char *current_subprogram_id;
     const char *current_subprogram_mangled;
+    const char *current_subprogram_method_name;   /* Bare method name (NULL for non-methods) */
+    const char *current_subprogram_owner_class;   /* Innermost owning class name (NULL for non-methods) */
+    const char *current_subprogram_owner_class_full; /* Full dotted class path (NULL if non-nested) */
     ListNode_t *static_link_procs;
 
     /* Flag indicating current function returns a dynamic array.

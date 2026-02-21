@@ -422,46 +422,25 @@ static const char *codegen_resolve_record_type_name(HashNode_t *node, SymTab_t *
  * looks up the class type in the symbol table, and registers each class var field
  * with the stack manager using add_static_var.
  */
-static void codegen_add_class_vars_for_static_method(const char *mangled_name, 
-    SymTab_t *symtab, CodeGenContext *ctx)
+static void codegen_add_class_vars_for_static_method(const char *owner_class,
+    const char *method_name_arg, SymTab_t *symtab, CodeGenContext *ctx)
 {
-    if (mangled_name == NULL || symtab == NULL)
+    if (owner_class == NULL || symtab == NULL)
         return;
-    
-    /* Check if this is a method (contains "__") */
-    const char *sep = strstr(mangled_name, "__");
-    if (sep == NULL || sep == mangled_name)
+
+    if (method_name_arg == NULL)
         return;
-    
-    /* Extract class name */
-    size_t class_name_len = (size_t)(sep - mangled_name);
-    char *class_name = (char *)malloc(class_name_len + 1);
+
+    char *class_name = strdup(owner_class);
     if (class_name == NULL)
         return;
-    memcpy(class_name, mangled_name, class_name_len);
-    class_name[class_name_len] = '\0';
-    
-    /* Extract method name (after "__") */
-    const char *method_name = sep + 2;
-    /* Method name might have suffix like "_void", strip at first underscore */
-    size_t method_len = strcspn(method_name, "_");
-    char *method_short = (char *)malloc(method_len + 1);
-    if (method_short == NULL) {
-        free(class_name);
-        return;
-    }
-    memcpy(method_short, method_name, method_len);
-    method_short[method_len] = '\0';
-    
-    /* Only add class vars for static methods */
-    int is_static_check = from_cparser_is_method_static(class_name, method_short);
+
+    int is_static_check = from_cparser_is_method_static(class_name, method_name_arg);
     if (!is_static_check)
     {
         free(class_name);
-        free(method_short);
         return;
     }
-    free(method_short);
     
     /* Look up the class type */
     HashNode_t *class_node = NULL;
@@ -3104,20 +3083,26 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
 
     const char *prev_sub_id = ctx->current_subprogram_id;
     const char *prev_sub_mangled = ctx->current_subprogram_mangled;
+    const char *prev_sub_method_name = ctx->current_subprogram_method_name;
+    const char *prev_sub_owner_class = ctx->current_subprogram_owner_class;
+    const char *prev_sub_owner_class_full = ctx->current_subprogram_owner_class_full;
 
     push_stackscope();
     inst_list = NULL;
 
     /* Static links are supported for nested procedures/functions (depth >= 1), but NOT for:
      * - Top-level procedures (depth 0)
-     * - Class methods (which have __ in their mangled name)
-     * 
+     * - Class methods (which have owner_class set)
+     *
      * Class methods receive 'self' in the first register and should not use static links.
      * When there are parameters, the static link is passed in %rdi and all arguments
      * are shifted by one register position. */
     int num_args = (proc->args_var == NULL) ? 0 : ListLength(proc->args_var);
     ctx->current_subprogram_id = proc->id;
     ctx->current_subprogram_mangled = sub_id;
+    ctx->current_subprogram_method_name = proc->method_name;
+    ctx->current_subprogram_owner_class = proc->owner_class;
+    ctx->current_subprogram_owner_class_full = proc->owner_class_full;
     int lexical_depth = proc->nesting_level;
     if (lexical_depth < 0)
         lexical_depth = codegen_get_lexical_depth(ctx) + 1;
@@ -3125,20 +3110,19 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
              ctx->current_subprogram_id != NULL)
         lexical_depth = ctx->current_subprogram_lexical_depth + 1;
     int prev_depth = ctx->current_subprogram_lexical_depth;
-    /* A function is a class method if it has __ (ClassName__MethodName pattern) but is NOT
-     * a nested function (which would have $ in the name like Parent$Nested). */
     int is_nested_function = (sub_id != NULL && strchr(sub_id, '$') != NULL);
     if (lexical_depth <= 0 && is_nested_function)
     {
         lexical_depth = codegen_get_lexical_depth(ctx) + 1;
     }
     ctx->current_subprogram_lexical_depth = lexical_depth;
-    int is_class_method = (sub_id != NULL && strstr(sub_id, "__") != NULL && !is_nested_function);
+    int is_class_method = (proc->owner_class != NULL && !is_nested_function);
     StackNode_t *static_link = NULL;
 
     /* For static class methods, register class vars with the stack manager */
     if (is_class_method)
-        codegen_add_class_vars_for_static_method(sub_id, symtab, ctx);
+        codegen_add_class_vars_for_static_method(ctx->current_subprogram_owner_class,
+            ctx->current_subprogram_method_name, symtab, ctx);
 
     /* Process arguments first to allocate their stack space */
     /* Nested procedures always receive a static link so they can forward it to callees,
@@ -3221,6 +3205,9 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
 
     ctx->current_subprogram_id = prev_sub_id;
     ctx->current_subprogram_mangled = prev_sub_mangled;
+    ctx->current_subprogram_method_name = prev_sub_method_name;
+    ctx->current_subprogram_owner_class = prev_sub_owner_class;
+    ctx->current_subprogram_owner_class_full = prev_sub_owner_class_full;
     ctx->current_subprogram_lexical_depth = prev_depth;
 
     #ifdef DEBUG_CODEGEN
@@ -3260,20 +3247,26 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
 
     const char *prev_sub_id = ctx->current_subprogram_id;
     const char *prev_sub_mangled = ctx->current_subprogram_mangled;
+    const char *prev_sub_method_name = ctx->current_subprogram_method_name;
+    const char *prev_sub_owner_class = ctx->current_subprogram_owner_class;
+    const char *prev_sub_owner_class_full = ctx->current_subprogram_owner_class_full;
 
     push_stackscope();
     inst_list = NULL;
 
     /* Static links are supported for nested functions (depth >= 1), but NOT for:
      * - Top-level functions (depth 0)
-     * - Class methods (which have __ in their mangled name)
-     * 
+     * - Class methods (which have owner_class set)
+     *
      * Class methods receive 'self' in the first register and should not use static links.
      * When there are parameters, the static link is passed in %rdi (or second register
      * if function returns a record) and all arguments are shifted accordingly. */
     int num_args = (func->args_var == NULL) ? 0 : ListLength(func->args_var);
     ctx->current_subprogram_id = func->id;
     ctx->current_subprogram_mangled = sub_id;
+    ctx->current_subprogram_method_name = func->method_name;
+    ctx->current_subprogram_owner_class = func->owner_class;
+    ctx->current_subprogram_owner_class_full = func->owner_class_full;
     int lexical_depth = func->nesting_level;
     if (lexical_depth < 0)
         lexical_depth = codegen_get_lexical_depth(ctx) + 1;
@@ -3281,20 +3274,19 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
              ctx->current_subprogram_id != NULL)
         lexical_depth = ctx->current_subprogram_lexical_depth + 1;
     int prev_depth = ctx->current_subprogram_lexical_depth;
-    /* A function is a class method if it has __ (ClassName__MethodName pattern) but is NOT
-     * a nested function (which would have $ in the name like Parent$Nested). */
     int is_nested_function = (sub_id != NULL && strchr(sub_id, '$') != NULL);
     if (lexical_depth <= 0 && is_nested_function)
     {
         lexical_depth = codegen_get_lexical_depth(ctx) + 1;
     }
     ctx->current_subprogram_lexical_depth = lexical_depth;
-    int is_class_method = (sub_id != NULL && strstr(sub_id, "__") != NULL && !is_nested_function);
+    int is_class_method = (func->owner_class != NULL && !is_nested_function);
     StackNode_t *static_link = NULL;
 
     /* For static class methods, register class vars with the stack manager */
     if (is_class_method)
-        codegen_add_class_vars_for_static_method(sub_id, symtab, ctx);
+        codegen_add_class_vars_for_static_method(ctx->current_subprogram_owner_class,
+            ctx->current_subprogram_method_name, symtab, ctx);
 
     HashNode_t *func_node = NULL;
     if (symtab != NULL)
@@ -3639,21 +3631,9 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     /* Allow Delphi-style Result alias in regular functions too. */
     add_result_alias_for_return_var(return_var);
     /* For class methods, also alias the unmangled method name to the return slot */
-    if (func->id != NULL)
+    if (func->method_name != NULL)
     {
-        const char *sep = strstr(func->id, "__");
-        if (sep != NULL && sep[2] != '\0')
-        {
-            const char *suffix = sep + 2;
-            size_t base_len = strcspn(suffix, "_");
-            if (base_len > 0 && base_len < 128)
-            {
-                char base_name[128];
-                memcpy(base_name, suffix, base_len);
-                base_name[base_len] = '\0';
-                add_alias_for_return_var(return_var, base_name);
-            }
-        }
+        add_alias_for_return_var(return_var, func->method_name);
     }
 
     if (has_record_return)
@@ -3845,6 +3825,9 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
 
     ctx->current_subprogram_id = prev_sub_id;
     ctx->current_subprogram_mangled = prev_sub_mangled;
+    ctx->current_subprogram_method_name = prev_sub_method_name;
+    ctx->current_subprogram_owner_class = prev_sub_owner_class;
+    ctx->current_subprogram_owner_class_full = prev_sub_owner_class_full;
     ctx->current_subprogram_lexical_depth = prev_depth;
     ctx->returns_dynamic_array = prev_returns_dynamic_array;
     ctx->dynamic_array_descriptor_size = prev_dynamic_array_descriptor_size;

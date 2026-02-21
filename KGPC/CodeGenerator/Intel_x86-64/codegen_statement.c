@@ -9764,12 +9764,8 @@ static ListNode_t *codegen_inherited(struct Statement *stmt, ListNode_t *inst_li
         return inst_list;
 
     int is_class_method = 0;
-    if (ctx != NULL && ctx->current_subprogram_mangled != NULL)
-    {
-        /* Current mangling scheme encodes class methods with "__" separator. */
-        if (strstr(ctx->current_subprogram_mangled, "__") != NULL)
-            is_class_method = 1;
-    }
+    if (ctx != NULL && ctx->current_subprogram_owner_class != NULL)
+        is_class_method = 1;
 
     struct Expression *call_expr = stmt->stmt_data.inherited_data.call_expr;
     if (!is_class_method)
