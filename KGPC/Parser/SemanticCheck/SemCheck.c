@@ -1609,26 +1609,18 @@ static void copy_default_values_to_impl_params(ListNode_t *fwd_params, ListNode_
  * so they can be referenced within the method body. This is essential for
  * static methods which have no implicit Self parameter.
  */
-static void add_class_vars_to_method_scope(SymTab_t *symtab, const char *method_id)
+static void add_class_vars_to_method_scope_impl(SymTab_t *symtab,
+    const char *owner, const char *method_name)
 {
-    if (symtab == NULL || method_id == NULL)
+    if (symtab == NULL || owner == NULL || method_name == NULL || method_name[0] == '\0')
         return;
 
     if (getenv("KGPC_DEBUG_CLASS_VAR") != NULL)
-        fprintf(stderr, "[KGPC_DEBUG_CLASS_VAR] method_id=%s\n", method_id ? method_id : "<null>");
+        fprintf(stderr, "[KGPC_DEBUG_CLASS_VAR] owner=%s method=%s\n", owner, method_name);
 
-    /* Check if this is a method (contains "__") */
-    const char *sep = strstr(method_id, "__");
-    if (sep == NULL || sep == method_id)
-        return;
-
-    /* Extract class name */
-    size_t class_name_len = (size_t)(sep - method_id);
-    char *class_name = (char *)malloc(class_name_len + 1);
+    char *class_name = strdup(owner);
     if (class_name == NULL)
         return;
-    memcpy(class_name, method_id, class_name_len);
-    class_name[class_name_len] = '\0';
 
     /* For generic types (containing < or >), skip this lookup as
      * the type resolution is handled differently for generics. */
@@ -1644,14 +1636,6 @@ static void add_class_vars_to_method_scope(SymTab_t *symtab, const char *method_
         return;
     }
 
-    /* Extract method name */
-    const char *method_name = sep + 2;
-    if (method_name[0] == '\0')
-    {
-        free(class_name);
-        return;
-    }
-
     /* Only add class fields for static methods. Non-static methods
      * access fields via Self which is handled differently. */
     int is_static = from_cparser_is_method_static(class_name, method_name);
@@ -1661,19 +1645,8 @@ static void add_class_vars_to_method_scope(SymTab_t *symtab, const char *method_
     int lookup_result = FindIdent(&class_node, symtab, class_name);
     if (lookup_result == -1 || class_node == NULL)
     {
-        /* For nested types like "HeapInc.ThreadState", the full dotted name
-         * won't be found as a symbol. Try resolving the outermost class. */
-        char *dot = strchr(class_name, '.');
-        if (dot != NULL)
-        {
-            *dot = '\0'; /* Truncate to outermost class name */
-            lookup_result = FindIdent(&class_node, symtab, class_name);
-        }
-        if (lookup_result == -1 || class_node == NULL)
-        {
-            free(class_name);
-            return;
-        }
+        free(class_name);
+        return;
     }
 
     struct RecordType *record_info = get_record_type_from_node(class_node);
@@ -1896,6 +1869,24 @@ static void add_class_vars_to_method_scope(SymTab_t *symtab, const char *method_
     free(class_name);
 }
 
+static void add_class_vars_to_method_scope(SymTab_t *symtab, Tree_t *subprogram)
+{
+    if (subprogram == NULL)
+        return;
+    add_class_vars_to_method_scope_impl(symtab,
+        subprogram->tree_data.subprogram_data.owner_class,
+        subprogram->tree_data.subprogram_data.method_name);
+}
+
+static void add_outer_class_vars_to_method_scope(SymTab_t *symtab, Tree_t *subprogram)
+{
+    if (subprogram == NULL)
+        return;
+    add_class_vars_to_method_scope_impl(symtab,
+        subprogram->tree_data.subprogram_data.owner_class_outer,
+        subprogram->tree_data.subprogram_data.method_name);
+}
+
 /**
  * For a method implementation (ClassName__MethodName), copy default parameter
  * values from the class declaration to the implementation's parameters.
@@ -1907,30 +1898,15 @@ static void copy_method_decl_defaults_to_impl(SymTab_t *symtab, Tree_t *subprogr
     if (symtab == NULL || subprogram == NULL)
         return;
     
-    const char *method_id = subprogram->tree_data.subprogram_data.id;
-    if (method_id == NULL)
+    /* Check if this is a method */
+    const char *owner = subprogram->tree_data.subprogram_data.owner_class;
+    const char *method_name = subprogram->tree_data.subprogram_data.method_name;
+    if (owner == NULL || method_name == NULL || method_name[0] == '\0')
         return;
-    
-    /* Check if this is a method (contains "__") */
-    const char *sep = strstr(method_id, "__");
-    if (sep == NULL || sep == method_id)
-        return;
-    
-    /* Extract class name */
-    size_t class_name_len = (size_t)(sep - method_id);
-    char *class_name = (char *)malloc(class_name_len + 1);
+
+    char *class_name = strdup(owner);
     if (class_name == NULL)
         return;
-    memcpy(class_name, method_id, class_name_len);
-    class_name[class_name_len] = '\0';
-    
-    /* Extract method name */
-    const char *method_name = sep + 2;
-    if (method_name[0] == '\0')
-    {
-        free(class_name);
-        return;
-    }
     
     /* Look up the class type */
     HashNode_t *class_node = NULL;
@@ -2375,6 +2351,27 @@ const char *semcheck_get_current_subprogram_result_var_name(void)
     if (g_semcheck_current_subprogram == NULL)
         return NULL;
     return g_semcheck_current_subprogram->tree_data.subprogram_data.result_var_name;
+}
+
+const char *semcheck_get_current_subprogram_method_name(void)
+{
+    if (g_semcheck_current_subprogram == NULL)
+        return NULL;
+    return g_semcheck_current_subprogram->tree_data.subprogram_data.method_name;
+}
+
+const char *semcheck_get_current_subprogram_owner_class(void)
+{
+    if (g_semcheck_current_subprogram == NULL)
+        return NULL;
+    return g_semcheck_current_subprogram->tree_data.subprogram_data.owner_class;
+}
+
+const char *semcheck_get_current_subprogram_owner_class_full(void)
+{
+    if (g_semcheck_current_subprogram == NULL)
+        return NULL;
+    return g_semcheck_current_subprogram->tree_data.subprogram_data.owner_class_full;
 }
 
 KgpcType *semcheck_get_current_subprogram_return_kgpc_type(SymTab_t *symtab, int *owns_type)
@@ -6769,6 +6766,18 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                         else
                                             PushProcedureOntoScope_Typed(symtab, mangled, overload_mangled, proc_type);
 
+                                        /* Set method identity on the newly-pushed symbol */
+                                        {
+                                            HashNode_t *pushed_node = NULL;
+                                            if (FindIdent(&pushed_node, symtab, mangled) != -1 && pushed_node != NULL)
+                                            {
+                                                if (pushed_node->method_name == NULL && tmpl->name != NULL)
+                                                    pushed_node->method_name = strdup(tmpl->name);
+                                                if (pushed_node->owner_class == NULL)
+                                                    pushed_node->owner_class = strdup(tree->tree_data.type_decl_data.id);
+                                            }
+                                        }
+
                                         if (proc_type != NULL)
                                             destroy_kgpc_type(proc_type);
 
@@ -6856,6 +6865,15 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                         }
                                     }
 
+                                    /* Set method identity on existing node */
+                                    if (existing != NULL)
+                                    {
+                                        if (existing->method_name == NULL && tmpl->name != NULL)
+                                            existing->method_name = strdup(tmpl->name);
+                                        if (existing->owner_class == NULL)
+                                            existing->owner_class = strdup(tree->tree_data.type_decl_data.id);
+                                    }
+
                                     if (params != NULL)
                                         DestroyList(params);
                                     if (existing_list != NULL)
@@ -6906,8 +6924,27 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                             {
                                                 PushProcedureOntoScope_Typed(symtab, mangled, mangled_dup, proc_type);
                                             }
+                                            /* Set method identity on the newly-pushed symbol */
+                                            {
+                                                HashNode_t *pushed_node = NULL;
+                                                if (FindIdent(&pushed_node, symtab, mangled) != -1 && pushed_node != NULL)
+                                                {
+                                                    if (pushed_node->method_name == NULL && tmpl->name != NULL)
+                                                        pushed_node->method_name = strdup(tmpl->name);
+                                                    if (pushed_node->owner_class == NULL && record_info->type_id != NULL)
+                                                        pushed_node->owner_class = strdup(record_info->type_id);
+                                                }
+                                            }
                                             mangled = NULL;
                                         }
+                                    }
+                                    else if (existing != NULL)
+                                    {
+                                        /* Set method identity on existing interface method node */
+                                        if (existing->method_name == NULL && tmpl->name != NULL)
+                                            existing->method_name = strdup(tmpl->name);
+                                        if (existing->owner_class == NULL && record_info->type_id != NULL)
+                                            existing->owner_class = strdup(record_info->type_id);
                                     }
                                     if (mangled != NULL)
                                         free(mangled);
@@ -10079,16 +10116,10 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                  * prevents imported aliases with the same name from corrupting
                  * Self/parameter record field resolution. */
                 const char *owner_id = semcheck_get_current_method_owner();
-                const char *owner_tail = owner_id;
-                if (owner_tail != NULL)
-                {
-                    const char *dot = strrchr(owner_tail, '.');
-                    if (dot != NULL && dot[1] != '\0')
-                        owner_tail = dot + 1;
-                }
+                const char *owner_innermost = semcheck_get_current_subprogram_owner_class();
                 if (owner_id != NULL &&
                     (pascal_identifier_equals(decl_type_id, owner_id) ||
-                     (owner_tail != NULL && pascal_identifier_equals(decl_type_id, owner_tail))))
+                     (owner_innermost != NULL && pascal_identifier_equals(decl_type_id, owner_innermost))))
                 {
                     owner_type_match = 1;
                     if (tree->tree_data.var_decl_data.cached_kgpc_type != NULL &&
@@ -10103,8 +10134,8 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     else
                     {
                     resolved_type = semcheck_find_owner_record_type_node(symtab, owner_id);
-                    if (resolved_type == NULL && owner_tail != NULL)
-                        resolved_type = semcheck_find_owner_record_type_node(symtab, owner_tail);
+                    if (resolved_type == NULL && owner_innermost != NULL)
+                        resolved_type = semcheck_find_owner_record_type_node(symtab, owner_innermost);
                     if (resolved_type == NULL)
                         resolved_type = semcheck_find_preferred_type_node(symtab, owner_id);
                     }
@@ -11636,21 +11667,16 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
 
     const char *prev_owner = semcheck_get_current_method_owner();
     char *owner_copy = NULL;
-    if (subprogram->tree_data.subprogram_data.mangled_id != NULL)
+    if (subprogram->tree_data.subprogram_data.owner_class != NULL)
     {
-        const char *mangled = subprogram->tree_data.subprogram_data.mangled_id;
-        const char *sep = strstr(mangled, "__");
-        if (sep != NULL && sep != mangled)
-        {
-            size_t len = (size_t)(sep - mangled);
-            owner_copy = (char *)malloc(len + 1);
-            if (owner_copy != NULL)
-            {
-                memcpy(owner_copy, mangled, len);
-                owner_copy[len] = '\0';
-                semcheck_set_current_method_owner(owner_copy);
-            }
-        }
+        /* Use full dotted path when available (e.g. "TOuter.TInner") so that
+         * semcheck_get_current_method_owner can walk up to outer classes. */
+        const char *owner_src = subprogram->tree_data.subprogram_data.owner_class_full;
+        if (owner_src == NULL)
+            owner_src = subprogram->tree_data.subprogram_data.owner_class;
+        owner_copy = strdup(owner_src);
+        if (owner_copy != NULL)
+            semcheck_set_current_method_owner(owner_copy);
     }
 
     /* For class methods, copy default parameter values from the class declaration
@@ -11914,22 +11940,24 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             }
         }
 
-        PushScope(symtab);
-        
-        /* For method implementations, add class vars to scope */
-        add_class_vars_to_method_scope(symtab, subprogram->tree_data.subprogram_data.id);
-        /* For nested types (e.g. HeapInc.ThreadState), also add outer class
-         * vars/consts to scope using the full path from mangled_id. */
-        if (subprogram->tree_data.subprogram_data.mangled_id != NULL &&
-            subprogram->tree_data.subprogram_data.id != NULL)
+        /* Copy method identity fields from the subprogram tree to the symbol. */
+        if (existing_decl != NULL && subprogram->tree_data.subprogram_data.method_name != NULL)
         {
-            const char *mid = subprogram->tree_data.subprogram_data.mangled_id;
-            const char *id = subprogram->tree_data.subprogram_data.id;
-            /* Only try if mangled_id differs from id (nested type path) */
-            if (strcasecmp(mid, id) != 0)
-                add_class_vars_to_method_scope(symtab, mid);
+            if (existing_decl->method_name == NULL)
+                existing_decl->method_name = strdup(subprogram->tree_data.subprogram_data.method_name);
+            if (existing_decl->owner_class == NULL && subprogram->tree_data.subprogram_data.owner_class != NULL)
+                existing_decl->owner_class = strdup(subprogram->tree_data.subprogram_data.owner_class);
         }
-        
+
+        PushScope(symtab);
+
+        /* For method implementations, add class vars to scope */
+        add_class_vars_to_method_scope(symtab, subprogram);
+        /* For nested types (e.g. TOuter.TInner), also add outer class
+         * vars/consts to scope. owner_class_full contains the dotted path. */
+        if (subprogram->tree_data.subprogram_data.owner_class_full != NULL)
+            add_outer_class_vars_to_method_scope(symtab, subprogram);
+
         if (existing_decl != NULL && existing_decl->type != NULL)
         {
             kgpc_type_retain(existing_decl->type);
@@ -12027,22 +12055,26 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             }
         }
 
+        /* Copy method identity fields from the subprogram tree to the symbol. */
+        if (existing_decl != NULL && subprogram->tree_data.subprogram_data.method_name != NULL)
+        {
+            if (existing_decl->method_name == NULL)
+                existing_decl->method_name = strdup(subprogram->tree_data.subprogram_data.method_name);
+            if (existing_decl->owner_class == NULL && subprogram->tree_data.subprogram_data.owner_class != NULL)
+                existing_decl->owner_class = strdup(subprogram->tree_data.subprogram_data.owner_class);
+        }
+
         PushScope(symtab);
         if (getenv("KGPC_DEBUG_TYPE_HELPER") != NULL)
             fprintf(stderr, "[KGPC] semcheck_subprogram (func): PushScope for %s\n",
                 subprogram->tree_data.subprogram_data.id);
 
         /* For method implementations, add class vars to scope */
-        add_class_vars_to_method_scope(symtab, subprogram->tree_data.subprogram_data.id);
-        /* For nested types, also add outer class vars/consts via mangled_id */
-        if (subprogram->tree_data.subprogram_data.mangled_id != NULL &&
-            subprogram->tree_data.subprogram_data.id != NULL)
-        {
-            const char *mid = subprogram->tree_data.subprogram_data.mangled_id;
-            const char *id = subprogram->tree_data.subprogram_data.id;
-            if (strcasecmp(mid, id) != 0)
-                add_class_vars_to_method_scope(symtab, mid);
-        }
+        add_class_vars_to_method_scope(symtab, subprogram);
+        /* For nested types (e.g. TOuter.TInner), also add outer class
+         * vars/consts to scope. owner_class_full contains the dotted path. */
+        if (subprogram->tree_data.subprogram_data.owner_class_full != NULL)
+            add_outer_class_vars_to_method_scope(symtab, subprogram);
 
         // **THIS IS THE FIX FOR THE RETURN VALUE**:
         // Use the ORIGINAL name for the internal return variable with KgpcType
@@ -12083,16 +12115,9 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             PushFuncRetOntoScope_Typed(symtab, subprogram->tree_data.subprogram_data.result_var_name, return_kgpc_type);
         }
 
-        /* For class methods, also add an alias using the unmangled method name (suffix after __).
-         * The mangled id format is ClassName__MethodName; the method name after __ may itself
-         * contain underscores (e.g., _AddRef, _Release), so we use the full suffix. */
-        const char *alias_suffix = NULL;
-        if (subprogram->tree_data.subprogram_data.id != NULL)
-        {
-            const char *sep = strstr(subprogram->tree_data.subprogram_data.id, "__");
-            if (sep != NULL && sep[2] != '\0')
-                alias_suffix = sep + 2;
-        }
+        /* For class methods, also add an alias using the unmangled method name.
+         * The method_name field contains the bare name (e.g., "_AddRef", "ReadNext"). */
+        const char *alias_suffix = subprogram->tree_data.subprogram_data.method_name;
         if (alias_suffix != NULL && alias_suffix[0] != '\0')
         {
             size_t alias_len = strlen(alias_suffix);
@@ -12410,13 +12435,12 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         /* Constructors implicitly yield the constructed instance, so do not
          * require an explicit assignment to the return variable. */
         int is_constructor = 0;
-        if (subprogram->tree_data.subprogram_data.id != NULL) {
-            const char *suffix = strstr(subprogram->tree_data.subprogram_data.id, "__");
-            const char *name = (suffix != NULL && suffix[2] != '\0') ? suffix + 2
-                                                                     : subprogram->tree_data.subprogram_data.id;
-            if (strcasecmp(name, "create") == 0) {
+        {
+            const char *name = subprogram->tree_data.subprogram_data.method_name;
+            if (name == NULL)
+                name = subprogram->tree_data.subprogram_data.id;
+            if (name != NULL && strcasecmp(name, "create") == 0)
                 is_constructor = 1;
-            }
         }
 
         /* Check if either the function name or "Result" was assigned to */
@@ -12432,15 +12456,12 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         }
 
         /* Methods use mangled identifiers like Class__Func; allow assignments to the
-         * unmangled function name (after the final '__') to satisfy the return check. */
-        if (!return_was_assigned && subprogram->tree_data.subprogram_data.id != NULL) {
-            const char *id = subprogram->tree_data.subprogram_data.id;
-            const char *sep = strstr(id, "__");
-            if (sep != NULL && sep[2] != '\0') {
-                HashNode_t *suffix_node = NULL;
-                if (FindIdent(&suffix_node, symtab, (sep + 2)) == 0 && suffix_node != NULL) {
-                    return_was_assigned = (suffix_node->mutated != NO_MUTATE);
-                }
+         * unmangled method name to satisfy the return check. */
+        if (!return_was_assigned && subprogram->tree_data.subprogram_data.method_name != NULL) {
+            const char *mname = subprogram->tree_data.subprogram_data.method_name;
+            HashNode_t *suffix_node = NULL;
+            if (FindIdent(&suffix_node, symtab, mname) == 0 && suffix_node != NULL) {
+                return_was_assigned = (suffix_node->mutated != NO_MUTATE);
             }
         }
         
@@ -12554,33 +12575,8 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
      * convert_method_impl (e.g. "TOuter.TInner__DoWork").  This is needed
      * so that semcheck_get_current_method_owner can walk up to outer classes
      * when resolving class vars / consts in nested object methods. */
-    char *original_dotted_prefix = NULL;
     if (subprogram->tree_data.subprogram_data.mangled_id != NULL)
     {
-        const char *orig = subprogram->tree_data.subprogram_data.mangled_id;
-        const char *orig_sep = strstr(orig, "__");
-        if (orig_sep != NULL)
-        {
-            /* Check if the prefix before __ contains a dot (nested class) */
-            const char *dot = memchr(orig, '.', (size_t)(orig_sep - orig));
-            if (dot != NULL)
-            {
-                /* Extract everything up to and including the last dot */
-                const char *last_dot = orig_sep;
-                while (last_dot > orig && *last_dot != '.')
-                    last_dot--;
-                if (last_dot > orig)
-                {
-                    size_t prefix_len = (size_t)(last_dot - orig) + 1; /* Include the dot */
-                    original_dotted_prefix = (char *)malloc(prefix_len + 1);
-                    if (original_dotted_prefix != NULL)
-                    {
-                        memcpy(original_dotted_prefix, orig, prefix_len);
-                        original_dotted_prefix[prefix_len] = '\0';
-                    }
-                }
-            }
-        }
         free(subprogram->tree_data.subprogram_data.mangled_id);
         subprogram->tree_data.subprogram_data.mangled_id = NULL;
     }
@@ -12613,25 +12609,6 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
             subprogram->tree_data.subprogram_data.mangled_id = base_mangled;
         }
     }
-
-    /* Re-apply the dotted class prefix so that the owner lookup in
-     * semcheck_subprogram can resolve outer-class vars/consts. */
-    if (original_dotted_prefix != NULL &&
-        subprogram->tree_data.subprogram_data.mangled_id != NULL)
-    {
-        const char *current = subprogram->tree_data.subprogram_data.mangled_id;
-        size_t prefix_len = strlen(original_dotted_prefix);
-        size_t current_len = strlen(current);
-        char *combined = (char *)malloc(prefix_len + current_len + 1);
-        if (combined != NULL)
-        {
-            memcpy(combined, original_dotted_prefix, prefix_len);
-            memcpy(combined + prefix_len, current, current_len + 1);
-            free(subprogram->tree_data.subprogram_data.mangled_id);
-            subprogram->tree_data.subprogram_data.mangled_id = combined;
-        }
-    }
-    free(original_dotted_prefix);
 
     if (getenv("KGPC_DEBUG_PREDECLARE_PROC") != NULL)
     {

@@ -1534,11 +1534,6 @@ int semcheck_varid(int *type_return,
     semcheck_clear_pointer_info(expr);
     semcheck_clear_array_info(expr);
 
-    if (pascal_identifier_equals(id, "Pos")) {
-        const char *cur_sub = semcheck_get_current_subprogram_id();
-        fprintf(stderr, "[DEBUG] semcheck_varid: id='Pos' line=%d cur_sub='%s' mutating=%d\n",
-            expr->line_num, cur_sub ? cur_sub : "(null)", mutating);
-    }
     struct Expression *with_expr = NULL;
     int with_status = semcheck_with_try_resolve(id, symtab, &with_expr, expr->line_num);
     if (with_status == 0 && with_expr != NULL)
@@ -1895,20 +1890,36 @@ resolved:;
 
     if (scope_return > 0 && id != NULL && helper_self_node != NULL)
     {
-        struct RecordType *self_record = helper_self_record;
-        if (self_record == NULL)
-        {
-            self_record = semcheck_resolve_helper_self_record(symtab,
-                helper_self_node, helper_self_record);
+        /* Skip Self-member resolution if the identifier is the current function's
+         * own name (Pascal-style function result assignment: FuncName := value).
+         * Otherwise, a method like TEReader.Pos sees 'Pos' on the LHS and
+         * semcheck_try_helper_member resolves it as Self.Pos(), which then
+         * collides with builtin Pos(). */
+        const char *cur_sub_id = semcheck_get_current_subprogram_id();
+        int is_func_result_name = 0;
+        if (cur_sub_id != NULL) {
+            const char *bare_name = semcheck_get_current_subprogram_method_name();
+            const char *func_name = (bare_name != NULL) ? bare_name : cur_sub_id;
+            if (pascal_identifier_equals(id, func_name))
+                is_func_result_name = 1;
         }
-        int field_result = semcheck_try_self_field_access(type_return, symtab, expr,
-            max_scope_lev, mutating, helper_self_node, self_record, id);
-        if (field_result >= 0)
-            return field_result;
-        int helper_result = semcheck_try_helper_member(type_return, symtab, expr,
-            max_scope_lev, mutating, helper_self_node, self_record, id);
-        if (helper_result >= 0)
-            return helper_result;
+        if (!is_func_result_name)
+        {
+            struct RecordType *self_record = helper_self_record;
+            if (self_record == NULL)
+            {
+                self_record = semcheck_resolve_helper_self_record(symtab,
+                    helper_self_node, helper_self_record);
+            }
+            int field_result = semcheck_try_self_field_access(type_return, symtab, expr,
+                max_scope_lev, mutating, helper_self_node, self_record, id);
+            if (field_result >= 0)
+                return field_result;
+            int helper_result = semcheck_try_helper_member(type_return, symtab, expr,
+                max_scope_lev, mutating, helper_self_node, self_record, id);
+            if (helper_result >= 0)
+                return helper_result;
+        }
     }
 
     if (scope_return == -1)

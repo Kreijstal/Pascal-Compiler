@@ -6380,11 +6380,9 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                         arg_record != NULL && record_type_is_class(arg_record))
                     {
                         int is_class_method = 0;
-                        const char *mangled_name_hint = (procedure_name != NULL) ? procedure_name : "";
 
-                        /* Detect if this is a class method by checking for __ in the mangled name.
-                         * Class methods have mangled names like TClassName__MethodName. */
-                        if (strstr(mangled_name_hint, "__") != NULL)
+                        /* Detect if this is a class method from the codegen context. */
+                        if (ctx != NULL && ctx->current_subprogram_owner_class != NULL)
                             is_class_method = 1;
 
                         /* Check if the argument expression is itself a var parameter variable.

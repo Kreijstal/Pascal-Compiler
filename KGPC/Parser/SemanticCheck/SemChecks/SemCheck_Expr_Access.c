@@ -793,6 +793,9 @@ int semcheck_funccall(int *type_return,
                     args_given = recv_node;
                     expr->expr_data.function_call_data.args_expr = args_given;
                     expr->expr_data.function_call_data.is_method_call_placeholder = 1;
+                    if (expr->expr_data.function_call_data.placeholder_method_name != NULL)
+                        free(expr->expr_data.function_call_data.placeholder_method_name);
+                    expr->expr_data.function_call_data.placeholder_method_name = strdup(unqualified);
                 }
                 free(expr->expr_data.function_call_data.id);
                 expr->expr_data.function_call_data.id = unqualified;
@@ -874,14 +877,16 @@ int semcheck_funccall(int *type_return,
      * represents as __Function(UnitName, Args...). Only strip the first
      * argument when the unit qualifier is unresolved AND the real function
      * (without "__") exists. */
-    if (id != NULL && strncmp(id, "__", 2) == 0 && args_given != NULL)
+    if (expr->expr_data.function_call_data.is_method_call_placeholder && args_given != NULL)
     {
         struct Expression *first_arg = (struct Expression *)args_given->cur;
         if (first_arg != NULL && first_arg->type == EXPR_VAR_ID && first_arg->expr_data.id != NULL)
         {
             if (semcheck_is_unit_name(first_arg->expr_data.id))
             {
-                char *real_func_name = strdup(id + 2);
+                char *real_func_name = (expr->expr_data.function_call_data.placeholder_method_name != NULL)
+                    ? strdup(expr->expr_data.function_call_data.placeholder_method_name)
+                    : NULL;
                 if (real_func_name != NULL)
                 {
                     ListNode_t *func_candidates = FindAllIdents(symtab, real_func_name);
@@ -902,6 +907,7 @@ int semcheck_funccall(int *type_return,
                         DestroyList(func_candidates);
                         real_func_name = NULL;
                         was_unit_qualified = 1;
+                        expr->expr_data.function_call_data.is_method_call_placeholder = 0;
                     }
                     if (real_func_name != NULL)
                         free(real_func_name);
@@ -1280,22 +1286,7 @@ int semcheck_funccall(int *type_return,
                             mangled_name = NULL;
                         }
 
-                        const char *method_owner_name = NULL;
-                        char owner_buf[256];
-                        if (method_node->mangled_id != NULL)
-                        {
-                            const char *sep = strstr(method_node->mangled_id, "__");
-                            if (sep != NULL && sep != method_node->mangled_id)
-                            {
-                                size_t owner_len = (size_t)(sep - method_node->mangled_id);
-                                if (owner_len < sizeof(owner_buf))
-                                {
-                                    memcpy(owner_buf, method_node->mangled_id, owner_len);
-                                    owner_buf[owner_len] = '\0';
-                                    method_owner_name = owner_buf;
-                                }
-                            }
-                        }
+                        const char *method_owner_name = method_node->owner_class;
                         if (method_owner_name == NULL && self_record != NULL)
                             method_owner_name = self_record->type_id;
 
@@ -2608,9 +2599,8 @@ int semcheck_funccall(int *type_return,
             }
 
             if (record_info != NULL && record_info->type_id != NULL) {
-                const char *method_name = id;
-                if (method_name != NULL && strncmp(method_name, "__", 2) == 0)
-                    method_name += 2;
+                const char *method_name = (expr->expr_data.function_call_data.placeholder_method_name != NULL)
+                    ? expr->expr_data.function_call_data.placeholder_method_name : id;
                 if (method_name != NULL &&
                     (strncasecmp(method_name, "Create", 6) == 0 ||
                      strcasecmp(method_name, "Destroy") == 0))
@@ -2869,9 +2859,8 @@ int semcheck_funccall(int *type_return,
                 {
                     record_info = helper_record;
                     /* Retry helper method lookup */
-                    const char *method_name = id;
-                    if (method_name != NULL && strncmp(method_name, "__", 2) == 0)
-                        method_name += 2;
+                    const char *method_name = (expr->expr_data.function_call_data.placeholder_method_name != NULL)
+                        ? expr->expr_data.function_call_data.placeholder_method_name : id;
                     if (method_name != NULL &&
                         (strncasecmp(method_name, "Create", 6) == 0 ||
                          strcasecmp(method_name, "Destroy") == 0))
@@ -3273,9 +3262,19 @@ int semcheck_funccall(int *type_return,
                 /* Set up overload candidates for normal resolution */
                 overload_candidates = method_candidates;
                 
-                /* For constructors (Create, CreateFmt, etc.), set up the return type */
-                const char *sep = strstr(id, "__");
-                const char *method_name = sep != NULL ? sep + 2 : id;
+                /* For constructors (Create, CreateFmt, etc.), set up the return type.
+                 * Get the bare method name from the candidate's structured identity. */
+                const char *method_name = NULL;
+                if (method_candidates != NULL && method_candidates->cur != NULL)
+                {
+                    HashNode_t *first_candidate = (HashNode_t *)method_candidates->cur;
+                    if (first_candidate->method_name != NULL)
+                        method_name = first_candidate->method_name;
+                }
+                if (method_name == NULL && expr->expr_data.function_call_data.placeholder_method_name != NULL)
+                    method_name = expr->expr_data.function_call_data.placeholder_method_name;
+                if (method_name == NULL)
+                    method_name = id;
                 if (strncasecmp(method_name, "Create", 6) == 0 && owner_type != NULL) {
                     if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                         fprintf(stderr, "[SemCheck] semcheck_funccall: Setting up return type for constructor %s\n", method_name);
@@ -3839,58 +3838,28 @@ method_call_resolved:
                 }
             }
             if (best_match->type->info.proc_info.return_type == NULL &&
-                (best_match->id != NULL || best_match->mangled_id != NULL))
+                best_match->owner_class != NULL && best_match->method_name != NULL)
             {
-                const char *method_id = best_match->mangled_id != NULL ?
-                    best_match->mangled_id : best_match->id;
-                const char *sep = (method_id != NULL) ? strstr(method_id, "__") : NULL;
-                if (sep != NULL && sep != method_id && sep[2] != '\0')
+                HashNode_t *class_node = NULL;
+                if (FindIdent(&class_node, symtab, best_match->owner_class) != -1 && class_node != NULL)
                 {
-                    size_t class_len = (size_t)(sep - method_id);
-                    char *class_name = (char *)malloc(class_len + 1);
-                    if (class_name != NULL)
+                    struct RecordType *record_info = get_record_type_from_node(class_node);
+                    if (record_info != NULL)
                     {
-                        memcpy(class_name, method_id, class_len);
-                        class_name[class_len] = '\0';
-                        const char *method_name = sep + 2;
-                        char *method_base = NULL;
-                        const char *dollar = strchr(method_name, '$');
-                        if (dollar != NULL)
+                        struct MethodTemplate *tmpl =
+                            from_cparser_get_method_template(record_info, best_match->method_name);
+                        if (tmpl != NULL && tmpl->return_type_ast != NULL &&
+                            tmpl->return_type_ast->child != NULL)
                         {
-                            size_t base_len = (size_t)(dollar - method_name);
-                            method_base = (char *)malloc(base_len + 1);
-                            if (method_base != NULL)
+                            KgpcType *ret_type = convert_type_spec_to_kgpctype(
+                                tmpl->return_type_ast->child, symtab);
+                            if (ret_type != NULL)
                             {
-                                memcpy(method_base, method_name, base_len);
-                                method_base[base_len] = '\0';
+                                best_match->type->info.proc_info.return_type = ret_type;
+                                if (best_match->hash_type == HASHTYPE_PROCEDURE)
+                                    best_match->hash_type = HASHTYPE_FUNCTION;
                             }
                         }
-                        const char *method_lookup = (method_base != NULL) ? method_base : method_name;
-                        HashNode_t *class_node = NULL;
-                        if (FindIdent(&class_node, symtab, class_name) != -1 && class_node != NULL)
-                        {
-                            struct RecordType *record_info = get_record_type_from_node(class_node);
-                            if (record_info != NULL)
-                            {
-                                struct MethodTemplate *tmpl =
-                                    from_cparser_get_method_template(record_info, method_lookup);
-                                if (tmpl != NULL && tmpl->return_type_ast != NULL &&
-                                    tmpl->return_type_ast->child != NULL)
-                                {
-                                    KgpcType *ret_type = convert_type_spec_to_kgpctype(
-                                        tmpl->return_type_ast->child, symtab);
-                                    if (ret_type != NULL)
-                                    {
-                                        best_match->type->info.proc_info.return_type = ret_type;
-                                        if (best_match->hash_type == HASHTYPE_PROCEDURE)
-                                            best_match->hash_type = HASHTYPE_FUNCTION;
-                                    }
-                                }
-                            }
-                        }
-                        if (method_base != NULL)
-                            free(method_base);
-                        free(class_name);
                     }
                 }
             }
@@ -4272,11 +4241,11 @@ skip_overload_resolution:
                     fprintf(stderr, "[SemCheck]   return_type kind=%d\n", return_type->kind);
                 }
                 int skip_override_for_ctor = 0;
-                if (expr->expr_data.function_call_data.id != NULL)
                 {
-                    const char *sep = strstr(expr->expr_data.function_call_data.id, "__");
-                    const char *method_name = (sep != NULL) ? sep + 2 : expr->expr_data.function_call_data.id;
-                    if (method_name != NULL && strncasecmp(method_name, "Create", 6) == 0)
+                    const char *ctor_method = (hash_return != NULL && hash_return->method_name != NULL)
+                        ? hash_return->method_name
+                        : expr->expr_data.function_call_data.id;
+                    if (ctor_method != NULL && strncasecmp(ctor_method, "Create", 6) == 0)
                     {
                         if (expr->resolved_kgpc_type != NULL &&
                             expr->resolved_kgpc_type->kind == TYPE_KIND_POINTER)
@@ -4351,30 +4320,16 @@ skip_overload_resolution:
         }
 
         int is_constructor_call = 0;
-        if (args_given != NULL && hash_return != NULL)
+        if (args_given != NULL && hash_return != NULL &&
+            hash_return->owner_class != NULL && hash_return->method_name != NULL)
         {
-            const char *method_id = (hash_return->id != NULL) ? hash_return->id : hash_return->mangled_id;
-            const char *sep = (method_id != NULL) ? strstr(method_id, "__") : NULL;
-            if (sep != NULL && sep != method_id)
+            struct RecordType *record_info = semcheck_lookup_record_type(symtab, hash_return->owner_class);
+            if (record_info != NULL && record_info->is_class &&
+                (pascal_identifier_equals(hash_return->method_name, "Create") ||
+                 pascal_identifier_equals(hash_return->method_name, "Destroy")) &&
+                !from_cparser_is_method_static(hash_return->owner_class, hash_return->method_name))
             {
-                size_t class_len = (size_t)(sep - method_id);
-                char *class_name = (char *)malloc(class_len + 1);
-                if (class_name != NULL)
-                {
-                    memcpy(class_name, method_id, class_len);
-                    class_name[class_len] = '\0';
-                    const char *method_name = sep + 2;
-                    struct RecordType *record_info = semcheck_lookup_record_type(symtab, class_name);
-                    if (record_info != NULL && record_info->is_class &&
-                        method_name != NULL &&
-                        (pascal_identifier_equals(method_name, "Create") ||
-                         pascal_identifier_equals(method_name, "Destroy")) &&
-                        !from_cparser_is_method_static(class_name, method_name))
-                    {
-                        is_constructor_call = 1;
-                    }
-                    free(class_name);
-                }
+                is_constructor_call = 1;
             }
         }
 
@@ -4866,8 +4821,7 @@ skip_overload_resolution:
         {
             int allow_implicit_self_only = 0;
             if (expr->expr_data.function_call_data.resolved_func != NULL &&
-                expr->expr_data.function_call_data.resolved_func->mangled_id != NULL &&
-                strstr(expr->expr_data.function_call_data.resolved_func->mangled_id, "__") != NULL)
+                expr->expr_data.function_call_data.resolved_func->owner_class != NULL)
             {
             if (args_to_validate->next == NULL)
             {

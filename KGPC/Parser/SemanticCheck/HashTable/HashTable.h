@@ -89,6 +89,9 @@ typedef struct HashNode
     int defined_in_unit;
     int unit_is_public;
 
+    char *method_name;    /* Bare method name (NULL for non-methods) */
+    char *owner_class;    /* Owning class name (NULL for non-methods) */
+
 } HashNode_t;
 
 /* Our actual hash table */

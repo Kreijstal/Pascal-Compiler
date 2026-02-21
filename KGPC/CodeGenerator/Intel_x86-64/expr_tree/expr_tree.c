@@ -2031,33 +2031,22 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 }
             }
 
-            /* Fallback: derive owner class from mangled method name prefix. */
-            if (!ctor_type_receiver && func_mangled_name != NULL && ctx != NULL && ctx->symtab != NULL)
+            /* Fallback: derive owner class from the codegen context. */
+            if (!ctor_type_receiver && ctx != NULL && ctx->current_subprogram_owner_class != NULL && ctx->symtab != NULL)
             {
-                const char *sep = strstr(func_mangled_name, "__");
-                if (sep != NULL && sep > func_mangled_name)
-                {
-                    size_t owner_len = (size_t)(sep - func_mangled_name);
-                    char *owner_id = (char *)malloc(owner_len + 1);
-                    if (owner_id != NULL)
-                    {
-                        memcpy(owner_id, func_mangled_name, owner_len);
-                        owner_id[owner_len] = '\0';
+                const char *owner_id = ctx->current_subprogram_owner_class;
 
-                        HashNode_t *owner_node = NULL;
-                        if (FindIdent(&owner_node, ctx->symtab, owner_id) >= 0 &&
-                            owner_node != NULL && owner_node->type != NULL)
-                        {
-                            if (owner_node->type->kind == TYPE_KIND_RECORD)
-                                class_record = owner_node->type->info.record_info;
-                            else if (owner_node->type->kind == TYPE_KIND_POINTER &&
-                                     owner_node->type->info.points_to != NULL &&
-                                     owner_node->type->info.points_to->kind == TYPE_KIND_RECORD)
-                                class_record = owner_node->type->info.points_to->info.record_info;
-                            ctor_type_receiver = (class_record != NULL);
-                        }
-                        free(owner_id);
-                    }
+                HashNode_t *owner_node = NULL;
+                if (FindIdent(&owner_node, ctx->symtab, owner_id) >= 0 &&
+                    owner_node != NULL && owner_node->type != NULL)
+                {
+                    if (owner_node->type->kind == TYPE_KIND_RECORD)
+                        class_record = owner_node->type->info.record_info;
+                    else if (owner_node->type->kind == TYPE_KIND_POINTER &&
+                             owner_node->type->info.points_to != NULL &&
+                             owner_node->type->info.points_to->kind == TYPE_KIND_RECORD)
+                        class_record = owner_node->type->info.points_to->info.record_info;
+                    ctor_type_receiver = (class_record != NULL);
                 }
             }
             

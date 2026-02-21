@@ -11012,7 +11012,8 @@ static struct Expression *convert_member_access(ast_t *node) {
         call_expr->expr_data.function_call_data.args_expr = args_list;
         call_expr->expr_data.function_call_data.resolved_func = NULL;
         call_expr->expr_data.function_call_data.is_method_call_placeholder = 1;
-        
+        call_expr->expr_data.function_call_data.placeholder_method_name = strdup(method_id);
+
         return call_expr;
     }
 
@@ -11129,7 +11130,8 @@ static struct Expression *convert_member_access_chain(int line,
             call_expr->expr_data.function_call_data.resolved_func = NULL;
             call_expr->resolved_kgpc_type = NULL;
             call_expr->expr_data.function_call_data.is_method_call_placeholder = 1;
-            
+            call_expr->expr_data.function_call_data.placeholder_method_name = strdup(method_id);
+
             return call_expr;
         }
     }
@@ -11171,7 +11173,8 @@ static struct Expression *convert_member_access_chain(int line,
         call_expr->expr_data.function_call_data.args_expr = args_list;
         call_expr->expr_data.function_call_data.resolved_func = NULL;
         call_expr->expr_data.function_call_data.is_method_call_placeholder = 1;
-        
+        call_expr->expr_data.function_call_data.placeholder_method_name = strdup(method_id);
+
         return call_expr;
     }
 
@@ -11380,9 +11383,12 @@ static struct Statement *convert_proc_call(ast_t *call_node, bool implicit_ident
     struct Statement *call = mk_procedurecall(call_node->line, id, args);
     if (call != NULL) {
         call->source_index = call_node->index;
-        /* If id starts with __, it might be a method call placeholder from convert_method_call_statement */
-        if (id != NULL && strncmp(id, "__", 2) == 0)
+        /* If id starts with __, it's a method call placeholder from convert_method_call_statement.
+         * Extract the bare method name and set the structured flag. */
+        if (id != NULL && strncmp(id, "__", 2) == 0) {
             call->stmt_data.procedure_call_data.is_method_call_placeholder = 1;
+            call->stmt_data.procedure_call_data.placeholder_method_name = strdup(id + 2);
+        }
     }
     return call;
 }
@@ -11452,14 +11458,15 @@ static struct Statement *convert_method_call_statement(ast_t *member_node, ast_t
         }
     }
     
-    free(method_name);
-
-    if (proc_name == NULL)
+    if (proc_name == NULL) {
+        free(method_name);
         return NULL;
+    }
 
     struct Expression *object_expr = convert_expression(object_node);
     if (object_expr == NULL) {
         free(proc_name);
+        free(method_name);
         return NULL;
     }
 
@@ -11474,8 +11481,12 @@ static struct Statement *convert_method_call_statement(ast_t *member_node, ast_t
 
     ListNode_t *args = list_builder_finish(&arg_builder);
     struct Statement *call = mk_procedurecall(member_node->line, proc_name, args);
-    if (call != NULL)
+    if (call != NULL) {
         call->stmt_data.procedure_call_data.is_method_call_placeholder = 1;
+        call->stmt_data.procedure_call_data.placeholder_method_name = method_name;
+    } else {
+        free(method_name);
+    }
     return call;
 }
 
@@ -12327,11 +12338,14 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
      * effective_class_full for const/var lookups.  */
     const char *effective_class_full = effective_class;
     char *effective_class_last = NULL;
+    char *effective_class_outer = NULL;
     if (effective_class != NULL)
     {
         const char *last_dot = strrchr(effective_class, '.');
         if (last_dot != NULL && last_dot[1] != '\0')
         {
+            /* "TOuter.TInner" -> outer="TOuter", last="TInner" */
+            effective_class_outer = strndup(effective_class, (size_t)(last_dot - effective_class));
             effective_class_last = strdup(last_dot + 1);
             effective_class = effective_class_last;
         }
@@ -12617,6 +12631,12 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         {
             tree->tree_data.subprogram_data.mangled_id = strdup(proc_name);
         }
+        tree->tree_data.subprogram_data.method_name = strdup(method_name);
+        tree->tree_data.subprogram_data.owner_class = strdup(effective_class);
+        if (effective_class_full != NULL && effective_class_full != effective_class)
+            tree->tree_data.subprogram_data.owner_class_full = strdup(effective_class_full);
+        if (effective_class_outer != NULL)
+            tree->tree_data.subprogram_data.owner_class_outer = strdup(effective_class_outer);
         if (num_generic_type_params > 0) {
             tree->tree_data.subprogram_data.generic_type_params = generic_type_params;
             tree->tree_data.subprogram_data.num_generic_type_params = num_generic_type_params;
@@ -12642,6 +12662,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         free(class_name);
         free(method_name);
         free(effective_class_last);
+        free(effective_class_outer);
         g_current_method_name = prev_method_name_ctx;
         return NULL;
     }
@@ -12660,6 +12681,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     free(class_name);
     free(method_name);
     free(effective_class_last);
+    free(effective_class_outer);
     g_current_method_name = prev_method_name_ctx;
     return tree;
 }

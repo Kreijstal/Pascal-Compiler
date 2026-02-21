@@ -3002,24 +3002,16 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                     {
                         /* For inherited procedure calls, check if we need to handle Create/Destroy with no parent */
                         const char *method_name = call_expr->expr_data.function_call_data.id;
-                        char *method_name_buf = NULL;
-                        char *owner_name_buf = NULL;
-                        if (method_name != NULL)
+                        const char *owner_name_from_node = NULL;
                         {
-                            const char *sep = strstr(method_name, "__");
-                            if (sep != NULL)
+                            HashNode_t *call_method_node = NULL;
+                            if (method_name != NULL &&
+                                FindIdent(&call_method_node, symtab, method_name) != -1 &&
+                                call_method_node != NULL)
                             {
-                                size_t owner_len = (size_t)(sep - method_name);
-                                size_t meth_len = strlen(sep + 2);
-                                owner_name_buf = (char *)malloc(owner_len + 1);
-                                method_name_buf = (char *)malloc(meth_len + 1);
-                                if (owner_name_buf != NULL && method_name_buf != NULL)
-                                {
-                                    memcpy(owner_name_buf, method_name, owner_len);
-                                    owner_name_buf[owner_len] = '\0';
-                                    memcpy(method_name_buf, sep + 2, meth_len + 1);
-                                    method_name = method_name_buf;
-                                }
+                                if (call_method_node->method_name != NULL)
+                                    method_name = call_method_node->method_name;
+                                owner_name_from_node = call_method_node->owner_class;
                             }
                         }
                         HashNode_t *self_node = NULL;
@@ -3076,8 +3068,8 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                         if (current_class == NULL)
                         {
                             const char *owner_id = semcheck_get_current_method_owner();
-                            if (owner_id == NULL && owner_name_buf != NULL)
-                                owner_id = owner_name_buf;
+                            if (owner_id == NULL && owner_name_from_node != NULL)
+                                owner_id = owner_name_from_node;
                             if (owner_id != NULL)
                             {
                                 HashNode_t *owner_node = NULL;
@@ -3095,10 +3087,8 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                                 current_class && current_class->type_id ? current_class->type_id : "<null>",
                                 parent_class_name ? parent_class_name : "<null>");
                         }
-                        if (owner_name_buf != NULL)
-                            free(owner_name_buf);
-                        if (method_name_buf != NULL)
-                            free(method_name_buf);
+                        /* method_name and owner_name_from_node point to HashNode fields,
+                         * no need to free */
 
                         /* If a parent exists, call the parent class method */
                         HashNode_t *parent_method_node = NULL;
@@ -3489,8 +3479,12 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                  * Also check operator result variable name (e.g., "dest" in
                  * operator :=(src) dest: variant). */
                 const char *result_var = semcheck_get_current_subprogram_result_var_name();
+                /* For methods, cur_id is mangled (e.g. "TEReader__ReadNext").
+                 * Also check against just the method name part after "__". */
+                const char *method_name = semcheck_get_current_subprogram_method_name();
                 int is_result_assign = pascal_identifier_equals(var->expr_data.id, "Result") ||
                                        pascal_identifier_equals(var->expr_data.id, cur_id) ||
+                                       (method_name != NULL && pascal_identifier_equals(var->expr_data.id, method_name)) ||
                                        (result_var != NULL && pascal_identifier_equals(var->expr_data.id, result_var));
                 if (is_result_assign)
                 {
@@ -4024,6 +4018,8 @@ static int semcheck_convert_property_assignment_to_setter(SymTab_t *symtab,
     stmt->stmt_data.procedure_call_data.is_procedural_var_call = 0;
     stmt->stmt_data.procedure_call_data.procedural_var_symbol = NULL;
     stmt->stmt_data.procedure_call_data.procedural_var_expr = NULL;
+    stmt->stmt_data.procedure_call_data.is_method_call_placeholder = 0;
+    stmt->stmt_data.procedure_call_data.placeholder_method_name = NULL;
     semcheck_stmt_set_call_kgpc_type(stmt, NULL, 0);
 
     return semcheck_proccall(symtab, stmt, max_scope_lev);
@@ -4114,7 +4110,7 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
 
     /* If this is a method call placeholder with a type identifier receiver,
      * resolve it to the class method immediately to avoid type-helper detours. */
-    if (proc_id != NULL && strncmp(proc_id, "__", 2) == 0 && args_given != NULL)
+    if (stmt->stmt_data.procedure_call_data.is_method_call_placeholder && args_given != NULL)
     {
         struct Expression *first_arg = (struct Expression *)args_given->cur;
         if (first_arg != NULL && first_arg->type == EXPR_VAR_ID && first_arg->expr_data.id != NULL)
@@ -4130,9 +4126,10 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                 type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
             {
                 struct RecordType *record_info = semcheck_stmt_get_record_type_from_node(type_node);
-                if (record_info != NULL && record_info->type_id != NULL)
+                if (record_info != NULL && record_info->type_id != NULL &&
+                    stmt->stmt_data.procedure_call_data.placeholder_method_name != NULL)
                 {
-                    const char *method_name = proc_id + 2;
+                    const char *method_name = stmt->stmt_data.procedure_call_data.placeholder_method_name;
                     size_t class_len = strlen(record_info->type_id);
                     size_t method_len = strlen(method_name);
                     char *new_proc_id = (char *)malloc(class_len + 2 + method_len + 1);
@@ -4166,7 +4163,7 @@ skip_type_receiver_rewrite:
      * (preferred) or is unresolved in the symbol table (fallback heuristic), and the procedure
      * name (without "__" prefix) exists in symbol table.
      */
-    if (proc_id != NULL && strncmp(proc_id, "__", 2) == 0 && args_given != NULL)
+    if (stmt->stmt_data.procedure_call_data.is_method_call_placeholder && args_given != NULL)
     {
         struct Expression *first_arg = (struct Expression *)args_given->cur;
         if (first_arg != NULL && first_arg->type == EXPR_VAR_ID && first_arg->expr_data.id != NULL)
@@ -4185,9 +4182,9 @@ skip_type_receiver_rewrite:
 
             if (is_unit_qualifier)
             {
-                /* Unit-qualified call; try to resolve the real procedure name
-                 * without the "__" prefix. */
-                char *real_proc_name = strdup(proc_id + 2);  /* Skip the "__" prefix */
+                /* Unit-qualified call; resolve using the structured method name. */
+                char *real_proc_name = (stmt->stmt_data.procedure_call_data.placeholder_method_name != NULL)
+                    ? strdup(stmt->stmt_data.procedure_call_data.placeholder_method_name) : NULL;
                 if (real_proc_name == NULL)
                 {
                     /* strdup failed - skip transformation, will report error later */
@@ -4359,20 +4356,29 @@ skip_type_receiver_rewrite:
                 stmt->stmt_data.procedure_call_data.expr_args = self_arg;
                 args_given = self_arg;
 
-                /* Update proc_id to mangled name */
-                size_t class_len = strlen(self_record->type_id);
-                size_t method_len = strlen(proc_id);
-                char *new_proc_id = (char *)malloc(class_len + 2 + method_len + 1);
-                if (new_proc_id != NULL)
+                /* Update proc_id to the resolved method's id (e.g. TBase__Bump, not TDerived__Bump
+                 * when the method is inherited from a parent class). */
+                if (method_node->id != NULL)
                 {
-                    sprintf(new_proc_id, "%s__%s", self_record->type_id, proc_id);
-                    free(proc_id);
-                    proc_id = new_proc_id;
-                    stmt->stmt_data.procedure_call_data.id = proc_id;
+                    char *new_proc_id = strdup(method_node->id);
+                    if (new_proc_id != NULL)
+                    {
+                        free(proc_id);
+                        proc_id = new_proc_id;
+                        stmt->stmt_data.procedure_call_data.id = proc_id;
+                    }
                 }
             }
-            else if (strstr(proc_id, "__") == NULL && self_record != NULL && self_record->type_id != NULL)
+            else if (self_record != NULL && self_record->type_id != NULL)
             {
+                /* Check if proc_id is already a resolved method call (has owner_class in symbol table) */
+                HashNode_t *proc_check_node = NULL;
+                int is_already_method = 0;
+                if (FindIdent(&proc_check_node, symtab, proc_id) != -1 && proc_check_node != NULL &&
+                    proc_check_node->owner_class != NULL)
+                    is_already_method = 1;
+                if (!is_already_method)
+                {
                 /* Check if proc_id is a procedural-type field or property of Self's class.
                  * This handles patterns like FCallBack(Self,a,b,c) and OnQueryInterface(x,y,z)
                  * where FCallBack is a field of type TThunkCallBack (procedural type)
@@ -4468,6 +4474,7 @@ skip_type_receiver_rewrite:
                     return_val += semcheck_stmt_expr_tag(&field_tag, symtab, field_access, max_scope_lev, NO_MUTATE);
 
                     return return_val;
+                }
                 }
             }
         }
@@ -4908,9 +4915,8 @@ skip_type_receiver_rewrite:
         }
 
         if (record_info != NULL && record_info->type_id != NULL) {
-            const char *method_name = proc_id;
-            if (method_name != NULL && strncmp(method_name, "__", 2) == 0)
-                method_name += 2;
+            const char *method_name = (stmt->stmt_data.procedure_call_data.placeholder_method_name != NULL)
+                ? stmt->stmt_data.procedure_call_data.placeholder_method_name : proc_id;
 
             int is_static = from_cparser_is_method_static(record_info->type_id, method_name);
             if (static_method_receiver)
@@ -5058,13 +5064,29 @@ skip_type_receiver_rewrite:
      * 1. __MethodName(object, ...) - method call without class prefix
      * 2. ClassName__MethodName(object, ...) - method call with class prefix
      */
-    char *method_double_underscore = (proc_id != NULL) ? strstr(proc_id, "__") : NULL;
-    if (method_double_underscore != NULL && args_given != NULL && !static_arg_already_removed) {
-        const char *method_name = method_double_underscore + 2;
-        const char *class_name = NULL;
+    /* Check if proc_id represents a method call.
+     * Use symbol table lookup for structured identity instead of parsing "__". */
+    HashNode_t *proc_method_node = NULL;
+    int proc_is_method_placeholder = stmt->stmt_data.procedure_call_data.is_method_call_placeholder;
+    int proc_is_method = proc_is_method_placeholder;
+    const char *proc_method_name_resolved = NULL;
+    const char *proc_owner_class_resolved = NULL;
+    if (!proc_is_method && proc_id != NULL &&
+        FindIdent(&proc_method_node, symtab, proc_id) != -1 && proc_method_node != NULL &&
+        proc_method_node->owner_class != NULL)
+    {
+        proc_is_method = 1;
+        proc_method_name_resolved = proc_method_node->method_name;
+        proc_owner_class_resolved = proc_method_node->owner_class;
+    }
+    if (proc_is_method && args_given != NULL && !static_arg_already_removed) {
+        const char *method_name = proc_is_method_placeholder
+            ? stmt->stmt_data.procedure_call_data.placeholder_method_name
+            : proc_method_name_resolved;
+        const char *class_name = proc_owner_class_resolved;
         int need_free_class_name = 0;
-        
-        if (method_double_underscore == proc_id) {
+
+        if (proc_is_method_placeholder) {
             /* Case 1: __MethodName - need to get class from first argument */
             if (args_given != NULL && args_given->cur != NULL) {
                 struct Expression *first_arg = (struct Expression *)args_given->cur;
@@ -5182,16 +5204,8 @@ skip_type_receiver_rewrite:
                 }
             }
         } else {
-            /* Case 2: ClassName__MethodName - extract class from proc_id */
-            size_t class_len = method_double_underscore - proc_id;
-            char *extracted_class = (char *)malloc(class_len + 1);
-            if (extracted_class != NULL) {
-                memcpy(extracted_class, proc_id, class_len);
-                extracted_class[class_len] = '\0';
-                class_name = extracted_class;
-                need_free_class_name = 1;
-            }
-            /* If malloc failed, class_name remains NULL and we skip the rest */
+            /* Case 2: ClassName__MethodName - class_name already set from symbol table lookup */
+            /* class_name = proc_owner_class_resolved (set above) */
         }
         
         if (class_name != NULL && method_name != NULL) {
@@ -5206,7 +5220,7 @@ skip_type_receiver_rewrite:
             }
             
             /* If proc_id started with __, update it to include the class name */
-            if (method_double_underscore == proc_id) {
+            if (proc_is_method_placeholder) {
                 size_t class_len = strlen(class_name);
                 size_t method_len = strlen(method_name);
                 char *new_proc_id = (char *)malloc(class_len + 2 + method_len + 1);
@@ -5263,12 +5277,23 @@ skip_type_receiver_rewrite:
     }
 
     
-    char *type_resolution_double_underscore = (proc_id != NULL) ? strstr(proc_id, "__") : NULL;
-    if (type_resolution_double_underscore != NULL && args_given != NULL &&
+    /* Re-check if proc_id is a method (may have been updated by previous block) */
+    HashNode_t *type_res_method_node = NULL;
+    const char *type_res_method_name = NULL;
+    int proc_is_method_for_type_res = stmt->stmt_data.procedure_call_data.is_method_call_placeholder;
+    if (!proc_is_method_for_type_res && proc_id != NULL &&
+        FindIdent(&type_res_method_node, symtab, proc_id) != -1 && type_res_method_node != NULL &&
+        type_res_method_node->owner_class != NULL)
+    {
+        proc_is_method_for_type_res = 1;
+        type_res_method_name = type_res_method_node->method_name;
+    }
+    if (proc_is_method_for_type_res && type_res_method_name == NULL)
+        type_res_method_name = stmt->stmt_data.procedure_call_data.placeholder_method_name;
+    if (proc_is_method_for_type_res && args_given != NULL &&
         !static_arg_already_removed &&
         stmt->stmt_data.procedure_call_data.mangled_id == NULL) {
-        /* Extract the method name (part after __) */
-        char *method_name_part = type_resolution_double_underscore + 2;
+        const char *method_name_part = type_res_method_name;
         
         /* Get the first argument (should be the object/Self parameter) */
         struct Expression *first_arg = (struct Expression *)args_given->cur;
@@ -5511,18 +5536,14 @@ skip_type_receiver_rewrite:
     }
     
     /* If no match found and this is a method call, try parent classes */
-    if (resolved_proc == NULL && proc_id != NULL && strstr(proc_id, "__") != NULL) {
-        char *double_underscore = strstr(proc_id, "__");
-        if (double_underscore != NULL) {
-            /* Extract class name and method name */
-            size_t class_name_len = double_underscore - proc_id;
-            char *class_name = (char *)malloc(class_name_len + 1);
-            if (class_name != NULL) {
-                memcpy(class_name, proc_id, class_name_len);
-                class_name[class_name_len] = '\0';
-            }
-            char *method_name = strdup(double_underscore + 2);
-            
+    HashNode_t *parent_lookup_node = NULL;
+    if (resolved_proc == NULL && proc_id != NULL &&
+        FindIdent(&parent_lookup_node, symtab, proc_id) != -1 && parent_lookup_node != NULL &&
+        parent_lookup_node->owner_class != NULL) {
+        {
+            char *class_name = strdup(parent_lookup_node->owner_class);
+            char *method_name = strdup(parent_lookup_node->method_name);
+
             if (class_name != NULL && method_name != NULL) {
                 if (getenv("KGPC_DEBUG_INHERITED") != NULL)
                 {
