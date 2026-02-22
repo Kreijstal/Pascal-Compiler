@@ -76,32 +76,6 @@ int semcheck_typecast(int *type_return,
         return error_count;
     }
 
-    /* For qualified type names like "HeapInc.pCommonHeader", strip the prefix.
-     * Nested types inside objects/classes/records are registered in the symbol table
-     * without the qualifier prefix. We must rewrite target_type_id here so that
-     * ALL subsequent lookups (resolve_type_identifier, FindIdent for pointer info,
-     * etc.) use the bare type name. */
-    if (expr->expr_data.typecast_data.target_type_id != NULL)
-    {
-        const char *dot = strchr(expr->expr_data.typecast_data.target_type_id, '.');
-        if (dot != NULL && dot[1] != '\0')
-        {
-            const char *suffix = dot + 1;
-            /* Verify the suffix exists as a type in the symbol table */
-            HashNode_t *suffix_node = NULL;
-            if (FindIdent(&suffix_node, symtab, suffix) != -1 &&
-                suffix_node != NULL && suffix_node->hash_type == HASHTYPE_TYPE)
-            {
-                char *new_id = strdup(suffix);
-                if (new_id != NULL)
-                {
-                    free(expr->expr_data.typecast_data.target_type_id);
-                    expr->expr_data.typecast_data.target_type_id = new_id;
-                }
-            }
-        }
-    }
-
     int target_type = expr->expr_data.typecast_data.target_type;
     int builtin_mapped = semcheck_map_builtin_type_name(symtab,
         expr->expr_data.typecast_data.target_type_id);
@@ -109,21 +83,66 @@ int semcheck_typecast(int *type_return,
     if (target_type == UNKNOWN_TYPE && builtin_mapped != UNKNOWN_TYPE)
         target_type = builtin_mapped;
 
+    /* When there's a qualifier (e.g., typecast from "THeap.PMyHeader"),
+     * construct the qualified name for lookup from the structured components. */
+    char *qualified_type_id = NULL;
+    if (expr->expr_data.typecast_data.type_qualifier != NULL &&
+        expr->expr_data.typecast_data.target_type_id != NULL)
+    {
+        const char *qual = expr->expr_data.typecast_data.type_qualifier;
+        const char *bare = expr->expr_data.typecast_data.target_type_id;
+        size_t qlen = strlen(qual) + 1 + strlen(bare) + 1;
+        qualified_type_id = (char *)malloc(qlen);
+        if (qualified_type_id != NULL)
+            snprintf(qualified_type_id, qlen, "%s.%s", qual, bare);
+    }
+
     /* Resolve the target type unless we already mapped a builtin */
     if (target_type == UNKNOWN_TYPE || !target_is_builtin)
     {
-        HashNode_t *type_node = semcheck_find_preferred_type_node(symtab,
-            expr->expr_data.typecast_data.target_type_id);
-        if (type_node == NULL || type_node->hash_type != HASHTYPE_TYPE)
+        /* Try qualified name first (e.g., "THeap.PMyHeader"), then bare name */
+        const char *lookup_id = qualified_type_id != NULL ? qualified_type_id
+            : expr->expr_data.typecast_data.target_type_id;
+        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+        {
+            fprintf(stderr, "[SemCheck] semcheck_typecast: qualified lookup_id='%s' qualifier='%s' bare='%s'\n",
+                lookup_id ? lookup_id : "(null)",
+                expr->expr_data.typecast_data.type_qualifier ? expr->expr_data.typecast_data.type_qualifier : "(null)",
+                expr->expr_data.typecast_data.target_type_id ? expr->expr_data.typecast_data.target_type_id : "(null)");
+        }
+        HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, lookup_id);
+        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+        {
+            fprintf(stderr, "[SemCheck] semcheck_typecast: type_node=%p hash_type=%d\n",
+                (void*)type_node, type_node ? type_node->hash_type : -1);
+        }
+        if (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+        {
+            /* Found as qualified type - rewrite target_type_id to the qualified form
+             * so all subsequent lookups use the resolved name */
+            if (qualified_type_id != NULL)
+            {
+                free(expr->expr_data.typecast_data.target_type_id);
+                expr->expr_data.typecast_data.target_type_id = qualified_type_id;
+                qualified_type_id = NULL;  /* ownership transferred */
+                free(expr->expr_data.typecast_data.type_qualifier);
+                expr->expr_data.typecast_data.type_qualifier = NULL;
+            }
+        }
+        else
         {
             int call_result = semcheck_reinterpret_typecast_as_call(type_return, symtab,
                 expr, max_scope_lev);
-            if (call_result == 0)
-                return 0;
+            free(qualified_type_id);
+            /* semcheck_reinterpret_typecast_as_call may convert the expression
+             * to EXPR_FUNCTION_CALL, so we cannot continue with typecast processing
+             * regardless of whether it succeeded or failed */
+            return call_result;
         }
         error_count += resolve_type_identifier(&target_type, symtab,
             expr->expr_data.typecast_data.target_type_id, expr->line_num);
     }
+    free(qualified_type_id);
 
     HashNode_t *array_target_node = NULL;
     int target_is_array = 0;
@@ -183,18 +202,41 @@ int semcheck_typecast(int *type_return,
         struct TypeAlias *alias = NULL;
         if (expr->expr_data.typecast_data.target_type_id != NULL)
         {
+            if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+            {
+                fprintf(stderr, "[SemCheck] semcheck_typecast: looking up pointer type %s\n",
+                    expr->expr_data.typecast_data.target_type_id);
+            }
             if (FindIdent(&target_node, symtab, expr->expr_data.typecast_data.target_type_id) >= 0 &&
                 target_node != NULL && target_node->type != NULL)
             {
+                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+                {
+                    fprintf(stderr, "[SemCheck] semcheck_typecast: found target_node %p type_kind=%d\n",
+                        (void *)target_node, target_node->type->kind);
+                }
                 resolved_ptr = target_node->type;
                 kgpc_type_retain(resolved_ptr);
 
+                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+                {
+                    fprintf(stderr, "[SemCheck] semcheck_typecast: resolved_ptr kind=%d points_to=%p\n",
+                        resolved_ptr->kind, resolved_ptr->kind == TYPE_KIND_POINTER ? (void*)resolved_ptr->info.points_to : NULL);
+                    if (resolved_ptr->kind == TYPE_KIND_POINTER && resolved_ptr->info.points_to != NULL)
+                        fprintf(stderr, "[SemCheck] semcheck_typecast: points_to kind=%d record_info=%p\n",
+                            resolved_ptr->info.points_to->kind, resolved_ptr->info.points_to->kind == TYPE_KIND_RECORD ? (void*)resolved_ptr->info.points_to->info.record_info : NULL);
+                }
                 if (resolved_ptr->kind == TYPE_KIND_POINTER &&
                     resolved_ptr->info.points_to != NULL)
                 {
                     KgpcType *points_to = resolved_ptr->info.points_to;
                     if (points_to->kind == TYPE_KIND_RECORD && points_to->info.record_info != NULL)
                     {
+                        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+                        {
+                            fprintf(stderr, "[SemCheck] semcheck_typecast: pointer to record, type_id=%s\\n",
+                                points_to->info.record_info->type_id ? points_to->info.record_info->type_id : "(null)");
+                        }
                         semcheck_set_pointer_info(expr, RECORD_TYPE, points_to->info.record_info->type_id);
                     }
                     else if (points_to->kind == TYPE_KIND_PRIMITIVE)
@@ -708,20 +750,40 @@ int semcheck_pointer_deref(int *type_return,
 
     if (pointer_type != POINTER_TYPE)
     {
+        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+        {
+            fprintf(stderr, "[SemCheck] semcheck_pointer_deref: pointer_expr type=%d pointer_subtype=%d pointer_subtype_id=%s\\n",
+                pointer_expr->type, pointer_expr->pointer_subtype, pointer_expr->pointer_subtype_id ? pointer_expr->pointer_subtype_id : "(null)");
+        }
         semcheck_error_with_context("Error on line %d, dereference operator requires a pointer expression.\\n\\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return ++error_count;
     }
-
+    
     int target_type = pointer_expr->pointer_subtype;
     if (target_type == UNKNOWN_TYPE && pointer_expr->pointer_subtype_id != NULL)
     {
+        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+        {
+            fprintf(stderr, "[SemCheck] semcheck_pointer_deref: looking up subtype_id %s in symbol table\\n",
+                pointer_expr->pointer_subtype_id);
+        }
         HashNode_t *target_node = NULL;
-        if (FindIdent(&target_node, symtab, pointer_expr->pointer_subtype_id) != -1 &&
+        if (FindIdent(&target_node, symtab, pointer_expr->pointer_subtype_id) != -1 ||
             target_node != NULL)
         {
+            if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+            {
+                fprintf(stderr, "[SemCheck] semcheck_pointer_deref: found target_node=%p hash_type=%d\\n",
+                target_node, target_node->hash_type);
+            }
             set_type_from_hashtype(&target_type, target_node);
+            if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+            {
+                fprintf(stderr, "[SemCheck] semcheck_pointer_deref: after set_type_from_hashtype target_type=%d\\n",
+                    target_type);
+            }
             struct TypeAlias *alias = get_type_alias_from_node(target_node);
             if (alias != NULL)
             {
@@ -2493,7 +2555,28 @@ FIELD_RESOLVED:
     if (!field_desc->is_pointer && field_desc->type_id != NULL)
     {
         int resolved_type = field_type;
-        if (resolve_type_identifier(&resolved_type, symtab, field_desc->type_id, expr->line_num) != 0)
+        int resolve_result = resolve_type_identifier(&resolved_type, symtab, field_desc->type_id, expr->line_num);
+        if (resolve_result != 0 && record_info != NULL && record_info->type_id != NULL && strchr(field_desc->type_id, '.') == NULL)
+        {
+            size_t qual_len = strlen(record_info->type_id) + 1 + strlen(field_desc->type_id) + 1;
+            char *qualified_type_id = (char *)malloc(qual_len);
+            if (qualified_type_id != NULL)
+            {
+                snprintf(qualified_type_id, qual_len, "%s.%s", record_info->type_id, field_desc->type_id);
+                int qual_result = resolve_type_identifier(&resolved_type, symtab, qualified_type_id, expr->line_num);
+                if (qual_result == 0)
+                {
+                    resolve_result = 0;
+                    free(field_desc->type_id);
+                    field_desc->type_id = qualified_type_id;
+                }
+                else
+                {
+                    free(qualified_type_id);
+                }
+            }
+        }
+        if (resolve_result != 0)
             ++error_count;
         field_type = resolved_type;
 
@@ -2896,57 +2979,92 @@ int semcheck_reinterpret_typecast_as_call(int *type_return, SymTab_t *symtab,
     int found_func = (FindIdent(&func_node, symtab, expr->expr_data.typecast_data.target_type_id) >= 0 &&
         func_node != NULL);
 
-    /* For dotted identifiers like "widestringmanager.UpperProc", if the full name
-     * is not found as a function, check if the prefix is a variable/record - the
-     * function call handler will split and resolve it as a record field call. */
-    if (!found_func)
+    char *qualifier = expr->expr_data.typecast_data.type_qualifier;
+    char *split_qualifier = NULL;
+    char *split_bare_id = NULL;
+    
+    if (!found_func && qualifier == NULL)
     {
-        const char *dot = strchr(expr->expr_data.typecast_data.target_type_id, '.');
-        if (dot != NULL && dot[1] != '\0')
+        const char *target_id = expr->expr_data.typecast_data.target_type_id;
+        const char *last_dot = strrchr(target_id, '.');
+        if (last_dot != NULL && last_dot[1] != '\0')
         {
-            size_t prefix_len = (size_t)(dot - expr->expr_data.typecast_data.target_type_id);
-            char *prefix = (char *)malloc(prefix_len + 1);
-            if (prefix != NULL)
+            size_t qual_len = (size_t)(last_dot - target_id);
+            split_qualifier = strndup(target_id, qual_len);
+            split_bare_id = strdup(last_dot + 1);
+            
+            HashNode_t *prefix_node = NULL;
+            if (split_qualifier != NULL && FindIdent(&prefix_node, symtab, split_qualifier) >= 0 &&
+                prefix_node != NULL)
             {
-                memcpy(prefix, expr->expr_data.typecast_data.target_type_id, prefix_len);
-                prefix[prefix_len] = '\0';
-                HashNode_t *prefix_node = NULL;
-                int prefix_found = (FindIdent(&prefix_node, symtab, prefix) >= 0 && prefix_node != NULL);
-                free(prefix);
-                if (prefix_found)
-                    found_func = 1;  /* Let the function call handler resolve the dotted name */
+                qualifier = split_qualifier;
+                found_func = 1;
             }
         }
     }
 
+    if (!found_func && qualifier != NULL)
+    {
+        HashNode_t *prefix_node = NULL;
+        int prefix_found = (FindIdent(&prefix_node, symtab, qualifier) >= 0 && prefix_node != NULL);
+        if (prefix_found)
+            found_func = 1;
+    }
+
     if (!found_func)
+    {
+        free(split_qualifier);
+        free(split_bare_id);
         return 1;
+    }
 
     if (func_node != NULL &&
         func_node->hash_type != HASHTYPE_FUNCTION &&
         func_node->hash_type != HASHTYPE_PROCEDURE &&
         func_node->hash_type != HASHTYPE_BUILTIN_PROCEDURE)
     {
-        /* For dotted identifiers, the func_node may be a variable (record) -
-         * that's OK, the function call handler will resolve the field call */
-        const char *dot = strchr(expr->expr_data.typecast_data.target_type_id, '.');
-        if (dot == NULL)
+        /* Non-function identifier found - only allow if we have a qualifier
+         * (the function call handler will resolve the record field call) */
+        if (qualifier == NULL)
+        {
+            free(split_qualifier);
+            free(split_bare_id);
             return 1;
+        }
     }
 
     struct Expression *arg_expr = expr->expr_data.typecast_data.expr;
     expr->expr_data.typecast_data.expr = NULL;
 
-    char *call_id = expr->expr_data.typecast_data.target_type_id;
+    char *bare_id;
+    if (split_bare_id != NULL)
+    {
+        free(expr->expr_data.typecast_data.target_type_id);
+        bare_id = split_bare_id;
+        qualifier = split_qualifier;
+    }
+    else
+    {
+        bare_id = expr->expr_data.typecast_data.target_type_id;
+    }
     expr->expr_data.typecast_data.target_type_id = NULL;
+    expr->expr_data.typecast_data.type_qualifier = NULL;
 
     expr->type = EXPR_FUNCTION_CALL;
     memset(&expr->expr_data.function_call_data, 0, sizeof(expr->expr_data.function_call_data));
-    expr->expr_data.function_call_data.id = call_id;
+    expr->expr_data.function_call_data.id = bare_id;
+    expr->expr_data.function_call_data.call_qualifier = qualifier;
     if (arg_expr != NULL)
         expr->expr_data.function_call_data.args_expr = CreateListNode(arg_expr, LIST_EXPR);
 
-    /* Keep legacy_tag here - typecast reinterpreted as call needs re-checking */
+    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+    {
+        fprintf(stderr, "[SemCheck] reinterpret_typecast_as_call: converted to FUNC_CALL id='%s' qualifier='%s' args=%d\n",
+            bare_id ? bare_id : "(null)",
+            qualifier ? qualifier : "(null)",
+            arg_expr != NULL ? 1 : 0);
+    }
+
     return semcheck_expr_legacy_tag(type_return, symtab, expr, max_scope_lev, NO_MUTATE);
 }
 
