@@ -757,35 +757,18 @@ int semcheck_funccall(int *type_return,
     args_given = expr->expr_data.function_call_data.args_expr;
     if (id != NULL)
     {
-        const char *dot = strrchr(id, '.');
-        if (dot != NULL && dot[1] != '\0')
+        const char *qualifier = expr->expr_data.function_call_data.call_qualifier;
+        if (qualifier != NULL)
         {
-            size_t prefix_len = (size_t)(dot - id);
-            char *prefix = (char *)malloc(prefix_len + 1);
-            char *unqualified = strdup(dot + 1);
-            if (prefix == NULL || unqualified == NULL)
-            {
-                if (prefix != NULL)
-                    free(prefix);
-                if (unqualified != NULL)
-                    free(unqualified);
-                semcheck_error_with_context("Error on line %d: failed to allocate memory for qualified call '%s'.\n",
-                    expr->line_num, id);
-                *type_return = UNKNOWN_TYPE;
-                return 1;
-            }
-            memcpy(prefix, id, prefix_len);
-            prefix[prefix_len] = '\0';
-
-            int prefix_is_unit = semcheck_is_unit_name(prefix);
+            int prefix_is_unit = semcheck_is_unit_name(qualifier);
             HashNode_t *prefix_node = NULL;
-            int prefix_scope = FindIdent(&prefix_node, symtab, prefix);
+            int prefix_scope = FindIdent(&prefix_node, symtab, qualifier);
             int prefix_found = (prefix_scope >= 0 && prefix_node != NULL);
 
             if (!prefix_is_unit && prefix_found)
             {
                 /* Treat qualified identifier as a member/procedural field call. */
-                struct Expression *receiver_expr = mk_varid(expr->line_num, strdup(prefix));
+                struct Expression *receiver_expr = mk_varid(expr->line_num, strdup(qualifier));
                 if (receiver_expr != NULL)
                 {
                     ListNode_t *recv_node = CreateListNode(receiver_expr, LIST_EXPR);
@@ -795,22 +778,17 @@ int semcheck_funccall(int *type_return,
                     expr->expr_data.function_call_data.is_method_call_placeholder = 1;
                     if (expr->expr_data.function_call_data.placeholder_method_name != NULL)
                         free(expr->expr_data.function_call_data.placeholder_method_name);
-                    expr->expr_data.function_call_data.placeholder_method_name = strdup(unqualified);
+                    expr->expr_data.function_call_data.placeholder_method_name = strdup(id);
                 }
-                free(expr->expr_data.function_call_data.id);
-                expr->expr_data.function_call_data.id = unqualified;
-                id = unqualified;
             }
             else
             {
-                /* Unit-qualified call; strip the unit prefix. */
-                free(expr->expr_data.function_call_data.id);
-                expr->expr_data.function_call_data.id = unqualified;
-                id = unqualified;
+                /* Unit-qualified call; qualifier is already stripped from id. */
                 was_unit_qualified = 1;
             }
 
-            free(prefix);
+            free(expr->expr_data.function_call_data.call_qualifier);
+            expr->expr_data.function_call_data.call_qualifier = NULL;
         }
     }
     if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
