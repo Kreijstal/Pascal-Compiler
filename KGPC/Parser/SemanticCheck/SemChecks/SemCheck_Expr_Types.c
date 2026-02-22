@@ -2104,9 +2104,19 @@ int semcheck_recordaccess(int *type_return,
                             type_name ? type_name : "<null>", field_id, is_static_method);
                     }
                     
-                    /* Transform record access into an explicit method call */
-                    char *method_id = (method_node->mangled_id != NULL) ?
-                        strdup(method_node->mangled_id) :
+                    /* Transform record access into an explicit method call.
+                     * Use the base mangled name (Type__Method) rather than a
+                     * specific overload's mangled_id so that semcheck_funccall
+                     * can perform proper overload resolution. */
+                    char *base_mangled = NULL;
+                    if (type_name != NULL && field_id != NULL)
+                    {
+                        size_t bm_len = strlen(type_name) + 2 + strlen(field_id) + 1;
+                        base_mangled = (char *)malloc(bm_len);
+                        if (base_mangled != NULL)
+                            snprintf(base_mangled, bm_len, "%s__%s", type_name, field_id);
+                    }
+                    char *method_id = (base_mangled != NULL) ? base_mangled :
                         ((field_id != NULL) ? strdup(field_id) : NULL);
 
                     expr->type = EXPR_FUNCTION_CALL;
@@ -2114,15 +2124,11 @@ int semcheck_recordaccess(int *type_return,
                         sizeof(expr->expr_data.function_call_data));
                     expr->expr_data.function_call_data.is_method_call_placeholder = 0;
                     expr->expr_data.function_call_data.id = method_id;
-                    if (method_node->mangled_id != NULL)
-                        expr->expr_data.function_call_data.mangled_id =
-                            strdup(method_node->mangled_id);
-                    else if (method_id != NULL)
+                    if (method_id != NULL)
                         expr->expr_data.function_call_data.mangled_id = strdup(method_id);
-                    expr->expr_data.function_call_data.resolved_func = method_node;
-                    expr->expr_data.function_call_data.call_hash_type = method_node->hash_type;
-                    semcheck_expr_set_call_kgpc_type(expr, method_node->type, 0);
-                    expr->expr_data.function_call_data.is_call_info_valid = 1;
+                    /* Don't pre-bind resolved_func or call_kgpc_type — let
+                     * semcheck_funccall handle overload resolution. */
+                    expr->expr_data.function_call_data.is_call_info_valid = 0;
 
                     /* For static methods, don't pass a receiver/Self */
                     if (is_static_method) {

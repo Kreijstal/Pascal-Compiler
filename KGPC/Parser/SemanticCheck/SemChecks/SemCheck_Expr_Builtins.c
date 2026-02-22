@@ -2650,6 +2650,26 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
                 {
                     set_hash_meta(node, NO_MUTATE);
                 }
+                else if (node->hash_type == HASHTYPE_FUNCTION)
+                {
+                    /* sizeof(FuncName) inside the function body refers to the
+                     * result variable's type, not the function itself. */
+                    const char *cur_sub_id = semcheck_get_current_subprogram_id();
+                    int is_own_result = 0;
+                    if (cur_sub_id != NULL && arg_id != NULL)
+                    {
+                        const char *bare = semcheck_get_current_subprogram_method_name();
+                        const char *fname = (bare != NULL) ? bare : cur_sub_id;
+                        if (pascal_identifier_equals(arg_id, fname))
+                            is_own_result = 1;
+                    }
+                    if (!is_own_result)
+                    {
+                        semcheck_error_with_context("Error on line %d, SizeOf argument %s is not a data object.\n",
+                            expr->line_num, arg_id);
+                        error_count++;
+                    }
+                }
                 else if (node->hash_type != HASHTYPE_TYPE)
                 {
                     semcheck_error_with_context("Error on line %d, SizeOf argument %s is not a data object.\n",

@@ -2113,6 +2113,35 @@ resolved:;
            which should remain as HASHTYPE_FUNCTION_RETURN access. */
         if(hash_return->hash_type == HASHTYPE_FUNCTION && mutating == NO_MUTATE)
         {
+            /* In {$mode objfpc}, a bare function/method name without () inside
+             * the function's own body refers to the result variable, not a
+             * recursive call.  E.g. ReadNext(ReadAddress, sizeof(ReadAddress))
+             * inside TEReader.ReadAddress should pass the result variable. */
+            const char *_cur_sub_id = semcheck_get_current_subprogram_id();
+            int _is_own_result = 0;
+            if (_cur_sub_id != NULL && id != NULL)
+            {
+                const char *_bare = semcheck_get_current_subprogram_method_name();
+                const char *_fname = (_bare != NULL) ? _bare : _cur_sub_id;
+                if (pascal_identifier_equals(id, _fname))
+                    _is_own_result = 1;
+            }
+            if (_is_own_result)
+            {
+                /* Treat as result variable: use the function's return type */
+                KgpcType *ret_type = kgpc_type_get_return_type(hash_return->type);
+                if (ret_type != NULL)
+                {
+                    *type_return = semcheck_tag_from_kgpc(ret_type);
+                    semcheck_expr_set_resolved_kgpc_type_shared(expr, ret_type);
+                }
+                else
+                {
+                    set_type_from_hashtype(type_return, hash_return);
+                }
+                return return_val;
+            }
+
             /* Prefer implicit Self members over same-named global functions.
              * Example: inside TRectF methods, bare "BottomRight" should resolve
              * to Self.BottomRight (property) rather than a global BottomRight(). */
