@@ -1409,6 +1409,11 @@ static int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, 
              * TODO: Could enhance this to verify the field is actually a dynamic array */
             is_valid_array = 1;
         }
+        else if (array_expr != NULL && array_expr->type == EXPR_ARRAY_ACCESS)
+        {
+            /* Array access result - valid for nested dynamic arrays (array of array of ...) */
+            is_valid_array = 1;
+        }
         
         if (!is_valid_array)
         {

@@ -669,7 +669,13 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                                         /* Array field */
                                         KgpcType *element_type = NULL;
                                         int element_type_borrowed = 0;
-                                        if (field->array_element_type_id != NULL)
+                                        if (field->array_element_kgpc_type != NULL)
+                                        {
+                                            /* Pre-built element type for nested arrays */
+                                            element_type = field->array_element_kgpc_type;
+                                            element_type_borrowed = 1;
+                                        }
+                                        else if (field->array_element_type_id != NULL)
                                         {
                                             HashNode_t *elem_type_node =
                                                 semcheck_find_preferred_type_node(symtab, field->array_element_type_id);

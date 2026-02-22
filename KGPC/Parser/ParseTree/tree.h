@@ -151,6 +151,7 @@ typedef struct Tree
             int type; /* Int, or real */
             char *type_id;
             struct RecordType *inline_record_type;  /* Inline record element type */
+            struct KgpcType *element_kgpc_type;    /* Pre-built element type for nested arrays */
 
             int s_range;
             int e_range;

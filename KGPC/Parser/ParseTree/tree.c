@@ -366,6 +366,8 @@ static void destroy_record_field(struct RecordField *field)
         kgpc_type_release(field->proc_type);
     destroy_record_type(field->nested_record);
     destroy_record_type(field->array_element_record);
+    if (field->array_element_kgpc_type != NULL)
+        kgpc_type_release(field->array_element_kgpc_type);
     free(field);
 }
 
@@ -1951,6 +1953,9 @@ static struct RecordField *clone_record_field(const struct RecordField *field)
     clone->array_element_type_id = field->array_element_type_id != NULL ?
         strdup(field->array_element_type_id) : NULL;
     clone->array_element_record = clone_record_type(field->array_element_record);
+    clone->array_element_kgpc_type = field->array_element_kgpc_type;
+    if (clone->array_element_kgpc_type != NULL)
+        kgpc_type_retain(clone->array_element_kgpc_type);
     clone->array_is_open = field->array_is_open;
     clone->is_hidden = field->is_hidden;
     clone->is_class_var = field->is_class_var;
