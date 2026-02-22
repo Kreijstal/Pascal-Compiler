@@ -1749,7 +1749,13 @@ static void add_class_vars_to_method_scope_impl(SymTab_t *symtab,
                 else if (field->is_array)
                 {
                     KgpcType *elem_type = NULL;
-                    if (field->array_element_type_id != NULL)
+                    if (field->array_element_kgpc_type != NULL)
+                    {
+                        /* Pre-built element type for nested arrays (array of array of ...) */
+                        elem_type = field->array_element_kgpc_type;
+                        kgpc_type_retain(elem_type);
+                    }
+                    else if (field->array_element_type_id != NULL)
                     {
                         HashNode_t *elem_node = NULL;
                         if (FindIdent(&elem_node, symtab, field->array_element_type_id) != -1 &&

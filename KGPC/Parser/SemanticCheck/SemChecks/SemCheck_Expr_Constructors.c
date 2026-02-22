@@ -471,7 +471,13 @@ KgpcType *semcheck_field_expected_kgpc_type(SymTab_t *symtab, struct RecordField
     if (field->is_array)
     {
         KgpcType *element_type = NULL;
-        if (field->array_element_type == RECORD_TYPE && field->nested_record != NULL)
+        if (field->array_element_kgpc_type != NULL)
+        {
+            /* Pre-built element type for nested arrays (array of array of ...) */
+            kgpc_type_retain(field->array_element_kgpc_type);
+            element_type = field->array_element_kgpc_type;
+        }
+        else if (field->array_element_type == RECORD_TYPE && field->nested_record != NULL)
         {
             element_type = create_record_type(field->nested_record);
         }

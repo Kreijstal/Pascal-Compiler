@@ -567,6 +567,44 @@ int semcheck_arrayaccess(int *type_return,
 
     if (res_type != NULL)
         element_type = semcheck_tag_from_kgpc(res_type);
+
+    /* If the element type is itself an array (nested dynamic arrays), propagate array info */
+    if (res_type != NULL && kgpc_type_is_array(res_type))
+    {
+        expr->is_array_expr = 1;
+        expr->array_lower_bound = res_type->info.array_info.start_index;
+        expr->array_upper_bound = res_type->info.array_info.end_index;
+        expr->array_is_dynamic = kgpc_type_is_dynamic_array(res_type);
+        KgpcType *inner_elem = kgpc_type_get_array_element_type_resolved(res_type, symtab);
+        if (inner_elem != NULL)
+        {
+            expr->array_element_type = semcheck_tag_from_kgpc(inner_elem);
+            if (kgpc_type_is_record(inner_elem))
+            {
+                expr->array_element_record_type = kgpc_type_get_record(inner_elem);
+                /* Compute element size from the record */
+                if (expr->array_element_record_type != NULL)
+                {
+                    long long computed_size = 0;
+                    if (sizeof_from_record(symtab, expr->array_element_record_type,
+                            &computed_size, 0, expr->line_num) == 0 &&
+                        computed_size > 0 && computed_size <= INT_MAX)
+                    {
+                        expr->array_element_size = (int)computed_size;
+                    }
+                }
+            }
+            else
+            {
+                /* Compute element size from KgpcType */
+                long long sz = kgpc_type_sizeof(inner_elem);
+                if (sz > 0 && sz <= INT_MAX)
+                    expr->array_element_size = (int)sz;
+            }
+        }
+        element_type = POINTER_TYPE; /* Dynamic arrays are pointers at runtime */
+    }
+
     if (element_type == UNKNOWN_TYPE)
         element_type = LONGINT_TYPE;
 

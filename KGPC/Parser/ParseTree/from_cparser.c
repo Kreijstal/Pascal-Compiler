@@ -285,6 +285,7 @@ typedef struct {
     int end;
     int element_type;
     char *element_type_id;
+    struct KgpcType *element_kgpc_type; /* For nested array elements (array of array of ...) */
     int is_shortstring;
     int is_open_array;
     ListNode_t *array_dimensions;
@@ -543,6 +544,10 @@ static void destroy_type_info_contents(TypeInfo *info) {
     if (info->record_type != NULL) {
         destroy_record_type(info->record_type);
         info->record_type = NULL;
+    }
+    if (info->element_kgpc_type != NULL) {
+        destroy_kgpc_type(info->element_kgpc_type);
+        info->element_kgpc_type = NULL;
     }
 }
 
@@ -4497,6 +4502,42 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                         type_info->is_record = 1;
                         type_info->element_type = RECORD_TYPE;
                     }
+                    /* Build KgpcType for nested array elements (array of array of ...) */
+                    if (nested_info.is_array)
+                    {
+                        KgpcType *inner_elem = NULL;
+                        if (nested_info.element_kgpc_type != NULL)
+                        {
+                            /* Deeper nesting: element is already a pre-built KgpcType */
+                            inner_elem = nested_info.element_kgpc_type;
+                            kgpc_type_retain(inner_elem);
+                        }
+                        else if (nested_info.record_type != NULL)
+                        {
+                            inner_elem = create_record_type(clone_record_type(nested_info.record_type));
+                        }
+                        else if (nested_info.element_type != UNKNOWN_TYPE)
+                        {
+                            inner_elem = create_primitive_type(nested_info.element_type);
+                        }
+                        /* Create the inner array KgpcType.
+                         * If inner_elem is NULL but element_type_id is set, create a
+                         * deferred-resolution array type */
+                        if (inner_elem != NULL)
+                        {
+                            type_info->element_kgpc_type = create_array_type(
+                                inner_elem, nested_info.start, nested_info.end);
+                        }
+                        else if (nested_info.element_type_id != NULL)
+                        {
+                            /* Named element type: create array with deferred element resolution */
+                            type_info->element_kgpc_type = create_array_type(
+                                NULL, nested_info.start, nested_info.end);
+                            if (type_info->element_kgpc_type != NULL)
+                                type_info->element_kgpc_type->info.array_info.element_type_id =
+                                    strdup(nested_info.element_type_id);
+                        }
+                    }
                     destroy_type_info_contents(&nested_info);
                 }
                 if (type_info->element_type_id != NULL &&
@@ -5283,6 +5324,12 @@ static ListNode_t *convert_class_field_decl(ast_t *field_decl_node) {
             field_info.record_type = NULL;  /* Ownership transferred */
             field_desc->array_is_open = field_info.is_open_array;
             field_info.element_type_id = NULL;  /* Ownership transferred */
+            /* Transfer pre-built element KgpcType for nested arrays */
+            if (field_info.element_kgpc_type != NULL)
+            {
+                field_desc->array_element_kgpc_type = field_info.element_kgpc_type;
+                kgpc_type_retain(field_desc->array_element_kgpc_type);
+            }
             field_desc->is_hidden = 0;
             field_desc->is_class_var = is_class_var;
             /* Copy pointer type info for inline pointer fields like ^Char */
@@ -6310,6 +6357,12 @@ static ListNode_t *convert_field_decl(ast_t *field_decl_node) {
             field_info.record_type = NULL;  /* Ownership transferred */
             field_desc->array_is_open = field_info.is_open_array;
             field_info.element_type_id = NULL;
+            /* Transfer pre-built element KgpcType for nested arrays */
+            if (field_info.element_kgpc_type != NULL)
+            {
+                field_desc->array_element_kgpc_type = field_info.element_kgpc_type;
+                kgpc_type_retain(field_desc->array_element_kgpc_type);
+            }
             field_desc->is_class_var = is_class_var;
             /* Copy pointer type info for inline pointer fields like ^Char */
             field_desc->is_pointer = field_info.is_pointer;

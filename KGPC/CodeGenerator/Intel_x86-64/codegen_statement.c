@@ -3932,6 +3932,11 @@ static ListNode_t *codegen_builtin_setlength(struct Statement *stmt, ListNode_t 
         /* For field access like self.FItems, use the field name */
         array_id = array_expr->expr_data.record_access_data.field_id;
     }
+    else if (array_expr != NULL && array_expr->type == EXPR_ARRAY_ACCESS)
+    {
+        /* Nested dynamic array: SetLength(arr[i], n) where arr[i] is itself a dynamic array */
+        array_id = "__nested_dynarray__";
+    }
 
     if (array_id == NULL)
     {
@@ -3949,21 +3954,43 @@ static ListNode_t *codegen_builtin_setlength(struct Statement *stmt, ListNode_t 
     }
 
     int is_field_array = 0;
-    
+    int is_nested_array = 0;
+
     /* If not found in local stack, might be a field of the current object */
     if (array_node == NULL && array_expr->type == EXPR_RECORD_ACCESS)
     {
         is_field_array = 1;
     }
-    
-    if (!is_field_array && (array_node == NULL || !array_node->is_dynamic))
+    /* Nested dynamic array: arr[i] where arr[i] is itself a dynamic array */
+    if (array_node == NULL && array_expr->type == EXPR_ARRAY_ACCESS)
+    {
+        is_nested_array = 1;
+    }
+
+    if (!is_field_array && !is_nested_array && (array_node == NULL || !array_node->is_dynamic))
     {
         fprintf(stderr, "ERROR: Dynamic array %s not found for SetLength.\n", array_id);
         return inst_list;
     }
 
     int element_size;
-    if (is_field_array)
+    if (is_nested_array)
+    {
+        /* For nested dynamic arrays (array of array of ...), get element size from KgpcType */
+        element_size = 8; /* Default: inner elements are pointers (dynamic arrays) */
+        KgpcType *arr_type = expr_get_kgpc_type(array_expr);
+        if (arr_type != NULL && kgpc_type_is_array(arr_type))
+        {
+            KgpcType *elem_type = kgpc_type_get_array_element_type_resolved(arr_type, ctx->symtab);
+            if (elem_type != NULL)
+            {
+                long long sz = kgpc_type_sizeof(elem_type);
+                if (sz > 0)
+                    element_size = (int)sz;
+            }
+        }
+    }
+    else if (is_field_array)
     {
         struct RecordField *field = codegen_lookup_record_field_expr(array_expr);
         element_size = -1;
@@ -4018,7 +4045,21 @@ static ListNode_t *codegen_builtin_setlength(struct Statement *stmt, ListNode_t 
             "ERROR: Unable to allocate register for SetLength descriptor.");
 
     char buffer[128];
-    if (is_field_array)
+    if (is_nested_array)
+    {
+        /* For nested dynamic arrays, compute the address of the inner array element.
+         * E.g. SetLength(arr[i], n) where arr[i] is a dynamic array pointer.
+         * We need the address of that pointer (not its value). */
+        Register_t *addr_reg = NULL;
+        inst_list = codegen_address_for_expr(array_expr, inst_list, ctx, &addr_reg);
+        if (codegen_had_error(ctx) || addr_reg == NULL)
+            return inst_list;
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
+            addr_reg->bit_64, descriptor_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        free_reg(get_reg_stack(), addr_reg);
+    }
+    else if (is_field_array)
     {
         /* For field arrays, compute the field address from the base record expression. */
         Register_t *field_addr_reg = NULL;
