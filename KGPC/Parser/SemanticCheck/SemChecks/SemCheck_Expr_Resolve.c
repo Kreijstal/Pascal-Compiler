@@ -126,7 +126,6 @@ int resolve_type_identifier(int *out_type, SymTab_t *symtab,
     HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, type_id);
     if (type_node == NULL)
     {
-        /* Unresolved generic type (e.g., TArray$T) — treat as identity cast */
         if (strchr(type_id, '$') != NULL)
         {
             *out_type = POINTER_TYPE;

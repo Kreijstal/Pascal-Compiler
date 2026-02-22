@@ -2903,7 +2903,8 @@ static struct Statement *build_nested_with_statements(int line,
                                                       ast_t *context_node,
                                                       struct Statement *body_stmt);
 static void append_type_decls_from_section(ast_t *type_section, ListNode_t **dest,
-    ListNode_t **subprograms, ListNode_t **const_decls, ListBuilder *var_builder);
+    ListNode_t **subprograms, ListNode_t **const_decls, ListBuilder *var_builder,
+    const char *parent_type_name);
 
 static ast_t *unwrap_record_constructor_elem(ast_t *elem)
 {
@@ -8638,7 +8639,7 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
                     ast_t *type_section_ast = (ast_t *)section_cursor->cur;
                     if (type_section_ast != NULL) {
                         append_type_decls_from_section(type_section_ast, nested_type_decls_out,
-                            NULL, NULL, NULL);
+                            NULL, NULL, NULL, id);
                     }
                     section_cursor = section_cursor->next;
                 }
@@ -8658,7 +8659,7 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
                     if (type_section_ast != NULL) {
                         /* Recursively process this nested type section */
                         append_type_decls_from_section(type_section_ast, nested_type_decls_out,
-                            NULL, NULL, NULL);
+                            NULL, NULL, NULL, id);
                         if (getenv("KGPC_DEBUG_TYPE_SECTION") != NULL)
                             fprintf(stderr, "[KGPC] convert_type_decl: processed nested TYPE_SECTION for class %s\n", id);
                     }
@@ -8691,7 +8692,7 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
                         ast_t *type_section_ast = (ast_t *)section_cursor->cur;
                         if (type_section_ast != NULL) {
                             append_type_decls_from_section(type_section_ast, nested_type_decls_out,
-                                NULL, NULL, NULL);
+                                NULL, NULL, NULL, id);
                             if (getenv("KGPC_DEBUG_TYPE_SECTION") != NULL)
                                 fprintf(stderr, "[KGPC] convert_type_decl: processed nested TYPE_SECTION for record %s\n", id);
                         }
@@ -9071,7 +9072,7 @@ static void convert_routine_body(ast_t *body_node, ListNode_t **const_decls,
                 }
                 if (type_decl_list != NULL)
                     append_type_decls_from_section(node, type_decl_list, nested_subs,
-                        const_decls, var_builder);
+                        const_decls, var_builder, NULL);
                 type_section_ast = node;  /* Save for const array enum resolution */
                 break;
             case PASCAL_T_CONST_SECTION:
@@ -9768,7 +9769,8 @@ static void append_helper_const_decls_from_type_decl(ast_t *type_decl_node,
 }
 
 static void append_type_decls_from_section(ast_t *type_section, ListNode_t **dest,
-    ListNode_t **subprograms, ListNode_t **const_decls, ListBuilder *var_builder) {
+    ListNode_t **subprograms, ListNode_t **const_decls, ListBuilder *var_builder,
+    const char *parent_type_name) {
     if (type_section == NULL || dest == NULL)
         return;
 
@@ -9777,8 +9779,9 @@ static void append_type_decls_from_section(ast_t *type_section, ListNode_t **des
         tail = &(*tail)->next;
 
     if (getenv("KGPC_DEBUG_TYPE_SECTION") != NULL) {
-        fprintf(stderr, "[KGPC] append_type_decls_from_section: type_section->typ=%d child=%p line=%d\n",
-                type_section->typ, (void*)type_section->child, type_section->line);
+        fprintf(stderr, "[KGPC] append_type_decls_from_section: type_section->typ=%d child=%p line=%d parent=%s\n",
+                type_section->typ, (void*)type_section->child, type_section->line,
+                parent_type_name ? parent_type_name : "<none>");
 
         /* Count children and print info for each */
         int child_count = 0;
@@ -9833,12 +9836,38 @@ static void append_type_decls_from_section(ast_t *type_section, ListNode_t **des
             }
             Tree_t *decl = convert_generic_type_decl(unwrapped);
             if (decl != NULL) {
+                if (parent_type_name != NULL && decl->tree_data.type_decl_data.id != NULL) {
+                    char *orig_id = decl->tree_data.type_decl_data.id;
+                    size_t len = strlen(parent_type_name) + 1 + strlen(orig_id) + 1;
+                    char *qualified_id = (char *)malloc(len);
+                    if (qualified_id != NULL) {
+                        snprintf(qualified_id, len, "%s.%s", parent_type_name, orig_id);
+                        free(orig_id);
+                        decl->tree_data.type_decl_data.id = qualified_id;
+                    }
+                    /* Also qualify pointer_type_id for pointer aliases referencing
+                     * sibling types in the same nested scope */
+                    if (decl->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS) {
+                        struct TypeAlias *alias = &decl->tree_data.type_decl_data.info.alias;
+                        if (alias->is_pointer && alias->pointer_type_id != NULL) {
+                            char *orig_ptr_id = alias->pointer_type_id;
+                            size_t ptr_len = strlen(parent_type_name) + 1 + strlen(orig_ptr_id) + 1;
+                            char *qualified_ptr_id = (char *)malloc(ptr_len);
+                            if (qualified_ptr_id != NULL) {
+                                snprintf(qualified_ptr_id, ptr_len, "%s.%s", parent_type_name, orig_ptr_id);
+                                free(orig_ptr_id);
+                                alias->pointer_type_id = qualified_ptr_id;
+                            }
+                        }
+                    }
+                }
                 ListNode_t *node = CreateListNode(decl, LIST_TREE);
                 *tail = node;
                 tail = &node->next;
             }
         } else if (unwrapped != NULL && unwrapped->typ == PASCAL_T_TYPE_DECL) {
             ListNode_t *nested_type_decls = NULL;
+            char *nested_parent_name = NULL;
             if (const_decls != NULL && var_builder != NULL) {
                 char *helper_id = dup_first_identifier_in_node(unwrapped);
                 if (helper_id != NULL) {
@@ -9846,11 +9875,74 @@ static void append_type_decls_from_section(ast_t *type_section, ListNode_t **des
                         const_decls, var_builder, type_section);
                     append_class_const_decls_from_type_decl(unwrapped, helper_id,
                         const_decls, var_builder, type_section);
+                    if (parent_type_name != NULL) {
+                        size_t len = strlen(parent_type_name) + 1 + strlen(helper_id) + 1;
+                        nested_parent_name = (char *)malloc(len);
+                        if (nested_parent_name != NULL) {
+                            snprintf(nested_parent_name, len, "%s.%s", parent_type_name, helper_id);
+                        }
+                    } else {
+                        nested_parent_name = strdup(helper_id);
+                    }
                     free(helper_id);
+                }
+            } else if (parent_type_name != NULL) {
+                char *type_id = dup_first_identifier_in_node(unwrapped);
+                if (type_id != NULL) {
+                    size_t len = strlen(parent_type_name) + 1 + strlen(type_id) + 1;
+                    nested_parent_name = (char *)malloc(len);
+                    if (nested_parent_name != NULL) {
+                        snprintf(nested_parent_name, len, "%s.%s", parent_type_name, type_id);
+                    }
+                    free(type_id);
                 }
             }
             Tree_t *decl = convert_type_decl_ex(unwrapped, subprograms, &nested_type_decls);
-            /* Insert nested type declarations first (they must be available before the container type) */
+            if (decl != NULL && parent_type_name != NULL && decl->tree_data.type_decl_data.id != NULL) {
+                char *orig_id = decl->tree_data.type_decl_data.id;
+                size_t len = strlen(parent_type_name) + 1 + strlen(orig_id) + 1;
+                char *qualified_id = (char *)malloc(len);
+                if (qualified_id != NULL) {
+                    snprintf(qualified_id, len, "%s.%s", parent_type_name, orig_id);
+                    free(orig_id);
+                    decl->tree_data.type_decl_data.id = qualified_id;
+                    if (decl->tree_data.type_decl_data.kind == TYPE_DECL_RECORD &&
+                        decl->tree_data.type_decl_data.info.record != NULL &&
+                        decl->tree_data.type_decl_data.info.record->type_id != NULL)
+                    {
+                        free(decl->tree_data.type_decl_data.info.record->type_id);
+                        decl->tree_data.type_decl_data.info.record->type_id = strdup(qualified_id);
+                    }
+                    if (decl->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS) {
+                        struct TypeAlias *alias = &decl->tree_data.type_decl_data.info.alias;
+                        /* Qualify pointer_type_id so symbol table lookup resolves
+                         * the sibling nested type correctly */
+                        if (alias->is_pointer && alias->pointer_type_id != NULL) {
+                            char *orig_ptr_id = alias->pointer_type_id;
+                            size_t ptr_len = strlen(parent_type_name) + 1 + strlen(orig_ptr_id) + 1;
+                            char *qualified_ptr_id = (char *)malloc(ptr_len);
+                            if (qualified_ptr_id != NULL) {
+                                snprintf(qualified_ptr_id, ptr_len, "%s.%s", parent_type_name, orig_ptr_id);
+                                free(orig_ptr_id);
+                                alias->pointer_type_id = qualified_ptr_id;
+                            }
+                        }
+                        if (alias->kgpc_type != NULL &&
+                            alias->kgpc_type->kind == TYPE_KIND_POINTER &&
+                            alias->kgpc_type->info.points_to != NULL &&
+                            alias->kgpc_type->info.points_to->kind == TYPE_KIND_RECORD &&
+                            alias->kgpc_type->info.points_to->info.record_info != NULL)
+                        {
+                            struct RecordType *points_to_record = alias->kgpc_type->info.points_to->info.record_info;
+                            if (points_to_record->type_id != NULL)
+                            {
+                                free(points_to_record->type_id);
+                                points_to_record->type_id = strdup(qualified_id);
+                            }
+                        }
+                    }
+                }
+            }
             if (nested_type_decls != NULL) {
                 ListNode_t *nested_cursor = nested_type_decls;
                 while (nested_cursor != NULL) {
@@ -9861,12 +9953,13 @@ static void append_type_decls_from_section(ast_t *type_section, ListNode_t **des
                     nested_cursor = next;
                 }
             }
-            /* Then insert the main type declaration */
             if (decl != NULL) {
                 ListNode_t *node = CreateListNode(decl, LIST_TREE);
                 *tail = node;
                 tail = &node->next;
             }
+            if (nested_parent_name != NULL)
+                free(nested_parent_name);
         }
         type_decl = type_decl->next;
     }
@@ -10618,8 +10711,14 @@ tuple_cleanup:
         ast_t *unwrapped_type = unwrap_pascal_node(type_node);
         if (unwrapped_type != NULL)
         {
+            if (getenv("KGPC_DEBUG_BODY") != NULL)
+                fprintf(stderr, "[KGPC] TYPECAST handler: type_node typ=%d unwrapped typ=%d\n",
+                    type_node ? type_node->typ : -1, unwrapped_type->typ);
             target_type = convert_type_spec(unwrapped_type, &target_type_id,
                 &record_type, &type_info);
+            if (getenv("KGPC_DEBUG_BODY") != NULL)
+                fprintf(stderr, "[KGPC] TYPECAST handler: after convert_type_spec target_type=%d target_type_id=%s\n",
+                    target_type, target_type_id ? target_type_id : "(null)");
             destroy_type_info_contents(&type_info);
             if (record_type != NULL)
             {
@@ -10643,10 +10742,14 @@ tuple_cleanup:
                 char *field_name = dup_symbol(field);
                 if (base_name != NULL && field_name != NULL)
                 {
+                    /* Store components separately as structured data:
+                     * - target_type_id: bare name (field/type name)
+                     * - target_type_qualifier: base (record variable or parent type)
+                     * Semcheck constructs the qualified lookup key when needed. */
                     target_type_id = field_name;
                     field_name = NULL;  /* ownership transferred */
                     target_type_qualifier = base_name;
-                    base_name = NULL;  /* ownership transferred */
+                    base_name = NULL;   /* ownership transferred */
                 }
                 if (base_name != NULL) free(base_name);
                 if (field_name != NULL) free(field_name);
@@ -12525,7 +12628,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
                 self_type_alias = helper_self_real_alias(helper_base);
                 self_is_var = helper_self_param_is_var(helper_base, NULL);
             } else {
-                self_type_id = strdup(effective_class);
+                self_type_id = strdup(effective_class_full ? effective_class_full : effective_class);
             }
         }
         Tree_t *self_param = mk_vardecl(method_node->line, self_ids, self_type_tag,
@@ -12622,7 +12725,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
                 fprintf(stderr, "[KGPC] convert_function TYPE_SECTION at line=%d\n", node->line);
             }
             append_type_decls_from_section(node, &type_decls, &nested_subs,
-                &const_decls, &var_builder);
+                &const_decls, &var_builder, NULL);
             type_section_ast = node;  /* Save for const array enum resolution */
             break;
         case PASCAL_T_CONST_SECTION:
@@ -12851,7 +12954,7 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
         switch (cur->typ) {
         case PASCAL_T_TYPE_SECTION:
             append_type_decls_from_section(cur, &type_decls, &nested_subs,
-                &const_decls, &var_decls_builder);
+                &const_decls, &var_decls_builder, NULL);
             type_section_ast = cur;  /* Save for const array enum resolution */
             break;
         case PASCAL_T_CONST_SECTION:
@@ -13133,7 +13236,7 @@ static Tree_t *convert_function(ast_t *func_node) {
         switch (cur->typ) {
         case PASCAL_T_TYPE_SECTION:
             append_type_decls_from_section(cur, &type_decls, &nested_subs,
-                &const_decls, &var_decls_builder);
+                &const_decls, &var_decls_builder, NULL);
             type_section_ast = cur;  /* Save for const array enum resolution */
             break;
         case PASCAL_T_CONST_SECTION:
@@ -13448,7 +13551,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
             case PASCAL_T_TYPE_SECTION:
                 type_section_ast = section;  /* Save for enum resolution */
                 append_type_decls_from_section(section, &type_decls, &subprograms,
-                    &const_decls, &var_decls_builder);
+                    &const_decls, &var_decls_builder, NULL);
                 break;
             case PASCAL_T_USES_SECTION:
                 append_uses_from_section(section, &uses);
@@ -13731,7 +13834,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                             interface_type_section_ast = node_cursor;  /* Save for const array enum resolution */
                             g_interface_type_section_ast = node_cursor;
                             append_type_decls_from_section(node_cursor, &interface_type_decls,
-                                NULL, &interface_const_decls, &interface_var_builder);
+                                NULL, &interface_const_decls, &interface_var_builder, NULL);
                             break;
                         case PASCAL_T_CONST_SECTION:
                             append_const_decls_from_section(node_cursor, &interface_const_decls,
@@ -13852,7 +13955,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                             implementation_type_section_ast = node_cursor;  /* Save for const array enum resolution */
                             g_implementation_type_section_ast = node_cursor;
                             append_type_decls_from_section(node_cursor, &implementation_type_decls,
-                                &subprograms, &implementation_const_decls, &implementation_var_builder);
+                                &subprograms, &implementation_const_decls, &implementation_var_builder, NULL);
                             break;
                         case PASCAL_T_CONST_SECTION:
                             append_const_decls_from_section(node_cursor, &implementation_const_decls,
