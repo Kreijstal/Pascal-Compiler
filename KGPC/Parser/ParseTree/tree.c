@@ -1623,6 +1623,8 @@ void destroy_expr(struct Expression *expr)
           }
           if (expr->expr_data.function_call_data.placeholder_method_name != NULL)
               free(expr->expr_data.function_call_data.placeholder_method_name);
+          if (expr->expr_data.function_call_data.call_qualifier != NULL)
+              free(expr->expr_data.function_call_data.call_qualifier);
           break;
 
         case EXPR_INUM:
@@ -1706,6 +1708,11 @@ void destroy_expr(struct Expression *expr)
           {
               free(expr->expr_data.typecast_data.target_type_id);
               expr->expr_data.typecast_data.target_type_id = NULL;
+          }
+          if (expr->expr_data.typecast_data.type_qualifier != NULL)
+          {
+              free(expr->expr_data.typecast_data.type_qualifier);
+              expr->expr_data.typecast_data.type_qualifier = NULL;
           }
           if (expr->expr_data.typecast_data.expr != NULL)
           {
@@ -2977,6 +2984,7 @@ struct Expression *mk_functioncall(int line_num, char *id, ListNode_t *args)
     new_expr->expr_data.function_call_data.procedural_var_expr = NULL;
     new_expr->expr_data.function_call_data.is_method_call_placeholder = 0;
     new_expr->expr_data.function_call_data.placeholder_method_name = NULL;
+    new_expr->expr_data.function_call_data.call_qualifier = NULL;
 
     return new_expr;
 }
@@ -3106,6 +3114,7 @@ struct Expression *mk_typecast(int line_num, int target_type, char *target_type_
     init_expression(new_expr, line_num, EXPR_TYPECAST);
     new_expr->expr_data.typecast_data.target_type = target_type;
     new_expr->expr_data.typecast_data.target_type_id = target_type_id;
+    new_expr->expr_data.typecast_data.type_qualifier = NULL;
     new_expr->expr_data.typecast_data.expr = expr;
 
     return new_expr;

@@ -10557,6 +10557,7 @@ tuple_cleanup:
 
         int target_type = UNKNOWN_TYPE;
         char *target_type_id = NULL;
+        char *target_type_qualifier = NULL;
         struct RecordType *record_type = NULL;
         TypeInfo type_info;
         memset(&type_info, 0, sizeof(TypeInfo));
@@ -10589,10 +10590,10 @@ tuple_cleanup:
                 char *field_name = dup_symbol(field);
                 if (base_name != NULL && field_name != NULL)
                 {
-                    size_t len = strlen(base_name) + 1 + strlen(field_name) + 1;
-                    target_type_id = (char *)malloc(len);
-                    if (target_type_id != NULL)
-                        snprintf(target_type_id, len, "%s.%s", base_name, field_name);
+                    target_type_id = field_name;
+                    field_name = NULL;  /* ownership transferred */
+                    target_type_qualifier = base_name;
+                    base_name = NULL;  /* ownership transferred */
                 }
                 if (base_name != NULL) free(base_name);
                 if (field_name != NULL) free(field_name);
@@ -10642,7 +10643,13 @@ tuple_cleanup:
         {
             char *call_id = target_type_id;
             target_type_id = NULL;
-            return mk_functioncall(expr_node->line, call_id, args);
+            struct Expression *call_expr = mk_functioncall(expr_node->line, call_id, args);
+            if (call_expr != NULL)
+                call_expr->expr_data.function_call_data.call_qualifier = target_type_qualifier;
+            else if (target_type_qualifier != NULL)
+                free(target_type_qualifier);
+            target_type_qualifier = NULL;
+            return call_expr;
         }
 
         struct Expression *inner_expr = NULL;
@@ -10660,7 +10667,13 @@ tuple_cleanup:
             }
             inner_expr = convert_expression(value_node);
         }
-        return mk_typecast(expr_node->line, target_type, target_type_id, inner_expr);
+        struct Expression *tc_expr = mk_typecast(expr_node->line, target_type, target_type_id, inner_expr);
+        if (tc_expr != NULL)
+            tc_expr->expr_data.typecast_data.type_qualifier = target_type_qualifier;
+        else if (target_type_qualifier != NULL)
+            free(target_type_qualifier);
+        target_type_qualifier = NULL;
+        return tc_expr;
     }
     case PASCAL_T_DEREF:
         return mk_pointer_deref(expr_node->line, convert_expression(expr_node->child));

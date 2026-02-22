@@ -491,6 +491,7 @@ struct Expression
             int vmt_index;                           /* VMT index for virtual calls (-1 if not set) */
             char *self_class_name;                   /* Class name for VMT lookup in virtual calls */
             int arg0_is_dynarray_descriptor;         /* 1 if arg0 should be passed as dynarray descriptor */
+            char *call_qualifier;  /* Unit/object prefix if call was qualified, e.g. "SysUtils" (NULL if unqualified) */
         } function_call_data;
 
         /* Integer number */
@@ -547,6 +548,7 @@ struct Expression
         {
             int target_type;
             char *target_type_id;
+            char *type_qualifier;  /* Unit prefix for qualified types, e.g. "SysUtils" (NULL if unqualified) */
             struct Expression *expr;
         } typecast_data;
 
