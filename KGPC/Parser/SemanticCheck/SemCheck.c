@@ -28,6 +28,7 @@
 #endif
 #include <math.h>
 #include "SemCheck.h"
+#include "../ParseTree/ident_ref.h"
 #include "SemChecks/SemCheck_sizeof.h"
 #include "../../flags.h"
 #include "../../identifier_utils.h"
@@ -221,29 +222,174 @@ int semcheck_is_unit_name(const char *name)
 /* Helper declared in SemCheck_expr.c */
 static const char *semcheck_base_type_name(const char *id)
 {
-    if (id == NULL)
-        return NULL;
-    const char *dot = strrchr(id, '.');
-    return (dot != NULL && dot[1] != '\0') ? (dot + 1) : id;
+    /* Type identifiers are normalized before semcheck; avoid parsing strings here. */
+    return id;
 }
 
-static int semcheck_is_explicit_unit_qualified_type(const char *id)
+static char *type_ref_render_mangled_unqualified(const TypeRef *ref)
 {
-    if (id == NULL)
-        return 0;
+    if (ref == NULL)
+        return NULL;
+    const char *base = type_ref_base_name(ref);
+    if (base == NULL)
+        return NULL;
+    if (ref->num_generic_args <= 0)
+        return strdup(base);
 
-    const char *dot = strchr(id, '.');
-    if (dot == NULL || dot == id)
-        return 0;
+    size_t total = strlen(base) + 1;
+    for (int i = 0; i < ref->num_generic_args; ++i)
+    {
+        char *arg = type_ref_render_mangled(ref->generic_args[i]);
+        if (arg != NULL)
+        {
+            total += strlen(arg);
+            free(arg);
+        }
+        if (i + 1 < ref->num_generic_args)
+            total += 1;
+    }
 
-    size_t prefix_len = (size_t)(dot - id);
-    if (prefix_len == 0 || prefix_len >= 128)
-        return 0;
+    char *out = (char *)malloc(total + 1);
+    if (out == NULL)
+        return NULL;
+    out[0] = '\0';
+    strcat(out, base);
+    strcat(out, "$");
+    for (int i = 0; i < ref->num_generic_args; ++i)
+    {
+        char *arg = type_ref_render_mangled(ref->generic_args[i]);
+        if (arg != NULL)
+        {
+            strcat(out, arg);
+            free(arg);
+        }
+        if (i + 1 < ref->num_generic_args)
+            strcat(out, "$");
+    }
+    return out;
+}
 
-    char prefix[128];
-    memcpy(prefix, id, prefix_len);
-    prefix[prefix_len] = '\0';
+static int semcheck_is_explicit_unit_qualified_type_ref(const TypeRef *ref)
+{
+    if (ref == NULL || ref->name == NULL || ref->name->count < 2)
+        return 0;
+    const char *prefix = ref->name->segments[0];
     return semcheck_is_unit_name(prefix);
+}
+
+HashNode_t *semcheck_find_preferred_type_node_with_ref(SymTab_t *symtab,
+    const TypeRef *type_ref, const char *type_id);
+
+static void semcheck_maybe_qualify_nested_type(SymTab_t *symtab, const char *owner_id,
+    char **type_id, TypeRef **type_ref)
+{
+    if (symtab == NULL || owner_id == NULL || type_id == NULL || *type_id == NULL)
+        return;
+
+    TypeRef *ref = type_ref != NULL ? *type_ref : NULL;
+    if (ref != NULL && ref->name != NULL && ref->name->count > 1)
+        return;
+
+    if (semcheck_find_preferred_type_node_with_ref(symtab, ref, *type_id) != NULL)
+        return;
+
+    char qualified_name[512];
+    snprintf(qualified_name, sizeof(qualified_name), "%s.%s", owner_id, *type_id);
+    if (semcheck_find_preferred_type_node(symtab, qualified_name) == NULL)
+        return;
+
+    char *orig_id = *type_id;
+    char *orig_copy = strdup(orig_id);
+    char *qualified_copy = strdup(qualified_name);
+    if (qualified_copy == NULL || orig_copy == NULL)
+    {
+        free(orig_copy);
+        free(qualified_copy);
+        return;
+    }
+
+    *type_id = qualified_copy;
+    free(orig_id);
+
+    if (type_ref != NULL)
+    {
+        if (*type_ref != NULL)
+            type_ref_free(*type_ref);
+        char **segments = (char **)calloc(2, sizeof(char *));
+        if (segments != NULL)
+        {
+            segments[0] = strdup(owner_id);
+            segments[1] = orig_copy;
+            if (segments[0] != NULL && segments[1] != NULL)
+            {
+                QualifiedIdent *qid = qualified_ident_from_segments(segments, 2, 1);
+                if (qid != NULL)
+                    *type_ref = type_ref_create(qid, NULL, 0);
+                else
+                    type_ref_free(*type_ref);
+            }
+            else
+            {
+                free(segments[0]);
+                free(orig_copy);
+                free(segments);
+            }
+        }
+        else
+        {
+            free(orig_copy);
+        }
+    }
+    else
+    {
+        free(orig_copy);
+    }
+}
+
+static void semcheck_qualify_nested_types_for_record(SymTab_t *symtab, struct RecordType *record_info)
+{
+    if (symtab == NULL || record_info == NULL || record_info->type_id == NULL)
+        return;
+
+    ListNode_t *fnode = record_info->fields;
+    while (fnode != NULL)
+    {
+        if (fnode->type == LIST_RECORD_FIELD && fnode->cur != NULL)
+        {
+            struct RecordField *field = (struct RecordField *)fnode->cur;
+            semcheck_maybe_qualify_nested_type(symtab, record_info->type_id,
+                &field->type_id, &field->type_ref);
+            semcheck_maybe_qualify_nested_type(symtab, record_info->type_id,
+                &field->array_element_type_id, &field->array_element_type_ref);
+            semcheck_maybe_qualify_nested_type(symtab, record_info->type_id,
+                &field->pointer_type_id, &field->pointer_type_ref);
+        }
+        fnode = fnode->next;
+    }
+
+    ListNode_t *pnode = record_info->properties;
+    while (pnode != NULL)
+    {
+        if (pnode->type == LIST_CLASS_PROPERTY && pnode->cur != NULL)
+        {
+            struct ClassProperty *prop = (struct ClassProperty *)pnode->cur;
+            semcheck_maybe_qualify_nested_type(symtab, record_info->type_id,
+                &prop->type_id, &prop->type_ref);
+        }
+        pnode = pnode->next;
+    }
+
+    ListNode_t *rnode = record_info->record_properties;
+    while (rnode != NULL)
+    {
+        if (rnode->type == LIST_CLASS_PROPERTY && rnode->cur != NULL)
+        {
+            struct ClassProperty *prop = (struct ClassProperty *)rnode->cur;
+            semcheck_maybe_qualify_nested_type(symtab, record_info->type_id,
+                &prop->type_id, &prop->type_ref);
+        }
+        rnode = rnode->next;
+    }
 }
 
 static int semcheck_map_builtin_type_name_local(const char *id)
@@ -457,13 +603,31 @@ static int semcheck_find_ident_with_qualified_fallback(HashNode_t **out, SymTab_
     if (out == NULL || symtab == NULL || id == NULL)
         return -1;
 
-    int found = FindIdent(out, symtab, id);
+    return FindIdent(out, symtab, id);
+}
+
+static int semcheck_find_ident_with_qualified_fallback_ref(HashNode_t **out, SymTab_t *symtab,
+    const QualifiedIdent *id_ref)
+{
+    if (out == NULL || symtab == NULL || id_ref == NULL || id_ref->count <= 0)
+        return -1;
+
+    int found = -1;
+    char *full = qualified_ident_join(id_ref, ".");
+    if (full != NULL)
+    {
+        found = FindIdent(out, symtab, full);
+        free(full);
+    }
     if (found >= 0 && out != NULL && *out != NULL)
         return found;
 
-    const char *dot = strrchr(id, '.');
-    if (dot != NULL && dot[1] != '\0')
-        return FindIdent(out, symtab, dot + 1);
+    if (id_ref->count > 1)
+    {
+        const char *last = qualified_ident_last(id_ref);
+        if (last != NULL)
+            return FindIdent(out, symtab, last);
+    }
 
     return found;
 }
@@ -1487,12 +1651,22 @@ static void apply_builtin_integer_alias_metadata(struct TypeAlias *alias, const 
 
 static void inherit_alias_metadata(SymTab_t *symtab, struct TypeAlias *alias)
 {
-    if (symtab == NULL || alias == NULL || alias->target_type_id == NULL)
+    if (symtab == NULL || alias == NULL)
         return;
 
     HashNode_t *target_node = NULL;
-    if (semcheck_find_ident_with_qualified_fallback(&target_node, symtab,
-        alias->target_type_id) == -1 || target_node == NULL)
+    int found = -1;
+    if (alias->target_type_ref != NULL)
+    {
+        found = semcheck_find_ident_with_qualified_fallback_ref(&target_node, symtab,
+            alias->target_type_ref->name);
+    }
+    else if (alias->target_type_id != NULL)
+    {
+        found = semcheck_find_ident_with_qualified_fallback(&target_node, symtab,
+            alias->target_type_id);
+    }
+    if (found == -1 || target_node == NULL)
         return;
 
     struct TypeAlias *target_alias = get_type_alias_from_node(target_node);
@@ -1622,14 +1796,6 @@ static void add_class_vars_to_method_scope_impl(SymTab_t *symtab,
     if (class_name == NULL)
         return;
 
-    /* For generic types (containing < or >), skip this lookup as
-     * the type resolution is handled differently for generics. */
-    if (strchr(class_name, '<') != NULL || strchr(class_name, '>') != NULL)
-    {
-        free(class_name);
-        return;
-    }
-
     if (from_cparser_is_type_helper(class_name))
     {
         free(class_name);
@@ -1651,6 +1817,11 @@ static void add_class_vars_to_method_scope_impl(SymTab_t *symtab,
 
     struct RecordType *record_info = get_record_type_from_node(class_node);
     if (record_info == NULL)
+    {
+        free(class_name);
+        return;
+    }
+    if (record_info->generic_decl != NULL || record_info->num_generic_args > 0)
     {
         free(class_name);
         return;
@@ -1744,6 +1915,19 @@ static void add_class_vars_to_method_scope_impl(SymTab_t *symtab,
                     {
                         field_type = type_node->type;
                         kgpc_type_retain(field_type);
+                    }
+                    else if (class_name != NULL)
+                    {
+                        char qualified_name[512];
+                        snprintf(qualified_name, sizeof(qualified_name), "%s.%s", class_name, field->type_id);
+                        if (FindIdent(&type_node, symtab, qualified_name) != -1 &&
+                            type_node != NULL && type_node->type != NULL)
+                        {
+                            field_type = type_node->type;
+                            kgpc_type_retain(field_type);
+                            free(field->type_id);
+                            field->type_id = strdup(qualified_name);
+                        }
                     }
                 }
                 else if (field->is_array)
@@ -2054,68 +2238,59 @@ static void copy_method_decl_defaults_to_impl(SymTab_t *symtab, Tree_t *subprogr
     free(class_name);
 }
 
-HashNode_t *semcheck_find_preferred_type_node(SymTab_t *symtab, const char *type_id)
+static HashNode_t *semcheck_find_preferred_type_node_ref(SymTab_t *symtab,
+    const TypeRef *type_ref, const char *type_id)
 {
-    if (symtab == NULL || type_id == NULL)
+    if (symtab == NULL)
         return NULL;
 
-    int prefer_unit_defined = semcheck_is_explicit_unit_qualified_type(type_id);
-    ListNode_t *matches = FindAllIdents(symtab, type_id);
-    if (matches == NULL && strchr(type_id, '$') != NULL)
+    char *rendered = NULL;
+    const char *lookup_id = type_id;
+    if (type_ref != NULL)
     {
-        /* On-demand generic specialization (e.g., TFPGListEnumerator$TMyRecord). */
-        char *base_name = NULL;
-        char **arg_types = NULL;
-        int arg_count = 0;
-        const char *cursor = type_id;
-        const char *dollar = strchr(cursor, '$');
-        if (dollar != NULL && dollar != cursor)
-        {
-            base_name = (char *)malloc((size_t)(dollar - cursor + 1));
-            if (base_name != NULL)
-            {
-                memcpy(base_name, cursor, (size_t)(dollar - cursor));
-                base_name[dollar - cursor] = '\0';
-            }
-        }
+        rendered = type_ref_render_mangled(type_ref);
+        if (rendered != NULL)
+            lookup_id = rendered;
+    }
+    if (lookup_id == NULL)
+    {
+        free(rendered);
+        return NULL;
+    }
 
+    int prefer_unit_defined = semcheck_is_explicit_unit_qualified_type_ref(type_ref);
+    ListNode_t *matches = FindAllIdents(symtab, lookup_id);
+    if (matches == NULL && type_ref != NULL && type_ref->name != NULL &&
+        type_ref->name->count > 1)
+    {
+        const char *base_name = type_ref_base_name(type_ref);
         if (base_name != NULL)
+            matches = FindAllIdents(symtab, base_name);
+    }
+
+    if (matches == NULL && type_ref != NULL && type_ref->num_generic_args > 0)
+    {
+        const char *base_name = type_ref_base_name(type_ref);
+        int arg_count = type_ref->num_generic_args;
+        char **arg_types = NULL;
+        if (base_name != NULL && arg_count > 0)
         {
-            const char *tmp = dollar;
-            while (tmp != NULL)
+            arg_types = (char **)calloc((size_t)arg_count, sizeof(char *));
+            if (arg_types != NULL)
             {
-                arg_count++;
-                tmp = strchr(tmp + 1, '$');
-            }
-            if (arg_count > 0)
-            {
-                arg_types = (char **)calloc((size_t)arg_count, sizeof(char *));
-                if (arg_types != NULL)
+                int ok = 1;
+                for (int i = 0; i < arg_count; ++i)
                 {
-                    int idx = 0;
-                    const char *seg = dollar + 1;
-                    while (seg != NULL && idx < arg_count)
-                    {
-                        const char *next = strchr(seg, '$');
-                        size_t seg_len = next ? (size_t)(next - seg) : strlen(seg);
-                        arg_types[idx] = (char *)malloc(seg_len + 1);
-                        if (arg_types[idx] == NULL)
-                            break;
-                        memcpy(arg_types[idx], seg, seg_len);
-                        arg_types[idx][seg_len] = '\0';
-                        idx++;
-                        if (next == NULL)
-                            break;
-                        seg = next + 1;
-                    }
-                    if (idx != arg_count)
-                    {
-                        for (int i = 0; i < arg_count; ++i)
-                            free(arg_types[i]);
-                        free(arg_types);
-                        arg_types = NULL;
-                        arg_count = 0;
-                    }
+                    arg_types[i] = type_ref_render_mangled(type_ref->generic_args[i]);
+                    if (arg_types[i] == NULL)
+                        ok = 0;
+                }
+                if (!ok)
+                {
+                    for (int i = 0; i < arg_count; ++i)
+                        free(arg_types[i]);
+                    free(arg_types);
+                    arg_types = NULL;
                 }
             }
         }
@@ -2131,7 +2306,7 @@ HashNode_t *semcheck_find_preferred_type_node(SymTab_t *symtab, const char *type
                 {
                     if (record->type_id != NULL)
                         free(record->type_id);
-                    record->type_id = strdup(type_id);
+                    record->type_id = strdup(lookup_id);
                     record->generic_decl = generic;
                     record->num_generic_args = arg_count;
                     record->generic_args = arg_types;
@@ -2202,7 +2377,7 @@ HashNode_t *semcheck_find_preferred_type_node(SymTab_t *symtab, const char *type
                         kgpc_type = create_pointer_type(kgpc_type);
                     if (kgpc_type != NULL)
                     {
-                        PushTypeOntoScope_Typed(symtab, (char *)type_id, kgpc_type);
+                        PushTypeOntoScope_Typed(symtab, (char *)lookup_id, kgpc_type);
                     }
                 }
             }
@@ -2214,16 +2389,17 @@ HashNode_t *semcheck_find_preferred_type_node(SymTab_t *symtab, const char *type
                 free(arg_types[i]);
             free(arg_types);
         }
-        free(base_name);
 
-        matches = FindAllIdents(symtab, type_id);
+        matches = FindAllIdents(symtab, lookup_id);
     }
-    if (matches == NULL)
+
+    if (matches == NULL && type_ref != NULL)
     {
-        const char *base = semcheck_base_type_name(type_id);
-        if (base != NULL && base != type_id)
+        const char *base = type_ref_base_name(type_ref);
+        if (base != NULL && base != lookup_id)
             matches = FindAllIdents(symtab, base);
     }
+
     HashNode_t *best = NULL;
     int best_unit_rank = INT_MAX / 2;
     int best_scope_level = INT_MAX / 2;
@@ -2253,7 +2429,20 @@ HashNode_t *semcheck_find_preferred_type_node(SymTab_t *symtab, const char *type
     }
     if (matches != NULL)
         DestroyList(matches);
+    if (rendered != NULL)
+        free(rendered);
     return best;
+}
+
+HashNode_t *semcheck_find_preferred_type_node(SymTab_t *symtab, const char *type_id)
+{
+    return semcheck_find_preferred_type_node_ref(symtab, NULL, type_id);
+}
+
+HashNode_t *semcheck_find_preferred_type_node_with_ref(SymTab_t *symtab,
+    const TypeRef *type_ref, const char *type_id)
+{
+    return semcheck_find_preferred_type_node_ref(symtab, type_ref, type_id);
 }
 
 static HashNode_t *semcheck_find_type_node_with_unit_flag(SymTab_t *symtab,
@@ -2286,6 +2475,62 @@ static HashNode_t *semcheck_find_type_node_with_unit_flag(SymTab_t *symtab,
         best = fallback_outermost;
     if (matches != NULL)
         DestroyList(matches);
+    return best;
+}
+
+static HashNode_t *semcheck_find_type_node_with_unit_flag_ref(SymTab_t *symtab,
+    const TypeRef *type_ref, const char *type_id, int defined_in_unit)
+{
+    if (symtab == NULL)
+        return NULL;
+
+    char *rendered = NULL;
+    const char *lookup_id = type_id;
+    if (type_ref != NULL)
+    {
+        rendered = type_ref_render_mangled(type_ref);
+        if (rendered != NULL)
+            lookup_id = rendered;
+    }
+    if (lookup_id == NULL)
+    {
+        free(rendered);
+        return NULL;
+    }
+
+    ListNode_t *matches = FindAllIdents(symtab, lookup_id);
+    if (matches == NULL && type_ref != NULL)
+    {
+        const char *base = type_ref_base_name(type_ref);
+        if (base != NULL && base != lookup_id)
+            matches = FindAllIdents(symtab, base);
+    }
+
+    HashNode_t *best = NULL;
+    HashNode_t *fallback_outermost = NULL;
+    ListNode_t *cur = matches;
+    while (cur != NULL)
+    {
+        HashNode_t *node = (HashNode_t *)cur->cur;
+        if (node != NULL && node->hash_type == HASHTYPE_TYPE)
+        {
+            if (node->defined_in_unit == defined_in_unit)
+            {
+                best = node;
+                break;
+            }
+            if (best == NULL)
+                best = node;
+            fallback_outermost = node;
+        }
+        cur = cur->next;
+    }
+    if (best != NULL && best->defined_in_unit != defined_in_unit && defined_in_unit)
+        best = fallback_outermost;
+
+    if (matches != NULL)
+        DestroyList(matches);
+    free(rendered);
     return best;
 }
 
@@ -2380,6 +2625,13 @@ const char *semcheck_get_current_subprogram_owner_class_full(void)
     return g_semcheck_current_subprogram->tree_data.subprogram_data.owner_class_full;
 }
 
+const char *semcheck_get_current_subprogram_owner_class_outer(void)
+{
+    if (g_semcheck_current_subprogram == NULL)
+        return NULL;
+    return g_semcheck_current_subprogram->tree_data.subprogram_data.owner_class_outer;
+}
+
 KgpcType *semcheck_get_current_subprogram_return_kgpc_type(SymTab_t *symtab, int *owns_type)
 {
     if (owns_type != NULL)
@@ -2388,9 +2640,10 @@ KgpcType *semcheck_get_current_subprogram_return_kgpc_type(SymTab_t *symtab, int
         return NULL;
 
     const char *rt_id = g_semcheck_current_subprogram->tree_data.subprogram_data.return_type_id;
+    const TypeRef *rt_ref = g_semcheck_current_subprogram->tree_data.subprogram_data.return_type_ref;
     if (rt_id != NULL)
     {
-        HashNode_t *type_node = semcheck_find_type_node_with_kgpc_type(symtab, rt_id);
+        HashNode_t *type_node = semcheck_find_type_node_with_kgpc_type_ref(symtab, rt_ref, rt_id);
         if (type_node != NULL && type_node->type != NULL)
         {
             if (owns_type != NULL)
@@ -2610,19 +2863,34 @@ int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scop
     Tree_t *parent_subprogram);
 
 /* Resolve the return type for a function declaration once so callers share the same KgpcType. */
-HashNode_t *semcheck_find_type_node_with_kgpc_type(SymTab_t *symtab, const char *type_id)
+HashNode_t *semcheck_find_type_node_with_kgpc_type_ref(SymTab_t *symtab,
+    const TypeRef *type_ref, const char *type_id)
 {
-    if (symtab == NULL || type_id == NULL)
+    if (symtab == NULL || (type_id == NULL && type_ref == NULL))
         return NULL;
 
     /* Prefer the generic-aware lookup so we can instantiate types like
      * TFPGListEnumerator$TMyRecord on demand for function return types. */
-    HashNode_t *preferred = semcheck_find_preferred_type_node(symtab, type_id);
+    HashNode_t *preferred = semcheck_find_preferred_type_node_with_ref(symtab, type_ref, type_id);
     if (preferred != NULL && preferred->type != NULL)
         return preferred;
 
+    char *rendered = NULL;
+    const char *lookup_id = type_id;
+    if (type_ref != NULL)
+    {
+        rendered = type_ref_render_mangled(type_ref);
+        if (rendered != NULL)
+            lookup_id = rendered;
+    }
+    if (lookup_id == NULL)
+    {
+        free(rendered);
+        return NULL;
+    }
+
     HashNode_t *result = NULL;
-    ListNode_t *all_nodes = FindAllIdents(symtab, type_id);
+    ListNode_t *all_nodes = FindAllIdents(symtab, lookup_id);
     ListNode_t *cur = all_nodes;
     while (cur != NULL)
     {
@@ -2643,7 +2911,13 @@ HashNode_t *semcheck_find_type_node_with_kgpc_type(SymTab_t *symtab, const char 
     if (all_nodes != NULL)
         DestroyList(all_nodes);
 
+    free(rendered);
     return result;
+}
+
+HashNode_t *semcheck_find_type_node_with_kgpc_type(SymTab_t *symtab, const char *type_id)
+{
+    return semcheck_find_type_node_with_kgpc_type_ref(symtab, NULL, type_id);
 }
 
 static KgpcType *build_function_return_type(Tree_t *subprogram, SymTab_t *symtab,
@@ -2659,18 +2933,23 @@ static KgpcType *build_function_return_type(Tree_t *subprogram, SymTab_t *symtab
     HashNode_t *type_node = NULL;
     if (subprogram->tree_data.subprogram_data.return_type_id != NULL)
     {
-        type_node = semcheck_find_type_node_with_kgpc_type(symtab, subprogram->tree_data.subprogram_data.return_type_id);
+        type_node = semcheck_find_type_node_with_kgpc_type_ref(symtab,
+            subprogram->tree_data.subprogram_data.return_type_ref,
+            subprogram->tree_data.subprogram_data.return_type_id);
         if (type_node == NULL)
         {
             /* Before reporting error, check for builtin types not in symbol table */
             const char *type_id = subprogram->tree_data.subprogram_data.return_type_id;
-            int builtin_type = semcheck_map_builtin_type_name_local(type_id);
+            const TypeRef *type_ref = subprogram->tree_data.subprogram_data.return_type_ref;
+            const char *type_base = type_ref != NULL ? type_ref_base_name(type_ref) : type_id;
+            int builtin_type = semcheck_map_builtin_type_name_local(type_base);
             if (builtin_type == UNKNOWN_TYPE)
             {
                 /* Check if this is a generic type parameter of the function */
                 int is_generic_param = 0;
                 for (int i = 0; i < subprogram->tree_data.subprogram_data.num_generic_type_params; i++) {
-                    if (strcasecmp(type_id, subprogram->tree_data.subprogram_data.generic_type_params[i]) == 0) {
+                    if (type_base != NULL &&
+                        strcasecmp(type_base, subprogram->tree_data.subprogram_data.generic_type_params[i]) == 0) {
                         is_generic_param = 1;
                         break;
                     }
@@ -2721,14 +3000,16 @@ static KgpcType *build_function_return_type(Tree_t *subprogram, SymTab_t *symtab
 }
 
 /* Forward declaration for type resolution helper used in const evaluation. */
-static const char *resolve_type_to_base_name(SymTab_t *symtab, const char *type_name);
+static const char *resolve_type_to_base_name(SymTab_t *symtab,
+    const QualifiedIdent *type_id,
+    const char *type_name);
 
 static int is_real_type_name(SymTab_t *symtab, const char *type_name)
 {
     if (type_name == NULL)
         return 0;
 
-    const char *resolved = resolve_type_to_base_name(symtab, type_name);
+    const char *resolved = resolve_type_to_base_name(symtab, NULL, type_name);
     const char *name = (resolved != NULL) ? resolved : type_name;
 
     return (pascal_identifier_equals(name, "Real") ||
@@ -2842,6 +3123,7 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
 static int resolve_scoped_enum_literal(SymTab_t *symtab, const char *type_name,
     const char *literal_name, long long *out_value);
 static char *build_qualified_identifier_from_expr(struct Expression *expr);
+static QualifiedIdent *build_qualified_ident_from_expr(struct Expression *expr);
 
 static int expression_is_set_const_expr(SymTab_t *symtab, struct Expression *expr)
 {
@@ -3335,51 +3617,65 @@ static int evaluate_real_const_expr(SymTab_t *symtab, struct Expression *expr, d
 static int resolve_type_depth = 0;
 #define MAX_RESOLVE_TYPE_DEPTH 100
 
-static const char *resolve_type_to_base_name(SymTab_t *symtab, const char *type_name)
+static const char *resolve_type_to_base_name(SymTab_t *symtab,
+    const QualifiedIdent *type_id,
+    const char *type_name)
 {
-    if (type_name == NULL) return NULL;
+    const char *input_name = NULL;
+    if (type_id != NULL)
+        input_name = qualified_ident_last(type_id);
+    if (input_name == NULL)
+        input_name = type_name;
+    if (input_name == NULL)
+        return NULL;
     
     /* Prevent infinite recursion from circular type definitions */
     if (resolve_type_depth >= MAX_RESOLVE_TYPE_DEPTH)
     {
         KGPC_SEMCHECK_HARD_ASSERT(0,
             "type resolution depth limit reached for '%s' (possible circular definition)",
-            type_name);
+            input_name);
         return NULL;
     }
     
     /* First, check if it's already a known primitive type */
-    if (pascal_identifier_equals(type_name, "Int64") ||
-        pascal_identifier_equals(type_name, "QWord") ||
-        pascal_identifier_equals(type_name, "UInt64") ||
-        pascal_identifier_equals(type_name, "LongInt") ||
-        pascal_identifier_equals(type_name, "Integer") ||
-        pascal_identifier_equals(type_name, "Cardinal") ||
-        pascal_identifier_equals(type_name, "LongWord") ||
-        pascal_identifier_equals(type_name, "DWord") ||
-        pascal_identifier_equals(type_name, "SmallInt") ||
-        pascal_identifier_equals(type_name, "Word") ||
-        pascal_identifier_equals(type_name, "ShortInt") ||
-        pascal_identifier_equals(type_name, "Byte") ||
-        pascal_identifier_equals(type_name, "Boolean") ||
-        pascal_identifier_equals(type_name, "Char") ||
-        pascal_identifier_equals(type_name, "AnsiChar") ||
-        pascal_identifier_equals(type_name, "WideChar") ||
-        pascal_identifier_equals(type_name, "Pointer") ||
-        pascal_identifier_equals(type_name, "PChar") ||
-        pascal_identifier_equals(type_name, "Double") ||
-        pascal_identifier_equals(type_name, "Real") ||
-        pascal_identifier_equals(type_name, "Single"))
+    if (pascal_identifier_equals(input_name, "Int64") ||
+        pascal_identifier_equals(input_name, "QWord") ||
+        pascal_identifier_equals(input_name, "UInt64") ||
+        pascal_identifier_equals(input_name, "LongInt") ||
+        pascal_identifier_equals(input_name, "Integer") ||
+        pascal_identifier_equals(input_name, "Cardinal") ||
+        pascal_identifier_equals(input_name, "LongWord") ||
+        pascal_identifier_equals(input_name, "DWord") ||
+        pascal_identifier_equals(input_name, "SmallInt") ||
+        pascal_identifier_equals(input_name, "Word") ||
+        pascal_identifier_equals(input_name, "ShortInt") ||
+        pascal_identifier_equals(input_name, "Byte") ||
+        pascal_identifier_equals(input_name, "Boolean") ||
+        pascal_identifier_equals(input_name, "Char") ||
+        pascal_identifier_equals(input_name, "AnsiChar") ||
+        pascal_identifier_equals(input_name, "WideChar") ||
+        pascal_identifier_equals(input_name, "Pointer") ||
+        pascal_identifier_equals(input_name, "PChar") ||
+        pascal_identifier_equals(input_name, "Double") ||
+        pascal_identifier_equals(input_name, "Real") ||
+        pascal_identifier_equals(input_name, "Single"))
     {
-        return type_name;
+        return input_name;
     }
     
     /* Try to look up as a type alias in the symbol table */
     if (symtab != NULL)
     {
         HashNode_t *type_node = NULL;
-        /* Cast away const for FindIdent - it doesn't modify the string */
         const char *lookup_name = type_name;
+        char *qualified_name = NULL;
+        if (type_id != NULL)
+        {
+            qualified_name = qualified_ident_join(type_id, ".");
+            if (qualified_name != NULL)
+                lookup_name = qualified_name;
+        }
         
         /* Handle qualified type names like "UnixType.culong" - try full name first */
         int found = FindIdent(&type_node, symtab, lookup_name);
@@ -3387,31 +3683,33 @@ static const char *resolve_type_to_base_name(SymTab_t *symtab, const char *type_
         if (getenv("KGPC_DEBUG_RESOLVE_TYPE") != NULL)
         {
             fprintf(stderr, "[resolve_type] '%s' initial lookup found=%d node=%p\n",
-                type_name, found, (void*)type_node);
+                input_name, found, (void*)type_node);
         }
         
         /* If lookup failed and this is a qualified name, try the unqualified part */
         if (found < 0 || type_node == NULL)
         {
-            const char *dot = strrchr(type_name, '.');
-            if (dot != NULL && dot[1] != '\0')
+            const char *last = (type_id != NULL) ? qualified_ident_last(type_id) : NULL;
+            if (last != NULL)
             {
-                lookup_name = dot + 1;  /* Skip past the dot to get unqualified name */
+                lookup_name = last;
                 found = FindIdent(&type_node, symtab, lookup_name);
                 if (getenv("KGPC_DEBUG_RESOLVE_TYPE") != NULL)
                 {
                     fprintf(stderr, "[resolve_type] '%s' unqualified '%s' found=%d node=%p\n",
-                        type_name, lookup_name, found, (void*)type_node);
+                        input_name, lookup_name, found, (void*)type_node);
                 }
             }
         }
+        if (qualified_name != NULL)
+            free(qualified_name);
         
         if (found >= 0 && type_node != NULL)
         {
             if (getenv("KGPC_DEBUG_RESOLVE_TYPE") != NULL)
             {
                 fprintf(stderr, "[resolve_type] '%s' hash_type=%d type=%p\n",
-                    type_name, type_node->hash_type, (void*)type_node->type);
+                    input_name, type_node->hash_type, (void*)type_node->type);
             }
             if (type_node->hash_type == HASHTYPE_TYPE && type_node->type != NULL)
             {
@@ -3426,11 +3724,11 @@ static const char *resolve_type_to_base_name(SymTab_t *symtab, const char *type_
                 if (getenv("KGPC_DEBUG_RESOLVE_TYPE") != NULL)
                 {
                     fprintf(stderr, "[resolve_type] '%s' kgpc_type kind=%d alias=%p\n",
-                        type_name, kgpc_type->kind, (void*)alias);
+                        input_name, kgpc_type->kind, (void*)alias);
                     if (alias != NULL)
                     {
                         fprintf(stderr, "[resolve_type] '%s' alias target_type_id='%s' base_type=%d\n",
-                            type_name, alias->target_type_id ? alias->target_type_id : "<null>",
+                            input_name, alias->target_type_id ? alias->target_type_id : "<null>",
                             alias->base_type);
                     }
                 }
@@ -3439,14 +3737,17 @@ static const char *resolve_type_to_base_name(SymTab_t *symtab, const char *type_
                     /* Recursively resolve via target_type_id if available.
                      * This will eventually reach a builtin type like "Word", "Byte", etc.
                      * which are handled by the builtin check at the top of this function. */
-                    if (alias->target_type_id != NULL)
+                    if (alias->target_type_ref != NULL || alias->target_type_id != NULL)
                     {
                         /* Prevent recursion on same type name */
-                        if (pascal_identifier_equals(alias->target_type_id, type_name))
-                            return type_name;
+                        const char *alias_target = alias->target_type_id;
+                        if (alias_target != NULL && pascal_identifier_equals(alias_target, input_name))
+                            return input_name;
                         
                         resolve_type_depth++;
-                        const char *result = resolve_type_to_base_name(symtab, alias->target_type_id);
+                        const char *result = resolve_type_to_base_name(symtab,
+                            alias->target_type_ref != NULL ? alias->target_type_ref->name : NULL,
+                            alias->target_type_id);
                         resolve_type_depth--;
                         return result;
                     }
@@ -4011,28 +4312,31 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                 /* High expects a type identifier */
                 if (arg->type == EXPR_VAR_ID || arg->type == EXPR_RECORD_ACCESS)
                 {
+                    QualifiedIdent *type_id_ref = build_qualified_ident_from_expr(arg);
                     char *qualified_name = NULL;
                     const char *type_name = NULL;
                     int status = 1;
+                    if (type_id_ref != NULL)
+                        qualified_name = qualified_ident_join(type_id_ref, ".");
                     if (arg->type == EXPR_VAR_ID)
                         type_name = arg->expr_data.id;
-                    else
-                    {
-                        qualified_name = build_qualified_identifier_from_expr(arg);
+                    if (type_name == NULL)
                         type_name = qualified_name;
-                    }
-                    const char *base_name = semcheck_base_type_name(type_name);
+                    const char *base_name = (type_id_ref != NULL) ?
+                        qualified_ident_last(type_id_ref) :
+                        semcheck_base_type_name(type_name);
                     const char *lookup_name = type_name;
                     long long range_low = 0;
                     long long range_high = 0;
-                    if (resolve_range_bounds_for_type(symtab, lookup_name, &range_low, &range_high))
+                    if (lookup_name != NULL &&
+                        resolve_range_bounds_for_type(symtab, lookup_name, &range_low, &range_high))
                     {
                         *out_value = range_high;
                         status = 0;
                         goto high_cleanup;
                     }
                     /* Resolve type aliases to base type */
-                    const char *resolved = resolve_type_to_base_name(symtab, lookup_name);
+                    const char *resolved = resolve_type_to_base_name(symtab, type_id_ref, lookup_name);
                     if (resolved != NULL)
                         lookup_name = resolved;
                     
@@ -4103,6 +4407,7 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
 high_cleanup:
                     if (qualified_name != NULL)
                         free(qualified_name);
+                    qualified_ident_free(type_id_ref);
                     return status;
                 }
                 fprintf(stderr, "Error: High expects a type identifier as argument.\n");
@@ -4128,28 +4433,31 @@ high_cleanup:
                 /* Low expects a type identifier */
                 if (arg->type == EXPR_VAR_ID || arg->type == EXPR_RECORD_ACCESS)
                 {
+                    QualifiedIdent *type_id_ref = build_qualified_ident_from_expr(arg);
                     char *qualified_name = NULL;
                     const char *type_name = NULL;
                     int status = 1;
+                    if (type_id_ref != NULL)
+                        qualified_name = qualified_ident_join(type_id_ref, ".");
                     if (arg->type == EXPR_VAR_ID)
                         type_name = arg->expr_data.id;
-                    else
-                    {
-                        qualified_name = build_qualified_identifier_from_expr(arg);
+                    if (type_name == NULL)
                         type_name = qualified_name;
-                    }
-                    const char *base_name = semcheck_base_type_name(type_name);
+                    const char *base_name = (type_id_ref != NULL) ?
+                        qualified_ident_last(type_id_ref) :
+                        semcheck_base_type_name(type_name);
                     const char *lookup_name = type_name;
                     long long range_low = 0;
                     long long range_high = 0;
-                    if (resolve_range_bounds_for_type(symtab, lookup_name, &range_low, &range_high))
+                    if (lookup_name != NULL &&
+                        resolve_range_bounds_for_type(symtab, lookup_name, &range_low, &range_high))
                     {
                         *out_value = range_low;
                         status = 0;
                         goto low_cleanup;
                     }
                     /* Resolve type aliases to base type */
-                    const char *resolved = resolve_type_to_base_name(symtab, lookup_name);
+                    const char *resolved = resolve_type_to_base_name(symtab, type_id_ref, lookup_name);
                     if (resolved != NULL)
                         lookup_name = resolved;
                         
@@ -4219,6 +4527,7 @@ high_cleanup:
 low_cleanup:
                     if (qualified_name != NULL)
                         free(qualified_name);
+                    qualified_ident_free(type_id_ref);
                     return status;
                 }
                 fprintf(stderr, "Error: Low expects a type identifier as argument.\n");
@@ -4244,51 +4553,63 @@ low_cleanup:
                 /* SizeOf expects a type identifier */
                 if (arg->type == EXPR_VAR_ID)
                 {
+                    QualifiedIdent *type_id_ref = NULL;
                     const char *type_name = arg->expr_data.id;
+                    const char *base_name = type_name;
+                    if (arg->id_ref != NULL)
+                    {
+                        type_id_ref = qualified_ident_clone(arg->id_ref);
+                        base_name = qualified_ident_last(type_id_ref);
+                    }
                     /* Resolve type aliases to base type */
-                    const char *resolved = resolve_type_to_base_name(symtab, type_name);
+                    const char *resolved = resolve_type_to_base_name(symtab, type_id_ref, type_name);
                     if (resolved != NULL)
-                        type_name = resolved;
+                        base_name = resolved;
                         
                     /* Map common type names to their sizes (in bytes) */
                     /* 64-bit types */
-                    if (pascal_identifier_equals(type_name, "Int64") ||
-                        pascal_identifier_equals(type_name, "QWord") ||
-                        pascal_identifier_equals(type_name, "UInt64") ||
-                        pascal_identifier_equals(type_name, "Pointer") ||
-                        pascal_identifier_equals(type_name, "PChar") ||
-                        pascal_identifier_equals(type_name, "Double") ||
-                        pascal_identifier_equals(type_name, "Real")) {
+                    if (pascal_identifier_equals(base_name, "Int64") ||
+                        pascal_identifier_equals(base_name, "QWord") ||
+                        pascal_identifier_equals(base_name, "UInt64") ||
+                        pascal_identifier_equals(base_name, "Pointer") ||
+                        pascal_identifier_equals(base_name, "PChar") ||
+                        pascal_identifier_equals(base_name, "Double") ||
+                        pascal_identifier_equals(base_name, "Real")) {
                         *out_value = 8LL;
+                        qualified_ident_free(type_id_ref);
                         return 0;
                     }
                     /* 32-bit types */
-                    if (pascal_identifier_equals(type_name, "LongInt") ||
-                        pascal_identifier_equals(type_name, "LongWord") ||
-                        pascal_identifier_equals(type_name, "Cardinal") ||
-                        pascal_identifier_equals(type_name, "DWord") ||
-                        pascal_identifier_equals(type_name, "Integer") ||
-                        pascal_identifier_equals(type_name, "Single")) {
+                    if (pascal_identifier_equals(base_name, "LongInt") ||
+                        pascal_identifier_equals(base_name, "LongWord") ||
+                        pascal_identifier_equals(base_name, "Cardinal") ||
+                        pascal_identifier_equals(base_name, "DWord") ||
+                        pascal_identifier_equals(base_name, "Integer") ||
+                        pascal_identifier_equals(base_name, "Single")) {
                         *out_value = 4LL;
+                        qualified_ident_free(type_id_ref);
                         return 0;
                     }
                     /* 16-bit types */
-                    if (pascal_identifier_equals(type_name, "SmallInt") ||
-                        pascal_identifier_equals(type_name, "Word") ||
-                        pascal_identifier_equals(type_name, "WideChar")) {
+                    if (pascal_identifier_equals(base_name, "SmallInt") ||
+                        pascal_identifier_equals(base_name, "Word") ||
+                        pascal_identifier_equals(base_name, "WideChar")) {
                         *out_value = 2LL;
+                        qualified_ident_free(type_id_ref);
                         return 0;
                     }
                     /* 8-bit types */
-                    if (pascal_identifier_equals(type_name, "ShortInt") ||
-                        pascal_identifier_equals(type_name, "Byte") ||
-                        pascal_identifier_equals(type_name, "Char") ||
-                        pascal_identifier_equals(type_name, "AnsiChar") ||
-                        pascal_identifier_equals(type_name, "Boolean")) {
+                    if (pascal_identifier_equals(base_name, "ShortInt") ||
+                        pascal_identifier_equals(base_name, "Byte") ||
+                        pascal_identifier_equals(base_name, "Char") ||
+                        pascal_identifier_equals(base_name, "AnsiChar") ||
+                        pascal_identifier_equals(base_name, "Boolean")) {
                         *out_value = 1LL;
+                        qualified_ident_free(type_id_ref);
                         return 0;
                     }
                     fprintf(stderr, "Error: SizeOf(%s) - unsupported type in const expression.\n", arg->expr_data.id);
+                    qualified_ident_free(type_id_ref);
                     return 1;
                 }
                 fprintf(stderr, "Error: SizeOf expects a type identifier as argument.\n");
@@ -5405,42 +5726,46 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                     else if (kgpc_type == NULL && alias->target_type_id != NULL)
                     {
                         /* Check if target is a known builtin primitive type */
+                        const TypeRef *target_ref = alias->target_type_ref;
                         const char *target = alias->target_type_id;
-                        if (pascal_identifier_equals(target, "Int64") ||
-                            pascal_identifier_equals(target, "QWord") ||
-                            pascal_identifier_equals(target, "UInt64") ||
-                            pascal_identifier_equals(target, "SizeUInt") ||
-                            pascal_identifier_equals(target, "SizeInt") ||
-                            pascal_identifier_equals(target, "PtrUInt") ||
-                            pascal_identifier_equals(target, "PtrInt") ||
-                            pascal_identifier_equals(target, "NativeUInt") ||
-                            pascal_identifier_equals(target, "NativeInt"))
+                        const char *target_base = (target_ref != NULL)
+                            ? type_ref_base_name(target_ref)
+                            : target;
+                        if (pascal_identifier_equals(target_base, "Int64") ||
+                            pascal_identifier_equals(target_base, "QWord") ||
+                            pascal_identifier_equals(target_base, "UInt64") ||
+                            pascal_identifier_equals(target_base, "SizeUInt") ||
+                            pascal_identifier_equals(target_base, "SizeInt") ||
+                            pascal_identifier_equals(target_base, "PtrUInt") ||
+                            pascal_identifier_equals(target_base, "PtrInt") ||
+                            pascal_identifier_equals(target_base, "NativeUInt") ||
+                            pascal_identifier_equals(target_base, "NativeInt"))
                         {
                             kgpc_type = create_primitive_type(INT64_TYPE);
                             if (kgpc_type != NULL)
                                 created_new_type = 1;
                         }
-                        else if (pascal_identifier_equals(target, "LongInt") ||
-                            pascal_identifier_equals(target, "Cardinal") ||
-                            pascal_identifier_equals(target, "LongWord") ||
-                            pascal_identifier_equals(target, "DWord"))
+                        else if (pascal_identifier_equals(target_base, "LongInt") ||
+                            pascal_identifier_equals(target_base, "Cardinal") ||
+                            pascal_identifier_equals(target_base, "LongWord") ||
+                            pascal_identifier_equals(target_base, "DWord"))
                         {
                             kgpc_type = create_primitive_type(LONGINT_TYPE);
                             if (kgpc_type != NULL)
                                 created_new_type = 1;
                         }
-                        else if (pascal_identifier_equals(target, "Integer") ||
-                            pascal_identifier_equals(target, "SmallInt") ||
-                            pascal_identifier_equals(target, "ShortInt") ||
-                            pascal_identifier_equals(target, "Byte") ||
-                            pascal_identifier_equals(target, "Word"))
+                        else if (pascal_identifier_equals(target_base, "Integer") ||
+                            pascal_identifier_equals(target_base, "SmallInt") ||
+                            pascal_identifier_equals(target_base, "ShortInt") ||
+                            pascal_identifier_equals(target_base, "Byte") ||
+                            pascal_identifier_equals(target_base, "Word"))
                         {
                             int storage_size = 0;
-                            if (pascal_identifier_equals(target, "Byte") ||
-                                pascal_identifier_equals(target, "ShortInt"))
+                            if (pascal_identifier_equals(target_base, "Byte") ||
+                                pascal_identifier_equals(target_base, "ShortInt"))
                                 storage_size = 1;
-                            else if (pascal_identifier_equals(target, "Word") ||
-                                     pascal_identifier_equals(target, "SmallInt"))
+                            else if (pascal_identifier_equals(target_base, "Word") ||
+                                     pascal_identifier_equals(target_base, "SmallInt"))
                                 storage_size = 2;
                             if (storage_size > 0)
                                 kgpc_type = create_primitive_type_with_size(INT_TYPE, storage_size);
@@ -5449,22 +5774,22 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             if (kgpc_type != NULL)
                                 created_new_type = 1;
                         }
-                        else if (pascal_identifier_equals(target, "Real") ||
-                                 pascal_identifier_equals(target, "Double") ||
-                                 pascal_identifier_equals(target, "Single"))
+                        else if (pascal_identifier_equals(target_base, "Real") ||
+                                 pascal_identifier_equals(target_base, "Double") ||
+                                 pascal_identifier_equals(target_base, "Single"))
                         {
                             kgpc_type = create_primitive_type(REAL_TYPE);
                             if (kgpc_type != NULL)
                                 created_new_type = 1;
                         }
-                        else if (pascal_identifier_equals(target, "Boolean"))
+                        else if (pascal_identifier_equals(target_base, "Boolean"))
                         {
                             kgpc_type = create_primitive_type(BOOL);
                             if (kgpc_type != NULL)
                                 created_new_type = 1;
                         }
-                        else if (pascal_identifier_equals(target, "Char") ||
-                                 pascal_identifier_equals(target, "AnsiChar"))
+                        else if (pascal_identifier_equals(target_base, "Char") ||
+                                 pascal_identifier_equals(target_base, "AnsiChar"))
                         {
                             kgpc_type = create_primitive_type(CHAR_TYPE);
                             if (kgpc_type != NULL)
@@ -5474,27 +5799,42 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                         else
                         {
                             HashNode_t *target_node = NULL;
-                            const char *lookup_target = target;
-                            const char *dot = strrchr(target, '.');
-                            int has_dot = (dot != NULL && dot[1] != '\0');
+                            char *lookup_target = NULL;
+                            char *lookup_unqualified = NULL;
+                            const char *lookup_name = target;
+                            int has_qualification = 0;
+                            if (target_ref != NULL)
+                            {
+                                lookup_target = type_ref_render_mangled(target_ref);
+                                if (lookup_target != NULL)
+                                    lookup_name = lookup_target;
+                                if (target_ref->name != NULL && target_ref->name->count > 1)
+                                    has_qualification = 1;
+                            }
                             
                             /* Handle qualified type names like "UnixType.culong" */
-                            int found = FindIdent(&target_node, symtab, lookup_target);
+                            int found = FindIdent(&target_node, symtab, lookup_name);
                             if (found < 0 || target_node == NULL)
                             {
-                                /* Try unqualified name if it contains a dot */
-                                if (has_dot)
+                                /* Try unqualified name if we have structured qualification */
+                                if (has_qualification)
                                 {
-                                    lookup_target = dot + 1;
-                                    found = FindIdent(&target_node, symtab, lookup_target);
+                                    lookup_unqualified = type_ref_render_mangled_unqualified(target_ref);
+                                    if (lookup_unqualified != NULL)
+                                    {
+                                        lookup_name = lookup_unqualified;
+                                        found = FindIdent(&target_node, symtab, lookup_name);
+                                    }
                                 }
                             }
-                            if (found >= 0 && target_node != NULL && has_dot &&
+                            if (found >= 0 && target_node != NULL && has_qualification &&
                                 target_node->type != NULL &&
                                 kgpc_type_get_type_alias(target_node->type) == alias)
                             {
-                                target_node = semcheck_find_type_excluding_alias(symtab, lookup_target, alias);
+                                target_node = semcheck_find_type_excluding_alias(symtab, lookup_name, alias);
                             }
+                            free(lookup_target);
+                            free(lookup_unqualified);
                             
                             if (found >= 0 &&
                                 target_node != NULL && target_node->hash_type == HASHTYPE_TYPE &&
@@ -5638,6 +5978,7 @@ static struct ClassProperty *clone_class_property(const struct ClassProperty *pr
     clone->name = property->name != NULL ? strdup(property->name) : NULL;
     clone->type = property->type;
     clone->type_id = property->type_id != NULL ? strdup(property->type_id) : NULL;
+    clone->type_ref = property->type_ref != NULL ? type_ref_clone(property->type_ref) : NULL;
     clone->read_accessor = property->read_accessor != NULL ? strdup(property->read_accessor) : NULL;
     clone->write_accessor = property->write_accessor != NULL ? strdup(property->write_accessor) : NULL;
     clone->is_indexed = property->is_indexed;
@@ -5650,6 +5991,8 @@ static struct ClassProperty *clone_class_property(const struct ClassProperty *pr
     {
         free(clone->name);
         free(clone->type_id);
+        if (clone->type_ref != NULL)
+            type_ref_free(clone->type_ref);
         free(clone->read_accessor);
         free(clone->write_accessor);
         free(clone);
@@ -5924,7 +6267,13 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
                     struct RecordField *field = (struct RecordField *)temp->cur;
                     free(field->name);
                     free(field->type_id);
+                    if (field->type_ref != NULL)
+                        type_ref_free(field->type_ref);
                     free(field->array_element_type_id);
+                    if (field->array_element_type_ref != NULL)
+                        type_ref_free(field->array_element_type_ref);
+                    if (field->pointer_type_ref != NULL)
+                        type_ref_free(field->pointer_type_ref);
                     if (field->proc_type != NULL)
                         kgpc_type_release(field->proc_type);
                     free(field);
@@ -5936,6 +6285,8 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
             cloned_field->name = original_field->name ? strdup(original_field->name) : NULL;
             cloned_field->type = original_field->type;
             cloned_field->type_id = original_field->type_id ? strdup(original_field->type_id) : NULL;
+            cloned_field->type_ref = original_field->type_ref != NULL
+                ? type_ref_clone(original_field->type_ref) : NULL;
             cloned_field->nested_record = original_field->nested_record;  /* Share the nested record */
             cloned_field->proc_type = original_field->proc_type;
             if (cloned_field->proc_type != NULL)
@@ -5946,6 +6297,8 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
             cloned_field->array_element_type = original_field->array_element_type;
             cloned_field->array_element_type_id = original_field->array_element_type_id ? 
                 strdup(original_field->array_element_type_id) : NULL;
+            cloned_field->array_element_type_ref = original_field->array_element_type_ref != NULL
+                ? type_ref_clone(original_field->array_element_type_ref) : NULL;
             cloned_field->array_is_open = original_field->array_is_open;
             cloned_field->is_hidden = original_field->is_hidden;
             cloned_field->is_class_var = original_field->is_class_var;
@@ -5953,6 +6306,8 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
             cloned_field->pointer_type = original_field->pointer_type;
             cloned_field->pointer_type_id = original_field->pointer_type_id ?
                 strdup(original_field->pointer_type_id) : NULL;
+            cloned_field->pointer_type_ref = original_field->pointer_type_ref != NULL
+                ? type_ref_clone(original_field->pointer_type_ref) : NULL;
             /* array_element_record is zeroed by calloc — not cloned to avoid double-free */
             cloned_field->enum_literals = NULL;
             
@@ -5962,7 +6317,13 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
             {
                 free(cloned_field->name);
                 free(cloned_field->type_id);
+                if (cloned_field->type_ref != NULL)
+                    type_ref_free(cloned_field->type_ref);
                 free(cloned_field->array_element_type_id);
+                if (cloned_field->array_element_type_ref != NULL)
+                    type_ref_free(cloned_field->array_element_type_ref);
+                if (cloned_field->pointer_type_ref != NULL)
+                    type_ref_free(cloned_field->pointer_type_ref);
                 if (cloned_field->proc_type != NULL)
                     kgpc_type_release(cloned_field->proc_type);
                 free(cloned_field);
@@ -6298,6 +6659,58 @@ static char *build_qualified_identifier_from_expr(struct Expression *expr)
     return qualified;
 }
 
+static QualifiedIdent *build_qualified_ident_from_expr(struct Expression *expr)
+{
+    if (expr == NULL)
+        return NULL;
+    if (expr->type == EXPR_VAR_ID)
+    {
+        if (expr->id_ref != NULL)
+            return qualified_ident_clone(expr->id_ref);
+        if (expr->expr_data.id != NULL)
+            return qualified_ident_from_single(expr->expr_data.id);
+        return NULL;
+    }
+    if (expr->type != EXPR_RECORD_ACCESS)
+        return NULL;
+
+    struct Expression *record_expr = expr->expr_data.record_access_data.record_expr;
+    char *field_id = expr->expr_data.record_access_data.field_id;
+    if (record_expr == NULL || field_id == NULL)
+        return NULL;
+
+    QualifiedIdent *base = build_qualified_ident_from_expr(record_expr);
+    if (base == NULL || base->count <= 0 || base->segments == NULL)
+    {
+        qualified_ident_free(base);
+        return NULL;
+    }
+
+    int new_count = base->count + 1;
+    char **segments = (char **)calloc((size_t)new_count, sizeof(char *));
+    if (segments == NULL)
+    {
+        qualified_ident_free(base);
+        return NULL;
+    }
+    for (int i = 0; i < base->count; ++i)
+    {
+        if (base->segments[i] != NULL)
+            segments[i] = strdup(base->segments[i]);
+    }
+    segments[new_count - 1] = strdup(field_id);
+
+    QualifiedIdent *out = qualified_ident_from_segments(segments, new_count, 1);
+    if (out == NULL)
+    {
+        for (int i = 0; i < new_count; ++i)
+            free(segments[i]);
+        free(segments);
+    }
+    qualified_ident_free(base);
+    return out;
+}
+
 static void sync_alias_array_bounds(KgpcType *kgpc_type, struct TypeAlias *alias)
 {
     if (kgpc_type == NULL || alias == NULL)
@@ -6523,6 +6936,8 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 {
                     record_info->type_id = strdup(tree->tree_data.type_decl_data.id);
                 }
+
+                semcheck_qualify_nested_types_for_record(symtab, record_info);
 
                 if (record_info != NULL && record_info->is_type_helper)
                     semcheck_register_type_helper(record_info, symtab);
@@ -7132,14 +7547,23 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                     else if (alias_info->is_file)
                         var_type = HASHVAR_FILE;
 
-                    if (var_type == HASHVAR_UNTYPED && alias_info->target_type_id != NULL)
+                    if (var_type == HASHVAR_UNTYPED &&
+                        (alias_info->target_type_ref != NULL || alias_info->target_type_id != NULL))
                     {
                         HashNode_t *target_node = NULL;
-                        if (semcheck_find_ident_with_qualified_fallback(&target_node, symtab,
-                            alias_info->target_type_id) != -1 && target_node != NULL)
+                        int found = -1;
+                        if (alias_info->target_type_ref != NULL)
                         {
-                            var_type = get_var_type_from_node(target_node);
+                            found = semcheck_find_ident_with_qualified_fallback_ref(&target_node,
+                                symtab, alias_info->target_type_ref->name);
                         }
+                        else
+                        {
+                            found = semcheck_find_ident_with_qualified_fallback(&target_node, symtab,
+                                alias_info->target_type_id);
+                        }
+                        if (found != -1 && target_node != NULL)
+                            var_type = get_var_type_from_node(target_node);
                     }
                 }
 
@@ -10091,20 +10515,31 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
 
         HashNode_t *resolved_type = NULL;
         int owner_type_match = 0;
-        if (tree->type == TREE_VAR_DECL && tree->tree_data.var_decl_data.type_id != NULL)
+        const TypeRef *decl_type_ref = NULL;
+        const char *decl_type_id = NULL;
+        const char *decl_type_base = NULL;
+        if (tree->type == TREE_VAR_DECL)
         {
-            const char *decl_type_id = tree->tree_data.var_decl_data.type_id;
+            decl_type_ref = tree->tree_data.var_decl_data.type_ref;
+            decl_type_id = tree->tree_data.var_decl_data.type_id;
+            decl_type_base = (decl_type_ref != NULL)
+                ? type_ref_base_name(decl_type_ref)
+                : decl_type_id;
+        }
+        if (tree->type == TREE_VAR_DECL && decl_type_id != NULL)
+        {
             if (tree->tree_data.var_decl_data.defined_in_unit)
             {
                 /* Imported declarations must stay bound to imported symbols.
                  * Never allow local fallback here: local shadow types can
                  * silently corrupt signatures (e.g. UnixType.TSize). */
-                resolved_type = semcheck_find_type_node_with_unit_flag(symtab,
-                    decl_type_id, 1);
+                resolved_type = semcheck_find_type_node_with_unit_flag_ref(symtab,
+                    decl_type_ref, decl_type_id, 1);
                 if (resolved_type != NULL && resolved_type->type != NULL &&
                     resolved_type->type->kind == TYPE_KIND_RECORD &&
-                    (pascal_identifier_equals(decl_type_id, "TSize") ||
-                     pascal_identifier_equals(decl_type_id, "tsize")))
+                    (decl_type_base != NULL &&
+                     (pascal_identifier_equals(decl_type_base, "TSize") ||
+                      pascal_identifier_equals(decl_type_base, "tsize"))))
                 {
                     HashNode_t *size_node = semcheck_find_type_node_with_unit_flag(symtab,
                         "size_t", 1);
@@ -10124,8 +10559,9 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 const char *owner_id = semcheck_get_current_method_owner();
                 const char *owner_innermost = semcheck_get_current_subprogram_owner_class();
                 if (owner_id != NULL &&
-                    (pascal_identifier_equals(decl_type_id, owner_id) ||
-                     (owner_innermost != NULL && pascal_identifier_equals(decl_type_id, owner_innermost))))
+                    (decl_type_base != NULL &&
+                     (pascal_identifier_equals(decl_type_base, owner_id) ||
+                      (owner_innermost != NULL && pascal_identifier_equals(decl_type_base, owner_innermost)))))
                 {
                     owner_type_match = 1;
                     if (tree->tree_data.var_decl_data.cached_kgpc_type != NULL &&
@@ -10147,7 +10583,8 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     }
                 }
                 if (resolved_type == NULL && !owner_type_match)
-                    resolved_type = semcheck_find_preferred_type_node(symtab, decl_type_id);
+                    resolved_type = semcheck_find_preferred_type_node_with_ref(symtab,
+                        decl_type_ref, decl_type_id);
             }
         }
         if (tree->type == TREE_VAR_DECL)
@@ -10175,16 +10612,17 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 }
             }
             else if (tree->tree_data.var_decl_data.cached_kgpc_type == NULL &&
-                     resolved_type == NULL && tree->tree_data.var_decl_data.type_id != NULL)
+                     resolved_type == NULL && decl_type_id != NULL)
             {
                 /* Fallback: Create KgpcType for built-in type names not in symbol table */
-                const char *type_id = tree->tree_data.var_decl_data.type_id;
+                const char *type_id = decl_type_base != NULL ? decl_type_base : decl_type_id;
                 int builtin_tag = semcheck_map_builtin_type_name_local(type_id);
                 if (builtin_tag != UNKNOWN_TYPE)
                 {
                     tree->tree_data.var_decl_data.cached_kgpc_type = create_primitive_type(builtin_tag);
                 }
-                else if (strchr(type_id, '$') != NULL)
+                else if (tree->tree_data.var_decl_data.type_ref != NULL &&
+                         tree->tree_data.var_decl_data.type_ref->num_generic_args > 0)
                 {
                     tree->tree_data.var_decl_data.cached_kgpc_type =
                         create_primitive_type(POINTER_TYPE);
@@ -10388,7 +10826,8 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                                  pascal_identifier_equals(type_id, "PPointer") ||
                                  pascal_identifier_equals(type_id, "PBoolean"))
                             var_type = HASHVAR_POINTER;
-                        else if (strchr(type_id, '$') != NULL)
+                        else if (tree->tree_data.var_decl_data.type_ref != NULL &&
+                                 tree->tree_data.var_decl_data.type_ref->num_generic_args > 0)
                             var_type = HASHVAR_POINTER;
                         else
                         {
@@ -10896,11 +11335,13 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 int is_array_of_const = (tree->tree_data.arr_decl_data.type == ARRAY_OF_CONST_TYPE);
 
                 /* If type_id is specified, resolve it to get the element type */
-                if (!is_array_of_const && tree->tree_data.arr_decl_data.type_id != NULL)
+                const TypeRef *element_type_ref = tree->tree_data.arr_decl_data.type_ref;
+                if (!is_array_of_const &&
+                    (tree->tree_data.arr_decl_data.type_id != NULL || element_type_ref != NULL))
                 {
                     HashNode_t *element_type_node = NULL;
-                    element_type_node = semcheck_find_preferred_type_node(symtab,
-                        tree->tree_data.arr_decl_data.type_id);
+                    element_type_node = semcheck_find_preferred_type_node_with_ref(symtab,
+                        element_type_ref, tree->tree_data.arr_decl_data.type_id);
                     if (element_type_node != NULL)
                     {
                         /* Use the KgpcType from the resolved type node */
@@ -10923,6 +11364,8 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     {
                         /* Fallback: check for builtin types not in symbol table */
                         const char *type_id = tree->tree_data.arr_decl_data.type_id;
+                        if (type_id == NULL && element_type_ref != NULL)
+                            type_id = type_ref_base_name(element_type_ref);
                         int builtin_type = semcheck_map_builtin_type_name_local(type_id);
                         if (builtin_type != UNKNOWN_TYPE)
                         {

@@ -1582,13 +1582,12 @@ int semcheck_varid(int *type_return,
              * outermost class: HeapInc__ConstName */
             if (class_const_scope == -1)
             {
-                const char *dot = strchr(owner, '.');
-                if (dot != NULL)
+                const char *outer = semcheck_get_current_subprogram_owner_class_outer();
+                if (outer != NULL)
                 {
-                    size_t outer_len = (size_t)(dot - owner);
                     char outer_mangled[256];
-                    snprintf(outer_mangled, sizeof(outer_mangled), "%.*s__%s",
-                             (int)outer_len, owner, id);
+                    snprintf(outer_mangled, sizeof(outer_mangled), "%s__%s",
+                             outer, id);
                     class_const = NULL;
                     class_const_scope = FindIdent(&class_const, symtab, outer_mangled);
                     if (class_const_scope >= 0 && class_const != NULL &&
@@ -1614,16 +1613,11 @@ int semcheck_varid(int *type_return,
          * (e.g. case labels). */
         if (scope_return == -1)
         {
-            assert(id != NULL);
-            const char *dot = strchr(id, '.');
-            if (dot != NULL && dot[1] != '\0')
+            if (expr->id_ref != NULL && expr->id_ref->count >= 2)
             {
-                size_t prefix_len = (size_t)(dot - id);
-                char *prefix = (char *)malloc(prefix_len + 1);
-                const char *suffix = dot + 1;
-                assert(prefix != NULL);
-                memcpy(prefix, id, prefix_len);
-                prefix[prefix_len] = '\0';
+                const char *prefix = expr->id_ref->segments[0];
+                const char *suffix = expr->id_ref->segments[expr->id_ref->count - 1];
+                size_t prefix_len = strlen(prefix);
 
                 HashNode_t *prefix_node = NULL;
                 int prefix_scope = FindIdent(&prefix_node, symtab, prefix);
@@ -1643,7 +1637,6 @@ int semcheck_varid(int *type_return,
                                 char *literal_name = (char *)literal_node->cur;
                                 if (strcasecmp(literal_name, suffix) == 0)
                                 {
-                                    free(prefix);
                                     expr->type = EXPR_INUM;
                                     expr->expr_data.i_num = ordinal;
                                     semcheck_expr_set_resolved_type(expr, ENUM_TYPE);
@@ -1670,7 +1663,6 @@ int semcheck_varid(int *type_return,
                          class_const_node->hash_type == HASHTYPE_VAR ||
                          class_const_node->is_typed_const))
                     {
-                        free(prefix);
                         if (expr->expr_data.id != NULL)
                             free(expr->expr_data.id);
                         expr->expr_data.id = strdup(mangled_qid);
@@ -1691,7 +1683,6 @@ int semcheck_varid(int *type_return,
                     {
                         if (field_node->hash_type == HASHTYPE_CONST)
                         {
-                            free(prefix);
                             expr->type = EXPR_INUM;
                             expr->expr_data.i_num = field_node->const_int_value;
                             semcheck_expr_set_resolved_type(expr, LONGINT_TYPE);
@@ -1703,7 +1694,6 @@ int semcheck_varid(int *type_return,
                         else if (field_node->hash_type == HASHTYPE_VAR ||
                                  field_node->hash_type == HASHTYPE_ARRAY)
                         {
-                            free(prefix);
                             char *field_copy = strdup(suffix);
                             assert(field_copy != NULL);
                             if (expr->expr_data.id != NULL)
@@ -1715,7 +1705,6 @@ int semcheck_varid(int *type_return,
                         }
                     }
                 }
-                free(prefix);
             }
         }
         /* Class property resolution in static methods: if the identifier

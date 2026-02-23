@@ -30,6 +30,7 @@ static char* strndup(const char* s, size_t n)
 #include "../List/List.h"
 #include "tree.h"
 #include "tree_types.h"
+#include "ident_ref.h"
 #include "type_tags.h"
 #include "pascal_parser.h"
 #include "KgpcType.h"
@@ -285,6 +286,7 @@ typedef struct {
     int end;
     int element_type;
     char *element_type_id;
+    TypeRef *element_type_ref;
     struct KgpcType *element_kgpc_type; /* For nested array elements (array of array of ...) */
     int is_shortstring;
     int is_open_array;
@@ -292,9 +294,11 @@ typedef struct {
     int is_pointer;
     int pointer_type;
     char *pointer_type_id;
+    TypeRef *pointer_type_ref;
     int is_set;
     int set_element_type;
     char *set_element_type_id;
+    TypeRef *set_element_type_ref;
     int is_enum_set;           /* Set with inline anonymous enum as element type */
     ListNode_t *inline_enum_values; /* Enum values for inline enum in set type */
     int is_enum;
@@ -303,11 +307,13 @@ typedef struct {
     int is_file;
     int file_type;
     char *file_type_id;
+    TypeRef *file_type_ref;
     int is_record;
     struct RecordType *record_type;
     int is_generic_specialization;
     char *generic_base_name;
     ListNode_t *generic_type_args;
+    TypeRef *type_ref;
     int is_range;
     int range_known;
     long long range_start;
@@ -320,6 +326,332 @@ static int g_frontend_error_count = 0;
 static char *g_scoped_enum_source_path = NULL;
 static char *g_scoped_enum_source_buffer = NULL;
 static size_t g_scoped_enum_source_length = 0;
+
+static ast_t *unwrap_pascal_node(ast_t *node);
+static char *dup_symbol(ast_t *node);
+
+static QualifiedIdent *qualified_ident_from_dotted(const char *name)
+{
+    if (name == NULL || name[0] == '\0')
+        return NULL;
+    int count = 1;
+    for (const char *p = name; *p != '\0'; ++p)
+    {
+        if (*p == '.')
+            ++count;
+    }
+    char **segments = (char **)calloc((size_t)count, sizeof(char *));
+    if (segments == NULL)
+        return NULL;
+    int idx = 0;
+    const char *start = name;
+    const char *p = name;
+    while (1)
+    {
+        if (*p == '.' || *p == '\0')
+        {
+            size_t len = (size_t)(p - start);
+            char *seg = (char *)malloc(len + 1);
+            if (seg == NULL)
+                break;
+            memcpy(seg, start, len);
+            seg[len] = '\0';
+            segments[idx++] = seg;
+            if (*p == '\0')
+                break;
+            start = p + 1;
+        }
+        if (*p == '\0')
+            break;
+        ++p;
+    }
+    if (idx != count)
+    {
+        for (int i = 0; i < idx; ++i)
+            free(segments[i]);
+        free(segments);
+        return NULL;
+    }
+    return qualified_ident_from_segments(segments, count, 1);
+}
+
+static char *qualified_ident_join_prefix(const QualifiedIdent *qid, int count)
+{
+    if (qid == NULL || qid->segments == NULL || count <= 0 || count > qid->count)
+        return NULL;
+    size_t total = 0;
+    for (int i = 0; i < count; ++i)
+    {
+        if (qid->segments[i] != NULL)
+            total += strlen(qid->segments[i]);
+        if (i + 1 < count)
+            total += 1;
+    }
+    char *out = (char *)malloc(total + 1);
+    if (out == NULL)
+        return NULL;
+    out[0] = '\0';
+    for (int i = 0; i < count; ++i)
+    {
+        if (qid->segments[i] != NULL)
+            strcat(out, qid->segments[i]);
+        if (i + 1 < count)
+            strcat(out, ".");
+    }
+    return out;
+}
+
+static TypeRef *type_ref_from_single_name(const char *name)
+{
+    if (name == NULL)
+        return NULL;
+    QualifiedIdent *qid = NULL;
+    if (strchr(name, '.') != NULL)
+        qid = qualified_ident_from_dotted(name);
+    else
+        qid = qualified_ident_from_single(name);
+    if (qid == NULL)
+        return NULL;
+    return type_ref_create(qid, NULL, 0);
+}
+
+static TypeRef *type_ref_from_name_and_args(const char *base_name, ListNode_t *type_args)
+{
+    if (base_name == NULL)
+        return NULL;
+    QualifiedIdent *qid = qualified_ident_from_single(base_name);
+    if (qid == NULL)
+        return NULL;
+    int arg_count = ListLength(type_args);
+    TypeRef **args = NULL;
+    if (arg_count > 0)
+    {
+        args = (TypeRef **)calloc((size_t)arg_count, sizeof(TypeRef *));
+        if (args == NULL)
+        {
+            qualified_ident_free(qid);
+            return NULL;
+        }
+        int idx = 0;
+        for (ListNode_t *cur = type_args; cur != NULL && idx < arg_count; cur = cur->next)
+        {
+            const char *arg_name = (const char *)cur->cur;
+            args[idx++] = type_ref_from_single_name(arg_name);
+        }
+    }
+    return type_ref_create(qid, args, arg_count);
+}
+
+static int append_qualified_segment(char ***segments, int *count, int *cap, const char *segment)
+{
+    if (segment == NULL)
+        return 0;
+    if (*count + 1 > *cap)
+    {
+        int new_cap = (*cap == 0) ? 4 : (*cap * 2);
+        char **next = (char **)realloc(*segments, (size_t)new_cap * sizeof(char *));
+        if (next == NULL)
+            return 0;
+        *segments = next;
+        *cap = new_cap;
+    }
+    (*segments)[*count] = strdup(segment);
+    if ((*segments)[*count] == NULL)
+        return 0;
+    (*count)++;
+    return 1;
+}
+
+static int append_qualified_segments_from_dotted(char ***segments, int *count, int *cap,
+    const char *name)
+{
+    if (name == NULL)
+        return 0;
+    const char *start = name;
+    const char *cursor = name;
+    int ok = 1;
+    while (*cursor != '\0')
+    {
+        if (*cursor == '.')
+        {
+            if (cursor > start)
+            {
+                size_t len = (size_t)(cursor - start);
+                char *segment = (char *)malloc(len + 1);
+                if (segment == NULL)
+                    return 0;
+                memcpy(segment, start, len);
+                segment[len] = '\0';
+                ok = append_qualified_segment(segments, count, cap, segment);
+                free(segment);
+                if (!ok)
+                    return 0;
+            }
+            start = cursor + 1;
+        }
+        ++cursor;
+    }
+    if (cursor > start)
+    {
+        size_t len = (size_t)(cursor - start);
+        char *segment = (char *)malloc(len + 1);
+        if (segment == NULL)
+            return 0;
+        memcpy(segment, start, len);
+        segment[len] = '\0';
+        ok = append_qualified_segment(segments, count, cap, segment);
+        free(segment);
+        if (!ok)
+            return 0;
+    }
+    return 1;
+}
+
+static QualifiedIdent *qualified_ident_from_ast(ast_t *node)
+{
+    ast_t *unwrapped = unwrap_pascal_node(node);
+    if (unwrapped == NULL)
+        return NULL;
+
+    char **segments = NULL;
+    int count = 0;
+    int cap = 0;
+
+    if (unwrapped->typ == PASCAL_T_IDENTIFIER || unwrapped->typ == PASCAL_T_BOOLEAN)
+    {
+        char *name = dup_symbol(unwrapped);
+        if (name == NULL)
+            return NULL;
+        int ok = 1;
+        if (strchr(name, '.') != NULL)
+            ok = append_qualified_segments_from_dotted(&segments, &count, &cap, name);
+        else
+            ok = append_qualified_segment(&segments, &count, &cap, name);
+        free(name);
+        if (!ok)
+            return NULL;
+        return qualified_ident_from_segments(segments, count, 1);
+    }
+
+    if (unwrapped->typ == PASCAL_T_QUALIFIED_IDENTIFIER)
+    {
+        for (ast_t *cur = unwrapped->child; cur != NULL; cur = cur->next)
+        {
+            ast_t *item = unwrap_pascal_node(cur);
+            if (item == NULL)
+                item = cur;
+            if (item != NULL &&
+                (item->typ == PASCAL_T_IDENTIFIER || item->typ == PASCAL_T_BOOLEAN))
+            {
+                char *name = dup_symbol(item);
+                if (name != NULL)
+                {
+                    if (!append_qualified_segment(&segments, &count, &cap, name))
+                    {
+                        free(name);
+                        return NULL;
+                    }
+                    free(name);
+                }
+            }
+        }
+        if (count == 0)
+            return NULL;
+        return qualified_ident_from_segments(segments, count, 1);
+    }
+
+    if (unwrapped->typ == PASCAL_T_MEMBER_ACCESS)
+    {
+        ast_t *base = unwrapped->child;
+        ast_t *field = (base != NULL) ? base->next : NULL;
+        QualifiedIdent *base_id = qualified_ident_from_ast(base);
+        if (base_id == NULL)
+            return NULL;
+        for (int i = 0; i < base_id->count; ++i)
+        {
+            if (!append_qualified_segment(&segments, &count, &cap, base_id->segments[i]))
+            {
+                qualified_ident_free(base_id);
+                return NULL;
+            }
+        }
+        qualified_ident_free(base_id);
+        if (field != NULL)
+        {
+            ast_t *field_node = unwrap_pascal_node(field);
+            if (field_node != NULL &&
+                (field_node->typ == PASCAL_T_IDENTIFIER || field_node->typ == PASCAL_T_BOOLEAN))
+            {
+                char *name = dup_symbol(field_node);
+                if (name != NULL)
+                {
+                    if (!append_qualified_segment(&segments, &count, &cap, name))
+                    {
+                        free(name);
+                        return NULL;
+                    }
+                    free(name);
+                }
+            }
+        }
+        if (count == 0)
+            return NULL;
+        return qualified_ident_from_segments(segments, count, 1);
+    }
+
+    return NULL;
+}
+
+static TypeRef *type_ref_from_info_or_id(const TypeInfo *info, const char *type_id)
+{
+    if (info != NULL && info->type_ref != NULL)
+        return type_ref_clone(info->type_ref);
+    if (type_id != NULL)
+        return type_ref_from_single_name(type_id);
+    return NULL;
+}
+
+static TypeRef *type_ref_from_element_info(const TypeInfo *info, const char *type_id)
+{
+    if (info != NULL && info->element_type_ref != NULL)
+        return type_ref_clone(info->element_type_ref);
+    if (type_id != NULL)
+        return type_ref_from_single_name(type_id);
+    return NULL;
+}
+
+static TypeRef *type_ref_from_pointer_info(const TypeInfo *info, const char *type_id)
+{
+    if (info != NULL && info->pointer_type_ref != NULL)
+        return type_ref_clone(info->pointer_type_ref);
+    if (type_id != NULL)
+        return type_ref_from_single_name(type_id);
+    return NULL;
+}
+
+static TypeRef *type_ref_from_qualifier_and_id(const char *qualifier, const char *id)
+{
+    if (id == NULL)
+        return NULL;
+    if (qualifier == NULL)
+        return type_ref_from_single_name(id);
+    char **segments = (char **)calloc(2, sizeof(char *));
+    if (segments == NULL)
+        return NULL;
+    segments[0] = strdup(qualifier);
+    segments[1] = strdup(id);
+    if (segments[0] == NULL || segments[1] == NULL)
+    {
+        free(segments[0]);
+        free(segments[1]);
+        free(segments);
+        return NULL;
+    }
+    QualifiedIdent *qid = qualified_ident_from_segments(segments, 2, 1);
+    if (qid == NULL)
+        return NULL;
+    return type_ref_create(qid, NULL, 0);
+}
 
 static void from_cparser_trim_ascii(char *s)
 {
@@ -509,13 +841,25 @@ static void destroy_type_info_contents(TypeInfo *info) {
         free(info->element_type_id);
         info->element_type_id = NULL;
     }
+    if (info->element_type_ref != NULL) {
+        type_ref_free(info->element_type_ref);
+        info->element_type_ref = NULL;
+    }
     if (info->pointer_type_id != NULL) {
         free(info->pointer_type_id);
         info->pointer_type_id = NULL;
     }
+    if (info->pointer_type_ref != NULL) {
+        type_ref_free(info->pointer_type_ref);
+        info->pointer_type_ref = NULL;
+    }
     if (info->set_element_type_id != NULL) {
         free(info->set_element_type_id);
         info->set_element_type_id = NULL;
+    }
+    if (info->set_element_type_ref != NULL) {
+        type_ref_free(info->set_element_type_ref);
+        info->set_element_type_ref = NULL;
     }
     if (info->inline_enum_values != NULL) {
         destroy_list(info->inline_enum_values);
@@ -524,6 +868,10 @@ static void destroy_type_info_contents(TypeInfo *info) {
     if (info->file_type_id != NULL) {
         free(info->file_type_id);
         info->file_type_id = NULL;
+    }
+    if (info->file_type_ref != NULL) {
+        type_ref_free(info->file_type_ref);
+        info->file_type_ref = NULL;
     }
     if (info->generic_base_name != NULL) {
         free(info->generic_base_name);
@@ -544,6 +892,10 @@ static void destroy_type_info_contents(TypeInfo *info) {
     if (info->record_type != NULL) {
         destroy_record_type(info->record_type);
         info->record_type = NULL;
+    }
+    if (info->type_ref != NULL) {
+        type_ref_free(info->type_ref);
+        info->type_ref = NULL;
     }
     if (info->element_kgpc_type != NULL) {
         destroy_kgpc_type(info->element_kgpc_type);
@@ -1220,6 +1572,43 @@ static void substitute_identifier(char **type_id, GenericTypeDecl *generic_decl,
     }
 }
 
+static void substitute_type_ref(TypeRef **type_ref, GenericTypeDecl *generic_decl, char **arg_types)
+{
+    if (type_ref == NULL || *type_ref == NULL || generic_decl == NULL || arg_types == NULL)
+        return;
+
+    TypeRef *ref = *type_ref;
+    if (ref->generic_args != NULL && ref->num_generic_args > 0)
+    {
+        for (int i = 0; i < ref->num_generic_args; ++i)
+            substitute_type_ref(&ref->generic_args[i], generic_decl, arg_types);
+    }
+
+    if (ref->name == NULL || ref->name->count != 1)
+        return;
+
+    const char *base_name = type_ref_base_name(ref);
+    if (base_name == NULL)
+        return;
+
+    if (ref->num_generic_args > 0)
+        return;
+
+    for (int i = 0; i < generic_decl->num_type_params; ++i)
+    {
+        if (generic_decl->type_parameters[i] != NULL &&
+            pascal_identifier_equals(base_name, generic_decl->type_parameters[i]))
+        {
+            TypeRef *replacement = NULL;
+            if (arg_types[i] != NULL)
+                replacement = type_ref_from_single_name(arg_types[i]);
+            type_ref_free(ref);
+            *type_ref = replacement;
+            return;
+        }
+    }
+}
+
 static void substitute_record_type_parameters(struct RecordType *record, GenericTypeDecl *generic_decl, char **arg_types);
 
 static void substitute_record_field(struct RecordField *field, GenericTypeDecl *generic_decl, char **arg_types) {
@@ -1236,8 +1625,13 @@ static void substitute_record_field(struct RecordField *field, GenericTypeDecl *
     }
     
     substitute_identifier(&field->type_id, generic_decl, arg_types);
+    substitute_type_ref(&field->type_ref, generic_decl, arg_types);
     if (field->array_element_type_id != NULL)
         substitute_identifier(&field->array_element_type_id, generic_decl, arg_types);
+    substitute_type_ref(&field->array_element_type_ref, generic_decl, arg_types);
+    if (field->pointer_type_id != NULL)
+        substitute_identifier(&field->pointer_type_id, generic_decl, arg_types);
+    substitute_type_ref(&field->pointer_type_ref, generic_decl, arg_types);
     if (field->nested_record != NULL)
         substitute_record_type_parameters(field->nested_record, generic_decl, arg_types);
     
@@ -1266,6 +1660,7 @@ static void substitute_record_type_parameters(struct RecordType *record, Generic
         if (prop_node->type == LIST_CLASS_PROPERTY) {
             struct ClassProperty *property = (struct ClassProperty *)prop_node->cur;
             substitute_identifier(&property->type_id, generic_decl, arg_types);
+            substitute_type_ref(&property->type_ref, generic_decl, arg_types);
         }
         prop_node = prop_node->next;
     }
@@ -2580,7 +2975,39 @@ static int extract_specialize_type_info(ast_t *spec_node, char **base_name_out, 
     return 1;
 }
 
+static struct Expression *make_varid_from_qualified_ast(ast_t *node)
+{
+    if (node == NULL)
+        return NULL;
+    QualifiedIdent *qid = qualified_ident_from_ast(node);
+    if (qid == NULL)
+        return NULL;
+    char *joined = qualified_ident_join(qid, ".");
+    struct Expression *expr = mk_varid(node->line, joined);
+    if (expr != NULL)
+    {
+        if (expr->id_ref != NULL)
+            qualified_ident_free(expr->id_ref);
+        expr->id_ref = qid;
+        qid = NULL;
+    }
+    if (qid != NULL)
+        qualified_ident_free(qid);
+    return expr;
+}
+
 static struct Expression *convert_case_label_expression(ast_t *node) {
+    ast_t *unwrapped = unwrap_pascal_node(node);
+    if (unwrapped != NULL &&
+        (unwrapped->typ == PASCAL_T_QUALIFIED_IDENTIFIER ||
+         unwrapped->typ == PASCAL_T_MEMBER_ACCESS ||
+         unwrapped->typ == PASCAL_T_IDENTIFIER))
+    {
+        struct Expression *qualified = make_varid_from_qualified_ast(unwrapped);
+        if (qualified != NULL)
+            return qualified;
+    }
+
     struct Expression *expr = convert_expression(node);
     if (expr != NULL && expr->type == EXPR_STRING && expr->expr_data.string != NULL) {
         const char *value = expr->expr_data.string;
@@ -4113,24 +4540,29 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
         type_info->end = 0;
         type_info->element_type = UNKNOWN_TYPE;
         type_info->element_type_id = NULL;
+        type_info->element_type_ref = NULL;
         type_info->is_open_array = 0;
         type_info->array_dimensions = NULL;
         type_info->is_pointer = 0;
         type_info->pointer_type = UNKNOWN_TYPE;
         type_info->pointer_type_id = NULL;
+        type_info->pointer_type_ref = NULL;
         type_info->is_set = 0;
         type_info->set_element_type = UNKNOWN_TYPE;
         type_info->set_element_type_id = NULL;
+        type_info->set_element_type_ref = NULL;
         type_info->is_enum = 0;
         type_info->enum_literals = NULL;
         type_info->is_file = 0;
         type_info->file_type = UNKNOWN_TYPE;
         type_info->file_type_id = NULL;
+        type_info->file_type_ref = NULL;
         type_info->is_record = 0;
         type_info->record_type = NULL;
         type_info->is_generic_specialization = 0;
         type_info->generic_base_name = NULL;
         type_info->generic_type_args = NULL;
+        type_info->type_ref = NULL;
         type_info->is_range = 0;
         type_info->range_known = 0;
         type_info->range_start = 0;
@@ -4154,8 +4586,72 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
             pascal_tag_to_string(spec_node->typ),
             (spec_node->sym != NULL && spec_node->sym->name != NULL) ? spec_node->sym->name : "<null>");
 
+    if (spec_node->typ == PASCAL_T_QUALIFIED_IDENTIFIER) {
+        QualifiedIdent *qid = qualified_ident_from_ast(spec_node);
+        const char *last = qualified_ident_last(qid);
+        char *last_dup = last ? strdup(last) : NULL;
+        char *qualified_name = qualified_ident_join(qid, ".");
+        int result = map_type_name(last_dup, type_id_out);
+        if (type_info != NULL && qid != NULL)
+            type_info->type_ref = type_ref_create(qid, NULL, 0);
+        else if (qid != NULL)
+            qualified_ident_free(qid);
+        if (type_info != NULL && result == FILE_TYPE) {
+            type_info->is_file = 1;
+            type_info->file_type = FILE_TYPE;
+            if (type_id_out != NULL && *type_id_out != NULL)
+                type_info->file_type_id = strdup(*type_id_out);
+            if (type_info->file_type_id != NULL)
+                type_info->file_type_ref = type_ref_from_single_name(type_info->file_type_id);
+        }
+        if (result == UNKNOWN_TYPE && type_id_out != NULL && *type_id_out == NULL) {
+            if (qualified_name != NULL) {
+                *type_id_out = qualified_name;
+                qualified_name = NULL;
+            } else {
+                *type_id_out = last_dup;
+                last_dup = NULL;
+            }
+        }
+        free(qualified_name);
+        free(last_dup);
+        return result;
+    }
     if (spec_node->typ == PASCAL_T_IDENTIFIER) {
         char *dup = dup_symbol(spec_node);
+        if (dup != NULL && strchr(dup, '.') != NULL)
+        {
+            QualifiedIdent *qid = qualified_ident_from_ast(spec_node);
+            const char *last = qualified_ident_last(qid);
+            char *last_dup = last ? strdup(last) : NULL;
+            char *qualified_name = qualified_ident_join(qid, ".");
+            int result = map_type_name(last_dup, type_id_out);
+            if (type_info != NULL && qid != NULL)
+                type_info->type_ref = type_ref_create(qid, NULL, 0);
+            else if (qid != NULL)
+                qualified_ident_free(qid);
+            if (type_info != NULL && result == FILE_TYPE) {
+                type_info->is_file = 1;
+                type_info->file_type = FILE_TYPE;
+                if (type_id_out != NULL && *type_id_out != NULL)
+                    type_info->file_type_id = strdup(*type_id_out);
+                if (type_info->file_type_id != NULL)
+                    type_info->file_type_ref = type_ref_from_single_name(type_info->file_type_id);
+            }
+            if (result == UNKNOWN_TYPE && type_id_out != NULL && *type_id_out == NULL) {
+                if (qualified_name != NULL) {
+                    *type_id_out = qualified_name;
+                    qualified_name = NULL;
+                } else {
+                    *type_id_out = last_dup;
+                    last_dup = NULL;
+                }
+            }
+            free(qualified_name);
+            free(last_dup);
+            free(dup);
+            return result;
+        }
 
         if (dup != NULL && spec_node->child != NULL &&
             strcasecmp(dup, "string") == 0)
@@ -4181,6 +4677,7 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                 type_info->end = size_val;
                 type_info->element_type = CHAR_TYPE;
                 type_info->element_type_id = strdup("char");
+                type_info->element_type_ref = type_ref_from_single_name("char");
                 type_info->is_shortstring = 1;
 
                 ListBuilder dims_builder;
@@ -4201,7 +4698,11 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
             type_info->file_type = FILE_TYPE;
             if (type_id_out != NULL && *type_id_out != NULL)
                 type_info->file_type_id = strdup(*type_id_out);
+            if (type_info->file_type_id != NULL)
+                type_info->file_type_ref = type_ref_from_single_name(type_info->file_type_id);
         }
+        if (type_info != NULL && type_info->type_ref == NULL && dup != NULL)
+            type_info->type_ref = type_ref_from_single_name(dup);
         if (result == UNKNOWN_TYPE && type_id_out != NULL && *type_id_out == NULL) {
             *type_id_out = dup;
         } else {
@@ -4226,6 +4727,9 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
         if (is_generic) {
             char *specialized_name = NULL;
             struct RecordType *record = instantiate_generic_record(base_name, type_args, &specialized_name);
+
+            if (type_info != NULL && type_info->type_ref == NULL)
+                type_info->type_ref = type_ref_from_name_and_args(base_name, type_args);
 
             if (record != NULL) {
                 if (getenv("KGPC_DEBUG_TFPG") != NULL && specialized_name != NULL)
@@ -5315,12 +5819,15 @@ static ListNode_t *convert_class_field_decl(ast_t *field_decl_node) {
             field_desc->name = field_name;
             field_desc->type = field_type;
             field_desc->type_id = type_id_copy;
+            field_desc->type_ref = type_ref_from_info_or_id(&field_info, type_id_copy);
             field_desc->nested_record = nested_copy;
             field_desc->is_array = field_info.is_array;
             field_desc->array_start = field_info.start;
             field_desc->array_end = field_info.end;
             field_desc->array_element_type = field_info.element_type;
             field_desc->array_element_type_id = field_info.element_type_id;
+            field_desc->array_element_type_ref =
+                type_ref_from_element_info(&field_info, field_info.element_type_id);
             field_desc->array_element_record = field_info.record_type;
             field_info.record_type = NULL;  /* Ownership transferred */
             field_desc->array_is_open = field_info.is_open_array;
@@ -5340,6 +5847,8 @@ static ListNode_t *convert_class_field_decl(ast_t *field_decl_node) {
                 field_desc->pointer_type_id = strdup(field_info.pointer_type_id);
             else
                 field_desc->pointer_type_id = NULL;
+            field_desc->pointer_type_ref =
+                type_ref_from_pointer_info(&field_info, field_info.pointer_type_id);
             list_builder_append(&result, field_desc, LIST_RECORD_FIELD);
         } else {
             if (field_name != NULL)
@@ -5470,10 +5979,12 @@ static struct ClassProperty *convert_property_decl(ast_t *property_node)
     struct RecordType *inline_record = NULL;
     TypeInfo type_info;
     memset(&type_info, 0, sizeof(TypeInfo));
+    TypeRef *property_type_ref = NULL;
 
     if (type_node != NULL)
     {
         property_type = convert_type_spec(type_node, &property_type_id, &inline_record, &type_info);
+        property_type_ref = type_ref_from_info_or_id(&type_info, property_type_id);
         destroy_type_info_contents(&type_info);
         if (inline_record != NULL)
             destroy_record_type(inline_record);
@@ -5492,6 +6003,9 @@ static struct ClassProperty *convert_property_decl(ast_t *property_node)
     property->name = property_name;
     property->type = property_type;
     property->type_id = property_type_id;
+    property->type_ref = property_type_ref;
+    if (property->type_ref == NULL)
+        property->type_ref = type_ref_from_single_name(property_type_id);
     property->read_accessor = read_accessor;
     property->write_accessor = write_accessor;
     property->is_indexed = has_indexer;
@@ -5539,6 +6053,10 @@ static void append_module_property_wrappers(ListNode_t **subprograms, ast_t *pro
                         0, 0, NULL, NULL, NULL, NULL);
                 if (param_decl == NULL && param_type_id != NULL)
                     free(param_type_id);
+                if (param_decl != NULL)
+                    param_decl->tree_data.var_decl_data.type_ref =
+                        prop->type_ref != NULL ? type_ref_clone(prop->type_ref)
+                                               : type_ref_from_single_name(param_type_id);
 
                 ListNode_t *params = NULL;
                 if (param_decl != NULL)
@@ -5600,6 +6118,9 @@ static void append_module_property_wrappers(ListNode_t **subprograms, ast_t *pro
                                     prop->type, return_type_id, NULL, 0, 0);
                                 if (func_tree != NULL)
                                 {
+                                    func_tree->tree_data.subprogram_data.return_type_ref =
+                                        prop->type_ref != NULL ? type_ref_clone(prop->type_ref)
+                                                               : type_ref_from_single_name(return_type_id);
                                     append_subprogram_node(subprograms, func_tree);
                                     if (getenv("KGPC_DEBUG_PROPERTY") != NULL)
                                     {
@@ -6345,6 +6866,7 @@ static ListNode_t *convert_field_decl(ast_t *field_decl_node) {
             field_desc->name = field_name;
             field_desc->type = field_type;
             field_desc->type_id = type_id_copy;
+            field_desc->type_ref = type_ref_from_info_or_id(&field_info, type_id_copy);
             field_desc->nested_record = nested_copy;
             field_desc->proc_type = inline_proc_type;
             if (field_desc->proc_type != NULL)
@@ -6354,6 +6876,8 @@ static ListNode_t *convert_field_decl(ast_t *field_decl_node) {
             field_desc->array_end = field_info.end;
             field_desc->array_element_type = field_info.element_type;
             field_desc->array_element_type_id = field_info.element_type_id;
+            field_desc->array_element_type_ref =
+                type_ref_from_element_info(&field_info, field_info.element_type_id);
             field_desc->array_element_record = field_info.record_type;
             field_info.record_type = NULL;  /* Ownership transferred */
             field_desc->array_is_open = field_info.is_open_array;
@@ -6372,6 +6896,8 @@ static ListNode_t *convert_field_decl(ast_t *field_decl_node) {
                 field_desc->pointer_type_id = strdup(field_info.pointer_type_id);
             else
                 field_desc->pointer_type_id = NULL;
+            field_desc->pointer_type_ref =
+                type_ref_from_pointer_info(&field_info, field_info.pointer_type_id);
             /* Transfer anonymous enum values for fields like `kind: (a, b, c)` */
             if (field_info.enum_literals != NULL && name_node->next == NULL)
             {
@@ -6980,6 +7506,8 @@ static ListNode_t *convert_param(ast_t *param_node) {
                 inline_alias->base_type = SET_TYPE;
                 if (type_info.set_element_type_id != NULL)
                     inline_alias->set_element_type_id = strdup(type_info.set_element_type_id);
+                inline_alias->set_element_type_ref =
+                    type_ref_from_single_name(type_info.set_element_type_id);
             }
         }
         /* Create TREE_ARR_DECL for inline array parameters */
@@ -6998,6 +7526,9 @@ static ListNode_t *convert_param(ast_t *param_node) {
                                       type_info.start, type_info.end, range_str, NULL, inline_record);
             if (param_decl != NULL)
                 param_decl->tree_data.arr_decl_data.is_shortstring = type_info.is_shortstring;
+            if (param_decl != NULL)
+                param_decl->tree_data.arr_decl_data.type_ref =
+                    type_ref_from_element_info(&type_info, element_type_id);
             /* Set var parameter flag on array declaration */
             if (is_var_param && param_decl != NULL)
                 param_decl->tree_data.arr_decl_data.type = var_type; // Store this for compatibility
@@ -7018,6 +7549,9 @@ static ListNode_t *convert_param(ast_t *param_node) {
                 is_var_param, 0, default_init, NULL, inline_alias, NULL);
             if (param_decl != NULL && (type_node == NULL || type_node->typ != PASCAL_T_TYPE_SPEC))
                 param_decl->tree_data.var_decl_data.is_untyped_param = 1;
+            if (param_decl != NULL)
+                param_decl->tree_data.var_decl_data.type_ref =
+                    type_ref_from_info_or_id(&type_info, type_id_copy);
         }
         
         list_builder_append(&result_builder, param_decl, LIST_TREE);
@@ -7106,6 +7640,8 @@ KgpcType *from_cparser_method_template_to_proctype(struct MethodTemplate *method
         }
         Tree_t *self_param = mk_vardecl(0, self_ids, self_type_tag, self_type_id,
             self_is_var, 0, NULL, NULL, self_type_alias, NULL);
+        if (self_param != NULL)
+            self_param->tree_data.var_decl_data.type_ref = type_ref_from_single_name(self_type_id);
         if (self_param != NULL)
             list_builder_append(&params_builder, self_param, LIST_TREE);
     }
@@ -7337,6 +7873,9 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
                                     inline_record);
         if (decl != NULL)
             decl->tree_data.arr_decl_data.is_shortstring = type_info.is_shortstring;
+        if (decl != NULL)
+            decl->tree_data.arr_decl_data.type_ref =
+                type_ref_from_element_info(&type_info, element_type_id);
         type_info.element_type_id = NULL;
         destroy_type_info_contents(&type_info);
         return decl;
@@ -7441,6 +7980,8 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
             inline_alias->base_type = FILE_TYPE;
             if (type_info.file_type_id != NULL)
                 inline_alias->file_type_id = strdup(type_info.file_type_id);
+            inline_alias->file_type_ref =
+                type_ref_from_single_name(type_info.file_type_id);
         }
     }
     if (inline_alias == NULL && type_info.is_set)
@@ -7453,6 +7994,8 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
             inline_alias->base_type = SET_TYPE;
             if (type_info.set_element_type_id != NULL)
                 inline_alias->set_element_type_id = strdup(type_info.set_element_type_id);
+            inline_alias->set_element_type_ref =
+                type_ref_from_single_name(type_info.set_element_type_id);
         }
     }
 
@@ -7510,6 +8053,9 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
         inferred, initializer_stmt, inline_record, inline_alias, absolute_target);
     if (decl == NULL && absolute_target != NULL)
         free(absolute_target);
+
+    if (decl != NULL)
+        decl->tree_data.var_decl_data.type_ref = type_ref_from_info_or_id(&type_info, type_id);
     
     /* Store inline procedure type in cached_kgpc_type */
     if (decl != NULL && inline_proc_type != NULL) {
@@ -8029,6 +8575,8 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
     Tree_t *array_decl = mk_arraydecl(const_decl_node->line, ids, type_info->element_type,
                                       type_info->element_type_id, start, end, range_str, initializer,
                                       inline_record);
+    array_decl->tree_data.arr_decl_data.type_ref =
+        type_ref_from_element_info(type_info, type_info->element_type_id);
     type_info->element_type_id = NULL;
 
     if (type_info->array_dimensions != NULL) {
@@ -8100,6 +8648,7 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_build
             Tree_t *decl = mk_vardecl(const_decl_node->line, ids, PROCEDURE, NULL, 0, 0,
                                        initializer_stmt, NULL, NULL, NULL);
             decl->tree_data.var_decl_data.is_typed_const = 1;
+            decl->tree_data.var_decl_data.type_ref = type_ref_from_info_or_id(&type_info, type_id);
             /* Attach the inline procedure type for proper type checking */
             KgpcType *proc_kgpc = convert_type_spec_to_kgpctype(proc_type_node, NULL);
             if (proc_kgpc != NULL) {
@@ -8217,6 +8766,7 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_build
             Tree_t *decl = mk_vardecl(const_decl_node->line, ids, typed_const_tag, type_id, 0, 0,
                                       initializer_stmt, NULL, NULL, NULL);
             decl->tree_data.var_decl_data.is_typed_const = 1;
+            decl->tree_data.var_decl_data.type_ref = type_ref_from_info_or_id(&type_info, type_id);
             list_builder_append(var_builder, decl, LIST_TREE);
 
             destroy_type_info_contents(&type_info);
@@ -8239,6 +8789,7 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_build
             Tree_t *decl = mk_vardecl(const_decl_node->line, ids, typed_const_tag, type_id, 0, 0,
                                       initializer_stmt, NULL, NULL, NULL);
             decl->tree_data.var_decl_data.is_typed_const = 1;
+            decl->tree_data.var_decl_data.type_ref = type_ref_from_info_or_id(&type_info, type_id);
             list_builder_append(var_builder, decl, LIST_TREE);
 
             destroy_type_info_contents(&type_info);
@@ -8261,6 +8812,7 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_build
             Tree_t *var_decl = mk_vardecl(const_decl_node->line, var_ids, var_type,
                 type_id, 0, 0, NULL, inline_record, NULL, NULL);
             var_decl->tree_data.var_decl_data.is_typed_const = 1;
+            var_decl->tree_data.var_decl_data.type_ref = type_ref_from_info_or_id(&type_info, type_id);
 
             if (var_builder != NULL)
                 list_builder_append(var_builder, var_decl, LIST_TREE);
@@ -8367,6 +8919,7 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_build
         Tree_t *var_decl = mk_vardecl(const_decl_node->line, var_ids, var_type,
             type_id, 0, 0, initializer, inline_record, NULL, NULL);
         var_decl->tree_data.var_decl_data.is_typed_const = 1;
+        var_decl->tree_data.var_decl_data.type_ref = type_ref_from_info_or_id(&type_info, type_id);
         
         if (var_builder != NULL)
             list_builder_append(var_builder, var_decl, LIST_TREE);
@@ -8424,6 +8977,8 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_build
     }
 
     Tree_t *decl = mk_constdecl(const_decl_node->line, id, type_id, value_expr);
+    if (decl != NULL)
+        decl->tree_data.const_decl_data.type_ref = type_ref_from_info_or_id(&type_info, type_id);
 
     destroy_type_info_contents(&type_info);
 
@@ -8859,17 +9414,37 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
             alias->array_dimensions = type_info.array_dimensions;
             type_info.array_dimensions = NULL;
         }
+        if (type_info.type_ref != NULL) {
+            type_ref_free(alias->target_type_ref);
+            alias->target_type_ref = type_info.type_ref;
+            type_info.type_ref = NULL;
+        }
+        if (type_info.element_type_ref != NULL) {
+            type_ref_free(alias->array_element_type_ref);
+            alias->array_element_type_ref = type_info.element_type_ref;
+            type_info.element_type_ref = NULL;
+        }
         alias->is_pointer = type_info.is_pointer;
         alias->pointer_type = type_info.pointer_type;
         if (type_info.pointer_type_id != NULL) {
             alias->pointer_type_id = type_info.pointer_type_id;
             type_info.pointer_type_id = NULL;
         }
+        if (type_info.pointer_type_ref != NULL) {
+            type_ref_free(alias->pointer_type_ref);
+            alias->pointer_type_ref = type_info.pointer_type_ref;
+            type_info.pointer_type_ref = NULL;
+        }
         alias->is_set = type_info.is_set;
         alias->set_element_type = type_info.set_element_type;
         if (type_info.set_element_type_id != NULL) {
             alias->set_element_type_id = type_info.set_element_type_id;
             type_info.set_element_type_id = NULL;
+        }
+        if (type_info.set_element_type_ref != NULL) {
+            type_ref_free(alias->set_element_type_ref);
+            alias->set_element_type_ref = type_info.set_element_type_ref;
+            type_info.set_element_type_ref = NULL;
         }
         alias->is_enum_set = type_info.is_enum_set;
         if (type_info.inline_enum_values != NULL) {
@@ -8887,6 +9462,11 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
         if (type_info.file_type_id != NULL) {
             alias->file_type_id = type_info.file_type_id;
             type_info.file_type_id = NULL;
+        }
+        if (type_info.file_type_ref != NULL) {
+            type_ref_free(alias->file_type_ref);
+            alias->file_type_ref = type_info.file_type_ref;
+            type_info.file_type_ref = NULL;
         }
         if (type_info.is_record && type_info.record_type != NULL) {
             alias->inline_record_type = type_info.record_type;
@@ -10283,6 +10863,22 @@ static struct Expression *convert_factor(ast_t *expr_node) {
         return mk_nil(expr_node->line);
     case PASCAL_T_IDENTIFIER:
         return mk_varid(expr_node->line, dup_symbol(expr_node));
+    case PASCAL_T_QUALIFIED_IDENTIFIER:
+    {
+        QualifiedIdent *qid = qualified_ident_from_ast(expr_node);
+        char *joined = qualified_ident_join(qid, ".");
+        struct Expression *expr = mk_varid(expr_node->line, joined);
+        if (expr != NULL)
+        {
+            if (expr->id_ref != NULL)
+                qualified_ident_free(expr->id_ref);
+            expr->id_ref = qid;
+            qid = NULL;
+        }
+        if (qid != NULL)
+            qualified_ident_free(qid);
+        return expr;
+    }
     case PASCAL_T_FUNC_CALL: {
         ast_t *child = expr_node->child;
         char *id = NULL;
@@ -10552,6 +11148,7 @@ static struct Expression *convert_expression(ast_t *expr_node) {
         struct RecordType *inline_record = NULL;
         TypeInfo type_info;
         memset(&type_info, 0, sizeof(TypeInfo));
+        TypeRef *type_ref_local = NULL;
         
         if (getenv("KGPC_DEBUG_BODY") != NULL) {
             fprintf(stderr, "[KGPC] convert_expression IS: value_node=%p type_node=%p\n", value_node, type_node);
@@ -10566,11 +11163,16 @@ static struct Expression *convert_expression(ast_t *expr_node) {
                 fprintf(stderr, "[KGPC]   convert_type_spec result: type=%d id=%s\n", target_type, target_type_id ? target_type_id : "<null>");
             }
             
+            type_ref_local = type_ref_from_info_or_id(&type_info, target_type_id);
             destroy_type_info_contents(&type_info);
             if (inline_record != NULL)
                 destroy_record_type(inline_record);
         }
         result = mk_is(expr_node->line, value_expr, target_type, target_type_id);
+        if (result != NULL)
+            result->expr_data.is_data.target_type_ref = type_ref_local;
+        else if (type_ref_local != NULL)
+            type_ref_free(type_ref_local);
         return set_expr_source_index(result, original_node);
     }
     case PASCAL_T_AS:
@@ -10583,14 +11185,20 @@ static struct Expression *convert_expression(ast_t *expr_node) {
         struct RecordType *inline_record = NULL;
         TypeInfo type_info;
         memset(&type_info, 0, sizeof(TypeInfo));
+        TypeRef *type_ref_local = NULL;
         if (type_node != NULL)
         {
             target_type = convert_type_spec(type_node, &target_type_id, &inline_record, &type_info);
+            type_ref_local = type_ref_from_info_or_id(&type_info, target_type_id);
             destroy_type_info_contents(&type_info);
             if (inline_record != NULL)
                 destroy_record_type(inline_record);
         }
         result = mk_as(expr_node->line, value_expr, target_type, target_type_id);
+        if (result != NULL)
+            result->expr_data.as_data.target_type_ref = type_ref_local;
+        else if (type_ref_local != NULL)
+            type_ref_free(type_ref_local);
         return set_expr_source_index(result, original_node);
     }
     case PASCAL_T_NEG:
@@ -10707,6 +11315,7 @@ tuple_cleanup:
         struct RecordType *record_type = NULL;
         TypeInfo type_info;
         memset(&type_info, 0, sizeof(TypeInfo));
+        TypeRef *type_ref_local = NULL;
 
         ast_t *unwrapped_type = unwrap_pascal_node(type_node);
         if (unwrapped_type != NULL)
@@ -10719,6 +11328,7 @@ tuple_cleanup:
             if (getenv("KGPC_DEBUG_BODY") != NULL)
                 fprintf(stderr, "[KGPC] TYPECAST handler: after convert_type_spec target_type=%d target_type_id=%s\n",
                     target_type, target_type_id ? target_type_id : "(null)");
+            type_ref_local = type_ref_from_info_or_id(&type_info, target_type_id);
             destroy_type_info_contents(&type_info);
             if (record_type != NULL)
             {
@@ -10753,6 +11363,33 @@ tuple_cleanup:
                 }
                 if (base_name != NULL) free(base_name);
                 if (field_name != NULL) free(field_name);
+            }
+            if (target_type_id != NULL && target_type_qualifier == NULL &&
+                type_ref_local != NULL && type_ref_local->name != NULL &&
+                type_ref_local->name->count > 1 && strchr(target_type_id, '.') != NULL)
+            {
+                QualifiedIdent *qid = type_ref_local->name;
+                int prefix_count = qid->count - 1;
+                char *prefix = qualified_ident_join_prefix(qid, prefix_count);
+                const char *base = qid->segments[qid->count - 1];
+                if (prefix != NULL && base != NULL)
+                {
+                    free(target_type_id);
+                    target_type_id = strdup(base);
+                    if (target_type_id == NULL)
+                    {
+                        target_type_id = NULL;
+                        free(prefix);
+                    }
+                    else
+                    {
+                        target_type_qualifier = prefix;
+                    }
+                }
+                else
+                {
+                    free(prefix);
+                }
             }
             /* Handle generic specialization typecasts like specialize TArray<T>(Result).
              * Extract the base type name and mangle with type args. */
@@ -10825,10 +11462,24 @@ tuple_cleanup:
         }
         struct Expression *tc_expr = mk_typecast(expr_node->line, target_type, target_type_id, inner_expr);
         if (tc_expr != NULL)
+        {
             tc_expr->expr_data.typecast_data.type_qualifier = target_type_qualifier;
+            if (type_ref_local != NULL)
+            {
+                tc_expr->expr_data.typecast_data.target_type_ref = type_ref_local;
+                type_ref_local = NULL;
+            }
+            else
+            {
+                tc_expr->expr_data.typecast_data.target_type_ref =
+                    type_ref_from_qualifier_and_id(target_type_qualifier, target_type_id);
+            }
+        }
         else if (target_type_qualifier != NULL)
             free(target_type_qualifier);
         target_type_qualifier = NULL;
+        if (type_ref_local != NULL)
+            type_ref_free(type_ref_local);
         return tc_expr;
     }
     case PASCAL_T_DEREF:
@@ -12342,13 +12993,18 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
                             char *return_type_id = NULL;
                             int return_type = UNKNOWN_TYPE;
                             struct TypeAlias *inline_return_type = NULL;
+                            TypeRef *return_type_ref = NULL;
 
                             if (return_type_node != NULL) {
                                 TypeInfo type_info;
+                                memset(&type_info, 0, sizeof(TypeInfo));
                                 return_type = convert_type_spec(return_type_node->child, &return_type_id, NULL, &type_info);
-                                if (return_type_id == NULL && return_type_node->sym != NULL && return_type_node->sym->name != NULL) {
+                                if (return_type_ref == NULL)
+                                    return_type_ref = type_ref_from_info_or_id(&type_info, return_type_id);
+                                if (return_type_id == NULL && return_type_node->sym != NULL &&
+                                    return_type_node->sym->name != NULL)
                                     return_type_id = strdup(return_type_node->sym->name);
-                                }
+                                destroy_type_info_contents(&type_info);
                             }
 
                             /* Append the return type to the mangled name to
@@ -12395,6 +13051,9 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
                             Tree_t *tree = mk_function(method_node->line, mangled_name, params, op_const_decls,
                                 op_label_decls, op_type_decls, op_var_decls, op_nested_subs, body, return_type, return_type_id, inline_return_type, 0, 0);
                             if (tree != NULL && result_var_name_method != NULL) {
+                                tree->tree_data.subprogram_data.return_type_ref =
+                                    return_type_ref != NULL ? type_ref_clone(return_type_ref)
+                                                            : type_ref_from_single_name(return_type_id);
                                 tree->tree_data.subprogram_data.result_var_name = result_var_name_method;
                             } else if (result_var_name_method != NULL) {
                                 free(result_var_name_method);
@@ -12605,6 +13264,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     int return_type = UNKNOWN_TYPE;
     struct TypeAlias *inline_return_type = NULL;
     int has_return_type = 0;
+    TypeRef *return_type_ref = NULL;
 
     const char *helper_base = (effective_class != NULL) ? lookup_type_helper_base(effective_class) : NULL;
     int is_helper_method = (helper_base != NULL);
@@ -12633,6 +13293,8 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         }
         Tree_t *self_param = mk_vardecl(method_node->line, self_ids, self_type_tag,
             self_type_id, self_is_var, 0, NULL, NULL, self_type_alias, NULL);
+        if (self_param != NULL)
+            self_param->tree_data.var_decl_data.type_ref = type_ref_from_single_name(self_type_id);
         list_builder_append(&params_builder, self_param, LIST_TREE);
     }
 
@@ -12668,6 +13330,8 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
             has_return_type = 1;
             TypeInfo type_info;
             return_type = convert_type_spec(node->child, &return_type_id, NULL, &type_info);
+            if (return_type_ref == NULL)
+                return_type_ref = type_ref_from_info_or_id(&type_info, return_type_id);
 
             if (return_type_id == NULL && node->sym != NULL && node->sym->name != NULL)
             {
@@ -12797,6 +13461,11 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
                            nested_subs, body, 0, 0);
     }
     if (tree != NULL) {
+        if (has_return_type)
+            tree->tree_data.subprogram_data.return_type_ref =
+                return_type_ref != NULL ? return_type_ref : type_ref_from_single_name(return_type_id);
+        else if (return_type_ref != NULL)
+            type_ref_free(return_type_ref);
         /* Use the full dotted class path for mangled_id so that
          * semcheck_get_current_method_owner returns the full nested path.
          * This allows const lookup to fall back to outer classes.
@@ -12823,6 +13492,10 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
             generic_type_params = NULL;
             num_generic_type_params = 0;
         }
+    }
+    else if (return_type_ref != NULL)
+    {
+        type_ref_free(return_type_ref);
     }
 
     record_generic_method_impl(effective_class, method_name, method_node);
@@ -13125,6 +13798,7 @@ static Tree_t *convert_function(ast_t *func_node) {
     int return_type = UNKNOWN_TYPE;
     struct TypeAlias *inline_return_type = NULL;
     char *result_var_name = NULL;
+    TypeRef *return_type_ref = NULL;
 
     /* For operator declarations with named results (e.g., "operator :=(source: byte) dest: variant"),
      * the named result identifier appears as a PASCAL_T_IDENTIFIER node before PASCAL_T_RETURN_TYPE. */
@@ -13136,6 +13810,8 @@ static Tree_t *convert_function(ast_t *func_node) {
     if (cur != NULL && cur->typ == PASCAL_T_RETURN_TYPE) {
         TypeInfo type_info;
         return_type = convert_type_spec(cur->child, &return_type_id, NULL, &type_info);
+        if (return_type_ref == NULL)
+            return_type_ref = type_ref_from_info_or_id(&type_info, return_type_id);
 
         if (return_type_id == NULL && cur->sym != NULL && cur->sym->name != NULL)
         {
@@ -13314,6 +13990,11 @@ static Tree_t *convert_function(ast_t *func_node) {
     Tree_t *tree = mk_function(func_node->line, id, params, const_decls,
                                 label_decls, type_decls, list_builder_finish(&var_decls_builder), nested_subs, body,
                                 return_type, return_type_id, inline_return_type, is_external, 0);
+    if (tree != NULL)
+        tree->tree_data.subprogram_data.return_type_ref =
+            return_type_ref != NULL ? return_type_ref : type_ref_from_single_name(return_type_id);
+    else if (return_type_ref != NULL)
+        type_ref_free(return_type_ref);
     if (tree != NULL && external_alias != NULL)
         tree->tree_data.subprogram_data.cname_override = external_alias;
     else if (external_alias != NULL)

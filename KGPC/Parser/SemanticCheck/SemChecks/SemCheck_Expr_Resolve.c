@@ -11,10 +11,7 @@
 
 const char *semcheck_base_type_name(const char *id)
 {
-    if (id == NULL)
-        return NULL;
-    const char *dot = strrchr(id, '.');
-    return (dot != NULL && dot[1] != '\0') ? (dot + 1) : id;
+    return id;
 }
 
 const char *semcheck_type_tag_name(int type_tag)
@@ -117,16 +114,32 @@ const char *semcheck_normalize_char_type_id(const char *id)
     return id;
 }
 
-int resolve_type_identifier(int *out_type, SymTab_t *symtab,
-    const char *type_id, int line_num)
+int resolve_type_identifier_ref(int *out_type, SymTab_t *symtab,
+    const char *type_id, const TypeRef *type_ref, int line_num)
 {
-    if (type_id == NULL)
+    if (type_id == NULL && type_ref == NULL)
         return 0;
 
-    HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, type_id);
+    HashNode_t *type_node = semcheck_find_preferred_type_node_with_ref(symtab, type_ref, type_id);
+    
     if (type_node == NULL)
     {
-        if (strchr(type_id, '$') != NULL)
+        const char *owner = semcheck_get_current_method_owner();
+        if (owner != NULL)
+        {
+            char qualified_name[512];
+            snprintf(qualified_name, sizeof(qualified_name), "%s.%s", owner, type_id);
+            int found = FindIdent(&type_node, symtab, qualified_name);
+            if (!(found >= 0 && type_node != NULL && type_node->hash_type == HASHTYPE_TYPE))
+            {
+                type_node = NULL;
+            }
+        }
+    }
+    
+    if (type_node == NULL)
+    {
+        if (type_ref != NULL && type_ref->num_generic_args > 0)
         {
             *out_type = POINTER_TYPE;
             return 0;
@@ -180,6 +193,12 @@ int resolve_type_identifier(int *out_type, SymTab_t *symtab,
     }
 
     return 0;
+}
+
+int resolve_type_identifier(int *out_type, SymTab_t *symtab,
+    const char *type_id, int line_num)
+{
+    return resolve_type_identifier_ref(out_type, symtab, type_id, NULL, line_num);
 }
 
 int set_type_from_hashtype(int *type, HashNode_t *hash_node)

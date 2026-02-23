@@ -96,6 +96,7 @@ typedef struct Tree
             ListNode_t *type_declarations;
             int return_type; /* Should be -1 for PROCEDURE */
             char *return_type_id;
+            struct TypeRef *return_type_ref;
             struct TypeAlias *inline_return_type;  /* For inline complex return types like array of string */
             int cname_flag;
             char *cname_override;
@@ -127,6 +128,7 @@ typedef struct Tree
             ListNode_t *ids;
             int type; /* Int, or real */
             char *type_id;
+            struct TypeRef *type_ref;
             int is_var_param;
             int is_untyped_param;
             int inferred_type;
@@ -150,6 +152,7 @@ typedef struct Tree
             ListNode_t *ids;
             int type; /* Int, or real */
             char *type_id;
+            struct TypeRef *type_ref;
             struct RecordType *inline_record_type;  /* Inline record element type */
             struct KgpcType *element_kgpc_type;    /* Pre-built element type for nested arrays */
 
@@ -172,6 +175,7 @@ typedef struct Tree
         {
             char *id;
             char *type_id;
+            struct TypeRef *type_ref;
             struct Expression *value;
             int defined_in_unit;
             int unit_is_public;

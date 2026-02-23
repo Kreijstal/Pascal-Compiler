@@ -26,6 +26,11 @@ void semcheck_clear_pointer_info(struct Expression *expr)
         free(expr->pointer_subtype_id);
         expr->pointer_subtype_id = NULL;
     }
+    if (expr->pointer_subtype_ref != NULL)
+    {
+        type_ref_free(expr->pointer_subtype_ref);
+        expr->pointer_subtype_ref = NULL;
+    }
 }
 
 void semcheck_set_pointer_info(struct Expression *expr, int subtype, const char *type_id)
@@ -58,6 +63,11 @@ void semcheck_clear_array_info(struct Expression *expr)
     {
         free(expr->array_element_type_id);
         expr->array_element_type_id = NULL;
+    }
+    if (expr->array_element_type_ref != NULL)
+    {
+        type_ref_free(expr->array_element_type_ref);
+        expr->array_element_type_ref = NULL;
     }
     expr->array_lower_bound = 0;
     expr->array_upper_bound = -1;
