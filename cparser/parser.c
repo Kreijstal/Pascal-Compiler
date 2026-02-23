@@ -1319,28 +1319,48 @@ static ParseResult expr_fn(input_t * in, void * args, char* parser_name) {
            }
            if (!found_op) { restore_input_state(in, &loop_state); break; }
        }
-   }
-   if (list->fix == EXPR_POSTFIX) {
-       while (1) {
-           InputState loop_state; save_input_state(in, &loop_state);
-           op_t *op = list->op;
-           bool found_op = false;
-           while (op) {
-               ParseResult op_res = parse(in, op->comb);
-               if (op_res.is_success) {
-                   tag_t op_tag = op->tag;
-                   free_ast(op_res.value.ast);
-                   lhs = ast1(op_tag, lhs);
-                   found_op = true;
-                   break;
-               }
-               free_error(op_res.value.error);
-               op = op->next;
-           }
-           if (!found_op) { restore_input_state(in, &loop_state); break; }
-       }
-   }
-   return make_success(lhs);
+    }
+    if (list->fix == EXPR_POSTFIX) {
+        while (1) {
+            InputState loop_state; save_input_state(in, &loop_state);
+            op_t *op = list->op;
+            bool found_op = false;
+            while (op) {
+                ParseResult op_res = parse(in, op->comb);
+                if (op_res.is_success) {
+                    tag_t op_tag = op->tag;
+                    ast_t* postfix_node = op_res.value.ast;
+                    if (postfix_node == ast_nil) {
+                        postfix_node = ast1(op_tag, lhs);
+                    } else {
+                        /* Store the content (args/indices) before overwriting child */
+                        ast_t* content = postfix_node->child;
+                        if (content == ast_nil) content = NULL;
+                        
+                        /* Set base expression as child */
+                        postfix_node->typ = op_tag;
+                        postfix_node->child = lhs;
+                        
+                        /* Append content to end of base chain (like build_array_or_pointer_chain) */
+                        if (content != NULL && lhs != NULL) {
+                            ast_t* tail = lhs;
+                            while (tail->next != NULL && tail->next != ast_nil) {
+                                tail = tail->next;
+                            }
+                            tail->next = content;
+                        }
+                    }
+                    lhs = postfix_node;
+                    found_op = true;
+                    break;
+                }
+                free_error(op_res.value.error);
+                op = op->next;
+            }
+            if (!found_op) { restore_input_state(in, &loop_state); break; }
+        }
+    }
+    return make_success(lhs);
 }
 
 static ParseResult lazy_fn(input_t * in, void * args, char* parser_name) {

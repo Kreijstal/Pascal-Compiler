@@ -45,6 +45,7 @@ kgpc_cparser_sources = [
   'main_cparser.c',
   'flags.c',
   'Parser/ParseTree/from_cparser.c',
+  'Parser/ParseTree/ident_ref.c',
   'Parser/List/List.c',
   'Parser/ParseTree/tree.c',
   'Parser/ParseTree/KgpcType.c',

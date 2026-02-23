@@ -15,6 +15,8 @@ struct Tree;      /* Forward declare Tree so MethodTemplate can reference it */
 struct ast_t;     /* Forward-declare AST type without including parser headers */
 struct GenericTypeDecl;
 struct RecordType;
+struct QualifiedIdent;
+struct TypeRef;
 
 /* Enums for readability with types */
 enum StmtType{STMT_VAR_ASSIGN, STMT_PROCEDURE_CALL, STMT_EXPR, STMT_COMPOUND_STATEMENT,
@@ -30,21 +32,25 @@ struct TypeAlias
     int base_type;
     int is_char_alias;
     char *target_type_id;
+    struct TypeRef *target_type_ref;
     struct RecordType *inline_record_type;
     int is_array;
     int array_start;
     int array_end;
     int array_element_type;
     char *array_element_type_id;
+    struct TypeRef *array_element_type_ref;
     int is_shortstring;
     int is_open_array;
     ListNode_t *array_dimensions;
     int is_pointer;
     int pointer_type;
     char *pointer_type_id;
+    struct TypeRef *pointer_type_ref;
     int is_set;
     int set_element_type;
     char *set_element_type_id;
+    struct TypeRef *set_element_type_ref;
     int is_enum_set;           /* Set with inline anonymous enum as element type */
     ListNode_t *inline_enum_values; /* Enum values for inline enum in set type */
     int is_enum;
@@ -53,6 +59,7 @@ struct TypeAlias
     int is_file;
     int file_type;
     char *file_type_id;
+    struct TypeRef *file_type_ref;
     /* Range/size metadata for scalar aliases */
     int is_range;
     int range_known;
@@ -79,6 +86,7 @@ struct RecordField
     char *name;
     int type;
     char *type_id;
+    struct TypeRef *type_ref;
     struct RecordType *nested_record;
     struct KgpcType *proc_type;
     int is_array;
@@ -86,6 +94,7 @@ struct RecordField
     int array_end;
     int array_element_type;
     char *array_element_type_id;
+    struct TypeRef *array_element_type_ref;
     struct RecordType *array_element_record; /* Anonymous record as array element type */
     struct KgpcType *array_element_kgpc_type; /* Pre-built element type for nested arrays (array of array of ...) */
     int array_is_open;
@@ -94,6 +103,7 @@ struct RecordField
     int is_pointer;
     int pointer_type;
     char *pointer_type_id;
+    struct TypeRef *pointer_type_ref;
     ListNode_t *enum_literals; /* Anonymous enum values for fields like `kind: (a, b, c)` */
 };
 
@@ -102,6 +112,7 @@ struct ClassProperty
     char *name;
     int type;
     char *type_id;
+    struct TypeRef *type_ref;
     char *read_accessor;
     char *write_accessor;
     int is_indexed;
@@ -411,6 +422,7 @@ struct Expression
     int col_num;
     int source_index;  /* Byte offset in preprocessed buffer for accurate error context (-1 if unknown) */
     struct RecordType *record_type; /* MOVED HERE */
+    struct QualifiedIdent *id_ref; /* Structured identifier for EXPR_VAR_ID (optional) */
     enum ExprType type;
     union expr_data
     {
@@ -550,6 +562,7 @@ struct Expression
             int target_type;
             char *target_type_id;
             char *type_qualifier;  /* Unit prefix for qualified types, e.g. "SysUtils" (NULL if unqualified) */
+            struct TypeRef *target_type_ref;
             struct Expression *expr;
         } typecast_data;
 
@@ -559,6 +572,7 @@ struct Expression
             struct Expression *expr;
             int target_type;
             char *target_type_id;
+            struct TypeRef *target_type_ref;
             struct RecordType *target_record_type;
         } is_data;
 
@@ -568,6 +582,7 @@ struct Expression
             struct Expression *expr;
             int target_type;
             char *target_type_id;
+            struct TypeRef *target_type_ref;
             struct RecordType *target_record_type;
         } as_data;
 
@@ -575,6 +590,7 @@ struct Expression
         struct TypeInfo
         {
             char *type_id;
+            struct TypeRef *type_ref;
         } typeinfo_data;
 
         /* Address of procedure */
@@ -590,6 +606,7 @@ struct Expression
             ListNode_t *parameters;         /* Parameter list */
             int return_type;                /* Return type (for functions, -1 for procedures) */
             char *return_type_id;           /* Return type identifier */
+            struct TypeRef *return_type_ref;
             struct Statement *body;         /* Body statement */
             int is_function;                /* 1 for function, 0 for procedure */
         } anonymous_method_data;
@@ -601,11 +618,13 @@ struct Expression
     
     int pointer_subtype;
     char *pointer_subtype_id;
+    struct TypeRef *pointer_subtype_ref;
     /* struct RecordType *record_type; MOVED */
     int is_pointer_diff; /* Flag for pointer-pointer subtraction */
     int is_array_expr;
     int array_element_type;
     char *array_element_type_id;
+    struct TypeRef *array_element_type_ref;
     int array_lower_bound;
     int array_upper_bound;
     int array_element_size;
