@@ -792,6 +792,16 @@ int semcheck_funccall(int *type_return,
         }
         return 0;
     }
+
+    /* Builtins that accept type identifiers should bypass generic
+     * call-shape/argument expression preprocessing. */
+    if (id != NULL && pascal_identifier_equals(id, "SizeOf"))
+        return semcheck_builtin_sizeof(type_return, symtab, expr, max_scope_lev);
+    if (id != NULL && pascal_identifier_equals(id, "IsManagedType"))
+        return semcheck_builtin_ismanagedtype(type_return, symtab, expr, max_scope_lev);
+    if (id != NULL && pascal_identifier_equals(id, "TypeInfo"))
+        return semcheck_builtin_typeinfo(type_return, symtab, expr, max_scope_lev);
+
     args_given = expr->expr_data.function_call_data.args_expr;
     if (id != NULL)
     {

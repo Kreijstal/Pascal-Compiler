@@ -318,6 +318,15 @@ type
   PVariant = ^Variant;
 
 const
+  CP_ACP     = 0;     { default to ANSI code page }
+  CP_OEMCP   = 1;     { default to OEM (console) code page }
+  CP_UTF16   = 1200;  { utf-16 }
+  CP_UTF16BE = 1201;  { unicodeFFFE }
+  CP_UTF7    = 65000; { utf-7 }
+  CP_UTF8    = 65001; { utf-8 }
+  CP_ASCII   = 20127; { us-ascii }
+  CP_NONE    = $FFFF; { rawbytestring encoding }
+
   vtInteger = 0;
   vtBoolean = 1;
   vtChar = 2;
@@ -622,6 +631,7 @@ end;
 
 function kgpc_get_current_dir: AnsiString; cdecl; external name 'kgpc_get_current_dir';
 function kgpc_set_current_dir(path: PChar): Integer; cdecl; external name 'kgpc_set_current_dir';
+function kgpc_ioresult_get_and_clear: Integer; cdecl; external name 'kgpc_ioresult_get_and_clear';
 function kgpc_ioresult_peek: Integer; cdecl; external name 'kgpc_ioresult_peek';
 function kgpc_class_name(self: Pointer): PAnsiChar; cdecl; external name 'kgpc_class_name';
 function kgpc_class_parent(self: Pointer): Pointer; cdecl; external name 'kgpc_class_parent';
@@ -1185,10 +1195,7 @@ end;
 
 function IOResult: integer;
 begin
-    assembler;
-    asm
-        call kgpc_ioresult_get_and_clear
-    end
+    IOResult := kgpc_ioresult_get_and_clear();
 end;
 
 procedure BlockWrite(var f: file; var buffer; count: longint); overload;

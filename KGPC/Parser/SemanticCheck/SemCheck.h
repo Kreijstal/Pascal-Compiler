@@ -58,6 +58,10 @@ HashNode_t *semcheck_find_type_node_with_kgpc_type(SymTab_t *symtab, const char 
 HashNode_t *semcheck_find_type_node_with_kgpc_type_ref(SymTab_t *symtab,
     const struct TypeRef *type_ref, const char *type_id);
 int semcheck_is_unit_name(const char *name);
+int semcheck_resolve_scoped_enum_literal(SymTab_t *symtab, const char *type_name,
+    const char *literal_name, long long *out_value);
+int semcheck_resolve_scoped_enum_literal_ref(SymTab_t *symtab, const struct QualifiedIdent *type_ref,
+    const char *literal_name, long long *out_value);
 const char *semcheck_get_current_subprogram_id(void);
 const char *semcheck_get_current_subprogram_result_var_name(void);
 const char *semcheck_get_current_subprogram_method_name(void);

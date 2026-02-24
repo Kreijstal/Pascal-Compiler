@@ -2063,6 +2063,28 @@ resolved:;
                     "unable to resolve WITH context for field \"%s\"", id);
                 ++return_val;
             }
+            else if (id != NULL)
+            {
+                HashNode_t *type_fallback = semcheck_find_preferred_type_node(symtab, id);
+                if (type_fallback == NULL && expr->id_ref != NULL &&
+                    expr->id_ref->count > 1)
+                {
+                    char *qualified = qualified_ident_join(expr->id_ref, ".");
+                    if (qualified != NULL)
+                    {
+                        type_fallback = semcheck_find_preferred_type_node(symtab, qualified);
+                        free(qualified);
+                    }
+                }
+                if (type_fallback != NULL && type_fallback->hash_type == HASHTYPE_TYPE)
+                {
+                    set_hash_meta(type_fallback, mutating);
+                    set_type_from_hashtype(type_return, type_fallback);
+                    if (type_fallback->type != NULL)
+                        semcheck_expr_set_resolved_kgpc_type_shared(expr, type_fallback->type);
+                    return return_val;
+                }
+            }
             else if (id != NULL && semcheck_is_unit_name(id))
             {
                 /* Unit identifiers may appear as the left side of unit-qualified

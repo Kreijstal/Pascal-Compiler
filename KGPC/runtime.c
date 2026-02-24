@@ -546,7 +546,7 @@ void kgpc_tfile_reset(KGPCFileRec *file)
         }
     }
 
-    priv.handle = fopen(file->name, "rb");
+    priv.handle = fopen(file->name, "r+b");
     if (priv.handle != NULL)
     {
         file->handle = fileno(priv.handle);

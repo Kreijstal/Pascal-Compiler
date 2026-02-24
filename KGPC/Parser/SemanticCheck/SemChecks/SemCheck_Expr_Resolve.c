@@ -129,11 +129,7 @@ int resolve_type_identifier_ref(int *out_type, SymTab_t *symtab,
         {
             char qualified_name[512];
             snprintf(qualified_name, sizeof(qualified_name), "%s.%s", owner, type_id);
-            int found = FindIdent(&type_node, symtab, qualified_name);
-            if (!(found >= 0 && type_node != NULL && type_node->hash_type == HASHTYPE_TYPE))
-            {
-                type_node = NULL;
-            }
+            type_node = semcheck_find_preferred_type_node(symtab, qualified_name);
         }
     }
     

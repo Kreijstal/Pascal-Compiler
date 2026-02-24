@@ -2583,6 +2583,27 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
         char *arg_id = arg->expr_data.id;
         HashNode_t *node = NULL;
         int scope = FindIdent(&node, symtab, arg_id);
+        HashNode_t *preferred_type_node = NULL;
+        if (arg_id != NULL)
+        {
+            preferred_type_node = semcheck_find_preferred_type_node(symtab, arg_id);
+            if (preferred_type_node == NULL && arg->id_ref != NULL &&
+                arg->id_ref->count > 1)
+            {
+                char *qualified = qualified_ident_join(arg->id_ref, ".");
+                if (qualified != NULL)
+                {
+                    preferred_type_node = semcheck_find_preferred_type_node(symtab, qualified);
+                    free(qualified);
+                }
+            }
+            if (preferred_type_node != NULL &&
+                preferred_type_node->hash_type == HASHTYPE_TYPE)
+            {
+                node = preferred_type_node;
+                scope = 0;
+            }
+        }
         if (scope == -1 || node == NULL)
         {
             /* Check if this is a builtin type name that isn't in the symbol table */
@@ -2754,8 +2775,30 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
                 KgpcType *arg_kgpc_type = NULL;
                 error_count += semcheck_expr_with_type(&arg_kgpc_type, symtab, arg, max_scope_lev, NO_MUTATE);
                 if (error_count == 0)
-                    error_count += sizeof_from_type_ref(symtab, semcheck_tag_from_kgpc(arg_kgpc_type), NULL, &computed_size,
-                        0, expr->line_num);
+                {
+                    if (arg != NULL && arg->type == EXPR_POINTER_DEREF &&
+                        arg_kgpc_type != NULL &&
+                        arg_kgpc_type->kind == TYPE_KIND_POINTER &&
+                        arg_kgpc_type->info.points_to != NULL)
+                    {
+                        long long ptsize = kgpc_type_sizeof(arg_kgpc_type->info.points_to);
+                        if (ptsize >= 0)
+                        {
+                            computed_size = ptsize;
+                        }
+                        else
+                        {
+                            error_count += sizeof_from_type_ref(symtab,
+                                semcheck_tag_from_kgpc(arg_kgpc_type->info.points_to), NULL, &computed_size,
+                                0, expr->line_num);
+                        }
+                    }
+                    else
+                    {
+                        error_count += sizeof_from_type_ref(symtab, semcheck_tag_from_kgpc(arg_kgpc_type), NULL, &computed_size,
+                            0, expr->line_num);
+                    }
+                }
             }
         }
         else
@@ -2763,8 +2806,30 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
             KgpcType *arg_kgpc_type = NULL;
             error_count += semcheck_expr_with_type(&arg_kgpc_type, symtab, arg, max_scope_lev, NO_MUTATE);
             if (error_count == 0)
-                error_count += sizeof_from_type_ref(symtab, semcheck_tag_from_kgpc(arg_kgpc_type), NULL, &computed_size,
-                    0, expr->line_num);
+            {
+                if (arg != NULL && arg->type == EXPR_POINTER_DEREF &&
+                    arg_kgpc_type != NULL &&
+                    arg_kgpc_type->kind == TYPE_KIND_POINTER &&
+                    arg_kgpc_type->info.points_to != NULL)
+                {
+                    long long ptsize = kgpc_type_sizeof(arg_kgpc_type->info.points_to);
+                    if (ptsize >= 0)
+                    {
+                        computed_size = ptsize;
+                    }
+                    else
+                    {
+                        error_count += sizeof_from_type_ref(symtab,
+                            semcheck_tag_from_kgpc(arg_kgpc_type->info.points_to), NULL, &computed_size,
+                            0, expr->line_num);
+                    }
+                }
+                else
+                {
+                    error_count += sizeof_from_type_ref(symtab, semcheck_tag_from_kgpc(arg_kgpc_type), NULL, &computed_size,
+                        0, expr->line_num);
+                }
+            }
         }
     }
 

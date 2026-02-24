@@ -814,9 +814,8 @@ int resolve_record_field(SymTab_t *symtab, struct RecordType *record,
         /* Try parent type */
         if (current->parent_class_name != NULL)
         {
-            HashNode_t *parent_node = NULL;
-            if (FindIdent(&parent_node, symtab, current->parent_class_name) >= 0 &&
-                parent_node != NULL)
+            HashNode_t *parent_node = semcheck_find_preferred_type_node(symtab, current->parent_class_name);
+            if (parent_node != NULL)
             {
                 struct RecordType *parent_record = hashnode_get_record_type(parent_node);
                 if (parent_record != NULL)

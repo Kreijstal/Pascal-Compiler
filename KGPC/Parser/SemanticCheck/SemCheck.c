@@ -280,6 +280,50 @@ static int semcheck_is_explicit_unit_qualified_type_ref(const TypeRef *ref)
 HashNode_t *semcheck_find_preferred_type_node_with_ref(SymTab_t *symtab,
     const TypeRef *type_ref, const char *type_id);
 
+static char **semcheck_split_segments(const char *name, int *out_count)
+{
+    if (out_count != NULL)
+        *out_count = 0;
+    if (name == NULL || *name == '\0' || out_count == NULL)
+        return NULL;
+
+    int count = 1;
+    for (const char *p = name; *p != '\0'; ++p)
+    {
+        if (*p == '.')
+            count += 1;
+    }
+    char **segments = (char **)calloc((size_t)count, sizeof(char *));
+    if (segments == NULL)
+        return NULL;
+
+    int idx = 0;
+    const char *start = name;
+    for (const char *p = name; ; ++p)
+    {
+        if (*p == '.' || *p == '\0')
+        {
+            size_t len = (size_t)(p - start);
+            char *seg = (char *)malloc(len + 1);
+            if (seg == NULL)
+            {
+                for (int i = 0; i < idx; ++i)
+                    free(segments[i]);
+                free(segments);
+                return NULL;
+            }
+            memcpy(seg, start, len);
+            seg[len] = '\0';
+            segments[idx++] = seg;
+            if (*p == '\0')
+                break;
+            start = p + 1;
+        }
+    }
+    *out_count = idx;
+    return segments;
+}
+
 static void semcheck_maybe_qualify_nested_type(SymTab_t *symtab, const char *owner_id,
     char **type_id, TypeRef **type_ref)
 {
@@ -293,57 +337,91 @@ static void semcheck_maybe_qualify_nested_type(SymTab_t *symtab, const char *own
     if (semcheck_find_preferred_type_node_with_ref(symtab, ref, *type_id) != NULL)
         return;
 
-    char qualified_name[512];
-    snprintf(qualified_name, sizeof(qualified_name), "%s.%s", owner_id, *type_id);
-    if (semcheck_find_preferred_type_node(symtab, qualified_name) == NULL)
+    int owner_count = 0;
+    char **owner_segments = semcheck_split_segments(owner_id, &owner_count);
+    if (owner_segments == NULL || owner_count == 0)
         return;
 
-    char *orig_id = *type_id;
-    char *orig_copy = strdup(orig_id);
-    char *qualified_copy = strdup(qualified_name);
-    if (qualified_copy == NULL || orig_copy == NULL)
+    for (int prefix = owner_count; prefix >= 1; --prefix)
     {
-        free(orig_copy);
-        free(qualified_copy);
-        return;
-    }
-
-    *type_id = qualified_copy;
-    free(orig_id);
-
-    if (type_ref != NULL)
-    {
-        if (*type_ref != NULL)
-            type_ref_free(*type_ref);
-        char **segments = (char **)calloc(2, sizeof(char *));
-        if (segments != NULL)
+        size_t total = 0;
+        for (int i = 0; i < prefix; ++i)
+            total += strlen(owner_segments[i]) + 1;
+        total += strlen(*type_id);
+        char *qualified_name = (char *)malloc(total + 1);
+        if (qualified_name == NULL)
+            continue;
+        qualified_name[0] = '\0';
+        for (int i = 0; i < prefix; ++i)
         {
-            segments[0] = strdup(owner_id);
-            segments[1] = orig_copy;
-            if (segments[0] != NULL && segments[1] != NULL)
+            strcat(qualified_name, owner_segments[i]);
+            strcat(qualified_name, ".");
+        }
+        strcat(qualified_name, *type_id);
+
+        if (semcheck_find_preferred_type_node(symtab, qualified_name) != NULL)
+        {
+            char *orig_id = *type_id;
+            char *qualified_copy = strdup(qualified_name);
+            char *base_copy = strdup(orig_id);
+            if (qualified_copy != NULL && base_copy != NULL)
             {
-                QualifiedIdent *qid = qualified_ident_from_segments(segments, 2, 1);
-                if (qid != NULL)
-                    *type_ref = type_ref_create(qid, NULL, 0);
+                *type_id = qualified_copy;
+                free(orig_id);
+                if (type_ref != NULL)
+                {
+                    if (*type_ref != NULL)
+                        type_ref_free(*type_ref);
+                    char **segments = (char **)calloc((size_t)prefix + 1, sizeof(char *));
+                    if (segments != NULL)
+                    {
+                        int ok = 1;
+                        for (int i = 0; i < prefix; ++i)
+                        {
+                            segments[i] = strdup(owner_segments[i]);
+                            if (segments[i] == NULL)
+                                ok = 0;
+                        }
+                        segments[prefix] = base_copy;
+                        if (segments[prefix] == NULL)
+                            ok = 0;
+                        if (ok)
+                        {
+                            QualifiedIdent *qid = qualified_ident_from_segments(segments, prefix + 1, 1);
+                            if (qid != NULL)
+                                *type_ref = type_ref_create(qid, NULL, 0);
+                        }
+                        else
+                        {
+                            for (int i = 0; i < prefix + 1; ++i)
+                                free(segments[i]);
+                            free(segments);
+                        }
+                    }
+                    else
+                    {
+                        free(base_copy);
+                    }
+                }
                 else
-                    type_ref_free(*type_ref);
+                {
+                    free(base_copy);
+                }
             }
             else
             {
-                free(segments[0]);
-                free(orig_copy);
-                free(segments);
+                free(qualified_copy);
+                free(base_copy);
             }
+            free(qualified_name);
+            break;
         }
-        else
-        {
-            free(orig_copy);
-        }
+        free(qualified_name);
     }
-    else
-    {
-        free(orig_copy);
-    }
+
+    for (int i = 0; i < owner_count; ++i)
+        free(owner_segments[i]);
+    free(owner_segments);
 }
 
 static void semcheck_qualify_nested_types_for_record(SymTab_t *symtab, struct RecordType *record_info)
@@ -2238,8 +2316,8 @@ static void copy_method_decl_defaults_to_impl(SymTab_t *symtab, Tree_t *subprogr
     free(class_name);
 }
 
-static HashNode_t *semcheck_find_preferred_type_node_ref(SymTab_t *symtab,
-    const TypeRef *type_ref, const char *type_id)
+static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symtab,
+    const TypeRef *type_ref, const char *type_id, int skip_owner_qualify)
 {
     if (symtab == NULL)
         return NULL;
@@ -2400,6 +2478,24 @@ static HashNode_t *semcheck_find_preferred_type_node_ref(SymTab_t *symtab,
             matches = FindAllIdents(symtab, base);
     }
 
+    if (!skip_owner_qualify && matches == NULL && type_ref == NULL)
+    {
+        const char *owner_id = semcheck_get_current_method_owner();
+        if (owner_id != NULL)
+        {
+            char qualified_name[512];
+            snprintf(qualified_name, sizeof(qualified_name), "%s.%s", owner_id, lookup_id);
+            HashNode_t *qualified = semcheck_find_preferred_type_node_ref_internal(
+                symtab, NULL, qualified_name, 1);
+            if (qualified != NULL)
+            {
+                if (rendered != NULL)
+                    free(rendered);
+                return qualified;
+            }
+        }
+    }
+
     HashNode_t *best = NULL;
     int best_unit_rank = INT_MAX / 2;
     int best_scope_level = INT_MAX / 2;
@@ -2436,13 +2532,13 @@ static HashNode_t *semcheck_find_preferred_type_node_ref(SymTab_t *symtab,
 
 HashNode_t *semcheck_find_preferred_type_node(SymTab_t *symtab, const char *type_id)
 {
-    return semcheck_find_preferred_type_node_ref(symtab, NULL, type_id);
+    return semcheck_find_preferred_type_node_ref_internal(symtab, NULL, type_id, 0);
 }
 
 HashNode_t *semcheck_find_preferred_type_node_with_ref(SymTab_t *symtab,
     const TypeRef *type_ref, const char *type_id)
 {
-    return semcheck_find_preferred_type_node_ref(symtab, type_ref, type_id);
+    return semcheck_find_preferred_type_node_ref_internal(symtab, type_ref, type_id, 0);
 }
 
 static HashNode_t *semcheck_find_type_node_with_unit_flag(SymTab_t *symtab,
@@ -3120,7 +3216,7 @@ static int expression_is_string(SymTab_t *symtab, struct Expression *expr)
 }
 
 static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long long *out_value);
-static int resolve_scoped_enum_literal(SymTab_t *symtab, const char *type_name,
+int semcheck_resolve_scoped_enum_literal(SymTab_t *symtab, const char *type_name,
     const char *literal_name, long long *out_value);
 static char *build_qualified_identifier_from_expr(struct Expression *expr);
 static QualifiedIdent *build_qualified_ident_from_expr(struct Expression *expr);
@@ -3676,35 +3772,35 @@ static const char *resolve_type_to_base_name(SymTab_t *symtab,
             if (qualified_name != NULL)
                 lookup_name = qualified_name;
         }
-        
-        /* Handle qualified type names like "UnixType.culong" - try full name first */
-        int found = FindIdent(&type_node, symtab, lookup_name);
-        
+
+        /* Resolve with preferred-type lookup (unit/scope-aware + nested suffix fallback). */
+        type_node = semcheck_find_preferred_type_node(symtab, lookup_name);
+
         if (getenv("KGPC_DEBUG_RESOLVE_TYPE") != NULL)
         {
-            fprintf(stderr, "[resolve_type] '%s' initial lookup found=%d node=%p\n",
-                input_name, found, (void*)type_node);
+            fprintf(stderr, "[resolve_type] '%s' initial lookup node=%p (%s)\n",
+                input_name, (void*)type_node, lookup_name != NULL ? lookup_name : "<null>");
         }
         
         /* If lookup failed and this is a qualified name, try the unqualified part */
-        if (found < 0 || type_node == NULL)
+        if (type_node == NULL)
         {
             const char *last = (type_id != NULL) ? qualified_ident_last(type_id) : NULL;
             if (last != NULL)
             {
                 lookup_name = last;
-                found = FindIdent(&type_node, symtab, lookup_name);
+                type_node = semcheck_find_preferred_type_node(symtab, lookup_name);
                 if (getenv("KGPC_DEBUG_RESOLVE_TYPE") != NULL)
                 {
-                    fprintf(stderr, "[resolve_type] '%s' unqualified '%s' found=%d node=%p\n",
-                        input_name, lookup_name, found, (void*)type_node);
+                    fprintf(stderr, "[resolve_type] '%s' unqualified '%s' node=%p\n",
+                        input_name, lookup_name, (void*)type_node);
                 }
             }
         }
         if (qualified_name != NULL)
             free(qualified_name);
         
-        if (found >= 0 && type_node != NULL)
+        if (type_node != NULL)
         {
             if (getenv("KGPC_DEBUG_RESOLVE_TYPE") != NULL)
             {
@@ -4127,7 +4223,7 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                     if (owner_name != NULL)
                     {
                         long long enum_value = 0;
-                        if (resolve_scoped_enum_literal(symtab, owner_name,
+                        if (semcheck_resolve_scoped_enum_literal(symtab, owner_name,
                             field_id, &enum_value))
                         {
                             *out_value = enum_value;
@@ -4160,7 +4256,7 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
 
                     long long enum_value = 0;
                     if (record_expr->type == EXPR_VAR_ID && record_expr->expr_data.id != NULL &&
-                        resolve_scoped_enum_literal(symtab, record_expr->expr_data.id,
+                        semcheck_resolve_scoped_enum_literal(symtab, record_expr->expr_data.id,
                             field_id, &enum_value))
                     {
                         *out_value = enum_value;
@@ -4565,6 +4661,33 @@ low_cleanup:
                     const char *resolved = resolve_type_to_base_name(symtab, type_id_ref, type_name);
                     if (resolved != NULL)
                         base_name = resolved;
+
+                    /* Prefer computing from an actual type node (handles nested/local types). */
+                    HashNode_t *size_type_node = NULL;
+                    if (symtab != NULL)
+                    {
+                        if (type_id_ref != NULL && type_id_ref->count > 1)
+                        {
+                            char *qualified_name = qualified_ident_join(type_id_ref, ".");
+                            if (qualified_name != NULL)
+                            {
+                                size_type_node = semcheck_find_preferred_type_node(symtab, qualified_name);
+                                free(qualified_name);
+                            }
+                        }
+                        if (size_type_node == NULL && type_name != NULL)
+                            size_type_node = semcheck_find_preferred_type_node(symtab, type_name);
+                    }
+                    if (size_type_node != NULL && size_type_node->hash_type == HASHTYPE_TYPE)
+                    {
+                        long long computed_size = 0;
+                        if (sizeof_from_hashnode(symtab, size_type_node, &computed_size, 0, expr->line_num) == 0)
+                        {
+                            *out_value = computed_size;
+                            qualified_ident_free(type_id_ref);
+                            return 0;
+                        }
+                    }
                         
                     /* Map common type names to their sizes (in bytes) */
                     /* 64-bit types */
@@ -5657,6 +5780,33 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                         }
                     }
 
+                    /* Pre-declare simple alias types (e.g., TEndian = ObjPas.TEndian) so they
+                     * are available for const expressions before full type checking. */
+                    if (!alias->is_array && !alias->is_set && !alias->is_file &&
+                        !alias->is_pointer && alias->base_type == UNKNOWN_TYPE)
+                    {
+                        KgpcType *kgpc_type = create_kgpc_type_from_type_alias(alias, symtab);
+                        if (kgpc_type == NULL)
+                        {
+                            kgpc_type = create_primitive_type(UNKNOWN_TYPE);
+                            if (kgpc_type != NULL)
+                                kgpc_type_set_type_alias(kgpc_type, alias);
+                        }
+                        if (kgpc_type != NULL)
+                        {
+                            if (tree->tree_data.type_decl_data.kgpc_type == NULL)
+                            {
+                                tree->tree_data.type_decl_data.kgpc_type = kgpc_type;
+                                kgpc_type_retain(kgpc_type);
+                            }
+                            int result = PushTypeOntoScope_Typed(symtab, (char *)type_id, kgpc_type);
+                            if (result > 0)
+                                errors += result;
+                            cur = cur->next;
+                            continue;
+                        }
+                    }
+
                     /* Pre-declare procedural type aliases so const initializers can use them */
                     if (alias->base_type == PROCEDURE ||
                         (tree->tree_data.type_decl_data.kgpc_type != NULL &&
@@ -6224,8 +6374,8 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
     }
     
     /* Look up parent class in symbol table */
-    HashNode_t *parent_node = NULL;
-    if (FindIdent(&parent_node, symtab, record_info->parent_class_name) == -1 || parent_node == NULL)
+    HashNode_t *parent_node = semcheck_find_preferred_type_node(symtab, record_info->parent_class_name);
+    if (parent_node == NULL)
     {
         semcheck_error_with_context("Error on line %d, parent class '%s' not found!\n", 
                 line_num, record_info->parent_class_name);
@@ -6411,9 +6561,8 @@ static int build_class_vmt(SymTab_t *symtab, struct RecordType *record_info,
     
 if (record_info->parent_class_name != NULL) {
         /* Look up parent class */
-        HashNode_t *parent_node = NULL;
-        if (FindIdent(&parent_node, symtab, record_info->parent_class_name) != -1 && 
-            parent_node != NULL) {
+        HashNode_t *parent_node = semcheck_find_preferred_type_node(symtab, record_info->parent_class_name);
+        if (parent_node != NULL) {
             struct RecordType *parent_record = get_record_type_from_node(parent_node);
             if (parent_record != NULL && parent_record->methods != NULL) {
                 /* Clone parent's VMT */
@@ -6565,13 +6714,14 @@ static int resolve_const_identifier(SymTab_t *symtab, const char *id, long long 
     return 1;
 }
 
-static int resolve_scoped_enum_literal(SymTab_t *symtab, const char *type_name,
+int semcheck_resolve_scoped_enum_literal(SymTab_t *symtab, const char *type_name,
     const char *literal_name, long long *out_value)
 {
     if (symtab == NULL || type_name == NULL || literal_name == NULL || out_value == NULL)
         return 0;
 
     const char *current_type = type_name;
+    char *owned_type = NULL;
     for (int depth = 0; depth < 8; ++depth)
     {
         HashNode_t *type_node = NULL;
@@ -6608,29 +6758,113 @@ static int resolve_scoped_enum_literal(SymTab_t *symtab, const char *type_name,
             return 0;
         }
 
+        if (alias != NULL && alias->target_type_ref != NULL &&
+            alias->target_type_ref->name != NULL)
+        {
+            char *qualified = qualified_ident_join(alias->target_type_ref->name, ".");
+            if (qualified != NULL && !pascal_identifier_equals(qualified, current_type))
+            {
+                if (owned_type != NULL)
+                    free(owned_type);
+                owned_type = qualified;
+                current_type = owned_type;
+                continue;
+            }
+            free(qualified);
+        }
+
         if (alias == NULL || alias->target_type_id == NULL ||
             pascal_identifier_equals(alias->target_type_id, current_type))
             break;
         current_type = alias->target_type_id;
     }
 
+    if (owned_type != NULL)
+        free(owned_type);
+    return 0;
+}
+
+int semcheck_resolve_scoped_enum_literal_ref(SymTab_t *symtab, const QualifiedIdent *type_ref,
+    const char *literal_name, long long *out_value)
+{
+    if (symtab == NULL || type_ref == NULL || literal_name == NULL || out_value == NULL)
+        return 0;
+
+    const QualifiedIdent *current_ref = type_ref;
+    QualifiedIdent *owned_ref = NULL;
+    for (int depth = 0; depth < 8; ++depth)
     {
-        const char *base_name = semcheck_base_type_name(type_name);
-        if (base_name != NULL && pascal_identifier_equals(base_name, "TEndian"))
+        HashNode_t *type_node = NULL;
+        if (current_ref->count > 1)
         {
-            if (pascal_identifier_equals(literal_name, "Little"))
+            const char *unit_name = current_ref->segments != NULL ? current_ref->segments[0] : NULL;
+            const char *base_name = qualified_ident_last(current_ref);
+            if (unit_name != NULL && base_name != NULL && semcheck_is_unit_name(unit_name))
             {
-                *out_value = 0;
-                return 1;
-            }
-            if (pascal_identifier_equals(literal_name, "Big"))
-            {
-                *out_value = 1;
-                return 1;
+                type_node = semcheck_find_type_node_with_unit_flag(symtab, base_name, 1);
             }
         }
+        if (type_node == NULL)
+        {
+            if (semcheck_find_ident_with_qualified_fallback_ref(&type_node, symtab, current_ref) < 0 ||
+                type_node == NULL || type_node->hash_type != HASHTYPE_TYPE)
+            {
+                break;
+            }
+        }
+
+        if (type_node->type == NULL)
+            return 0;
+        struct TypeAlias *alias = kgpc_type_get_type_alias(type_node->type);
+        if (alias != NULL && alias->is_enum && alias->enum_literals != NULL)
+        {
+            int ordinal = 0;
+            ListNode_t *literal_node = alias->enum_literals;
+            while (literal_node != NULL)
+            {
+                if (literal_node->cur != NULL &&
+                    pascal_identifier_equals((char *)literal_node->cur, literal_name))
+                {
+                    *out_value = ordinal;
+                    return 1;
+                }
+                ++ordinal;
+                literal_node = literal_node->next;
+            }
+            return 0;
+        }
+
+        if (alias != NULL && alias->target_type_ref != NULL &&
+            alias->target_type_ref->name != NULL &&
+            !qualified_ident_equals_ci(alias->target_type_ref->name, current_ref))
+        {
+            if (owned_ref != NULL)
+            {
+                qualified_ident_free(owned_ref);
+                owned_ref = NULL;
+            }
+            owned_ref = qualified_ident_clone(alias->target_type_ref->name);
+            if (owned_ref == NULL)
+                break;
+            current_ref = owned_ref;
+            continue;
+        }
+
+        if (alias == NULL || alias->target_type_id == NULL)
+            break;
+        /* Fall back to string-based resolution for non-structured aliases. */
+        if (owned_ref != NULL)
+        {
+            qualified_ident_free(owned_ref);
+            owned_ref = NULL;
+        }
+        int resolved = semcheck_resolve_scoped_enum_literal(symtab, alias->target_type_id,
+            literal_name, out_value);
+        return resolved;
     }
 
+    if (owned_ref != NULL)
+        qualified_ident_free(owned_ref);
     return 0;
 }
 
@@ -10585,6 +10819,29 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 if (resolved_type == NULL && !owner_type_match)
                     resolved_type = semcheck_find_preferred_type_node_with_ref(symtab,
                         decl_type_ref, decl_type_id);
+            }
+        }
+        if (tree->type == TREE_VAR_DECL &&
+            decl_type_id != NULL &&
+            resolved_type == NULL &&
+            !tree->tree_data.var_decl_data.defined_in_unit)
+        {
+            const char *owner_id = semcheck_get_current_method_owner();
+            if (owner_id != NULL)
+            {
+                semcheck_maybe_qualify_nested_type(symtab, owner_id,
+                    &tree->tree_data.var_decl_data.type_id,
+                    &tree->tree_data.var_decl_data.type_ref);
+                decl_type_ref = tree->tree_data.var_decl_data.type_ref;
+                decl_type_id = tree->tree_data.var_decl_data.type_id;
+                decl_type_base = (decl_type_ref != NULL)
+                    ? type_ref_base_name(decl_type_ref)
+                    : decl_type_id;
+                if (decl_type_id != NULL)
+                {
+                    resolved_type = semcheck_find_preferred_type_node_with_ref(symtab,
+                        decl_type_ref, decl_type_id);
+                }
             }
         }
         if (tree->type == TREE_VAR_DECL)
