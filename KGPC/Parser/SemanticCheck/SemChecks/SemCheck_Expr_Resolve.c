@@ -40,6 +40,42 @@ const char *semcheck_type_tag_name(int type_tag)
     }
 }
 
+HashNode_t *semcheck_find_type_node_in_owner_chain(SymTab_t *symtab,
+    const char *type_id, const char *owner_full, const char *owner_outer)
+{
+    if (symtab == NULL || type_id == NULL)
+        return NULL;
+
+    size_t type_len = strlen(type_id);
+    HashNode_t *type_node = NULL;
+
+    if (owner_full != NULL)
+    {
+        size_t owner_len = strlen(owner_full);
+        char *qualified_name = (char *)malloc(owner_len + 1 + type_len + 1);
+        if (qualified_name != NULL)
+        {
+            snprintf(qualified_name, owner_len + 1 + type_len + 1, "%s.%s", owner_full, type_id);
+            type_node = semcheck_find_preferred_type_node(symtab, qualified_name);
+            free(qualified_name);
+        }
+    }
+
+    if (type_node == NULL && owner_outer != NULL)
+    {
+        size_t owner_len = strlen(owner_outer);
+        char *qualified_name = (char *)malloc(owner_len + 1 + type_len + 1);
+        if (qualified_name != NULL)
+        {
+            snprintf(qualified_name, owner_len + 1 + type_len + 1, "%s.%s", owner_outer, type_id);
+            type_node = semcheck_find_preferred_type_node(symtab, qualified_name);
+            free(qualified_name);
+        }
+    }
+
+    return type_node;
+}
+
 int semcheck_map_builtin_type_name(SymTab_t *symtab, const char *id)
 {
     if (id == NULL)
@@ -124,13 +160,11 @@ int resolve_type_identifier_ref(int *out_type, SymTab_t *symtab,
     
     if (type_node == NULL)
     {
-        const char *owner = semcheck_get_current_method_owner();
-        if (owner != NULL)
-        {
-            char qualified_name[512];
-            snprintf(qualified_name, sizeof(qualified_name), "%s.%s", owner, type_id);
-            type_node = semcheck_find_preferred_type_node(symtab, qualified_name);
-        }
+        const char *owner_full = semcheck_get_current_subprogram_owner_class_full();
+        const char *owner_outer = semcheck_get_current_subprogram_owner_class_outer();
+        if (owner_full == NULL)
+            owner_full = semcheck_get_current_method_owner();
+        type_node = semcheck_find_type_node_in_owner_chain(symtab, type_id, owner_full, owner_outer);
     }
     
     if (type_node == NULL)

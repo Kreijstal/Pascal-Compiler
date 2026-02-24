@@ -47,6 +47,8 @@ HashNode_t *semcheck_find_preferred_type_node_with_ref(SymTab_t *symtab,
     const struct TypeRef *type_ref, const char *type_id);
 HashNode_t *semcheck_find_type_node_with_kgpc_type_ref(SymTab_t *symtab,
     const struct TypeRef *type_ref, const char *type_id);
+HashNode_t *semcheck_find_type_node_in_owner_chain(SymTab_t *symtab,
+    const char *type_id, const char *owner_full, const char *owner_outer);
 
 /*===========================================================================
  * Type Definitions (internal)

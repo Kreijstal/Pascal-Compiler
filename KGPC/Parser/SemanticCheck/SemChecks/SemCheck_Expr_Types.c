@@ -235,6 +235,15 @@ int semcheck_typecast(int *type_return,
             {
                 /* target_node assigned by FindIdent when present */
             }
+            if (target_node == NULL && expr->expr_data.typecast_data.target_type_id != NULL)
+            {
+                const char *owner_full = semcheck_get_current_subprogram_owner_class_full();
+                const char *owner_outer = semcheck_get_current_subprogram_owner_class_outer();
+                if (owner_full == NULL)
+                    owner_full = semcheck_get_current_method_owner();
+                target_node = semcheck_find_type_node_in_owner_chain(symtab,
+                    expr->expr_data.typecast_data.target_type_id, owner_full, owner_outer);
+            }
             if (target_node != NULL && target_node->type != NULL)
             {
                 resolved_ptr = target_node->type;
@@ -270,7 +279,7 @@ int semcheck_typecast(int *type_return,
                 alias = get_type_alias_from_node(target_node);
             if (alias != NULL && alias->is_pointer)
             {
-                KgpcType *alias_type = create_kgpc_type_from_type_alias(alias, symtab);
+                KgpcType *alias_type = create_kgpc_type_from_type_alias(alias, symtab, 0);
                 if (alias_type != NULL)
                 {
                     if (alias->kgpc_type == alias_type)
@@ -374,20 +383,131 @@ int semcheck_typecast(int *type_return,
             }
         }
 
+        if (resolved_ptr != NULL && resolved_ptr->kind == TYPE_KIND_POINTER &&
+            resolved_ptr->info.points_to == NULL)
+        {
+            const char *subtype_id = NULL;
+            const TypeRef *subtype_ref = NULL;
+            if (alias != NULL)
+            {
+                if (alias->pointer_type_id != NULL)
+                    subtype_id = alias->pointer_type_id;
+                else if (alias->target_type_id != NULL)
+                    subtype_id = alias->target_type_id;
+                if (alias->pointer_type_ref != NULL)
+                    subtype_ref = alias->pointer_type_ref;
+                else if (alias->target_type_ref != NULL)
+                    subtype_ref = alias->target_type_ref;
+            }
+            if (subtype_id == NULL)
+                subtype_id = expr->pointer_subtype_id;
+            if (subtype_ref == NULL)
+                subtype_ref = expr->pointer_subtype_ref;
+
+            HashNode_t *sub_node = semcheck_find_preferred_type_node_with_ref(symtab,
+                subtype_ref, subtype_id);
+            if (sub_node == NULL && subtype_id != NULL)
+            {
+                const char *owner_full = semcheck_get_current_subprogram_owner_class_full();
+                const char *owner_outer = semcheck_get_current_subprogram_owner_class_outer();
+                if (owner_full == NULL)
+                    owner_full = semcheck_get_current_method_owner();
+                sub_node = semcheck_find_type_node_in_owner_chain(symtab, subtype_id, owner_full, owner_outer);
+            }
+
+            KgpcType *points_to = NULL;
+            int points_to_owned = 0;
+            if (sub_node != NULL)
+            {
+                struct RecordType *record_info = get_record_type_from_node(sub_node);
+                if (sub_node->type != NULL)
+                {
+                    if (sub_node->type->kind == TYPE_KIND_PRIMITIVE &&
+                        sub_node->type->info.primitive_type_tag == RECORD_TYPE &&
+                        record_info != NULL)
+                    {
+                        points_to = create_record_type(record_info);
+                        points_to_owned = 1;
+                        semcheck_set_pointer_info(expr, RECORD_TYPE, record_info->type_id);
+                    }
+                    else
+                    {
+                        kgpc_type_retain(sub_node->type);
+                        points_to = sub_node->type;
+                    }
+                }
+                else if (record_info != NULL)
+                {
+                    points_to = create_record_type(record_info);
+                    points_to_owned = 1;
+                    semcheck_set_pointer_info(expr, RECORD_TYPE, record_info->type_id);
+                }
+            }
+            if (points_to == NULL && subtype_id != NULL)
+            {
+                struct RecordType *record_info = semcheck_lookup_record_type(symtab, subtype_id);
+                if (record_info != NULL)
+                {
+                    points_to = create_record_type(record_info);
+                    points_to_owned = 1;
+                    semcheck_set_pointer_info(expr, RECORD_TYPE, record_info->type_id);
+                }
+            }
+
+            if (points_to != NULL)
+            {
+                KgpcType *new_ptr = create_pointer_type(points_to);
+                if (new_ptr != NULL)
+                {
+                    if (resolved_ptr != NULL)
+                        destroy_kgpc_type(resolved_ptr);
+                    resolved_ptr = new_ptr;
+                    points_to = NULL;
+                }
+                if (points_to_owned && points_to != NULL)
+                    destroy_kgpc_type(points_to);
+            }
+        }
+
+        if (alias != NULL && alias->pointer_type_id != NULL)
+        {
+            if (expr->pointer_subtype_id == NULL ||
+                (expr->expr_data.typecast_data.target_type_id != NULL &&
+                 pascal_identifier_equals(expr->pointer_subtype_id,
+                     expr->expr_data.typecast_data.target_type_id)))
+            {
+                int subtype_tag = expr->pointer_subtype;
+                semcheck_set_pointer_info(expr, subtype_tag, alias->pointer_type_id);
+            }
+        }
+
         expr->resolved_kgpc_type = resolved_ptr;
     }
     else if (target_type == RECORD_TYPE)
     {
         HashNode_t *target_node = NULL;
         struct RecordType *record_info = NULL;
-        if (expr->expr_data.typecast_data.target_type_id != NULL)
+        if (expr->expr_data.typecast_data.target_type_id != NULL ||
+            expr->expr_data.typecast_data.target_type_ref != NULL)
         {
-            target_node = semcheck_find_type_node_with_kgpc_type(
-                symtab, expr->expr_data.typecast_data.target_type_id);
+            target_node = semcheck_find_preferred_type_node_with_ref(
+                symtab,
+                expr->expr_data.typecast_data.target_type_ref,
+                expr->expr_data.typecast_data.target_type_id);
             if (target_node == NULL &&
+                expr->expr_data.typecast_data.target_type_id != NULL &&
                 FindIdent(&target_node, symtab, expr->expr_data.typecast_data.target_type_id) >= 0)
             {
                 /* target_node assigned by FindIdent when present */
+            }
+            if (target_node == NULL && expr->expr_data.typecast_data.target_type_id != NULL)
+            {
+                const char *owner_full = semcheck_get_current_subprogram_owner_class_full();
+                const char *owner_outer = semcheck_get_current_subprogram_owner_class_outer();
+                if (owner_full == NULL)
+                    owner_full = semcheck_get_current_method_owner();
+                target_node = semcheck_find_type_node_in_owner_chain(symtab,
+                    expr->expr_data.typecast_data.target_type_id, owner_full, owner_outer);
             }
             if (target_node != NULL)
             {
@@ -405,25 +525,66 @@ int semcheck_typecast(int *type_return,
                     record_info = kgpc_type_get_record(target_node->type);
                 }
             }
+            if (record_info == NULL)
+                record_info = semcheck_lookup_record_type(symtab,
+                    expr->expr_data.typecast_data.target_type_id);
         }
 
-        if (target_node != NULL && target_node->type != NULL)
+        if (record_info != NULL)
+        {
+            KgpcType *target_type = NULL;
+            if (target_node != NULL && target_node->type != NULL &&
+                kgpc_type_is_record(target_node->type) &&
+                kgpc_type_get_record(target_node->type) != NULL)
+            {
+                target_type = target_node->type;
+            }
+            if (target_type != NULL)
+            {
+                kgpc_type_retain(target_type);
+                expr->resolved_kgpc_type = target_type;
+            }
+            else
+            {
+                expr->resolved_kgpc_type = create_record_type(record_info);
+            }
+        }
+        else if (target_node != NULL && target_node->type != NULL)
         {
             kgpc_type_retain(target_node->type);
             expr->resolved_kgpc_type = target_node->type;
-        }
-        else if (record_info != NULL)
-        {
-            expr->resolved_kgpc_type = create_record_type(record_info);
         }
         else
         {
             expr->resolved_kgpc_type = create_primitive_type(RECORD_TYPE);
         }
     }
-    else if (target_type != UNKNOWN_TYPE)
+
+    if (expr->resolved_kgpc_type == NULL)
     {
-        expr->resolved_kgpc_type = create_primitive_type(target_type);
+        HashNode_t *target_node = semcheck_find_preferred_type_node_with_ref(symtab,
+            expr->expr_data.typecast_data.target_type_ref,
+            expr->expr_data.typecast_data.target_type_id);
+        if (target_node != NULL && target_node->type != NULL)
+        {
+            kgpc_type_retain(target_node->type);
+            expr->resolved_kgpc_type = target_node->type;
+        }
+        else if (target_type != UNKNOWN_TYPE)
+        {
+            expr->resolved_kgpc_type = create_primitive_type(target_type);
+        }
+    }
+    else if (target_type != UNKNOWN_TYPE &&
+        expr->resolved_kgpc_type != NULL &&
+        expr->resolved_kgpc_type->kind == TYPE_KIND_PRIMITIVE)
+    {
+        int prim_tag = expr->resolved_kgpc_type->info.primitive_type_tag;
+        if (prim_tag != target_type)
+        {
+            destroy_kgpc_type(expr->resolved_kgpc_type);
+            expr->resolved_kgpc_type = create_primitive_type(target_type);
+        }
         semcheck_clear_array_info(expr);
     }
 
@@ -1720,6 +1881,67 @@ int semcheck_recordaccess(int *type_return,
     }
     else if (record_type == POINTER_TYPE)
     {
+        if (record_info == NULL && record_expr->type == EXPR_POINTER_DEREF)
+        {
+            struct Expression *ptr_expr = record_expr->expr_data.pointer_deref_data.pointer_expr;
+            const char *subtype_id = NULL;
+            const TypeRef *subtype_ref = NULL;
+            if (ptr_expr != NULL)
+            {
+                subtype_id = ptr_expr->pointer_subtype_id;
+                subtype_ref = ptr_expr->pointer_subtype_ref;
+                if (subtype_id == NULL && ptr_expr->type == EXPR_TYPECAST)
+                {
+                    const char *target_id = ptr_expr->expr_data.typecast_data.target_type_id;
+                    const TypeRef *target_ref = ptr_expr->expr_data.typecast_data.target_type_ref;
+                    HashNode_t *target_node = semcheck_find_preferred_type_node_with_ref(symtab,
+                        target_ref, target_id);
+                    if (target_node == NULL && target_id != NULL)
+                    {
+                        const char *owner_full = semcheck_get_current_subprogram_owner_class_full();
+                        const char *owner_outer = semcheck_get_current_subprogram_owner_class_outer();
+                        if (owner_full == NULL)
+                            owner_full = semcheck_get_current_method_owner();
+                        target_node = semcheck_find_type_node_in_owner_chain(symtab, target_id,
+                            owner_full, owner_outer);
+                    }
+                    if (target_node != NULL)
+                    {
+                        struct TypeAlias *alias = get_type_alias_from_node(target_node);
+                        if (alias != NULL)
+                        {
+                            if (alias->pointer_type_id != NULL)
+                                subtype_id = alias->pointer_type_id;
+                            if (alias->pointer_type_ref != NULL)
+                                subtype_ref = alias->pointer_type_ref;
+                        }
+                    }
+                }
+            }
+            if (subtype_id != NULL)
+            {
+                HashNode_t *target_node = semcheck_find_preferred_type_node_with_ref(symtab,
+                    subtype_ref, subtype_id);
+                if (target_node == NULL)
+                {
+                    const char *owner_full = semcheck_get_current_subprogram_owner_class_full();
+                    const char *owner_outer = semcheck_get_current_subprogram_owner_class_outer();
+                    if (owner_full == NULL)
+                        owner_full = semcheck_get_current_method_owner();
+                    target_node = semcheck_find_type_node_in_owner_chain(symtab, subtype_id,
+                        owner_full, owner_outer);
+                }
+                if (target_node != NULL)
+                {
+                    record_info = get_record_type_from_node(target_node);
+                }
+                if (record_info == NULL)
+                    record_info = semcheck_lookup_record_type(symtab, subtype_id);
+                if (record_info != NULL)
+                    record_type = RECORD_TYPE;
+            }
+        }
+
         /* Try resolved KgpcType pointer target */
         if (record_info == NULL && record_expr->resolved_kgpc_type != NULL &&
             record_expr->resolved_kgpc_type->kind == TYPE_KIND_POINTER) {
@@ -1880,205 +2102,203 @@ int semcheck_recordaccess(int *type_return,
     }
     if (field_desc == NULL)
     {
-        if (record_type_is_class(record_info) || record_info->is_type_helper)
+        struct RecordType *property_owner = NULL;
+        struct ClassProperty *property = semcheck_find_class_property(symtab,
+            record_info, field_id, &property_owner);
+        if (property != NULL)
         {
-            struct RecordType *property_owner = NULL;
-            struct ClassProperty *property = semcheck_find_class_property(symtab,
-                record_info, field_id, &property_owner);
-            if (property != NULL)
+            property_matched = 1;
+            if (mutating == NO_MUTATE)
             {
-                property_matched = 1;
-                if (mutating == NO_MUTATE)
+                if (property->read_accessor == NULL)
                 {
-                    if (property->read_accessor == NULL)
-                    {
-                        semcheck_error_with_context("Error on line %d, property %s is write-only.\n\n",
-                            expr->line_num, property->name != NULL ? property->name : field_id);
-                        *type_return = UNKNOWN_TYPE;
-                        return error_count + 1;
-                    }
-
-                    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
-                        fprintf(stderr, "[SemCheck]   Property read_accessor='%s'\n",
-                            property->read_accessor ? property->read_accessor : "<null>");
-                    }
-
-                    struct RecordField *read_field =
-                        semcheck_find_class_field_including_hidden(symtab,
-                            record_info, property->read_accessor, NULL);
-                    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
-                        fprintf(stderr, "[SemCheck]   Found read_field=%p\n", read_field);
-                    }
-                    if (read_field != NULL &&
-                        resolve_record_field(symtab, record_info, property->read_accessor,
-                            &field_desc, &field_offset, expr->line_num, 0) == 0 &&
-                        field_desc != NULL)
-                    {
-                        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
-                            fprintf(stderr, "[SemCheck]   Transforming property '%s' to field '%s'\n",
-                                field_id, property->read_accessor);
-                        }
-                        if (!pascal_identifier_equals(field_id, property->read_accessor))
-                        {
-                            free(expr->expr_data.record_access_data.field_id);
-                            expr->expr_data.record_access_data.field_id = strdup(property->read_accessor);
-                            if (expr->expr_data.record_access_data.field_id == NULL)
-                            {
-                                semcheck_error_with_context("Error on line %d, failed to allocate property field name.\n\n",
-                                    expr->line_num);
-                                *type_return = UNKNOWN_TYPE;
-                                return error_count + 1;
-                            }
-                        }
-                        goto FIELD_RESOLVED;
-                    }
-
-                    HashNode_t *getter_node = semcheck_find_class_method(symtab,
-                        property_owner, property->read_accessor, NULL);
-                    if (getter_node == NULL)
-                    {
-                        semcheck_error_with_context("Error on line %d, getter %s for property %s not found.\n\n",
-                            expr->line_num,
-                            property->read_accessor != NULL ? property->read_accessor : "<unknown>",
-                            property->name != NULL ? property->name : field_id);
-                        *type_return = UNKNOWN_TYPE;
-                        return error_count + 1;
-                    }
-                    int getter_is_function = (getter_node->hash_type == HASHTYPE_FUNCTION);
-                    if (!getter_is_function && getter_node->type != NULL &&
-                        getter_node->type->kind == TYPE_KIND_PROCEDURE &&
-                        getter_node->type->info.proc_info.return_type == NULL)
-                    {
-                        int prop_type = UNKNOWN_TYPE;
-                        struct RecordType *prop_record = NULL;
-                        if (semcheck_property_type_info(symtab, property, expr->line_num,
-                                &prop_type, &prop_record) == 0)
-                        {
-                            KgpcType *prop_kgpc = NULL;
-                            if (prop_record != NULL)
-                                prop_kgpc = create_record_type(prop_record);
-                            else if (prop_type != UNKNOWN_TYPE)
-                                prop_kgpc = create_primitive_type(prop_type);
-                            if (prop_kgpc != NULL)
-                            {
-                                getter_node->type->info.proc_info.return_type = prop_kgpc;
-                                getter_node->hash_type = HASHTYPE_FUNCTION;
-                                getter_is_function = 1;
-                            }
-                        }
-                    }
-                    if (!getter_is_function && getter_node->type != NULL &&
-                        getter_node->type->kind == TYPE_KIND_PROCEDURE)
-                    {
-                        KgpcType *ret_type = kgpc_type_get_return_type(getter_node->type);
-                        if (ret_type != NULL)
-                            getter_is_function = 1;
-                    }
-                    if (!getter_is_function)
-                    {
-                        semcheck_error_with_context("Error on line %d, property getter %s must be a function.\n\n",
-                            expr->line_num, property->read_accessor);
-                        *type_return = UNKNOWN_TYPE;
-                        return error_count + 1;
-                    }
-
-                    return semcheck_transform_property_getter_call(type_return, symtab,
-                        expr, max_scope_lev, mutating, getter_node, property_owner);
+                    semcheck_error_with_context("Error on line %d, property %s is write-only.\n\n",
+                        expr->line_num, property->name != NULL ? property->name : field_id);
+                    *type_return = UNKNOWN_TYPE;
+                    return error_count + 1;
                 }
-                else
+
+                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                    fprintf(stderr, "[SemCheck]   Property read_accessor='%s'\n",
+                        property->read_accessor ? property->read_accessor : "<null>");
+                }
+
+                struct RecordField *read_field =
+                    semcheck_find_class_field_including_hidden(symtab,
+                        record_info, property->read_accessor, NULL);
+                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                    fprintf(stderr, "[SemCheck]   Found read_field=%p\n", read_field);
+                }
+                if (read_field != NULL &&
+                    resolve_record_field(symtab, record_info, property->read_accessor,
+                        &field_desc, &field_offset, expr->line_num, 0) == 0 &&
+                    field_desc != NULL)
                 {
-                    if (property->write_accessor == NULL)
-                    {
-                        semcheck_error_with_context("Error on line %d, property %s is read-only.\n\n",
-                            expr->line_num, property->name != NULL ? property->name : field_id);
-                        *type_return = UNKNOWN_TYPE;
-                        return error_count + 1;
+                    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                        fprintf(stderr, "[SemCheck]   Transforming property '%s' to field '%s'\n",
+                            field_id, property->read_accessor);
                     }
-
-                    struct RecordField *write_field =
-                        semcheck_find_class_field_including_hidden(symtab,
-                            record_info, property->write_accessor, NULL);
-                    if (write_field != NULL &&
-                        resolve_record_field(symtab, record_info, property->write_accessor,
-                            &field_desc, &field_offset, expr->line_num, 0) == 0 &&
-                        field_desc != NULL)
+                    if (!pascal_identifier_equals(field_id, property->read_accessor))
                     {
-                        if (!pascal_identifier_equals(field_id, property->write_accessor))
+                        free(expr->expr_data.record_access_data.field_id);
+                        expr->expr_data.record_access_data.field_id = strdup(property->read_accessor);
+                        if (expr->expr_data.record_access_data.field_id == NULL)
                         {
-                            free(expr->expr_data.record_access_data.field_id);
-                            expr->expr_data.record_access_data.field_id = strdup(property->write_accessor);
-                            if (expr->expr_data.record_access_data.field_id == NULL)
-                            {
-                                semcheck_error_with_context("Error on line %d, failed to allocate property field name.\n\n",
-                                    expr->line_num);
-                                *type_return = UNKNOWN_TYPE;
-                                return error_count + 1;
-                            }
+                            semcheck_error_with_context("Error on line %d, failed to allocate property field name.\n\n",
+                                expr->line_num);
+                            *type_return = UNKNOWN_TYPE;
+                            return error_count + 1;
                         }
-                        goto FIELD_RESOLVED;
                     }
+                    goto FIELD_RESOLVED;
+                }
 
-                    if (mutating == BOTH_MUTATE_REFERENCE)
-                    {
-                        semcheck_error_with_context("Error on line %d, property %s cannot be passed as a var parameter.\n\n",
-                            expr->line_num, property->name != NULL ? property->name : field_id);
-                        *type_return = UNKNOWN_TYPE;
-                        return error_count + 1;
-                    }
-
-                    HashNode_t *setter_node = semcheck_find_class_method(symtab,
-                        property_owner, property->write_accessor, NULL);
-                    if (setter_node == NULL)
-                    {
-                        semcheck_error_with_context("Error on line %d, setter %s for property %s not found.\n\n",
-                            expr->line_num,
-                            property->write_accessor != NULL ? property->write_accessor : "<unknown>",
-                            property->name != NULL ? property->name : field_id);
-                        *type_return = UNKNOWN_TYPE;
-                        return error_count + 1;
-                    }
-                    if (setter_node->hash_type != HASHTYPE_PROCEDURE)
-                    {
-                        semcheck_error_with_context("Error on line %d, property setter %s must be a procedure.\n\n",
-                            expr->line_num, property->write_accessor);
-                        *type_return = UNKNOWN_TYPE;
-                        return error_count + 1;
-                    }
-
-                    int property_type = UNKNOWN_TYPE;
-                    struct RecordType *property_record = NULL;
+                HashNode_t *getter_node = semcheck_find_class_method(symtab,
+                    property_owner, property->read_accessor, NULL);
+                if (getter_node == NULL)
+                {
+                    semcheck_error_with_context("Error on line %d, getter %s for property %s not found.\n\n",
+                        expr->line_num,
+                        property->read_accessor != NULL ? property->read_accessor : "<unknown>",
+                        property->name != NULL ? property->name : field_id);
+                    *type_return = UNKNOWN_TYPE;
+                    return error_count + 1;
+                }
+                int getter_is_function = (getter_node->hash_type == HASHTYPE_FUNCTION);
+                if (!getter_is_function && getter_node->type != NULL &&
+                    getter_node->type->kind == TYPE_KIND_PROCEDURE &&
+                    getter_node->type->info.proc_info.return_type == NULL)
+                {
+                    int prop_type = UNKNOWN_TYPE;
+                    struct RecordType *prop_record = NULL;
                     if (semcheck_property_type_info(symtab, property, expr->line_num,
-                            &property_type, &property_record) != 0)
+                            &prop_type, &prop_record) == 0)
                     {
-                        *type_return = UNKNOWN_TYPE;
-                        return error_count + 1;
-                    }
-
-                    semcheck_expr_set_resolved_type(expr, property_type);
-                    if (property_type == RECORD_TYPE && property_record != NULL)
-                    {
-                        KgpcType *property_record_type = create_record_type(property_record);
-                        if (property_record_type != NULL)
+                        KgpcType *prop_kgpc = NULL;
+                        if (prop_record != NULL)
+                            prop_kgpc = create_record_type(prop_record);
+                        else if (prop_type != UNKNOWN_TYPE)
+                            prop_kgpc = create_primitive_type(prop_type);
+                        if (prop_kgpc != NULL)
                         {
-                            semcheck_expr_set_resolved_kgpc_type_shared(expr, property_record_type);
-                            destroy_kgpc_type(property_record_type);
+                            getter_node->type->info.proc_info.return_type = prop_kgpc;
+                            getter_node->hash_type = HASHTYPE_FUNCTION;
+                            getter_is_function = 1;
                         }
                     }
-                    *type_return = property_type;
-                    return error_count;
+                }
+                if (!getter_is_function && getter_node->type != NULL &&
+                    getter_node->type->kind == TYPE_KIND_PROCEDURE)
+                {
+                    KgpcType *ret_type = kgpc_type_get_return_type(getter_node->type);
+                    if (ret_type != NULL)
+                        getter_is_function = 1;
+                }
+                if (!getter_is_function)
+                {
+                    semcheck_error_with_context("Error on line %d, property getter %s must be a function.\n\n",
+                        expr->line_num, property->read_accessor);
+                    *type_return = UNKNOWN_TYPE;
+                    return error_count + 1;
                 }
 
+                return semcheck_transform_property_getter_call(type_return, symtab,
+                    expr, max_scope_lev, mutating, getter_node, property_owner);
+            }
+            else
+            {
+                if (property->write_accessor == NULL)
+                {
+                    semcheck_error_with_context("Error on line %d, property %s is read-only.\n\n",
+                        expr->line_num, property->name != NULL ? property->name : field_id);
+                    *type_return = UNKNOWN_TYPE;
+                    return error_count + 1;
+                }
+
+                struct RecordField *write_field =
+                    semcheck_find_class_field_including_hidden(symtab,
+                        record_info, property->write_accessor, NULL);
+                if (write_field != NULL &&
+                    resolve_record_field(symtab, record_info, property->write_accessor,
+                        &field_desc, &field_offset, expr->line_num, 0) == 0 &&
+                    field_desc != NULL)
+                {
+                    if (!pascal_identifier_equals(field_id, property->write_accessor))
+                    {
+                        free(expr->expr_data.record_access_data.field_id);
+                        expr->expr_data.record_access_data.field_id = strdup(property->write_accessor);
+                        if (expr->expr_data.record_access_data.field_id == NULL)
+                        {
+                            semcheck_error_with_context("Error on line %d, failed to allocate property field name.\n\n",
+                                expr->line_num);
+                            *type_return = UNKNOWN_TYPE;
+                            return error_count + 1;
+                        }
+                    }
+                    goto FIELD_RESOLVED;
+                }
+
+                if (mutating == BOTH_MUTATE_REFERENCE)
+                {
+                    semcheck_error_with_context("Error on line %d, property %s cannot be passed as a var parameter.\n\n",
+                        expr->line_num, property->name != NULL ? property->name : field_id);
+                    *type_return = UNKNOWN_TYPE;
+                    return error_count + 1;
+                }
+
+                HashNode_t *setter_node = semcheck_find_class_method(symtab,
+                    property_owner, property->write_accessor, NULL);
+                if (setter_node == NULL)
+                {
+                    semcheck_error_with_context("Error on line %d, setter %s for property %s not found.\n\n",
+                        expr->line_num,
+                        property->write_accessor != NULL ? property->write_accessor : "<unknown>",
+                        property->name != NULL ? property->name : field_id);
+                    *type_return = UNKNOWN_TYPE;
+                    return error_count + 1;
+                }
+                if (setter_node->hash_type != HASHTYPE_PROCEDURE)
+                {
+                    semcheck_error_with_context("Error on line %d, property setter %s must be a procedure.\n\n",
+                        expr->line_num, property->write_accessor);
+                    *type_return = UNKNOWN_TYPE;
+                    return error_count + 1;
+                }
+
+                int property_type = UNKNOWN_TYPE;
+                struct RecordType *property_record = NULL;
+                if (semcheck_property_type_info(symtab, property, expr->line_num,
+                        &property_type, &property_record) != 0)
+                {
+                    *type_return = UNKNOWN_TYPE;
+                    return error_count + 1;
+                }
+
+                semcheck_expr_set_resolved_type(expr, property_type);
+                if (property_type == RECORD_TYPE && property_record != NULL)
+                {
+                    KgpcType *property_record_type = create_record_type(property_record);
+                    if (property_record_type != NULL)
+                    {
+                        semcheck_expr_set_resolved_kgpc_type_shared(expr, property_record_type);
+                        destroy_kgpc_type(property_record_type);
+                    }
+                }
+                *type_return = property_type;
                 return error_count;
             }
 
-            /* Check for methods (including constructors) */
-            HashNode_t *method_node = semcheck_find_class_method(symtab, record_info, field_id, NULL);
-            if (method_node != NULL)
-            {
-                /* Found a method/constructor */
-                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
-                    fprintf(stderr, "[SemCheck] semcheck_recordaccess: Found method %s\n", field_id);
-                }
+            return error_count;
+        }
+
+        /* Check for methods (including constructors) */
+        HashNode_t *method_node = semcheck_find_class_method(symtab, record_info, field_id, NULL);
+        if (method_node != NULL)
+        {
+            /* Found a method/constructor */
+            if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                fprintf(stderr, "[SemCheck] semcheck_recordaccess: Found method %s\n", field_id);
+            }
                 
                 if (method_node->hash_type == HASHTYPE_FUNCTION || 
                     method_node->hash_type == HASHTYPE_PROCEDURE)
@@ -2171,7 +2391,6 @@ int semcheck_recordaccess(int *type_return,
                     semcheck_expr_set_resolved_type(expr, UNKNOWN_TYPE);
                     return semcheck_funccall(type_return, symtab, expr, max_scope_lev, mutating);
                 }
-            }
         }
 
         if (property_matched)
@@ -2861,7 +3080,7 @@ FIELD_RESOLVED:
         semcheck_set_array_info_from_alias(expr, symtab, array_alias, expr->line_num);
     if (array_alias != NULL && expr->resolved_kgpc_type == NULL)
     {
-        KgpcType *arr_type = create_kgpc_type_from_type_alias(array_alias, symtab);
+        KgpcType *arr_type = create_kgpc_type_from_type_alias(array_alias, symtab, 0);
         if (arr_type != NULL)
         {
             semcheck_expr_set_resolved_kgpc_type_shared(expr, arr_type);
@@ -2910,98 +3129,277 @@ FIELD_RESOLVED:
         }
     }
 
+    if (field_type == POINTER_TYPE &&
+        !field_desc->is_pointer &&
+        field_desc->pointer_type_id == NULL &&
+        field_desc->pointer_type == UNKNOWN_TYPE)
+    {
+        HashNode_t *ptr_node = NULL;
+        if (field_desc->type_id != NULL || field_desc->type_ref != NULL)
+        {
+            ptr_node = semcheck_find_preferred_type_node_with_ref(symtab,
+                field_desc->type_ref, field_desc->type_id);
+            if (ptr_node == NULL)
+                ptr_node = semcheck_find_type_node_with_kgpc_type_ref(symtab,
+                    field_desc->type_ref, field_desc->type_id);
+        }
+        if (ptr_node != NULL && ptr_node->type != NULL)
+        {
+            KgpcType *ptr_type = ptr_node->type;
+            int is_untyped_pointer = 0;
+            if (ptr_type->kind == TYPE_KIND_PRIMITIVE &&
+                ptr_type->info.primitive_type_tag == POINTER_TYPE)
+            {
+                is_untyped_pointer = 1;
+            }
+            else if (ptr_type->kind == TYPE_KIND_POINTER)
+            {
+                KgpcType *pointee = ptr_type->info.points_to;
+                if (pointee != NULL &&
+                    pointee->kind == TYPE_KIND_PRIMITIVE &&
+                    pointee->info.primitive_type_tag == POINTER_TYPE)
+                {
+                    struct TypeAlias *ptr_alias = get_type_alias_from_node(ptr_node);
+                    if (ptr_alias == NULL || !ptr_alias->is_pointer)
+                        is_untyped_pointer = 1;
+                }
+            }
+            if (is_untyped_pointer)
+            {
+                semcheck_set_pointer_info(expr, UNKNOWN_TYPE, NULL);
+                if (expr->resolved_kgpc_type != NULL)
+                {
+                    destroy_kgpc_type(expr->resolved_kgpc_type);
+                    expr->resolved_kgpc_type = NULL;
+                }
+                expr->resolved_kgpc_type = create_primitive_type(POINTER_TYPE);
+                *type_return = POINTER_TYPE;
+                return error_count;
+            }
+        }
+    }
+
     if (field_type == POINTER_TYPE)
     {
         int pointer_subtype = UNKNOWN_TYPE;
         const char *pointer_subtype_id = NULL;
         char *pointer_subtype_rendered = NULL;
-        if (field_desc->pointer_type_id != NULL || field_desc->pointer_type != UNKNOWN_TYPE)
+        int typed_pointer = 0;
+        int untyped_pointer_type = 0;
+        int force_untyped = 0;
+        HashNode_t *type_node = NULL;
+        struct TypeAlias *alias = NULL;
+
+        if (field_desc->is_pointer)
+            typed_pointer = 1;
+        if (field_desc->pointer_type_id != NULL || field_desc->pointer_type != UNKNOWN_TYPE ||
+            field_desc->pointer_type_ref != NULL)
+            typed_pointer = 1;
+
+        if (!typed_pointer && (field_desc->type_id != NULL || field_desc->type_ref != NULL))
         {
-            if (field_desc->pointer_type != UNKNOWN_TYPE)
-                pointer_subtype = field_desc->pointer_type;
-            if (field_desc->pointer_type_id != NULL)
-                pointer_subtype_id = field_desc->pointer_type_id;
-            else if (field_desc->pointer_type_ref != NULL)
-            {
-                pointer_subtype_rendered = type_ref_render_mangled(field_desc->pointer_type_ref);
-                pointer_subtype_id = pointer_subtype_rendered;
-            }
-        }
-        else if (field_desc->type_id != NULL || field_desc->type_ref != NULL)
-        {
-            HashNode_t *type_node = semcheck_find_preferred_type_node_with_ref(symtab,
+            type_node = semcheck_find_preferred_type_node_with_ref(symtab,
                 field_desc->type_ref, field_desc->type_id);
             if (type_node == NULL)
                 type_node = semcheck_find_type_node_with_kgpc_type_ref(symtab,
                     field_desc->type_ref, field_desc->type_id);
             if (type_node != NULL)
             {
-                struct TypeAlias *alias = get_type_alias_from_node(type_node);
+                alias = get_type_alias_from_node(type_node);
                 if (alias != NULL && alias->is_pointer)
+                    typed_pointer = 1;
+                if (type_node->type != NULL)
                 {
-                    pointer_subtype = alias->pointer_type;
-                    if (alias->pointer_type_ref != NULL)
+                    if (type_node->type->kind == TYPE_KIND_PRIMITIVE &&
+                        type_node->type->info.primitive_type_tag == POINTER_TYPE)
                     {
-                        pointer_subtype_rendered = type_ref_render_mangled(alias->pointer_type_ref);
-                        pointer_subtype_id = pointer_subtype_rendered;
+                        untyped_pointer_type = 1;
                     }
-                    else
-                        pointer_subtype_id = alias->pointer_type_id;
+                    else if (type_node->type->kind == TYPE_KIND_POINTER)
+                    {
+                        KgpcType *points_to = type_node->type->info.points_to;
+                        if (points_to != NULL &&
+                            points_to->kind == TYPE_KIND_PRIMITIVE &&
+                            points_to->info.primitive_type_tag == POINTER_TYPE)
+                        {
+                            untyped_pointer_type = 1;
+                        }
+                        else
+                        {
+                            typed_pointer = 1;
+                        }
+                    }
                 }
-                if (pointer_subtype == UNKNOWN_TYPE && type_node->type != NULL)
-                    pointer_subtype = kgpc_type_get_pointer_subtype_tag(type_node->type);
-            }
-        }
-        if (pointer_subtype_id == NULL)
-        {
-            if (field_desc->type_id != NULL)
-                pointer_subtype_id = field_desc->type_id;
-            else if (field_desc->type_ref != NULL)
-                pointer_subtype_id = type_ref_base_name(field_desc->type_ref);
-        }
-        semcheck_set_pointer_info(expr, pointer_subtype, pointer_subtype_id);
-        if (pointer_subtype_rendered != NULL)
-            free(pointer_subtype_rendered);
-        if (expr->resolved_kgpc_type != NULL &&
-            expr->resolved_kgpc_type->kind != TYPE_KIND_POINTER)
-        {
-            destroy_kgpc_type(expr->resolved_kgpc_type);
-            expr->resolved_kgpc_type = NULL;
-        }
-        if (expr->resolved_kgpc_type == NULL)
-        {
-            KgpcType *points_to = NULL;
-            if (pointer_subtype_id != NULL)
-            {
-                HashNode_t *target_node = semcheck_find_type_node_with_kgpc_type_ref(symtab,
-                    field_desc->pointer_type_ref, pointer_subtype_id);
-                if (target_node != NULL && target_node->type != NULL)
-                {
-                    points_to = target_node->type;
-                    kgpc_type_retain(points_to);
-                }
-            }
-            if (points_to == NULL && pointer_subtype != UNKNOWN_TYPE)
-                points_to = create_primitive_type(pointer_subtype);
-            KgpcType *ptr_type = create_pointer_type(points_to);
-            if (ptr_type != NULL)
-            {
-                semcheck_expr_set_resolved_kgpc_type_shared(expr, ptr_type);
-                destroy_kgpc_type(ptr_type);
+                if (untyped_pointer_type && (alias == NULL || !alias->is_pointer))
+                    typed_pointer = 0;
             }
         }
 
-        struct RecordType *pointer_record = NULL;
-        if (expr->resolved_kgpc_type != NULL &&
-            expr->resolved_kgpc_type->kind == TYPE_KIND_POINTER)
+        if (!typed_pointer)
         {
-            KgpcType *points_to = expr->resolved_kgpc_type->info.points_to;
-            if (points_to != NULL && points_to->kind == TYPE_KIND_RECORD)
-                pointer_record = points_to->info.record_info;
+            semcheck_set_pointer_info(expr, UNKNOWN_TYPE, NULL);
+            if (expr->resolved_kgpc_type == NULL ||
+                !(expr->resolved_kgpc_type->kind == TYPE_KIND_PRIMITIVE &&
+                  expr->resolved_kgpc_type->info.primitive_type_tag == POINTER_TYPE))
+            {
+                if (expr->resolved_kgpc_type != NULL)
+                {
+                    destroy_kgpc_type(expr->resolved_kgpc_type);
+                    expr->resolved_kgpc_type = NULL;
+                }
+                expr->resolved_kgpc_type = create_primitive_type(POINTER_TYPE);
+            }
         }
-        if (pointer_record == NULL && pointer_subtype_id != NULL)
-            pointer_record = semcheck_lookup_record_type(symtab, pointer_subtype_id);
-        (void)pointer_record;
+        else
+        {
+            if (field_desc->pointer_type_id != NULL || field_desc->pointer_type != UNKNOWN_TYPE)
+            {
+                if (field_desc->pointer_type != UNKNOWN_TYPE)
+                    pointer_subtype = field_desc->pointer_type;
+                if (field_desc->pointer_type_id != NULL)
+                    pointer_subtype_id = field_desc->pointer_type_id;
+                else if (field_desc->pointer_type_ref != NULL)
+                {
+                    pointer_subtype_rendered = type_ref_render_mangled(field_desc->pointer_type_ref);
+                    pointer_subtype_id = pointer_subtype_rendered;
+                }
+            }
+            else if (field_desc->type_id != NULL || field_desc->type_ref != NULL)
+            {
+                if (type_node == NULL)
+                {
+                    type_node = semcheck_find_preferred_type_node_with_ref(symtab,
+                        field_desc->type_ref, field_desc->type_id);
+                    if (type_node == NULL)
+                        type_node = semcheck_find_type_node_with_kgpc_type_ref(symtab,
+                            field_desc->type_ref, field_desc->type_id);
+                }
+                if (type_node != NULL)
+                {
+                    struct TypeAlias *alias_local = get_type_alias_from_node(type_node);
+                    if (alias_local != NULL && alias_local->is_pointer)
+                    {
+                        pointer_subtype = alias_local->pointer_type;
+                        if (alias_local->pointer_type_ref != NULL)
+                        {
+                            pointer_subtype_rendered = type_ref_render_mangled(alias_local->pointer_type_ref);
+                            pointer_subtype_id = pointer_subtype_rendered;
+                        }
+                        else
+                            pointer_subtype_id = alias_local->pointer_type_id;
+                    }
+                    if (pointer_subtype == UNKNOWN_TYPE && type_node->type != NULL)
+                        pointer_subtype = kgpc_type_get_pointer_subtype_tag(type_node->type);
+                }
+            }
+            if (pointer_subtype_id == NULL)
+            {
+                if (field_desc->type_id != NULL)
+                {
+                    if (!untyped_pointer_type)
+                        pointer_subtype_id = field_desc->type_id;
+                }
+                else if (field_desc->type_ref != NULL)
+                    pointer_subtype_id = type_ref_base_name(field_desc->type_ref);
+            }
+            if (!force_untyped && pointer_subtype_id != NULL)
+            {
+                HashNode_t *sub_node = semcheck_find_type_node_with_kgpc_type_ref(symtab,
+                    field_desc->pointer_type_ref, pointer_subtype_id);
+                if (sub_node != NULL && sub_node->type != NULL)
+                {
+                    if (sub_node->type->kind == TYPE_KIND_PRIMITIVE &&
+                        sub_node->type->info.primitive_type_tag == POINTER_TYPE)
+                    {
+                        force_untyped = 1;
+                    }
+                    else if (sub_node->type->kind == TYPE_KIND_POINTER)
+                    {
+                        KgpcType *points_to = sub_node->type->info.points_to;
+                        if (points_to != NULL &&
+                            points_to->kind == TYPE_KIND_PRIMITIVE &&
+                            points_to->info.primitive_type_tag == POINTER_TYPE)
+                        {
+                            struct TypeAlias *sub_alias = get_type_alias_from_node(sub_node);
+                            if (sub_alias == NULL || !sub_alias->is_pointer)
+                                force_untyped = 1;
+                        }
+                    }
+                }
+            }
+            if (pointer_subtype == POINTER_TYPE &&
+                field_desc->is_pointer == 0 &&
+                field_desc->pointer_type_id == NULL &&
+                field_desc->pointer_type == UNKNOWN_TYPE &&
+                (alias == NULL || !alias->is_pointer))
+            {
+                force_untyped = 1;
+            }
+
+            if (force_untyped)
+            {
+                semcheck_set_pointer_info(expr, UNKNOWN_TYPE, NULL);
+                if (pointer_subtype_rendered != NULL)
+                    free(pointer_subtype_rendered);
+                if (expr->resolved_kgpc_type == NULL ||
+                    !(expr->resolved_kgpc_type->kind == TYPE_KIND_PRIMITIVE &&
+                      expr->resolved_kgpc_type->info.primitive_type_tag == POINTER_TYPE))
+                {
+                    if (expr->resolved_kgpc_type != NULL)
+                    {
+                        destroy_kgpc_type(expr->resolved_kgpc_type);
+                        expr->resolved_kgpc_type = NULL;
+                    }
+                    expr->resolved_kgpc_type = create_primitive_type(POINTER_TYPE);
+                }
+            }
+            else
+            {
+                semcheck_set_pointer_info(expr, pointer_subtype, pointer_subtype_id);
+                if (pointer_subtype_rendered != NULL)
+                    free(pointer_subtype_rendered);
+                if (expr->resolved_kgpc_type != NULL &&
+                    expr->resolved_kgpc_type->kind != TYPE_KIND_POINTER)
+                {
+                    destroy_kgpc_type(expr->resolved_kgpc_type);
+                    expr->resolved_kgpc_type = NULL;
+                }
+                if (expr->resolved_kgpc_type == NULL)
+                {
+                    KgpcType *points_to = NULL;
+                    if (pointer_subtype_id != NULL)
+                    {
+                        HashNode_t *target_node = semcheck_find_type_node_with_kgpc_type_ref(symtab,
+                            field_desc->pointer_type_ref, pointer_subtype_id);
+                        if (target_node != NULL && target_node->type != NULL)
+                        {
+                            points_to = target_node->type;
+                            kgpc_type_retain(points_to);
+                        }
+                    }
+                    if (points_to == NULL && pointer_subtype != UNKNOWN_TYPE)
+                        points_to = create_primitive_type(pointer_subtype);
+                    KgpcType *ptr_type = create_pointer_type(points_to);
+                    if (ptr_type != NULL)
+                    {
+                        semcheck_expr_set_resolved_kgpc_type_shared(expr, ptr_type);
+                        destroy_kgpc_type(ptr_type);
+                    }
+                }
+
+                struct RecordType *pointer_record = NULL;
+                if (expr->resolved_kgpc_type != NULL &&
+                    expr->resolved_kgpc_type->kind == TYPE_KIND_POINTER)
+                {
+                    KgpcType *points_to = expr->resolved_kgpc_type->info.points_to;
+                    if (points_to != NULL && points_to->kind == TYPE_KIND_RECORD)
+                        pointer_record = points_to->info.record_info;
+                }
+                if (pointer_record == NULL && pointer_subtype_id != NULL)
+                    pointer_record = semcheck_lookup_record_type(symtab, pointer_subtype_id);
+                (void)pointer_record;
+            }
+        }
     }
     if (getenv("KGPC_DEBUG_BUFPTR") != NULL &&
         field_id != NULL && pascal_identifier_equals(field_id, "bufptr"))
@@ -3132,6 +3530,24 @@ int semcheck_try_reinterpret_as_typecast(int *type_return,
     }
     if (target_type == UNKNOWN_TYPE)
         target_type = semcheck_map_builtin_type_name(symtab, id);
+
+    if (type_node == NULL)
+    {
+        const char *owner_full = semcheck_get_current_subprogram_owner_class_full();
+        const char *owner_outer = semcheck_get_current_subprogram_owner_class_outer();
+        if (owner_full == NULL)
+            owner_full = semcheck_get_current_method_owner();
+        type_node = semcheck_find_type_node_in_owner_chain(symtab, id, owner_full, owner_outer);
+        if (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+        {
+            set_type_from_hashtype(&target_type, type_node);
+            if (target_type == UNKNOWN_TYPE &&
+                type_node->type != NULL && kgpc_type_is_record(type_node->type))
+            {
+                target_type = RECORD_TYPE;
+            }
+        }
+    }
 
     int is_unaligned_cast = pascal_identifier_equals(id, "unaligned");
     int is_type_identifier =

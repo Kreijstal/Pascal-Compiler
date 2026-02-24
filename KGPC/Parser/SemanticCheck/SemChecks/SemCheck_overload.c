@@ -641,6 +641,24 @@ static int semcheck_resolve_arg_kgpc_type(struct Expression *arg_expr,
     semcheck_expr_with_type(&arg_kgpc_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
     arg_tag = semcheck_tag_from_kgpc(arg_kgpc_type);
 
+    if (arg_expr->type == EXPR_TYPECAST &&
+        arg_expr->expr_data.typecast_data.target_type_id != NULL &&
+        (arg_kgpc_type == NULL ||
+         (arg_kgpc_type->kind == TYPE_KIND_PRIMITIVE &&
+          arg_kgpc_type->info.primitive_type_tag == RECORD_TYPE)))
+    {
+        struct RecordType *rec = semcheck_lookup_record_type(symtab,
+            arg_expr->expr_data.typecast_data.target_type_id);
+        if (rec != NULL)
+        {
+            if (owns_type_out != NULL)
+                *owns_type_out = 1;
+            if (arg_type_out != NULL)
+                *arg_type_out = create_record_type(rec);
+            return RECORD_TYPE;
+        }
+    }
+
     KgpcType *arg_type = arg_expr->resolved_kgpc_type;
     if (arg_type != NULL && arg_tag != UNKNOWN_TYPE)
     {
@@ -1516,7 +1534,7 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                 KgpcType *formal_kgpc = resolve_type_from_vardecl(formal_decl, symtab, &owns_formal);
                 if (formal_kgpc == NULL && formal_inline_alias != NULL)
                 {
-                    formal_kgpc = create_kgpc_type_from_type_alias(formal_inline_alias, symtab);
+                    formal_kgpc = create_kgpc_type_from_type_alias(formal_inline_alias, symtab, 0);
                     if (formal_inline_alias->kgpc_type == NULL && formal_kgpc != NULL)
                         owns_formal = 1;
                 }

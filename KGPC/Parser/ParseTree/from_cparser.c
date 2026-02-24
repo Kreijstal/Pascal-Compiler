@@ -5840,6 +5840,8 @@ static void convert_record_members(ast_t *node, ListBuilder *builder,
     ListBuilder *property_builder, ListBuilder *method_template_builder);
 static struct VariantPart *convert_variant_part(ast_t *variant_node, ListNode_t **out_tag_fields);
 static struct VariantBranch *convert_variant_branch(ast_t *branch_node);
+static void qualify_param_decl_types(ListNode_t *params, const char *owner_full,
+    const char *owner_outer, SymTab_t *symtab);
 
 static ListNode_t *convert_class_field_decl(ast_t *field_decl_node) {
     if (field_decl_node == NULL || field_decl_node->typ != PASCAL_T_FIELD_DECL)
@@ -7767,6 +7769,17 @@ KgpcType *from_cparser_method_template_to_proctype(struct MethodTemplate *method
 
     params = list_builder_finish(&params_builder);
 
+    const char *owner_full = (record != NULL) ? record->type_id : NULL;
+    char *owner_outer = NULL;
+    if (owner_full != NULL) {
+        const char *dot = strrchr(owner_full, '.');
+        if (dot != NULL && dot[1] != '\0' && dot != owner_full)
+            owner_outer = strndup(owner_full, (size_t)(dot - owner_full));
+    }
+    qualify_param_decl_types(params, owner_full, owner_outer, symtab);
+    if (owner_outer != NULL)
+        free(owner_outer);
+
     KgpcType *return_type = NULL;
     char *return_type_id = NULL;
     if (method_template->has_return_type && method_template->return_type_ast != NULL) {
@@ -9432,7 +9445,7 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
                 {
                     if (type_info.type_ref == NULL)
                         type_info.type_ref = type_ref_create(qualified_ident_clone(qid), NULL, 0);
-                    if (type_id == NULL || strchr(type_id, '.') == NULL)
+                    if (qid->count > 1)
                     {
                         char *qualified = qualified_ident_join(qid, ".");
                         if (qualified != NULL)
@@ -10088,6 +10101,76 @@ static void qualify_type_ref_id(char **type_id, struct TypeRef **type_ref,
     else
     {
         free(base_dup);
+    }
+}
+
+static int type_id_is_qualified(const char *type_id, const struct TypeRef *type_ref)
+{
+    (void)type_id;
+    if (type_ref != NULL && type_ref->name != NULL && type_ref->name->count > 1)
+        return 1;
+    return 0;
+}
+
+static struct TypeRef *ensure_type_ref_from_id(char **type_id, struct TypeRef **type_ref);
+
+static void qualify_param_type_id(char **type_id, struct TypeRef **type_ref,
+    const char *owner_full, const char *owner_outer, SymTab_t *symtab)
+{
+    if (type_id == NULL || *type_id == NULL || symtab == NULL)
+        return;
+    if (type_ref != NULL && *type_ref == NULL)
+        ensure_type_ref_from_id(type_id, type_ref);
+    if (type_id_is_qualified(*type_id, type_ref != NULL ? *type_ref : NULL))
+        return;
+    if (map_type_name(*type_id, NULL) != UNKNOWN_TYPE)
+        return;
+
+    const char *owners[2] = { owner_full, owner_outer };
+    for (size_t i = 0; i < 2; ++i)
+    {
+        const char *owner = owners[i];
+        if (owner == NULL)
+            continue;
+        size_t len = strlen(owner) + 1 + strlen(*type_id) + 1;
+        char *qualified = (char *)malloc(len);
+        if (qualified == NULL)
+            continue;
+        snprintf(qualified, len, "%s.%s", owner, *type_id);
+        HashNode_t *node = NULL;
+        if (FindIdent(&node, symtab, qualified) >= 0 &&
+            node != NULL && node->hash_type == HASHTYPE_TYPE)
+        {
+            free(qualified);
+            qualify_type_ref_id(type_id, type_ref, owner, *type_id);
+            break;
+        }
+        free(qualified);
+    }
+}
+
+static void qualify_param_decl_types(ListNode_t *params,
+    const char *owner_full, const char *owner_outer, SymTab_t *symtab)
+{
+    if (params == NULL || symtab == NULL)
+        return;
+    for (ListNode_t *cur = params; cur != NULL; cur = cur->next)
+    {
+        if (cur->type != LIST_TREE || cur->cur == NULL)
+            continue;
+        Tree_t *decl = (Tree_t *)cur->cur;
+        if (decl->type == TREE_VAR_DECL)
+        {
+            qualify_param_type_id(&decl->tree_data.var_decl_data.type_id,
+                &decl->tree_data.var_decl_data.type_ref,
+                owner_full, owner_outer, symtab);
+        }
+        else if (decl->type == TREE_ARR_DECL)
+        {
+            qualify_param_type_id(&decl->tree_data.arr_decl_data.type_id,
+                &decl->tree_data.arr_decl_data.type_ref,
+                owner_full, owner_outer, symtab);
+        }
     }
 }
 
@@ -11041,14 +11124,15 @@ static void append_type_decls_from_section(ast_t *type_section, ListNode_t **des
                      * sibling types in the same nested scope */
                     if (decl->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS) {
                         struct TypeAlias *alias = &decl->tree_data.type_decl_data.info.alias;
-                        if (alias->is_pointer && alias->pointer_type_id != NULL) {
-                            char *orig_ptr_id = alias->pointer_type_id;
-                            size_t ptr_len = strlen(parent_type_name) + 1 + strlen(orig_ptr_id) + 1;
-                            char *qualified_ptr_id = (char *)malloc(ptr_len);
-                            if (qualified_ptr_id != NULL) {
-                                snprintf(qualified_ptr_id, ptr_len, "%s.%s", parent_type_name, orig_ptr_id);
-                                free(orig_ptr_id);
-                                alias->pointer_type_id = qualified_ptr_id;
+                        if (alias->is_pointer) {
+                            struct TypeRef *ptr_ref = ensure_type_ref_from_id(
+                                &alias->pointer_type_id, &alias->pointer_type_ref);
+                            if (ptr_ref != NULL && ptr_ref->name != NULL && ptr_ref->name->count == 1) {
+                                const char *base = qualified_ident_last(ptr_ref->name);
+                                if (base != NULL && nested_type_section_has_id(type_section, base)) {
+                                    qualify_type_ref_id(&alias->pointer_type_id, &alias->pointer_type_ref,
+                                        parent_type_name, base);
+                                }
                             }
                         }
                     }
@@ -11125,14 +11209,15 @@ static void append_type_decls_from_section(ast_t *type_section, ListNode_t **des
                         struct TypeAlias *alias = &decl->tree_data.type_decl_data.info.alias;
                         /* Qualify pointer_type_id so symbol table lookup resolves
                          * the sibling nested type correctly */
-                        if (alias->is_pointer && alias->pointer_type_id != NULL) {
-                            char *orig_ptr_id = alias->pointer_type_id;
-                            size_t ptr_len = strlen(parent_type_name) + 1 + strlen(orig_ptr_id) + 1;
-                            char *qualified_ptr_id = (char *)malloc(ptr_len);
-                            if (qualified_ptr_id != NULL) {
-                                snprintf(qualified_ptr_id, ptr_len, "%s.%s", parent_type_name, orig_ptr_id);
-                                free(orig_ptr_id);
-                                alias->pointer_type_id = qualified_ptr_id;
+                        if (alias->is_pointer) {
+                            struct TypeRef *ptr_ref = ensure_type_ref_from_id(
+                                &alias->pointer_type_id, &alias->pointer_type_ref);
+                            if (ptr_ref != NULL && ptr_ref->name != NULL && ptr_ref->name->count == 1) {
+                                const char *base = qualified_ident_last(ptr_ref->name);
+                                if (base != NULL && nested_type_section_has_id(type_section, base)) {
+                                    qualify_type_ref_id(&alias->pointer_type_id, &alias->pointer_type_ref,
+                                        parent_type_name, base);
+                                }
                             }
                         }
                         if (alias->kgpc_type != NULL &&
@@ -13874,7 +13959,10 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
                 is_static_method);
     }
     
-    char *proc_name = mangle_method_name(effective_class, method_name);
+    const char *mangle_owner = effective_class;
+    if (effective_class_full != NULL && effective_class_full != effective_class)
+        mangle_owner = effective_class_full;
+    char *proc_name = mangle_method_name(mangle_owner, method_name);
     if (proc_name == NULL) {
         free(class_name);
         free(method_name);
@@ -14141,8 +14229,28 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         tree->tree_data.subprogram_data.owner_class = strdup(effective_class);
         if (effective_class_full != NULL && effective_class_full != effective_class)
             tree->tree_data.subprogram_data.owner_class_full = strdup(effective_class_full);
+        if (tree->tree_data.subprogram_data.owner_class_full == NULL &&
+            tree->tree_data.subprogram_data.owner_class != NULL &&
+            strchr(tree->tree_data.subprogram_data.owner_class, '.') != NULL)
+        {
+            tree->tree_data.subprogram_data.owner_class_full =
+                strdup(tree->tree_data.subprogram_data.owner_class);
+        }
         if (effective_class_outer != NULL)
             tree->tree_data.subprogram_data.owner_class_outer = strdup(effective_class_outer);
+        if (tree->tree_data.subprogram_data.owner_class_outer == NULL &&
+            tree->tree_data.subprogram_data.owner_class_full != NULL)
+        {
+            const char *full = tree->tree_data.subprogram_data.owner_class_full;
+            const char *last_dot = strrchr(full, '.');
+            if (last_dot != NULL && last_dot > full)
+            {
+                size_t len = (size_t)(last_dot - full);
+                char *outer = strndup(full, len);
+                if (outer != NULL)
+                    tree->tree_data.subprogram_data.owner_class_outer = outer;
+            }
+        }
         if (num_generic_type_params > 0) {
             tree->tree_data.subprogram_data.generic_type_params = generic_type_params;
             tree->tree_data.subprogram_data.num_generic_type_params = num_generic_type_params;

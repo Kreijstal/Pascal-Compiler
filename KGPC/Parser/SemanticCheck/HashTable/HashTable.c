@@ -351,6 +351,10 @@ void DestroyHashTable(HashTable_t *table)
                 free(hash_node->method_name);
             if (hash_node->owner_class != NULL)
                 free(hash_node->owner_class);
+            if (hash_node->owner_class_full != NULL)
+                free(hash_node->owner_class_full);
+            if (hash_node->owner_class_outer != NULL)
+                free(hash_node->owner_class_outer);
             if (hash_node->type != NULL)
                 destroy_kgpc_type(hash_node->type);
             /* Builtin procedures are handled separately - do not call DestroyBuiltin here */
@@ -476,6 +480,8 @@ static HashNode_t* create_hash_node(char* id, char* mangled_id,
     hash_node->unit_is_public = 0;
     hash_node->method_name = NULL;
     hash_node->owner_class = NULL;
+    hash_node->owner_class_full = NULL;
+    hash_node->owner_class_outer = NULL;
     
     /* Set identifier */
     hash_node->id = strdup(id);

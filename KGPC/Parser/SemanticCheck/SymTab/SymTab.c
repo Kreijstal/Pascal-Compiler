@@ -414,7 +414,7 @@ int PushTypeOntoScope(SymTab_t *symtab, char *id, enum VarType var_type,
     {
         /* Use the comprehensive TypeAlias → KgpcType converter
          * This handles ALL cases: arrays, pointers, sets, enums, files, primitives */
-        kgpc_type = create_kgpc_type_from_type_alias(type_alias, symtab);
+        kgpc_type = create_kgpc_type_from_type_alias(type_alias, symtab, 0);
         
         /* If conversion failed (e.g., forward reference), we'll handle it below */
     }

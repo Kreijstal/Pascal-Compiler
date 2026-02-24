@@ -965,6 +965,35 @@ static void debug_check_type_presence(Tree_t *target)
         check_id, in_interface, in_implementation, target->type);
 }
 
+static ListNode_t *merge_unit_type_decls_before_locals(ListNode_t *head, ListNode_t *unit_types)
+{
+    if (unit_types == NULL)
+        return head;
+    if (head == NULL)
+        return unit_types;
+
+    ListNode_t *prev = NULL;
+    ListNode_t *cur = head;
+    while (cur != NULL)
+    {
+        if (cur->type == LIST_TREE && cur->cur != NULL)
+        {
+            Tree_t *decl = (Tree_t *)cur->cur;
+            if (decl->type == TREE_TYPE_DECL &&
+                !decl->tree_data.type_decl_data.defined_in_unit)
+                break;
+        }
+        prev = cur;
+        cur = cur->next;
+    }
+
+    if (prev == NULL)
+        return ConcatList(unit_types, head);
+
+    prev->next = ConcatList(unit_types, cur);
+    return head;
+}
+
 /* Merges a loaded unit's declarations into the target tree.
  * The target can be either a TREE_PROGRAM_TYPE or TREE_UNIT. */
 static void merge_unit_into_target(Tree_t *target, Tree_t *unit_tree)
@@ -1003,8 +1032,9 @@ static void merge_unit_into_target(Tree_t *target, Tree_t *unit_tree)
             dbg = dbg->next;
         }
     }
-    /* Append imported types so dependencies stay ahead of later units. */
-    *type_list = ConcatList(*type_list, unit_tree->tree_data.unit_data.interface_type_decls);
+    /* Insert imported types before local types while preserving import order. */
+    *type_list = merge_unit_type_decls_before_locals(*type_list,
+        unit_tree->tree_data.unit_data.interface_type_decls);
     unit_tree->tree_data.unit_data.interface_type_decls = NULL;
 
     mark_unit_const_decls(unit_tree->tree_data.unit_data.interface_const_decls, 1);
@@ -1053,7 +1083,8 @@ static void merge_unit_into_target(Tree_t *target, Tree_t *unit_tree)
         }
     }
     /* Append implementation types to keep dependencies ahead of targets. */
-    *type_list = ConcatList(*type_list, unit_tree->tree_data.unit_data.implementation_type_decls);
+    *type_list = merge_unit_type_decls_before_locals(*type_list,
+        unit_tree->tree_data.unit_data.implementation_type_decls);
     unit_tree->tree_data.unit_data.implementation_type_decls = NULL;
 
     mark_unit_const_decls(unit_tree->tree_data.unit_data.implementation_const_decls, 0);
@@ -1644,6 +1675,7 @@ int main(int argc, char **argv)
         ListNode_t *prelude_types = get_prelude_type_decls(prelude_tree);
         if (prelude_types != NULL)
         {
+            mark_unit_type_decls(prelude_types, 1);
             user_tree->tree_data.program_data.type_declaration =
                 ConcatList(prelude_types, user_tree->tree_data.program_data.type_declaration);
             clear_prelude_type_decls(prelude_tree);

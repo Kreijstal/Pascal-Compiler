@@ -91,6 +91,8 @@ typedef struct HashNode
 
     char *method_name;    /* Bare method name (NULL for non-methods) */
     char *owner_class;    /* Owning class name (NULL for non-methods) */
+    char *owner_class_full;  /* Full dotted class path for nested classes (NULL if not nested) */
+    char *owner_class_outer; /* Outer class path for nested classes (NULL if not nested) */
 
 } HashNode_t;
 

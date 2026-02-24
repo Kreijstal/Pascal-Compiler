@@ -38,6 +38,9 @@
 #include "../ParseTree/tree_types.h"
 #include "../ParseTree/KgpcType.h"
 #include "../ParseTree/type_tags.h"
+
+HashNode_t *semcheck_find_type_node_in_owner_chain(SymTab_t *symtab,
+    const char *type_id, const char *owner_full, const char *owner_outer);
 #include "../ParseTree/KgpcType.h"
 #include "../ParseTree/from_cparser.h"
 #include "../ParseTree/operator_registry.h"
@@ -280,54 +283,11 @@ static int semcheck_is_explicit_unit_qualified_type_ref(const TypeRef *ref)
 HashNode_t *semcheck_find_preferred_type_node_with_ref(SymTab_t *symtab,
     const TypeRef *type_ref, const char *type_id);
 
-static char **semcheck_split_segments(const char *name, int *out_count)
-{
-    if (out_count != NULL)
-        *out_count = 0;
-    if (name == NULL || *name == '\0' || out_count == NULL)
-        return NULL;
-
-    int count = 1;
-    for (const char *p = name; *p != '\0'; ++p)
-    {
-        if (*p == '.')
-            count += 1;
-    }
-    char **segments = (char **)calloc((size_t)count, sizeof(char *));
-    if (segments == NULL)
-        return NULL;
-
-    int idx = 0;
-    const char *start = name;
-    for (const char *p = name; ; ++p)
-    {
-        if (*p == '.' || *p == '\0')
-        {
-            size_t len = (size_t)(p - start);
-            char *seg = (char *)malloc(len + 1);
-            if (seg == NULL)
-            {
-                for (int i = 0; i < idx; ++i)
-                    free(segments[i]);
-                free(segments);
-                return NULL;
-            }
-            memcpy(seg, start, len);
-            seg[len] = '\0';
-            segments[idx++] = seg;
-            if (*p == '\0')
-                break;
-            start = p + 1;
-        }
-    }
-    *out_count = idx;
-    return segments;
-}
-
-static void semcheck_maybe_qualify_nested_type(SymTab_t *symtab, const char *owner_id,
+static void semcheck_maybe_qualify_nested_type(SymTab_t *symtab,
+    const char *owner_full, const char *owner_outer,
     char **type_id, TypeRef **type_ref)
 {
-    if (symtab == NULL || owner_id == NULL || type_id == NULL || *type_id == NULL)
+    if (symtab == NULL || owner_full == NULL || type_id == NULL || *type_id == NULL)
         return;
 
     TypeRef *ref = type_ref != NULL ? *type_ref : NULL;
@@ -337,91 +297,37 @@ static void semcheck_maybe_qualify_nested_type(SymTab_t *symtab, const char *own
     if (semcheck_find_preferred_type_node_with_ref(symtab, ref, *type_id) != NULL)
         return;
 
-    int owner_count = 0;
-    char **owner_segments = semcheck_split_segments(owner_id, &owner_count);
-    if (owner_segments == NULL || owner_count == 0)
-        return;
-
-    for (int prefix = owner_count; prefix >= 1; --prefix)
+    const char *owners[2] = { owner_full, owner_outer };
+    for (int i = 0; i < 2; ++i)
     {
-        size_t total = 0;
-        for (int i = 0; i < prefix; ++i)
-            total += strlen(owner_segments[i]) + 1;
-        total += strlen(*type_id);
-        char *qualified_name = (char *)malloc(total + 1);
+        const char *owner = owners[i];
+        if (owner == NULL || owner[0] == '\0')
+            continue;
+        size_t owner_len = strlen(owner);
+        size_t type_len = strlen(*type_id);
+        char *qualified_name = (char *)malloc(owner_len + 1 + type_len + 1);
         if (qualified_name == NULL)
             continue;
-        qualified_name[0] = '\0';
-        for (int i = 0; i < prefix; ++i)
-        {
-            strcat(qualified_name, owner_segments[i]);
-            strcat(qualified_name, ".");
-        }
-        strcat(qualified_name, *type_id);
-
+        snprintf(qualified_name, owner_len + 1 + type_len + 1, "%s.%s", owner, *type_id);
         if (semcheck_find_preferred_type_node(symtab, qualified_name) != NULL)
         {
             char *orig_id = *type_id;
             char *qualified_copy = strdup(qualified_name);
-            char *base_copy = strdup(orig_id);
-            if (qualified_copy != NULL && base_copy != NULL)
+            if (qualified_copy != NULL)
             {
                 *type_id = qualified_copy;
                 free(orig_id);
-                if (type_ref != NULL)
+                if (type_ref != NULL && *type_ref != NULL)
                 {
-                    if (*type_ref != NULL)
-                        type_ref_free(*type_ref);
-                    char **segments = (char **)calloc((size_t)prefix + 1, sizeof(char *));
-                    if (segments != NULL)
-                    {
-                        int ok = 1;
-                        for (int i = 0; i < prefix; ++i)
-                        {
-                            segments[i] = strdup(owner_segments[i]);
-                            if (segments[i] == NULL)
-                                ok = 0;
-                        }
-                        segments[prefix] = base_copy;
-                        if (segments[prefix] == NULL)
-                            ok = 0;
-                        if (ok)
-                        {
-                            QualifiedIdent *qid = qualified_ident_from_segments(segments, prefix + 1, 1);
-                            if (qid != NULL)
-                                *type_ref = type_ref_create(qid, NULL, 0);
-                        }
-                        else
-                        {
-                            for (int i = 0; i < prefix + 1; ++i)
-                                free(segments[i]);
-                            free(segments);
-                        }
-                    }
-                    else
-                    {
-                        free(base_copy);
-                    }
+                    type_ref_free(*type_ref);
+                    *type_ref = NULL;
                 }
-                else
-                {
-                    free(base_copy);
-                }
-            }
-            else
-            {
-                free(qualified_copy);
-                free(base_copy);
             }
             free(qualified_name);
             break;
         }
         free(qualified_name);
     }
-
-    for (int i = 0; i < owner_count; ++i)
-        free(owner_segments[i]);
-    free(owner_segments);
 }
 
 static void semcheck_qualify_nested_types_for_record(SymTab_t *symtab, struct RecordType *record_info)
@@ -435,11 +341,11 @@ static void semcheck_qualify_nested_types_for_record(SymTab_t *symtab, struct Re
         if (fnode->type == LIST_RECORD_FIELD && fnode->cur != NULL)
         {
             struct RecordField *field = (struct RecordField *)fnode->cur;
-            semcheck_maybe_qualify_nested_type(symtab, record_info->type_id,
+            semcheck_maybe_qualify_nested_type(symtab, record_info->type_id, NULL,
                 &field->type_id, &field->type_ref);
-            semcheck_maybe_qualify_nested_type(symtab, record_info->type_id,
+            semcheck_maybe_qualify_nested_type(symtab, record_info->type_id, NULL,
                 &field->array_element_type_id, &field->array_element_type_ref);
-            semcheck_maybe_qualify_nested_type(symtab, record_info->type_id,
+            semcheck_maybe_qualify_nested_type(symtab, record_info->type_id, NULL,
                 &field->pointer_type_id, &field->pointer_type_ref);
         }
         fnode = fnode->next;
@@ -451,7 +357,7 @@ static void semcheck_qualify_nested_types_for_record(SymTab_t *symtab, struct Re
         if (pnode->type == LIST_CLASS_PROPERTY && pnode->cur != NULL)
         {
             struct ClassProperty *prop = (struct ClassProperty *)pnode->cur;
-            semcheck_maybe_qualify_nested_type(symtab, record_info->type_id,
+            semcheck_maybe_qualify_nested_type(symtab, record_info->type_id, NULL,
                 &prop->type_id, &prop->type_ref);
         }
         pnode = pnode->next;
@@ -463,7 +369,7 @@ static void semcheck_qualify_nested_types_for_record(SymTab_t *symtab, struct Re
         if (rnode->type == LIST_CLASS_PROPERTY && rnode->cur != NULL)
         {
             struct ClassProperty *prop = (struct ClassProperty *)rnode->cur;
-            semcheck_maybe_qualify_nested_type(symtab, record_info->type_id,
+            semcheck_maybe_qualify_nested_type(symtab, record_info->type_id, NULL,
                 &prop->type_id, &prop->type_ref);
         }
         rnode = rnode->next;
@@ -744,6 +650,8 @@ static HashNode_t *semcheck_find_type_excluding_alias(SymTab_t *symtab, const ch
     return NULL;
 }
 
+static int semcheck_prefer_unit_defined_owner(void);
+
 static HashNode_t *semcheck_find_owner_record_type_node(SymTab_t *symtab, const char *owner_id)
 {
     if (symtab == NULL || owner_id == NULL)
@@ -757,6 +665,7 @@ static HashNode_t *semcheck_find_owner_record_type_node(SymTab_t *symtab, const 
             matches = FindAllIdents(symtab, base);
     }
 
+    int prefer_unit_defined = semcheck_prefer_unit_defined_owner();
     HashNode_t *best_record = NULL;
     ListNode_t *cur = matches;
     while (cur != NULL)
@@ -768,6 +677,11 @@ static HashNode_t *semcheck_find_owner_record_type_node(SymTab_t *symtab, const 
             if (best_record == NULL)
             {
                 best_record = candidate;
+            }
+            else if (prefer_unit_defined)
+            {
+                if (!best_record->defined_in_unit && candidate->defined_in_unit)
+                    best_record = candidate;
             }
             else if (best_record->defined_in_unit && !candidate->defined_in_unit)
             {
@@ -2316,6 +2230,53 @@ static void copy_method_decl_defaults_to_impl(SymTab_t *symtab, Tree_t *subprogr
     free(class_name);
 }
 
+static void semcheck_propagate_method_identity(SymTab_t *symtab, Tree_t *subprogram)
+{
+    if (symtab == NULL || subprogram == NULL)
+        return;
+
+    const char *id = subprogram->tree_data.subprogram_data.id;
+    const char *mangled = subprogram->tree_data.subprogram_data.mangled_id;
+    if (id == NULL || mangled == NULL)
+        return;
+
+    ListNode_t *candidates = FindAllIdents(symtab, id);
+    if (candidates == NULL)
+        return;
+
+    ListNode_t *cur = candidates;
+    while (cur != NULL)
+    {
+        HashNode_t *candidate = (HashNode_t *)cur->cur;
+        if (candidate != NULL && candidate->mangled_id != NULL &&
+            strcmp(candidate->mangled_id, mangled) == 0)
+        {
+            if (candidate->type != NULL && candidate->type->kind == TYPE_KIND_PROCEDURE &&
+                candidate->type->info.proc_info.definition == NULL)
+                candidate->type->info.proc_info.definition = subprogram;
+
+            if (candidate->method_name == NULL &&
+                subprogram->tree_data.subprogram_data.method_name != NULL)
+                candidate->method_name = strdup(subprogram->tree_data.subprogram_data.method_name);
+
+            if (candidate->owner_class == NULL &&
+                subprogram->tree_data.subprogram_data.owner_class != NULL)
+                candidate->owner_class = strdup(subprogram->tree_data.subprogram_data.owner_class);
+
+            if (candidate->owner_class_full == NULL &&
+                subprogram->tree_data.subprogram_data.owner_class_full != NULL)
+                candidate->owner_class_full = strdup(subprogram->tree_data.subprogram_data.owner_class_full);
+
+            if (candidate->owner_class_outer == NULL &&
+                subprogram->tree_data.subprogram_data.owner_class_outer != NULL)
+                candidate->owner_class_outer = strdup(subprogram->tree_data.subprogram_data.owner_class_outer);
+        }
+        cur = cur->next;
+    }
+
+    DestroyList(candidates);
+}
+
 static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symtab,
     const TypeRef *type_ref, const char *type_id, int skip_owner_qualify)
 {
@@ -2512,9 +2473,25 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symt
                 unit_rank = node->defined_in_unit ? 1 : 0;
             int scope_level = semcheck_scope_level_for_type_candidate(symtab, node);
 
-            if (best == NULL ||
-                scope_level < best_scope_level ||
-                (scope_level == best_scope_level && unit_rank < best_unit_rank))
+            int take = 0;
+            if (best == NULL)
+            {
+                take = 1;
+            }
+            else if (prefer_unit_defined)
+            {
+                if (unit_rank < best_unit_rank)
+                    take = 1;
+                else if (unit_rank == best_unit_rank && scope_level < best_scope_level)
+                    take = 1;
+            }
+            else if (scope_level < best_scope_level ||
+                     (scope_level == best_scope_level && unit_rank < best_unit_rank))
+            {
+                take = 1;
+            }
+
+            if (take)
             {
                 best = node;
                 best_unit_rank = unit_rank;
@@ -2686,6 +2663,13 @@ static inline void mark_hashnode_unit_info(SymTab_t *symtab, HashNode_t *node,
 
 static Tree_t *g_semcheck_current_subprogram = NULL;
 
+static int semcheck_prefer_unit_defined_owner(void)
+{
+    if (g_semcheck_current_subprogram == NULL)
+        return 0;
+    return g_semcheck_current_subprogram->tree_data.subprogram_data.defined_in_unit;
+}
+
 const char *semcheck_get_current_subprogram_id(void)
 {
     if (g_semcheck_current_subprogram == NULL)
@@ -2740,6 +2724,12 @@ KgpcType *semcheck_get_current_subprogram_return_kgpc_type(SymTab_t *symtab, int
     if (rt_id != NULL)
     {
         HashNode_t *type_node = semcheck_find_type_node_with_kgpc_type_ref(symtab, rt_ref, rt_id);
+        if (type_node == NULL)
+        {
+            const char *owner_full = g_semcheck_current_subprogram->tree_data.subprogram_data.owner_class_full;
+            const char *owner_outer = g_semcheck_current_subprogram->tree_data.subprogram_data.owner_class_outer;
+            type_node = semcheck_find_type_node_in_owner_chain(symtab, rt_id, owner_full, owner_outer);
+        }
         if (type_node != NULL && type_node->type != NULL)
         {
             if (owns_type != NULL)
@@ -3032,6 +3022,13 @@ static KgpcType *build_function_return_type(Tree_t *subprogram, SymTab_t *symtab
         type_node = semcheck_find_type_node_with_kgpc_type_ref(symtab,
             subprogram->tree_data.subprogram_data.return_type_ref,
             subprogram->tree_data.subprogram_data.return_type_id);
+        if (type_node == NULL)
+        {
+            const char *owner_full = subprogram->tree_data.subprogram_data.owner_class_full;
+            const char *owner_outer = subprogram->tree_data.subprogram_data.owner_class_outer;
+            type_node = semcheck_find_type_node_in_owner_chain(symtab,
+                subprogram->tree_data.subprogram_data.return_type_id, owner_full, owner_outer);
+        }
         if (type_node == NULL)
         {
             /* Before reporting error, check for builtin types not in symbol table */
@@ -5399,7 +5396,8 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                 /* Debug: print predeclare order */
                 if (getenv("KGPC_DEBUG_PREDECLARE") != NULL)
                 {
-                    fprintf(stderr, "[predeclare] type '%s'", type_id);
+                    fprintf(stderr, "[predeclare] type '%s' unit=%d",
+                        type_id, tree->tree_data.type_decl_data.defined_in_unit);
                     if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS)
                     {
                         struct TypeAlias *a = &tree->tree_data.type_decl_data.info.alias;
@@ -5724,7 +5722,8 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                     /* Predeclare array/set/file aliases so return types can resolve early. */
                     if (alias->is_array || alias->is_set || alias->is_file)
                     {
-                        KgpcType *kgpc_type = create_kgpc_type_from_type_alias(alias, symtab);
+                        KgpcType *kgpc_type = create_kgpc_type_from_type_alias(
+                            alias, symtab, tree->tree_data.type_decl_data.defined_in_unit);
                         if (kgpc_type != NULL)
                         {
                             if (tree->tree_data.type_decl_data.kgpc_type == NULL)
@@ -5754,7 +5753,8 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                     /* Handle pointer aliases to already known element types */
                     if (alias->is_pointer)
                     {
-                        KgpcType *kgpc_type = create_kgpc_type_from_type_alias(alias, symtab);
+                        KgpcType *kgpc_type = create_kgpc_type_from_type_alias(
+                            alias, symtab, tree->tree_data.type_decl_data.defined_in_unit);
                         if (kgpc_type != NULL)
                         {
                             if (getenv("KGPC_DEBUG_PREDECLARE_POINTERS") != NULL)
@@ -5785,7 +5785,8 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                     if (!alias->is_array && !alias->is_set && !alias->is_file &&
                         !alias->is_pointer && alias->base_type == UNKNOWN_TYPE)
                     {
-                        KgpcType *kgpc_type = create_kgpc_type_from_type_alias(alias, symtab);
+                        KgpcType *kgpc_type = create_kgpc_type_from_type_alias(
+                            alias, symtab, tree->tree_data.type_decl_data.defined_in_unit);
                         if (kgpc_type == NULL)
                         {
                             kgpc_type = create_primitive_type(UNKNOWN_TYPE);
@@ -7670,7 +7671,8 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                     (alias_info->is_array || alias_info->is_pointer ||
                      alias_info->is_set || alias_info->is_file))
                 {
-                    KgpcType *alias_type = create_kgpc_type_from_type_alias(alias_info, symtab);
+                    KgpcType *alias_type = create_kgpc_type_from_type_alias(
+                        alias_info, symtab, tree->tree_data.type_decl_data.defined_in_unit);
                     if (alias_type != NULL)
                     {
                         tree->tree_data.type_decl_data.kgpc_type = alias_type;
@@ -7697,6 +7699,28 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                             destroy_kgpc_type(tree->tree_data.type_decl_data.kgpc_type);
                         tree->tree_data.type_decl_data.kgpc_type = inline_kgpc;
                         kgpc_type_retain(inline_kgpc);
+                    }
+                }
+                if (alias_info->is_pointer &&
+                    tree->tree_data.type_decl_data.kgpc_type != NULL &&
+                    kgpc_type_is_pointer(tree->tree_data.type_decl_data.kgpc_type) &&
+                    tree->tree_data.type_decl_data.kgpc_type->info.points_to == NULL)
+                {
+                    HashNode_t *pointee_node = NULL;
+                    if (alias_info->pointer_type_ref != NULL)
+                    {
+                        pointee_node = semcheck_find_preferred_type_node_with_ref(symtab,
+                            alias_info->pointer_type_ref, alias_info->pointer_type_id);
+                    }
+                    else if (alias_info->pointer_type_id != NULL)
+                    {
+                        pointee_node = semcheck_find_preferred_type_node(symtab,
+                            alias_info->pointer_type_id);
+                    }
+                    if (pointee_node != NULL && pointee_node->type != NULL)
+                    {
+                        kgpc_type_retain(pointee_node->type);
+                        tree->tree_data.type_decl_data.kgpc_type->info.points_to = pointee_node->type;
                     }
                 }
                 if (getenv("KGPC_DEBUG_PROC_TYPE") != NULL &&
@@ -7785,19 +7809,78 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                         (alias_info->target_type_ref != NULL || alias_info->target_type_id != NULL))
                     {
                         HashNode_t *target_node = NULL;
-                        int found = -1;
                         if (alias_info->target_type_ref != NULL)
-                        {
-                            found = semcheck_find_ident_with_qualified_fallback_ref(&target_node,
-                                symtab, alias_info->target_type_ref->name);
-                        }
+                            target_node = semcheck_find_preferred_type_node_with_ref(symtab,
+                                alias_info->target_type_ref, alias_info->target_type_id);
                         else
-                        {
-                            found = semcheck_find_ident_with_qualified_fallback(&target_node, symtab,
+                            target_node = semcheck_find_preferred_type_node(symtab,
                                 alias_info->target_type_id);
+
+                        if (target_node != NULL && target_node->type != NULL)
+                        {
+                            struct TypeAlias *target_alias = kgpc_type_get_type_alias(target_node->type);
+                            if (target_alias == alias_info)
+                            {
+                                char *lookup = NULL;
+                                if (alias_info->target_type_ref != NULL)
+                                    lookup = type_ref_render_mangled(alias_info->target_type_ref);
+                                const char *name = (lookup != NULL) ? lookup : alias_info->target_type_id;
+                                HashNode_t *alt = semcheck_find_type_excluding_alias(symtab, name, alias_info);
+                                if (alt != NULL)
+                                    target_node = alt;
+                                free(lookup);
+                            }
                         }
-                        if (found != -1 && target_node != NULL)
+
+                        if (target_node != NULL)
+                        {
+                            if (alias_info->target_type_ref != NULL &&
+                                semcheck_is_explicit_unit_qualified_type_ref(alias_info->target_type_ref) &&
+                                target_node->hash_type == HASHTYPE_TYPE &&
+                                !target_node->defined_in_unit)
+                            {
+                                const char *base_name = type_ref_base_name(alias_info->target_type_ref);
+                                if (base_name != NULL)
+                                {
+                                    ListNode_t *matches = FindAllIdents(symtab, base_name);
+                                    for (ListNode_t *mcur = matches; mcur != NULL; mcur = mcur->next)
+                                    {
+                                        HashNode_t *candidate = (HashNode_t *)mcur->cur;
+                                        if (candidate != NULL &&
+                                            candidate->hash_type == HASHTYPE_TYPE &&
+                                            candidate->defined_in_unit)
+                                        {
+                                            target_node = candidate;
+                                            break;
+                                        }
+                                    }
+                                    if (matches != NULL)
+                                        DestroyList(matches);
+                                }
+                            }
+
                             var_type = get_var_type_from_node(target_node);
+                            if (target_node->type != NULL &&
+                                !alias_info->is_array && !alias_info->is_pointer &&
+                                !alias_info->is_set && !alias_info->is_enum &&
+                                !alias_info->is_file && alias_info->inline_record_type == NULL)
+                            {
+                                KgpcType *existing = tree->tree_data.type_decl_data.kgpc_type;
+                                int replace_existing = 0;
+                                if (existing == NULL)
+                                    replace_existing = 1;
+                                else if (existing->kind == TYPE_KIND_PRIMITIVE &&
+                                    existing->info.primitive_type_tag == UNKNOWN_TYPE)
+                                    replace_existing = 1;
+                                if (replace_existing)
+                                {
+                                    if (existing != NULL)
+                                        destroy_kgpc_type(existing);
+                                    tree->tree_data.type_decl_data.kgpc_type = target_node->type;
+                                    kgpc_type_retain(target_node->type);
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -8046,6 +8129,27 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 {
                     resolve_array_bounds_in_kgpctype(symtab, existing_type->type, alias_info);
                 }
+                if (alias_info->is_pointer &&
+                    kgpc_type_is_pointer(existing_type->type) &&
+                    existing_type->type->info.points_to == NULL)
+                {
+                    HashNode_t *pointee_node = NULL;
+                    if (alias_info->pointer_type_ref != NULL)
+                    {
+                        pointee_node = semcheck_find_preferred_type_node_with_ref(symtab,
+                            alias_info->pointer_type_ref, alias_info->pointer_type_id);
+                    }
+                    else if (alias_info->pointer_type_id != NULL)
+                    {
+                        pointee_node = semcheck_find_preferred_type_node(symtab,
+                            alias_info->pointer_type_id);
+                    }
+                    if (pointee_node != NULL && pointee_node->type != NULL)
+                    {
+                        kgpc_type_retain(pointee_node->type);
+                        existing_type->type->info.points_to = pointee_node->type;
+                    }
+                }
             }
             /* Avoid double-free: ownership is in the symbol table for predeclared types. */
             if (tree->tree_data.type_decl_data.kgpc_type != NULL)
@@ -8202,6 +8306,58 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
 #endif
         }
 
+        cur = cur->next;
+    }
+
+    /* Post-pass: resolve forward pointer aliases now that all types are in scope. */
+    cur = type_decls;
+    while (cur != NULL)
+    {
+        if (cur->type != LIST_TREE || cur->cur == NULL)
+        {
+            cur = cur->next;
+            continue;
+        }
+        tree = (Tree_t *)cur->cur;
+        if (tree->type != TREE_TYPE_DECL ||
+            tree->tree_data.type_decl_data.kind != TYPE_DECL_ALIAS)
+        {
+            cur = cur->next;
+            continue;
+        }
+        struct TypeAlias *post_alias = &tree->tree_data.type_decl_data.info.alias;
+        if (post_alias == NULL || !post_alias->is_pointer ||
+            post_alias->pointer_type_id == NULL)
+        {
+            cur = cur->next;
+            continue;
+        }
+        HashNode_t *alias_node = semcheck_find_type_node_with_unit_flag(symtab,
+            tree->tree_data.type_decl_data.id,
+            tree->tree_data.type_decl_data.defined_in_unit);
+        if (alias_node == NULL || alias_node->type == NULL ||
+            !kgpc_type_is_pointer(alias_node->type) ||
+            alias_node->type->info.points_to != NULL)
+        {
+            cur = cur->next;
+            continue;
+        }
+        HashNode_t *pointee_node = NULL;
+        if (post_alias->pointer_type_ref != NULL)
+        {
+            pointee_node = semcheck_find_preferred_type_node_with_ref(symtab,
+                post_alias->pointer_type_ref, post_alias->pointer_type_id);
+        }
+        else
+        {
+            pointee_node = semcheck_find_preferred_type_node(symtab,
+                post_alias->pointer_type_id);
+        }
+        if (pointee_node != NULL && pointee_node->type != NULL)
+        {
+            kgpc_type_retain(pointee_node->type);
+            alias_node->type->info.points_to = pointee_node->type;
+        }
         cur = cur->next;
     }
 
@@ -10826,10 +10982,13 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
             resolved_type == NULL &&
             !tree->tree_data.var_decl_data.defined_in_unit)
         {
-            const char *owner_id = semcheck_get_current_method_owner();
-            if (owner_id != NULL)
+            const char *owner_full = semcheck_get_current_subprogram_owner_class_full();
+            const char *owner_outer = semcheck_get_current_subprogram_owner_class_outer();
+            if (owner_full == NULL)
+                owner_full = semcheck_get_current_method_owner();
+            if (owner_full != NULL)
             {
-                semcheck_maybe_qualify_nested_type(symtab, owner_id,
+                semcheck_maybe_qualify_nested_type(symtab, owner_full, owner_outer,
                     &tree->tree_data.var_decl_data.type_id,
                     &tree->tree_data.var_decl_data.type_ref);
                 decl_type_ref = tree->tree_data.var_decl_data.type_ref;
@@ -11599,6 +11758,23 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     HashNode_t *element_type_node = NULL;
                     element_type_node = semcheck_find_preferred_type_node_with_ref(symtab,
                         element_type_ref, tree->tree_data.arr_decl_data.type_id);
+                    if (element_type_node == NULL &&
+                        !tree->tree_data.arr_decl_data.defined_in_unit)
+                    {
+                        const char *owner_full = semcheck_get_current_subprogram_owner_class_full();
+                        const char *owner_outer = semcheck_get_current_subprogram_owner_class_outer();
+                        if (owner_full == NULL)
+                            owner_full = semcheck_get_current_method_owner();
+                        if (owner_full != NULL)
+                        {
+                            semcheck_maybe_qualify_nested_type(symtab, owner_full, owner_outer,
+                                &tree->tree_data.arr_decl_data.type_id,
+                                &tree->tree_data.arr_decl_data.type_ref);
+                            element_type_ref = tree->tree_data.arr_decl_data.type_ref;
+                            element_type_node = semcheck_find_preferred_type_node_with_ref(symtab,
+                                element_type_ref, tree->tree_data.arr_decl_data.type_id);
+                        }
+                    }
                     if (element_type_node != NULL)
                     {
                         /* Use the KgpcType from the resolved type node */
@@ -12371,6 +12547,9 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
 
     assert(subprogram->type == TREE_SUBPROGRAM);
 
+    Tree_t *prev_current_subprogram = g_semcheck_current_subprogram;
+    g_semcheck_current_subprogram = subprogram;
+
     const char *prev_owner = semcheck_get_current_method_owner();
     char *owner_copy = NULL;
     if (subprogram->tree_data.subprogram_data.owner_class != NULL)
@@ -12653,7 +12832,14 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                 existing_decl->method_name = strdup(subprogram->tree_data.subprogram_data.method_name);
             if (existing_decl->owner_class == NULL && subprogram->tree_data.subprogram_data.owner_class != NULL)
                 existing_decl->owner_class = strdup(subprogram->tree_data.subprogram_data.owner_class);
+            if (existing_decl->owner_class_full == NULL &&
+                subprogram->tree_data.subprogram_data.owner_class_full != NULL)
+                existing_decl->owner_class_full = strdup(subprogram->tree_data.subprogram_data.owner_class_full);
+            if (existing_decl->owner_class_outer == NULL &&
+                subprogram->tree_data.subprogram_data.owner_class_outer != NULL)
+                existing_decl->owner_class_outer = strdup(subprogram->tree_data.subprogram_data.owner_class_outer);
         }
+        semcheck_propagate_method_identity(symtab, subprogram);
 
         PushScope(symtab);
 
@@ -12768,7 +12954,14 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                 existing_decl->method_name = strdup(subprogram->tree_data.subprogram_data.method_name);
             if (existing_decl->owner_class == NULL && subprogram->tree_data.subprogram_data.owner_class != NULL)
                 existing_decl->owner_class = strdup(subprogram->tree_data.subprogram_data.owner_class);
+            if (existing_decl->owner_class_full == NULL &&
+                subprogram->tree_data.subprogram_data.owner_class_full != NULL)
+                existing_decl->owner_class_full = strdup(subprogram->tree_data.subprogram_data.owner_class_full);
+            if (existing_decl->owner_class_outer == NULL &&
+                subprogram->tree_data.subprogram_data.owner_class_outer != NULL)
+                existing_decl->owner_class_outer = strdup(subprogram->tree_data.subprogram_data.owner_class_outer);
         }
+        semcheck_propagate_method_identity(symtab, subprogram);
 
         PushScope(symtab);
         if (getenv("KGPC_DEBUG_TYPE_HELPER") != NULL)
@@ -13100,9 +13293,6 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
 
     return_val += semcheck_subprograms(symtab, subprogram->tree_data.subprogram_data.subprograms,
                     new_max_scope, subprogram);
-
-    Tree_t *prev_current_subprogram = g_semcheck_current_subprogram;
-    g_semcheck_current_subprogram = subprogram;
 
     body = subprogram->tree_data.subprogram_data.statement_list;
     if (body == NULL)
