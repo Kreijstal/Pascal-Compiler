@@ -239,6 +239,12 @@ type
     D4: array[0..7] of Byte;
   end;
 
+  TDoubleRec = packed record
+    case integer of
+      0: (Value: Double);
+      1: (Frac: QWord; Exp: Word; Sign: Word);
+  end;
+
   { IInterface / IUnknown - root interface type }
   IInterface = interface
     function QueryInterface(const IID: TGUID; out Obj): HRESULT;

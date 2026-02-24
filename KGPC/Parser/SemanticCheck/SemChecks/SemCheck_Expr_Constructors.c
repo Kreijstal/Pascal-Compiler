@@ -496,7 +496,7 @@ KgpcType *semcheck_field_expected_kgpc_type(SymTab_t *symtab, struct RecordField
                 {
                     struct TypeAlias *alias = hashnode_get_type_alias(type_node);
                     if (alias != NULL)
-                        element_type = create_kgpc_type_from_type_alias(alias, symtab);
+                        element_type = create_kgpc_type_from_type_alias(alias, symtab, 0);
                 }
             }
         }
@@ -525,7 +525,7 @@ KgpcType *semcheck_field_expected_kgpc_type(SymTab_t *symtab, struct RecordField
                 {
                     struct TypeAlias *alias = hashnode_get_type_alias(type_node);
                     if (alias != NULL)
-                        pointee_type = create_kgpc_type_from_type_alias(alias, symtab);
+                        pointee_type = create_kgpc_type_from_type_alias(alias, symtab, 0);
                 }
             }
         }
@@ -552,7 +552,7 @@ KgpcType *semcheck_field_expected_kgpc_type(SymTab_t *symtab, struct RecordField
             {
                 struct TypeAlias *alias = hashnode_get_type_alias(type_node);
                 if (alias != NULL)
-                    return create_kgpc_type_from_type_alias(alias, symtab);
+                    return create_kgpc_type_from_type_alias(alias, symtab, 0);
             }
         }
     }

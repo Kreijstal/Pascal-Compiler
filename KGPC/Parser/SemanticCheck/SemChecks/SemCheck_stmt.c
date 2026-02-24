@@ -39,6 +39,10 @@ HashNode_t *semcheck_find_preferred_type_node(SymTab_t *symtab, const char *type
 
 /* Forward declaration from SemCheck_Expr_Resolve.c */
 const char *semcheck_type_tag_name(int type_tag);
+HashNode_t *semcheck_find_type_node_in_owner_chain(SymTab_t *symtab,
+    const char *type_id, const char *owner_full, const char *owner_outer);
+const char *semcheck_get_current_subprogram_owner_class_full(void);
+const char *semcheck_get_current_subprogram_owner_class_outer(void);
 int semcheck_typecheck_array_literal(struct Expression *expr, SymTab_t *symtab,
     int max_scope_lev, int expected_type, const char *expected_type_id, int line_num);
 int set_type_from_hashtype(int *type, HashNode_t *hash_node);
@@ -862,6 +866,62 @@ static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
     return hashnode_get_type_alias(node);
 }
 
+static KgpcType *resolve_param_type_with_owner(Tree_t *param_decl, SymTab_t *symtab,
+    const char *owner_full, const char *owner_outer, int *param_type_owned)
+{
+    KgpcType *param_type = resolve_type_from_vardecl(param_decl, symtab, param_type_owned);
+    if (param_type != NULL || param_decl == NULL || symtab == NULL)
+        return param_type;
+
+    const char *type_id = NULL;
+    if (param_decl->type == TREE_VAR_DECL)
+        type_id = param_decl->tree_data.var_decl_data.type_id;
+    else if (param_decl->type == TREE_ARR_DECL)
+        type_id = param_decl->tree_data.arr_decl_data.type_id;
+
+    if (type_id == NULL)
+        return NULL;
+
+    const char *resolved_owner_full = owner_full;
+    const char *resolved_owner_outer = owner_outer;
+    if (resolved_owner_full == NULL && resolved_owner_outer == NULL)
+    {
+        resolved_owner_full = semcheck_get_current_subprogram_owner_class_full();
+        resolved_owner_outer = semcheck_get_current_subprogram_owner_class_outer();
+        if (resolved_owner_full == NULL)
+            resolved_owner_full = semcheck_get_current_method_owner();
+    }
+
+    HashNode_t *type_node = semcheck_find_type_node_in_owner_chain(symtab, type_id,
+        resolved_owner_full, resolved_owner_outer);
+    if (type_node == NULL)
+        return NULL;
+
+    if (type_node->type != NULL)
+    {
+        kgpc_type_retain(type_node->type);
+        if (param_type_owned != NULL)
+            *param_type_owned = 1;
+        return type_node->type;
+    }
+
+    struct TypeAlias *alias = get_type_alias_from_node(type_node);
+    if (alias != NULL)
+    {
+        KgpcType *alias_type = create_kgpc_type_from_type_alias(alias, symtab, 0);
+        if (alias_type != NULL)
+        {
+            if (alias->kgpc_type == alias_type)
+                kgpc_type_retain(alias_type);
+            if (param_type_owned != NULL)
+                *param_type_owned = 1;
+            return alias_type;
+        }
+    }
+
+    return NULL;
+}
+
 static HashNode_t *lookup_hashnode(SymTab_t *symtab, const char *id)
 {
     if (symtab == NULL || id == NULL)
@@ -1177,6 +1237,19 @@ static int semcheck_call_with_proc_var(SymTab_t *symtab, struct Statement *stmt,
     ListNode_t *formal_params = proc_node->type->info.proc_info.params;
     ListNode_t *args_given = stmt->stmt_data.procedure_call_data.expr_args;
     int arg_index = 0;
+    const char *callee_owner_full = proc_node->owner_class_full;
+    const char *callee_owner_outer = proc_node->owner_class_outer;
+    if (callee_owner_full == NULL && callee_owner_outer == NULL)
+    {
+        Tree_t *proc_def = proc_node->type->info.proc_info.definition;
+        if (proc_def != NULL && proc_def->type == TREE_SUBPROGRAM)
+        {
+            callee_owner_full = proc_def->tree_data.subprogram_data.owner_class_full;
+            callee_owner_outer = proc_def->tree_data.subprogram_data.owner_class_outer;
+            if (callee_owner_full == NULL)
+                callee_owner_full = proc_def->tree_data.subprogram_data.owner_class;
+        }
+    }
 
     while (formal_params != NULL && args_given != NULL)
     {
@@ -1196,9 +1269,11 @@ static int semcheck_call_with_proc_var(SymTab_t *symtab, struct Statement *stmt,
         /* Resolve KgpcType for the formal parameter */
         int param_type_owned = 0;
         KgpcType *param_type = NULL;
-        if (param_decl != NULL && param_decl->type == TREE_VAR_DECL)
+        if (param_decl != NULL &&
+            (param_decl->type == TREE_VAR_DECL || param_decl->type == TREE_ARR_DECL))
         {
-            param_type = resolve_type_from_vardecl(param_decl, symtab, &param_type_owned);
+            param_type = resolve_param_type_with_owner(param_decl, symtab,
+                callee_owner_full, callee_owner_outer, &param_type_owned);
         }
 
 
@@ -1658,7 +1733,16 @@ static int semcheck_builtin_strproc(SymTab_t *symtab, struct Statement *stmt, in
     }
 
     int target_type = UNKNOWN_TYPE;
-    return_val += semcheck_stmt_expr_tag(&target_type, symtab, target_expr, max_scope_lev, MUTATE);
+    int target_err = semcheck_stmt_expr_tag(&target_type, symtab, target_expr, max_scope_lev, MUTATE);
+    if (target_err > 0 && target_expr != NULL && target_expr->type == EXPR_TYPECAST)
+    {
+        /* Allow Inc on typecasted pointer expressions like Inc(PAnsiChar(p), ...) */
+        target_err = semcheck_stmt_expr_tag(&target_type, symtab, target_expr, max_scope_lev, NO_MUTATE);
+        struct Expression *inner = target_expr->expr_data.typecast_data.expr;
+        if (inner != NULL)
+            target_err += semcheck_stmt_expr_tag(NULL, symtab, inner, max_scope_lev, MUTATE);
+    }
+    return_val += target_err;
     if (target_type != STRING_TYPE && target_type != SHORTSTRING_TYPE)
     {
         semcheck_error_with_context("Error on line %d, Str output must be a string variable.\n", stmt->line_num);
@@ -6117,6 +6201,19 @@ proccall_parent_resolve_done:
         }
 
         /***** VERIFY ARGUMENTS USING KGPCTYPE ARCHITECTURE *****/
+        const char *callee_owner_full = sym_return->owner_class_full;
+        const char *callee_owner_outer = sym_return->owner_class_outer;
+        if (callee_owner_full == NULL && callee_owner_outer == NULL)
+        {
+            Tree_t *proc_def = sym_return->type->info.proc_info.definition;
+            if (proc_def != NULL && proc_def->type == TREE_SUBPROGRAM)
+            {
+                callee_owner_full = proc_def->tree_data.subprogram_data.owner_class_full;
+                callee_owner_outer = proc_def->tree_data.subprogram_data.owner_class_outer;
+                if (callee_owner_full == NULL)
+                    callee_owner_full = proc_def->tree_data.subprogram_data.owner_class;
+            }
+        }
         cur_arg = 0;
         /* Get formal arguments from KgpcType instead of deprecated args field */
         true_args = kgpc_type_get_procedure_params(sym_return->type);
@@ -6158,7 +6255,8 @@ proccall_parent_resolve_done:
                 
                 /* ALWAYS resolve both sides to KgpcType for proper type checking */
                 int expected_type_owned = 0;
-                KgpcType *expected_kgpc_type = resolve_type_from_vardecl(arg_decl, symtab, &expected_type_owned);
+                KgpcType *expected_kgpc_type = resolve_param_type_with_owner(arg_decl, symtab,
+                    callee_owner_full, callee_owner_outer, &expected_type_owned);
                 if (getenv("KGPC_DEBUG_FMTSTR") != NULL && proc_id != NULL &&
                     strcasecmp(proc_id, "FmtStr") == 0)
                 {

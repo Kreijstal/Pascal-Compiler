@@ -914,6 +914,93 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                 if (ptr_type != NULL && ptr_type->kind == TYPE_KIND_POINTER)
                 {
                     KgpcType *deref_type = ptr_type->info.points_to;
+                    int deref_owned = 0;
+
+                    if (deref_type == NULL)
+                    {
+                        const char *subtype_id = pointer_expr->pointer_subtype_id;
+                        const TypeRef *subtype_ref = pointer_expr->pointer_subtype_ref;
+                        if (subtype_id == NULL && pointer_expr->type == EXPR_TYPECAST)
+                        {
+                            const char *target_id = pointer_expr->expr_data.typecast_data.target_type_id;
+                            const TypeRef *target_ref = pointer_expr->expr_data.typecast_data.target_type_ref;
+                            HashNode_t *target_node = semcheck_find_preferred_type_node_with_ref(symtab,
+                                target_ref, target_id);
+                            if (target_node == NULL && target_id != NULL)
+                            {
+                                const char *owner_full = semcheck_get_current_subprogram_owner_class_full();
+                                const char *owner_outer = semcheck_get_current_subprogram_owner_class_outer();
+                                if (owner_full == NULL)
+                                    owner_full = semcheck_get_current_method_owner();
+                                target_node = semcheck_find_type_node_in_owner_chain(symtab, target_id,
+                                    owner_full, owner_outer);
+                            }
+                            if (target_node != NULL)
+                            {
+                                struct TypeAlias *alias = get_type_alias_from_node(target_node);
+                                if (alias != NULL)
+                                {
+                                    if (alias->pointer_type_id != NULL)
+                                        subtype_id = alias->pointer_type_id;
+                                    if (alias->pointer_type_ref != NULL)
+                                        subtype_ref = alias->pointer_type_ref;
+                                }
+                            }
+                        }
+                        if (subtype_id != NULL)
+                        {
+                            HashNode_t *target_node = semcheck_find_preferred_type_node_with_ref(symtab,
+                                subtype_ref, subtype_id);
+                            if (target_node == NULL)
+                            {
+                                const char *owner_full = semcheck_get_current_subprogram_owner_class_full();
+                                const char *owner_outer = semcheck_get_current_subprogram_owner_class_outer();
+                                if (owner_full == NULL)
+                                    owner_full = semcheck_get_current_method_owner();
+                                target_node = semcheck_find_type_node_in_owner_chain(symtab, subtype_id,
+                                    owner_full, owner_outer);
+                            }
+                            if (target_node != NULL)
+                            {
+                                struct RecordType *record_info = get_record_type_from_node(target_node);
+                                if (target_node->type != NULL)
+                                {
+                                    if (target_node->type->kind == TYPE_KIND_PRIMITIVE &&
+                                        target_node->type->info.primitive_type_tag == RECORD_TYPE &&
+                                        record_info != NULL)
+                                    {
+                                        deref_type = create_record_type(record_info);
+                                        deref_owned = 1;
+                                    }
+                                    else
+                                    {
+                                        deref_type = target_node->type;
+                                    }
+                                }
+                                else if (record_info != NULL)
+                                {
+                                    deref_type = create_record_type(record_info);
+                                    deref_owned = 1;
+                                }
+                            }
+                            if (deref_type == NULL)
+                            {
+                                struct RecordType *record_info = semcheck_lookup_record_type(symtab, subtype_id);
+                                if (record_info != NULL)
+                                {
+                                    deref_type = create_record_type(record_info);
+                                    deref_owned = 1;
+                                }
+                            }
+                        }
+                        if (deref_type == NULL &&
+                            pointer_expr->pointer_subtype != UNKNOWN_TYPE &&
+                            pointer_expr->pointer_subtype != POINTER_TYPE)
+                        {
+                            deref_type = create_primitive_type(pointer_expr->pointer_subtype);
+                            deref_owned = 1;
+                        }
+                    }
                     
                     /* Clean up the pointer type if we owned it */
                     if (ptr_type_owned)
@@ -921,7 +1008,7 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                     
                     /* Return what the pointer points to - caller doesn't own it (it's part of the pointer type) */
                     if (owns_type != NULL)
-                        *owns_type = 0;
+                        *owns_type = deref_owned ? 1 : 0;
                     return deref_type;
                 }
                 
