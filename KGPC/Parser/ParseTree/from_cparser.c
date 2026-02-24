@@ -1444,7 +1444,10 @@ static ListNode_t *collect_constructed_type_args(ast_t *args_node) {
         if (node == NULL)
             node = cursor;
 
-        if (node != NULL && node->typ == PASCAL_T_TYPE_ARG)
+        if (node != NULL &&
+            (node->typ == PASCAL_T_TYPE_ARG ||
+             node->typ == PASCAL_T_IDENTIFIER ||
+             node->typ == PASCAL_T_QUALIFIED_IDENTIFIER))
         {
             char *dup = dup_first_identifier_in_node(node);
             if (getenv("KGPC_DEBUG_TFPG") != NULL)
@@ -3715,6 +3718,83 @@ static int resolve_const_int_in_node(const char *identifier, ast_t *node,
     return -1;
 }
 
+static int resolve_const_string_in_node(const char *identifier, ast_t *node,
+                                        ast_t *const_section, const char **out_value, int depth);
+
+static int resolve_const_string_in_section(const char *identifier, ast_t *const_section,
+                                           const char **out_value, int depth) {
+    if (identifier == NULL || const_section == NULL || out_value == NULL)
+        return -1;
+    return resolve_const_string_in_node(identifier, const_section->child, const_section, out_value, depth);
+}
+
+static int resolve_const_string_from_ast_internal(const char *identifier, ast_t *const_section,
+                                                  const char **out_value, int depth) {
+    if (identifier == NULL || const_section == NULL || out_value == NULL)
+        return -1;
+    if (depth > 32)
+        return -1;
+
+    int found = 0;
+    if (g_const_sections != NULL) {
+        for (ListNode_t *cur = g_const_sections; cur != NULL; cur = cur->next) {
+            if (resolve_const_string_in_section(identifier, (ast_t *)cur->cur, out_value, depth) == 0) {
+                found = 1;
+                break;
+            }
+        }
+    } else {
+        if (resolve_const_string_in_section(identifier, const_section, out_value, depth) == 0)
+            found = 1;
+    }
+
+    return found ? 0 : -1;
+}
+
+static int resolve_const_string_in_node(const char *identifier, ast_t *node,
+                                        ast_t *const_section, const char **out_value, int depth) {
+    if (node == NULL)
+        return -1;
+    if (depth > 32)
+        return -1;
+
+    node = unwrap_pascal_node(node);
+    if (node == NULL)
+        return -1;
+
+    if (node->typ == PASCAL_T_CONST_DECL) {
+        ast_t *id_node = node->child;
+        if (id_node != NULL && id_node->sym != NULL) {
+            if (strcasecmp(id_node->sym->name, identifier) == 0) {
+                ast_t *value_node = id_node->next;
+                if (value_node != NULL && value_node->typ == PASCAL_T_TYPE_SPEC)
+                    value_node = value_node->next;
+                value_node = unwrap_pascal_node(value_node);
+
+                if (value_node != NULL && value_node->typ == PASCAL_T_STRING &&
+                    value_node->sym != NULL && value_node->sym->name != NULL) {
+                    *out_value = value_node->sym->name;
+                    return 0;
+                }
+
+                if (value_node != NULL && value_node->typ == PASCAL_T_IDENTIFIER &&
+                    value_node->sym != NULL &&
+                    strcasecmp(value_node->sym->name, identifier) != 0) {
+                    if (resolve_const_string_from_ast_internal(value_node->sym->name, const_section,
+                                                               out_value, depth + 1) == 0)
+                        return 0;
+                }
+            }
+        }
+    }
+
+    if (resolve_const_string_in_node(identifier, node->child, const_section, out_value, depth) == 0)
+        return 0;
+    if (resolve_const_string_in_node(identifier, node->next, const_section, out_value, depth) == 0)
+        return 0;
+    return -1;
+}
+
 static int resolve_enum_type_range_in_section_chain(const char *type_name, ast_t *section_root,
                                                     int *out_start, int *out_end) {
     if (type_name == NULL || section_root == NULL || out_start == NULL || out_end == NULL)
@@ -4617,6 +4697,37 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
         free(last_dup);
         return result;
     }
+    if (spec_node->typ == PASCAL_T_MEMBER_ACCESS) {
+        QualifiedIdent *qid = qualified_ident_from_ast(spec_node);
+        const char *last = qualified_ident_last(qid);
+        char *last_dup = last ? strdup(last) : NULL;
+        char *qualified_name = qualified_ident_join(qid, ".");
+        int result = map_type_name(last_dup, type_id_out);
+        if (type_info != NULL && qid != NULL)
+            type_info->type_ref = type_ref_create(qid, NULL, 0);
+        else if (qid != NULL)
+            qualified_ident_free(qid);
+        if (type_info != NULL && result == FILE_TYPE) {
+            type_info->is_file = 1;
+            type_info->file_type = FILE_TYPE;
+            if (type_id_out != NULL && *type_id_out != NULL)
+                type_info->file_type_id = strdup(*type_id_out);
+            if (type_info->file_type_id != NULL)
+                type_info->file_type_ref = type_ref_from_single_name(type_info->file_type_id);
+        }
+        if (result == UNKNOWN_TYPE && type_id_out != NULL && *type_id_out == NULL) {
+            if (qualified_name != NULL) {
+                *type_id_out = qualified_name;
+                qualified_name = NULL;
+            } else {
+                *type_id_out = last_dup;
+                last_dup = NULL;
+            }
+        }
+        free(qualified_name);
+        free(last_dup);
+        return result;
+    }
     if (spec_node->typ == PASCAL_T_IDENTIFIER) {
         char *dup = dup_symbol(spec_node);
         if (dup != NULL && strchr(dup, '.') != NULL)
@@ -4642,6 +4753,8 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                 if (qualified_name != NULL) {
                     *type_id_out = qualified_name;
                     qualified_name = NULL;
+                } else if (dup != NULL) {
+                    *type_id_out = strdup(dup);
                 } else {
                     *type_id_out = last_dup;
                     last_dup = NULL;
@@ -8205,6 +8318,22 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
 
     ast_t *tuple_node = value_node;
     int is_string_initializer = 0;
+    const char *string_initializer = NULL;
+    if (tuple_node != NULL) {
+        ast_t *unwrapped = unwrap_pascal_node(tuple_node);
+        if (unwrapped != NULL &&
+            (unwrapped->typ == PASCAL_T_TYPE_SPEC ||
+             unwrapped->typ == PASCAL_T_ARRAY_TYPE ||
+             unwrapped->typ == PASCAL_T_RECORD_TYPE ||
+             unwrapped->typ == PASCAL_T_POINTER_TYPE ||
+             unwrapped->typ == PASCAL_T_PROCEDURE_TYPE ||
+             unwrapped->typ == PASCAL_T_FUNCTION_TYPE) &&
+            unwrapped->next != NULL) {
+            tuple_node = unwrap_pascal_node(unwrapped->next);
+        } else {
+            tuple_node = unwrapped;
+        }
+    }
     if (tuple_node == NULL) {
         fprintf(stderr, "ERROR: Const array %s must use tuple syntax for its initializer.\n",
                 *id_ptr);
@@ -8216,8 +8345,34 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                                  strcasecmp(type_info->element_type_id, "widechar") == 0);
         if (is_char_array || is_widechar_array) {
             is_string_initializer = 1;
+            if (tuple_node->sym != NULL && tuple_node->sym->name != NULL)
+                string_initializer = tuple_node->sym->name;
         } else {
             fprintf(stderr, "ERROR: Const array %s string initializer requires a char array type.\n",
+                    *id_ptr);
+            return -1;
+        }
+    } else if (tuple_node->typ == PASCAL_T_IDENTIFIER) {
+        int is_char_array = (type_info->element_type == CHAR_TYPE);
+        int is_widechar_array = (type_info->element_type_id != NULL &&
+                                 strcasecmp(type_info->element_type_id, "widechar") == 0);
+        if (!is_char_array && !is_widechar_array) {
+            fprintf(stderr, "ERROR: Const array %s string initializer requires a char array type.\n",
+                    *id_ptr);
+            return -1;
+        }
+        if (tuple_node->sym != NULL && tuple_node->sym->name != NULL) {
+            if (resolve_const_string_from_ast_internal(tuple_node->sym->name, const_section,
+                                                       &string_initializer, 0) == 0 &&
+                string_initializer != NULL) {
+                is_string_initializer = 1;
+            } else {
+                fprintf(stderr, "ERROR: Const array %s must use tuple syntax for its initializer.\n",
+                        *id_ptr);
+                return -1;
+            }
+        } else {
+            fprintf(stderr, "ERROR: Const array %s must use tuple syntax for its initializer.\n",
                     *id_ptr);
             return -1;
         }
@@ -8240,8 +8395,8 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
 
     int actual_count = 0;
     if (is_string_initializer) {
-        if (tuple_node->sym != NULL && tuple_node->sym->name != NULL)
-            actual_count = (int)strlen(tuple_node->sym->name);
+        if (string_initializer != NULL)
+            actual_count = (int)strlen(string_initializer);
     } else {
         for (ast_t *elem = tuple_node->child; elem != NULL; elem = elem->next)
             ++actual_count;
@@ -8353,7 +8508,7 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
     }
 
     if (is_string_initializer) {
-        const char *str = (tuple_node->sym != NULL) ? tuple_node->sym->name : NULL;
+        const char *str = string_initializer;
         if (str == NULL)
             str = "";
         for (int i = 0; i < actual_count; ++i) {
@@ -9260,7 +9415,36 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
                     nested_type_sections = next;
                 }
             } else {
-                mapped_type = convert_type_spec(spec_node, &type_id, &record_type, &type_info);
+        mapped_type = convert_type_spec(spec_node, &type_id, &record_type, &type_info);
+        /* Preserve qualified type names for alias targets like ObjPas.TEndian. */
+        {
+            ast_t *spec_child = spec_node;
+            if (spec_child != NULL && spec_child->typ == PASCAL_T_TYPE_SPEC && spec_child->child != NULL)
+                spec_child = spec_child->child;
+            spec_child = unwrap_pascal_node(spec_child);
+            if (spec_child != NULL &&
+                (spec_child->typ == PASCAL_T_IDENTIFIER ||
+                 spec_child->typ == PASCAL_T_QUALIFIED_IDENTIFIER ||
+                 spec_child->typ == PASCAL_T_MEMBER_ACCESS))
+            {
+                QualifiedIdent *qid = qualified_ident_from_ast(spec_child);
+                if (qid != NULL)
+                {
+                    if (type_info.type_ref == NULL)
+                        type_info.type_ref = type_ref_create(qualified_ident_clone(qid), NULL, 0);
+                    if (type_id == NULL || strchr(type_id, '.') == NULL)
+                    {
+                        char *qualified = qualified_ident_join(qid, ".");
+                        if (qualified != NULL)
+                        {
+                            free(type_id);
+                            type_id = qualified;
+                        }
+                    }
+                    qualified_ident_free(qid);
+                }
+            }
+        }
             }
             if (getenv("KGPC_DEBUG_TFPG") != NULL)
                 fprintf(stderr, "[KGPC] convert_type_decl after convert_type_spec id=%s mapped=%d type_id=%s record_type=%p type_info.record=%p\n",
@@ -9811,6 +9995,328 @@ static const char *lookup_class_const_map(ListNode_t *map, const char *name)
     return NULL;
 }
 
+static int type_name_exists_in_sections(const char *name, ListNode_t *sections)
+{
+    if (name == NULL || sections == NULL)
+        return 0;
+    for (ListNode_t *cur = sections; cur != NULL; cur = cur->next)
+    {
+        if (cur->cur == NULL)
+            continue;
+        ast_t *section = (ast_t *)cur->cur;
+        if (type_name_exists_in_section(name, section))
+            return 1;
+    }
+    return 0;
+}
+
+static void qualify_expr_type_id(struct Expression *expr, const char *owner_id)
+{
+    if (expr == NULL || owner_id == NULL)
+        return;
+    if (expr->expr_data.id == NULL)
+        return;
+    if (expr->id_ref != NULL && expr->id_ref->count > 1)
+        return;
+
+    const char *base_name = expr->expr_data.id;
+    size_t len = strlen(owner_id) + 1 + strlen(base_name) + 1;
+    char *qualified = (char *)malloc(len);
+    if (qualified == NULL)
+        return;
+    snprintf(qualified, len, "%s.%s", owner_id, base_name);
+    free(expr->expr_data.id);
+    expr->expr_data.id = qualified;
+
+    if (expr->id_ref != NULL)
+        qualified_ident_free(expr->id_ref);
+    char **segments = (char **)calloc(2, sizeof(char *));
+    if (segments == NULL)
+        return;
+    segments[0] = strdup(owner_id);
+    segments[1] = strdup(base_name);
+    if (segments[0] == NULL || segments[1] == NULL)
+    {
+        free(segments[0]);
+        free(segments[1]);
+        free(segments);
+        return;
+    }
+    expr->id_ref = qualified_ident_from_segments(segments, 2, 1);
+}
+
+static void qualify_type_ref_id(char **type_id, struct TypeRef **type_ref,
+    const char *owner_id, const char *base_name)
+{
+    if (type_id == NULL || owner_id == NULL || base_name == NULL)
+        return;
+    char *base_dup = strdup(base_name);
+    if (base_dup == NULL)
+        return;
+    size_t len = strlen(owner_id) + 1 + strlen(base_name) + 1;
+    char *qualified = (char *)malloc(len);
+    if (qualified == NULL)
+    {
+        free(base_dup);
+        return;
+    }
+    snprintf(qualified, len, "%s.%s", owner_id, base_name);
+    free(*type_id);
+    *type_id = qualified;
+    if (type_ref != NULL)
+    {
+        if (*type_ref != NULL)
+            type_ref_free(*type_ref);
+        char **segments = (char **)calloc(2, sizeof(char *));
+        if (segments == NULL)
+        {
+            free(base_dup);
+            return;
+        }
+        segments[0] = strdup(owner_id);
+        segments[1] = base_dup;
+        if (segments[0] == NULL || segments[1] == NULL)
+        {
+            free(segments[0]);
+            free(segments[1]);
+            free(segments);
+            return;
+        }
+        QualifiedIdent *qid = qualified_ident_from_segments(segments, 2, 1);
+        *type_ref = type_ref_create(qid, NULL, 0);
+    }
+    else
+    {
+        free(base_dup);
+    }
+}
+
+static void rewrite_class_const_expr_nested_types(struct Expression *expr,
+    const char *owner_id, ListNode_t *nested_type_sections)
+{
+    if (expr == NULL || owner_id == NULL || nested_type_sections == NULL)
+        return;
+
+    switch (expr->type) {
+        case EXPR_FUNCTION_CALL: {
+            const char *func_id = expr->expr_data.function_call_data.id;
+            int is_type_intrinsic = func_id != NULL &&
+                (pascal_identifier_equals(func_id, "SizeOf") ||
+                 pascal_identifier_equals(func_id, "TypeInfo") ||
+                 pascal_identifier_equals(func_id, "IsManagedType") ||
+                 pascal_identifier_equals(func_id, "High") ||
+                 pascal_identifier_equals(func_id, "Low"));
+            ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+            for (ListNode_t *cur = args; cur != NULL; cur = cur->next) {
+                if (cur->type != LIST_EXPR)
+                    continue;
+                struct Expression *arg = (struct Expression *)cur->cur;
+                if (is_type_intrinsic && arg != NULL && arg->type == EXPR_VAR_ID &&
+                    arg->expr_data.id != NULL &&
+                    type_name_exists_in_sections(arg->expr_data.id, nested_type_sections))
+                {
+                    qualify_expr_type_id(arg, owner_id);
+                }
+                rewrite_class_const_expr_nested_types(arg, owner_id, nested_type_sections);
+            }
+            break;
+        }
+        case EXPR_TYPEINFO:
+            if (expr->expr_data.typeinfo_data.type_id != NULL &&
+                type_name_exists_in_sections(expr->expr_data.typeinfo_data.type_id,
+                    nested_type_sections))
+            {
+                qualify_type_ref_id(&expr->expr_data.typeinfo_data.type_id,
+                    &expr->expr_data.typeinfo_data.type_ref,
+                    owner_id, expr->expr_data.typeinfo_data.type_id);
+            }
+            break;
+        case EXPR_TYPECAST:
+            rewrite_class_const_expr_nested_types(expr->expr_data.typecast_data.expr,
+                owner_id, nested_type_sections);
+            if (expr->expr_data.typecast_data.target_type_id != NULL &&
+                expr->expr_data.typecast_data.type_qualifier == NULL &&
+                type_name_exists_in_sections(expr->expr_data.typecast_data.target_type_id,
+                    nested_type_sections))
+            {
+                qualify_type_ref_id(&expr->expr_data.typecast_data.target_type_id,
+                    &expr->expr_data.typecast_data.target_type_ref,
+                    owner_id, expr->expr_data.typecast_data.target_type_id);
+            }
+            break;
+        case EXPR_IS:
+            rewrite_class_const_expr_nested_types(expr->expr_data.is_data.expr,
+                owner_id, nested_type_sections);
+            if (expr->expr_data.is_data.target_type_id != NULL &&
+                type_name_exists_in_sections(expr->expr_data.is_data.target_type_id,
+                    nested_type_sections))
+            {
+                qualify_type_ref_id(&expr->expr_data.is_data.target_type_id,
+                    &expr->expr_data.is_data.target_type_ref,
+                    owner_id, expr->expr_data.is_data.target_type_id);
+            }
+            break;
+        case EXPR_AS:
+            rewrite_class_const_expr_nested_types(expr->expr_data.as_data.expr,
+                owner_id, nested_type_sections);
+            if (expr->expr_data.as_data.target_type_id != NULL &&
+                type_name_exists_in_sections(expr->expr_data.as_data.target_type_id,
+                    nested_type_sections))
+            {
+                qualify_type_ref_id(&expr->expr_data.as_data.target_type_id,
+                    &expr->expr_data.as_data.target_type_ref,
+                    owner_id, expr->expr_data.as_data.target_type_id);
+            }
+            break;
+        case EXPR_ADDOP:
+            rewrite_class_const_expr_nested_types(expr->expr_data.addop_data.left_expr,
+                owner_id, nested_type_sections);
+            rewrite_class_const_expr_nested_types(expr->expr_data.addop_data.right_term,
+                owner_id, nested_type_sections);
+            break;
+        case EXPR_MULOP:
+            rewrite_class_const_expr_nested_types(expr->expr_data.mulop_data.left_term,
+                owner_id, nested_type_sections);
+            rewrite_class_const_expr_nested_types(expr->expr_data.mulop_data.right_factor,
+                owner_id, nested_type_sections);
+            break;
+        case EXPR_RELOP:
+            rewrite_class_const_expr_nested_types(expr->expr_data.relop_data.left,
+                owner_id, nested_type_sections);
+            rewrite_class_const_expr_nested_types(expr->expr_data.relop_data.right,
+                owner_id, nested_type_sections);
+            break;
+        case EXPR_SIGN_TERM:
+            rewrite_class_const_expr_nested_types(expr->expr_data.sign_term,
+                owner_id, nested_type_sections);
+            break;
+        case EXPR_ARRAY_ACCESS:
+            rewrite_class_const_expr_nested_types(expr->expr_data.array_access_data.array_expr,
+                owner_id, nested_type_sections);
+            rewrite_class_const_expr_nested_types(expr->expr_data.array_access_data.index_expr,
+                owner_id, nested_type_sections);
+            for (ListNode_t *cur = expr->expr_data.array_access_data.extra_indices;
+                 cur != NULL; cur = cur->next) {
+                if (cur->type == LIST_EXPR)
+                    rewrite_class_const_expr_nested_types((struct Expression *)cur->cur,
+                        owner_id, nested_type_sections);
+            }
+            break;
+        case EXPR_RECORD_ACCESS:
+            rewrite_class_const_expr_nested_types(expr->expr_data.record_access_data.record_expr,
+                owner_id, nested_type_sections);
+            break;
+        case EXPR_SET:
+            for (ListNode_t *cur = expr->expr_data.set_data.elements; cur != NULL; cur = cur->next) {
+                if (cur->type == LIST_SET_ELEMENT && cur->cur != NULL) {
+                    struct SetElement *elem = (struct SetElement *)cur->cur;
+                    rewrite_class_const_expr_nested_types(elem->lower, owner_id, nested_type_sections);
+                    rewrite_class_const_expr_nested_types(elem->upper, owner_id, nested_type_sections);
+                }
+            }
+            break;
+        case EXPR_ARRAY_LITERAL:
+            for (ListNode_t *cur = expr->expr_data.array_literal_data.elements; cur != NULL; cur = cur->next) {
+                if (cur->type == LIST_EXPR)
+                    rewrite_class_const_expr_nested_types((struct Expression *)cur->cur,
+                        owner_id, nested_type_sections);
+            }
+            break;
+        case EXPR_RECORD_CONSTRUCTOR:
+            for (ListNode_t *cur = expr->expr_data.record_constructor_data.fields; cur != NULL; cur = cur->next) {
+                if (cur->type == LIST_UNSPECIFIED && cur->cur != NULL) {
+                    struct RecordConstructorField *field = (struct RecordConstructorField *)cur->cur;
+                    rewrite_class_const_expr_nested_types(field->value, owner_id, nested_type_sections);
+                }
+            }
+            break;
+        case EXPR_ADDR:
+            rewrite_class_const_expr_nested_types(expr->expr_data.addr_data.expr,
+                owner_id, nested_type_sections);
+            break;
+        case EXPR_POINTER_DEREF:
+            rewrite_class_const_expr_nested_types(expr->expr_data.pointer_deref_data.pointer_expr,
+                owner_id, nested_type_sections);
+            break;
+        default:
+            break;
+    }
+}
+
+static void rewrite_class_const_statement_nested_types(struct Statement *stmt,
+    const char *owner_id, ListNode_t *nested_type_sections)
+{
+    if (stmt == NULL || owner_id == NULL || nested_type_sections == NULL)
+        return;
+
+    switch (stmt->type) {
+        case STMT_VAR_ASSIGN:
+            rewrite_class_const_expr_nested_types(stmt->stmt_data.var_assign_data.var,
+                owner_id, nested_type_sections);
+            rewrite_class_const_expr_nested_types(stmt->stmt_data.var_assign_data.expr,
+                owner_id, nested_type_sections);
+            break;
+        case STMT_COMPOUND_STATEMENT:
+            for (ListNode_t *cur = stmt->stmt_data.compound_statement; cur != NULL; cur = cur->next)
+            {
+                if (cur->type == LIST_STMT)
+                    rewrite_class_const_statement_nested_types((struct Statement *)cur->cur,
+                        owner_id, nested_type_sections);
+            }
+            break;
+        case STMT_IF_THEN:
+            rewrite_class_const_expr_nested_types(stmt->stmt_data.if_then_data.relop_expr,
+                owner_id, nested_type_sections);
+            rewrite_class_const_statement_nested_types(stmt->stmt_data.if_then_data.if_stmt,
+                owner_id, nested_type_sections);
+            rewrite_class_const_statement_nested_types(stmt->stmt_data.if_then_data.else_stmt,
+                owner_id, nested_type_sections);
+            break;
+        case STMT_WHILE:
+            rewrite_class_const_expr_nested_types(stmt->stmt_data.while_data.relop_expr,
+                owner_id, nested_type_sections);
+            rewrite_class_const_statement_nested_types(stmt->stmt_data.while_data.while_stmt,
+                owner_id, nested_type_sections);
+            break;
+        case STMT_REPEAT:
+            for (ListNode_t *cur = stmt->stmt_data.repeat_data.body_list; cur != NULL; cur = cur->next)
+            {
+                if (cur->type == LIST_STMT)
+                    rewrite_class_const_statement_nested_types((struct Statement *)cur->cur,
+                        owner_id, nested_type_sections);
+            }
+            rewrite_class_const_expr_nested_types(stmt->stmt_data.repeat_data.until_expr,
+                owner_id, nested_type_sections);
+            break;
+        case STMT_FOR:
+            if (stmt->stmt_data.for_data.for_assign_type == STMT_FOR_ASSIGN_VAR)
+                rewrite_class_const_statement_nested_types(stmt->stmt_data.for_data.for_assign_data.var_assign,
+                    owner_id, nested_type_sections);
+            else if (stmt->stmt_data.for_data.for_assign_type == STMT_FOR_VAR)
+                rewrite_class_const_expr_nested_types(stmt->stmt_data.for_data.for_assign_data.var,
+                    owner_id, nested_type_sections);
+            rewrite_class_const_expr_nested_types(stmt->stmt_data.for_data.to,
+                owner_id, nested_type_sections);
+            rewrite_class_const_statement_nested_types(stmt->stmt_data.for_data.do_for,
+                owner_id, nested_type_sections);
+            break;
+        case STMT_FOR_IN:
+            rewrite_class_const_expr_nested_types(stmt->stmt_data.for_in_data.loop_var,
+                owner_id, nested_type_sections);
+            rewrite_class_const_expr_nested_types(stmt->stmt_data.for_in_data.collection,
+                owner_id, nested_type_sections);
+            rewrite_class_const_statement_nested_types(stmt->stmt_data.for_in_data.do_stmt,
+                owner_id, nested_type_sections);
+            break;
+        case STMT_EXPR:
+            rewrite_class_const_expr_nested_types(stmt->stmt_data.expr_stmt_data.expr,
+                owner_id, nested_type_sections);
+            break;
+        default:
+            break;
+    }
+}
+
 static void rewrite_class_const_expr(struct Expression *expr, ListNode_t *map)
 {
     if (expr == NULL || map == NULL)
@@ -10062,6 +10568,12 @@ static void append_class_const_decls_from_type_decl(ast_t *type_decl_node,
     while (*tail != NULL)
         tail = &(*tail)->next;
 
+    ListBuilder nested_type_builder;
+    list_builder_init(&nested_type_builder);
+    if (class_spec != NULL)
+        collect_record_nested_types(class_spec->child, &nested_type_builder);
+    ListNode_t *nested_type_sections = list_builder_finish(&nested_type_builder);
+
     ListBuilder class_map_builder;
     list_builder_init(&class_map_builder);
 
@@ -10174,7 +10686,11 @@ static void append_class_const_decls_from_type_decl(ast_t *type_decl_node,
             }
 
             if (decl != NULL && decl->type == TREE_CONST_DECL)
+            {
                 rewrite_class_const_expr(decl->tree_data.const_decl_data.value, map_list);
+                rewrite_class_const_expr_nested_types(decl->tree_data.const_decl_data.value,
+                    class_id, nested_type_sections);
+            }
 
             ListNode_t *next = iter->next;
             iter->next = NULL;
@@ -10205,6 +10721,8 @@ static void append_class_const_decls_from_type_decl(ast_t *type_decl_node,
                     }
                 }
                 rewrite_class_const_statement(decl->tree_data.var_decl_data.initializer, map_list);
+                rewrite_class_const_statement_nested_types(decl->tree_data.var_decl_data.initializer,
+                    class_id, nested_type_sections);
             }
             else if (decl->type == TREE_ARR_DECL)
             {
@@ -10223,6 +10741,8 @@ static void append_class_const_decls_from_type_decl(ast_t *type_decl_node,
                     }
                 }
                 rewrite_class_const_statement(decl->tree_data.arr_decl_data.initializer, map_list);
+                rewrite_class_const_statement_nested_types(decl->tree_data.arr_decl_data.initializer,
+                    class_id, nested_type_sections);
             }
         }
 
@@ -10343,6 +10863,98 @@ static void append_helper_const_decls_from_type_decl(ast_t *type_decl_node,
                         }
                     }
                 }
+            }
+        }
+    }
+
+}
+
+static int nested_type_section_has_id(ast_t *section, const char *id)
+{
+    if (section == NULL || id == NULL)
+        return 0;
+    for (ast_t *child = section->child; child != NULL; child = child->next)
+    {
+        ast_t *unwrapped = unwrap_pascal_node(child);
+        if (unwrapped == NULL)
+            unwrapped = child;
+        if (unwrapped == NULL)
+            continue;
+        if (unwrapped->typ == PASCAL_T_TYPE_DECL ||
+            unwrapped->typ == PASCAL_T_GENERIC_TYPE_DECL)
+        {
+            char *name = dup_first_identifier_in_node(unwrapped);
+            int match = (name != NULL && pascal_identifier_equals(name, id));
+            if (name != NULL)
+                free(name);
+            if (match)
+                return 1;
+        }
+    }
+    return 0;
+}
+
+static struct TypeRef *ensure_type_ref_from_id(char **type_id, struct TypeRef **type_ref)
+{
+    if (type_ref == NULL)
+        return NULL;
+    if (*type_ref != NULL)
+        return *type_ref;
+    if (type_id == NULL || *type_id == NULL)
+        return NULL;
+
+    QualifiedIdent *qid = qualified_ident_from_dotted(*type_id);
+    if (qid == NULL)
+        qid = qualified_ident_from_single(*type_id);
+    if (qid == NULL)
+        return NULL;
+    *type_ref = type_ref_create(qid, NULL, 0);
+    return *type_ref;
+}
+
+static void qualify_record_field_nested_types(struct RecordType *record,
+    const char *parent_type_name, ast_t *type_section)
+{
+    if (record == NULL || parent_type_name == NULL || type_section == NULL)
+        return;
+
+    for (ListNode_t *cur = record->fields; cur != NULL; cur = cur->next)
+    {
+        if (cur->type != LIST_RECORD_FIELD || cur->cur == NULL)
+            continue;
+        struct RecordField *field = (struct RecordField *)cur->cur;
+
+        struct TypeRef *type_ref = ensure_type_ref_from_id(&field->type_id, &field->type_ref);
+        if (type_ref != NULL && type_ref->name != NULL && type_ref->name->count == 1)
+        {
+            const char *base = qualified_ident_last(type_ref->name);
+            if (base != NULL && nested_type_section_has_id(type_section, base))
+            {
+                qualify_type_ref_id(&field->type_id, &field->type_ref, parent_type_name, base);
+            }
+        }
+
+        struct TypeRef *elem_ref = ensure_type_ref_from_id(&field->array_element_type_id,
+            &field->array_element_type_ref);
+        if (elem_ref != NULL && elem_ref->name != NULL && elem_ref->name->count == 1)
+        {
+            const char *base = qualified_ident_last(elem_ref->name);
+            if (base != NULL && nested_type_section_has_id(type_section, base))
+            {
+                qualify_type_ref_id(&field->array_element_type_id, &field->array_element_type_ref,
+                    parent_type_name, base);
+            }
+        }
+
+        struct TypeRef *ptr_ref = ensure_type_ref_from_id(&field->pointer_type_id,
+            &field->pointer_type_ref);
+        if (ptr_ref != NULL && ptr_ref->name != NULL && ptr_ref->name->count == 1)
+        {
+            const char *base = qualified_ident_last(ptr_ref->name);
+            if (base != NULL && nested_type_section_has_id(type_section, base))
+            {
+                qualify_type_ref_id(&field->pointer_type_id, &field->pointer_type_ref,
+                    parent_type_name, base);
             }
         }
     }
@@ -10492,6 +11104,22 @@ static void append_type_decls_from_section(ast_t *type_section, ListNode_t **des
                     {
                         free(decl->tree_data.type_decl_data.info.record->type_id);
                         decl->tree_data.type_decl_data.info.record->type_id = strdup(qualified_id);
+                        qualify_record_field_nested_types(decl->tree_data.type_decl_data.info.record,
+                            parent_type_name, type_section);
+                        if (decl->tree_data.type_decl_data.info.record->parent_class_name != NULL &&
+                            nested_type_section_has_id(type_section,
+                                decl->tree_data.type_decl_data.info.record->parent_class_name))
+                        {
+                            char *orig_parent = decl->tree_data.type_decl_data.info.record->parent_class_name;
+                            size_t plen = strlen(parent_type_name) + 1 + strlen(orig_parent) + 1;
+                            char *qualified_parent = (char *)malloc(plen);
+                            if (qualified_parent != NULL)
+                            {
+                                snprintf(qualified_parent, plen, "%s.%s", parent_type_name, orig_parent);
+                                free(orig_parent);
+                                decl->tree_data.type_decl_data.info.record->parent_class_name = qualified_parent;
+                            }
+                        }
                     }
                     if (decl->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS) {
                         struct TypeAlias *alias = &decl->tree_data.type_decl_data.info.alias;
@@ -11336,6 +11964,21 @@ tuple_cleanup:
                 record_type = NULL;
             }
 
+            if (target_type_id == NULL && type_ref_local != NULL && type_ref_local->name != NULL)
+            {
+                QualifiedIdent *qid = type_ref_local->name;
+                if (qid->count > 0 && qid->segments != NULL)
+                {
+                    const char *base = qid->segments[qid->count - 1];
+                    if (base != NULL)
+                        target_type_id = strdup(base);
+                    if (target_type_id != NULL && target_type_qualifier == NULL && qid->count > 1)
+                    {
+                        target_type_qualifier = qualified_ident_join_prefix(qid, qid->count - 1);
+                    }
+                }
+            }
+
             if (target_type == UNKNOWN_TYPE && target_type_id == NULL &&
                 unwrapped_type->typ == PASCAL_T_IDENTIFIER)
             {
@@ -11366,7 +12009,7 @@ tuple_cleanup:
             }
             if (target_type_id != NULL && target_type_qualifier == NULL &&
                 type_ref_local != NULL && type_ref_local->name != NULL &&
-                type_ref_local->name->count > 1 && strchr(target_type_id, '.') != NULL)
+                type_ref_local->name->count > 1)
             {
                 QualifiedIdent *qid = type_ref_local->name;
                 int prefix_count = qid->count - 1;
@@ -11392,34 +12035,49 @@ tuple_cleanup:
                 }
             }
             /* Handle generic specialization typecasts like specialize TArray<T>(Result).
-             * Extract the base type name and mangle with type args. */
+             * Extract the base type name and build a TypeRef with args. */
+            if (target_type == UNKNOWN_TYPE && target_type_id == NULL)
+            {
+                char *gen_base = NULL;
+                ListNode_t *gen_args = NULL;
+                if (extract_specialize_type_info(type_node, &gen_base, &gen_args))
+                {
+                    target_type_id = strdup(gen_base);
+                    if (type_ref_local != NULL)
+                        type_ref_free(type_ref_local);
+                    type_ref_local = type_ref_from_name_and_args(gen_base, gen_args);
+                    free(gen_base);
+                    if (gen_args != NULL)
+                        destroy_list(gen_args);
+                }
+            }
             if (target_type == UNKNOWN_TYPE && target_type_id == NULL &&
                 unwrapped_type->typ == PASCAL_T_CONSTRUCTED_TYPE)
             {
                 char *gen_base = NULL;
                 ListNode_t *gen_args = NULL;
-                if (extract_constructed_type_info(unwrapped_type, &gen_base, &gen_args))
+                if (extract_constructed_type_info(type_node, &gen_base, &gen_args))
                 {
-                    target_type_id = mangle_specialized_name_from_list(gen_base, gen_args);
+                    target_type_id = strdup(gen_base);
+                    if (type_ref_local != NULL)
+                        type_ref_free(type_ref_local);
+                    type_ref_local = type_ref_from_name_and_args(gen_base, gen_args);
                     free(gen_base);
                     if (gen_args != NULL) destroy_list(gen_args);
                 }
-                else
+            }
+            if (type_ref_local == NULL && unwrapped_type != NULL)
+            {
+                char *gen_base = NULL;
+                ListNode_t *gen_args = NULL;
+                if (extract_constructed_type_info(type_node, &gen_base, &gen_args) ||
+                    extract_specialize_type_info(type_node, &gen_base, &gen_args))
                 {
-                    /* Fallback: use base name with $ marker so semcheck knows
-                     * this is an unresolved generic and doesn't error */
-                    ast_t *base_child = unwrapped_type->child;
-                    if (base_child != NULL)
-                        base_child = unwrap_pascal_node(base_child);
-                    char *base = dup_symbol(base_child);
-                    if (base != NULL)
-                    {
-                        size_t len = strlen(base) + 3; /* base + "$T" + NUL */
-                        target_type_id = (char *)malloc(len);
-                        if (target_type_id != NULL)
-                            snprintf(target_type_id, len, "%s$T", base);
-                        free(base);
-                    }
+                    if (type_ref_local != NULL)
+                        type_ref_free(type_ref_local);
+                    type_ref_local = type_ref_from_name_and_args(gen_base, gen_args);
+                    free(gen_base);
+                    if (gen_args != NULL) destroy_list(gen_args);
                 }
             }
         }

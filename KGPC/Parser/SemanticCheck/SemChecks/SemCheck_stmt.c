@@ -31,8 +31,11 @@
 #include "../../ParseTree/generic_types.h"
 #include "../../ParseTree/tree.h"
 #include "../../ParseTree/tree_types.h"
+#include "../../ParseTree/ident_ref.h"
 #include "../../ParseTree/type_tags.h"
 #include "../../List/List.h"
+
+HashNode_t *semcheck_find_preferred_type_node(SymTab_t *symtab, const char *type_id);
 
 /* Forward declaration from SemCheck_Expr_Resolve.c */
 const char *semcheck_type_tag_name(int type_tag);
@@ -1882,7 +1885,19 @@ static int semcheck_builtin_inc(SymTab_t *symtab, struct Statement *stmt, int ma
         struct Expression *value_expr = (struct Expression *)args->next->cur;
         int value_type = UNKNOWN_TYPE;
         return_val += semcheck_stmt_expr_tag(&value_type, symtab, value_expr, max_scope_lev, NO_MUTATE);
-        if (!is_integer_type(value_type))
+        int value_is_integer = is_integer_type(value_type);
+        if (!value_is_integer && value_expr != NULL)
+        {
+            if (value_expr->type == EXPR_INUM)
+                value_is_integer = 1;
+            else if (value_expr->type == EXPR_FUNCTION_CALL &&
+                     value_expr->expr_data.function_call_data.id != NULL &&
+                     pascal_identifier_equals(value_expr->expr_data.function_call_data.id, "SizeOf"))
+            {
+                value_is_integer = 1;
+            }
+        }
+        if (!value_is_integer)
         {
             semcheck_error_with_context("Error on line %d, Inc increment must be an integer.\n", stmt->line_num);
             ++return_val;
@@ -3339,6 +3354,7 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
     int return_val;
     int type_first, type_second;
     struct Expression *var, *expr;
+    int lhs_was_typecast;
 
     assert(symtab != NULL);
     assert(stmt != NULL);
@@ -3352,6 +3368,7 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
 
     var = stmt->stmt_data.var_assign_data.var;
     expr = stmt->stmt_data.var_assign_data.expr;
+    lhs_was_typecast = (var != NULL && var->type == EXPR_TYPECAST);
 
     rewrite_tfpglist_constructor_if_needed(symtab, max_scope_lev, var,
         &stmt->stmt_data.var_assign_data.expr);
@@ -3366,6 +3383,34 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                 semstmt_now_ms() - t0, stmt->line_num);
     } else {
         return_val += semcheck_stmt_expr_tag(&type_first, symtab, var, max_scope_lev, MUTATE);
+    }
+
+    if (var != NULL && var->type == EXPR_TYPECAST)
+    {
+        struct Expression *inner = var->expr_data.typecast_data.expr;
+        if (inner != NULL)
+        {
+            int compatible = 0;
+            KgpcType *lhs_type = var->resolved_kgpc_type;
+            KgpcType *inner_type = inner->resolved_kgpc_type;
+            if (lhs_type != NULL && inner_type != NULL)
+                compatible = are_types_compatible_for_assignment(lhs_type, inner_type, symtab);
+            else if (lhs_type == NULL && inner_type == NULL)
+                compatible = 1;
+            if (!compatible)
+            {
+                TypeRef *target_ref = var->expr_data.typecast_data.target_type_ref;
+                if (target_ref != NULL && target_ref->num_generic_args > 0)
+                    compatible = 1;
+            }
+            if (compatible)
+            {
+                stmt->stmt_data.var_assign_data.var = inner;
+                var->expr_data.typecast_data.expr = NULL;
+                destroy_expr(var);
+                var = inner;
+            }
+        }
     }
 
     /* Check for record property assignment early, before RHS type checking.
@@ -3705,6 +3750,9 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                 }
             }
 
+            if (lhs_was_typecast)
+                goto assignment_types_ok;
+
             const char *lhs_name = "<expression>";
             if (var != NULL && var->type == EXPR_VAR_ID)
                 lhs_name = var->expr_data.id;
@@ -3844,6 +3892,19 @@ assignment_types_ok:
                     types_compatible = 1;
                     /* Keep the type as STRING_TYPE to signal code generator to emit string-to-array copy */
                 }
+            }
+        }
+
+        if (lhs_was_typecast)
+            types_compatible = 1;
+
+        if (!types_compatible)
+        {
+            if (var != NULL && var->type == EXPR_TYPECAST)
+            {
+                const struct TypeRef *cast_ref = var->expr_data.typecast_data.target_type_ref;
+                if (cast_ref != NULL && cast_ref->num_generic_args > 0)
+                    types_compatible = 1;
             }
         }
 
@@ -5618,8 +5679,8 @@ skip_type_receiver_rewrite:
                         
                         /* Move to the next parent class */
                         if (parent_class_name != NULL) {
-                            HashNode_t *parent_class_node = NULL;
-                            if (FindIdent(&parent_class_node, symtab, parent_class_name) != -1 && parent_class_node != NULL) {
+                            HashNode_t *parent_class_node = semcheck_find_preferred_type_node(symtab, parent_class_name);
+                            if (parent_class_node != NULL) {
                                 record_info = semcheck_stmt_get_record_type_from_node(parent_class_node);
                                 if (record_info == NULL)
                                     break;

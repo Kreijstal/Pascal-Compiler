@@ -14,6 +14,11 @@
 
 #include "SemCheck_Expr_Internal.h"
 
+int semcheck_resolve_scoped_enum_literal(SymTab_t *symtab, const char *type_name,
+    const char *literal_name, long long *out_value);
+int semcheck_resolve_scoped_enum_literal_ref(SymTab_t *symtab, const QualifiedIdent *type_ref,
+    const char *literal_name, long long *out_value);
+
 static char *semcheck_join_qualified_prefix(const QualifiedIdent *name)
 {
     if (name == NULL || name->segments == NULL || name->count <= 1)
@@ -173,7 +178,8 @@ int semcheck_typecast(int *type_return,
     }
 
     if (target_type == UNKNOWN_TYPE &&
-        expr->expr_data.typecast_data.target_type_id == NULL)
+        expr->expr_data.typecast_data.target_type_id == NULL &&
+        expr->expr_data.typecast_data.target_type_ref == NULL)
     {
         semcheck_error_with_context("Error on line %d, typecast requires a target type.\n\n",
             expr->line_num);
@@ -1250,6 +1256,60 @@ int semcheck_recordaccess(int *type_return,
         }
     }
 
+    /* Scoped enum support for identifiers that resolve as types (e.g., TEndian.Little).
+     * If record_expr is a type name, resolve field_id as enum literal.
+     */
+    if (record_expr->type == EXPR_VAR_ID && record_expr->expr_data.id != NULL)
+    {
+        HashNode_t *type_node = NULL;
+        if (FindIdent(&type_node, symtab, record_expr->expr_data.id) >= 0 && type_node != NULL &&
+            type_node->hash_type == HASHTYPE_TYPE)
+        {
+            struct TypeAlias *type_alias = hashnode_get_type_alias(type_node);
+            if (type_alias != NULL)
+            {
+                long long enum_value = 0;
+                if ((type_alias->is_enum && type_alias->enum_literals != NULL) ||
+                    (type_alias->target_type_id != NULL) ||
+                    (type_alias->target_type_ref != NULL && type_alias->target_type_ref->name != NULL))
+                {
+                    int resolved = 0;
+                    if (type_alias->is_enum)
+                    {
+                        resolved = semcheck_resolve_scoped_enum_literal(symtab,
+                            record_expr->expr_data.id, field_id, &enum_value);
+                    }
+                    else if (type_alias->target_type_ref != NULL &&
+                             type_alias->target_type_ref->name != NULL)
+                    {
+                        resolved = semcheck_resolve_scoped_enum_literal_ref(symtab,
+                            type_alias->target_type_ref->name, field_id, &enum_value);
+                    }
+                    else if (type_alias->target_type_id != NULL)
+                    {
+                        resolved = semcheck_resolve_scoped_enum_literal(symtab,
+                            type_alias->target_type_id, field_id, &enum_value);
+                    }
+
+                    if (resolved)
+                    {
+                        expr->type = EXPR_INUM;
+                        expr->expr_data.i_num = enum_value;
+                        semcheck_expr_set_resolved_type(expr, ENUM_TYPE);
+                        if (type_alias->kgpc_type != NULL)
+                            semcheck_expr_set_resolved_kgpc_type_shared(expr, type_alias->kgpc_type);
+                        *type_return = ENUM_TYPE;
+                        return 0;
+                    }
+                }
+            }
+        }
+        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+            fprintf(stderr, "[SemCheck] enum const expr: T=%s found=%d type_node=%p\n",
+                record_expr->expr_data.id, type_node != NULL, (void *)type_node);
+        }
+    }
+
     /* AST TRANSFORMATION FIX: Parser incorrectly parses `-r.x` as `(-r).x` instead of `-(r.x)`.
      * When we detect this pattern (record access on a sign term), we restructure the AST
      * to have the correct operator precedence: the sign term should wrap the record access. 
@@ -1484,6 +1544,56 @@ int semcheck_recordaccess(int *type_return,
                 *type_return = UNKNOWN_TYPE;
                 return 1;
             }
+
+            /* If this type is an alias to another type, try resolving scoped enum literal
+             * against the alias target (e.g., TEndian = ObjPas.TEndian).
+             */
+            if (type_alias != NULL)
+            {
+                long long enum_value = 0;
+                int resolved = 0;
+                if (type_alias->target_type_ref != NULL &&
+                    type_alias->target_type_ref->name != NULL)
+                {
+                    resolved = semcheck_resolve_scoped_enum_literal_ref(symtab,
+                        type_alias->target_type_ref->name, field_id, &enum_value);
+                }
+                else if (type_alias->target_type_id != NULL)
+                {
+                    resolved = semcheck_resolve_scoped_enum_literal(symtab,
+                        type_alias->target_type_id, field_id, &enum_value);
+                }
+                if (resolved)
+                {
+                    expr->type = EXPR_INUM;
+                    expr->expr_data.i_num = enum_value;
+                    semcheck_expr_set_resolved_type(expr, ENUM_TYPE);
+                    if (type_alias->kgpc_type != NULL)
+                        semcheck_expr_set_resolved_kgpc_type_shared(expr, type_alias->kgpc_type);
+                    *type_return = ENUM_TYPE;
+                    return 0;
+                }
+            }
+
+            if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                fprintf(stderr, "[SemCheck] enum alias fallback failed for %s\n", unit_id);
+            }
+        }
+    }
+
+    /* Enum member access in const expressions: resolve TEnum.Value even if TEnum
+     * isn't found as a value in the current scope. */
+    if (!mutating && record_expr->type == EXPR_VAR_ID && record_expr->expr_data.id != NULL)
+    {
+        long long enum_value = 0;
+        if (semcheck_resolve_scoped_enum_literal(symtab, record_expr->expr_data.id,
+                field_id, &enum_value))
+        {
+            expr->type = EXPR_INUM;
+            expr->expr_data.i_num = enum_value;
+            semcheck_expr_set_resolved_type(expr, ENUM_TYPE);
+            *type_return = ENUM_TYPE;
+            return 0;
         }
     }
 
@@ -1493,10 +1603,43 @@ int semcheck_recordaccess(int *type_return,
     error_count += semcheck_expr_with_type(&record_kgpc_type, symtab, record_expr, max_scope_lev, mutating);
     record_type = semcheck_tag_from_kgpc(record_kgpc_type);
 
+    if (record_type == ENUM_TYPE)
+    {
+        const char *expr_type_name = get_expr_type_name(record_expr, symtab);
+        const char *enum_type_name = expr_type_name;
+        long long enum_value = 0;
+        if (enum_type_name != NULL &&
+            semcheck_resolve_scoped_enum_literal(symtab, enum_type_name, field_id, &enum_value))
+        {
+            expr->type = EXPR_INUM;
+            expr->expr_data.i_num = enum_value;
+            semcheck_expr_set_resolved_type(expr, ENUM_TYPE);
+            if (record_kgpc_type != NULL)
+                semcheck_expr_set_resolved_kgpc_type_shared(expr, record_kgpc_type);
+            *type_return = ENUM_TYPE;
+            return error_count;
+        }
+        if (record_kgpc_type != NULL && record_kgpc_type->type_alias != NULL &&
+            record_kgpc_type->type_alias->target_type_id != NULL)
+        {
+            enum_type_name = record_kgpc_type->type_alias->target_type_id;
+            if (semcheck_resolve_scoped_enum_literal(symtab, enum_type_name, field_id, &enum_value))
+            {
+                expr->type = EXPR_INUM;
+                expr->expr_data.i_num = enum_value;
+                semcheck_expr_set_resolved_type(expr, ENUM_TYPE);
+                semcheck_expr_set_resolved_kgpc_type_shared(expr, record_kgpc_type);
+                *type_return = ENUM_TYPE;
+                return error_count;
+            }
+        }
+    }
+
     if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
         fprintf(stderr, "[SemCheck] semcheck_recordaccess: field_id=%s, record_type=%d\n",
             field_id, record_type);
     }
+
 
     struct RecordType *record_info = NULL;
     if (record_type == RECORD_TYPE)

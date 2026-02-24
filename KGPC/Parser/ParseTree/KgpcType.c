@@ -18,6 +18,7 @@
 #include "KgpcType.h"
 #include "type_tags.h"
 #include "tree_types.h"
+#include "ident_ref.h"
 #include "../../format_arg.h"
 #include "../../identifier_utils.h"
 
@@ -2392,6 +2393,17 @@ static struct TypeAlias* copy_type_alias(const struct TypeAlias *src)
         dst->set_element_type_id = strdup(src->set_element_type_id);
     if (src->file_type_id != NULL)
         dst->file_type_id = strdup(src->file_type_id);
+
+    if (src->target_type_ref != NULL)
+        dst->target_type_ref = type_ref_clone(src->target_type_ref);
+    if (src->array_element_type_ref != NULL)
+        dst->array_element_type_ref = type_ref_clone(src->array_element_type_ref);
+    if (src->pointer_type_ref != NULL)
+        dst->pointer_type_ref = type_ref_clone(src->pointer_type_ref);
+    if (src->set_element_type_ref != NULL)
+        dst->set_element_type_ref = type_ref_clone(src->set_element_type_ref);
+    if (src->file_type_ref != NULL)
+        dst->file_type_ref = type_ref_clone(src->file_type_ref);
     
     /* Deep copy lists */
     dst->array_dimensions = copy_string_list(src->array_dimensions);

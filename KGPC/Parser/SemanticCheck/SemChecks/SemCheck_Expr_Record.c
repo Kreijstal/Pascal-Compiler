@@ -48,9 +48,8 @@ struct RecordType *semcheck_lookup_parent_record(SymTab_t *symtab,
         record_info->parent_class_name == NULL)
         return NULL;
 
-    HashNode_t *parent_node = NULL;
-    if (FindIdent(&parent_node, symtab, record_info->parent_class_name) == -1 ||
-        parent_node == NULL)
+    HashNode_t *parent_node = semcheck_find_preferred_type_node(symtab, record_info->parent_class_name);
+    if (parent_node == NULL)
         return NULL;
 
     return get_record_type_from_node(parent_node);
