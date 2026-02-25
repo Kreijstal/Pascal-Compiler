@@ -111,7 +111,8 @@ function PadRight(const S: AnsiString; ATotalWidth: SizeInt; PaddingChar: AnsiCh
 function QuotedString(const S: AnsiString; QuoteChar: AnsiChar): AnsiString;
 function StartsWith(const S, Prefix: AnsiString): Boolean;
 function EndsWith(const S, Suffix: AnsiString): Boolean;
-function StringOfChar(C: AnsiChar; Count: Integer): AnsiString;
+function StringOfChar(C: AnsiChar; Count: Integer): AnsiString; overload;
+function StringOfChar(C: WideChar; Count: SizeInt): WideString; overload;
 function IntToHex(Value: LongInt): AnsiString;
 function IntToHex(Value: LongInt; Digits: Integer): AnsiString;
 function IntToHex(Value: Int64): AnsiString;
@@ -841,9 +842,23 @@ begin
     Result := True;
 end;
 
-function StringOfChar(C: AnsiChar; Count: Integer): AnsiString;
+function StringOfChar(C: AnsiChar; Count: Integer): AnsiString; overload;
 var
     i: Integer;
+begin
+    if Count <= 0 then
+    begin
+        Result := '';
+        exit;
+    end;
+    SetLength(Result, Count);
+    for i := 1 to Count do
+        Result[i] := C;
+end;
+
+function StringOfChar(C: WideChar; Count: SizeInt): WideString; overload;
+var
+    i: SizeInt;
 begin
     if Count <= 0 then
     begin

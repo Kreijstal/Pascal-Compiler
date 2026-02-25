@@ -2472,20 +2472,35 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symt
             matches = FindAllIdents(symtab, base);
     }
 
-    if (!skip_owner_qualify && matches == NULL && type_ref == NULL)
+    if (!skip_owner_qualify && matches == NULL)
     {
-        const char *owner_id = semcheck_get_current_method_owner();
-        if (owner_id != NULL)
+        int allow_owner_fallback = 0;
+        if (type_ref == NULL)
         {
-            char qualified_name[512];
-            snprintf(qualified_name, sizeof(qualified_name), "%s.%s", owner_id, lookup_id);
-            HashNode_t *qualified = semcheck_find_preferred_type_node_ref_internal(
-                symtab, NULL, qualified_name, 1);
-            if (qualified != NULL)
+            allow_owner_fallback = 1;
+        }
+        else if (type_ref->name != NULL &&
+                 type_ref->name->count == 1 &&
+                 !semcheck_is_explicit_unit_qualified_type_ref(type_ref))
+        {
+            allow_owner_fallback = 1;
+        }
+
+        if (allow_owner_fallback)
+        {
+            const char *owner_id = semcheck_get_current_method_owner();
+            if (owner_id != NULL)
             {
-                if (rendered != NULL)
-                    free(rendered);
-                return qualified;
+                char qualified_name[512];
+                snprintf(qualified_name, sizeof(qualified_name), "%s.%s", owner_id, lookup_id);
+                HashNode_t *qualified = semcheck_find_preferred_type_node_ref_internal(
+                    symtab, NULL, qualified_name, 1);
+                if (qualified != NULL)
+                {
+                    if (rendered != NULL)
+                        free(rendered);
+                    return qualified;
+                }
             }
         }
     }
@@ -8339,6 +8354,16 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
 
             /* Type was already registered by predeclare_types().
              * We still need to update any additional metadata like array bounds. */
+            if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS && alias_info != NULL &&
+                alias_info->is_pointer &&
+                kgpc_type != NULL &&
+                kgpc_type_is_pointer(kgpc_type) &&
+                (existing_type->type == NULL || !kgpc_type_is_pointer(existing_type->type)))
+            {
+                /* Replace predeclared non-pointer placeholder with proper pointer alias type. */
+                existing_type->type = kgpc_type;
+            }
+
             if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS && alias_info != NULL && 
                 existing_type->type != NULL)
             {
@@ -10317,14 +10342,55 @@ void semcheck_add_builtins(SymTab_t *symtab)
         }
     }
 
-    /* StringOfChar: function StringOfChar(c: Char; l: SizeInt): string */
+    /* StringOfChar: function StringOfChar(c: Char/WideChar; l: SizeInt): string */
     {
         const char *func_name = "StringOfChar";
+        KgpcType *return_type = create_primitive_type(STRING_TYPE);
+
+        /* Char + LongInt */
         ListNode_t *param_c = semcheck_create_builtin_param("c", CHAR_TYPE);
         ListNode_t *param_l = semcheck_create_builtin_param("l", LONGINT_TYPE);
         ListNode_t *params = ConcatList(param_c, param_l);
-        KgpcType *return_type = create_primitive_type(STRING_TYPE);
         KgpcType *func_type = create_procedure_type(params, return_type);
+        if (func_type != NULL)
+        {
+            AddBuiltinFunction_Typed(symtab, strdup(func_name), func_type);
+            destroy_kgpc_type(func_type);
+        }
+        if (params != NULL)
+            DestroyList(params);
+
+        /* Char + Int64 (SizeInt on 64-bit) */
+        param_c = semcheck_create_builtin_param("c", CHAR_TYPE);
+        param_l = semcheck_create_builtin_param("l", INT64_TYPE);
+        params = ConcatList(param_c, param_l);
+        func_type = create_procedure_type(params, return_type);
+        if (func_type != NULL)
+        {
+            AddBuiltinFunction_Typed(symtab, strdup(func_name), func_type);
+            destroy_kgpc_type(func_type);
+        }
+        if (params != NULL)
+            DestroyList(params);
+
+        /* WideChar (Word) + LongInt */
+        param_c = semcheck_create_builtin_param("c", WORD_TYPE);
+        param_l = semcheck_create_builtin_param("l", LONGINT_TYPE);
+        params = ConcatList(param_c, param_l);
+        func_type = create_procedure_type(params, return_type);
+        if (func_type != NULL)
+        {
+            AddBuiltinFunction_Typed(symtab, strdup(func_name), func_type);
+            destroy_kgpc_type(func_type);
+        }
+        if (params != NULL)
+            DestroyList(params);
+
+        /* WideChar (Word) + Int64 (SizeInt on 64-bit) */
+        param_c = semcheck_create_builtin_param("c", WORD_TYPE);
+        param_l = semcheck_create_builtin_param("l", INT64_TYPE);
+        params = ConcatList(param_c, param_l);
+        func_type = create_procedure_type(params, return_type);
         if (func_type != NULL)
         {
             AddBuiltinFunction_Typed(symtab, strdup(func_name), func_type);
