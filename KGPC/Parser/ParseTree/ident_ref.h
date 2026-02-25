@@ -18,6 +18,7 @@ typedef struct TypeRef
 } TypeRef;
 
 QualifiedIdent *qualified_ident_from_single(const char *segment);
+QualifiedIdent *qualified_ident_from_dotted(const char *name);
 QualifiedIdent *qualified_ident_from_segments(char **segments, int count, int take_ownership);
 QualifiedIdent *qualified_ident_clone(const QualifiedIdent *src);
 void qualified_ident_free(QualifiedIdent *id);

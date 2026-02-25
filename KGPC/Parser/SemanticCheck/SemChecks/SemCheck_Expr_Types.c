@@ -1734,6 +1734,22 @@ int semcheck_recordaccess(int *type_return,
                     *type_return = ENUM_TYPE;
                     return 0;
                 }
+
+                HashNode_t *literal_node = NULL;
+                if (FindIdent(&literal_node, symtab, field_id) >= 0 &&
+                    literal_node != NULL &&
+                    (literal_node->hash_type == HASHTYPE_CONST ||
+                     literal_node->is_constant ||
+                     literal_node->is_typed_const))
+                {
+                    expr->type = EXPR_INUM;
+                    expr->expr_data.i_num = literal_node->const_int_value;
+                    semcheck_expr_set_resolved_type(expr, ENUM_TYPE);
+                    if (type_alias->kgpc_type != NULL)
+                        semcheck_expr_set_resolved_kgpc_type_shared(expr, type_alias->kgpc_type);
+                    *type_return = ENUM_TYPE;
+                    return 0;
+                }
             }
 
             if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {

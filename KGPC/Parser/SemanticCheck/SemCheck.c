@@ -2707,6 +2707,34 @@ static inline void mark_hashnode_unit_info(SymTab_t *symtab, HashNode_t *node,
     node->unit_is_public = is_public ? 1 : 0;
     if (symtab != NULL)
         SymTab_MoveHashNodeToBack(symtab, node);
+
+    if (symtab == NULL || node->hash_type != HASHTYPE_TYPE ||
+        g_semcheck_current_unit_name == NULL || node->id == NULL)
+        return;
+
+    size_t qualified_len = strlen(g_semcheck_current_unit_name) + 1 + strlen(node->id) + 1;
+    char *qualified_id = (char *)malloc(qualified_len);
+    if (qualified_id == NULL)
+        return;
+    snprintf(qualified_id, qualified_len, "%s.%s", g_semcheck_current_unit_name, node->id);
+
+    HashNode_t *existing = NULL;
+    if (FindIdent(&existing, symtab, qualified_id) < 0 || existing == NULL)
+    {
+        if (symtab->stack_head != NULL && symtab->stack_head->cur != NULL)
+        {
+            AddIdentToTable((HashTable_t *)symtab->stack_head->cur, qualified_id,
+                NULL, HASHTYPE_TYPE, node->type);
+            if (FindIdent(&existing, symtab, qualified_id) >= 0 && existing != NULL)
+            {
+                existing->defined_in_unit = 1;
+                existing->unit_is_public = node->unit_is_public;
+                SymTab_MoveHashNodeToBack(symtab, existing);
+            }
+        }
+    }
+
+    free(qualified_id);
 }
 
 static Tree_t *g_semcheck_current_subprogram = NULL;
@@ -6977,6 +7005,46 @@ static int resolve_const_identifier(SymTab_t *symtab, const char *id, long long 
     return 1;
 }
 
+static int semcheck_try_resolve_enum_literal_by_base(SymTab_t *symtab, const char *base_name,
+    const char *literal_name, long long *out_value)
+{
+    if (symtab == NULL || base_name == NULL || literal_name == NULL || out_value == NULL)
+        return 0;
+
+    ListNode_t *matches = FindAllIdents(symtab, base_name);
+    ListNode_t *cur = matches;
+    while (cur != NULL)
+    {
+        HashNode_t *node = (HashNode_t *)cur->cur;
+        if (node != NULL && node->hash_type == HASHTYPE_TYPE && node->type != NULL)
+        {
+            struct TypeAlias *alias = kgpc_type_get_type_alias(node->type);
+            if (alias != NULL && alias->is_enum && alias->enum_literals != NULL)
+            {
+                int ordinal = 0;
+                ListNode_t *lit = alias->enum_literals;
+                while (lit != NULL)
+                {
+                    if (lit->cur != NULL &&
+                        pascal_identifier_equals((char *)lit->cur, literal_name))
+                    {
+                        *out_value = ordinal;
+                        if (matches != NULL)
+                            DestroyList(matches);
+                        return 1;
+                    }
+                    ++ordinal;
+                    lit = lit->next;
+                }
+            }
+        }
+        cur = cur->next;
+    }
+    if (matches != NULL)
+        DestroyList(matches);
+    return 0;
+}
+
 int semcheck_resolve_scoped_enum_literal(SymTab_t *symtab, const char *type_name,
     const char *literal_name, long long *out_value)
 {
@@ -6991,6 +7059,22 @@ int semcheck_resolve_scoped_enum_literal(SymTab_t *symtab, const char *type_name
         if (FindIdent(&type_node, symtab, current_type) < 0 || type_node == NULL ||
             type_node->hash_type != HASHTYPE_TYPE)
         {
+            QualifiedIdent *qid = qualified_ident_from_dotted(current_type);
+            if (qid != NULL && qid->count > 1)
+            {
+                const char *base_name = qualified_ident_last(qid);
+                if (base_name != NULL &&
+                    semcheck_try_resolve_enum_literal_by_base(symtab, base_name, literal_name, out_value))
+                {
+                    qualified_ident_free(qid);
+                    if (owned_type != NULL)
+                        free(owned_type);
+                    return 1;
+                }
+            }
+            if (qid != NULL)
+                qualified_ident_free(qid);
+
             const char *base = semcheck_base_type_name(current_type);
             if (base == NULL || base == current_type ||
                 FindIdent(&type_node, symtab, base) < 0 || type_node == NULL ||
@@ -7062,8 +7146,9 @@ int semcheck_resolve_scoped_enum_literal_ref(SymTab_t *symtab, const QualifiedId
         {
             const char *unit_name = current_ref->segments != NULL ? current_ref->segments[0] : NULL;
             const char *base_name = qualified_ident_last(current_ref);
-            if (unit_name != NULL && base_name != NULL && semcheck_is_unit_name(unit_name))
+            if (unit_name != NULL && base_name != NULL)
             {
+                /* Explicit unit qualification should work even without a uses entry. */
                 type_node = semcheck_find_type_node_with_unit_flag(symtab, base_name, 1);
             }
         }
@@ -7111,6 +7196,19 @@ int semcheck_resolve_scoped_enum_literal_ref(SymTab_t *symtab, const QualifiedId
                 break;
             current_ref = owned_ref;
             continue;
+        }
+
+        if (alias != NULL && alias->target_type_ref != NULL &&
+            alias->target_type_ref->name != NULL)
+        {
+            const char *base = qualified_ident_last(alias->target_type_ref->name);
+            if (base != NULL &&
+                semcheck_try_resolve_enum_literal_by_base(symtab, base, literal_name, out_value))
+            {
+                if (owned_ref != NULL)
+                    qualified_ident_free(owned_ref);
+                return 1;
+            }
         }
 
         if (alias == NULL || alias->target_type_id == NULL)

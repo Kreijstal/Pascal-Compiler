@@ -330,51 +330,6 @@ static size_t g_scoped_enum_source_length = 0;
 static ast_t *unwrap_pascal_node(ast_t *node);
 static char *dup_symbol(ast_t *node);
 
-static QualifiedIdent *qualified_ident_from_dotted(const char *name)
-{
-    if (name == NULL || name[0] == '\0')
-        return NULL;
-    int count = 1;
-    for (const char *p = name; *p != '\0'; ++p)
-    {
-        if (*p == '.')
-            ++count;
-    }
-    char **segments = (char **)calloc((size_t)count, sizeof(char *));
-    if (segments == NULL)
-        return NULL;
-    int idx = 0;
-    const char *start = name;
-    const char *p = name;
-    while (1)
-    {
-        if (*p == '.' || *p == '\0')
-        {
-            size_t len = (size_t)(p - start);
-            char *seg = (char *)malloc(len + 1);
-            if (seg == NULL)
-                break;
-            memcpy(seg, start, len);
-            seg[len] = '\0';
-            segments[idx++] = seg;
-            if (*p == '\0')
-                break;
-            start = p + 1;
-        }
-        if (*p == '\0')
-            break;
-        ++p;
-    }
-    if (idx != count)
-    {
-        for (int i = 0; i < idx; ++i)
-            free(segments[i]);
-        free(segments);
-        return NULL;
-    }
-    return qualified_ident_from_segments(segments, count, 1);
-}
-
 static int split_absolute_target(const char *absolute_target,
     char **out_base, char **out_field)
 {

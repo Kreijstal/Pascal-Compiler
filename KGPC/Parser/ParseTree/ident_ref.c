@@ -29,6 +29,55 @@ QualifiedIdent *qualified_ident_from_single(const char *segment)
     return id;
 }
 
+QualifiedIdent *qualified_ident_from_dotted(const char *name)
+{
+    if (name == NULL || name[0] == '\0')
+        return NULL;
+
+    int count = 1;
+    for (const char *p = name; *p != '\0'; ++p)
+    {
+        if (*p == '.')
+            ++count;
+    }
+
+    char **segments = (char **)calloc((size_t)count, sizeof(char *));
+    if (segments == NULL)
+        return NULL;
+
+    int idx = 0;
+    const char *seg_start = name;
+    for (const char *p = name; ; ++p)
+    {
+        if (*p == '.' || *p == '\0')
+        {
+            size_t len = (size_t)(p - seg_start);
+            if (len == 0)
+                goto fail;
+            segments[idx] = (char *)malloc(len + 1);
+            if (segments[idx] == NULL)
+                goto fail;
+            memcpy(segments[idx], seg_start, len);
+            segments[idx][len] = '\0';
+            ++idx;
+            if (*p == '\0')
+                break;
+            seg_start = p + 1;
+        }
+    }
+
+    return qualified_ident_from_segments(segments, count, 1);
+
+fail:
+    if (segments != NULL)
+    {
+        for (int i = 0; i < count; ++i)
+            free(segments[i]);
+        free(segments);
+    }
+    return NULL;
+}
+
 QualifiedIdent *qualified_ident_from_segments(char **segments, int count, int take_ownership)
 {
     if (segments == NULL || count <= 0)

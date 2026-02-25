@@ -47,6 +47,7 @@ int semcheck_typecheck_array_literal(struct Expression *expr, SymTab_t *symtab,
     int max_scope_lev, int expected_type, const char *expected_type_id, int line_num);
 int set_type_from_hashtype(int *type, HashNode_t *hash_node);
 struct RecordType *semcheck_lookup_record_type(SymTab_t *symtab, const char *type_id);
+int semcheck_convert_set_literal_to_array_literal(struct Expression *expr);
 
 #define SEMSTMT_TIMINGS_ENABLED() (getenv("KGPC_DEBUG_SEMSTMT_TIMINGS") != NULL)
 
@@ -3802,6 +3803,14 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                 goto assignment_types_ok;
             }
         }
+        if (expr != NULL && expr->type == EXPR_SET &&
+            kgpc_type_is_array(lhs_kgpctype))
+        {
+            if (semcheck_convert_set_literal_to_array_literal(expr) != 0)
+                semcheck_error_with_context("Error on line %d, unable to convert set literal to array literal.\n\n",
+                    stmt->line_num);
+        }
+
         if (expr != NULL && expr->type == EXPR_ARRAY_LITERAL &&
             kgpc_type_is_array(lhs_kgpctype))
         {
