@@ -175,6 +175,7 @@ struct RecordType
     struct GenericTypeDecl *generic_decl; /* Owning generic declaration, if any */
     char **generic_args;      /* Concrete type arguments for specialization */
     int num_generic_args;
+    int is_generic_specialization; /* 1 if this record is a generic specialization */
     int method_clones_emitted; /* 1 if generic method clones have been appended */
     char *default_indexed_property; /* Field name for default indexed access (e.g., "FItems" for array-like classes) */
     int default_indexed_element_type; /* Type tag for elements of the default indexed property */

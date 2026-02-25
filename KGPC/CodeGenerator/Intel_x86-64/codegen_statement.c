@@ -421,37 +421,37 @@ static const char *register_name8(const Register_t *reg)
     if (reg == NULL || reg->bit_64 == NULL)
         return NULL;
 
-    static const struct
+    switch (reg->reg_id)
     {
-        const char *wide;
-        const char *byte;
-    } register_map[] = {
-        { "%rax", "%al" },
-        { "%rbx", "%bl" },
-        { "%rcx", "%cl" },
-        { "%rdx", "%dl" },
-        { "%rsi", "%sil" },
-        { "%rdi", "%dil" },
-        { "%rbp", "%bpl" },
-        { "%rsp", "%spl" },
-        { "%r8", "%r8b" },
-        { "%r9", "%r9b" },
-        { "%r10", "%r10b" },
-        { "%r11", "%r11b" },
-        { "%r12", "%r12b" },
-        { "%r13", "%r13b" },
-        { "%r14", "%r14b" },
-        { "%r15", "%r15b" },
-    };
-
-    size_t count = sizeof(register_map) / sizeof(register_map[0]);
-    for (size_t i = 0; i < count; ++i)
-    {
-        if (strcmp(reg->bit_64, register_map[i].wide) == 0)
-            return register_map[i].byte;
+        case REG_RAX: return "%al";
+        case REG_RBX: return "%bl";
+        case REG_RCX: return "%cl";
+        case REG_RDX: return "%dl";
+        case REG_RSI: return "%sil";
+        case REG_RDI: return "%dil";
+        case REG_RBP: return "%bpl";
+        case REG_RSP: return "%spl";
+        case REG_R8: return "%r8b";
+        case REG_R9: return "%r9b";
+        case REG_R10: return "%r10b";
+        case REG_R11: return "%r11b";
+        case REG_R12: return "%r12b";
+        case REG_R13: return "%r13b";
+        case REG_R14: return "%r14b";
+        case REG_R15: return "%r15b";
+        default: return NULL;
     }
+}
 
-    return NULL;
+static inline RegisterId_t codegen_arg_reg_id_num(int num)
+{
+    static const RegisterId_t windows_regs[] = { REG_RCX, REG_RDX, REG_R8, REG_R9 };
+    static const RegisterId_t sysv_regs[] = { REG_RDI, REG_RSI, REG_RDX, REG_RCX, REG_R8, REG_R9 };
+    const RegisterId_t *regs = (g_current_codegen_abi == KGPC_TARGET_ABI_WINDOWS) ? windows_regs : sysv_regs;
+    int limit = kgpc_max_int_arg_regs();
+    if (num < 0 || num >= limit)
+        return REG_INVALID;
+    return regs[num];
 }
 
 static ListNode_t *codegen_convert_int_like_to_real(ListNode_t *inst_list,
@@ -1561,8 +1561,8 @@ static ListNode_t *codegen_call_string_assign(ListNode_t *inst_list, CodeGenCont
     {
         /* Windows x64 ABI: first arg in %rcx, second in %rdx */
         /* Handle register conflicts by checking if value_reg is already in %rcx */
-        int value_in_rcx = (strcmp(value_reg->bit_64, "%rcx") == 0);
-        int addr_in_rdx = (strcmp(addr_reg->bit_64, "%rdx") == 0);
+        int value_in_rcx = (value_reg->reg_id == REG_RCX);
+        int addr_in_rdx = (addr_reg->reg_id == REG_RDX);
 
         if (value_in_rcx && addr_in_rdx)
         {
@@ -1600,8 +1600,8 @@ static ListNode_t *codegen_call_string_assign(ListNode_t *inst_list, CodeGenCont
     {
         /* System V ABI: first arg in %rdi, second in %rsi */
         /* Handle register conflicts similarly */
-        int value_in_rdi = (strcmp(value_reg->bit_64, "%rdi") == 0);
-        int addr_in_rsi = (strcmp(addr_reg->bit_64, "%rsi") == 0);
+        int value_in_rdi = (value_reg->reg_id == REG_RDI);
+        int addr_in_rsi = (addr_reg->reg_id == REG_RSI);
 
         if (value_in_rdi && addr_in_rsi)
         {
@@ -1651,8 +1651,8 @@ static ListNode_t *codegen_call_string_to_char_array(ListNode_t *inst_list, Code
     if (codegen_target_is_windows())
     {
         /* Windows x64 ABI: first arg in %rcx, second in %rdx, third in %r8 */
-        int value_in_rcx = (strcmp(value_reg->bit_64, "%rcx") == 0);
-        int addr_in_rdx = (strcmp(addr_reg->bit_64, "%rdx") == 0);
+        int value_in_rcx = (value_reg->reg_id == REG_RCX);
+        int addr_in_rdx = (addr_reg->reg_id == REG_RDX);
 
         if (value_in_rcx && addr_in_rdx)
         {
@@ -1685,8 +1685,8 @@ static ListNode_t *codegen_call_string_to_char_array(ListNode_t *inst_list, Code
     else
     {
         /* System V ABI: first arg in %rdi, second in %rsi, third in %rdx */
-        int value_in_rdi = (strcmp(value_reg->bit_64, "%rdi") == 0);
-        int addr_in_rsi = (strcmp(addr_reg->bit_64, "%rsi") == 0);
+        int value_in_rdi = (value_reg->reg_id == REG_RDI);
+        int addr_in_rsi = (addr_reg->reg_id == REG_RSI);
 
         if (value_in_rdi && addr_in_rsi)
         {
@@ -2093,8 +2093,8 @@ static ListNode_t *codegen_call_string_to_shortstring(ListNode_t *inst_list, Cod
     if (codegen_target_is_windows())
     {
         /* Windows x64 ABI: first arg in %rcx, second in %rdx, third in %r8 */
-        int value_in_rcx = (strcmp(value_reg->bit_64, "%rcx") == 0);
-        int addr_in_rdx = (strcmp(addr_reg->bit_64, "%rdx") == 0);
+        int value_in_rcx = (value_reg->reg_id == REG_RCX);
+        int addr_in_rdx = (addr_reg->reg_id == REG_RDX);
 
         if (value_in_rcx && addr_in_rdx)
         {
@@ -2127,8 +2127,8 @@ static ListNode_t *codegen_call_string_to_shortstring(ListNode_t *inst_list, Cod
     else
     {
         /* System V ABI: first arg in %rdi, second in %rsi, third in %rdx */
-        int value_in_rdi = (strcmp(value_reg->bit_64, "%rdi") == 0);
-        int addr_in_rsi = (strcmp(addr_reg->bit_64, "%rsi") == 0);
+        int value_in_rdi = (value_reg->reg_id == REG_RDI);
+        int addr_in_rsi = (addr_reg->reg_id == REG_RSI);
 
         if (value_in_rdi && addr_in_rsi)
         {
@@ -4091,10 +4091,12 @@ static ListNode_t *codegen_builtin_setlength(struct Statement *stmt, ListNode_t 
     {
         const char *arg0 = current_arg_reg64(0);  /* %rcx */
         const char *arg1 = current_arg_reg64(1);  /* %rdx */
+        RegisterId_t arg0_id = codegen_arg_reg_id_num(0);
+        RegisterId_t arg1_id = codegen_arg_reg_id_num(1);
         
         /* Check if we need to swap or save/restore to avoid clobbering */
-        int descriptor_is_arg1 = (strcmp(descriptor_reg->bit_64, arg1) == 0);
-        int length_is_arg0 = (strcmp(length_reg->bit_64, arg0) == 0);
+        int descriptor_is_arg1 = (descriptor_reg->reg_id == arg1_id);
+        int length_is_arg0 = (length_reg->reg_id == arg0_id);
         
         if (descriptor_is_arg1 && length_is_arg0)
         {
@@ -4227,13 +4229,15 @@ static ListNode_t *codegen_builtin_setlength_string(struct Statement *stmt, List
 
     const char *arg0 = current_arg_reg64(0);  /* First argument: %rcx (Win) / %rdi (SysV) */
     const char *arg1 = current_arg_reg64(1);  /* Second argument: %rdx (Win) / %rsi (SysV) */
+    RegisterId_t arg0_id = codegen_arg_reg_id_num(0);
+    RegisterId_t arg1_id = codegen_arg_reg_id_num(1);
     
     /*
      * Handle register conflicts when setting up function arguments.
      * If length_reg is in arg0's position and we try to move addr_reg to arg0,
      * we'll overwrite the length. In this case, move length_reg to arg1 first.
      */
-    if (strcmp(length_reg->bit_64, arg0) == 0)
+    if (length_reg->reg_id == arg0_id)
     {
         /* length_reg is in arg0, which will be overwritten by addr_reg. Move length first. */
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", length_reg->bit_64, arg1);
@@ -4241,7 +4245,7 @@ static ListNode_t *codegen_builtin_setlength_string(struct Statement *stmt, List
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", addr_reg->bit_64, arg0);
         inst_list = add_inst(inst_list, buffer);
     }
-    else if (strcmp(addr_reg->bit_64, arg1) == 0)
+    else if (addr_reg->reg_id == arg1_id)
     {
         /* addr_reg is in arg1, which is the destination for length_reg. Move addr first. */
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", addr_reg->bit_64, arg0);
@@ -4312,15 +4316,17 @@ static ListNode_t *codegen_builtin_setlength_shortstring(struct Statement *stmt,
     char buffer[128];
     const char *arg0 = current_arg_reg64(0);
     const char *arg1 = current_arg_reg64(1);
+    RegisterId_t arg0_id = codegen_arg_reg_id_num(0);
+    RegisterId_t arg1_id = codegen_arg_reg_id_num(1);
 
-    if (strcmp(length_reg->bit_64, arg0) == 0)
+    if (length_reg->reg_id == arg0_id)
     {
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", length_reg->bit_64, arg1);
         inst_list = add_inst(inst_list, buffer);
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", addr_reg->bit_64, arg0);
         inst_list = add_inst(inst_list, buffer);
     }
-    else if (strcmp(addr_reg->bit_64, arg1) == 0)
+    else if (addr_reg->reg_id == arg1_id)
     {
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", addr_reg->bit_64, arg0);
         inst_list = add_inst(inst_list, buffer);

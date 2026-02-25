@@ -709,6 +709,7 @@ RegStack_t *init_reg_stack()
     /* %rax - return register, always safe to use for expressions */
     Register_t *rax = (Register_t *)malloc(sizeof(Register_t));
     assert(rax != NULL);
+    rax->reg_id = REG_RAX;
     rax->bit_64 = strdup("%rax");
     rax->bit_32 = strdup("%eax");
     rax->spill_location = NULL;
@@ -722,6 +723,7 @@ RegStack_t *init_reg_stack()
     /* %r10, %r11 - caller-saved, never used for arguments */
     Register_t *r10 = (Register_t *)malloc(sizeof(Register_t));
     assert(r10 != NULL);
+    r10->reg_id = REG_R10;
     r10->bit_64 = strdup("%r10");
     r10->bit_32 = strdup("%r10d");
     r10->spill_location = NULL;
@@ -734,6 +736,7 @@ RegStack_t *init_reg_stack()
 
     Register_t *r11 = (Register_t *)malloc(sizeof(Register_t));
     assert(r11 != NULL);
+    r11->reg_id = REG_R11;
     r11->bit_64 = strdup("%r11");
     r11->bit_32 = strdup("%r11d");
     r11->spill_location = NULL;
@@ -747,6 +750,7 @@ RegStack_t *init_reg_stack()
     /* %r8, %r9 - argument registers 3 and 4 (both ABIs), less commonly used */
     Register_t *r8 = (Register_t *)malloc(sizeof(Register_t));
     assert(r8 != NULL);
+    r8->reg_id = REG_R8;
     r8->bit_64 = strdup("%r8");
     r8->bit_32 = strdup("%r8d");
     r8->spill_location = NULL;
@@ -759,6 +763,7 @@ RegStack_t *init_reg_stack()
 
     Register_t *r9 = (Register_t *)malloc(sizeof(Register_t));
     assert(r9 != NULL);
+    r9->reg_id = REG_R9;
     r9->bit_64 = strdup("%r9");
     r9->bit_32 = strdup("%r9d");
     r9->spill_location = NULL;
@@ -782,6 +787,7 @@ RegStack_t *init_reg_stack()
         /* Windows: %rsi and %rdi are not argument registers */
         Register_t *rsi = (Register_t *)malloc(sizeof(Register_t));
         assert(rsi != NULL);
+        rsi->reg_id = REG_RSI;
         rsi->bit_64 = strdup("%rsi");
         rsi->bit_32 = strdup("%esi");
         rsi->spill_location = NULL;
@@ -794,6 +800,7 @@ RegStack_t *init_reg_stack()
 
         Register_t *rdi = (Register_t *)malloc(sizeof(Register_t));
         assert(rdi != NULL);
+        rdi->reg_id = REG_RDI;
         rdi->bit_64 = strdup("%rdi");
         rdi->bit_32 = strdup("%edi");
         rdi->spill_location = NULL;
@@ -812,6 +819,7 @@ RegStack_t *init_reg_stack()
         /* Linux/SysV: %rcx is argument register 4, less commonly used than rdi/rsi/rdx */
         Register_t *rcx = (Register_t *)malloc(sizeof(Register_t));
         assert(rcx != NULL);
+        rcx->reg_id = REG_RCX;
         rcx->bit_64 = strdup("%rcx");
         rcx->bit_32 = strdup("%ecx");
         rcx->spill_location = NULL;
@@ -843,59 +851,22 @@ RegStack_t *init_reg_stack()
 /* NOTE: Getters return number greater than 0 if it had to kick a value out to temp */
 /* The returned int is the temp offset to restore the value */
 /* TODO: Doesn't actually kick variable out to temp yet */
-int get_register_64bit(RegStack_t *regstack, char *reg_64, Register_t **return_reg)
+int get_register_by_id(RegStack_t *regstack, RegisterId_t reg_id, Register_t **return_reg)
 {
     assert(regstack != NULL);
-    assert(reg_64 != NULL);
+    assert(return_reg != NULL);
 
     ListNode_t *cur_reg, *prev_reg;
     Register_t *reg;
 
     cur_reg = regstack->registers_free;
     prev_reg = NULL;
-    while(cur_reg != NULL)
+    while (cur_reg != NULL)
     {
         reg = (Register_t *)cur_reg->cur;
-        if(strcmp(reg->bit_64, reg_64) == 0)
+        if (reg->reg_id == reg_id)
         {
-            if(prev_reg == NULL)
-                regstack->registers_free = cur_reg->next;
-            else
-                prev_reg->next = cur_reg->next;
-
-            cur_reg->next = regstack->registers_allocated;
-            regstack->registers_allocated = cur_reg;
-            *return_reg = reg;
-
-            return 0;
-        }
-
-        prev_reg = cur_reg;
-        cur_reg = cur_reg->next;
-    }
-
-    assert(0 && "Kicking out values in registers not currently supported!");
-}
-
-/* NOTE: Getters return number greater than 0 if it had to kick a value out to temp */
-/* The returned int is the temp offset to restore the value */
-/* TODO: Doesn't actually kick variable out to temp yet */
-int get_register_32bit(RegStack_t *regstack, char *reg_32, Register_t **return_reg)
-{
-    assert(regstack != NULL);
-    assert(reg_32 != NULL);
-
-    ListNode_t *cur_reg, *prev_reg;
-    Register_t *reg;
-
-    cur_reg = regstack->registers_free;
-    prev_reg = NULL;
-    while(cur_reg != NULL)
-    {
-        reg = (Register_t *)cur_reg->cur;
-        if(strcmp(reg->bit_32, reg_32) == 0)
-        {
-            if(prev_reg == NULL)
+            if (prev_reg == NULL)
                 regstack->registers_free = cur_reg->next;
             else
                 prev_reg->next = cur_reg->next;
@@ -946,7 +917,7 @@ void free_reg(RegStack_t *reg_stack, Register_t *reg)
 #endif
             
 #if KGPC_ENABLE_REG_DEBUG
-            if (strcmp(reg->bit_64, "%rcx") == 0 && g_reg_debug_context != NULL)
+            if (reg->reg_id == REG_RCX && g_reg_debug_context != NULL)
                 fprintf(stderr, "[reg-debug] free  %s (%s)\n", reg->bit_64, g_reg_debug_context);
 #endif
             return;
@@ -1039,7 +1010,7 @@ Register_t *get_free_reg(RegStack_t *reg_stack, ListNode_t **inst_list)
 #endif
         
 #if KGPC_ENABLE_REG_DEBUG
-        if (strcmp(reg->bit_64, "%rcx") == 0 && g_reg_debug_context != NULL)
+        if (reg->reg_id == REG_RCX && g_reg_debug_context != NULL)
             fprintf(stderr, "[reg-debug] alloc %s (%s)\n", reg->bit_64, g_reg_debug_context);
 #endif
         return reg;

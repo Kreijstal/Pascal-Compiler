@@ -1309,6 +1309,10 @@ void destroy_tree(Tree_t *tree)
           }
           if (tree->tree_data.var_decl_data.absolute_target != NULL)
               free(tree->tree_data.var_decl_data.absolute_target);
+          if (tree->tree_data.var_decl_data.absolute_base_id != NULL)
+              free(tree->tree_data.var_decl_data.absolute_base_id);
+          if (tree->tree_data.var_decl_data.absolute_field_id != NULL)
+              free(tree->tree_data.var_decl_data.absolute_field_id);
           break;
 
         case TREE_ARR_DECL:
@@ -1952,6 +1956,7 @@ struct RecordType *clone_record_type(const struct RecordType *record_type)
     clone->cached_size = record_type->cached_size;
     clone->generic_decl = record_type->generic_decl;
     clone->num_generic_args = record_type->num_generic_args;
+    clone->is_generic_specialization = record_type->is_generic_specialization;
     clone->method_clones_emitted = 0;
     clone->generic_args = NULL;
     if (record_type->generic_args != NULL && record_type->num_generic_args > 0)
@@ -2251,6 +2256,7 @@ Tree_t *mk_procedure(int line_num, char *id, ListNode_t *args, ListNode_t *const
     new_tree->tree_data.subprogram_data.cname_override = NULL;
     new_tree->tree_data.subprogram_data.overload_flag = overload_flag;
     new_tree->tree_data.subprogram_data.nesting_level = 0;
+    new_tree->tree_data.subprogram_data.is_nested = 0;
     new_tree->tree_data.subprogram_data.requires_static_link = 0;
     new_tree->tree_data.subprogram_data.defined_in_unit = 0;
     new_tree->tree_data.subprogram_data.has_nested_requiring_link = 0;
@@ -2289,6 +2295,7 @@ Tree_t *mk_function(int line_num, char *id, ListNode_t *args, ListNode_t *const_
     new_tree->tree_data.subprogram_data.cname_override = NULL;
     new_tree->tree_data.subprogram_data.overload_flag = overload_flag;
     new_tree->tree_data.subprogram_data.nesting_level = 0;
+    new_tree->tree_data.subprogram_data.is_nested = 0;
     new_tree->tree_data.subprogram_data.requires_static_link = 0;
     new_tree->tree_data.subprogram_data.has_nested_requiring_link = 0;
     new_tree->tree_data.subprogram_data.defined_in_unit = 0;
@@ -2332,6 +2339,8 @@ Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type, char *type_id,
     new_tree->tree_data.var_decl_data.cname_override = NULL;
     new_tree->tree_data.var_decl_data.is_external = 0;
     new_tree->tree_data.var_decl_data.absolute_target = absolute_target;
+    new_tree->tree_data.var_decl_data.absolute_base_id = NULL;
+    new_tree->tree_data.var_decl_data.absolute_field_id = NULL;
 
     return new_tree;
 }

@@ -35,6 +35,7 @@ typedef struct StackScope StackScope_t;
 typedef struct StackNode StackNode_t;
 typedef struct RegStack RegStack_t;
 typedef struct Register Register_t;
+typedef enum RegisterId RegisterId_t;
 
 typedef void (*RegisterSpillCallback)(Register_t *reg, StackNode_t *spill_slot, void *context);
 
@@ -101,8 +102,7 @@ RegStack_t *init_reg_stack();
 
 /* NOTE: Getters return number greater than 1 if it had to kick a value out to temp */
 /* The returned int is the temp offset to restore the value */
-int get_register_64bit(RegStack_t *, char *reg_64, Register_t **);
-int get_register_32bit(RegStack_t *, char *reg_32, Register_t **);
+int get_register_by_id(RegStack_t *, RegisterId_t reg_id, Register_t **);
 void restore_register_64bit(RegStack_t *, Register_t *, int temp_offset);
 void restore_register_32bit(RegStack_t *, Register_t *, int temp_offset);
 void free_reg(RegStack_t *, Register_t *);
@@ -123,8 +123,30 @@ extern const char *g_reg_debug_context;
 #endif
 
 /********* Register_t **********/
+enum RegisterId
+{
+    REG_INVALID = 0,
+    REG_RAX,
+    REG_RBX,
+    REG_RCX,
+    REG_RDX,
+    REG_RSI,
+    REG_RDI,
+    REG_RBP,
+    REG_RSP,
+    REG_R8,
+    REG_R9,
+    REG_R10,
+    REG_R11,
+    REG_R12,
+    REG_R13,
+    REG_R14,
+    REG_R15
+};
+
 typedef struct Register
 {
+    RegisterId_t reg_id;
     char *bit_64;
     char *bit_32;
     /* Spill tracking - if spilled, this points to the stack location */
