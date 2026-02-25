@@ -4017,6 +4017,19 @@ static int resolve_range_bounds_for_type(SymTab_t *symtab, const char *type_name
         }
     }
 
+    const char *base_name = semcheck_base_type_name(type_name);
+    HashNode_t *alt = find_type_node_with_range_metadata(symtab, base_name, alias);
+    if (alt != NULL)
+    {
+        struct TypeAlias *alt_alias = get_type_alias_from_node(alt);
+        if (alt_alias != NULL && alt_alias->range_known)
+        {
+            *out_low = alt_alias->range_start;
+            *out_high = alt_alias->range_end;
+            return 1;
+        }
+    }
+
     return 0;
 }
 
