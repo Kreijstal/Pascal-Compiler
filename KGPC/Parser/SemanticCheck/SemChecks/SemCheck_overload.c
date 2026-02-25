@@ -1349,9 +1349,6 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
 
     int given_count = ListLength(args_given);
 
-    /* Count candidates for disambiguation heuristics */
-    int num_candidates = ListLength(overload_candidates);
-
     ListNode_t *slow = overload_candidates;
     ListNode_t *fast = overload_candidates;
     int guard = 0;

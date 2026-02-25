@@ -2090,9 +2090,6 @@ void init_pascal_unit_parser(combinator_t** p) {
         NULL
     ));
 
-    // Optional bracket directives (legacy/specific uses)
-    combinator_t* bracket_directives = optional(bracket_directive_required);
-
     // Header-only bracket directives: [internproc:N], [internconst:N], [compilerproc], etc.
     // These indicate NO body follows. Calling convention directives like [cdecl] are NOT header-only.
     combinator_t* internproc_directive = seq(new_combinator(), PASCAL_T_NONE,
@@ -2764,12 +2761,6 @@ void init_pascal_unit_parser(combinator_t** p) {
         interface_declarations,
         NULL);
     set_combinator_name(interface_section, "interface_section");
-
-    combinator_t* unit_end_marker = seq(new_combinator(), PASCAL_T_NONE,
-        token(keyword_ci("end")),
-        token(match(".")),
-        NULL
-    );
 
     combinator_t* implementation_section = seq(new_combinator(), PASCAL_T_IMPLEMENTATION_SECTION,
         token(keyword_ci("implementation")),

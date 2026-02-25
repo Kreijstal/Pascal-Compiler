@@ -356,7 +356,18 @@ void DestroyHashTable(HashTable_t *table)
             if (hash_node->owner_class_outer != NULL)
                 free(hash_node->owner_class_outer);
             if (hash_node->type != NULL)
+            {
+                if (getenv("KGPC_DEBUG_TYPE_FREE") != NULL)
+                {
+                    fprintf(stderr,
+                        "[KgpcType] hashnode '%s' (type=%d) destroy type=%p ref=%d\n",
+                        hash_node->id ? hash_node->id : "<null>",
+                        hash_node->hash_type,
+                        (void *)hash_node->type,
+                        hash_node->type->ref_count);
+                }
                 destroy_kgpc_type(hash_node->type);
+            }
             /* Builtin procedures are handled separately - do not call DestroyBuiltin here */
             /* to avoid double-free issues */
 

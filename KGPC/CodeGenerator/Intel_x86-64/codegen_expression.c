@@ -2992,9 +2992,17 @@ static ListNode_t *codegen_expr_tree_value(struct Expression *expr, ListNode_t *
 
             char label[CODEGEN_MAX_INST_BUF];
             codegen_enum_typeinfo_label(type_id, label, sizeof(label));
-            char buffer[CODEGEN_MAX_INST_BUF];
-            snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", label, tmp_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
+            int buf_len = snprintf(NULL, 0, "\tleaq\t%s(%%rip), %s\n", label, tmp_reg->bit_64);
+            if (buf_len > 0)
+            {
+                char *buffer = (char *)malloc((size_t)buf_len + 1);
+                if (buffer != NULL)
+                {
+                    snprintf(buffer, (size_t)buf_len + 1, "\tleaq\t%s(%%rip), %s\n", label, tmp_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    free(buffer);
+                }
+            }
 
             if (out_reg != NULL)
                 *out_reg = tmp_reg;

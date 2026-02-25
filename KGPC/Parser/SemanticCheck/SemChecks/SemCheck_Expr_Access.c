@@ -1687,10 +1687,8 @@ int semcheck_funccall(int *type_return,
         }
 
         struct Expression *size_expr = (struct Expression *)args->cur;
-        int size_type = UNKNOWN_TYPE;
         KgpcType *size_kgpc_type = NULL;
         int error_count = semcheck_expr_with_type(&size_kgpc_type, symtab, size_expr, max_scope_lev, NO_MUTATE);
-        size_type = semcheck_tag_from_kgpc(size_kgpc_type);
         if (error_count != 0)
         {
             *type_return = UNKNOWN_TYPE;

@@ -2653,8 +2653,18 @@ cleanup_constructor:
         }
         
         inst_list = add_inst(inst_list, add_rodata);
-        snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", label, target_reg->bit_64);
-        return add_inst(inst_list, buffer);
+        int buf_len = snprintf(NULL, 0, "\tleaq\t%s(%%rip), %s\n", label, target_reg->bit_64);
+        if (buf_len > 0)
+        {
+            char *tmp_buf = (char *)malloc((size_t)buf_len + 1);
+            if (tmp_buf != NULL)
+            {
+                snprintf(tmp_buf, (size_t)buf_len + 1, "\tleaq\t%s(%%rip), %s\n", label, target_reg->bit_64);
+                inst_list = add_inst(inst_list, tmp_buf);
+                free(tmp_buf);
+            }
+        }
+        return inst_list;
     }
     else if (expr->type == EXPR_TYPEINFO)
     {
@@ -2666,8 +2676,18 @@ cleanup_constructor:
         }
         char label[CODEGEN_MAX_INST_BUF];
         codegen_enum_typeinfo_label(type_id, label, sizeof(label));
-        snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", label, target_reg->bit_64);
-        return add_inst(inst_list, buffer);
+        int buf_len = snprintf(NULL, 0, "\tleaq\t%s(%%rip), %s\n", label, target_reg->bit_64);
+        if (buf_len > 0)
+        {
+            char *tmp_buf = (char *)malloc((size_t)buf_len + 1);
+            if (tmp_buf != NULL)
+            {
+                snprintf(tmp_buf, (size_t)buf_len + 1, "\tleaq\t%s(%%rip), %s\n", label, target_reg->bit_64);
+                inst_list = add_inst(inst_list, tmp_buf);
+                free(tmp_buf);
+            }
+        }
+        return inst_list;
     }
 
     inst_list = gencode_leaf_var(expr, inst_list, ctx, buf_leaf, sizeof(buf_leaf));

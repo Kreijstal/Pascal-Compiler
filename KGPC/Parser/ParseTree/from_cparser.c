@@ -11608,13 +11608,10 @@ static struct Expression *convert_factor(ast_t *expr_node) {
     case PASCAL_T_FUNC_CALL: {
         ast_t *child = expr_node->child;
         char *id = NULL;
-        int inherited_call = 0;
         if (child != NULL) {
             if (child->typ == PASCAL_T_IDENTIFIER) {
                 const char *name = ast_symbol_name(child);
-                if (name != NULL && strcasecmp(name, "inherited") == 0)
-                    inherited_call = 1;
-                else
+                if (name != NULL && strcasecmp(name, "inherited") != 0)
                     id = dup_symbol(child);
             } else if (child->typ == PASCAL_T_TYPECAST &&
                        child->child != NULL &&
@@ -11636,9 +11633,7 @@ static struct Expression *convert_factor(ast_t *expr_node) {
                 return call_expr;
             } else if (child->child != NULL && child->child->typ == PASCAL_T_IDENTIFIER) {
                 const char *name = ast_symbol_name(child->child);
-                if (name != NULL && strcasecmp(name, "inherited") == 0)
-                    inherited_call = 1;
-                else
+                if (name != NULL && strcasecmp(name, "inherited") != 0)
                     id = dup_symbol(child->child);
             }
             child = child->next;
@@ -11656,10 +11651,8 @@ static struct Expression *convert_factor(ast_t *expr_node) {
                     const char *name = ast_symbol_name(node);
                     if (name == NULL)
                         continue;
-                    if (strcasecmp(name, "inherited") == 0) {
-                        inherited_call = 1;
+                    if (strcasecmp(name, "inherited") == 0)
                         continue;
-                    }
                     id = strdup(name);
                     break;
                 }

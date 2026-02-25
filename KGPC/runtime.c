@@ -1016,21 +1016,6 @@ static void kgpc_real_cache_put(int64_t bits, long double ext_value)
     kgpc_real_cache_pos = (kgpc_real_cache_pos + 1) % KGPC_REAL_CACHE_SIZE;
 }
 
-static int kgpc_real_cache_get(int64_t bits, long double *out_value)
-{
-    if (out_value == NULL)
-        return 0;
-    for (int i = 0; i < KGPC_REAL_CACHE_SIZE; ++i)
-    {
-        if (kgpc_real_cache[i].valid && kgpc_real_cache[i].bits == bits)
-        {
-            *out_value = kgpc_real_cache[i].ext_value;
-            return 1;
-        }
-    }
-    return 0;
-}
-
 static const char *kgpc_rtti_type_name(const kgpc_class_typeinfo *info)
 {
     if (info != NULL && info->class_name != NULL)

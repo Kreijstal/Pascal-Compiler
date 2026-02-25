@@ -1108,40 +1108,6 @@ static void semcheck_stmt_set_call_kgpc_type(struct Statement *stmt, KgpcType *t
     }
 }
 
-static int semcheck_expr_is_char_set(SymTab_t *symtab, struct Expression *expr)
-{
-    if (expr == NULL)
-        return 0;
-
-    if (expr->resolved_kgpc_type != NULL)
-    {
-        struct TypeAlias *alias = expr->resolved_kgpc_type->type_alias;
-        if (alias != NULL && alias->is_set &&
-            (alias->set_element_type == CHAR_TYPE ||
-             (alias->set_element_type_id != NULL &&
-              (pascal_identifier_equals(alias->set_element_type_id, "Char") ||
-               pascal_identifier_equals(alias->set_element_type_id, "AnsiChar")))))
-            return 1;
-    }
-
-    if (expr->type == EXPR_VAR_ID && symtab != NULL)
-    {
-        HashNode_t *node = NULL;
-        if (FindIdent(&node, symtab, expr->expr_data.id) >= 0 && node != NULL)
-        {
-            struct TypeAlias *alias = get_type_alias_from_node(node);
-            if (alias != NULL && alias->is_set &&
-                (alias->set_element_type == CHAR_TYPE ||
-                 (alias->set_element_type_id != NULL &&
-                  (pascal_identifier_equals(alias->set_element_type_id, "Char") ||
-                   pascal_identifier_equals(alias->set_element_type_id, "AnsiChar")))))
-                return 1;
-        }
-    }
-
-    return 0;
-}
-
 /* Helper to check if a TypeAlias represents WideChar/UnicodeChar.
  * WideChar = Word (integer type), so we check alias_name, not CHAR_TYPE. */
 static int semcheck_alias_is_widechar(struct TypeAlias *alias)
