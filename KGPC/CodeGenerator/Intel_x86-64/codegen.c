@@ -1807,6 +1807,227 @@ void codegen_rodata(CodeGenContext *ctx)
     #endif
 }
 
+/* Track emitted class labels to avoid duplicates (e.g., TObject from merged units) */
+#define MAX_EMITTED_CLASSES 256
+
+static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
+    struct RecordType *record_info, const char *class_label,
+    const char **emitted_classes, int *emitted_count)
+{
+    if (record_info == NULL || !record_type_is_class(record_info) || class_label == NULL)
+        return;
+
+    int already_emitted = 0;
+    for (int i = 0; i < *emitted_count; i++) {
+        if (emitted_classes[i] != NULL && strcmp(emitted_classes[i], class_label) == 0) {
+            already_emitted = 1;
+            break;
+        }
+    }
+    if (already_emitted)
+        return;
+
+    if (*emitted_count < MAX_EMITTED_CLASSES)
+        emitted_classes[(*emitted_count)++] = class_label;
+
+    /* Emit interface entry table if this class implements interfaces */
+    int actual_iface_count = 0;
+    if (record_info->num_interfaces > 0) {
+        fprintf(ctx->output_file, "\n# Interface table for class %s\n", class_label);
+        fprintf(ctx->output_file, "\t.align 8\n");
+        fprintf(ctx->output_file, "%s_INTERFACES:\n", class_label);
+        for (int iidx = 0; iidx < record_info->num_interfaces; iidx++) {
+            const char *iface_name = record_info->interface_names[iidx];
+            if (iface_name == NULL) continue;
+            /* Look up the interface type to get its GUID */
+            HashNode_t *iface_node = NULL;
+            struct RecordType *iface_record = NULL;
+            if (FindIdent(&iface_node, symtab, iface_name) == 0 && iface_node != NULL) {
+                iface_record = get_record_type_from_node(iface_node);
+                if (iface_record == NULL && iface_node->type != NULL &&
+                    iface_node->type->kind == TYPE_KIND_POINTER &&
+                    iface_node->type->info.points_to != NULL &&
+                    iface_node->type->info.points_to->kind == TYPE_KIND_RECORD)
+                    iface_record = iface_node->type->info.points_to->info.record_info;
+            }
+            const char *guid = (iface_record != NULL) ? iface_record->guid_string : NULL;
+            unsigned long d1 = 0; unsigned int d2 = 0, d3 = 0;
+            unsigned char d4[8] = {0};
+            if (guid != NULL) {
+                /* Parse GUID string: {D1-D2-D3-D4A-D4B} */
+                const char *p = guid;
+                if (*p == '\'') p++;
+                if (*p == '{') p++;
+                d1 = strtoul(p, NULL, 16);
+                p = strchr(p, '-'); if (p) p++;
+                d2 = (unsigned int)strtoul(p ? p : "", NULL, 16);
+                if (p) p = strchr(p, '-'); if (p) p++;
+                d3 = (unsigned int)strtoul(p ? p : "", NULL, 16);
+                if (p) p = strchr(p, '-'); if (p) p++;
+                if (p) {
+                    /* D4[0..1] from the 4-char group before last dash */
+                    unsigned long d4ab = strtoul(p, NULL, 16);
+                    d4[0] = (unsigned char)((d4ab >> 8) & 0xFF);
+                    d4[1] = (unsigned char)(d4ab & 0xFF);
+                    p = strchr(p, '-'); if (p) p++;
+                    if (p) {
+                        /* D4[2..7] from the final 12-char group */
+                        int b;
+                        for (b = 2; b < 8; b++) {
+                            char hx[3];
+                            hx[0] = 0; hx[1] = 0; hx[2] = 0;
+                            if (*p && *(p+1)) {
+                                hx[0] = *p++; hx[1] = *p++;
+                                d4[b] = (unsigned char)strtoul(hx, NULL, 16);
+                            }
+                        }
+                    }
+                }
+            }
+            fprintf(ctx->output_file, "\t# Entry for %s\n", iface_name);
+            fprintf(ctx->output_file, "\t.long\t0x%08lX\n", d1);
+            fprintf(ctx->output_file, "\t.short\t0x%04X\n", (unsigned)d2);
+            fprintf(ctx->output_file, "\t.short\t0x%04X\n", (unsigned)d3);
+            fprintf(ctx->output_file, "\t.byte\t0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X\n",
+                d4[0], d4[1], d4[2], d4[3], d4[4], d4[5], d4[6], d4[7]);
+            /* Padding to align the name pointer to 8 bytes.
+             * GUID is 4+2+2+8 = 16 bytes, already aligned. */
+            fprintf(ctx->output_file, "\t.quad\t__iface_name_%s_%s\n", class_label, iface_name);
+            actual_iface_count++;
+        }
+        /* Emit interface name strings */
+        for (int iidx = 0; iidx < record_info->num_interfaces; iidx++) {
+            const char *iface_name = record_info->interface_names[iidx];
+            if (iface_name == NULL) continue;
+            fprintf(ctx->output_file, "__iface_name_%s_%s:\n", class_label, iface_name);
+            fprintf(ctx->output_file, "\t.string \"%s\"\n", iface_name);
+        }
+    }
+
+    fprintf(ctx->output_file, "\n# RTTI for class %s\n", class_label);
+    fprintf(ctx->output_file, "\t.align 8\n");
+    fprintf(ctx->output_file, ".globl %s_TYPEINFO\n", class_label);
+    fprintf(ctx->output_file, "%s_TYPEINFO:\n", class_label);
+    if (record_info->parent_class_name != NULL)
+        fprintf(ctx->output_file, "\t.quad\t%s_TYPEINFO\n", record_info->parent_class_name);
+    else
+        fprintf(ctx->output_file, "\t.quad\t0\n");
+
+    char name_label[256];
+    snprintf(name_label, sizeof(name_label), "__kgpc_typeinfo_name_%s", class_label);
+    fprintf(ctx->output_file, "\t.quad\t%s\n", name_label);
+    /* Always emit VMT reference, even if no methods */
+    fprintf(ctx->output_file, "\t.quad\t%s_VMT\n", class_label);
+    /* Interface table pointer and count */
+    if (actual_iface_count > 0)
+        fprintf(ctx->output_file, "\t.quad\t%s_INTERFACES\n", class_label);
+    else
+        fprintf(ctx->output_file, "\t.quad\t0\n");
+    fprintf(ctx->output_file, "\t.quad\t%d\n", actual_iface_count);
+    {
+        char escaped_label[CODEGEN_MAX_INST_BUF];
+        escape_string(escaped_label, class_label, sizeof(escaped_label));
+        fprintf(ctx->output_file, "%s:\n\t.string \"%s\"\n", name_label, escaped_label);
+    }
+
+    /* Always emit VMT for classes, even if no virtual methods */
+    fprintf(ctx->output_file, "\n# VMT for class %s\n", class_label);
+    fprintf(ctx->output_file, "\t.align 8\n");
+    fprintf(ctx->output_file, ".globl %s_VMT\n", class_label);
+    fprintf(ctx->output_file, "%s_VMT:\n", class_label);
+    /* Pointer to TypeInfo at offset 0 */
+    fprintf(ctx->output_file, "\t.quad\t%s_TYPEINFO\n", class_label);
+
+    if (record_info->methods != NULL) {
+        ListNode_t *method_node = record_info->methods;
+        while (method_node != NULL) {
+            struct MethodInfo *method = (struct MethodInfo *)method_node->cur;
+            if (method != NULL && method->mangled_name != NULL) {
+                /* Look up the actual function symbol to get its full mangled name.
+                 * Only use it if the method has a definition (body), not just a declaration. */
+                HashNode_t *func_sym = NULL;
+                const char *full_mangled = NULL;
+                if (FindIdent(&func_sym, symtab, method->mangled_name) == 0 &&
+                    func_sym != NULL && func_sym->mangled_id != NULL &&
+                    func_sym->type != NULL &&
+                    func_sym->type->kind == TYPE_KIND_PROCEDURE &&
+                    func_sym->type->info.proc_info.definition != NULL) {
+                    full_mangled = func_sym->mangled_id;
+                }
+                if (full_mangled != NULL) {
+                    fprintf(ctx->output_file, "\t.quad\t%s\n", full_mangled);
+                } else {
+                    /* Abstract method or no definition - emit reference to runtime error handler */
+                    fprintf(ctx->output_file, "\t.quad\t__kgpc_abstract_method_error\n");
+                }
+            }
+            method_node = method_node->next;
+        }
+    }
+
+    /* Emit writable storage for class vars. */
+    if (record_type_is_class(record_info) || record_has_class_vars(record_info) ||
+        record_has_class_method_templates(record_info) || record_has_method_decls(record_info))
+    {
+        int include_all_fields = (!record_has_class_vars(record_info) &&
+            (record_has_class_method_templates(record_info) || record_has_method_decls(record_info)));
+        long long class_var_size = codegen_class_var_storage_size(symtab, record_info,
+            include_all_fields ? 1 : 0);
+        if (class_var_size <= 0)
+            class_var_size = 8;
+
+        fprintf(ctx->output_file, "\n# Class variables for %s\n", class_label);
+        fprintf(ctx->output_file, "\t.data\n");
+        fprintf(ctx->output_file, "\t.align 8\n");
+        fprintf(ctx->output_file, ".globl %s_CLASSVAR\n", class_label);
+        fprintf(ctx->output_file, "%s_CLASSVAR:\n", class_label);
+        fprintf(ctx->output_file, "\t.zero %lld\n", class_var_size);
+        fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());
+    }
+}
+
+static void codegen_emit_record_classvar_storage(CodeGenContext *ctx, SymTab_t *symtab,
+    struct RecordType *record_info, const char *class_label,
+    const char **emitted_classes, int *emitted_count)
+{
+    if (record_info == NULL || record_type_is_class(record_info) || class_label == NULL)
+        return;
+
+    int has_class_vars = record_has_class_vars(record_info);
+    int has_class_methods = record_has_class_method_templates(record_info) ||
+        record_has_method_decls(record_info);
+    if (!has_class_vars && !has_class_methods)
+        return;
+
+    int already_emitted = 0;
+    for (int i = 0; i < *emitted_count; i++)
+    {
+        if (emitted_classes[i] != NULL && strcmp(emitted_classes[i], class_label) == 0)
+        {
+            already_emitted = 1;
+            break;
+        }
+    }
+    if (already_emitted)
+        return;
+
+    if (*emitted_count < MAX_EMITTED_CLASSES)
+        emitted_classes[(*emitted_count)++] = class_label;
+
+    long long class_var_size = codegen_class_var_storage_size(symtab, record_info,
+        has_class_vars ? 0 : 1);
+    if (class_var_size <= 0)
+        class_var_size = 8;
+
+    fprintf(ctx->output_file, "\n# Class var storage for record %s\n", class_label);
+    fprintf(ctx->output_file, "\t.data\n");
+    fprintf(ctx->output_file, "\t.align 8\n");
+    fprintf(ctx->output_file, ".globl %s_CLASSVAR\n", class_label);
+    fprintf(ctx->output_file, "%s_CLASSVAR:\n", class_label);
+    fprintf(ctx->output_file, "\t.zero\t%lld\n", class_var_size);
+    fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());
+}
+
 /* Generate Virtual Method Tables (VMT) for classes with virtual methods */
 void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
 {
@@ -1829,8 +2050,6 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
     fprintf(ctx->output_file, "# Class RTTI metadata and Virtual Method Tables (VMT)\n");
     fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());
 
-    /* Track emitted class labels to avoid duplicates (e.g., TObject from merged units) */
-    #define MAX_EMITTED_CLASSES 256
     const char *emitted_classes[MAX_EMITTED_CLASSES];
     int emitted_count = 0;
 
@@ -1860,223 +2079,59 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
                 }
             }
 
-            if (record_info != NULL && record_type_is_class(record_info) && class_label != NULL) {
-                    /* Check if this class was already emitted (can happen with merged units) */
-                    int already_emitted = 0;
-                    for (int i = 0; i < emitted_count; i++) {
-                        if (emitted_classes[i] != NULL && strcmp(emitted_classes[i], class_label) == 0) {
-                            already_emitted = 1;
-                            break;
-                        }
-                    }
-                    if (already_emitted) {
-                        cur = cur->next;
-                        continue;
-                    }
-                    /* Track this class as emitted */
-                    if (emitted_count < MAX_EMITTED_CLASSES) {
-                        emitted_classes[emitted_count++] = class_label;
-                    }
-
-                    /* Emit interface entry table if this class implements interfaces */
-                    int actual_iface_count = 0;
-                    if (record_info->num_interfaces > 0) {
-                        fprintf(ctx->output_file, "\n# Interface table for class %s\n", class_label);
-                        fprintf(ctx->output_file, "\t.align 8\n");
-                        fprintf(ctx->output_file, "%s_INTERFACES:\n", class_label);
-                        for (int iidx = 0; iidx < record_info->num_interfaces; iidx++) {
-                            const char *iface_name = record_info->interface_names[iidx];
-                            if (iface_name == NULL) continue;
-                            /* Look up the interface type to get its GUID */
-                            HashNode_t *iface_node = NULL;
-                            struct RecordType *iface_record = NULL;
-                            if (FindIdent(&iface_node, symtab, iface_name) == 0 && iface_node != NULL) {
-                                iface_record = get_record_type_from_node(iface_node);
-                                if (iface_record == NULL && iface_node->type != NULL &&
-                                    iface_node->type->kind == TYPE_KIND_POINTER &&
-                                    iface_node->type->info.points_to != NULL &&
-                                    iface_node->type->info.points_to->kind == TYPE_KIND_RECORD)
-                                    iface_record = iface_node->type->info.points_to->info.record_info;
-                            }
-                            const char *guid = (iface_record != NULL) ? iface_record->guid_string : NULL;
-                            unsigned long d1 = 0; unsigned int d2 = 0, d3 = 0;
-                            unsigned char d4[8] = {0};
-                            if (guid != NULL) {
-                                /* Parse GUID string: {D1-D2-D3-D4A-D4B} */
-                                const char *p = guid;
-                                if (*p == '\'') p++;
-                                if (*p == '{') p++;
-                                d1 = strtoul(p, NULL, 16);
-                                p = strchr(p, '-'); if (p) p++;
-                                d2 = (unsigned int)strtoul(p ? p : "", NULL, 16);
-                                if (p) p = strchr(p, '-'); if (p) p++;
-                                d3 = (unsigned int)strtoul(p ? p : "", NULL, 16);
-                                if (p) p = strchr(p, '-'); if (p) p++;
-                                if (p) {
-                                    /* D4[0..1] from the 4-char group before last dash */
-                                    unsigned long d4ab = strtoul(p, NULL, 16);
-                                    d4[0] = (unsigned char)((d4ab >> 8) & 0xFF);
-                                    d4[1] = (unsigned char)(d4ab & 0xFF);
-                                    p = strchr(p, '-'); if (p) p++;
-                                    if (p) {
-                                        /* D4[2..7] from the final 12-char group */
-                                        int b;
-                                        for (b = 2; b < 8; b++) {
-                                            char hx[3];
-                                            hx[0] = 0; hx[1] = 0; hx[2] = 0;
-                                            if (*p && *(p+1)) {
-                                                hx[0] = *p++; hx[1] = *p++;
-                                                d4[b] = (unsigned char)strtoul(hx, NULL, 16);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            fprintf(ctx->output_file, "\t# Entry for %s\n", iface_name);
-                            fprintf(ctx->output_file, "\t.long\t0x%08lX\n", d1);
-                            fprintf(ctx->output_file, "\t.short\t0x%04X\n", (unsigned)d2);
-                            fprintf(ctx->output_file, "\t.short\t0x%04X\n", (unsigned)d3);
-                            fprintf(ctx->output_file, "\t.byte\t0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X\n",
-                                d4[0], d4[1], d4[2], d4[3], d4[4], d4[5], d4[6], d4[7]);
-                            /* Padding to align the name pointer to 8 bytes.
-                             * GUID is 4+2+2+8 = 16 bytes, already aligned. */
-                            fprintf(ctx->output_file, "\t.quad\t__iface_name_%s_%s\n", class_label, iface_name);
-                            actual_iface_count++;
-                        }
-                        /* Emit interface name strings */
-                        for (int iidx = 0; iidx < record_info->num_interfaces; iidx++) {
-                            const char *iface_name = record_info->interface_names[iidx];
-                            if (iface_name == NULL) continue;
-                            fprintf(ctx->output_file, "__iface_name_%s_%s:\n", class_label, iface_name);
-                            fprintf(ctx->output_file, "\t.string \"%s\"\n", iface_name);
-                        }
-                    }
-
-                    fprintf(ctx->output_file, "\n# RTTI for class %s\n", class_label);
-                    fprintf(ctx->output_file, "\t.align 8\n");
-                    fprintf(ctx->output_file, ".globl %s_TYPEINFO\n", class_label);
-                    fprintf(ctx->output_file, "%s_TYPEINFO:\n", class_label);
-                    if (record_info->parent_class_name != NULL)
-                        fprintf(ctx->output_file, "\t.quad\t%s_TYPEINFO\n", record_info->parent_class_name);
-                    else
-                        fprintf(ctx->output_file, "\t.quad\t0\n");
-
-                    char name_label[256];
-                    snprintf(name_label, sizeof(name_label), "__kgpc_typeinfo_name_%s", class_label);
-                    fprintf(ctx->output_file, "\t.quad\t%s\n", name_label);
-                    /* Always emit VMT reference, even if no methods */
-                    fprintf(ctx->output_file, "\t.quad\t%s_VMT\n", class_label);
-                    /* Interface table pointer and count */
-                    if (actual_iface_count > 0)
-                        fprintf(ctx->output_file, "\t.quad\t%s_INTERFACES\n", class_label);
-                    else
-                        fprintf(ctx->output_file, "\t.quad\t0\n");
-                    fprintf(ctx->output_file, "\t.quad\t%d\n", actual_iface_count);
-                    {
-                        char escaped_label[CODEGEN_MAX_INST_BUF];
-                        escape_string(escaped_label, class_label, sizeof(escaped_label));
-                        fprintf(ctx->output_file, "%s:\n\t.string \"%s\"\n", name_label, escaped_label);
-                    }
-
-                    /* Always emit VMT for classes, even if no virtual methods */
-                    fprintf(ctx->output_file, "\n# VMT for class %s\n", class_label);
-                    fprintf(ctx->output_file, "\t.align 8\n");
-                    fprintf(ctx->output_file, ".globl %s_VMT\n", class_label);
-                    fprintf(ctx->output_file, "%s_VMT:\n", class_label);
-                    /* Pointer to TypeInfo at offset 0 */
-                    fprintf(ctx->output_file, "\t.quad\t%s_TYPEINFO\n", class_label);
-                    
-                    if (record_info->methods != NULL) {
-                        ListNode_t *method_node = record_info->methods;
-                        while (method_node != NULL) {
-                            struct MethodInfo *method = (struct MethodInfo *)method_node->cur;
-                            if (method != NULL && method->mangled_name != NULL) {
-                                /* Look up the actual function symbol to get its full mangled name.
-                                 * Only use it if the method has a definition (body), not just a declaration. */
-                                HashNode_t *func_sym = NULL;
-                                const char *full_mangled = NULL;
-                                if (FindIdent(&func_sym, symtab, method->mangled_name) == 0 &&
-                                    func_sym != NULL && func_sym->mangled_id != NULL &&
-                                    func_sym->type != NULL &&
-                                    func_sym->type->kind == TYPE_KIND_PROCEDURE &&
-                                    func_sym->type->info.proc_info.definition != NULL) {
-                                    full_mangled = func_sym->mangled_id;
-                                }
-                                if (full_mangled != NULL) {
-                                    fprintf(ctx->output_file, "\t.quad\t%s\n", full_mangled);
-                                } else {
-                                    /* Abstract method or no definition - emit reference to runtime error handler */
-                                    fprintf(ctx->output_file, "\t.quad\t__kgpc_abstract_method_error\n");
-                                }
-                            }
-                            method_node = method_node->next;
-                        }
-                    }
-
-                    /* Emit writable storage for class vars. */
-                    if (record_type_is_class(record_info) || record_has_class_vars(record_info) ||
-                        record_has_class_method_templates(record_info) || record_has_method_decls(record_info))
-                    {
-                        int include_all_fields = (!record_has_class_vars(record_info) &&
-                            (record_has_class_method_templates(record_info) || record_has_method_decls(record_info)));
-                        long long class_var_size = codegen_class_var_storage_size(symtab, record_info,
-                            include_all_fields ? 1 : 0);
-                        if (class_var_size <= 0)
-                            class_var_size = 8;
-
-                        fprintf(ctx->output_file, "\n# Class var storage for %s\n", class_label);
-                        fprintf(ctx->output_file, "\t.data\n");
-                        fprintf(ctx->output_file, "\t.align 8\n");
-                        fprintf(ctx->output_file, ".globl %s_CLASSVAR\n", class_label);
-                        fprintf(ctx->output_file, "%s_CLASSVAR:\n", class_label);
-                        fprintf(ctx->output_file, "\t.zero\t%lld\n", class_var_size);
-                        fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());
-                    }
-                }
-                else if (record_info != NULL && !record_type_is_class(record_info) && class_label != NULL)
-                {
-                    int has_class_vars = record_has_class_vars(record_info);
-                    int has_class_methods = record_has_class_method_templates(record_info) ||
-                        record_has_method_decls(record_info);
-                    if (!has_class_vars && !has_class_methods)
-                    {
-                        cur = cur->next;
-                        continue;
-                    }
-                    int already_emitted = 0;
-                    for (int i = 0; i < emitted_count; i++)
-                    {
-                        if (emitted_classes[i] != NULL && strcmp(emitted_classes[i], class_label) == 0)
-                        {
-                            already_emitted = 1;
-                            break;
-                        }
-                    }
-                    if (!already_emitted)
-                    {
-                        if (emitted_count < MAX_EMITTED_CLASSES)
-                            emitted_classes[emitted_count++] = class_label;
-
-                        long long class_var_size = codegen_class_var_storage_size(symtab, record_info,
-                            has_class_vars ? 0 : 1);
-                        if (class_var_size <= 0)
-                            class_var_size = 8;
-
-                        fprintf(ctx->output_file, "\n# Class var storage for record %s\n", class_label);
-                        fprintf(ctx->output_file, "\t.data\n");
-                        fprintf(ctx->output_file, "\t.align 8\n");
-                        fprintf(ctx->output_file, ".globl %s_CLASSVAR\n", class_label);
-                        fprintf(ctx->output_file, "%s_CLASSVAR:\n", class_label);
-                        fprintf(ctx->output_file, "\t.zero\t%lld\n", class_var_size);
-                        fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());
-                    }
-                }
-            }
+            codegen_emit_class_vmt(ctx, symtab, record_info, class_label,
+                emitted_classes, &emitted_count);
+            codegen_emit_record_classvar_storage(ctx, symtab, record_info, class_label,
+                emitted_classes, &emitted_count);
+        }
         cur = cur->next;
     }
-    
+
+    /* Also emit VMTs for class types that exist only in the symbol table
+     * (e.g., specializations pulled in from units like FGL). */
+    for (ListNode_t *scope = symtab->stack_head; scope != NULL; scope = scope->next)
+    {
+        HashTable_t *table = (HashTable_t *)scope->cur;
+        if (table == NULL)
+            continue;
+        for (int b = 0; b < TABLE_SIZE; b++)
+        {
+            ListNode_t *node = table->table[b];
+            while (node != NULL)
+            {
+                HashNode_t *hash_node = (HashNode_t *)node->cur;
+                if (hash_node != NULL && hash_node->hash_type == HASHTYPE_TYPE &&
+                    hash_node->type != NULL)
+                {
+                    struct RecordType *record_info = NULL;
+                    const char *class_label = NULL;
+                    if (hash_node->type->kind == TYPE_KIND_RECORD)
+                    {
+                        record_info = hash_node->type->info.record_info;
+                    }
+                    else if (hash_node->type->kind == TYPE_KIND_POINTER &&
+                        hash_node->type->info.points_to != NULL &&
+                        hash_node->type->info.points_to->kind == TYPE_KIND_RECORD)
+                    {
+                        record_info = hash_node->type->info.points_to->info.record_info;
+                    }
+                    if (record_info != NULL)
+                        class_label = record_info->type_id;
+                    if (class_label == NULL)
+                        class_label = hash_node->id;
+
+                    codegen_emit_class_vmt(ctx, symtab, record_info, class_label,
+                        emitted_classes, &emitted_count);
+                    codegen_emit_record_classvar_storage(ctx, symtab, record_info, class_label,
+                        emitted_classes, &emitted_count);
+                }
+                node = node->next;
+            }
+        }
+    }
+
     fprintf(ctx->output_file, ".text\n");
-    
+
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
