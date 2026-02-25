@@ -2713,13 +2713,27 @@ static int semcheck_builtin_dispose(SymTab_t *symtab, struct Statement *stmt, in
 /* Semantic check on a normal statement */
 int semcheck_stmt(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
-    return semcheck_stmt_main(symtab, stmt, max_scope_lev);
+    int ret = semcheck_stmt_main(symtab, stmt, max_scope_lev);
+    if (ret > 0 && getenv("KGPC_DEBUG_ERRORS") != NULL && stmt != NULL)
+    {
+        fprintf(stderr,
+            "[KGPC_DEBUG_ERRORS] stmt_error type=%d line=%d col=%d src=%d ret=%d\n",
+            stmt->type, stmt->line_num, stmt->col_num, stmt->source_index, ret);
+    }
+    return ret;
 }
 
 /* Semantic check on a function statement (no side effects allowed) */
 int semcheck_func_stmt(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
-    return semcheck_stmt_main(symtab, stmt, max_scope_lev);
+    int ret = semcheck_stmt_main(symtab, stmt, max_scope_lev);
+    if (ret > 0 && getenv("KGPC_DEBUG_ERRORS") != NULL && stmt != NULL)
+    {
+        fprintf(stderr,
+            "[KGPC_DEBUG_ERRORS] func_stmt_error type=%d line=%d col=%d src=%d ret=%d\n",
+            stmt->type, stmt->line_num, stmt->col_num, stmt->source_index, ret);
+    }
+    return ret;
 }
 
 static int semcheck_break_stmt(struct Statement *stmt)
@@ -3462,11 +3476,31 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
     /* Left side var assigns must abide by scoping rules */
     if (SEMSTMT_TIMINGS_ENABLED()) {
         double t0 = semstmt_now_ms();
+        int before_lhs = return_val;
         return_val += semcheck_stmt_expr_tag(&type_first, symtab, var, max_scope_lev, MUTATE);
         fprintf(stderr, "[timing] varassign lhs semcheck_stmt_expr_tag: %.2f ms (line=%d)\n",
                 semstmt_now_ms() - t0, stmt->line_num);
+        if (getenv("KGPC_DEBUG_ERRORS") != NULL && return_val > before_lhs && var != NULL)
+        {
+            fprintf(stderr,
+                "[KGPC_DEBUG_ERRORS] varassign_lhs_error line=%d expr_type=%d\n",
+                stmt->line_num, var->type);
+            if (var->type == EXPR_RECORD_ACCESS && var->expr_data.record_access_data.field_id != NULL)
+                fprintf(stderr, "[KGPC_DEBUG_ERRORS]   lhs record field=%s\n",
+                    var->expr_data.record_access_data.field_id);
+        }
     } else {
+        int before_lhs = return_val;
         return_val += semcheck_stmt_expr_tag(&type_first, symtab, var, max_scope_lev, MUTATE);
+        if (getenv("KGPC_DEBUG_ERRORS") != NULL && return_val > before_lhs && var != NULL)
+        {
+            fprintf(stderr,
+                "[KGPC_DEBUG_ERRORS] varassign_lhs_error line=%d expr_type=%d\n",
+                stmt->line_num, var->type);
+            if (var->type == EXPR_RECORD_ACCESS && var->expr_data.record_access_data.field_id != NULL)
+                fprintf(stderr, "[KGPC_DEBUG_ERRORS]   lhs record field=%s\n",
+                    var->expr_data.record_access_data.field_id);
+        }
     }
 
     if (var != NULL && var->type == EXPR_TYPECAST)
@@ -3557,11 +3591,37 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
     }
     if (SEMSTMT_TIMINGS_ENABLED()) {
         double t0 = semstmt_now_ms();
+        int before_rhs = return_val;
         return_val += semcheck_stmt_expr_tag(&type_second, symtab, expr, INT_MAX, NO_MUTATE);
         fprintf(stderr, "[timing] varassign rhs semcheck_stmt_expr_tag: %.2f ms (line=%d)\n",
                 semstmt_now_ms() - t0, stmt->line_num);
+        if (getenv("KGPC_DEBUG_ERRORS") != NULL && return_val > before_rhs && expr != NULL)
+        {
+            fprintf(stderr,
+                "[KGPC_DEBUG_ERRORS] varassign_rhs_error line=%d expr_type=%d\n",
+                stmt->line_num, expr->type);
+            if (expr->type == EXPR_FUNCTION_CALL && expr->expr_data.function_call_data.id != NULL)
+                fprintf(stderr, "[KGPC_DEBUG_ERRORS]   rhs func=%s\n",
+                    expr->expr_data.function_call_data.id);
+            if (expr->type == EXPR_RECORD_ACCESS && expr->expr_data.record_access_data.field_id != NULL)
+                fprintf(stderr, "[KGPC_DEBUG_ERRORS]   rhs record field=%s\n",
+                    expr->expr_data.record_access_data.field_id);
+        }
     } else {
+        int before_rhs = return_val;
         return_val += semcheck_stmt_expr_tag(&type_second, symtab, expr, INT_MAX, NO_MUTATE);
+        if (getenv("KGPC_DEBUG_ERRORS") != NULL && return_val > before_rhs && expr != NULL)
+        {
+            fprintf(stderr,
+                "[KGPC_DEBUG_ERRORS] varassign_rhs_error line=%d expr_type=%d\n",
+                stmt->line_num, expr->type);
+            if (expr->type == EXPR_FUNCTION_CALL && expr->expr_data.function_call_data.id != NULL)
+                fprintf(stderr, "[KGPC_DEBUG_ERRORS]   rhs func=%s\n",
+                    expr->expr_data.function_call_data.id);
+            if (expr->type == EXPR_RECORD_ACCESS && expr->expr_data.record_access_data.field_id != NULL)
+                fprintf(stderr, "[KGPC_DEBUG_ERRORS]   rhs record field=%s\n",
+                    expr->expr_data.record_access_data.field_id);
+        }
     }
 
     if (getenv("KGPC_DEBUG_SEMCHECK") != NULL && expr != NULL && expr->type == EXPR_FUNCTION_CALL &&
@@ -6498,7 +6558,7 @@ int semcheck_compoundstmt(SymTab_t *symtab, struct Statement *stmt, int max_scop
 
         if (stmt_list->cur != NULL)
         {
-            return_val += semcheck_stmt_main(symtab,
+            return_val += semcheck_stmt(symtab,
                 (struct Statement *)stmt_list->cur, max_scope_lev);
         }
 

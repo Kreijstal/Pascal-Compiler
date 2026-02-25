@@ -1227,6 +1227,38 @@ static void semcheck_print_error_prefix(const char *file_path, int line_num, int
     fprintf(stderr, ": ");
 }
 
+static int semcheck_debug_errors_enabled(void)
+{
+    static int cached = -1;
+    if (cached == -1)
+        cached = (getenv("KGPC_DEBUG_ERRORS") != NULL);
+    return cached;
+}
+
+static void semcheck_debug_error_step(const char *step, Tree_t *subprogram, int before, int after)
+{
+    if (!semcheck_debug_errors_enabled() || after <= before)
+        return;
+
+    const char *sub_id = NULL;
+    int sub_line = 0;
+    if (subprogram != NULL && subprogram->type == TREE_SUBPROGRAM)
+    {
+        sub_id = subprogram->tree_data.subprogram_data.id;
+        sub_line = subprogram->line_num;
+    }
+
+    fprintf(stderr,
+        "[KGPC_DEBUG_ERRORS] sub=%s sub_line=%d step=%s delta=%d err_line=%d err_col=%d err_src=%d\n",
+        sub_id != NULL ? sub_id : "<null>",
+        sub_line,
+        step != NULL ? step : "<null>",
+        after - before,
+        g_semcheck_error_line,
+        g_semcheck_error_col,
+        g_semcheck_error_source_index);
+}
+
 /* Helper function to print semantic error with source code context */
 void semantic_error(int line_num, int col_num, const char *format, ...)
 {
@@ -3019,6 +3051,16 @@ static KgpcType *build_function_return_type(Tree_t *subprogram, SymTab_t *symtab
     HashNode_t *type_node = NULL;
     if (subprogram->tree_data.subprogram_data.return_type_id != NULL)
     {
+        const char *owner_full = subprogram->tree_data.subprogram_data.owner_class_full;
+        const char *owner_outer = subprogram->tree_data.subprogram_data.owner_class_outer;
+        if (owner_full == NULL)
+            owner_full = subprogram->tree_data.subprogram_data.owner_class;
+        if (owner_full != NULL)
+        {
+            semcheck_maybe_qualify_nested_type(symtab, owner_full, owner_outer,
+                &subprogram->tree_data.subprogram_data.return_type_id,
+                &subprogram->tree_data.subprogram_data.return_type_ref);
+        }
         type_node = semcheck_find_type_node_with_kgpc_type_ref(symtab,
             subprogram->tree_data.subprogram_data.return_type_ref,
             subprogram->tree_data.subprogram_data.return_type_id);
@@ -3092,7 +3134,9 @@ static KgpcType *build_function_return_type(Tree_t *subprogram, SymTab_t *symtab
         symtab);
 }
 
-/* Forward declaration for type resolution helper used in const evaluation. */
+/* Forward declarations for type resolution helpers used in const evaluation. */
+static HashNode_t *find_type_node_with_range_metadata(SymTab_t *symtab,
+    const char *base_name, const struct TypeAlias *exclude_alias);
 static const char *resolve_type_to_base_name(SymTab_t *symtab,
     const QualifiedIdent *type_id,
     const char *type_name);
@@ -3763,7 +3807,21 @@ static const char *resolve_type_to_base_name(SymTab_t *symtab,
         HashNode_t *type_node = NULL;
         const char *lookup_name = type_name;
         char *qualified_name = NULL;
-        if (type_id != NULL)
+
+        /* Prefer unit-defined types when we have a structured unit qualification. */
+        if (type_id != NULL && type_id->count > 1)
+        {
+            const char *unit_name = type_id->segments != NULL ? type_id->segments[0] : NULL;
+            const char *base_name = qualified_ident_last(type_id);
+            if (unit_name != NULL && base_name != NULL && semcheck_is_unit_name(unit_name))
+            {
+                type_node = semcheck_find_type_node_with_unit_flag(symtab, base_name, 1);
+                if (type_node != NULL && type_node->hash_type != HASHTYPE_TYPE)
+                    type_node = NULL;
+            }
+        }
+
+        if (type_id != NULL && type_node == NULL)
         {
             qualified_name = qualified_ident_join(type_id, ".");
             if (qualified_name != NULL)
@@ -3771,7 +3829,8 @@ static const char *resolve_type_to_base_name(SymTab_t *symtab,
         }
 
         /* Resolve with preferred-type lookup (unit/scope-aware + nested suffix fallback). */
-        type_node = semcheck_find_preferred_type_node(symtab, lookup_name);
+        if (type_node == NULL)
+            type_node = semcheck_find_preferred_type_node(symtab, lookup_name);
 
         if (getenv("KGPC_DEBUG_RESOLVE_TYPE") != NULL)
         {
@@ -3796,7 +3855,7 @@ static const char *resolve_type_to_base_name(SymTab_t *symtab,
         }
         if (qualified_name != NULL)
             free(qualified_name);
-        
+
         if (type_node != NULL)
         {
             if (getenv("KGPC_DEBUG_RESOLVE_TYPE") != NULL)
@@ -3814,6 +3873,22 @@ static const char *resolve_type_to_base_name(SymTab_t *symtab,
                  * which are all mapped to LONGINT_TYPE by the predeclare_types function but need
                  * to retain their original type semantics for SizeOf/High/Low operations. */
                 struct TypeAlias *alias = kgpc_type_get_type_alias(kgpc_type);
+                if (alias != NULL && alias->target_type_id != NULL && type_id != NULL)
+                {
+                    char *qualified = qualified_ident_join(type_id, ".");
+                    if (qualified != NULL &&
+                        pascal_identifier_equals(alias->target_type_id, qualified))
+                    {
+                        HashNode_t *alt = semcheck_find_type_excluding_alias(symtab, qualified, alias);
+                        if (alt != NULL && alt->type != NULL)
+                        {
+                            type_node = alt;
+                            kgpc_type = alt->type;
+                            alias = kgpc_type_get_type_alias(kgpc_type);
+                        }
+                    }
+                    free(qualified);
+                }
                 if (getenv("KGPC_DEBUG_RESOLVE_TYPE") != NULL)
                 {
                     fprintf(stderr, "[resolve_type] '%s' kgpc_type kind=%d alias=%p\n",
@@ -3827,16 +3902,43 @@ static const char *resolve_type_to_base_name(SymTab_t *symtab,
                 }
                 if (alias != NULL)
                 {
+                    int allow_recursion = 1;
+                    if (alias->target_type_ref != NULL &&
+                        alias->target_type_ref->name != NULL &&
+                        type_id != NULL &&
+                        qualified_ident_equals_ci(alias->target_type_ref->name, type_id))
+                    {
+                        allow_recursion = 0;
+                    }
+                    if (alias->target_type_id != NULL &&
+                        pascal_identifier_equals(alias->target_type_id, input_name))
+                    {
+                        allow_recursion = 0;
+                    }
+                    if (alias->target_type_id != NULL &&
+                        type_name != NULL &&
+                        pascal_identifier_equals(alias->target_type_id, type_name))
+                    {
+                        allow_recursion = 0;
+                    }
+
+                    if (!allow_recursion && type_id != NULL)
+                    {
+                        const char *base_name = qualified_ident_last(type_id);
+                        HashNode_t *alt = find_type_node_with_range_metadata(symtab, base_name, alias);
+                        if (alt != NULL && alt->type != NULL)
+                        {
+                            kgpc_type = alt->type;
+                            alias = kgpc_type_get_type_alias(kgpc_type);
+                        }
+                    }
+
                     /* Recursively resolve via target_type_id if available.
                      * This will eventually reach a builtin type like "Word", "Byte", etc.
                      * which are handled by the builtin check at the top of this function. */
-                    if (alias->target_type_ref != NULL || alias->target_type_id != NULL)
+                    if (allow_recursion &&
+                        (alias->target_type_ref != NULL || alias->target_type_id != NULL))
                     {
-                        /* Prevent recursion on same type name */
-                        const char *alias_target = alias->target_type_id;
-                        if (alias_target != NULL && pascal_identifier_equals(alias_target, input_name))
-                            return input_name;
-                        
                         resolve_type_depth++;
                         const char *result = resolve_type_to_base_name(symtab,
                             alias->target_type_ref != NULL ? alias->target_type_ref->name : NULL,
@@ -3907,12 +4009,105 @@ static int resolve_range_bounds_for_type(SymTab_t *symtab, const char *type_name
             }
         }
 
-        if (alias->is_range && alias->range_known)
+        if (alias->range_known)
         {
             *out_low = alias->range_start;
             *out_high = alias->range_end;
             return 1;
         }
+    }
+
+    return 0;
+}
+
+static HashNode_t *find_type_node_with_range_metadata(SymTab_t *symtab,
+    const char *base_name, const struct TypeAlias *exclude_alias)
+{
+    if (symtab == NULL || base_name == NULL)
+        return NULL;
+
+    ListNode_t *matches = FindAllIdents(symtab, base_name);
+    HashNode_t *best = NULL;
+    ListNode_t *cur = matches;
+    while (cur != NULL)
+    {
+        HashNode_t *node = (HashNode_t *)cur->cur;
+        if (node != NULL && node->hash_type == HASHTYPE_TYPE && node->type != NULL)
+        {
+            struct TypeAlias *alias = kgpc_type_get_type_alias(node->type);
+            if (alias == NULL || alias == exclude_alias)
+            {
+                cur = cur->next;
+                continue;
+            }
+            if (alias->is_range && alias->range_known)
+            {
+                best = node;
+                break;
+            }
+            if (best == NULL && alias->base_type != UNKNOWN_TYPE)
+                best = node;
+        }
+        cur = cur->next;
+    }
+    if (matches != NULL)
+        DestroyList(matches);
+    return best;
+}
+
+static int resolve_range_bounds_for_type_ref(SymTab_t *symtab, const QualifiedIdent *type_ref,
+    long long *out_low, long long *out_high)
+{
+    if (symtab == NULL || type_ref == NULL || out_low == NULL || out_high == NULL)
+        return 0;
+
+    HashNode_t *type_node = NULL;
+    if (type_ref->count > 1)
+    {
+        const char *unit_name = type_ref->segments != NULL ? type_ref->segments[0] : NULL;
+        const char *base_name = qualified_ident_last(type_ref);
+        if (unit_name != NULL && base_name != NULL && semcheck_is_unit_name(unit_name))
+        {
+            type_node = semcheck_find_type_node_with_unit_flag(symtab, base_name, 1);
+        }
+    }
+    if (type_node == NULL)
+    {
+        if (semcheck_find_ident_with_qualified_fallback_ref(&type_node, symtab, type_ref) < 0 ||
+            type_node == NULL)
+            return 0;
+    }
+    if (type_node->hash_type != HASHTYPE_TYPE)
+        return 0;
+
+    struct TypeAlias *alias = get_type_alias_from_node(type_node);
+    if (alias != NULL && alias->target_type_id != NULL)
+    {
+        char *qualified = qualified_ident_join(type_ref, ".");
+        if (qualified != NULL &&
+            pascal_identifier_equals(alias->target_type_id, qualified))
+        {
+            HashNode_t *alt = semcheck_find_type_excluding_alias(symtab, qualified, alias);
+            if (alt != NULL && alt->hash_type == HASHTYPE_TYPE)
+            {
+                type_node = alt;
+                alias = get_type_alias_from_node(type_node);
+            }
+        }
+        free(qualified);
+    }
+    if (alias == NULL || !alias->range_known)
+    {
+        const char *base_name = qualified_ident_last(type_ref);
+        HashNode_t *alt = find_type_node_with_range_metadata(symtab, base_name, alias);
+        if (alt != NULL)
+            alias = get_type_alias_from_node(alt);
+    }
+    if (alias != NULL && alias->range_known)
+    {
+        *out_low = alias->range_start;
+        *out_high = alias->range_end;
+        return 1;
     }
 
     return 0;
@@ -4421,8 +4616,10 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                     const char *lookup_name = type_name;
                     long long range_low = 0;
                     long long range_high = 0;
-                    if (lookup_name != NULL &&
-                        resolve_range_bounds_for_type(symtab, lookup_name, &range_low, &range_high))
+                    if ((type_id_ref != NULL &&
+                         resolve_range_bounds_for_type_ref(symtab, type_id_ref, &range_low, &range_high)) ||
+                        (lookup_name != NULL &&
+                         resolve_range_bounds_for_type(symtab, lookup_name, &range_low, &range_high)))
                     {
                         *out_value = range_high;
                         status = 0;
@@ -4542,8 +4739,10 @@ high_cleanup:
                     const char *lookup_name = type_name;
                     long long range_low = 0;
                     long long range_high = 0;
-                    if (lookup_name != NULL &&
-                        resolve_range_bounds_for_type(symtab, lookup_name, &range_low, &range_high))
+                    if ((type_id_ref != NULL &&
+                         resolve_range_bounds_for_type_ref(symtab, type_id_ref, &range_low, &range_high)) ||
+                        (lookup_name != NULL &&
+                         resolve_range_bounds_for_type(symtab, lookup_name, &range_low, &range_high)))
                     {
                         *out_value = range_low;
                         status = 0;
@@ -5609,6 +5808,40 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                         apply_builtin_integer_alias_metadata(alias, alias->target_type_id);
                     else if (type_id != NULL)
                         apply_builtin_integer_alias_metadata(alias, type_id);
+
+                    /* Predeclare range aliases early so Low/High on subranges work in consts. */
+                    if (alias->is_range || alias->range_known)
+                    {
+                        int base_tag = alias->base_type != UNKNOWN_TYPE ? alias->base_type : INT_TYPE;
+                        KgpcType *kgpc_type = NULL;
+                        if (alias->storage_size > 0)
+                            kgpc_type = create_primitive_type_with_size(base_tag, (int)alias->storage_size);
+                        else
+                            kgpc_type = create_primitive_type(base_tag);
+                        if (kgpc_type != NULL)
+                        {
+                            kgpc_type_set_type_alias(kgpc_type, alias);
+                            if (tree->tree_data.type_decl_data.kgpc_type == NULL)
+                            {
+                                tree->tree_data.type_decl_data.kgpc_type = kgpc_type;
+                                kgpc_type_retain(kgpc_type);
+                            }
+                            int result = PushTypeOntoScope_Typed(symtab, (char *)type_id, kgpc_type);
+                            if (result > 0)
+                                errors += result;
+                            else
+                            {
+                                HashNode_t *type_node = semcheck_find_type_node_with_unit_flag(symtab,
+                                    type_id, tree->tree_data.type_decl_data.defined_in_unit);
+                                if (type_node != NULL)
+                                    mark_hashnode_unit_info(symtab, type_node,
+                                        tree->tree_data.type_decl_data.defined_in_unit,
+                                        tree->tree_data.type_decl_data.unit_is_public);
+                            }
+                        }
+                        cur = cur->next;
+                        continue;
+                    }
                     
                     /* Handle inline record aliases (e.g., generic specializations) */
                     if (alias->inline_record_type != NULL)
@@ -12891,7 +13124,9 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
          * build it now and update the existing declaration. */
         if (return_kgpc_type == NULL)
         {
+            int before_ret = return_val;
             return_kgpc_type = build_function_return_type(subprogram, symtab, &return_val, 0);
+            semcheck_debug_error_step("build_return_type", subprogram, before_ret, return_val);
 #ifdef DEBUG
             if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_subprogram %s error after build_function_return_type: %d\n", subprogram->tree_data.subprogram_data.id, return_val);
 #endif
@@ -13152,7 +13387,11 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             }
         }
     }
-    return_val += semcheck_decls(symtab, subprogram->tree_data.subprogram_data.args_var);
+    {
+        int before_args = return_val;
+        return_val += semcheck_decls(symtab, subprogram->tree_data.subprogram_data.args_var);
+        semcheck_debug_error_step("args_decls", subprogram, before_args, return_val);
+    }
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_subprogram %s error after args: %d\n", subprogram->tree_data.subprogram_data.id, return_val);
 #endif
@@ -13281,18 +13520,26 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         }
     }
 
-    return_val += predeclare_enum_literals(symtab, subprogram->tree_data.subprogram_data.type_declarations);
-    /* Pre-declare types so they're available for const expressions like High(MyType) */
-    return_val += predeclare_types(symtab, subprogram->tree_data.subprogram_data.type_declarations);
-    return_val += semcheck_const_decls(symtab, subprogram->tree_data.subprogram_data.const_declarations);
-    return_val += semcheck_type_decls(symtab, subprogram->tree_data.subprogram_data.type_declarations);
-    return_val += semcheck_decls(symtab, subprogram->tree_data.subprogram_data.declarations);
+    {
+        int before_local = return_val;
+        return_val += predeclare_enum_literals(symtab, subprogram->tree_data.subprogram_data.type_declarations);
+        /* Pre-declare types so they're available for const expressions like High(MyType) */
+        return_val += predeclare_types(symtab, subprogram->tree_data.subprogram_data.type_declarations);
+        return_val += semcheck_const_decls(symtab, subprogram->tree_data.subprogram_data.const_declarations);
+        return_val += semcheck_type_decls(symtab, subprogram->tree_data.subprogram_data.type_declarations);
+        return_val += semcheck_decls(symtab, subprogram->tree_data.subprogram_data.declarations);
+        semcheck_debug_error_step("local_decls", subprogram, before_local, return_val);
+    }
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_subprogram %s error after decls: %d\n", subprogram->tree_data.subprogram_data.id, return_val);
 #endif
 
-    return_val += semcheck_subprograms(symtab, subprogram->tree_data.subprogram_data.subprograms,
-                    new_max_scope, subprogram);
+    {
+        int before_nested = return_val;
+        return_val += semcheck_subprograms(symtab, subprogram->tree_data.subprogram_data.subprograms,
+                        new_max_scope, subprogram);
+        semcheck_debug_error_step("nested_subprograms", subprogram, before_nested, return_val);
+    }
 
     body = subprogram->tree_data.subprogram_data.statement_list;
     if (body == NULL)
@@ -13308,9 +13555,11 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     /* Functions cannot have side effects, so need to call a special function in that case */
     if(sub_type == TREE_SUBPROGRAM_PROC)
     {
-        return_val += semcheck_stmt(symtab,
-                body,
-                new_max_scope);
+        {
+            int before_body = return_val;
+            return_val += semcheck_stmt(symtab, body, new_max_scope);
+            semcheck_debug_error_step("proc_body", subprogram, before_body, return_val);
+        }
     }
     else
     {
@@ -13318,9 +13567,13 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                     == 0);
 
         ResetHashNodeStatus(hash_return);
-        int func_stmt_ret = semcheck_func_stmt(symtab,
-                body, new_max_scope);
-        return_val += func_stmt_ret;
+        int func_stmt_ret = 0;
+        {
+            int before_body = return_val;
+            func_stmt_ret = semcheck_func_stmt(symtab, body, new_max_scope);
+            return_val += func_stmt_ret;
+            semcheck_debug_error_step("func_body", subprogram, before_body, return_val);
+        }
 #ifdef DEBUG
         if (func_stmt_ret > 0) fprintf(stderr, "DEBUG: semcheck_subprogram %s error after semcheck_func_stmt: %d\n", subprogram->tree_data.subprogram_data.id, func_stmt_ret);
 #endif

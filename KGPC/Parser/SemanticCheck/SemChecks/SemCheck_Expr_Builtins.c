@@ -2239,7 +2239,7 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
                     have_bounds = 1;
                 }
             }
-            if (!have_bounds && alias != NULL && alias->is_range && alias->range_known)
+            if (!have_bounds && alias != NULL && alias->range_known)
             {
                 low = alias->range_start;
                 high = alias->range_end;
@@ -2254,7 +2254,7 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
                 if (target_node != NULL && target_node->hash_type == HASHTYPE_TYPE)
                 {
                     struct TypeAlias *target_alias = get_type_alias_from_node(target_node);
-                    if (target_alias != NULL && target_alias->is_range && target_alias->range_known)
+                    if (target_alias != NULL && target_alias->range_known)
                     {
                         low = target_alias->range_start;
                         high = target_alias->range_end;
@@ -2577,6 +2577,7 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
     struct Expression *arg = (struct Expression *)args->cur;
     int error_count = 0;
     long long computed_size = 0;
+    int size_computed = 0;
 
     if (arg != NULL && arg->type == EXPR_VAR_ID)
     {
@@ -2766,17 +2767,35 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
         if (arg != NULL && arg->resolved_kgpc_type != NULL)
         {
             long long size = kgpc_type_sizeof(arg->resolved_kgpc_type);
+            if (getenv("KGPC_DEBUG_ERRORS") != NULL)
+            {
+                fprintf(stderr,
+                    "[KGPC_DEBUG_ERRORS] sizeof kgpc_size=%lld\n",
+                    size);
+            }
             if (size >= 0)
             {
                 computed_size = size;
+                size_computed = 1;
             }
             else
             {
+                if (getenv("KGPC_DEBUG_ERRORS") != NULL)
+                    fprintf(stderr, "[KGPC_DEBUG_ERRORS] sizeof fallback path\n");
                 KgpcType *arg_kgpc_type = NULL;
                 error_count += semcheck_expr_with_type(&arg_kgpc_type, symtab, arg, max_scope_lev, NO_MUTATE);
                 if (error_count == 0)
                 {
-                    if (arg != NULL && arg->type == EXPR_POINTER_DEREF &&
+                    if (arg_kgpc_type != NULL)
+                    {
+                        long long fallback_size = kgpc_type_sizeof(arg_kgpc_type);
+                        if (fallback_size >= 0)
+                        {
+                            computed_size = fallback_size;
+                            size_computed = 1;
+                        }
+                    }
+                    if (!size_computed && arg != NULL && arg->type == EXPR_POINTER_DEREF &&
                         arg->expr_data.pointer_deref_data.pointer_expr != NULL)
                     {
                         KgpcType *ptr_type = NULL;
@@ -2790,19 +2809,24 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
                             if (ptsize >= 0)
                             {
                                 computed_size = ptsize;
+                                size_computed = 1;
                             }
                             else
                             {
                                 error_count += sizeof_from_type_ref(symtab,
                                     semcheck_tag_from_kgpc(ptr_type->info.points_to), NULL, &computed_size,
                                     0, expr->line_num);
+                                if (error_count == 0)
+                                    size_computed = 1;
                             }
                         }
                     }
-                    else if (arg_kgpc_type != NULL)
+                    else if (!size_computed && arg_kgpc_type != NULL)
                     {
                         error_count += sizeof_from_type_ref(symtab, semcheck_tag_from_kgpc(arg_kgpc_type), NULL, &computed_size,
                             0, expr->line_num);
+                        if (error_count == 0)
+                            size_computed = 1;
                     }
                 }
             }
@@ -2813,7 +2837,16 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
             error_count += semcheck_expr_with_type(&arg_kgpc_type, symtab, arg, max_scope_lev, NO_MUTATE);
             if (error_count == 0)
             {
-                if (arg != NULL && arg->type == EXPR_POINTER_DEREF &&
+                if (arg_kgpc_type != NULL)
+                {
+                    long long fallback_size = kgpc_type_sizeof(arg_kgpc_type);
+                    if (fallback_size >= 0)
+                    {
+                        computed_size = fallback_size;
+                        size_computed = 1;
+                    }
+                }
+                if (!size_computed && arg != NULL && arg->type == EXPR_POINTER_DEREF &&
                     arg->expr_data.pointer_deref_data.pointer_expr != NULL)
                 {
                     KgpcType *ptr_type = NULL;
@@ -2827,19 +2860,24 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
                         if (ptsize >= 0)
                         {
                             computed_size = ptsize;
+                            size_computed = 1;
                         }
                         else
                         {
                             error_count += sizeof_from_type_ref(symtab,
                                 semcheck_tag_from_kgpc(ptr_type->info.points_to), NULL, &computed_size,
                                 0, expr->line_num);
+                            if (error_count == 0)
+                                size_computed = 1;
                         }
                     }
                 }
-                else if (arg_kgpc_type != NULL)
+                else if (!size_computed && arg_kgpc_type != NULL)
                 {
                     error_count += sizeof_from_type_ref(symtab, semcheck_tag_from_kgpc(arg_kgpc_type), NULL, &computed_size,
                         0, expr->line_num);
+                    if (error_count == 0)
+                        size_computed = 1;
                 }
             }
         }
@@ -2877,6 +2915,33 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
         semcheck_expr_set_resolved_type(expr, LONGINT_TYPE);
         *type_return = LONGINT_TYPE;
         return 0;
+    }
+
+    if (getenv("KGPC_DEBUG_ERRORS") != NULL)
+    {
+        const char *arg_type_str = "<null>";
+        if (arg != NULL && arg->resolved_kgpc_type != NULL)
+            arg_type_str = kgpc_type_to_string(arg->resolved_kgpc_type);
+        fprintf(stderr,
+            "[KGPC_DEBUG_ERRORS] sizeof_error line=%d arg_type=%d kgpc=%s\n",
+            expr->line_num, arg != NULL ? arg->type : -1, arg_type_str);
+        if (arg != NULL && arg->resolved_kgpc_type != NULL &&
+            arg->resolved_kgpc_type->kind == TYPE_KIND_ARRAY)
+        {
+            KgpcType *elem = arg->resolved_kgpc_type->info.array_info.element_type;
+            fprintf(stderr,
+                "[KGPC_DEBUG_ERRORS] sizeof_error array_bounds=%d..%d elem_kind=%d elem=%s\n",
+                arg->resolved_kgpc_type->info.array_info.start_index,
+                arg->resolved_kgpc_type->info.array_info.end_index,
+                elem != NULL ? elem->kind : -1,
+                elem != NULL ? kgpc_type_to_string(elem) : "<null>");
+        }
+        if (arg != NULL && arg->type == EXPR_RECORD_ACCESS &&
+            arg->expr_data.record_access_data.field_id != NULL)
+        {
+            fprintf(stderr, "[KGPC_DEBUG_ERRORS] sizeof_error field=%s\n",
+                arg->expr_data.record_access_data.field_id);
+        }
     }
 
     *type_return = UNKNOWN_TYPE;
