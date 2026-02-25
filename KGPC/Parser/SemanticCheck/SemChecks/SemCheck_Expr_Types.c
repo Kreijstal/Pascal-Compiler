@@ -3115,6 +3115,18 @@ FIELD_RESOLVED:
             elem_type = create_primitive_type(field_desc->array_element_type);
             elem_owned = 1;
         }
+        if (elem_type == NULL && expr->array_element_type != UNKNOWN_TYPE)
+        {
+            elem_type = create_primitive_type(expr->array_element_type);
+            elem_owned = 1;
+        }
+        if (elem_type == NULL && expr->array_element_type_id != NULL)
+        {
+            HashNode_t *elem_node = semcheck_find_type_node_with_kgpc_type_ref(
+                symtab, expr->array_element_type_ref, expr->array_element_type_id);
+            if (elem_node != NULL && elem_node->type != NULL)
+                elem_type = elem_node->type;
+        }
         if (elem_type != NULL)
         {
             if (!elem_owned)
