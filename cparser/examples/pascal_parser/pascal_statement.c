@@ -467,6 +467,7 @@ static combinator_t* make_case_expression(combinator_t** expr_parser) {
         binary_integer(PASCAL_T_INTEGER),
         octal_integer(PASCAL_T_INTEGER),
         integer(PASCAL_T_INTEGER),
+        pascal_string(PASCAL_T_STRING),
         char_literal(PASCAL_T_CHAR),
         control_char_literal(PASCAL_T_CHAR),
         char_code_literal(PASCAL_T_CHAR_CODE),

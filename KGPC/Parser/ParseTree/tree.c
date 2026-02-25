@@ -2408,7 +2408,9 @@ Tree_t *mk_typealiasdecl(int line_num, char *id, int is_array, int actual_type, 
             alias->array_element_type_id = NULL;
         if (alias->array_element_type_id != NULL)
         {
-            QualifiedIdent *qid = qualified_ident_from_single(alias->array_element_type_id);
+            QualifiedIdent *qid = qualified_ident_from_dotted(alias->array_element_type_id);
+            if (qid == NULL)
+                qid = qualified_ident_from_single(alias->array_element_type_id);
             if (qid != NULL)
                 alias->array_element_type_ref = type_ref_create(qid, NULL, 0);
         }
@@ -2422,7 +2424,9 @@ Tree_t *mk_typealiasdecl(int line_num, char *id, int is_array, int actual_type, 
             alias->target_type_id = NULL;
         if (alias->target_type_id != NULL)
         {
-            QualifiedIdent *qid = qualified_ident_from_single(alias->target_type_id);
+            QualifiedIdent *qid = qualified_ident_from_dotted(alias->target_type_id);
+            if (qid == NULL)
+                qid = qualified_ident_from_single(alias->target_type_id);
             if (qid != NULL)
                 alias->target_type_ref = type_ref_create(qid, NULL, 0);
         }

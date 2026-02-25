@@ -1261,6 +1261,47 @@ static ListNode_t *codegen_materialize_array_literal(struct Expression *expr,
         element_size = DOUBLEWORD;
 
     int element_count = expr->expr_data.array_literal_data.element_count;
+    if (element_count == 0)
+    {
+        const int pointer_bytes = CODEGEN_POINTER_SIZE_BYTES;
+        int descriptor_size = codegen_expr_align_to(2 * pointer_bytes, pointer_bytes);
+        if (expr->array_element_size > 0)
+        {
+            int candidate = expr->array_element_size * 2;
+            if (descriptor_size < candidate)
+                descriptor_size = codegen_expr_align_to(candidate, pointer_bytes);
+        }
+        StackNode_t *desc_slot = codegen_alloc_temp_bytes("arr_lit_desc", descriptor_size);
+        if (desc_slot == NULL)
+            return inst_list;
+
+        Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (addr_reg == NULL)
+        {
+            codegen_report_error(ctx, "ERROR: Unable to allocate register for array literal descriptor.");
+            return inst_list;
+        }
+
+        char buffer[128];
+        snprintf(buffer, sizeof(buffer), "\tmovq\t$0, -%d(%%rbp)\n", desc_slot->offset);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t$0, -%d(%%rbp)\n", desc_slot->offset - pointer_bytes);
+        inst_list = add_inst(inst_list, buffer);
+
+        int field_count = descriptor_size / pointer_bytes;
+        for (int field = 2; field < field_count; ++field)
+        {
+            int field_offset = desc_slot->offset - field * pointer_bytes;
+            snprintf(buffer, sizeof(buffer), "\tmovq\t$0, -%d(%%rbp)\n", field_offset);
+            inst_list = add_inst(inst_list, buffer);
+        }
+
+        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n", desc_slot->offset, addr_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+
+        *out_reg = addr_reg;
+        return inst_list;
+    }
     int data_size = codegen_expr_align_to(element_count * element_size, DOUBLEWORD);
     StackNode_t *data_slot = codegen_alloc_temp_bytes("arr_lit_data", data_size);
     if (data_slot == NULL)

@@ -1949,6 +1949,8 @@ void init_pascal_unit_parser(combinator_t** p) {
         token(create_keyword_parser("cdecl", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("stdcall", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("register", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("cppdecl", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("mwpascal", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("export", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("external", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("weakexternal", PASCAL_T_IDENTIFIER)),
@@ -2599,6 +2601,8 @@ void init_pascal_unit_parser(combinator_t** p) {
     // Initialize the lazy nested procedure/function reference now that impls are defined
     // This allows var sections to appear after nested functions in outer function bodies
     combinator_t* nested_proc_or_func = multi(new_combinator(), PASCAL_T_NONE,
+        headeronly_procedure_decl,
+        headeronly_function_decl,
         procedure_impl,
         function_impl,
         NULL
@@ -3677,6 +3681,8 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         token(keyword_ci("cdecl")),
         token(keyword_ci("stdcall")),
         token(keyword_ci("register")),
+        token(keyword_ci("cppdecl")),
+        token(keyword_ci("mwpascal")),
         token(keyword_ci("export")),
         token(keyword_ci("far")),
         token(keyword_ci("near")),

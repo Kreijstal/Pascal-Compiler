@@ -1023,6 +1023,13 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
             if (rhs_elem != NULL && kgpc_type_equals(lhs_points_to, rhs_elem))
                 return 1;
         }
+        if (lhs_points_to != NULL && rhs_points_to != NULL &&
+            rhs_points_to->kind == TYPE_KIND_ARRAY &&
+            lhs_points_to->kind == TYPE_KIND_PRIMITIVE &&
+            lhs_points_to->info.primitive_type_tag == BYTE_TYPE)
+        {
+            return 1;
+        }
     }
 
     /* Allow assigning procedure values to strings in helper conversions

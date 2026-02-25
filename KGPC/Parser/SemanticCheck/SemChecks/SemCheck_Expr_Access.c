@@ -273,6 +273,13 @@ int semcheck_arrayaccess(int *type_return,
                 return return_val + property_result;
         }
     }
+    else if (array_expr->type == EXPR_RECORD_ACCESS)
+    {
+        int property_result = semcheck_try_indexed_property_getter(type_return, symtab,
+            expr, max_scope_lev, mutating);
+        if (property_result >= 0)
+            return return_val + property_result;
+    }
 
     int base_type = UNKNOWN_TYPE;
     KgpcType *base_kgpc_type = NULL;
@@ -4931,6 +4938,229 @@ int semcheck_try_indexed_property_getter(int *type_return,
     else if (array_expr->type == EXPR_FUNCTION_CALL &&
              array_expr->expr_data.function_call_data.args_expr == NULL)
         base_id = array_expr->expr_data.function_call_data.id;
+
+    if (base_id == NULL && array_expr->type == EXPR_RECORD_ACCESS)
+    {
+        struct Expression *record_expr = array_expr->expr_data.record_access_data.record_expr;
+        const char *field_id = array_expr->expr_data.record_access_data.field_id;
+        if (record_expr == NULL || field_id == NULL || index_expr == NULL)
+            return -1;
+
+        KgpcType *record_type = NULL;
+        semcheck_expr_with_type(&record_type, symtab, record_expr, max_scope_lev, mutating);
+
+        struct RecordType *record_info = NULL;
+        if (record_type != NULL && kgpc_type_is_pointer(record_type) &&
+            record_type->info.points_to != NULL && kgpc_type_is_record(record_type->info.points_to))
+        {
+            record_info = kgpc_type_get_record(record_type->info.points_to);
+        }
+        else if (record_type != NULL && kgpc_type_is_record(record_type))
+        {
+            record_info = kgpc_type_get_record(record_type);
+        }
+        if (record_info == NULL)
+            return -1;
+
+        struct RecordType *property_owner = NULL;
+        struct ClassProperty *property = semcheck_find_class_property(symtab,
+            record_info, field_id, &property_owner);
+        if (property == NULL || property->read_accessor == NULL || !property->is_indexed)
+            return -1;
+
+        /* If property read accessor is a field, rewrite and let array access proceed normally. */
+        struct RecordField *read_field =
+            semcheck_find_class_field_including_hidden(symtab,
+                record_info, property->read_accessor, NULL);
+        if (read_field != NULL)
+        {
+            if (!pascal_identifier_equals(field_id, property->read_accessor))
+            {
+                free(array_expr->expr_data.record_access_data.field_id);
+                array_expr->expr_data.record_access_data.field_id = strdup(property->read_accessor);
+                if (array_expr->expr_data.record_access_data.field_id == NULL)
+                    return -1;
+            }
+            return -1;
+        }
+
+        HashNode_t *getter_node = semcheck_find_class_method(symtab,
+            property_owner != NULL ? property_owner : record_info,
+            property->read_accessor, NULL);
+        if (getter_node == NULL)
+            return -1;
+
+        int is_static_getter = 0;
+        if (property_owner != NULL && property_owner->type_id != NULL &&
+            getter_node->id != NULL)
+        {
+            is_static_getter = from_cparser_is_method_static(property_owner->type_id,
+                getter_node->id);
+        }
+        if (!is_static_getter && getter_node->type != NULL &&
+            getter_node->type->kind == TYPE_KIND_PROCEDURE)
+        {
+            ListNode_t *params = kgpc_type_get_procedure_params(getter_node->type);
+            if (params == NULL)
+                is_static_getter = 1;
+        }
+
+        /* Detach record_expr from array_expr before destroying it. */
+        array_expr->expr_data.record_access_data.record_expr = NULL;
+        destroy_expr(array_expr);
+        expr->expr_data.array_access_data.array_expr = NULL;
+        expr->expr_data.array_access_data.index_expr = NULL;
+
+        ListNode_t *args_head = NULL;
+        ListNode_t *args_tail = NULL;
+        if (!is_static_getter)
+        {
+            args_head = CreateListNode(record_expr, LIST_EXPR);
+            if (args_head == NULL)
+                return -1;
+            args_tail = args_head;
+        }
+        else
+        {
+            destroy_expr(record_expr);
+        }
+
+        ListNode_t *index_node = CreateListNode(index_expr, LIST_EXPR);
+        if (index_node == NULL)
+            return -1;
+        if (args_tail != NULL)
+            args_tail->next = index_node;
+        else
+            args_head = index_node;
+
+        char *id_copy = getter_node->id != NULL ? strdup(getter_node->id) : NULL;
+        char *mangled_copy = NULL;
+        if (getter_node->mangled_id != NULL)
+            mangled_copy = strdup(getter_node->mangled_id);
+
+        if ((getter_node->id != NULL && id_copy == NULL) ||
+            (getter_node->mangled_id != NULL && mangled_copy == NULL))
+        {
+            free(id_copy);
+            free(mangled_copy);
+            return -1;
+        }
+
+        expr->type = EXPR_FUNCTION_CALL;
+        memset(&expr->expr_data.function_call_data, 0, sizeof(expr->expr_data.function_call_data));
+        expr->expr_data.function_call_data.id = id_copy;
+        expr->expr_data.function_call_data.mangled_id = mangled_copy;
+        expr->expr_data.function_call_data.args_expr = args_head;
+        expr->expr_data.function_call_data.resolved_func = NULL;
+        expr->expr_data.function_call_data.call_hash_type = getter_node->hash_type;
+        semcheck_expr_set_call_kgpc_type(expr, getter_node->type, 0);
+        expr->expr_data.function_call_data.is_call_info_valid = 1;
+        semcheck_expr_set_resolved_type(expr, UNKNOWN_TYPE);
+        expr->is_array_expr = 0;
+        expr->array_element_type = UNKNOWN_TYPE;
+        expr->array_element_type_id = NULL;
+        expr->array_element_record_type = NULL;
+        expr->array_element_size = 0;
+
+        return semcheck_expr_legacy_tag(type_return, symtab, expr, max_scope_lev, mutating);
+    }
+
+    if (base_id != NULL && index_expr != NULL)
+    {
+        HashNode_t *self_node = NULL;
+        if (FindIdent(&self_node, symtab, "Self") == 0 && self_node != NULL)
+        {
+            struct RecordType *self_record = get_record_type_from_node(self_node);
+            if (self_record != NULL)
+            {
+                struct RecordType *property_owner = NULL;
+                struct ClassProperty *property = semcheck_find_class_property(symtab,
+                    self_record, base_id, &property_owner);
+                if (property != NULL && property->read_accessor != NULL && property->is_indexed)
+                {
+                    HashNode_t *getter_node = semcheck_find_class_method(symtab,
+                        property_owner != NULL ? property_owner : self_record,
+                        property->read_accessor, NULL);
+                    if (getter_node != NULL)
+                    {
+                        int is_static_getter = 0;
+                        if (property_owner != NULL && property_owner->type_id != NULL &&
+                            getter_node->id != NULL)
+                        {
+                            is_static_getter = from_cparser_is_method_static(property_owner->type_id,
+                                getter_node->id);
+                        }
+                        if (!is_static_getter && getter_node->type != NULL &&
+                            getter_node->type->kind == TYPE_KIND_PROCEDURE)
+                        {
+                            ListNode_t *params = kgpc_type_get_procedure_params(getter_node->type);
+                            if (params == NULL)
+                                is_static_getter = 1;
+                        }
+
+                        struct Expression *self_expr = NULL;
+                        if (!is_static_getter)
+                            self_expr = mk_varid(expr->line_num, strdup("Self"));
+
+                        destroy_expr(array_expr);
+                        expr->expr_data.array_access_data.array_expr = NULL;
+                        expr->expr_data.array_access_data.index_expr = NULL;
+
+                        ListNode_t *args_head = NULL;
+                        ListNode_t *args_tail = NULL;
+                        if (!is_static_getter)
+                        {
+                            if (self_expr == NULL)
+                                return -1;
+                            args_head = CreateListNode(self_expr, LIST_EXPR);
+                            if (args_head == NULL)
+                                return -1;
+                            args_tail = args_head;
+                        }
+
+                        ListNode_t *index_node = CreateListNode(index_expr, LIST_EXPR);
+                        if (index_node == NULL)
+                            return -1;
+                        if (args_tail != NULL)
+                            args_tail->next = index_node;
+                        else
+                            args_head = index_node;
+
+                        char *id_copy = getter_node->id != NULL ? strdup(getter_node->id) : NULL;
+                        char *mangled_copy = NULL;
+                        if (getter_node->mangled_id != NULL)
+                            mangled_copy = strdup(getter_node->mangled_id);
+
+                        if ((getter_node->id != NULL && id_copy == NULL) ||
+                            (getter_node->mangled_id != NULL && mangled_copy == NULL))
+                        {
+                            free(id_copy);
+                            free(mangled_copy);
+                            return -1;
+                        }
+
+                        expr->type = EXPR_FUNCTION_CALL;
+                        memset(&expr->expr_data.function_call_data, 0, sizeof(expr->expr_data.function_call_data));
+                        expr->expr_data.function_call_data.id = id_copy;
+                        expr->expr_data.function_call_data.mangled_id = mangled_copy;
+                        expr->expr_data.function_call_data.args_expr = args_head;
+                        expr->expr_data.function_call_data.resolved_func = NULL;
+                        expr->expr_data.function_call_data.call_hash_type = getter_node->hash_type;
+                        semcheck_expr_set_call_kgpc_type(expr, getter_node->type, 0);
+                        expr->expr_data.function_call_data.is_call_info_valid = 1;
+                        semcheck_expr_set_resolved_type(expr, UNKNOWN_TYPE);
+                        expr->is_array_expr = 0;
+                        expr->array_element_type = UNKNOWN_TYPE;
+                        expr->array_element_type_id = NULL;
+                        expr->array_element_record_type = NULL;
+                        expr->array_element_size = 0;
+
+                        return semcheck_expr_legacy_tag(type_return, symtab, expr, max_scope_lev, mutating);
+                    }
+                }
+            }
+        }
+    }
 
     if (base_id == NULL || index_expr == NULL)
         return -1;

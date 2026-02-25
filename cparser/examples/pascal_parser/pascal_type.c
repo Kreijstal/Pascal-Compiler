@@ -490,16 +490,17 @@ static combinator_t* create_property_decl_parser(void) {
         NULL
     ));
 
-    combinator_t* property_indexer = optional(between(
+    combinator_t* property_indexer = optional(seq(new_combinator(), PASCAL_T_PARAM_LIST,
         token(match("[")),
-        token(match("]")),
         sep_by(seq(new_combinator(), PASCAL_T_NONE,
             property_indexer_modifier,
             sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
             token(match(":")),
             create_record_field_type_spec(),
             NULL
-        ), token(match(";")))
+        ), token(match(";"))),
+        token(match("]")),
+        NULL
     ));
 
     return seq(new_combinator(), PASCAL_T_PROPERTY_DECL,
@@ -547,6 +548,15 @@ static combinator_t* create_property_decl_parser(void) {
         )),
         NULL
     );
+}
+
+static combinator_t* create_record_field_attribute_parser(void) {
+    return many(seq(new_combinator(), PASCAL_T_NONE,
+        token(match("[")),
+        sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
+        token(match("]")),
+        NULL
+    ));
 }
 
 combinator_t* class_type(tag_t tag) {
@@ -701,16 +711,17 @@ combinator_t* class_type(tag_t tag) {
         NULL
     ));
 
-    combinator_t* property_indexer = optional(between(
+    combinator_t* property_indexer = optional(seq(new_combinator(), PASCAL_T_PARAM_LIST,
         token(match("[")),
-        token(match("]")),
         sep_by(seq(new_combinator(), PASCAL_T_NONE,
             property_indexer_modifier,
             sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
             token(match(":")),
             create_record_field_type_spec(),
             NULL
-        ), token(match(";")))
+        ), token(match(";"))),
+        token(match("]")),
+        NULL
     ));
 
     combinator_t* property_decl = seq(new_combinator(), PASCAL_T_PROPERTY_DECL,
@@ -887,15 +898,16 @@ combinator_t* class_type(tag_t tag) {
         NULL
     );
 
-    combinator_t* nested_property_indexer = optional(between(
+    combinator_t* nested_property_indexer = optional(seq(new_combinator(), PASCAL_T_PARAM_LIST,
         token(match("[")),
-        token(match("]")),
         sep_by(seq(new_combinator(), PASCAL_T_NONE,
             sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
             token(match(":")),
             create_record_field_type_spec(),
             NULL
-        ), token(match(";")))
+        ), token(match(";"))),
+        token(match("]")),
+        NULL
     ));
 
     combinator_t* nested_property_decl = seq(new_combinator(), PASCAL_T_NONE,
@@ -1132,16 +1144,17 @@ combinator_t* interface_type(tag_t tag) {
         NULL
     ));
 
-    combinator_t* interface_property_indexer = optional(between(
+    combinator_t* interface_property_indexer = optional(seq(new_combinator(), PASCAL_T_PARAM_LIST,
         token(match("[")),
-        token(match("]")),
         sep_by(seq(new_combinator(), PASCAL_T_NONE,
             interface_property_indexer_modifier,
             sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
             token(match(":")),
             create_record_field_type_spec(),
             NULL
-        ), token(match(";")))
+        ), token(match(";"))),
+        token(match("]")),
+        NULL
     ));
 
     combinator_t* property_decl = seq(new_combinator(), PASCAL_T_PROPERTY_DECL,
@@ -1728,15 +1741,10 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
         NULL
     ));
     
-    combinator_t* field_attribute = many(seq(new_combinator(), PASCAL_T_NONE,
-        token(match("[")),
-        sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
-        token(match("]")),
-        NULL
-    ));
+    combinator_t* field_attribute_main = create_record_field_attribute_parser();
 
     combinator_t* field_decl = seq(new_combinator(), PASCAL_T_FIELD_DECL,
-        field_attribute,
+        field_attribute_main,
         field_name_list,
         token(match(":")),
         field_type,
@@ -1845,8 +1853,9 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
     );
 
     // Simple field declaration with trailing ';' and optional directives
+    combinator_t* field_attribute_adv = create_record_field_attribute_parser();
     combinator_t* adv_field_decl = seq(new_combinator(), PASCAL_T_FIELD_DECL,
-        field_attribute,
+        field_attribute_adv,
         sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
         token(match(":")),
         create_record_field_type_spec(),
@@ -2121,8 +2130,9 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
             NULL
         ));
 
+        combinator_t* field_attribute_tail = create_record_field_attribute_parser();
         combinator_t* tail_field_decl = seq(new_combinator(), PASCAL_T_FIELD_DECL,
-            field_attribute,
+            field_attribute_tail,
             tail_field_name_list,
             token(match(":")),
             tail_field_type,
