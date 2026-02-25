@@ -102,6 +102,7 @@ typedef struct Tree
             char *cname_override;
             int overload_flag;
             int nesting_level; /* Lexical nesting depth: 0 = top-level, 1 = nested in program, etc. */
+            int is_nested; /* 1 if this subprogram is nested (non-method) */
             int requires_static_link;  /* 1 if this function needs to RECEIVE a static link from caller */
             int has_nested_requiring_link;  /* 1 if this function has nested children that need static links */
             int defined_in_unit;
@@ -143,6 +144,8 @@ typedef struct Tree
             char *cname_override;    /* External/public name alias (FPC bootstrap) */
             int is_external;         /* True if declared with 'external name' */
             char *absolute_target;   /* Absolute alias target name, if any */
+            char *absolute_base_id;  /* Base identifier for absolute targets */
+            char *absolute_field_id; /* Field identifier for absolute targets */
         } var_decl_data;
 
         /* An array declaration */

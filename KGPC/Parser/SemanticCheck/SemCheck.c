@@ -2381,6 +2381,7 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symt
                     record->generic_decl = generic;
                     record->num_generic_args = arg_count;
                     record->generic_args = arg_types;
+                    record->is_generic_specialization = 1;
                     arg_types = NULL;
 
                     /* Substitute generic parameters in record fields/properties. */
@@ -12819,6 +12820,9 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
      * Store depth as parent depth + 1 so the top-level program has depth 1 and
      * nested subprograms continue to increase. */
     subprogram->tree_data.subprogram_data.nesting_level = max_scope_lev + 1;
+    subprogram->tree_data.subprogram_data.is_nested =
+        (subprogram->tree_data.subprogram_data.owner_class == NULL &&
+         subprogram->tree_data.subprogram_data.nesting_level > 1);
     int default_requires = (subprogram->tree_data.subprogram_data.nesting_level > 1 &&
         !subprogram->tree_data.subprogram_data.defined_in_unit);
     subprogram->tree_data.subprogram_data.requires_static_link = default_requires ? 1 : 0;

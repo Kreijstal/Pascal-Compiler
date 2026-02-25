@@ -375,6 +375,42 @@ static QualifiedIdent *qualified_ident_from_dotted(const char *name)
     return qualified_ident_from_segments(segments, count, 1);
 }
 
+static int split_absolute_target(const char *absolute_target,
+    char **out_base, char **out_field)
+{
+    if (out_base != NULL)
+        *out_base = NULL;
+    if (out_field != NULL)
+        *out_field = NULL;
+    if (absolute_target == NULL || absolute_target[0] == '\0')
+        return 0;
+
+    const char *dot = strchr(absolute_target, '.');
+    if (dot == NULL)
+    {
+        if (out_base != NULL)
+            *out_base = strdup(absolute_target);
+        return 1;
+    }
+
+    if (dot == absolute_target || dot[1] == '\0')
+        return 0;
+
+    if (out_base != NULL)
+    {
+        size_t base_len = (size_t)(dot - absolute_target);
+        *out_base = (char *)malloc(base_len + 1);
+        if (*out_base != NULL)
+        {
+            memcpy(*out_base, absolute_target, base_len);
+            (*out_base)[base_len] = '\0';
+        }
+    }
+    if (out_field != NULL)
+        *out_field = strdup(dot + 1);
+    return 1;
+}
+
 static char *qualified_ident_join_prefix(const QualifiedIdent *qid, int count)
 {
     if (qid == NULL || qid->segments == NULL || count <= 0 || count > qid->count)
@@ -6724,6 +6760,7 @@ static struct RecordType *convert_class_type_ex(const char *class_name, ast_t *c
     record->generic_decl = NULL;
     record->generic_args = NULL;
     record->num_generic_args = 0;
+    record->is_generic_specialization = 0;
     record->method_clones_emitted = 0;
     record->default_indexed_property = NULL;
     record->default_indexed_element_type = UNKNOWN_TYPE;
@@ -6834,6 +6871,8 @@ static struct RecordType *convert_interface_type_ex(const char *interface_name, 
     record->generic_decl = NULL;
     record->generic_args = NULL;
     record->num_generic_args = 0;
+    record->is_generic_specialization = 0;
+    record->is_generic_specialization = 0;
     record->method_clones_emitted = 0;
     record->default_indexed_property = NULL;
     record->default_indexed_element_type = UNKNOWN_TYPE;
@@ -7311,6 +7350,7 @@ static struct RecordType *convert_record_type_ex(ast_t *record_node, ListNode_t 
         record->is_type_helper = 1;
         record->helper_base_type_id = NULL;
         record->helper_parent_id = NULL;
+        record->is_generic_specialization = 0;
         record->type_id = NULL;
         record->has_cached_size = 0;
         record->cached_size = 0;
@@ -7475,6 +7515,7 @@ static struct RecordType *convert_record_type_ex(ast_t *record_node, ListNode_t 
     record->generic_decl = NULL;
     record->generic_args = NULL;
     record->num_generic_args = 0;
+    record->is_generic_specialization = 0;
     record->method_clones_emitted = 0;
     record->default_indexed_property = NULL;
     record->default_indexed_element_type = UNKNOWN_TYPE;
@@ -8181,7 +8222,24 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
         free(absolute_target);
 
     if (decl != NULL)
+    {
         decl->tree_data.var_decl_data.type_ref = type_ref_from_info_or_id(&type_info, type_id);
+        if (absolute_target != NULL)
+        {
+            char *abs_base = NULL;
+            char *abs_field = NULL;
+            if (split_absolute_target(absolute_target, &abs_base, &abs_field))
+            {
+                decl->tree_data.var_decl_data.absolute_base_id = abs_base;
+                decl->tree_data.var_decl_data.absolute_field_id = abs_field;
+            }
+            else
+            {
+                free(abs_base);
+                free(abs_field);
+            }
+        }
+    }
     
     /* Store inline procedure type in cached_kgpc_type */
     if (decl != NULL && inline_proc_type != NULL) {

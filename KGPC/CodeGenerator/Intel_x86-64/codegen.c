@@ -1853,8 +1853,8 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
             else if (type_tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS) {
                 record_info = type_tree->tree_data.type_decl_data.info.alias.inline_record_type;
                 if (record_info != NULL && record_info->type_id != NULL) {
-                    /* Check if this is a specialized generic (has $ in the name) */
-                    if (strchr(record_info->type_id, '$') != NULL) {
+                    /* Check if this is a specialized generic */
+                    if (record_info->is_generic_specialization) {
                         class_label = record_info->type_id;
                     }
                 }
@@ -2628,20 +2628,18 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                     if (is_program_scope)
                     {
                         const char *absolute_target = tree->tree_data.var_decl_data.absolute_target;
+                        const char *absolute_base = tree->tree_data.var_decl_data.absolute_base_id;
+                        const char *absolute_field = tree->tree_data.var_decl_data.absolute_field_id;
                         if (absolute_target != NULL && id_list != NULL && id_list->next == NULL)
                         {
-                            const char *dot = strchr(absolute_target, '.');
-                            if (dot != NULL)
+                            if (absolute_base != NULL && absolute_field != NULL)
                             {
                                 /* Record field alias: extract base var and field name */
-                                size_t base_len = (size_t)(dot - absolute_target);
-                                char *base_var = (char *)malloc(base_len + 1);
-                                if (base_var != NULL)
+                                const char *base_var = absolute_base;
+                                const char *field_name = absolute_field;
+
+                                if (base_var != NULL && field_name != NULL)
                                 {
-                                    strncpy(base_var, absolute_target, base_len);
-                                    base_var[base_len] = '\0';
-                                    const char *field_name = dot + 1;
-                                    
                                     /* Look up base variable in symbol table to get record type */
                                     int field_offset = -1;
                                     HashNode_t *base_node = NULL;
@@ -2659,20 +2657,19 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                                     if (field_offset >= 0)
                                     {
                                         if (add_absolute_var_alias_with_offset((char *)id_list->cur, 
-                                            base_var, field_offset, alloc_size) == 0)
+                                            (char *)base_var, field_offset, alloc_size) == 0)
                                         {
-                                            free(base_var);
                                             id_list = id_list->next;
                                             continue;
                                         }
                                     }
-                                    free(base_var);
                                 }
                                 fprintf(stderr,
                                     "Warning: absolute variable alias to record field '%s' failed to resolve.\n",
                                     absolute_target);
                             }
-                            else if (add_absolute_var_alias((char *)id_list->cur, absolute_target) == 0)
+                            else if (absolute_base != NULL &&
+                                add_absolute_var_alias((char *)id_list->cur, absolute_base) == 0)
                             {
                                 id_list = id_list->next;
                                 continue;
@@ -2718,20 +2715,18 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                     else
                     {
                         const char *absolute_target = tree->tree_data.var_decl_data.absolute_target;
+                        const char *absolute_base = tree->tree_data.var_decl_data.absolute_base_id;
+                        const char *absolute_field = tree->tree_data.var_decl_data.absolute_field_id;
                         if (absolute_target != NULL && id_list != NULL && id_list->next == NULL)
                         {
-                            const char *dot = strchr(absolute_target, '.');
-                            if (dot != NULL)
+                            if (absolute_base != NULL && absolute_field != NULL)
                             {
                                 /* Record field alias: extract base var and field name */
-                                size_t base_len = (size_t)(dot - absolute_target);
-                                char *base_var = (char *)malloc(base_len + 1);
-                                if (base_var != NULL)
+                                const char *base_var = absolute_base;
+                                const char *field_name = absolute_field;
+
+                                if (base_var != NULL && field_name != NULL)
                                 {
-                                    strncpy(base_var, absolute_target, base_len);
-                                    base_var[base_len] = '\0';
-                                    const char *field_name = dot + 1;
-                                    
                                     /* Look up base variable in symbol table to get record type */
                                     int field_offset = -1;
                                     HashNode_t *base_node = NULL;
@@ -2749,20 +2744,19 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                                     if (field_offset >= 0)
                                     {
                                         if (add_absolute_var_alias_with_offset((char *)id_list->cur, 
-                                            base_var, field_offset, alloc_size) == 0)
+                                            (char *)base_var, field_offset, alloc_size) == 0)
                                         {
-                                            free(base_var);
                                             id_list = id_list->next;
                                             continue;
                                         }
                                     }
-                                    free(base_var);
                                 }
                                 fprintf(stderr,
                                     "Warning: absolute variable alias to record field '%s' failed to resolve.\n",
                                     absolute_target);
                             }
-                            else if (add_absolute_var_alias((char *)id_list->cur, absolute_target) == 0)
+                            else if (absolute_base != NULL &&
+                                add_absolute_var_alias((char *)id_list->cur, absolute_base) == 0)
                             {
                                 id_list = id_list->next;
                                 continue;
@@ -3110,7 +3104,7 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
              ctx->current_subprogram_id != NULL)
         lexical_depth = ctx->current_subprogram_lexical_depth + 1;
     int prev_depth = ctx->current_subprogram_lexical_depth;
-    int is_nested_function = (sub_id != NULL && strchr(sub_id, '$') != NULL);
+    int is_nested_function = proc->is_nested;
     if (lexical_depth <= 0 && is_nested_function)
     {
         lexical_depth = codegen_get_lexical_depth(ctx) + 1;
@@ -3274,7 +3268,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
              ctx->current_subprogram_id != NULL)
         lexical_depth = ctx->current_subprogram_lexical_depth + 1;
     int prev_depth = ctx->current_subprogram_lexical_depth;
-    int is_nested_function = (sub_id != NULL && strchr(sub_id, '$') != NULL);
+    int is_nested_function = func->is_nested;
     if (lexical_depth <= 0 && is_nested_function)
     {
         lexical_depth = codegen_get_lexical_depth(ctx) + 1;

@@ -1143,80 +1143,77 @@ ListNode_t *codegen_emit_class_cast_check(struct Expression *expr,
     return inst_list;
 }
 
+static inline RegisterId_t codegen_arg_reg_id_num(int num)
+{
+    static const RegisterId_t windows_regs[] = { REG_RCX, REG_RDX, REG_R8, REG_R9 };
+    static const RegisterId_t sysv_regs[] = { REG_RDI, REG_RSI, REG_RDX, REG_RCX, REG_R8, REG_R9 };
+    const RegisterId_t *regs = (g_current_codegen_abi == KGPC_TARGET_ABI_WINDOWS) ? windows_regs : sysv_regs;
+    int limit = kgpc_max_int_arg_regs();
+    if (num < 0 || num >= limit)
+        return REG_INVALID;
+    return regs[num];
+}
+
+static inline const char *codegen_register_id_to_8bit(RegisterId_t reg_id)
+{
+    switch (reg_id)
+    {
+        case REG_RAX: return "%al";
+        case REG_RBX: return "%bl";
+        case REG_RCX: return "%cl";
+        case REG_RDX: return "%dl";
+        case REG_RSI: return "%sil";
+        case REG_RDI: return "%dil";
+        case REG_RBP: return "%bpl";
+        case REG_RSP: return "%spl";
+        case REG_R8: return "%r8b";
+        case REG_R9: return "%r9b";
+        case REG_R10: return "%r10b";
+        case REG_R11: return "%r11b";
+        case REG_R12: return "%r12b";
+        case REG_R13: return "%r13b";
+        case REG_R14: return "%r14b";
+        case REG_R15: return "%r15b";
+        default: return NULL;
+    }
+}
+
+static inline const char *codegen_register_id_to_16bit(RegisterId_t reg_id)
+{
+    switch (reg_id)
+    {
+        case REG_RAX: return "%ax";
+        case REG_RBX: return "%bx";
+        case REG_RCX: return "%cx";
+        case REG_RDX: return "%dx";
+        case REG_RSI: return "%si";
+        case REG_RDI: return "%di";
+        case REG_RBP: return "%bp";
+        case REG_RSP: return "%sp";
+        case REG_R8: return "%r8w";
+        case REG_R9: return "%r9w";
+        case REG_R10: return "%r10w";
+        case REG_R11: return "%r11w";
+        case REG_R12: return "%r12w";
+        case REG_R13: return "%r13w";
+        case REG_R14: return "%r14w";
+        case REG_R15: return "%r15w";
+        default: return NULL;
+    }
+}
+
 static const char *codegen_register_name8(const Register_t *reg)
 {
     if (reg == NULL || reg->bit_64 == NULL)
         return NULL;
-
-    static const struct
-    {
-        const char *wide;
-        const char *byte;
-    } register_map[] = {
-        { "%rax", "%al" },
-        { "%rbx", "%bl" },
-        { "%rcx", "%cl" },
-        { "%rdx", "%dl" },
-        { "%rsi", "%sil" },
-        { "%rdi", "%dil" },
-        { "%rbp", "%bpl" },
-        { "%rsp", "%spl" },
-        { "%r8", "%r8b" },
-        { "%r9", "%r9b" },
-        { "%r10", "%r10b" },
-        { "%r11", "%r11b" },
-        { "%r12", "%r12b" },
-        { "%r13", "%r13b" },
-        { "%r14", "%r14b" },
-        { "%r15", "%r15b" },
-    };
-
-    size_t count = sizeof(register_map) / sizeof(register_map[0]);
-    for (size_t i = 0; i < count; ++i)
-    {
-        if (strcmp(reg->bit_64, register_map[i].wide) == 0)
-            return register_map[i].byte;
-    }
-
-    return NULL;
+    return codegen_register_id_to_8bit(reg->reg_id);
 }
 
 const char *codegen_register_name16(const Register_t *reg)
 {
     if (reg == NULL || reg->bit_64 == NULL)
         return NULL;
-
-    static const struct
-    {
-        const char *wide;
-        const char *word;
-    } register_map[] = {
-        { "%rax", "%ax" },
-        { "%rbx", "%bx" },
-        { "%rcx", "%cx" },
-        { "%rdx", "%dx" },
-        { "%rsi", "%si" },
-        { "%rdi", "%di" },
-        { "%rbp", "%bp" },
-        { "%rsp", "%sp" },
-        { "%r8", "%r8w" },
-        { "%r9", "%r9w" },
-        { "%r10", "%r10w" },
-        { "%r11", "%r11w" },
-        { "%r12", "%r12w" },
-        { "%r13", "%r13w" },
-        { "%r14", "%r14w" },
-        { "%r15", "%r15w" },
-    };
-
-    size_t count = sizeof(register_map) / sizeof(register_map[0]);
-    for (size_t i = 0; i < count; ++i)
-    {
-        if (strcmp(reg->bit_64, register_map[i].wide) == 0)
-            return register_map[i].word;
-    }
-
-    return NULL;
+    return codegen_register_id_to_16bit(reg->reg_id);
 }
 
 static ListNode_t *codegen_store_value_to_stack(ListNode_t *inst_list, Register_t *value_reg,
@@ -3764,14 +3761,14 @@ static Register_t *codegen_clone_register_if_rcx(ListNode_t **inst_list, CodeGen
     if (reg == NULL || inst_list == NULL)
         return reg;
 
-    if (strcmp(reg->bit_64, "%rcx") != 0)
+    if (reg->reg_id != REG_RCX)
         return reg;
 
-    static const char *preferred_regs[] = { "%rax", "%r10", "%r11", "%r8", "%r9" };
+    static const RegisterId_t preferred_regs[] = { REG_RAX, REG_R10, REG_R11, REG_R8, REG_R9 };
     Register_t *replacement = NULL;
     for (size_t i = 0; i < sizeof(preferred_regs) / sizeof(preferred_regs[0]); ++i)
     {
-        if (get_register_64bit(get_reg_stack(), (char *)preferred_regs[i], &replacement) == 0 && replacement != NULL)
+        if (get_register_by_id(get_reg_stack(), preferred_regs[i], &replacement) == 0 && replacement != NULL)
             break;
         replacement = NULL;
     }
@@ -7045,11 +7042,14 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
 
             if (arg_infos != NULL)
             {
+                RegisterId_t arg_reg_id = REG_INVALID;
+                if (arg_infos[i].assigned_class == ARG_CLASS_INT)
+                    arg_reg_id = codegen_arg_reg_id_num(reg_index);
+
                 for (int j = 0; j < i; ++j)
                 {
-                    const char *check_reg = arg_reg_char;
-                    if (arg_infos[j].reg != NULL &&
-                        strcmp(arg_infos[j].reg->bit_64, check_reg) == 0)
+                    if (arg_reg_id != REG_INVALID && arg_infos[j].reg != NULL &&
+                        arg_infos[j].reg->reg_id == arg_reg_id)
                     {
                         StackNode_t *spill = add_l_t("arg_spill");
                         if (arg_infos[j].assigned_class == ARG_CLASS_SSE &&
