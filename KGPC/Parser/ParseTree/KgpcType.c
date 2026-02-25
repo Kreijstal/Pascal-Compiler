@@ -12,6 +12,7 @@
 #include <errno.h>
 #ifndef _WIN32
 #include <strings.h>
+#include <execinfo.h>
 #else
 #define strcasecmp _stricmp
 #endif
@@ -51,25 +52,6 @@ static HashNode_t *kgpc_find_type_node(SymTab_t *symtab, const char *type_id)
 
 static HashNode_t *kgpc_find_type_node_with_unit_flag(SymTab_t *symtab,
     const char *type_id, int defined_in_unit);
-
-static HashNode_t *kgpc_find_type_node_ref(SymTab_t *symtab, const TypeRef *type_ref)
-{
-    if (symtab == NULL || type_ref == NULL || type_ref->name == NULL)
-        return NULL;
-    if (type_ref->name->count <= 1)
-        return kgpc_find_type_node(symtab, type_ref_base_name(type_ref));
-
-    char *qualified = qualified_ident_join(type_ref->name, ".");
-    if (qualified != NULL)
-    {
-        HashNode_t *node = kgpc_find_type_node(symtab, qualified);
-        free(qualified);
-        if (node != NULL)
-            return node;
-    }
-
-    return kgpc_find_type_node(symtab, type_ref_base_name(type_ref));
-}
 
 static HashNode_t *kgpc_find_type_node_ref_with_unit_flag(SymTab_t *symtab,
     const TypeRef *type_ref, int defined_in_unit)
@@ -481,6 +463,14 @@ void destroy_kgpc_type(KgpcType *type) {
                 type->info.record_info->type_id != NULL)
                 fprintf(stderr, " record=%s", type->info.record_info->type_id);
             fprintf(stderr, "\n");
+#ifndef _WIN32
+            void *bt[32];
+            int bt_count = backtrace(bt, (int)(sizeof(bt) / sizeof(bt[0])));
+            if (bt_count > 0)
+            {
+                backtrace_symbols_fd(bt, bt_count, fileno(stderr));
+            }
+#endif
         }
         if (!warn_once) {
             fprintf(stderr,

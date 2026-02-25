@@ -92,6 +92,7 @@ int PushConstOntoScope_Typed(SymTab_t *symtab, char *id, long long value, KgpcTy
     assert(type != NULL && "KgpcType must be provided for typed constant");
 
     HashTable_t *cur_hash = (HashTable_t *)symtab->stack_head->cur;
+    kgpc_type_retain(type);
     int result = AddIdentToTable(cur_hash, id, NULL, HASHTYPE_CONST, type);
     if (result == 0)
     {
@@ -101,6 +102,10 @@ int PushConstOntoScope_Typed(SymTab_t *symtab, char *id, long long value, KgpcTy
             node->is_constant = 1;
             node->const_int_value = value;
         }
+    }
+    else
+    {
+        kgpc_type_release(type);
     }
     return result;
 }
@@ -526,7 +531,11 @@ int AddBuiltinProc_Typed(SymTab_t *symtab, char *id, KgpcType *type)
     assert(type->kind == TYPE_KIND_PROCEDURE && "Builtin proc must have procedure type");
     assert(type->info.proc_info.return_type == NULL && "Procedure must not have return type");
 
-    return AddIdentToTable(symtab->builtins, id, NULL, HASHTYPE_BUILTIN_PROCEDURE, type);
+    kgpc_type_retain(type);
+    int result = AddIdentToTable(symtab->builtins, id, NULL, HASHTYPE_BUILTIN_PROCEDURE, type);
+    if (result != 0)
+        kgpc_type_release(type);
+    return result;
 }
 
 /* Adds a built-in function with a KgpcType */
@@ -538,7 +547,11 @@ int AddBuiltinFunction_Typed(SymTab_t *symtab, char *id, KgpcType *type)
     assert(type->kind == TYPE_KIND_PROCEDURE && "Builtin function must have procedure type");
     assert(type->info.proc_info.return_type != NULL && "Function must have return type");
 
-    return AddIdentToTable(symtab->builtins, id, NULL, HASHTYPE_FUNCTION, type);
+    kgpc_type_retain(type);
+    int result = AddIdentToTable(symtab->builtins, id, NULL, HASHTYPE_FUNCTION, type);
+    if (result != 0)
+        kgpc_type_release(type);
+    return result;
 }
 
 int AddBuiltinRealConst(SymTab_t *symtab, const char *id, double value)

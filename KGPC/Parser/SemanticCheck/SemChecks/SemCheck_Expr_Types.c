@@ -3788,13 +3788,9 @@ int semcheck_addressof(int *type_return,
         KgpcType *element_type = kgpc_type_get_array_element_type_resolved(array_type, symtab);
         int element_tag = UNKNOWN_TYPE;
         const char *element_type_id = NULL;
-        struct RecordType *element_record = NULL;
-
         if (element_type != NULL)
         {
             element_tag = semcheck_tag_from_kgpc(element_type);
-            if (element_tag == RECORD_TYPE)
-                element_record = kgpc_type_get_record(element_type);
             if (element_type->type_alias != NULL)
             {
                 element_type_id = element_type->type_alias->alias_name != NULL

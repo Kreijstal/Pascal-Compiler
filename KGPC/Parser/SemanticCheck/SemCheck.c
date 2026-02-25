@@ -1012,7 +1012,6 @@ static void semcheck_file_from_line_number(int line_num, char *file_out, size_t 
     
     /* Scan through buffer tracking line directives */
     int current_line = 1;
-    int last_directive_line = 1;
     char last_file[512] = "";
     size_t pos = 0;
     
@@ -1031,7 +1030,6 @@ static void semcheck_file_from_line_number(int line_num, char *file_out, size_t 
         
         if (directive_line >= 0)
         {
-            last_directive_line = directive_line;
             if (directive_file[0] != '\0')
             {
                 strncpy(last_file, directive_file, sizeof(last_file) - 1);
@@ -2723,8 +2721,12 @@ static inline void mark_hashnode_unit_info(SymTab_t *symtab, HashNode_t *node,
     {
         if (symtab->stack_head != NULL && symtab->stack_head->cur != NULL)
         {
-            AddIdentToTable((HashTable_t *)symtab->stack_head->cur, qualified_id,
+            if (node->type != NULL)
+                kgpc_type_retain(node->type);
+            int add_result = AddIdentToTable((HashTable_t *)symtab->stack_head->cur, qualified_id,
                 NULL, HASHTYPE_TYPE, node->type);
+            if (add_result != 0 && node->type != NULL)
+                kgpc_type_release(node->type);
             if (FindIdent(&existing, symtab, qualified_id) >= 0 && existing != NULL)
             {
                 existing->defined_in_unit = 1;
@@ -5487,14 +5489,21 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                             {
                                 char *literal_name = (char *)literal_node->cur;
                                 
-                                /* Check if this enum literal already exists (e.g., from prelude) */
-                                HashNode_t *existing = NULL;
-                                if (FindIdent(&existing, symtab, literal_name) != -1 && existing != NULL)
+                                /* Check for collisions in the current scope only (allow shadowing). */
+                                HashNode_t *existing = FindIdentInTable(
+                                    (HashTable_t *)symtab->stack_head->cur, literal_name);
+                                if (existing != NULL)
                                 {
-                                    /* If it exists as a constant with the same value, skip silently */
-                                    if (existing->is_constant && existing->const_int_value == ordinal)
+                                    /* Allow local enum literals to shadow imported unit literals. */
+                                    if (!tree->tree_data.type_decl_data.defined_in_unit)
                                     {
-                                        /* Same enum literal from prelude - not an error */
+                                        if (existing->type != NULL && existing->type != alias_info->kgpc_type)
+                                            kgpc_type_release(existing->type);
+                                        existing->is_constant = 1;
+                                        existing->const_int_value = ordinal;
+                                        existing->type = alias_info->kgpc_type;
+                                        existing->defined_in_unit = 0;
+                                        kgpc_type_retain(existing->type);
                                         literal_node = literal_node->next;
                                         ++ordinal;
                                         continue;
@@ -5502,6 +5511,14 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                                     /* Imported unit collisions are allowed: keep first visible literal. */
                                     if (tree->tree_data.type_decl_data.defined_in_unit)
                                     {
+                                        literal_node = literal_node->next;
+                                        ++ordinal;
+                                        continue;
+                                    }
+                                    /* If it exists as a constant with the same value, skip silently */
+                                    if (existing->is_constant && existing->const_int_value == ordinal)
+                                    {
+                                        /* Same enum literal from prelude - not an error */
                                         literal_node = literal_node->next;
                                         ++ordinal;
                                         continue;
@@ -5523,6 +5540,17 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                                             "Error on line %d, redeclaration of enum literal %s!\n",
                                             tree->line_num, literal_name);
                                     ++errors;
+                                }
+                                else if (tree->tree_data.type_decl_data.defined_in_unit)
+                                {
+                                    HashNode_t *literal_node_entry = FindIdentInTable(
+                                        (HashTable_t *)symtab->stack_head->cur, literal_name);
+                                    if (literal_node_entry != NULL)
+                                    {
+                                        literal_node_entry->defined_in_unit = 1;
+                                        literal_node_entry->unit_is_public =
+                                            tree->tree_data.type_decl_data.unit_is_public ? 1 : 0;
+                                    }
                                 }
                             }
                             ++ordinal;
@@ -5553,18 +5581,33 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                             {
                                 char *literal_name = (char *)literal_node->cur;
                                 
-                                /* Check if this enum literal already exists */
-                                HashNode_t *existing = NULL;
-                                if (FindIdent(&existing, symtab, literal_name) != -1 && existing != NULL)
+                                /* Check for collisions in the current scope only (allow shadowing). */
+                                HashNode_t *existing = FindIdentInTable(
+                                    (HashTable_t *)symtab->stack_head->cur, literal_name);
+                                if (existing != NULL)
                                 {
-                                    /* If it exists as a constant with the same value, skip silently */
-                                    if (existing->is_constant && existing->const_int_value == ordinal)
+                                    /* Allow local enum literals to shadow imported unit literals. */
+                                    if (!tree->tree_data.type_decl_data.defined_in_unit)
                                     {
+                                        if (existing->type != NULL && existing->type != inline_enum_type)
+                                            kgpc_type_release(existing->type);
+                                        existing->is_constant = 1;
+                                        existing->const_int_value = ordinal;
+                                        existing->type = inline_enum_type;
+                                        existing->defined_in_unit = 0;
+                                        kgpc_type_retain(existing->type);
                                         literal_node = literal_node->next;
                                         ++ordinal;
                                         continue;
                                     }
                                     if (tree->tree_data.type_decl_data.defined_in_unit)
+                                    {
+                                        literal_node = literal_node->next;
+                                        ++ordinal;
+                                        continue;
+                                    }
+                                    /* If it exists as a constant with the same value, skip silently */
+                                    if (existing->is_constant && existing->const_int_value == ordinal)
                                     {
                                         literal_node = literal_node->next;
                                         ++ordinal;
@@ -5587,6 +5630,17 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                                             "Error on line %d, redeclaration of inline enum literal %s!\n",
                                             tree->line_num, literal_name);
                                     ++errors;
+                                }
+                                else if (tree->tree_data.type_decl_data.defined_in_unit)
+                                {
+                                    HashNode_t *literal_node_entry = FindIdentInTable(
+                                        (HashTable_t *)symtab->stack_head->cur, literal_name);
+                                    if (literal_node_entry != NULL)
+                                    {
+                                        literal_node_entry->defined_in_unit = 1;
+                                        literal_node_entry->unit_is_public =
+                                            tree->tree_data.type_decl_data.unit_is_public ? 1 : 0;
+                                    }
                                 }
                             }
                             ++ordinal;
@@ -9441,8 +9495,8 @@ static void add_builtin_type_owned(SymTab_t *symtab, const char *name, KgpcType 
         return;
     if (type->type_alias != NULL && type->type_alias->target_type_id == NULL)
         type->type_alias->target_type_id = strdup(name);
-    AddBuiltinType_Typed(symtab, (char *)name, type);
-    destroy_kgpc_type(type);
+    if (AddBuiltinType_Typed(symtab, (char *)name, type) != 0)
+        destroy_kgpc_type(type);
 }
 
 static void add_builtin_alias_type(SymTab_t *symtab, const char *name, int base_type,
@@ -9462,8 +9516,8 @@ static void add_builtin_alias_type(SymTab_t *symtab, const char *name, int base_
         return;
     }
     kgpc_type_set_type_alias(type, &alias);
-    AddBuiltinType_Typed(symtab, (char *)name, type);
-    destroy_kgpc_type(type);
+    if (AddBuiltinType_Typed(symtab, (char *)name, type) != 0)
+        destroy_kgpc_type(type);
 }
 
 static void add_builtin_from_vartype(SymTab_t *symtab, const char *name, enum VarType vt)
@@ -9755,46 +9809,11 @@ void semcheck_add_builtins(SymTab_t *symtab)
     add_builtin_type_owned(symtab, "OleVariant", create_primitive_type_with_size(VARIANT_TYPE, 16));
 
     /* File/Text primitives (sizes align with system.p TextRec/FileRec layout) */
-    char *file_name = strdup("file");
-    if (file_name != NULL) {
-        KgpcType *file_type = create_primitive_type_with_size(FILE_TYPE, 368);
-        assert(file_type != NULL && "Failed to create file type");
-        AddBuiltinType_Typed(symtab, file_name, file_type);
-        destroy_kgpc_type(file_type);
-        free(file_name);
-    }
-    char *file_upper = strdup("File");
-    if (file_upper != NULL) {
-        KgpcType *file_type = create_primitive_type_with_size(FILE_TYPE, 368);
-        assert(file_type != NULL && "Failed to create file type");
-        AddBuiltinType_Typed(symtab, file_upper, file_type);
-        destroy_kgpc_type(file_type);
-        free(file_upper);
-    }
-    char *typed_file = strdup("TypedFile");
-    if (typed_file != NULL) {
-        KgpcType *typed_file_type = create_primitive_type_with_size(FILE_TYPE, 368);
-        assert(typed_file_type != NULL && "Failed to create typed file type");
-        AddBuiltinType_Typed(symtab, typed_file, typed_file_type);
-        destroy_kgpc_type(typed_file_type);
-        free(typed_file);
-    }
-    char *text_name = strdup("text");
-    if (text_name != NULL) {
-        KgpcType *text_type = create_primitive_type_with_size(TEXT_TYPE, 632);
-        assert(text_type != NULL && "Failed to create text type");
-        AddBuiltinType_Typed(symtab, text_name, text_type);
-        destroy_kgpc_type(text_type);
-        free(text_name);
-    }
-    char *text_upper = strdup("Text");
-    if (text_upper != NULL) {
-        KgpcType *text_type = create_primitive_type_with_size(TEXT_TYPE, 632);
-        assert(text_type != NULL && "Failed to create text type");
-        AddBuiltinType_Typed(symtab, text_upper, text_type);
-        destroy_kgpc_type(text_type);
-        free(text_upper);
-    }
+    add_builtin_type_owned(symtab, "file", create_primitive_type_with_size(FILE_TYPE, 368));
+    add_builtin_type_owned(symtab, "File", create_primitive_type_with_size(FILE_TYPE, 368));
+    add_builtin_type_owned(symtab, "TypedFile", create_primitive_type_with_size(FILE_TYPE, 368));
+    add_builtin_type_owned(symtab, "text", create_primitive_type_with_size(TEXT_TYPE, 632));
+    add_builtin_type_owned(symtab, "Text", create_primitive_type_with_size(TEXT_TYPE, 632));
 
     AddBuiltinRealConst(symtab, "Pi", acos(-1.0));
 
@@ -11667,6 +11686,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     {
                         if (type_node->type != NULL && type_node->type->kind == TYPE_KIND_PROCEDURE)
                         {
+                            kgpc_type_retain(type_node->type);
                             func_return = PushVarOntoScope_Typed(symtab, (char *)ids->cur, type_node->type);
                             if (func_return == 0)
                             {
@@ -11749,6 +11769,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             if (type_node->type != NULL &&
                                 type_node->type->kind == TYPE_KIND_ARRAY)
                             {
+                                kgpc_type_retain(type_node->type);
                                 func_return = PushArrayOntoScope_Typed(symtab, (char *)ids->cur, type_node->type);
                                 if (func_return == 0)
                                 {
@@ -11836,6 +11857,8 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                                 fprintf(stderr, "[KGPC] semcheck_decls: Pushing Self with type_node->type kind=%d\n",
                                     var_kgpc_type ? var_kgpc_type->kind : -1);
                             }
+                            if (var_kgpc_type != NULL)
+                                kgpc_type_retain(var_kgpc_type);
                             func_return = PushVarOntoScope_Typed(symtab, (char *)ids->cur, var_kgpc_type);
                         }
                         else
@@ -11863,6 +11886,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                                         if (FindIdent(&target_node, symtab, type_alias->pointer_type_id) >= 0 &&
                                             target_node != NULL && target_node->type != NULL)
                                         {
+                                            kgpc_type_retain(target_node->type);
                                             points_to = target_node->type;
                                         }
                                     }
@@ -11950,15 +11974,18 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 
                 /* Create KgpcType for typed variables */
                 KgpcType *var_kgpc_type = NULL;
+                int var_kgpc_borrowed = 0;
                 if (resolved_type != NULL && resolved_type->type != NULL)
                 {
                     /* Use KgpcType from resolved type if available */
                     var_kgpc_type = resolved_type->type;
+                    var_kgpc_borrowed = 1;
                 }
                 else if (tree->tree_data.var_decl_data.cached_kgpc_type != NULL)
                 {
                     /* Use pre-cached KgpcType (e.g., for inline procedure types) */
                     var_kgpc_type = tree->tree_data.var_decl_data.cached_kgpc_type;
+                    var_kgpc_borrowed = 1;
                 }
                 else if (tree->tree_data.var_decl_data.inline_record_type != NULL)
                 {
@@ -12130,9 +12157,17 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                                      pascal_identifier_equals(tree->tree_data.var_decl_data.type_id, "ShortString"));
                 
                 if (is_shortstring)
+                {
+                    if (var_kgpc_borrowed && var_kgpc_type != NULL)
+                        kgpc_type_retain(var_kgpc_type);
                     func_return = PushArrayOntoScope_Typed(symtab, (char *)ids->cur, var_kgpc_type);
+                }
                 else
+                {
+                    if (var_kgpc_borrowed && var_kgpc_type != NULL)
+                        kgpc_type_retain(var_kgpc_type);
                     func_return = PushVarOntoScope_Typed(symtab, (char *)ids->cur, var_kgpc_type);
+                }
                 
                 if (func_return == 0)
                 {
@@ -13404,6 +13439,8 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         if (result_check == NULL)
         {
             /* "Result" is not already declared in this scope, so add it as an alias */
+            if (return_kgpc_type != NULL)
+                kgpc_type_retain(return_kgpc_type);
             PushFuncRetOntoScope_Typed(symtab, "Result", return_kgpc_type);
             if (getenv("KGPC_DEBUG_RESULT") != NULL)
             {
@@ -13608,6 +13645,11 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                                 if (builtin_tag != UNKNOWN_TYPE)
                                     param_type = create_primitive_type(builtin_tag);
                             }
+                            if (param_type != NULL &&
+                                param_type == param_tree->tree_data.var_decl_data.cached_kgpc_type)
+                            {
+                                kgpc_type_retain(param_type);
+                            }
                             PushVarOntoScope_Typed(symtab, (char *)ids->cur, param_type);
                             if (param_type != NULL &&
                                 param_type != param_tree->tree_data.var_decl_data.cached_kgpc_type)
@@ -13687,6 +13729,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             {
                 if (FindIdent(&self_node, symtab, "Self") == -1)
                 {
+                    kgpc_type_retain(self_type);
                     PushVarOntoScope_Typed(symtab, "Self", self_type);
                 }
                 else if (self_node->type == NULL || !kgpc_type_equals(self_node->type, self_type))

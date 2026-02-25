@@ -1310,8 +1310,11 @@ static void codegen_emit_enum_typeinfo_for_alias(CodeGenContext *ctx, const char
     char type_label[CODEGEN_MAX_INST_BUF];
     codegen_sanitize_identifier_for_label(type_name, type_label, sizeof(type_label));
 
-    char typeinfo_label[CODEGEN_MAX_INST_BUF];
-    snprintf(typeinfo_label, sizeof(typeinfo_label), "__kgpc_enum_typeinfo_%s", type_label);
+    size_t typeinfo_len = strlen(type_label) + strlen("__kgpc_enum_typeinfo_") + 1;
+    char *typeinfo_label = (char *)malloc(typeinfo_len);
+    if (typeinfo_label == NULL)
+        return;
+    snprintf(typeinfo_label, typeinfo_len, "__kgpc_enum_typeinfo_%s", type_label);
 
     fprintf(ctx->output_file, "\n# Enum RTTI for %s\n", type_name);
     fprintf(ctx->output_file, "\t.align 8\n");
@@ -1323,22 +1326,38 @@ static void codegen_emit_enum_typeinfo_for_alias(CodeGenContext *ctx, const char
     int index = 0;
     for (ListNode_t *lit = alias->enum_literals; lit != NULL; lit = lit->next, ++index)
     {
-        char name_label[CODEGEN_MAX_INST_BUF];
-        snprintf(name_label, sizeof(name_label), "__kgpc_enum_%s_name_%d", type_label, index);
-        fprintf(ctx->output_file, "\t.quad\t%s\n", name_label);
+        int name_len = snprintf(NULL, 0, "__kgpc_enum_%s_name_%d", type_label, index);
+        if (name_len > 0)
+        {
+            char *name_label = (char *)malloc((size_t)name_len + 1);
+            if (name_label != NULL)
+            {
+                snprintf(name_label, (size_t)name_len + 1, "__kgpc_enum_%s_name_%d", type_label, index);
+                fprintf(ctx->output_file, "\t.quad\t%s\n", name_label);
+                free(name_label);
+            }
+        }
     }
 
     index = 0;
     for (ListNode_t *lit = alias->enum_literals; lit != NULL; lit = lit->next, ++index)
     {
         const char *literal = (lit->cur != NULL) ? (const char *)lit->cur : "";
-        char name_label[CODEGEN_MAX_INST_BUF];
-        snprintf(name_label, sizeof(name_label), "__kgpc_enum_%s_name_%d", type_label, index);
+        int name_len = snprintf(NULL, 0, "__kgpc_enum_%s_name_%d", type_label, index);
+        char *name_label = NULL;
+        if (name_len > 0)
+            name_label = (char *)malloc((size_t)name_len + 1);
         char escaped_literal[CODEGEN_MAX_INST_BUF];
         escape_string(escaped_literal, literal, sizeof(escaped_literal));
-        fprintf(ctx->output_file, "%s:\n", name_label);
-        fprintf(ctx->output_file, "\t.string \"%s\"\n", escaped_literal);
+        if (name_label != NULL)
+        {
+            snprintf(name_label, (size_t)name_len + 1, "__kgpc_enum_%s_name_%d", type_label, index);
+            fprintf(ctx->output_file, "%s:\n", name_label);
+            fprintf(ctx->output_file, "\t.string \"%s\"\n", escaped_literal);
+            free(name_label);
+        }
     }
+    free(typeinfo_label);
 }
 
 static void codegen_emit_enum_typeinfo_from_table(CodeGenContext *ctx, HashTable_t *table,
@@ -1381,8 +1400,11 @@ static void codegen_emit_enum_typeinfo_from_table(CodeGenContext *ctx, HashTable
 
             char type_label[CODEGEN_MAX_INST_BUF];
             codegen_sanitize_identifier_for_label(type_name, type_label, sizeof(type_label));
-            char label[CODEGEN_MAX_INST_BUF];
-            snprintf(label, sizeof(label), "__kgpc_enum_typeinfo_%s", type_label);
+            size_t label_len = strlen(type_label) + strlen("__kgpc_enum_typeinfo_") + 1;
+            char *label = (char *)malloc(label_len);
+            if (label == NULL)
+                continue;
+            snprintf(label, label_len, "__kgpc_enum_typeinfo_%s", type_label);
 
             int already_emitted = 0;
             for (int idx = 0; idx < *emitted_count; ++idx)
@@ -1402,6 +1424,7 @@ static void codegen_emit_enum_typeinfo_from_table(CodeGenContext *ctx, HashTable
                 if (emitted_labels[*emitted_count] != NULL)
                     (*emitted_count)++;
             }
+            free(label);
 
             if (emitted_any != NULL && !(*emitted_any))
             {
@@ -1859,11 +1882,23 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                 if (*p == '\'') p++;
                 if (*p == '{') p++;
                 d1 = strtoul(p, NULL, 16);
-                p = strchr(p, '-'); if (p) p++;
+                p = strchr(p, '-');
+                if (p)
+                    p++;
                 d2 = (unsigned int)strtoul(p ? p : "", NULL, 16);
-                if (p) p = strchr(p, '-'); if (p) p++;
+                if (p)
+                {
+                    p = strchr(p, '-');
+                    if (p)
+                        p++;
+                }
                 d3 = (unsigned int)strtoul(p ? p : "", NULL, 16);
-                if (p) p = strchr(p, '-'); if (p) p++;
+                if (p)
+                {
+                    p = strchr(p, '-');
+                    if (p)
+                        p++;
+                }
                 if (p) {
                     /* D4[0..1] from the 4-char group before last dash */
                     unsigned long d4ab = strtoul(p, NULL, 16);
