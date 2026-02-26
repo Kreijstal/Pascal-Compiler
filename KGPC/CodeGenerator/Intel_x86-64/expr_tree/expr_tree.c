@@ -1630,6 +1630,12 @@ void free_expr_tree(expr_node_t *node)
 {
     if(node != NULL)
     {
+        if (node->reg != NULL &&
+            node->reg->spill_callback == expr_tree_register_spill_handler &&
+            node->reg->spill_context == node)
+        {
+            register_clear_spill_callback(node->reg);
+        }
         free_expr_tree(node->left_expr);
         free_expr_tree(node->right_expr);
         free(node);

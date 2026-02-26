@@ -90,6 +90,9 @@ typedef struct RecordParamWork {
     int stack_arg_offset;
     int has_stack_arg;
     const char *arg_reg;
+    int is_dynarray;
+    int dynarray_elem_size;
+    int dynarray_lower_bound;
 } RecordParamWork;
 
 /* Escape a string for use in assembly .string directive */
@@ -842,6 +845,137 @@ static void codegen_reset_static_link_cache(CodeGenContext *ctx)
     }
     ctx->static_link_reg_level = 0;
     ctx->static_link_spill_slot = NULL;
+}
+
+static void codegen_register_local_types(ListNode_t *type_decls, SymTab_t *symtab)
+{
+    if (type_decls == NULL || symtab == NULL)
+        return;
+
+    /* First pass: register record/class types so pointer aliases can resolve. */
+    for (ListNode_t *cur = type_decls; cur != NULL; cur = cur->next)
+    {
+        if (cur->type != LIST_TREE || cur->cur == NULL)
+            continue;
+        Tree_t *decl = (Tree_t *)cur->cur;
+        if (decl->type != TREE_TYPE_DECL ||
+            decl->tree_data.type_decl_data.id == NULL)
+            continue;
+        if (decl->tree_data.type_decl_data.kind != TYPE_DECL_RECORD)
+            continue;
+
+        KgpcType *kgpc = decl->tree_data.type_decl_data.kgpc_type;
+        if (kgpc == NULL && decl->tree_data.type_decl_data.info.record != NULL)
+        {
+            kgpc = create_record_type(decl->tree_data.type_decl_data.info.record);
+            if (decl->tree_data.type_decl_data.info.record->is_class && kgpc != NULL)
+                kgpc = create_pointer_type(kgpc);
+        }
+
+        if (kgpc != NULL)
+        {
+            kgpc_type_retain(kgpc);
+            PushTypeOntoScope_Typed(symtab, strdup(decl->tree_data.type_decl_data.id), kgpc);
+        }
+    }
+
+    /* Second pass: register aliases and resolve pointer targets now that records exist. */
+    for (ListNode_t *cur = type_decls; cur != NULL; cur = cur->next)
+    {
+        if (cur->type != LIST_TREE || cur->cur == NULL)
+            continue;
+        Tree_t *decl = (Tree_t *)cur->cur;
+        if (decl->type != TREE_TYPE_DECL ||
+            decl->tree_data.type_decl_data.id == NULL)
+            continue;
+        if (decl->tree_data.type_decl_data.kind != TYPE_DECL_ALIAS)
+            continue;
+
+        struct TypeAlias *alias = &decl->tree_data.type_decl_data.info.alias;
+        KgpcType *kgpc = decl->tree_data.type_decl_data.kgpc_type;
+        if (kgpc == NULL)
+        {
+            kgpc = create_kgpc_type_from_type_alias(alias, symtab,
+                decl->tree_data.type_decl_data.defined_in_unit);
+        }
+
+        if (kgpc != NULL && kgpc_type_is_pointer(kgpc) &&
+            kgpc->info.points_to == NULL)
+        {
+            const char *pointee_id = alias->pointer_type_id;
+            if (pointee_id == NULL)
+                pointee_id = alias->target_type_id;
+            if (pointee_id != NULL)
+            {
+                HashNode_t *pointee_node = NULL;
+                if (FindIdent(&pointee_node, symtab, pointee_id) >= 0 &&
+                    pointee_node != NULL && pointee_node->type != NULL)
+                {
+                    kgpc_type_retain(pointee_node->type);
+                    kgpc->info.points_to = pointee_node->type;
+                }
+            }
+        }
+
+        if (kgpc != NULL)
+        {
+            kgpc_type_retain(kgpc);
+            PushTypeOntoScope_Typed(symtab, strdup(decl->tree_data.type_decl_data.id), kgpc);
+        }
+    }
+}
+
+static void codegen_register_decl_list(ListNode_t *decls, SymTab_t *symtab, int is_param)
+{
+    if (decls == NULL || symtab == NULL)
+        return;
+
+    for (ListNode_t *cur = decls; cur != NULL; cur = cur->next)
+    {
+        Tree_t *decl = (Tree_t *)cur->cur;
+        if (decl == NULL)
+            continue;
+        if (decl->type != TREE_VAR_DECL && decl->type != TREE_ARR_DECL)
+            continue;
+
+        ListNode_t *ids = (decl->type == TREE_VAR_DECL)
+            ? decl->tree_data.var_decl_data.ids
+            : decl->tree_data.arr_decl_data.ids;
+
+        KgpcType *decl_type = resolve_type_from_vardecl(decl, symtab, NULL);
+        int is_array_decl = (decl->type == TREE_ARR_DECL);
+        if (!is_array_decl && decl_type != NULL)
+            is_array_decl = kgpc_type_is_array(decl_type);
+
+        for (ListNode_t *id_node = ids; id_node != NULL; id_node = id_node->next)
+        {
+            if (id_node->cur == NULL)
+                continue;
+            if (is_array_decl)
+                PushArrayOntoScope_Typed(symtab, (char *)id_node->cur, decl_type);
+            else
+                PushVarOntoScope_Typed(symtab, (char *)id_node->cur, decl_type);
+
+            if (is_param)
+            {
+                HashNode_t *var_node = NULL;
+                if (FindIdent(&var_node, symtab, id_node->cur) == 0 && var_node != NULL)
+                {
+                    int is_var_param = 0;
+                    int is_untyped_param = 0;
+                    if (decl->type == TREE_VAR_DECL)
+                    {
+                        is_var_param = decl->tree_data.var_decl_data.is_var_param;
+                        is_untyped_param = decl->tree_data.var_decl_data.is_untyped_param;
+                    }
+                    var_node->is_var_parameter = (is_var_param || is_untyped_param) ? 1 : 0;
+                }
+            }
+        }
+
+        if (decl_type != NULL)
+            destroy_kgpc_type(decl_type);
+    }
 }
 
 static void codegen_static_link_spilled(Register_t *reg, StackNode_t *spill_slot, void *context)
@@ -3150,6 +3284,10 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ctx->current_subprogram_method_name = proc->method_name;
     ctx->current_subprogram_owner_class = proc->owner_class;
     ctx->current_subprogram_owner_class_full = proc->owner_class_full;
+    PushScope(symtab);
+    codegen_register_local_types(proc->type_declarations, symtab);
+    codegen_register_decl_list(proc->args_var, symtab, 1);
+    codegen_register_decl_list(proc->declarations, symtab, 0);
     int lexical_depth = proc->nesting_level;
     if (lexical_depth < 0)
         lexical_depth = codegen_get_lexical_depth(ctx) + 1;
@@ -3249,6 +3387,7 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     codegen_function_footer(sub_id, ctx);
     free_inst_list(inst_list);
     pop_stackscope();
+    PopScope(symtab);
 
     ctx->current_subprogram_id = prev_sub_id;
     ctx->current_subprogram_mangled = prev_sub_mangled;
@@ -3314,6 +3453,10 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ctx->current_subprogram_method_name = func->method_name;
     ctx->current_subprogram_owner_class = func->owner_class;
     ctx->current_subprogram_owner_class_full = func->owner_class_full;
+    PushScope(symtab);
+    codegen_register_local_types(func->type_declarations, symtab);
+    codegen_register_decl_list(func->args_var, symtab, 1);
+    codegen_register_decl_list(func->declarations, symtab, 0);
     int lexical_depth = func->nesting_level;
     if (lexical_depth < 0)
         lexical_depth = codegen_get_lexical_depth(ctx) + 1;
@@ -3722,6 +3865,8 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
 #endif
         Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
         if (addr_reg == NULL)
+            addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+        if (addr_reg == NULL)
         {
             codegen_report_error(ctx,
                 "ERROR: Unable to allocate register for dynamic array return.");
@@ -3869,6 +4014,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     codegen_function_footer(sub_id, ctx);
     free_inst_list(inst_list);
     pop_stackscope();
+    PopScope(symtab);
 
     ctx->current_subprogram_id = prev_sub_id;
     ctx->current_subprogram_mangled = prev_sub_mangled;
@@ -4571,6 +4717,9 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                         work->stack_arg_offset = 0;
                         work->has_stack_arg = 0;
                         work->arg_reg = alloc_integer_arg_reg(1, &next_gpr_index);
+                        work->is_dynarray = is_dynarray_param;
+                        work->dynarray_elem_size = dynarray_elem_size;
+                        work->dynarray_lower_bound = 0;
 
                         if (work->arg_reg == NULL)
                         {
@@ -4702,9 +4851,13 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                         /* Check if we have a presaved slot from pre-pass. We must use it
                          * because the argument registers may have been clobbered by kgpc_move
                          * calls when processing earlier record/dynarray parameters. */
-                        char presaved_name[64];
-                        snprintf(presaved_name, sizeof(presaved_name), "__presaved_%s__", (char *)arg_ids->cur);
-                        StackNode_t *presaved_slot = find_label(presaved_name);
+                        StackNode_t *presaved_slot = NULL;
+                        if (has_record_or_dynarray)
+                        {
+                            char presaved_name[64];
+                            snprintf(presaved_name, sizeof(presaved_name), "__presaved_%s__", (char *)arg_ids->cur);
+                            presaved_slot = find_label(presaved_name);
+                        }
                         
                         if (presaved_slot != NULL && arg_reg != NULL)
                         {
@@ -4803,7 +4956,9 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                 }
                 break;
             default:
-                assert(0 && "Unknown argument type!");
+                fprintf(stderr,
+                    "WARNING: Unknown argument type %d for procedure parameter.\n",
+                    arg_decl ? arg_decl->type : -1);
                 break;
         }
         args = args->next;
@@ -4824,6 +4979,14 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                 free(work);
                 rec_node = rec_node->next;
                 continue;
+            }
+            if (work->is_dynarray)
+            {
+                record_slot->is_array = 1;
+                record_slot->is_dynamic = 1;
+                record_slot->element_size = (work->dynarray_elem_size > 0) ?
+                    work->dynarray_elem_size : DOUBLEWORD;
+                record_slot->array_lower_bound = work->dynarray_lower_bound;
             }
 
             Register_t *stack_value_reg = NULL;

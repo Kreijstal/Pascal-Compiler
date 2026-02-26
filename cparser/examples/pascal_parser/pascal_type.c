@@ -310,31 +310,34 @@ static ParseResult array_type_fn(input_t* in, void* args, char* parser_name) {
 
     // Parse element type - support full type specs (record, set, pointer, identifier with optional [size], etc.)
     ast_t* element_ast = NULL;
-    // Try a rich element type first: record/class/interface/proc/func/set/file/pointer/range
-    combinator_t* packed_record = seq(new_combinator(), PASCAL_T_RECORD_TYPE,
-        token(keyword_ci("packed")),
-        record_type(PASCAL_T_RECORD_TYPE),
-        NULL
-    );
-    combinator_t* rich_element_type = multi(new_combinator(), PASCAL_T_TYPE_SPEC,
-        array_type(PASCAL_T_ARRAY_TYPE),
-        packed_record,
-        record_type(PASCAL_T_RECORD_TYPE),
-        interface_type(PASCAL_T_INTERFACE_TYPE),
-        class_type(PASCAL_T_CLASS_TYPE),
-        procedure_type(PASCAL_T_PROCEDURE_TYPE),
-        function_type(PASCAL_T_FUNCTION_TYPE),
-        set_type(PASCAL_T_SET),
-        file_type(PASCAL_T_FILE_TYPE),
-        pointer_type(PASCAL_T_POINTER_TYPE),
-        range_type(PASCAL_T_RANGE_TYPE),
-        map(token(keyword_ci("const")), map_const_type_keyword),
-        token(pascal_identifier_with_subscript(PASCAL_T_IDENTIFIER)),
-        token(cident(PASCAL_T_IDENTIFIER)),
-        NULL
-    );
-    ParseResult el_res = parse(in, rich_element_type);
-    free_combinator(rich_element_type);
+    // Cache the rich element type parser to avoid reconstructing expensive
+    // class_type/interface_type combinators on every array type parse attempt.
+    static combinator_t* cached_rich_element_type = NULL;
+    if (cached_rich_element_type == NULL) {
+        combinator_t* packed_record = seq(new_combinator(), PASCAL_T_RECORD_TYPE,
+            token(keyword_ci("packed")),
+            record_type(PASCAL_T_RECORD_TYPE),
+            NULL
+        );
+        cached_rich_element_type = multi(new_combinator(), PASCAL_T_TYPE_SPEC,
+            array_type(PASCAL_T_ARRAY_TYPE),
+            packed_record,
+            record_type(PASCAL_T_RECORD_TYPE),
+            interface_type(PASCAL_T_INTERFACE_TYPE),
+            class_type(PASCAL_T_CLASS_TYPE),
+            procedure_type(PASCAL_T_PROCEDURE_TYPE),
+            function_type(PASCAL_T_FUNCTION_TYPE),
+            set_type(PASCAL_T_SET),
+            file_type(PASCAL_T_FILE_TYPE),
+            pointer_type(PASCAL_T_POINTER_TYPE),
+            range_type(PASCAL_T_RANGE_TYPE),
+            map(token(keyword_ci("const")), map_const_type_keyword),
+            token(pascal_identifier_with_subscript(PASCAL_T_IDENTIFIER)),
+            token(cident(PASCAL_T_IDENTIFIER)),
+            NULL
+        );
+    }
+    ParseResult el_res = parse(in, cached_rich_element_type);
     if (!el_res.is_success) {
         discard_failure(el_res);
         free_ast(indices_ast);
@@ -404,7 +407,7 @@ static combinator_t* create_type_ref_parser(void) {
 
     combinator_t* type_arg_list = seq(new_combinator(), PASCAL_T_TYPE_ARG_LIST,
         token(match("<")),
-        sep_by(lazy(type_arg_ref), token(match(","))),
+        sep_by(lazy_owned(type_arg_ref), token(match(","))),
         token(match(">")),
         NULL
     );
@@ -632,7 +635,7 @@ combinator_t* class_type(tag_t tag) {
 
     combinator_t* delegation_type_arg_list = seq(new_combinator(), PASCAL_T_TYPE_ARG_LIST,
         token(match("<")),
-        sep_by(lazy(delegation_type_arg_ref), token(match(","))),
+        sep_by(lazy_owned(delegation_type_arg_ref), token(match(","))),
         token(match(">")),
         NULL
     );
@@ -1016,7 +1019,7 @@ combinator_t* class_type(tag_t tag) {
             NULL
         )),
         token(match("=")),
-        lazy(class_const_expr_parser),
+        lazy_owned(class_const_expr_parser),
         optional(token(match(";"))),
         NULL
     );
@@ -1755,6 +1758,7 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
 
     combinator_t** record_item_ref = safe_malloc(sizeof(combinator_t*));
     *record_item_ref = new_combinator();
+    (*record_item_ref)->extra_to_free = record_item_ref;
 
     combinator_t* variant_tag = create_variant_tag_parser(field_type);
     combinator_t* variant_branch = create_variant_branch_parser(record_item_ref);
@@ -1989,7 +1993,7 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
             NULL
         )),
         token(match("=")),
-        lazy(adv_const_expr_parser),
+        lazy_owned(adv_const_expr_parser),
         optional(token(match(";"))),
         NULL
     );
@@ -2164,7 +2168,7 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
             NULL
         );
 
-        combinator_t* tail_record_items = sep_end_by(lazy_owned(tail_record_item_ref), token(match(";")));
+        combinator_t* tail_record_items = sep_end_by(lazy(tail_record_item_ref), token(match(";")));
         ParseResult tail_items_res = parse(in, tail_record_items);
         ast_t* tail_fields_ast = NULL;
         if (tail_items_res.is_success) {

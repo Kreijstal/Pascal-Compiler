@@ -8586,6 +8586,15 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
             kgpc_type = wrapped;
             tree->tree_data.type_decl_data.kgpc_type = wrapped;
         }
+        if (kgpc_type == NULL &&
+            tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS &&
+            alias_info != NULL)
+        {
+            /* Ensure alias types get KgpcType even when parser couldn't resolve */
+            kgpc_type = create_kgpc_type_from_type_alias(alias_info, symtab,
+                tree->tree_data.type_decl_data.defined_in_unit);
+            tree->tree_data.type_decl_data.kgpc_type = kgpc_type;
+        }
 
         /* Check if this type was already pre-declared by predeclare_types().
          * If so, skip the push to avoid "redeclaration" errors.
@@ -11583,6 +11592,16 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 tree->tree_data.var_decl_data.cached_kgpc_type = resolved_type->type;
                 }
             }
+            else if (resolved_type != NULL && resolved_type->type == NULL && decl_type_id != NULL)
+            {
+                const char *type_name = decl_type_base != NULL ? decl_type_base : decl_type_id;
+                int builtin_tag = semcheck_map_builtin_type_name_local(type_name);
+                if (builtin_tag == STRING_TYPE || builtin_tag == SHORTSTRING_TYPE)
+                {
+                    tree->tree_data.var_decl_data.cached_kgpc_type =
+                        create_primitive_type(builtin_tag);
+                }
+            }
             else if (tree->tree_data.var_decl_data.cached_kgpc_type == NULL &&
                      resolved_type == NULL && decl_type_id != NULL)
             {
@@ -11596,8 +11615,19 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 else if (tree->tree_data.var_decl_data.type_ref != NULL &&
                          tree->tree_data.var_decl_data.type_ref->num_generic_args > 0)
                 {
-                    tree->tree_data.var_decl_data.cached_kgpc_type =
-                        create_primitive_type(POINTER_TYPE);
+                    /* Handle parameterized string types like AnsiString(CP_NONE) */
+                    const char *base_name = decl_type_base != NULL ? decl_type_base : decl_type_id;
+                    int base_tag = semcheck_map_builtin_type_name_local(base_name);
+                    if (base_tag == STRING_TYPE || base_tag == SHORTSTRING_TYPE)
+                    {
+                        tree->tree_data.var_decl_data.cached_kgpc_type =
+                            create_primitive_type(base_tag);
+                    }
+                    else
+                    {
+                        tree->tree_data.var_decl_data.cached_kgpc_type =
+                            create_primitive_type(POINTER_TYPE);
+                    }
                 }
             }
             /* Note: If cached_kgpc_type is already set (e.g., for inline procedure types from parser),
@@ -11667,6 +11697,41 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             type_id ? type_id : "<null>", declared_type, (void*)type_node,
                             type_node && type_node->type ? (void*)type_node->type : NULL,
                             type_node && type_node->type ? type_node->type->kind : -1);
+                    }
+                    if (getenv("KGPC_DEBUG_VAR_TYPES") != NULL && ids && ids->cur)
+                    {
+                        fprintf(stderr,
+                            "[KGPC] semcheck_decls var=%s type_id=%s declared_type=%d type_node=%p type_node->type=%p cached=%p cached_kind=%d\n",
+                            (char*)ids->cur,
+                            type_id ? type_id : "<null>",
+                            declared_type,
+                            (void*)type_node,
+                            type_node && type_node->type ? (void*)type_node->type : NULL,
+                            (void*)tree->tree_data.var_decl_data.cached_kgpc_type,
+                            tree->tree_data.var_decl_data.cached_kgpc_type ?
+                                tree->tree_data.var_decl_data.cached_kgpc_type->kind : -1);
+                    }
+
+                    if (tree->tree_data.var_decl_data.cached_kgpc_type != NULL &&
+                        (type_node == NULL || type_node->type == NULL))
+                    {
+                        KgpcType *cached = tree->tree_data.var_decl_data.cached_kgpc_type;
+                        kgpc_type_retain(cached);
+                        func_return = PushVarOntoScope_Typed(symtab, (char *)ids->cur, cached);
+                        if (func_return == 0)
+                        {
+                            HashNode_t *var_node = NULL;
+                            if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
+                            {
+                                var_node->is_var_parameter =
+                                    (tree->tree_data.var_decl_data.is_var_param ||
+                                     tree->tree_data.var_decl_data.is_untyped_param) ? 1 : 0;
+                                mark_hashnode_unit_info(symtab, var_node,
+                                    tree->tree_data.var_decl_data.defined_in_unit,
+                                    tree->tree_data.var_decl_data.unit_is_public);
+                            }
+                        }
+                        goto next_identifier;
                     }
                     
                     if (declared_type == SET_TYPE)
@@ -11801,6 +11866,30 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     }
                     else
                     {
+                        if (type_node->type == NULL && type_id != NULL)
+                        {
+                            int builtin_tag = semcheck_map_builtin_type_name_local(type_id);
+                            if (builtin_tag != UNKNOWN_TYPE)
+                            {
+                                KgpcType *builtin_type = create_primitive_type(builtin_tag);
+                                func_return = PushVarOntoScope_Typed(symtab, (char *)ids->cur, builtin_type);
+                                if (func_return == 0)
+                                {
+                                    HashNode_t *var_node = NULL;
+                                    if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
+                                    {
+                                        var_node->is_var_parameter =
+                                            (tree->tree_data.var_decl_data.is_var_param ||
+                                             tree->tree_data.var_decl_data.is_untyped_param) ? 1 : 0;
+                                        mark_hashnode_unit_info(symtab, var_node,
+                                            tree->tree_data.var_decl_data.defined_in_unit,
+                                            tree->tree_data.var_decl_data.unit_is_public);
+                                    }
+                                }
+                                goto next_identifier;
+                            }
+                        }
+
                         if (type_node->type != NULL && type_node->type->kind == TYPE_KIND_PROCEDURE)
                         {
                             kgpc_type_retain(type_node->type);

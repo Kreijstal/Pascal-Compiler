@@ -1260,10 +1260,13 @@ StackNode_t *stackscope_find_x(StackScope_t *cur_scope, char *label)
     assert(label != NULL);
 
     cur_li = cur_scope->x;
-    while(cur_li != NULL)
+    int safety = 0;
+    while(cur_li != NULL && safety < 100000)
     {
+        safety++;
         cur_node = (StackNode_t *)cur_li->cur;
-        if(pascal_identifier_equals(cur_node->label, label))
+        if(cur_node != NULL && cur_node->label != NULL &&
+           pascal_identifier_equals(cur_node->label, label))
         {
             if (!cur_node->is_alias)
                 return cur_node;

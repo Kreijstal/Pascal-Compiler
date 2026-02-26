@@ -90,13 +90,15 @@ int main(int argc, char *argv[]) {
     ast_nil = new_ast();
     ast_nil->typ = CALC_T_NONE;
     ParseResult result = parse(in, expr_parser);
+    int status = 0;
 
     // Output
     if (result.is_success) {
         if (in->start < in->length) {
             fprintf(stderr, "Error: Parser did not consume entire input. Trailing characters: '%s'\n", in->buffer + in->start);
             free_ast(result.value.ast);
-            return 1;
+            status = 1;
+            goto cleanup;
         }
         if (print_ast) {
             print_calculator_ast(result.value.ast);
@@ -109,19 +111,21 @@ int main(int argc, char *argv[]) {
         long final_result = 0;
         if (!eval(result.value.ast, &final_result)) {
             free_ast(result.value.ast);
-            return 1;
+            status = 1;
+            goto cleanup;
         }
         printf("%ld\n", final_result);
         free_ast(result.value.ast);
     } else {
         print_error_with_partial_ast(result.value.error);
         free_error(result.value.error);
-        return 1;
+        status = 1;
     }
 
     // Cleanup
+cleanup:
     free_combinator(expr_parser);
-    free(in);
+    free_input(in);
     free(ast_nil);
-    return 0;
+    return status;
 }
