@@ -3929,6 +3929,35 @@ static ast_t *find_type_decl_in_section(ast_t *type_section, const char *type_na
     return NULL;
 }
 
+static int type_name_is_class_like(const char *type_name) {
+    if (type_name == NULL)
+        return 0;
+
+    ast_t *type_decl = find_type_decl_in_section(g_interface_type_section_ast, type_name);
+    if (type_decl == NULL)
+        type_decl = find_type_decl_in_section(g_implementation_type_section_ast, type_name);
+    if (type_decl == NULL)
+        return 0;
+
+    ast_t *spec_node = type_decl->child;
+    while (spec_node != NULL &&
+           spec_node->typ != PASCAL_T_TYPE_SPEC &&
+           spec_node->typ != PASCAL_T_CLASS_TYPE &&
+           spec_node->typ != PASCAL_T_INTERFACE_TYPE)
+    {
+        spec_node = spec_node->next;
+    }
+
+    if (spec_node == NULL)
+        return 0;
+
+    if (spec_node->typ == PASCAL_T_TYPE_SPEC && spec_node->child != NULL)
+        spec_node = spec_node->child;
+
+    return (spec_node->typ == PASCAL_T_CLASS_TYPE ||
+            spec_node->typ == PASCAL_T_INTERFACE_TYPE);
+}
+
 static int resolve_array_type_info_from_ast(const char *type_name, ast_t *type_section, TypeInfo *out_info, int depth) {
     if (type_name == NULL || type_section == NULL || out_info == NULL)
         return -1;
@@ -7860,6 +7889,8 @@ KgpcType *from_cparser_method_template_to_proctype(struct MethodTemplate *method
                 self_type_tag = map_type_name(record->helper_base_type_id, NULL);
                 self_is_var = helper_self_param_is_var(record->helper_base_type_id, symtab);
                 self_type_alias = helper_self_real_alias(record->helper_base_type_id);
+            } else if (record->is_class || record->is_interface) {
+                self_is_var = 0;
             } else if (record->type_id != NULL) {
                 self_type_id = strdup(record->type_id);
             }
@@ -14164,6 +14195,8 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
                 self_is_var = helper_self_param_is_var(helper_base, NULL);
             } else {
                 self_type_id = strdup(effective_class_full ? effective_class_full : effective_class);
+                if (type_name_is_class_like(effective_class))
+                    self_is_var = 0;
             }
         }
         Tree_t *self_param = mk_vardecl(method_node->line, self_ids, self_type_tag,
