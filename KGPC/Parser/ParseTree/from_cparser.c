@@ -220,24 +220,50 @@ static bool visited_set_contains(VisitedSet *set, ast_t *node) {
     return false;
 }
 
+static void visited_set_rehash(VisitedSet *set) {
+    size_t new_capacity = set->capacity * 2;
+    VisitedSetEntry **new_buckets = (VisitedSetEntry **)calloc(new_capacity, sizeof(VisitedSetEntry *));
+    if (new_buckets == NULL) return; /* rehash failed, continue with old table */
+
+    for (size_t i = 0; i < set->capacity; i++) {
+        VisitedSetEntry *entry = set->buckets[i];
+        while (entry != NULL) {
+            VisitedSetEntry *next = entry->next;
+            size_t new_index = (size_t)((uintptr_t)entry->node % new_capacity);
+            entry->next = new_buckets[new_index];
+            new_buckets[new_index] = entry;
+            entry = next;
+        }
+    }
+
+    free(set->buckets);
+    set->buckets = new_buckets;
+    set->capacity = new_capacity;
+}
+
 static bool visited_set_add(VisitedSet *set, ast_t *node) {
     if (set == NULL || node == NULL) return false;
-    
+
     /* Check if already present */
     if (visited_set_contains(set, node)) {
         return true; /* Already visited - indicates circular reference */
     }
-    
+
+    /* Rehash if load factor exceeded */
+    if (set->size >= (size_t)(set->capacity * VISITED_SET_LOAD_FACTOR)) {
+        visited_set_rehash(set);
+    }
+
     /* Add new entry */
     size_t index = visited_set_hash(node, set->capacity);
     VisitedSetEntry *new_entry = (VisitedSetEntry *)malloc(sizeof(VisitedSetEntry));
     if (new_entry == NULL) return false;
-    
+
     new_entry->node = node;
     new_entry->next = set->buckets[index];
     set->buckets[index] = new_entry;
     set->size++;
-    
+
     return false; /* Not a duplicate */
 }
 
@@ -2611,84 +2637,85 @@ static void append_subprogram_if_unique(ListNode_t **dest, Tree_t *tree)
 static void append_subprograms_from_ast_recursive(ast_t *node, ListNode_t **subprograms,
     VisitedSet *visited)
 {
-    if (node == NULL || node == ast_nil || subprograms == NULL || visited == NULL)
-        return;
-
-    if (!is_safe_to_continue(visited, node))
-        return;
-
-    switch (node->typ)
+    /* Iterate over siblings to avoid deep recursion on node->next chains */
+    for (ast_t *cur = node; cur != NULL && cur != ast_nil; cur = cur->next)
     {
-    case PASCAL_T_PROCEDURE_DECL: {
-        Tree_t *proc = convert_procedure(node);
-        append_subprogram_if_unique(subprograms, proc);
-        append_subprograms_from_ast_recursive(node->next, subprograms, visited);
-        return;
-    }
-    case PASCAL_T_FUNCTION_DECL: {
-        Tree_t *func = convert_function(node);
-        append_subprogram_if_unique(subprograms, func);
-        append_subprograms_from_ast_recursive(node->next, subprograms, visited);
-        return;
-    }
-    case PASCAL_T_METHOD_IMPL:
-    case PASCAL_T_CONSTRUCTOR_DECL:
-    case PASCAL_T_DESTRUCTOR_DECL: {
-        Tree_t *method_tree = convert_method_impl(node);
-        append_subprogram_if_unique(subprograms, method_tree);
-        append_subprograms_from_ast_recursive(node->next, subprograms, visited);
-        return;
-    }
-    default:
-        break;
-    }
+        if (subprograms == NULL || visited == NULL)
+            return;
 
-    append_subprograms_from_ast_recursive(node->child, subprograms, visited);
-    append_subprograms_from_ast_recursive(node->next, subprograms, visited);
+        if (!is_safe_to_continue(visited, cur))
+            continue;
+
+        switch (cur->typ)
+        {
+        case PASCAL_T_PROCEDURE_DECL: {
+            Tree_t *proc = convert_procedure(cur);
+            append_subprogram_if_unique(subprograms, proc);
+            continue; /* skip child traversal for subprograms */
+        }
+        case PASCAL_T_FUNCTION_DECL: {
+            Tree_t *func = convert_function(cur);
+            append_subprogram_if_unique(subprograms, func);
+            continue;
+        }
+        case PASCAL_T_METHOD_IMPL:
+        case PASCAL_T_CONSTRUCTOR_DECL:
+        case PASCAL_T_DESTRUCTOR_DECL: {
+            Tree_t *method_tree = convert_method_impl(cur);
+            append_subprogram_if_unique(subprograms, method_tree);
+            continue;
+        }
+        default:
+            break;
+        }
+
+        /* Recurse into children (tree depth is bounded) */
+        append_subprograms_from_ast_recursive(cur->child, subprograms, visited);
+    }
 }
 
 static void append_top_level_subprograms_from_ast(ast_t *node, ListNode_t **subprograms,
     VisitedSet *visited, int in_subprogram)
 {
-    if (node == NULL || node == ast_nil || subprograms == NULL || visited == NULL)
-        return;
-
-    if (visited_set_contains(visited, node))
+    /* Iterate over siblings to avoid deep recursion on node->next chains */
+    for (ast_t *cur = node; cur != NULL && cur != ast_nil; cur = cur->next)
     {
-        /* Still traverse siblings to avoid skipping shared subtrees. */
-        append_top_level_subprograms_from_ast(node->next, subprograms, visited, in_subprogram);
-        return;
+        if (subprograms == NULL || visited == NULL)
+            return;
+
+        if (visited_set_contains(visited, cur))
+            continue;
+        visited_set_add(visited, cur);
+
+        int is_subprogram = (cur->typ == PASCAL_T_PROCEDURE_DECL ||
+            cur->typ == PASCAL_T_FUNCTION_DECL ||
+            cur->typ == PASCAL_T_METHOD_IMPL ||
+            cur->typ == PASCAL_T_CONSTRUCTOR_DECL ||
+            cur->typ == PASCAL_T_DESTRUCTOR_DECL);
+
+        if (is_subprogram && !in_subprogram)
+        {
+            if (cur->typ == PASCAL_T_PROCEDURE_DECL)
+            {
+                Tree_t *proc = convert_procedure(cur);
+                append_subprogram_if_unique(subprograms, proc);
+            }
+            else if (cur->typ == PASCAL_T_FUNCTION_DECL)
+            {
+                Tree_t *func = convert_function(cur);
+                append_subprogram_if_unique(subprograms, func);
+            }
+            else
+            {
+                Tree_t *method_tree = convert_method_impl(cur);
+                append_subprogram_if_unique(subprograms, method_tree);
+            }
+        }
+
+        int child_in_subprogram = in_subprogram || is_subprogram;
+        /* Recurse into children (tree depth is bounded) */
+        append_top_level_subprograms_from_ast(cur->child, subprograms, visited, child_in_subprogram);
     }
-    visited_set_add(visited, node);
-
-    int is_subprogram = (node->typ == PASCAL_T_PROCEDURE_DECL ||
-        node->typ == PASCAL_T_FUNCTION_DECL ||
-        node->typ == PASCAL_T_METHOD_IMPL ||
-        node->typ == PASCAL_T_CONSTRUCTOR_DECL ||
-        node->typ == PASCAL_T_DESTRUCTOR_DECL);
-
-    if (is_subprogram && !in_subprogram)
-    {
-        if (node->typ == PASCAL_T_PROCEDURE_DECL)
-        {
-            Tree_t *proc = convert_procedure(node);
-            append_subprogram_if_unique(subprograms, proc);
-        }
-        else if (node->typ == PASCAL_T_FUNCTION_DECL)
-        {
-            Tree_t *func = convert_function(node);
-            append_subprogram_if_unique(subprograms, func);
-        }
-        else
-        {
-            Tree_t *method_tree = convert_method_impl(node);
-            append_subprogram_if_unique(subprograms, method_tree);
-        }
-    }
-
-    int child_in_subprogram = in_subprogram || is_subprogram;
-    append_top_level_subprograms_from_ast(node->child, subprograms, visited, child_in_subprogram);
-    append_top_level_subprograms_from_ast(node->next, subprograms, visited, in_subprogram);
 }
 
 static void sync_method_impls_from_generic_template(struct RecordType *record)
@@ -5649,11 +5676,9 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
                 }
             }
 
-            if (points_to != NULL) {
-                return create_pointer_type(points_to);
-            }
+            return create_pointer_type(points_to);
         }
-        return NULL;
+        return create_pointer_type(NULL);
     }
 
     /* Handle procedure and function types */
@@ -10135,11 +10160,16 @@ static void qualify_expr_type_id(struct Expression *expr, const char *owner_id)
     if (expr->id_ref != NULL && expr->id_ref->count > 1)
         return;
 
-    const char *base_name = expr->expr_data.id;
+    char *base_name = strdup(expr->expr_data.id);
+    if (base_name == NULL)
+        return;
     size_t len = strlen(owner_id) + 1 + strlen(base_name) + 1;
     char *qualified = (char *)malloc(len);
     if (qualified == NULL)
+    {
+        free(base_name);
         return;
+    }
     snprintf(qualified, len, "%s.%s", owner_id, base_name);
     free(expr->expr_data.id);
     expr->expr_data.id = qualified;
@@ -10148,9 +10178,12 @@ static void qualify_expr_type_id(struct Expression *expr, const char *owner_id)
         qualified_ident_free(expr->id_ref);
     char **segments = (char **)calloc(2, sizeof(char *));
     if (segments == NULL)
+    {
+        free(base_name);
         return;
+    }
     segments[0] = strdup(owner_id);
-    segments[1] = strdup(base_name);
+    segments[1] = base_name;
     if (segments[0] == NULL || segments[1] == NULL)
     {
         free(segments[0]);

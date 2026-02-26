@@ -1626,7 +1626,7 @@ ParseResult parse(input_t * in, combinator_t * comb) {
     return result;
 }
 
-static combinator_t* create_lazy(combinator_t** parser_ptr, bool owns_parser) {
+static combinator_t* create_lazy(combinator_t** parser_ptr, bool owns_parser, bool owns_parser_ptr) {
     if (parser_ptr == NULL) {
         exception("create_lazy called with NULL parser_ptr");
     }
@@ -1636,6 +1636,7 @@ static combinator_t* create_lazy(combinator_t** parser_ptr, bool owns_parser) {
     lazy_args* args = (lazy_args*)safe_malloc(sizeof(lazy_args));
     args->parser_ptr = parser_ptr;
     args->owns_parser = owns_parser;
+    args->owns_parser_ptr = owns_parser_ptr;
     combinator_t* comb = new_combinator();
     comb->type = COMB_LAZY;
     comb->fn = lazy_fn;
@@ -1644,11 +1645,11 @@ static combinator_t* create_lazy(combinator_t** parser_ptr, bool owns_parser) {
 }
 
 combinator_t * lazy(combinator_t** parser_ptr) {
-    return create_lazy(parser_ptr, false);
+    return create_lazy(parser_ptr, false, false);
 }
 
 combinator_t * lazy_owned(combinator_t** parser_ptr) {
-    return create_lazy(parser_ptr, true);
+    return create_lazy(parser_ptr, true, true);
 }
 
 //=============================================================================
@@ -2261,8 +2262,18 @@ static void free_combinator_recursive(combinator_t* comb, visited_set* visited, 
             case COMB_LAZY: {
                 lazy_args* args = (lazy_args*)comb->args;
                 if (args != NULL) {
-                    if (args->owns_parser && args->parser_ptr != NULL && *args->parser_ptr != NULL) {
+                    int parser_ptr_freed = 0;
+                    if (args->owns_parser_ptr && args->parser_ptr != NULL) {
+                        parser_ptr_freed = visited_set_contains(visited, args->parser_ptr);
+                    }
+                    if (args->owns_parser && args->parser_ptr != NULL && !parser_ptr_freed &&
+                        *args->parser_ptr != NULL) {
                         free_combinator_recursive(*args->parser_ptr, visited, extras);
+                    }
+                    if (args->owns_parser_ptr && args->parser_ptr != NULL && !parser_ptr_freed) {
+                        visited_set_insert(visited, args->parser_ptr);
+                        free(args->parser_ptr);
+                        args->parser_ptr = NULL;
                     }
                     free(args);
                 }

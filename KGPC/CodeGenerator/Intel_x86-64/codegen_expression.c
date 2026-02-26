@@ -4137,6 +4137,87 @@ static int codegen_get_indexable_element_size(struct Expression *array_expr,
     int base_is_array = codegen_resolve_is_array(array_expr, ctx, &array_stack_node);
     int base_is_string = (is_string_type(expr_get_type_tag(array_expr)) && !base_is_array);
     int base_is_pointer = (expr_has_type_tag(array_expr, POINTER_TYPE) && !base_is_array);
+    struct RecordField *record_field = NULL;
+    KgpcType *record_field_type = NULL;
+
+    if (array_expr->type == EXPR_RECORD_ACCESS)
+    {
+        record_field = codegen_lookup_record_field_expr(array_expr, ctx);
+        if (record_field != NULL)
+        {
+            if (record_field->is_array)
+                base_is_array = 1;
+            if (!base_is_pointer && record_field->is_pointer)
+                base_is_pointer = 1;
+            if (!base_is_string && is_string_type(record_field->type))
+                base_is_string = 1;
+            if (ctx != NULL && ctx->symtab != NULL && record_field->type_id != NULL)
+            {
+                HashNode_t *type_node = NULL;
+                if (FindIdent(&type_node, ctx->symtab, record_field->type_id) >= 0 &&
+                    type_node != NULL && type_node->type != NULL)
+                {
+                    record_field_type = type_node->type;
+                    if (!base_is_array && kgpc_type_is_array(record_field_type))
+                        base_is_array = 1;
+                    if (!base_is_string && kgpc_type_is_string(record_field_type))
+                        base_is_string = 1;
+                    if (!base_is_pointer && kgpc_type_is_pointer(record_field_type))
+                        base_is_pointer = 1;
+                }
+            }
+        }
+    }
+    if (array_expr != NULL && array_expr->resolved_kgpc_type != NULL)
+    {
+        KgpcType *resolved = array_expr->resolved_kgpc_type;
+        if (!base_is_array && kgpc_type_is_array(resolved))
+            base_is_array = 1;
+        if (!base_is_string && kgpc_type_is_string(resolved))
+            base_is_string = 1;
+        if (!base_is_pointer && kgpc_type_is_pointer(resolved))
+            base_is_pointer = 1;
+    }
+    /* Fallback: check stack node and symbol table for unresolved types */
+    if (!base_is_array && !base_is_string && !base_is_pointer)
+    {
+        if (array_stack_node != NULL && (array_stack_node->is_array || array_stack_node->is_dynamic))
+            base_is_array = 1;
+        else if (array_expr->type == EXPR_VAR_ID && array_expr->expr_data.id != NULL &&
+                 ctx != NULL && ctx->symtab != NULL)
+        {
+            HashNode_t *var_node = NULL;
+            if (FindIdent(&var_node, ctx->symtab, array_expr->expr_data.id) >= 0 &&
+                var_node != NULL && var_node->type != NULL)
+            {
+                if (kgpc_type_is_string(var_node->type))
+                    base_is_string = 1;
+                else if (kgpc_type_is_array(var_node->type))
+                    base_is_array = 1;
+                else if (kgpc_type_is_pointer(var_node->type))
+                    base_is_pointer = 1;
+            }
+        }
+    }
+    if (!base_is_array && !base_is_string && !base_is_pointer)
+    {
+        if (array_expr->type == EXPR_POINTER_DEREF)
+        {
+            /* p^[i] where p points to an array - treat as array access */
+            base_is_array = 1;
+        }
+        else if (array_expr->type == EXPR_RECORD_ACCESS)
+        {
+            /* Record field indexing (e.g., rec.field[i]) - trust semcheck info if present */
+            if (array_expr->is_array_expr ||
+                array_expr->array_element_type != UNKNOWN_TYPE ||
+                array_expr->array_element_type_id != NULL ||
+                array_expr->array_element_record_type != NULL)
+            {
+                base_is_array = 1;
+            }
+        }
+    }
     long long element_size_ll = 1;
 
     if (base_is_string)
@@ -4158,6 +4239,47 @@ static int codegen_get_indexable_element_size(struct Expression *array_expr,
         }
         *out_size = element_size_ll;
         return 1;
+    }
+
+    if (base_is_array && record_field != NULL && record_field->is_array)
+    {
+        if (record_field->array_element_kgpc_type != NULL)
+        {
+            element_size_ll = kgpc_type_sizeof(record_field->array_element_kgpc_type);
+        }
+        else
+        {
+            struct RecordType *elem_record = record_field->array_element_record;
+            if (codegen_sizeof_type(ctx, record_field->array_element_type,
+                    record_field->array_element_type_id, elem_record,
+                    &element_size_ll, 0) != 0)
+            {
+                element_size_ll = -1;
+            }
+        }
+
+        if (element_size_ll > 0)
+        {
+            *out_size = element_size_ll;
+            return 1;
+        }
+    }
+
+    if (base_is_array && record_field_type != NULL && kgpc_type_is_array(record_field_type))
+    {
+        long long field_elem = kgpc_type_get_array_element_size(record_field_type);
+        if (field_elem <= 0)
+        {
+            KgpcType *elem = kgpc_type_get_array_element_type_resolved(record_field_type,
+                ctx != NULL ? ctx->symtab : NULL);
+            if (elem != NULL)
+                field_elem = kgpc_type_sizeof(elem);
+        }
+        if (field_elem > 0)
+        {
+            *out_size = field_elem;
+            return 1;
+        }
     }
 
     element_size_ll = expr_get_array_element_size(array_expr, ctx);
@@ -4328,9 +4450,123 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
     int base_is_array = codegen_resolve_is_array(array_expr, ctx, &array_stack_node);
     int base_is_string = (is_string_type(expr_get_type_tag(array_expr)) && !base_is_array);
     int base_is_pointer = (expr_has_type_tag(array_expr, POINTER_TYPE) && !base_is_array);
+    struct RecordField *record_field = NULL;
+    KgpcType *record_field_type = NULL;
+    int record_field_lower_known = 0;
+    long long record_field_lower = 0;
+
+    if (array_expr->type == EXPR_RECORD_ACCESS)
+    {
+        record_field = codegen_lookup_record_field_expr(array_expr, ctx);
+        if (record_field != NULL)
+        {
+            if (record_field->is_array)
+            {
+                base_is_array = 1;
+                record_field_lower_known = 1;
+                record_field_lower = record_field->array_start;
+            }
+            if (!base_is_pointer && record_field->is_pointer)
+                base_is_pointer = 1;
+            if (!base_is_string && is_string_type(record_field->type))
+                base_is_string = 1;
+            if (ctx != NULL && ctx->symtab != NULL && record_field->type_id != NULL)
+            {
+                HashNode_t *type_node = NULL;
+                if (FindIdent(&type_node, ctx->symtab, record_field->type_id) >= 0 &&
+                    type_node != NULL && type_node->type != NULL)
+                {
+                    record_field_type = type_node->type;
+                    if (!base_is_array && kgpc_type_is_array(record_field_type))
+                        base_is_array = 1;
+                    if (!base_is_string && kgpc_type_is_string(record_field_type))
+                        base_is_string = 1;
+                    if (!base_is_pointer && kgpc_type_is_pointer(record_field_type))
+                        base_is_pointer = 1;
+                    if (!record_field_lower_known && kgpc_type_is_array(record_field_type))
+                    {
+                        record_field_lower_known = 1;
+                        record_field_lower = record_field_type->info.array_info.start_index;
+                    }
+                }
+            }
+        }
+    }
+
+    /* Fallback: if type tag is unknown, try looking up the variable's type from the
+     * symbol table or stack. String parameters like RawByteString may not have their
+     * type tag set but are still indexable. */
+    if (!base_is_array && !base_is_string && !base_is_pointer)
+    {
+        if (array_stack_node != NULL && (array_stack_node->is_array || array_stack_node->is_dynamic))
+            base_is_array = 1;
+        else if (array_expr->type == EXPR_VAR_ID && array_expr->expr_data.id != NULL &&
+                 ctx != NULL && ctx->symtab != NULL)
+        {
+            HashNode_t *var_node = NULL;
+            if (FindIdent(&var_node, ctx->symtab, array_expr->expr_data.id) >= 0 &&
+                var_node != NULL && var_node->type != NULL)
+            {
+                if (kgpc_type_is_string(var_node->type))
+                    base_is_string = 1;
+                else if (kgpc_type_is_array(var_node->type))
+                    base_is_array = 1;
+                else if (kgpc_type_is_pointer(var_node->type))
+                    base_is_pointer = 1;
+            }
+        }
+    }
+    if (!base_is_array && !base_is_string && !base_is_pointer)
+    {
+        if (array_expr->type == EXPR_POINTER_DEREF)
+        {
+            /* p^[i] where p points to an array - treat as array access */
+            base_is_array = 1;
+        }
+        else if (array_expr->type == EXPR_RECORD_ACCESS)
+        {
+            /* Record field indexing (e.g., rec.field[i]) - trust semcheck info if present */
+            if (array_expr->is_array_expr ||
+                array_expr->array_element_type != UNKNOWN_TYPE ||
+                array_expr->array_element_type_id != NULL ||
+                array_expr->array_element_record_type != NULL)
+            {
+                base_is_array = 1;
+            }
+        }
+    }
 
     if (!base_is_array && !base_is_string && !base_is_pointer)
     {
+        if (getenv("KGPC_DEBUG_ARRAY_ACCESS") != NULL)
+        {
+            fprintf(stderr,
+                "[KGPC_DEBUG_ARRAY_ACCESS] non-indexable base: expr_type=%d tag=%d base_is_array=%d base_is_string=%d base_is_pointer=%d\n",
+                array_expr != NULL ? array_expr->type : -1,
+                array_expr != NULL ? expr_get_type_tag(array_expr) : -1,
+                base_is_array, base_is_string, base_is_pointer);
+            if (ctx != NULL && ctx->current_subprogram_id != NULL)
+                fprintf(stderr, "[KGPC_DEBUG_ARRAY_ACCESS] subprogram: %s\n", ctx->current_subprogram_id);
+            if (array_expr != NULL)
+            {
+                if (array_expr->type == EXPR_VAR_ID && array_expr->expr_data.id != NULL)
+                    fprintf(stderr, "[KGPC_DEBUG_ARRAY_ACCESS] base id: %s\n", array_expr->expr_data.id);
+                if (array_expr->resolved_kgpc_type != NULL)
+                    fprintf(stderr, "[KGPC_DEBUG_ARRAY_ACCESS] kgpc type: %s\n",
+                        kgpc_type_to_string(array_expr->resolved_kgpc_type));
+                if (ctx != NULL && ctx->symtab != NULL &&
+                    array_expr->type == EXPR_VAR_ID && array_expr->expr_data.id != NULL)
+                {
+                    HashNode_t *dbg_node = NULL;
+                    if (FindIdent(&dbg_node, ctx->symtab, array_expr->expr_data.id) == 0 &&
+                        dbg_node != NULL && dbg_node->type != NULL)
+                    {
+                        fprintf(stderr, "[KGPC_DEBUG_ARRAY_ACCESS] symtab type: %s\n",
+                            kgpc_type_to_string(dbg_node->type));
+                    }
+                }
+            }
+        }
         codegen_report_error(ctx, "ERROR: Expression is not indexable as an array.");
         return inst_list;
     }
@@ -4390,6 +4626,8 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
         if (FindIdent(&node, ctx->symtab, array_expr->expr_data.id) >= 0 && node != NULL)
             array_type = node->type;
     }
+    if (array_type == NULL && record_field_type != NULL && kgpc_type_is_array(record_field_type))
+        array_type = record_field_type;
     int array_is_open_array = 0;
     if (array_type != NULL && array_type->type_alias != NULL &&
         array_type->type_alias->is_open_array)
@@ -4428,6 +4666,8 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
     {
         if (array_is_open_array)
             first_lower_bound = 0;
+        else if (record_field_lower_known)
+            first_lower_bound = record_field_lower;
         else
             first_lower_bound = base_is_pointer ? 0 : (base_is_string ? 1 : expr_get_array_lower_bound(array_expr));
         long long element_size_ll = 1;
@@ -6222,6 +6462,8 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 }
 
                 Register_t *buf_addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                if (buf_addr_reg == NULL)
+                    buf_addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
                 if (buf_addr_reg == NULL)
                 {
                     codegen_report_error(ctx,

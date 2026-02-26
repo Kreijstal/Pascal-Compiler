@@ -982,6 +982,8 @@ static ListNode_t *codegen_evaluate_expr(struct Expression *expr, ListNode_t *in
     expr_node_t *expr_tree = build_expr_tree(expr);
     Register_t *reg = get_free_reg(get_reg_stack(), &inst_list);
     if (reg == NULL)
+        reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+    if (reg == NULL)
         return codegen_fail_register(ctx, inst_list, out_reg,
             "ERROR: Unable to allocate register for expression evaluation.");
     inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, reg);
@@ -4028,6 +4030,7 @@ static ListNode_t *codegen_builtin_setlength(struct Statement *stmt, ListNode_t 
 
     int is_field_array = 0;
     int is_nested_array = 0;
+    int use_expr_address = 0;
 
     /* If not found in local stack, might be a field of the current object */
     if (array_node == NULL && array_expr->type == EXPR_RECORD_ACCESS)
@@ -4040,10 +4043,17 @@ static ListNode_t *codegen_builtin_setlength(struct Statement *stmt, ListNode_t 
         is_nested_array = 1;
     }
 
-    if (!is_field_array && !is_nested_array && (array_node == NULL || !array_node->is_dynamic))
+    if (!is_field_array && !is_nested_array)
     {
-        fprintf(stderr, "ERROR: Dynamic array %s not found for SetLength.\n", array_id);
-        return inst_list;
+        if (array_node == NULL)
+        {
+            use_expr_address = 1;
+        }
+        else if (!array_node->is_dynamic)
+        {
+            array_node->is_array = 1;
+            array_node->is_dynamic = 1;
+        }
     }
 
     int element_size;
@@ -4118,7 +4128,18 @@ static ListNode_t *codegen_builtin_setlength(struct Statement *stmt, ListNode_t 
             "ERROR: Unable to allocate register for SetLength descriptor.");
 
     char buffer[128];
-    if (is_nested_array)
+    if (use_expr_address)
+    {
+        Register_t *addr_reg = NULL;
+        inst_list = codegen_address_for_expr(array_expr, inst_list, ctx, &addr_reg);
+        if (codegen_had_error(ctx) || addr_reg == NULL)
+            return inst_list;
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
+            addr_reg->bit_64, descriptor_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        free_reg(get_reg_stack(), addr_reg);
+    }
+    else if (is_nested_array)
     {
         /* For nested dynamic arrays, compute the address of the inner array element.
          * E.g. SetLength(arr[i], n) where arr[i] is a dynamic array pointer.
@@ -4153,8 +4174,16 @@ static ListNode_t *codegen_builtin_setlength(struct Statement *stmt, ListNode_t 
     }
     else
     {
-        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
-            array_node->offset, descriptor_reg->bit_64);
+        if (array_node->is_reference)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                array_node->offset, descriptor_reg->bit_64);
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                array_node->offset, descriptor_reg->bit_64);
+        }
     }
     inst_list = add_inst(inst_list, buffer);
 
@@ -5927,6 +5956,8 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
         {
             /* Load value normally - need to allocate register for expr tree evaluation */
             value_reg = get_free_reg(get_reg_stack(), &inst_list);
+            if (value_reg == NULL)
+                value_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
             if (value_reg == NULL)
             {
                 codegen_report_error(ctx, "ERROR: Unable to allocate register for write value.");
@@ -7861,6 +7892,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
     else
     {
         assert(0 && "Unsupported assignment target");
+        return inst_list;
     }
 }
 
@@ -7877,11 +7909,13 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
 
     char *proc_name;
     ListNode_t *args_expr;
+    ListNode_t *call_args;
     /* Procedure calls can reference very long mangled identifiers, so keep plenty of space. */
     char buffer[CODEGEN_MAX_INST_BUF];
 
     proc_name = stmt->stmt_data.procedure_call_data.mangled_id;
     args_expr = stmt->stmt_data.procedure_call_data.expr_args;
+    call_args = args_expr;
     char *unmangled_name = stmt->stmt_data.procedure_call_data.id;
     
     /* CRITICAL FIX: Use cached information from AST instead of HashNode pointer.
@@ -7912,7 +7946,11 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
     {
         /* Fallback: look up the symbol (for old code paths or if semantic checker didn't set it) */
         HashNode_t *proc_node = NULL;
-        FindIdent(&proc_node, symtab, unmangled_name);
+        if (unmangled_name != NULL)
+            FindIdent(&proc_node, symtab, unmangled_name);
+        /* If unmangled name not found, try the mangled name */
+        if (proc_node == NULL && proc_name != NULL && proc_name != unmangled_name)
+            FindIdent(&proc_node, symtab, proc_name);
 #ifdef DEBUG_CODEGEN
         debug_proc_node = proc_node;
 #endif
@@ -7923,11 +7961,21 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         }
         else
         {
-            /* Symbol not found - this is an error that should have been caught in semantic checking */
+            /* Symbol not found - emit as a direct call and hope the linker resolves it.
+             * This handles runtime procedures and methods that may not be in the symbol table. */
             codegen_report_error(ctx,
-                "FATAL: Internal compiler error - procedure %s not found during code generation. "
-                "This should have been caught during semantic checking.",
+                "WARNING: procedure %s not found during code generation, emitting direct call.",
                 unmangled_name ? unmangled_name : "(unknown)");
+            /* Emit a direct call to the mangled name */
+            const char *call_target = proc_name ? proc_name : unmangled_name;
+            if (call_target != NULL)
+            {
+                char call_buffer[CODEGEN_MAX_INST_BUF];
+                inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, NULL,
+                    unmangled_name, 0, NULL);
+                snprintf(call_buffer, sizeof(call_buffer), "\tcall\t%s\n", call_target);
+                inst_list = add_inst(inst_list, call_buffer);
+            }
             return inst_list;
         }
     }
@@ -8007,6 +8055,7 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
      * but hash_type is always reliable for distinguishing variables from procedures.
      */
     int is_indirect_call = stmt->stmt_data.procedure_call_data.is_procedural_var_call;
+    struct Expression *callee_override = NULL;
     
     /* Case 1: If hash_type is VAR, this is a procedure variable or parameter.
      * It MUST be an indirect call, regardless of whether type info is present. */
@@ -8032,6 +8081,19 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
     {
         is_indirect_call = 1;
     }
+    /* Case 3: If the call target is a procedural TYPE (e.g. FileFunc(...)(...)),
+     * treat it as an indirect call through the first argument. */
+    else if (call_hash_type == HASHTYPE_TYPE &&
+             call_kgpc_type != NULL &&
+             call_kgpc_type->kind == TYPE_KIND_PROCEDURE)
+    {
+        is_indirect_call = 1;
+        if (args_expr != NULL)
+        {
+            callee_override = (struct Expression *)args_expr->cur;
+            call_args = args_expr->next;
+        }
+    }
     
     if (is_indirect_call)
     {
@@ -8049,7 +8111,11 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         /* 1. Create a temporary expression to evaluate the procedure variable */
         struct Expression *callee_expr = NULL;
         int callee_owned = 0;
-        if (stmt->stmt_data.procedure_call_data.is_procedural_var_call &&
+        if (callee_override != NULL)
+        {
+            callee_expr = callee_override;
+        }
+        else if (stmt->stmt_data.procedure_call_data.is_procedural_var_call &&
             stmt->stmt_data.procedure_call_data.procedural_var_expr != NULL)
         {
             callee_expr = stmt->stmt_data.procedure_call_data.procedural_var_expr;
@@ -8121,7 +8187,7 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         addr_reg = NULL;
         
         /* 4. Pass arguments as usual */
-        inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, call_kgpc_type, 
+        inst_list = codegen_pass_arguments(call_args, inst_list, ctx, call_kgpc_type, 
             unmangled_name, 0, NULL);
         
         /* 5. Zero out %eax for varargs ABI compatibility */

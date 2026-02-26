@@ -892,6 +892,7 @@ static combinator_t* get_param_default_expr_parser(void) {
         g_param_default_expr_parser = (combinator_t**)safe_malloc(sizeof(combinator_t*));
         *g_param_default_expr_parser = new_combinator();
         init_pascal_expression_parser(g_param_default_expr_parser, NULL);
+        (*g_param_default_expr_parser)->extra_to_free = g_param_default_expr_parser;
         if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL) {
             fprintf(stderr, "[get_param_default_expr_parser] Initialized expr parser at %p -> %p\n",
                 (void*)g_param_default_expr_parser, (void*)*g_param_default_expr_parser);
@@ -3484,7 +3485,6 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     // Function body that can contain nested function/procedure declarations
     combinator_t** nested_proc_or_func = (combinator_t**)safe_malloc(sizeof(combinator_t*));
     *nested_proc_or_func = new_combinator();
-    (*nested_proc_or_func)->extra_to_free = nested_proc_or_func;
 
     // Forward declaration for nested functions - these will refer to working_function and working_procedure below
     combinator_t* nested_function_decl = lazy_owned(nested_proc_or_func);
