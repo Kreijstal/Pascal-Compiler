@@ -1211,6 +1211,24 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
         }
         if (var_node->is_reference)
             treat_as_reference = 1;
+        if (treat_as_reference && symbol != NULL && expr->expr_data.id != NULL &&
+            pascal_identifier_equals(expr->expr_data.id, "Self") &&
+            symbol->type != NULL)
+        {
+            struct RecordType *self_record = NULL;
+            if (kgpc_type_is_pointer(symbol->type) &&
+                symbol->type->info.points_to != NULL &&
+                symbol->type->info.points_to->kind == TYPE_KIND_RECORD)
+            {
+                self_record = symbol->type->info.points_to->info.record_info;
+            }
+            else if (symbol->type->kind == TYPE_KIND_RECORD)
+            {
+                self_record = symbol->type->info.record_info;
+            }
+            if (self_record != NULL && record_type_is_class(self_record))
+                treat_as_reference = 0;
+        }
         /* ShortStrings may be stored as pointers in a single qword slot.
          * In that case we need to load the pointer value, not take the
          * address of the spill slot itself. */
@@ -8088,7 +8106,9 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
              call_kgpc_type->kind == TYPE_KIND_PROCEDURE)
     {
         is_indirect_call = 1;
-        if (args_expr != NULL)
+        if (!stmt->stmt_data.procedure_call_data.is_procedural_var_call &&
+            stmt->stmt_data.procedure_call_data.procedural_var_expr == NULL &&
+            args_expr != NULL)
         {
             callee_override = (struct Expression *)args_expr->cur;
             call_args = args_expr->next;

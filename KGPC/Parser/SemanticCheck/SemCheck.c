@@ -7847,6 +7847,11 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                     {
                                         const char *self_type_id = tree->tree_data.type_decl_data.id;
                                         int self_is_var = 1;
+                                        if (record_info != NULL && record_info->is_class)
+                                        {
+                                            /* Class instances are already pointers; Self should not be var. */
+                                            self_is_var = 0;
+                                        }
                                         if (record_info != NULL && record_info->is_type_helper)
                                         {
                                             if (record_info->helper_base_type_id != NULL)
@@ -7917,6 +7922,25 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                                 return_type = convert_type_spec_to_kgpctype(return_type_node->child, symtab);
                                             if (return_type_id == NULL)
                                                 return_type_id = semcheck_dup_type_id_from_ast(return_type_node);
+                                        }
+                                        if (return_type_id != NULL)
+                                        {
+                                            const char *owner_full = NULL;
+                                            char *owner_outer = NULL;
+                                            if (record_info != NULL && record_info->type_id != NULL)
+                                                owner_full = record_info->type_id;
+                                            else if (tree->tree_data.type_decl_data.id != NULL)
+                                                owner_full = tree->tree_data.type_decl_data.id;
+                                            if (owner_full != NULL)
+                                            {
+                                                const char *dot = strrchr(owner_full, '.');
+                                                if (dot != NULL && dot != owner_full)
+                                                    owner_outer = strndup(owner_full, (size_t)(dot - owner_full));
+                                                semcheck_maybe_qualify_nested_type(symtab, owner_full, owner_outer,
+                                                    &return_type_id, NULL);
+                                            }
+                                            if (owner_outer != NULL)
+                                                free(owner_outer);
                                         }
                                         if (getenv("KGPC_DEBUG_SEMCHECK") != NULL && tmpl->name != NULL &&
                                             (strcasecmp(tmpl->name, "GetAnsiString") == 0 ||
@@ -8018,6 +8042,25 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                                 return_type = convert_type_spec_to_kgpctype(return_type_node->child, symtab);
                                             if (return_type_id == NULL)
                                                 return_type_id = semcheck_dup_type_id_from_ast(return_type_node);
+                                        }
+                                        if (return_type_id != NULL)
+                                        {
+                                            const char *owner_full = NULL;
+                                            char *owner_outer = NULL;
+                                            if (record_info != NULL && record_info->type_id != NULL)
+                                                owner_full = record_info->type_id;
+                                            else if (tree->tree_data.type_decl_data.id != NULL)
+                                                owner_full = tree->tree_data.type_decl_data.id;
+                                            if (owner_full != NULL)
+                                            {
+                                                const char *dot = strrchr(owner_full, '.');
+                                                if (dot != NULL && dot != owner_full)
+                                                    owner_outer = strndup(owner_full, (size_t)(dot - owner_full));
+                                                semcheck_maybe_qualify_nested_type(symtab, owner_full, owner_outer,
+                                                    &return_type_id, NULL);
+                                            }
+                                            if (owner_outer != NULL)
+                                                free(owner_outer);
                                         }
                                         if (return_type == NULL && return_type_id != NULL)
                                         {

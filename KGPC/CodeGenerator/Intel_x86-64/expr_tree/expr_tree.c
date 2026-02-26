@@ -2760,6 +2760,25 @@ cleanup_constructor:
             treat_as_reference = 1;
         else if (symbol_node != NULL && symbol_node->is_var_parameter)
             treat_as_reference = 1;
+        if (treat_as_reference && symbol_node != NULL &&
+            expr->expr_data.id != NULL &&
+            pascal_identifier_equals(expr->expr_data.id, "Self") &&
+            symbol_node->type != NULL)
+        {
+            struct RecordType *self_record = NULL;
+            if (kgpc_type_is_pointer(symbol_node->type) &&
+                symbol_node->type->info.points_to != NULL &&
+                symbol_node->type->info.points_to->kind == TYPE_KIND_RECORD)
+            {
+                self_record = symbol_node->type->info.points_to->info.record_info;
+            }
+            else if (symbol_node->type->kind == TYPE_KIND_RECORD)
+            {
+                self_record = symbol_node->type->info.record_info;
+            }
+            if (self_record != NULL && record_type_is_class(self_record))
+                treat_as_reference = 0;
+        }
 
         if (treat_as_reference)
         {
