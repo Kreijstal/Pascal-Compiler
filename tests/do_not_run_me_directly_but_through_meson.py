@@ -43,6 +43,7 @@ KGPC_PATH = os.path.join(build_dir, "KGPC/kgpc.exe" if IS_WINDOWS_ABI else "KGPC
 TEST_CASES_DIR = "tests/test_cases"
 INPUT_DATA_DIR = TEST_CASES_DIR
 TEST_OUTPUT_DIR = "tests/output"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 GOLDEN_AST_DIR = "tests/golden_ast"
 # Default execution timeout per compiled test program (seconds).
 # Can be overridden via environment variable KGPC_TEST_TIMEOUT for slower machines.

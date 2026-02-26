@@ -6,6 +6,8 @@
 #ifndef TREE_TYPES_H
 #define TREE_TYPES_H
 
+#include <stdint.h>
+
 #include "../List/List.h"
 
 /* Forward declarations to avoid circular dependencies */
@@ -182,6 +184,11 @@ struct RecordType
     char *default_indexed_element_type_id; /* Type identifier for elements of the default indexed property */
     ListNode_t *record_properties; /* Properties on plain records (Delphi advanced records), not checked by record_type_is_class */
     char *guid_string;             /* GUID string for interfaces, e.g. "{12345678-1234-...}" */
+    int has_guid;                  /* 1 if parsed GUID fields are available */
+    uint32_t guid_d1;
+    uint16_t guid_d2;
+    uint16_t guid_d3;
+    uint8_t guid_d4[8];
     char **interface_names;        /* Names of interfaces this class implements */
     int num_interfaces;            /* Number of entries in interface_names */
 };
