@@ -1981,6 +1981,11 @@ struct RecordType *clone_record_type(const struct RecordType *record_type)
     clone->record_properties = clone_property_list(record_type->record_properties);
 
     clone->guid_string = record_type->guid_string ? strdup(record_type->guid_string) : NULL;
+    clone->has_guid = record_type->has_guid;
+    clone->guid_d1 = record_type->guid_d1;
+    clone->guid_d2 = record_type->guid_d2;
+    clone->guid_d3 = record_type->guid_d3;
+    memcpy(clone->guid_d4, record_type->guid_d4, sizeof(clone->guid_d4));
     clone->num_interfaces = record_type->num_interfaces;
     clone->interface_names = NULL;
     if (record_type->interface_names != NULL && record_type->num_interfaces > 0) {

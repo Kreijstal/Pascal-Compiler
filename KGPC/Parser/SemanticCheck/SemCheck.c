@@ -453,6 +453,23 @@ static int semcheck_map_builtin_type_name_local(const char *id)
     return UNKNOWN_TYPE;
 }
 
+static int semcheck_is_builtin_pointer_type_id(const char *id)
+{
+    if (id == NULL)
+        return 0;
+    id = semcheck_base_type_name(id);
+    return (pascal_identifier_equals(id, "PInt64") ||
+            pascal_identifier_equals(id, "PByte") ||
+            pascal_identifier_equals(id, "PWord") ||
+            pascal_identifier_equals(id, "PLongInt") ||
+            pascal_identifier_equals(id, "PLongWord") ||
+            pascal_identifier_equals(id, "PInteger") ||
+            pascal_identifier_equals(id, "PCardinal") ||
+            pascal_identifier_equals(id, "PQWord") ||
+            pascal_identifier_equals(id, "PPointer") ||
+            pascal_identifier_equals(id, "PBoolean"));
+}
+
 static int semcheck_scope_level_for_type_candidate(SymTab_t *symtab, HashNode_t *candidate)
 {
     if (symtab == NULL || candidate == NULL || candidate->id == NULL)
@@ -671,21 +688,40 @@ static HashNode_t *semcheck_find_owner_record_type_node(SymTab_t *symtab, const 
     while (cur != NULL)
     {
         HashNode_t *candidate = (HashNode_t *)cur->cur;
-        if (candidate != NULL && candidate->hash_type == HASHTYPE_TYPE &&
-            get_record_type_from_node(candidate) != NULL)
+        if (candidate != NULL && candidate->hash_type == HASHTYPE_TYPE)
         {
-            if (best_record == NULL)
+            HashNode_t *record_node = NULL;
+            if (get_record_type_from_node(candidate) != NULL)
             {
-                best_record = candidate;
+                record_node = candidate;
             }
-            else if (prefer_unit_defined)
+            else if (candidate->type != NULL)
             {
-                if (!best_record->defined_in_unit && candidate->defined_in_unit)
-                    best_record = candidate;
+                struct TypeAlias *alias = kgpc_type_get_type_alias(candidate->type);
+                if (alias != NULL && alias->target_type_id != NULL)
+                {
+                    HashNode_t *target_node = semcheck_find_preferred_type_node(symtab,
+                        alias->target_type_id);
+                    if (target_node != NULL && get_record_type_from_node(target_node) != NULL)
+                        record_node = target_node;
+                }
             }
-            else if (best_record->defined_in_unit && !candidate->defined_in_unit)
+
+            if (record_node != NULL)
             {
-                best_record = candidate;
+                if (best_record == NULL)
+                {
+                    best_record = record_node;
+                }
+                else if (prefer_unit_defined)
+                {
+                    if (!best_record->defined_in_unit && record_node->defined_in_unit)
+                        best_record = record_node;
+                }
+                else if (best_record->defined_in_unit && !record_node->defined_in_unit)
+                {
+                    best_record = record_node;
+                }
             }
         }
         cur = cur->next;
@@ -5721,6 +5757,96 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                 int scope_level = FindIdent(&existing, symtab, type_id);
                 if (scope_level == 0 && existing != NULL)
                 {
+                    /* If the existing symbol is a non-record alias and we are now defining
+                     * a record with the same name, replace the alias with the record.
+                     * This is required for units that import a type alias (e.g. TSize = LongInt)
+                     * and then define their own record TSize with methods. */
+                    if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD &&
+                        existing->hash_type == HASHTYPE_TYPE &&
+                        get_record_type_from_node(existing) == NULL)
+                    {
+                        struct RecordType *record_info = tree->tree_data.type_decl_data.info.record;
+                        if (record_info != NULL)
+                        {
+                            if (record_info->type_id == NULL)
+                                record_info->type_id = strdup(type_id);
+
+                            KgpcType *kgpc_type = create_record_type(record_info);
+                            if (record_type_is_class(record_info))
+                                kgpc_type = create_pointer_type(kgpc_type);
+
+                            if (tree->tree_data.type_decl_data.kgpc_type == NULL)
+                            {
+                                tree->tree_data.type_decl_data.kgpc_type = kgpc_type;
+                                kgpc_type_retain(kgpc_type);
+                            }
+
+                            if (existing->type != NULL)
+                                destroy_kgpc_type(existing->type);
+                            if (kgpc_type != NULL)
+                                kgpc_type_retain(kgpc_type);
+                            existing->type = kgpc_type;
+                            mark_hashnode_unit_info(symtab, existing,
+                                tree->tree_data.type_decl_data.defined_in_unit,
+                                tree->tree_data.type_decl_data.unit_is_public);
+                        }
+                        cur = cur->next;
+                        continue;
+                    }
+
+                    /* If we already have a type alias without range/enum metadata and are now
+                     * declaring a range/enum, replace the alias so Low/High work in consts.
+                     * This is needed for circular unit references like Math -> Types. */
+                    if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS &&
+                        existing->hash_type == HASHTYPE_TYPE)
+                    {
+                        struct TypeAlias *alias = &tree->tree_data.type_decl_data.info.alias;
+                        struct TypeAlias *existing_alias = get_type_alias_from_node(existing);
+                        int new_has_range = (alias->is_range || alias->range_known);
+                        int existing_has_range = (existing_alias != NULL && existing_alias->range_known);
+                        int new_has_enum = (alias->is_enum && alias->enum_literals != NULL);
+                        int existing_has_enum =
+                            (existing_alias != NULL && existing_alias->is_enum &&
+                             existing_alias->enum_literals != NULL);
+
+                        if ((new_has_range && !existing_has_range) ||
+                            (new_has_enum && !existing_has_enum))
+                        {
+                            KgpcType *kgpc_type = NULL;
+                            if (new_has_enum)
+                            {
+                                kgpc_type = create_primitive_type(ENUM_TYPE);
+                            }
+                            else
+                            {
+                                int base_tag = alias->base_type != UNKNOWN_TYPE ? alias->base_type : INT_TYPE;
+                                if (alias->storage_size > 0)
+                                    kgpc_type = create_primitive_type_with_size(base_tag, (int)alias->storage_size);
+                                else
+                                    kgpc_type = create_primitive_type(base_tag);
+                            }
+
+                            if (kgpc_type != NULL)
+                            {
+                                kgpc_type_set_type_alias(kgpc_type, alias);
+                                if (tree->tree_data.type_decl_data.kgpc_type == NULL)
+                                {
+                                    tree->tree_data.type_decl_data.kgpc_type = kgpc_type;
+                                    kgpc_type_retain(kgpc_type);
+                                }
+                                if (existing->type != NULL)
+                                    destroy_kgpc_type(existing->type);
+                                kgpc_type_retain(kgpc_type);
+                                existing->type = kgpc_type;
+                                mark_hashnode_unit_info(symtab, existing,
+                                    tree->tree_data.type_decl_data.defined_in_unit,
+                                    tree->tree_data.type_decl_data.unit_is_public);
+                            }
+                            cur = cur->next;
+                            continue;
+                        }
+                    }
+
                     /* Allow local types to shadow imported unit types */
                     if (!(existing->defined_in_unit &&
                           !tree->tree_data.type_decl_data.defined_in_unit))
@@ -11661,16 +11787,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         else if (pascal_identifier_equals(type_id, "Byte") || pascal_identifier_equals(type_id, "Word"))
                             var_type = HASHVAR_INTEGER;
                         /* Handle FPC system pointer types (PInt64, PByte, etc.) */
-                        else if (pascal_identifier_equals(type_id, "PInt64") ||
-                                 pascal_identifier_equals(type_id, "PByte") ||
-                                 pascal_identifier_equals(type_id, "PWord") ||
-                                 pascal_identifier_equals(type_id, "PLongInt") ||
-                                 pascal_identifier_equals(type_id, "PLongWord") ||
-                                 pascal_identifier_equals(type_id, "PInteger") ||
-                                 pascal_identifier_equals(type_id, "PCardinal") ||
-                                 pascal_identifier_equals(type_id, "PQWord") ||
-                                 pascal_identifier_equals(type_id, "PPointer") ||
-                                 pascal_identifier_equals(type_id, "PBoolean"))
+                        else if (semcheck_is_builtin_pointer_type_id(type_id))
                             var_type = HASHVAR_POINTER;
                         else if (tree->tree_data.var_decl_data.type_ref != NULL &&
                                  tree->tree_data.var_decl_data.type_ref->num_generic_args > 0)
@@ -11865,7 +11982,22 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         {
                             /* Fallback: create KgpcType from legacy fields using helpers */
                             struct RecordType *record_type = get_record_type_from_node(type_node);
-                            if (record_type != NULL)
+                            struct TypeAlias *type_alias = get_type_alias_from_node(type_node);
+                            if (type_alias != NULL)
+                            {
+                                var_kgpc_type = create_kgpc_type_from_type_alias(
+                                    type_alias, symtab, tree->tree_data.var_decl_data.defined_in_unit);
+                            }
+                            if (var_kgpc_type != NULL)
+                            {
+                                /* No further legacy handling needed */
+                            }
+                            else if (type_id != NULL && semcheck_is_builtin_pointer_type_id(type_id))
+                            {
+                                var_type = HASHVAR_POINTER;
+                                var_kgpc_type = create_pointer_type(NULL);
+                            }
+                            else if (record_type != NULL)
                             {
                                 /* Use the canonical RecordType, not a clone */
                                 var_kgpc_type = create_record_type(record_type);
@@ -11874,7 +12006,6 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             {
                                 /* For pointer types, we need to create a pointer KgpcType */
                                 /* Get the TypeAlias to find what the pointer points to */
-                                struct TypeAlias *type_alias = get_type_alias_from_node(type_node);
                                 if (type_alias != NULL && type_alias->is_pointer)
                                 {
                                     KgpcType *points_to = NULL;
@@ -11908,8 +12039,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             {
                                 var_kgpc_type = kgpc_type_from_var_type(var_type);
                             }
-                            
-                            struct TypeAlias *type_alias = get_type_alias_from_node(type_node);
+
                             if (var_kgpc_type != NULL && type_alias != NULL && var_type != HASHVAR_POINTER)
                             {
                                 kgpc_type_set_type_alias(var_kgpc_type, type_alias);
@@ -12091,6 +12221,10 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     {
                         /* Create KgpcType from var_type */
                         var_kgpc_type = kgpc_type_from_var_type(var_type);
+                        if (var_kgpc_type == NULL && var_type == HASHVAR_POINTER)
+                        {
+                            var_kgpc_type = create_pointer_type(NULL);
+                        }
                     }
                     
                     if (var_kgpc_type != NULL)
@@ -12932,6 +13066,12 @@ next_identifier:
                                     compatible = 1;
                                 if (!compatible && inferred_is_pointer && current_is_proc)
                                     compatible = 1;
+                                if (!compatible && inferred_is_pointer && var_node != NULL)
+                                {
+                                    struct TypeAlias *alias = hashnode_get_type_alias(var_node);
+                                    if (alias != NULL && alias->is_pointer)
+                                        compatible = 1;
+                                }
                             }
 
                             if (!compatible && current_var_type == HASHVAR_RECORD && expr_tag == STRING_TYPE)

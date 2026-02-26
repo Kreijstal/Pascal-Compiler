@@ -664,6 +664,74 @@ static void from_cparser_trim_ascii(char *s)
     }
 }
 
+static int parse_guid_literal(const char *guid, uint32_t *d1, uint16_t *d2, uint16_t *d3, uint8_t d4[8])
+{
+    if (d1 != NULL)
+        *d1 = 0;
+    if (d2 != NULL)
+        *d2 = 0;
+    if (d3 != NULL)
+        *d3 = 0;
+    if (d4 != NULL)
+        memset(d4, 0, 8);
+
+    if (guid == NULL)
+        return 0;
+
+    const char *p = guid;
+    if (*p == '\'' || *p == '"')
+        p++;
+    if (*p == '{')
+        p++;
+
+    char *end = NULL;
+    unsigned long v = strtoul(p, &end, 16);
+    if (end == p || *end != '-')
+        return 0;
+    if (d1 != NULL)
+        *d1 = (uint32_t)v;
+    p = end + 1;
+
+    v = strtoul(p, &end, 16);
+    if (end == p || *end != '-')
+        return 0;
+    if (d2 != NULL)
+        *d2 = (uint16_t)v;
+    p = end + 1;
+
+    v = strtoul(p, &end, 16);
+    if (end == p || *end != '-')
+        return 0;
+    if (d3 != NULL)
+        *d3 = (uint16_t)v;
+    p = end + 1;
+
+    v = strtoul(p, &end, 16);
+    if (end == p || *end != '-')
+        return 0;
+    if (d4 != NULL) {
+        d4[0] = (uint8_t)((v >> 8) & 0xFF);
+        d4[1] = (uint8_t)(v & 0xFF);
+    }
+    p = end + 1;
+
+    for (int i = 2; i < 8; i++) {
+        if (p[0] == '\0' || p[1] == '\0')
+            return 0;
+        if (!isxdigit((unsigned char)p[0]) || !isxdigit((unsigned char)p[1]))
+            return 0;
+        char hx[3];
+        hx[0] = p[0];
+        hx[1] = p[1];
+        hx[2] = '\0';
+        if (d4 != NULL)
+            d4[i] = (uint8_t)strtoul(hx, NULL, 16);
+        p += 2;
+    }
+
+    return 1;
+}
+
 /* Determine SCOPEDENUMS state at a parser line by scanning compiler directives
  * in the preprocessed source up to that logical line. */
 static int from_cparser_scopedenums_enabled_at_line(int target_line)
@@ -6722,6 +6790,16 @@ static struct RecordType *convert_class_type_ex(const char *class_name, ast_t *c
     record->default_indexed_element_type_id = NULL;
     record->record_properties = NULL;
     record->guid_string = NULL;
+    record->has_guid = 0;
+    record->guid_d1 = 0;
+    record->guid_d2 = 0;
+    record->guid_d3 = 0;
+    memset(record->guid_d4, 0, sizeof(record->guid_d4));
+    record->has_guid = 0;
+    record->guid_d1 = 0;
+    record->guid_d2 = 0;
+    record->guid_d3 = 0;
+    memset(record->guid_d4, 0, sizeof(record->guid_d4));
     record->interface_names = iface_names;
     record->num_interfaces = iface_count;
 
@@ -6779,6 +6857,11 @@ static struct RecordType *convert_interface_type_ex(const char *interface_name, 
     /* Optional parent interface identifier is stored first if present. */
     char *parent_interface_name = NULL;
     char *guid_string = NULL;
+    int has_guid = 0;
+    uint32_t guid_d1 = 0;
+    uint16_t guid_d2 = 0;
+    uint16_t guid_d3 = 0;
+    uint8_t guid_d4[8] = {0};
     ast_t *body_start = interface_node->child;
     if (body_start != NULL && body_start->typ == PASCAL_T_IDENTIFIER) {
         if (body_start->sym != NULL && body_start->sym->name != NULL)
@@ -6788,8 +6871,10 @@ static struct RecordType *convert_interface_type_ex(const char *interface_name, 
 
     /* Optional GUID string follows parent identifier, e.g. ['{...}'] */
     if (body_start != NULL && body_start->typ == PASCAL_T_STRING) {
-        if (body_start->sym != NULL && body_start->sym->name != NULL)
+        if (body_start->sym != NULL && body_start->sym->name != NULL) {
             guid_string = strdup(body_start->sym->name);
+            has_guid = parse_guid_literal(body_start->sym->name, &guid_d1, &guid_d2, &guid_d3, guid_d4);
+        }
         body_start = body_start->next;
     }
 
@@ -6834,6 +6919,11 @@ static struct RecordType *convert_interface_type_ex(const char *interface_name, 
     record->default_indexed_element_type_id = NULL;
     record->record_properties = NULL;
     record->guid_string = guid_string;
+    record->has_guid = has_guid;
+    record->guid_d1 = guid_d1;
+    record->guid_d2 = guid_d2;
+    record->guid_d3 = guid_d3;
+    memcpy(record->guid_d4, guid_d4, sizeof(record->guid_d4));
     record->interface_names = NULL;
     record->num_interfaces = 0;
 

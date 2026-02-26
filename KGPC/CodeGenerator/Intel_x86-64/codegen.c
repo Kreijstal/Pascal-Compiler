@@ -1873,51 +1873,14 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                     iface_node->type->info.points_to->kind == TYPE_KIND_RECORD)
                     iface_record = iface_node->type->info.points_to->info.record_info;
             }
-            const char *guid = (iface_record != NULL) ? iface_record->guid_string : NULL;
-            unsigned long d1 = 0; unsigned int d2 = 0, d3 = 0;
+            unsigned long d1 = 0;
+            unsigned int d2 = 0, d3 = 0;
             unsigned char d4[8] = {0};
-            if (guid != NULL) {
-                /* Parse GUID string: {D1-D2-D3-D4A-D4B} */
-                const char *p = guid;
-                if (*p == '\'') p++;
-                if (*p == '{') p++;
-                d1 = strtoul(p, NULL, 16);
-                p = strchr(p, '-');
-                if (p)
-                    p++;
-                d2 = (unsigned int)strtoul(p ? p : "", NULL, 16);
-                if (p)
-                {
-                    p = strchr(p, '-');
-                    if (p)
-                        p++;
-                }
-                d3 = (unsigned int)strtoul(p ? p : "", NULL, 16);
-                if (p)
-                {
-                    p = strchr(p, '-');
-                    if (p)
-                        p++;
-                }
-                if (p) {
-                    /* D4[0..1] from the 4-char group before last dash */
-                    unsigned long d4ab = strtoul(p, NULL, 16);
-                    d4[0] = (unsigned char)((d4ab >> 8) & 0xFF);
-                    d4[1] = (unsigned char)(d4ab & 0xFF);
-                    p = strchr(p, '-'); if (p) p++;
-                    if (p) {
-                        /* D4[2..7] from the final 12-char group */
-                        int b;
-                        for (b = 2; b < 8; b++) {
-                            char hx[3];
-                            hx[0] = 0; hx[1] = 0; hx[2] = 0;
-                            if (*p && *(p+1)) {
-                                hx[0] = *p++; hx[1] = *p++;
-                                d4[b] = (unsigned char)strtoul(hx, NULL, 16);
-                            }
-                        }
-                    }
-                }
+            if (iface_record != NULL && iface_record->has_guid) {
+                d1 = (unsigned long)iface_record->guid_d1;
+                d2 = (unsigned int)iface_record->guid_d2;
+                d3 = (unsigned int)iface_record->guid_d3;
+                memcpy(d4, iface_record->guid_d4, sizeof(d4));
             }
             fprintf(ctx->output_file, "\t# Entry for %s\n", iface_name);
             fprintf(ctx->output_file, "\t.long\t0x%08lX\n", d1);
