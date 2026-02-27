@@ -5185,9 +5185,12 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
             first_index_stride = element_size_ll;
     }
 
-    /* ShortString indexing is 1-based even though it is stored with a length byte at index 0. */
-    if (codegen_array_access_targets_shortstring(expr, ctx) ||
-        codegen_expr_is_shortstring_value(array_expr))
+    /* ShortString indexing is 1-based even though it is stored with a length byte at index 0.
+     * Only apply shortstring indexing for character access within a ShortString (stride == 1),
+     * NOT for element access in an array of ShortStrings (stride == 256). */
+    if (first_index_stride <= 1 &&
+        (codegen_array_access_targets_shortstring(expr, ctx) ||
+         codegen_expr_is_shortstring_value(array_expr)))
     {
         shortstring_index = 1;
     }
