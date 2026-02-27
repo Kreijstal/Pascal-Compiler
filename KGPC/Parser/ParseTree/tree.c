@@ -2492,7 +2492,7 @@ Tree_t *mk_constdecl(int line_num, char *id, char *type_id, struct Expression *v
 struct Statement *mk_varassign(int line_num, int col_num, struct Expression *var, struct Expression *expr)
 {
     struct Statement *new_stmt;
-    new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    new_stmt = (struct Statement *)calloc(1, sizeof(struct Statement));
     assert(new_stmt != NULL);
 
     new_stmt->line_num = line_num;
@@ -2507,7 +2507,7 @@ struct Statement *mk_varassign(int line_num, int col_num, struct Expression *var
 
 struct Statement *mk_label(int line_num, char *label, struct Statement *stmt)
 {
-    struct Statement *new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    struct Statement *new_stmt = (struct Statement *)calloc(1, sizeof(struct Statement));
     assert(new_stmt != NULL);
 
     new_stmt->line_num = line_num;
@@ -2522,7 +2522,7 @@ struct Statement *mk_label(int line_num, char *label, struct Statement *stmt)
 
 struct Statement *mk_goto(int line_num, char *label)
 {
-    struct Statement *new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    struct Statement *new_stmt = (struct Statement *)calloc(1, sizeof(struct Statement));
     assert(new_stmt != NULL);
 
     new_stmt->line_num = line_num;
@@ -2536,7 +2536,7 @@ struct Statement *mk_goto(int line_num, char *label)
 
 struct Statement *mk_break(int line_num)
 {
-    struct Statement *new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    struct Statement *new_stmt = (struct Statement *)calloc(1, sizeof(struct Statement));
     assert(new_stmt != NULL);
 
     new_stmt->line_num = line_num;
@@ -2550,7 +2550,7 @@ struct Statement *mk_break(int line_num)
 
 struct Statement *mk_continue(int line_num)
 {
-    struct Statement *new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    struct Statement *new_stmt = (struct Statement *)calloc(1, sizeof(struct Statement));
     assert(new_stmt != NULL);
 
     new_stmt->line_num = line_num;
@@ -2570,7 +2570,7 @@ struct Statement *mk_exit(int line_num)
 
 struct Statement *mk_exit_with_value(int line_num, struct Expression *return_expr)
 {
-    struct Statement *new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    struct Statement *new_stmt = (struct Statement *)calloc(1, sizeof(struct Statement));
     assert(new_stmt != NULL);
 
     new_stmt->line_num = line_num;
@@ -2586,7 +2586,7 @@ struct Statement *mk_exit_with_value(int line_num, struct Expression *return_exp
 struct Statement *mk_procedurecall(int line_num, char *id, ListNode_t *expr_args)
 {
     struct Statement *new_stmt;
-    new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    new_stmt = (struct Statement *)calloc(1, sizeof(struct Statement));
     assert(new_stmt != NULL);
 
     new_stmt->line_num = line_num;
@@ -2611,7 +2611,7 @@ struct Statement *mk_procedurecall(int line_num, char *id, ListNode_t *expr_args
 
 struct Statement *mk_exprstmt(int line_num, int col_num, struct Expression *expr)
 {
-    struct Statement *new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    struct Statement *new_stmt = (struct Statement *)calloc(1, sizeof(struct Statement));
     assert(new_stmt != NULL);
 
     new_stmt->line_num = line_num;
@@ -2626,7 +2626,7 @@ struct Statement *mk_exprstmt(int line_num, int col_num, struct Expression *expr
 struct Statement *mk_compoundstatement(int line_num, ListNode_t *compound_statement)
 {
     struct Statement *new_stmt;
-    new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    new_stmt = (struct Statement *)calloc(1, sizeof(struct Statement));
     assert(new_stmt != NULL);
 
     new_stmt->line_num = line_num;
@@ -2642,7 +2642,7 @@ struct Statement *mk_ifthen(int line_num, struct Expression *eval_relop, struct 
                             struct Statement *else_stmt)
 {
     struct Statement *new_stmt;
-    new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    new_stmt = (struct Statement *)calloc(1, sizeof(struct Statement));
     assert(new_stmt != NULL);
 
     new_stmt->line_num = line_num;
@@ -2660,7 +2660,7 @@ struct Statement *mk_while(int line_num, struct Expression *eval_relop,
                             struct Statement *while_stmt)
 {
     struct Statement *new_stmt;
-    new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    new_stmt = (struct Statement *)calloc(1, sizeof(struct Statement));
     assert(new_stmt != NULL);
 
     new_stmt->line_num = line_num;
@@ -2676,7 +2676,7 @@ struct Statement *mk_while(int line_num, struct Expression *eval_relop,
 struct Statement *mk_repeat(int line_num, ListNode_t *body_list,
                             struct Expression *until_expr)
 {
-    struct Statement *new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    struct Statement *new_stmt = (struct Statement *)calloc(1, sizeof(struct Statement));
     assert(new_stmt != NULL);
 
     new_stmt->line_num = line_num;
@@ -2693,7 +2693,7 @@ struct Statement *mk_forassign(int line_num, struct Statement *for_assign, struc
                                struct Statement *do_for, int is_downto)
 {
    struct Statement *new_stmt;
-   new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+   new_stmt = (struct Statement *)calloc(1, sizeof(struct Statement));
     assert(new_stmt != NULL);
 
    new_stmt->line_num = line_num;
@@ -2715,7 +2715,7 @@ struct Statement *mk_forvar(int line_num, struct Expression *for_var, struct Exp
                               struct Statement *do_for, int is_downto)
 {
   struct Statement *new_stmt;
-  new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+  new_stmt = (struct Statement *)calloc(1, sizeof(struct Statement));
     assert(new_stmt != NULL);
 
   new_stmt->line_num = line_num;
@@ -2737,7 +2737,7 @@ struct Statement *mk_for_in(int line_num, struct Expression *loop_var, struct Ex
                              struct Statement *do_stmt)
 {
     struct Statement *new_stmt;
-    new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    new_stmt = (struct Statement *)calloc(1, sizeof(struct Statement));
     assert(new_stmt != NULL);
 
     new_stmt->line_num = line_num;
@@ -2754,7 +2754,7 @@ struct Statement *mk_for_in(int line_num, struct Expression *loop_var, struct Ex
 struct Statement *mk_asmblock(int line_num, char *code)
 {
     struct Statement *new_stmt;
-    new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    new_stmt = (struct Statement *)calloc(1, sizeof(struct Statement));
     assert(new_stmt != NULL);
 
     new_stmt->line_num = line_num;
@@ -2769,7 +2769,7 @@ struct Statement *mk_asmblock(int line_num, char *code)
 struct Statement *mk_case(int line_num, struct Expression *selector, ListNode_t *branches, struct Statement *else_stmt)
 {
     struct Statement *new_stmt;
-    new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    new_stmt = (struct Statement *)calloc(1, sizeof(struct Statement));
     assert(new_stmt != NULL);
 
     new_stmt->line_num = line_num;
@@ -2785,7 +2785,7 @@ struct Statement *mk_case(int line_num, struct Expression *selector, ListNode_t 
 
 struct Statement *mk_with(int line_num, struct Expression *context, struct Statement *body)
 {
-    struct Statement *new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    struct Statement *new_stmt = (struct Statement *)calloc(1, sizeof(struct Statement));
     assert(new_stmt != NULL);
 
     new_stmt->line_num = line_num;
@@ -2800,7 +2800,7 @@ struct Statement *mk_with(int line_num, struct Expression *context, struct State
 
 struct Statement *mk_tryfinally(int line_num, ListNode_t *try_stmts, ListNode_t *finally_stmts)
 {
-    struct Statement *new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    struct Statement *new_stmt = (struct Statement *)calloc(1, sizeof(struct Statement));
     assert(new_stmt != NULL);
 
     new_stmt->line_num = line_num;
@@ -2816,7 +2816,7 @@ struct Statement *mk_tryfinally(int line_num, ListNode_t *try_stmts, ListNode_t 
 struct Statement *mk_tryexcept(int line_num, ListNode_t *try_stmts, ListNode_t *except_stmts,
                                char *exception_var_name, char *exception_type_name)
 {
-    struct Statement *new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    struct Statement *new_stmt = (struct Statement *)calloc(1, sizeof(struct Statement));
     assert(new_stmt != NULL);
 
     new_stmt->line_num = line_num;
@@ -2834,7 +2834,7 @@ struct Statement *mk_tryexcept(int line_num, ListNode_t *try_stmts, ListNode_t *
 
 struct Statement *mk_raise(int line_num, struct Expression *expr)
 {
-    struct Statement *new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    struct Statement *new_stmt = (struct Statement *)calloc(1, sizeof(struct Statement));
     assert(new_stmt != NULL);
 
     new_stmt->line_num = line_num;
@@ -2848,7 +2848,7 @@ struct Statement *mk_raise(int line_num, struct Expression *expr)
 
 struct Statement *mk_inherited(int line_num, struct Expression *expr)
 {
-    struct Statement *new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    struct Statement *new_stmt = (struct Statement *)calloc(1, sizeof(struct Statement));
     assert(new_stmt != NULL);
 
     new_stmt->line_num = line_num;

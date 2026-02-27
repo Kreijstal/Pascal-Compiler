@@ -12,7 +12,10 @@
 #include <errno.h>
 #ifndef _WIN32
 #include <strings.h>
+#if defined(__GLIBC__) || (defined(__APPLE__) && defined(__MACH__))
+#define HAVE_EXECINFO 1
 #include <execinfo.h>
+#endif
 #else
 #define strcasecmp _stricmp
 #endif
@@ -463,7 +466,7 @@ void destroy_kgpc_type(KgpcType *type) {
                 type->info.record_info->type_id != NULL)
                 fprintf(stderr, " record=%s", type->info.record_info->type_id);
             fprintf(stderr, "\n");
-#ifndef _WIN32
+#ifdef HAVE_EXECINFO
             void *bt[32];
             int bt_count = backtrace(bt, (int)(sizeof(bt) / sizeof(bt[0])));
             if (bt_count > 0)
@@ -1149,7 +1152,7 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
         if (rhs_type->info.record_info != NULL && record_type_is_class(rhs_type->info.record_info))
             return 1;
     }
-    /* Allow ^record := primitive-with-RECORD_TYPE-tag (parser @-operator precedence workaround) */
+    /* Allow ^record := primitive-with-RECORD_TYPE-tag (type compatibility for unresolved record pointers) */
     if (lhs_type->kind == TYPE_KIND_POINTER && rhs_type->kind == TYPE_KIND_PRIMITIVE &&
         rhs_type->info.primitive_type_tag == RECORD_TYPE)
     {

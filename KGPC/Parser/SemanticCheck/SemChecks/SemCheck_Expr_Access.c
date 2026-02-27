@@ -746,7 +746,7 @@ int resolve_param_type(Tree_t *decl, SymTab_t *symtab)
 int semcheck_funccall(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating)
 {
-    int return_val, scope_return, final_status;
+    int return_val, scope_return, final_status = 0;
     char *id;
     char *mangled_name = NULL;
     int arg_type, cur_arg;
@@ -4964,7 +4964,7 @@ skip_overload_resolution:
                                 free(addr_expr);
                             }
                         }
-                        /* Check for Char -> PChar mismatch (workaround for missing @ parser issue) */
+                        /* Implicit Char -> PChar conversion (FPC allows passing Char where PChar is expected) */
                         if (!type_compatible && expected_type == POINTER_TYPE && arg_type == CHAR_TYPE)
                         {
                             int expected_is_pchar = 0;

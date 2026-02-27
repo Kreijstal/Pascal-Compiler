@@ -3909,7 +3909,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
             }
 
             inst_list = codegen_vect_reg(inst_list, 0);
-            inst_list = add_inst(inst_list, "\tcall\tkgpc_dynarray_clone_descriptor\n");
+            inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_dynarray_clone_descriptor");
             free_arg_regs();
             free_reg(get_reg_stack(), addr_reg);
         }
@@ -3975,7 +3975,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
             }
 
             inst_list = codegen_vect_reg(inst_list, 0);
-            inst_list = add_inst(inst_list, "\tcall\tkgpc_move\n");
+            inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_move");
             free_arg_regs();
 
             snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
@@ -5127,7 +5127,7 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
             }
 
             inst_list = codegen_vect_reg(inst_list, 0);
-            inst_list = add_inst(inst_list, "\tcall\tkgpc_move\n");
+            inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_move");
             free_arg_regs();
             free_reg(get_reg_stack(), size_reg);
             if (stack_value_reg != NULL)
@@ -5177,7 +5177,7 @@ static ListNode_t *codegen_store_class_typeinfo(ListNode_t *inst_list,
         inst_list = add_inst(inst_list, buffer);
         snprintf(buffer, sizeof(buffer), "\tmovq\t$64, %s\n", count_reg);
         inst_list = add_inst(inst_list, buffer);
-        inst_list = add_inst(inst_list, "\tcall\tcalloc\n");
+        inst_list = codegen_call_with_shadow_space(inst_list, "calloc");
         
         /* RAX now contains the pointer to the allocated instance */
         /* Store the typeinfo pointer in the first field */
@@ -5253,7 +5253,7 @@ static ListNode_t *codegen_emit_tfile_configure(ListNode_t *inst_list,
     snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %s\n", element_hash_tag, tag_reg);
     inst_list = add_inst(inst_list, buffer);
 
-    inst_list = add_inst(inst_list, "\tcall\tkgpc_tfile_configure\n");
+    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_tfile_configure");
     return inst_list;
 }
 
