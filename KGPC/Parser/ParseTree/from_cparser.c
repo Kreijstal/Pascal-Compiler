@@ -8081,6 +8081,10 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
         while (search != NULL && search->typ == PASCAL_T_IDENTIFIER)
             search = search->next;
         if (search != NULL && search->typ == PASCAL_T_TYPE_SPEC) {
+            if (type_id != NULL) {
+                free(type_id);
+                type_id = NULL;
+            }
             var_type = convert_type_spec(search, &type_id, NULL, &type_info);
         } else if (search != NULL && search->typ == PASCAL_T_IDENTIFIER) {
             char *type_name = dup_symbol(search);
@@ -8202,6 +8206,8 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
                 type_ref_from_element_info(&type_info, element_type_id);
         type_info.element_type_id = NULL;
         destroy_type_info_contents(&type_info);
+        if (type_id != NULL)
+            free(type_id);
         return decl;
     }
 
