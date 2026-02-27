@@ -342,7 +342,7 @@ static ListNode_t *codegen_promote_shortstring_reg(ListNode_t *inst_list, CodeGe
     snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", value_reg->bit_64, arg_reg64);
     inst_list = add_inst(inst_list, buffer);
     inst_list = codegen_vect_reg(inst_list, 0);
-    inst_list = add_inst(inst_list, "\tcall\tkgpc_shortstring_to_string\n");
+    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_shortstring_to_string");
     snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", value_reg->bit_64);
     inst_list = add_inst(inst_list, buffer);
     free_arg_regs();
@@ -1147,7 +1147,7 @@ ListNode_t *codegen_emit_is_expr(struct Expression *expr, ListNode_t *inst_list,
         free_reg(get_reg_stack(), target_typeinfo_reg);
 
     inst_list = codegen_vect_reg(inst_list, 0);
-    inst_list = add_inst(inst_list, "\tcall\tkgpc_rtti_is\n");
+    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_rtti_is");
     free_arg_regs();
 
     if (out_reg != NULL)
@@ -1215,7 +1215,7 @@ ListNode_t *codegen_emit_class_cast_check_from_address(struct Expression *expr,
     free_reg(get_reg_stack(), typeinfo_reg);
 
     inst_list = codegen_vect_reg(inst_list, 0);
-    inst_list = add_inst(inst_list, "\tcall\tkgpc_rtti_check_cast\n");
+    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_rtti_check_cast");
     free_arg_regs();
 
     snprintf(buffer, sizeof(buffer), "\tmovq\t32(%%rsp), %s\n", instance_ptr_reg->bit_64);
@@ -5824,7 +5824,7 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
         snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", right_reg->bit_32, arg_reg32);
         inst_list = add_inst(inst_list, buffer);
         inst_list = codegen_vect_reg(inst_list, 0);
-        inst_list = add_inst(inst_list, "\tcall\tkgpc_char_to_string\n");
+        inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_char_to_string");
         snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", right_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
         free_arg_regs();
@@ -5850,7 +5850,7 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
         snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", left_reg->bit_32, arg_reg32);
         inst_list = add_inst(inst_list, buffer);
         inst_list = codegen_vect_reg(inst_list, 0);
-        inst_list = add_inst(inst_list, "\tcall\tkgpc_char_to_string\n");
+        inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_char_to_string");
         snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", left_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
         free_arg_regs();
@@ -6058,7 +6058,7 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
             snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", left_reg->bit_32, arg_reg32);
             inst_list = add_inst(inst_list, buffer);
             inst_list = codegen_vect_reg(inst_list, 0);
-            inst_list = add_inst(inst_list, "\tcall\tkgpc_char_to_string\n");
+            inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_char_to_string");
             snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", left_reg->bit_64);
             inst_list = add_inst(inst_list, buffer);
             free_arg_regs();
@@ -6082,7 +6082,7 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
             snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", right_reg->bit_32, arg_reg32);
             inst_list = add_inst(inst_list, buffer);
             inst_list = codegen_vect_reg(inst_list, 0);
-            inst_list = add_inst(inst_list, "\tcall\tkgpc_char_to_string\n");
+            inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_char_to_string");
             snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", right_reg->bit_64);
             inst_list = add_inst(inst_list, buffer);
             free_arg_regs();
@@ -6100,7 +6100,7 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
         inst_list = add_inst(inst_list, buffer);
 
         inst_list = codegen_vect_reg(inst_list, 0);
-        inst_list = add_inst(inst_list, "\tcall\tkgpc_string_compare\n");
+        inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_string_compare");
         snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", RETURN_REG_32, left_reg->bit_32);
         inst_list = add_inst(inst_list, buffer);
         free_arg_regs();
@@ -7204,7 +7204,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                     }
 
                     inst_list = add_inst(inst_list, "\tmovl\t$0, %eax\n");
-                    inst_list = add_inst(inst_list, "\tcall\tkgpc_shortstring_to_shortstring\n");
+                    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_shortstring_to_shortstring");
                     free_arg_regs();
                     free_reg(get_reg_stack(), src_reg);
                 }
@@ -7259,7 +7259,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                     }
 
                     inst_list = add_inst(inst_list, "\tmovl\t$0, %eax\n");
-                    inst_list = add_inst(inst_list, "\tcall\tkgpc_char_array_to_shortstring\n");
+                    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_char_array_to_shortstring");
                     free_arg_regs();
                     free_reg(get_reg_stack(), src_reg);
                 }
@@ -7294,7 +7294,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                     }
 
                     inst_list = add_inst(inst_list, "\tmovl\t$0, %eax\n");
-                    inst_list = add_inst(inst_list, "\tcall\tkgpc_string_to_shortstring\n");
+                    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_string_to_shortstring");
                     free_arg_regs();
                     free_reg(get_reg_stack(), value_reg);
                 }
@@ -7538,7 +7538,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                     }
 
                     inst_list = codegen_vect_reg(inst_list, 0);
-                    inst_list = add_inst(inst_list, "\tcall\tkgpc_dynarray_assign_from_temp\n");
+                    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_dynarray_assign_from_temp");
                     free_arg_regs();
                     free_reg(get_reg_stack(), value_reg);
                     /* Reload address because the call may clobber caller-saved regs. */
@@ -7681,7 +7681,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 }
 
                 inst_list = codegen_vect_reg(inst_list, 0);
-                inst_list = add_inst(inst_list, "\tcall\tkgpc_move\n");
+                inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_move");
                 free_arg_regs();
 
                 free_reg(get_reg_stack(), src_reg);
@@ -7819,7 +7819,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                     const char *arg_reg32 = codegen_target_is_windows() ? "%ecx" : "%edi";
                     snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", top_reg->bit_32, arg_reg32);
                     inst_list = add_inst(inst_list, buffer);
-                    inst_list = add_inst(inst_list, "\tcall\tkgpc_char_to_string\n");
+                    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_char_to_string");
                     snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", top_reg->bit_64);
                     inst_list = add_inst(inst_list, buffer);
                 }

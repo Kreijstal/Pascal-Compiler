@@ -135,6 +135,18 @@ void codegen_sanitize_identifier_for_label(const char *value, char *buffer, size
 #include "../../Parser/ParseTree/KgpcType.h"
 #include "../../Parser/SemanticCheck/SymTab/SymTab.h"
 
+static inline int codegen_align_to(int value, int alignment)
+{
+    if (alignment <= 0)
+        return value;
+    int remainder = value % alignment;
+    if (remainder == 0)
+        return value;
+    return value + (alignment - remainder);
+}
+
+ListNode_t *codegen_call_with_shadow_space(ListNode_t *inst_list, const char *target);
+
 /*
  * Compiler invariant policy:
  * For internal compiler assumptions, do not silently continue with fallbacks.
