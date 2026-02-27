@@ -11571,7 +11571,11 @@ static int extract_constant_int(struct Expression *expr, long long *out_value) {
     case EXPR_SIGN_TERM:
         if (extract_constant_int(expr->expr_data.sign_term, out_value) != 0)
             return 1;
-        *out_value = -*out_value;
+        {
+            unsigned long long bits = (unsigned long long)(*out_value);
+            bits = 0ULL - bits;
+            *out_value = (long long)bits;
+        }
         return 0;
     case EXPR_ADDOP: {
         long long left_value = 0;
