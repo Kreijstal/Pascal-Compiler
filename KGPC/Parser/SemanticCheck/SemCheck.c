@@ -54,6 +54,20 @@ HashNode_t *semcheck_find_type_node_in_owner_chain(SymTab_t *symtab,
 #include "NameMangling.h"
 #include <stdarg.h>
 
+#ifdef _WIN32
+/* Windows CRT does not provide strndup; caller owns returned buffer. */
+static char* strndup(const char* s, size_t n)
+{
+    size_t len = strnlen(s, n);
+    char* buf = (char*)malloc(len + 1);
+    if (buf == NULL)
+        return NULL;
+    memcpy(buf, s, len);
+    buf[len] = '\0';
+    return buf;
+}
+#endif
+
 static ListNode_t *g_semcheck_unit_names = NULL;
 static char *g_semcheck_current_unit_name = NULL;
 static char *g_semcheck_source_path = NULL;
