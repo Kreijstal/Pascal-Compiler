@@ -161,12 +161,12 @@ int semcheck_builtin_ord(int *type_return, SymTab_t *symtab,
     if (arg_type_tag == UNKNOWN_TYPE && arg_expr != NULL && arg_expr->resolved_kgpc_type != NULL)
         arg_type_tag = semcheck_tag_from_kgpc(arg_expr->resolved_kgpc_type);
 
-    int arg_is_upcase_char_call = 0;
+    int is_arg_upcase_char_call = 0;
     if (arg_expr != NULL && arg_expr->type == EXPR_FUNCTION_CALL)
     {
-        char *arg_mangled = arg_expr->expr_data.function_call_data.mangled_id;
-        if (arg_mangled != NULL && strcmp(arg_mangled, "kgpc_upcase_char") == 0)
-            arg_is_upcase_char_call = 1;
+        char *mangled_function_name = arg_expr->expr_data.function_call_data.mangled_id;
+        if (mangled_function_name != NULL && strcmp(mangled_function_name, "kgpc_upcase_char") == 0)
+            is_arg_upcase_char_call = 1;
     }
 
     const char *mangled_name = NULL;
@@ -249,7 +249,7 @@ int semcheck_builtin_ord(int *type_return, SymTab_t *symtab,
     {
         mangled_name = "kgpc_ord_longint";
     }
-    else if (kgpc_type_is_char(arg_kgpc_type) || arg_type_tag == CHAR_TYPE || arg_is_upcase_char_call)
+    else if (kgpc_type_is_char(arg_kgpc_type) || arg_type_tag == CHAR_TYPE || is_arg_upcase_char_call)
     {
         /* For char variables, Ord returns the character code */
         mangled_name = "kgpc_ord_longint";
