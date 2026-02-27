@@ -9683,7 +9683,9 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
     }
 
     KgpcType *kgpc_type = NULL;
-    if (spec_node != NULL)
+    /* If we already have record_type, skip convert_type_spec_to_kgpctype to avoid
+     * redundant allocation of RecordType objects (the "first leak" fix). */
+    if (spec_node != NULL && record_type == NULL)
         kgpc_type = convert_type_spec_to_kgpctype(spec_node, NULL);
 
     if (record_type != NULL && record_type->is_interface)
