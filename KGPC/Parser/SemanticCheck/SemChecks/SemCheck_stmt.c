@@ -48,6 +48,8 @@ int semcheck_typecheck_array_literal(struct Expression *expr, SymTab_t *symtab,
 int set_type_from_hashtype(int *type, HashNode_t *hash_node);
 struct RecordType *semcheck_lookup_record_type(SymTab_t *symtab, const char *type_id);
 int semcheck_convert_set_literal_to_array_literal(struct Expression *expr);
+int semcheck_try_reinterpret_as_typecast(int *type_return,
+    SymTab_t *symtab, struct Expression *expr, int max_scope_lev);
 
 #define SEMSTMT_TIMINGS_ENABLED() (getenv("KGPC_DEBUG_SEMSTMT_TIMINGS") != NULL)
 
@@ -1195,7 +1197,6 @@ static int semcheck_set_stmt_call_mangled_id(SymTab_t *symtab, struct Statement 
 static int semcheck_call_with_proc_var(SymTab_t *symtab, struct Statement *stmt, HashNode_t *proc_node,
     int max_scope_lev)
 {
-    (void)max_scope_lev;
     if (proc_node == NULL || proc_node->type == NULL ||
         proc_node->type->kind != TYPE_KIND_PROCEDURE)
         return 0;
@@ -1228,6 +1229,14 @@ static int semcheck_call_with_proc_var(SymTab_t *symtab, struct Statement *stmt,
         struct Expression *arg_expr = (struct Expression *)args_given->cur;
 
         /* Phase 3: Use KgpcType for comprehensive type checking */
+        if (arg_expr != NULL && arg_expr->type == EXPR_FUNCTION_CALL)
+        {
+            int cast_type = UNKNOWN_TYPE;
+            int cast_result = semcheck_try_reinterpret_as_typecast(&cast_type, symtab,
+                arg_expr, max_scope_lev);
+            if (cast_result != 0)
+                return cast_result;
+        }
         
         /* Resolve KgpcType for the argument expression */
         int arg_type_owned = 0;

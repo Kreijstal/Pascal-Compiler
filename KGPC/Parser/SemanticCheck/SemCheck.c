@@ -11587,8 +11587,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
         }
         if (tree->type == TREE_VAR_DECL &&
             decl_type_id != NULL &&
-            resolved_type == NULL &&
-            !tree->tree_data.var_decl_data.defined_in_unit)
+            resolved_type == NULL)
         {
             const char *owner_full = semcheck_get_current_subprogram_owner_class_full();
             const char *owner_outer = semcheck_get_current_subprogram_owner_class_outer();

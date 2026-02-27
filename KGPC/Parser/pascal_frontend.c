@@ -5,7 +5,6 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 #ifndef _WIN32
 #include <strings.h>
 #endif
@@ -834,14 +833,7 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
 
     file_to_parse = (char *)path;
 
-    parser_reset_type_profile();
-    struct timespec ts_start, ts_end;
-    clock_gettime(CLOCK_MONOTONIC, &ts_start);
     ParseResult result = parse(input, parser);
-    clock_gettime(CLOCK_MONOTONIC, &ts_end);
-    double parse_ms = (ts_end.tv_sec - ts_start.tv_sec) * 1000.0 + (ts_end.tv_nsec - ts_start.tv_nsec) / 1e6;
-    fprintf(stderr, "  [PARSE_TIME] %s: %.1f ms\n", path, parse_ms);
-    parser_print_type_profile(path);
 
     if (getenv("KGPC_DEBUG_TFPG_AST") != NULL && result.is_success && result.value.ast != NULL)
     {

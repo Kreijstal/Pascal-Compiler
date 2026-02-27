@@ -159,6 +159,29 @@ struct RecordType *resolve_record_type_for_with(SymTab_t *symtab,
     if (context_expr == NULL)
         return NULL;
 
+    if (context_expr->type == EXPR_FUNCTION_CALL)
+    {
+        int cast_type = UNKNOWN_TYPE;
+        semcheck_try_reinterpret_as_typecast(&cast_type, symtab, context_expr, INT_MAX);
+    }
+
+    if (context_expr->type == EXPR_TYPECAST)
+    {
+        const char *target_id = context_expr->expr_data.typecast_data.target_type_id;
+        const TypeRef *target_ref = context_expr->expr_data.typecast_data.target_type_ref;
+        if (target_id != NULL || target_ref != NULL)
+        {
+            HashNode_t *type_node = semcheck_find_preferred_type_node_with_ref(symtab,
+                target_ref, target_id);
+            if (type_node != NULL)
+            {
+                struct RecordType *record_info = get_record_type_from_node(type_node);
+                if (record_info != NULL)
+                    return record_info;
+            }
+        }
+    }
+
     if (expr_type == RECORD_TYPE)
     {
         if (context_expr->resolved_kgpc_type != NULL &&

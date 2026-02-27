@@ -43,12 +43,109 @@ static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
     return hashnode_get_record_type(node);
 }
 
+static struct Expression *codegen_unwrap_typecast_call_expr(struct Expression *expr, SymTab_t *symtab)
+{
+    if (expr == NULL || expr->type != EXPR_FUNCTION_CALL || symtab == NULL)
+        return NULL;
+
+    const char *id = expr->expr_data.function_call_data.id;
+    if (id == NULL)
+        return NULL;
+
+    HashNode_t *type_node = NULL;
+    if (FindIdent(&type_node, symtab, id) < 0 ||
+        type_node == NULL || type_node->hash_type != HASHTYPE_TYPE)
+        return NULL;
+
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    if (args == NULL || args->next != NULL)
+        return NULL;
+
+    return (struct Expression *)args->cur;
+}
+
 static long long codegen_sizeof_type_tag(int type_tag);
+static int codegen_sizeof_record(CodeGenContext *ctx, struct RecordType *record,
+    long long *size_out, int depth);
+static struct RecordField *codegen_lookup_record_field_expr(struct Expression *record_access_expr,
+    CodeGenContext *ctx);
 static long long codegen_record_field_effective_size(struct Expression *expr, CodeGenContext *ctx);
+static struct RecordField *codegen_find_unique_record_field(SymTab_t *symtab,
+    const char *field_id, struct RecordType **out_record);
+static struct RecordField *codegen_lookup_with_field(CodeGenContext *ctx,
+    const char *field_id, struct RecordType **out_record);
+static long long codegen_array_elem_size_from_field(struct RecordField *field, CodeGenContext *ctx);
 static struct RecordType *codegen_expr_record_type(const struct Expression *expr, SymTab_t *symtab)
 {
     if (expr == NULL)
         return NULL;
+    if (expr->record_type != NULL)
+        return expr->record_type;
+    if (expr->type == EXPR_VAR_ID && symtab != NULL && expr->expr_data.id != NULL)
+    {
+        HashNode_t *var_node = NULL;
+        if (FindIdent(&var_node, symtab, expr->expr_data.id) >= 0 && var_node != NULL)
+        {
+            struct RecordType *rec = get_record_type_from_node(var_node);
+            if (rec != NULL)
+                return rec;
+            if (var_node->type != NULL)
+            {
+                if (kgpc_type_is_record(var_node->type))
+                    return kgpc_type_get_record(var_node->type);
+                if (kgpc_type_is_pointer(var_node->type) &&
+                    var_node->type->info.points_to != NULL &&
+                    kgpc_type_is_record(var_node->type->info.points_to))
+                    return kgpc_type_get_record(var_node->type->info.points_to);
+            }
+        }
+    }
+    if (expr->type == EXPR_TYPECAST && symtab != NULL)
+    {
+        const char *target_id = expr->expr_data.typecast_data.target_type_id;
+        if (target_id != NULL)
+        {
+            HashNode_t *type_node = NULL;
+            if (FindIdent(&type_node, symtab, target_id) >= 0 && type_node != NULL)
+            {
+                struct RecordType *rec = get_record_type_from_node(type_node);
+                if (rec != NULL)
+                    return rec;
+                if (type_node->type != NULL)
+                {
+                    if (kgpc_type_is_record(type_node->type))
+                        return kgpc_type_get_record(type_node->type);
+                    if (kgpc_type_is_pointer(type_node->type) &&
+                        type_node->type->info.points_to != NULL &&
+                        kgpc_type_is_record(type_node->type->info.points_to))
+                        return kgpc_type_get_record(type_node->type->info.points_to);
+                }
+            }
+        }
+    }
+    if (expr->type == EXPR_FUNCTION_CALL && symtab != NULL)
+    {
+        const char *call_id = expr->expr_data.function_call_data.id;
+        if (call_id != NULL)
+        {
+            HashNode_t *type_node = NULL;
+            if (FindIdent(&type_node, symtab, call_id) >= 0 && type_node != NULL)
+            {
+                struct RecordType *rec = get_record_type_from_node(type_node);
+                if (rec != NULL)
+                    return rec;
+                if (type_node->type != NULL)
+                {
+                    if (kgpc_type_is_record(type_node->type))
+                        return kgpc_type_get_record(type_node->type);
+                    if (kgpc_type_is_pointer(type_node->type) &&
+                        type_node->type->info.points_to != NULL &&
+                        kgpc_type_is_record(type_node->type->info.points_to))
+                        return kgpc_type_get_record(type_node->type->info.points_to);
+                }
+            }
+        }
+    }
 
     KgpcType *expr_type = expr_get_kgpc_type((struct Expression *)expr);
     if (expr_type != NULL)
@@ -1592,6 +1689,16 @@ KgpcType* expr_get_kgpc_type(const struct Expression *expr)
                 return create_record_type(record);
             return NULL;
         }
+        case EXPR_POINTER_DEREF:
+        {
+            struct Expression *pointer_expr = expr->expr_data.pointer_deref_data.pointer_expr;
+            if (pointer_expr == NULL)
+                return NULL;
+            KgpcType *ptr_type = expr_get_kgpc_type(pointer_expr);
+            if (ptr_type != NULL && kgpc_type_is_pointer(ptr_type))
+                return ptr_type->info.points_to;
+            return NULL;
+        }
         case EXPR_ARRAY_LITERAL:
         {
             if (expr->array_element_type == ARRAY_OF_CONST_TYPE)
@@ -1955,6 +2062,198 @@ long long expr_get_array_element_size(const struct Expression *expr, CodeGenCont
         }
     }
 
+    if (expr->type == EXPR_POINTER_DEREF)
+    {
+        const struct Expression *pointer_expr = expr->expr_data.pointer_deref_data.pointer_expr;
+        if (getenv("KGPC_DEBUG_ARRAY_ACCESS") != NULL)
+        {
+            fprintf(stderr,
+                "[KGPC_DEBUG_ARRAY_ACCESS] pointer_deref base_type=%d ptr_subtype=%d ptr_subtype_id=%s ptr_kgpc=%s%s%s\n",
+                pointer_expr != NULL ? pointer_expr->type : -1,
+                expr->pointer_subtype,
+                expr->pointer_subtype_id ? expr->pointer_subtype_id : "<null>",
+                (pointer_expr != NULL && pointer_expr->resolved_kgpc_type != NULL)
+                    ? kgpc_type_to_string(pointer_expr->resolved_kgpc_type) : "<null>",
+                (pointer_expr != NULL && pointer_expr->type == EXPR_VAR_ID && pointer_expr->expr_data.id != NULL)
+                    ? " id=" : "",
+                (pointer_expr != NULL && pointer_expr->type == EXPR_VAR_ID && pointer_expr->expr_data.id != NULL)
+                    ? pointer_expr->expr_data.id : "");
+        }
+        if (pointer_expr != NULL &&
+            pointer_expr->resolved_kgpc_type != NULL &&
+            kgpc_type_is_pointer(pointer_expr->resolved_kgpc_type))
+        {
+            KgpcType *points_to = pointer_expr->resolved_kgpc_type->info.points_to;
+            if (points_to != NULL)
+            {
+                if (kgpc_type_is_array(points_to))
+                {
+                    long long elem_size = kgpc_type_get_array_element_size(points_to);
+                    if (elem_size <= 0)
+                    {
+                        KgpcType *elem_type = kgpc_type_get_array_element_type_resolved(points_to,
+                            ctx != NULL ? ctx->symtab : NULL);
+                        if (elem_type != NULL)
+                            elem_size = kgpc_type_sizeof(elem_type);
+                    }
+                    if (elem_size > 0)
+                        return elem_size;
+                }
+                else
+                {
+                    long long elem_size = kgpc_type_sizeof(points_to);
+                    if (elem_size > 0)
+                        return elem_size;
+                }
+            }
+        }
+
+        if (pointer_expr != NULL && pointer_expr->type == EXPR_VAR_ID &&
+            ctx != NULL && ctx->symtab != NULL && pointer_expr->expr_data.id != NULL)
+        {
+            HashNode_t *var_node = NULL;
+            if (FindIdent(&var_node, ctx->symtab, pointer_expr->expr_data.id) == 0 &&
+                var_node != NULL && var_node->type != NULL)
+            {
+                if (kgpc_type_is_pointer(var_node->type))
+                {
+                    KgpcType *points_to = var_node->type->info.points_to;
+                    if (points_to != NULL)
+                    {
+                        if (kgpc_type_is_array(points_to))
+                        {
+                            long long elem_size = kgpc_type_get_array_element_size(points_to);
+                            if (elem_size <= 0)
+                            {
+                                KgpcType *elem_type = kgpc_type_get_array_element_type_resolved(points_to,
+                                    ctx->symtab);
+                                if (elem_type != NULL)
+                                    elem_size = kgpc_type_sizeof(elem_type);
+                            }
+                            if (elem_size > 0)
+                                return elem_size;
+                        }
+                        else
+                        {
+                            long long elem_size = kgpc_type_sizeof(points_to);
+                            if (elem_size > 0)
+                                return elem_size;
+                        }
+                    }
+                }
+                if (kgpc_type_is_array(var_node->type))
+                {
+                    long long elem_size = kgpc_type_get_array_element_size(var_node->type);
+                    if (elem_size <= 0)
+                    {
+                        KgpcType *elem_type = kgpc_type_get_array_element_type_resolved(var_node->type,
+                            ctx->symtab);
+                        if (elem_type != NULL)
+                            elem_size = kgpc_type_sizeof(elem_type);
+                    }
+                    if (elem_size > 0)
+                        return elem_size;
+                }
+            }
+        }
+
+        if (pointer_expr != NULL && pointer_expr->type == EXPR_VAR_ID &&
+            ctx != NULL && pointer_expr->expr_data.id != NULL)
+        {
+            struct RecordField *with_field = codegen_lookup_with_field(ctx,
+                pointer_expr->expr_data.id, NULL);
+            if (with_field != NULL)
+            {
+                long long elem_size = codegen_array_elem_size_from_field(with_field, ctx);
+                if (elem_size > 0)
+                    return elem_size;
+            }
+            if (with_field == NULL && ctx->symtab != NULL)
+            {
+                struct RecordField *unique_field = codegen_find_unique_record_field(
+                    ctx->symtab, pointer_expr->expr_data.id, NULL);
+                if (unique_field != NULL)
+                {
+                    long long elem_size = codegen_array_elem_size_from_field(unique_field, ctx);
+                    if (elem_size > 0)
+                        return elem_size;
+                }
+            }
+        }
+
+        const struct Expression *lookup_expr = pointer_expr;
+        if (lookup_expr != NULL && lookup_expr->type == EXPR_TYPECAST &&
+            lookup_expr->expr_data.typecast_data.expr != NULL)
+        {
+            lookup_expr = lookup_expr->expr_data.typecast_data.expr;
+        }
+
+        if (lookup_expr != NULL && lookup_expr->type == EXPR_RECORD_ACCESS && ctx != NULL)
+        {
+            struct RecordField *field = codegen_lookup_record_field_expr((struct Expression *)lookup_expr, ctx);
+            if (field != NULL)
+            {
+                if (getenv("KGPC_DEBUG_ARRAY_ACCESS") != NULL)
+                {
+                    fprintf(stderr,
+                        "[KGPC_DEBUG_ARRAY_ACCESS] record field=%s is_pointer=%d is_array=%d pointer_type=%d pointer_type_id=%s array_elem_type=%d array_elem_type_id=%s\n",
+                        field->name ? field->name : "<null>",
+                        field->is_pointer,
+                        field->is_array,
+                        field->pointer_type,
+                        field->pointer_type_id ? field->pointer_type_id : "<null>",
+                        field->array_element_type,
+                        field->array_element_type_id ? field->array_element_type_id : "<null>");
+                }
+                {
+                    long long elem_size = codegen_array_elem_size_from_field(field, ctx);
+                    if (elem_size > 0)
+                        return elem_size;
+                }
+            }
+        }
+
+        if (pointer_expr != NULL && pointer_expr->type == EXPR_TYPECAST &&
+            ctx != NULL && ctx->symtab != NULL)
+        {
+            const char *target_id = pointer_expr->expr_data.typecast_data.target_type_id;
+            if (target_id != NULL)
+            {
+                HashNode_t *type_node = NULL;
+                if (FindIdent(&type_node, ctx->symtab, target_id) >= 0 &&
+                    type_node != NULL && type_node->type != NULL &&
+                    kgpc_type_is_pointer(type_node->type))
+                {
+                    KgpcType *points_to = type_node->type->info.points_to;
+                    if (points_to != NULL)
+                    {
+                        long long elem_size = kgpc_type_sizeof(points_to);
+                        if (elem_size > 0)
+                            return elem_size;
+                    }
+                }
+            }
+        }
+
+        if (expr->pointer_subtype != UNKNOWN_TYPE)
+        {
+            long long tag_size = codegen_sizeof_type_tag(expr->pointer_subtype);
+            if (tag_size > 0)
+                return tag_size;
+        }
+        if (ctx != NULL && ctx->symtab != NULL && expr->pointer_subtype_id != NULL)
+        {
+            HashNode_t *type_node = NULL;
+            if (FindIdent(&type_node, ctx->symtab, expr->pointer_subtype_id) >= 0 &&
+                type_node != NULL && type_node->type != NULL)
+            {
+                long long node_size = kgpc_type_sizeof(type_node->type);
+                if (node_size > 0)
+                    return node_size;
+            }
+        }
+    }
+
     if (expr->type == EXPR_ARRAY_ACCESS)
     {
         const struct Expression *base = expr->expr_data.array_access_data.array_expr;
@@ -1986,9 +2285,11 @@ static int expr_is_signed_kgpctype(const struct Expression *expr)
     KgpcType *type = expr_get_kgpc_type(expr);
     if (type != NULL)
         return kgpc_type_is_signed(type);
-    
-    KGPC_COMPILER_HARD_ASSERT(0,
-        "expr_is_signed_kgpctype called without resolved KgpcType metadata");
+
+    int tag = expr_get_type_tag(expr);
+    if (tag != UNKNOWN_TYPE)
+        return codegen_type_is_signed(tag);
+
     return 0;
 }
 
@@ -2860,6 +3161,19 @@ static struct RecordField *codegen_lookup_record_field_expr(struct Expression *r
     struct RecordType *record = codegen_expr_record_type(record_access_expr, symtab);
     if (record == NULL && record_access_expr->expr_data.record_access_data.record_expr != NULL)
         record = codegen_expr_record_type(record_access_expr->expr_data.record_access_data.record_expr, symtab);
+    if (record == NULL && getenv("KGPC_DEBUG_ARRAY_ACCESS") != NULL)
+    {
+        struct Expression *rec_expr = record_access_expr->expr_data.record_access_data.record_expr;
+        fprintf(stderr,
+            "[KGPC_DEBUG_ARRAY_ACCESS] record_field_lookup failed: field=%s rec_type=%d rec_kgpc=%s rec_type_id=%s\n",
+            field_id,
+            rec_expr != NULL ? rec_expr->type : -1,
+            (rec_expr != NULL && rec_expr->resolved_kgpc_type != NULL)
+                ? kgpc_type_to_string(rec_expr->resolved_kgpc_type) : "<null>",
+            (rec_expr != NULL && rec_expr->type == EXPR_TYPECAST &&
+             rec_expr->expr_data.typecast_data.target_type_id != NULL)
+                ? rec_expr->expr_data.typecast_data.target_type_id : "<null>");
+    }
     if (record == NULL)
         return NULL;
 
@@ -2875,6 +3189,201 @@ static struct RecordField *codegen_lookup_record_field_expr(struct Expression *r
         cur = cur->next;
     }
     return NULL;
+}
+
+static struct RecordField *codegen_lookup_record_field(struct RecordType *record,
+    const char *field_id)
+{
+    if (record == NULL || field_id == NULL)
+        return NULL;
+    ListNode_t *cur = record->fields;
+    while (cur != NULL)
+    {
+        if (cur->type == LIST_RECORD_FIELD && cur->cur != NULL)
+        {
+            struct RecordField *field = (struct RecordField *)cur->cur;
+            if (field->name != NULL && pascal_identifier_equals(field->name, field_id))
+                return field;
+        }
+        cur = cur->next;
+    }
+    return NULL;
+}
+
+static struct RecordField *codegen_find_unique_record_field(SymTab_t *symtab,
+    const char *field_id, struct RecordType **out_record)
+{
+    if (symtab == NULL || field_id == NULL)
+        return NULL;
+
+    struct RecordField *found_field = NULL;
+    struct RecordType *found_record = NULL;
+
+    HashTable_t *tables[2];
+    tables[0] = symtab->builtins;
+    tables[1] = NULL;
+
+    ListNode_t *scope = symtab->stack_head;
+    while (scope != NULL)
+    {
+        tables[1] = (HashTable_t *)scope->cur;
+        for (int t = 0; t < 2; ++t)
+        {
+            HashTable_t *table = tables[t];
+            if (table == NULL)
+                continue;
+            for (int i = 0; i < TABLE_SIZE; ++i)
+            {
+                ListNode_t *node_list = table->table[i];
+                while (node_list != NULL)
+                {
+                    HashNode_t *node = (HashNode_t *)node_list->cur;
+                    if (node != NULL && node->hash_type == HASHTYPE_TYPE)
+                    {
+                        struct RecordType *record = get_record_type_from_node(node);
+                        if (record != NULL)
+                        {
+                            struct RecordField *field = codegen_lookup_record_field(record, field_id);
+                            if (field != NULL)
+                            {
+                                if (found_field != NULL && found_record != record)
+                                {
+                                    if (field->is_pointer == found_field->is_pointer &&
+                                        field->is_array == found_field->is_array &&
+                                        field->pointer_type == found_field->pointer_type &&
+                                        ((field->pointer_type_id == NULL && found_field->pointer_type_id == NULL) ||
+                                         (field->pointer_type_id != NULL && found_field->pointer_type_id != NULL &&
+                                          pascal_identifier_equals(field->pointer_type_id, found_field->pointer_type_id))) &&
+                                        field->array_element_type == found_field->array_element_type &&
+                                        ((field->array_element_type_id == NULL && found_field->array_element_type_id == NULL) ||
+                                         (field->array_element_type_id != NULL && found_field->array_element_type_id != NULL &&
+                                          pascal_identifier_equals(field->array_element_type_id, found_field->array_element_type_id))) &&
+                                        field->array_element_record == found_field->array_element_record)
+                                    {
+                                        found_field = field;
+                                        found_record = record;
+                                        break;
+                                    }
+                                    return NULL;
+                                }
+                                found_field = field;
+                                found_record = record;
+                            }
+                        }
+                    }
+                    node_list = node_list->next;
+                }
+            }
+        }
+        scope = scope->next;
+    }
+
+    if (found_field != NULL && out_record != NULL)
+        *out_record = found_record;
+    return found_field;
+}
+
+static struct RecordField *codegen_lookup_with_field(CodeGenContext *ctx,
+    const char *field_id, struct RecordType **out_record)
+{
+    if (ctx == NULL || field_id == NULL || ctx->with_depth <= 0)
+        return NULL;
+    if (getenv("KGPC_DEBUG_WITH_CODEGEN") != NULL)
+    {
+        fprintf(stderr, "[KGPC_DEBUG_WITH_CODEGEN] lookup field=%s depth=%d\n",
+            field_id, ctx->with_depth);
+    }
+    for (int i = ctx->with_depth; i > 0; --i)
+    {
+        struct RecordType *record = ctx->with_stack[i - 1].record_type;
+        struct RecordField *field = codegen_lookup_record_field(record, field_id);
+        if (field != NULL)
+        {
+            if (out_record != NULL)
+                *out_record = record;
+            return field;
+        }
+    }
+    return NULL;
+}
+
+static long long codegen_array_elem_size_from_field(struct RecordField *field, CodeGenContext *ctx)
+{
+    if (field == NULL)
+        return -1;
+    if (field->is_pointer)
+    {
+        if (field->pointer_type != UNKNOWN_TYPE)
+        {
+            long long tag_size = codegen_sizeof_type_tag(field->pointer_type);
+            if (tag_size > 0)
+                return tag_size;
+        }
+        if (ctx != NULL && ctx->symtab != NULL && field->pointer_type_id != NULL)
+        {
+            HashNode_t *type_node = NULL;
+            if (FindIdent(&type_node, ctx->symtab, field->pointer_type_id) >= 0 &&
+                type_node != NULL && type_node->type != NULL)
+            {
+                KgpcType *points_to = NULL;
+                if (kgpc_type_is_pointer(type_node->type))
+                    points_to = type_node->type->info.points_to;
+                if (points_to != NULL)
+                {
+                    long long elem_size = kgpc_type_sizeof(points_to);
+                    if (elem_size > 0)
+                        return elem_size;
+                }
+                if (kgpc_type_is_array(type_node->type))
+                {
+                    long long elem_size = kgpc_type_get_array_element_size(type_node->type);
+                    if (elem_size <= 0)
+                    {
+                        KgpcType *elem_type =
+                            kgpc_type_get_array_element_type_resolved(type_node->type,
+                                ctx->symtab);
+                        if (elem_type != NULL)
+                            elem_size = kgpc_type_sizeof(elem_type);
+                    }
+                    if (elem_size > 0)
+                        return elem_size;
+                }
+                {
+                    long long node_size = kgpc_type_sizeof(type_node->type);
+                    if (node_size > 0)
+                        return node_size;
+                }
+            }
+        }
+    }
+    else if (field->is_array)
+    {
+        if (field->array_element_type != UNKNOWN_TYPE)
+        {
+            long long tag_size = codegen_sizeof_type_tag(field->array_element_type);
+            if (tag_size > 0)
+                return tag_size;
+        }
+        if (ctx != NULL && ctx->symtab != NULL && field->array_element_type_id != NULL)
+        {
+            HashNode_t *type_node = NULL;
+            if (FindIdent(&type_node, ctx->symtab, field->array_element_type_id) >= 0 &&
+                type_node != NULL && type_node->type != NULL)
+            {
+                long long elem_size = kgpc_type_sizeof(type_node->type);
+                if (elem_size > 0)
+                    return elem_size;
+            }
+        }
+        if (field->array_element_record != NULL)
+        {
+            long long elem_size = 0;
+            if (codegen_sizeof_record(ctx, field->array_element_record, &elem_size, 0) == 0 &&
+                elem_size > 0)
+                return elem_size;
+        }
+    }
+    return -1;
 }
 
 /* Best-effort size for a record field, respecting packed/range aliases */
@@ -6642,13 +7151,32 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 }
                 else
                 {
-                    if (!codegen_expr_is_addressable(arg_expr))
+                    struct Expression *address_expr = arg_expr;
+                    if (!codegen_expr_is_addressable(address_expr) &&
+                        address_expr != NULL &&
+                        address_expr->type == EXPR_FUNCTION_CALL &&
+                        ctx != NULL && ctx->symtab != NULL)
                     {
+                        struct Expression *cast_inner =
+                            codegen_unwrap_typecast_call_expr(address_expr, ctx->symtab);
+                        if (cast_inner != NULL)
+                            address_expr = cast_inner;
+                    }
+                    if (!codegen_expr_is_addressable(address_expr))
+                    {
+                        const char *call_id = NULL;
+                        if (arg_expr != NULL && arg_expr->type == EXPR_FUNCTION_CALL)
+                            call_id = arg_expr->expr_data.function_call_data.id;
                         codegen_report_error(ctx,
-                            "ERROR: Unsupported expression type for var parameter.");
+                            "ERROR: Unsupported expression type for var parameter (expr_type=%d%s%s) in call to %s arg %d.",
+                            arg_expr != NULL ? arg_expr->type : -1,
+                            call_id != NULL ? " call_id=" : "",
+                            call_id != NULL ? call_id : "",
+                            procedure_name ? procedure_name : "(unknown)",
+                            arg_num);
                         return inst_list;
                     }
-                    inst_list = codegen_address_for_expr(arg_expr, inst_list, ctx, &addr_reg);
+                    inst_list = codegen_address_for_expr(address_expr, inst_list, ctx, &addr_reg);
 
                     /* BUGFIX: For TRUE var parameters of class types, we pass the ADDRESS of the variable itself,
                      * not the value it contains. This allows the callee to update the variable (e.g., FreeAndNil).

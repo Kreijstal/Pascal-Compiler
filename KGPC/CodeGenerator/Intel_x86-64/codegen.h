@@ -175,6 +175,11 @@ typedef struct {
 } CodeGenLoopFrame;
 
 typedef struct {
+    struct Expression *context_expr;
+    struct RecordType *record_type;
+} CodeGenWithContext;
+
+typedef struct {
     int label_counter;
     int write_label_counter;
     FILE *output_file;
@@ -216,6 +221,9 @@ typedef struct {
     StackNode_t *static_link_spill_slot;
     int pending_stack_arg_bytes;
     ListNode_t *emitted_subprograms;
+    CodeGenWithContext *with_stack;
+    int with_depth;
+    int with_capacity;
 } CodeGenContext;
 
 /* Generates a label */
@@ -241,6 +249,7 @@ void codegen_stack_space(CodeGenContext *ctx);
 void codegen_inst_list(ListNode_t *, CodeGenContext *ctx);
 
 void codegen_report_error(CodeGenContext *ctx, const char *fmt, ...);
+void codegen_report_warning(const CodeGenContext *ctx, const char *fmt, ...);
 int codegen_had_error(const CodeGenContext *ctx);
 
 /* Convert a KgpcType to a legacy type tag.

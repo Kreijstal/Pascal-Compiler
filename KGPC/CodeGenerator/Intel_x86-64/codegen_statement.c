@@ -25,10 +25,19 @@
 #define CODEGEN_POINTER_SIZE_BYTES 8
 #endif
 
+/* Helper function to get RecordType from HashNode */
+static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
+{
+    return hashnode_get_record_type(node);
+}
+
 static int codegen_push_loop(CodeGenContext *ctx, const char *exit_label, const char *continue_label);
 static void codegen_pop_loop(CodeGenContext *ctx);
 static const char *codegen_current_loop_exit(const CodeGenContext *ctx);
 static const char *codegen_current_loop_continue(const CodeGenContext *ctx);
+static int codegen_with_push(CodeGenContext *ctx, struct Expression *context_expr,
+    struct RecordType *record_type);
+static void codegen_with_pop(CodeGenContext *ctx);
 static void codegen_get_current_return_info(CodeGenContext *ctx, SymTab_t *symtab,
     int *out_is_real, int *out_size);
 static ListNode_t *codegen_break_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
@@ -2343,6 +2352,27 @@ static ListNode_t *codegen_assign_static_array(struct Expression *dest_expr,
 
         if (num_elements <= 0)
         {
+            if (dest_expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL &&
+                dest_expr->expr_data.id != NULL)
+            {
+                HashNode_t *var_node = NULL;
+                if (FindIdent(&var_node, ctx->symtab, dest_expr->expr_data.id) == 0 &&
+                    var_node != NULL && var_node->type != NULL &&
+                    kgpc_type_is_array(var_node->type))
+                {
+                    int start = 0;
+                    int end = -1;
+                    if (kgpc_type_get_array_bounds(var_node->type, &start, &end) == 0 &&
+                        end >= start)
+                    {
+                        num_elements = (long long)end - (long long)start + 1;
+                    }
+                }
+            }
+        }
+
+        if (num_elements <= 0)
+        {
             struct RecordField *field = codegen_lookup_record_field(dest_expr);
             if (field != NULL && field->is_array && !field->array_is_open)
                 num_elements = (long long)field->array_end - (long long)field->array_start + 1;
@@ -2360,6 +2390,30 @@ static ListNode_t *codegen_assign_static_array(struct Expression *dest_expr,
 
     long long element_size = expr_get_array_element_size(dest_expr, ctx);
     
+    if (element_size <= 0)
+    {
+        if (dest_expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL &&
+            dest_expr->expr_data.id != NULL)
+        {
+            HashNode_t *var_node = NULL;
+            if (FindIdent(&var_node, ctx->symtab, dest_expr->expr_data.id) == 0 &&
+                var_node != NULL && var_node->type != NULL &&
+                kgpc_type_is_array(var_node->type))
+            {
+                long long elem_size = kgpc_type_get_array_element_size(var_node->type);
+                if (elem_size <= 0)
+                {
+                    KgpcType *elem_type = kgpc_type_get_array_element_type_resolved(var_node->type,
+                        ctx->symtab);
+                    if (elem_type != NULL)
+                        elem_size = kgpc_type_sizeof(elem_type);
+                }
+                if (elem_size > 0)
+                    element_size = elem_size;
+            }
+        }
+    }
+
     if (element_size <= 0)
     {
         struct RecordField *field = codegen_lookup_record_field(dest_expr);
@@ -2414,9 +2468,20 @@ static ListNode_t *codegen_assign_static_array(struct Expression *dest_expr,
 
         if (array_size <= 0)
         {
+            const char *dest_name = NULL;
+            if (dest_expr != NULL)
+            {
+                if (dest_expr->type == EXPR_VAR_ID)
+                    dest_name = dest_expr->expr_data.id;
+                else if (dest_expr->type == EXPR_RECORD_ACCESS)
+                    dest_name = dest_expr->expr_data.record_access_data.field_id;
+            }
             codegen_report_error(ctx,
-                "ERROR: Invalid array size for assignment: %lld elements * %lld bytes = %lld total.",
-                num_elements, element_size, array_size);
+                "ERROR: Invalid array size for assignment: %lld elements * %lld bytes = %lld total (dest_type=%d%s%s).",
+                num_elements, element_size, array_size,
+                dest_expr != NULL ? dest_expr->type : -1,
+                dest_name != NULL ? " dest=" : "",
+                dest_name != NULL ? dest_name : "");
             return inst_list;
         }
     }
@@ -3504,6 +3569,104 @@ static void codegen_pop_loop(CodeGenContext *ctx)
         free(ctx->loop_frames[ctx->loop_depth].continue_label);
         ctx->loop_frames[ctx->loop_depth].continue_label = NULL;
     }
+}
+
+static struct RecordType *codegen_resolve_with_record_type(struct Expression *context_expr,
+    SymTab_t *symtab)
+{
+    if (context_expr == NULL || symtab == NULL)
+        return NULL;
+    if (context_expr->record_type != NULL)
+        return context_expr->record_type;
+    if (context_expr->type == EXPR_VAR_ID && context_expr->expr_data.id != NULL)
+    {
+        HashNode_t *var_node = NULL;
+        if (FindIdent(&var_node, symtab, context_expr->expr_data.id) >= 0 && var_node != NULL)
+        {
+            struct RecordType *rec = get_record_type_from_node(var_node);
+            if (rec != NULL)
+                return rec;
+            if (var_node->type != NULL)
+            {
+                if (kgpc_type_is_record(var_node->type))
+                    return kgpc_type_get_record(var_node->type);
+                if (kgpc_type_is_pointer(var_node->type) &&
+                    var_node->type->info.points_to != NULL &&
+                    kgpc_type_is_record(var_node->type->info.points_to))
+                    return kgpc_type_get_record(var_node->type->info.points_to);
+            }
+        }
+    }
+    if (context_expr->resolved_kgpc_type != NULL)
+    {
+        if (kgpc_type_is_record(context_expr->resolved_kgpc_type))
+            return kgpc_type_get_record(context_expr->resolved_kgpc_type);
+        if (kgpc_type_is_pointer(context_expr->resolved_kgpc_type) &&
+            context_expr->resolved_kgpc_type->info.points_to != NULL &&
+            kgpc_type_is_record(context_expr->resolved_kgpc_type->info.points_to))
+            return kgpc_type_get_record(context_expr->resolved_kgpc_type->info.points_to);
+    }
+    if (context_expr->type == EXPR_TYPECAST)
+    {
+        const char *target_id = context_expr->expr_data.typecast_data.target_type_id;
+        if (target_id != NULL)
+        {
+            HashNode_t *type_node = NULL;
+            if (FindIdent(&type_node, symtab, target_id) >= 0 && type_node != NULL)
+                return get_record_type_from_node(type_node);
+        }
+    }
+    if (context_expr->type == EXPR_FUNCTION_CALL)
+    {
+        const char *call_id = context_expr->expr_data.function_call_data.id;
+        if (call_id != NULL)
+        {
+            HashNode_t *type_node = NULL;
+            if (FindIdent(&type_node, symtab, call_id) >= 0 && type_node != NULL)
+                return get_record_type_from_node(type_node);
+        }
+    }
+    if (context_expr->pointer_subtype_id != NULL)
+    {
+        HashNode_t *type_node = NULL;
+        if (FindIdent(&type_node, symtab, context_expr->pointer_subtype_id) >= 0 &&
+            type_node != NULL)
+            return get_record_type_from_node(type_node);
+    }
+    return NULL;
+}
+
+static int codegen_with_push(CodeGenContext *ctx, struct Expression *context_expr,
+    struct RecordType *record_type)
+{
+    if (ctx == NULL || record_type == NULL)
+        return 0;
+    if (ctx->with_capacity == ctx->with_depth)
+    {
+        int new_capacity = (ctx->with_capacity > 0) ? ctx->with_capacity * 2 : 4;
+        CodeGenWithContext *new_stack = (CodeGenWithContext *)realloc(
+            ctx->with_stack, sizeof(CodeGenWithContext) * (size_t)new_capacity);
+        if (new_stack == NULL)
+        {
+            codegen_report_error(ctx, "ERROR: Unable to allocate WITH context stack.\n");
+            return 0;
+        }
+        ctx->with_stack = new_stack;
+        ctx->with_capacity = new_capacity;
+    }
+    ctx->with_stack[ctx->with_depth].context_expr = context_expr;
+    ctx->with_stack[ctx->with_depth].record_type = record_type;
+    ctx->with_depth += 1;
+    return 1;
+}
+
+static void codegen_with_pop(CodeGenContext *ctx)
+{
+    if (ctx == NULL || ctx->with_depth <= 0)
+        return;
+    ctx->with_depth -= 1;
+    ctx->with_stack[ctx->with_depth].context_expr = NULL;
+    ctx->with_stack[ctx->with_depth].record_type = NULL;
 }
 
 static const char *codegen_current_loop_exit(const CodeGenContext *ctx)
@@ -7981,7 +8144,7 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         {
             /* Symbol not found - emit as a direct call and hope the linker resolves it.
              * This handles runtime procedures and methods that may not be in the symbol table. */
-            codegen_report_error(ctx,
+            codegen_report_warning(ctx,
                 "WARNING: procedure %s not found during code generation, emitting direct call.",
                 unmangled_name ? unmangled_name : "(unknown)");
             /* Emit a direct call to the mangled name */
@@ -9772,9 +9935,18 @@ static ListNode_t *codegen_with(struct Statement *stmt, ListNode_t *inst_list, C
 {
     if (stmt == NULL)
         return inst_list;
+    int pushed = 0;
     if (stmt->stmt_data.with_data.context_expr != NULL)
     {
         struct Expression *context_expr = stmt->stmt_data.with_data.context_expr;
+        struct RecordType *record_type = codegen_resolve_with_record_type(context_expr, symtab);
+        if (record_type != NULL)
+            pushed = codegen_with_push(ctx, context_expr, record_type);
+        if (getenv("KGPC_DEBUG_WITH_CODEGEN") != NULL)
+        {
+            fprintf(stderr, "[KGPC_DEBUG_WITH_CODEGEN] with push=%d record=%s\n",
+                pushed, (record_type != NULL && record_type->type_id != NULL) ? record_type->type_id : "<null>");
+        }
         int is_record_context = expr_has_type_tag(context_expr, RECORD_TYPE) ||
             context_expr->record_type != NULL;
         if (is_record_context && codegen_expr_is_addressable(context_expr))
@@ -9791,6 +9963,8 @@ static ListNode_t *codegen_with(struct Statement *stmt, ListNode_t *inst_list, C
     }
     if (stmt->stmt_data.with_data.body_stmt != NULL)
         inst_list = codegen_stmt(stmt->stmt_data.with_data.body_stmt, inst_list, ctx, symtab);
+    if (pushed)
+        codegen_with_pop(ctx);
     return inst_list;
 }
 
