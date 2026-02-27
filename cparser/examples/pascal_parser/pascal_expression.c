@@ -1522,8 +1522,10 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
     expr_insert(*p, 4, PASCAL_T_NOT, EXPR_PREFIX, ASSOC_NONE, token(keyword_ci("not")));
     expr_insert(*p, 4, PASCAL_T_ADDR, EXPR_PREFIX, ASSOC_NONE, token(match("@")));
 
-    // Field width operator for formatted output: expression:width (same precedence as unary)
-    expr_insert(*p, 4, PASCAL_T_FIELD_WIDTH, EXPR_INFIX, ASSOC_LEFT, token(match(":")));
+    // Field width operator for formatted output: expression:width
+    // Precedence 0 (same as relational) so that `x:Width-2` parses as `x:(Width-2)`
+    // rather than `(x:Width) - 2`. Multiple colons like `x:10:2` work via left-assoc.
+    expr_altern(*p, 0, PASCAL_T_FIELD_WIDTH, token(match(":")));
 
     // Precedence 5: Member access (highest precedence for infix)
     combinator_t* member_access_op = seq(new_combinator(), PASCAL_T_NONE,
