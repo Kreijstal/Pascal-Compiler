@@ -746,7 +746,7 @@ int resolve_param_type(Tree_t *decl, SymTab_t *symtab)
 int semcheck_funccall(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating)
 {
-    int return_val, scope_return;
+    int return_val, scope_return, final_status;
     char *id;
     char *mangled_name = NULL;
     int arg_type, cur_arg;
@@ -760,6 +760,7 @@ int semcheck_funccall(int *type_return,
     assert(expr->type == EXPR_FUNCTION_CALL);
 
     return_val = 0;
+    final_status = 0;
     id = expr->expr_data.function_call_data.id;
 
     /* If the function call was already resolved (e.g., transformed from RECORD_ACCESS
@@ -3801,7 +3802,6 @@ int semcheck_funccall(int *type_return,
 
 method_call_resolved:
     ;  /* Label for jumping here after method resolution */
-    int final_status = 0;
 
     HashNode_t *best_match = NULL;
     int best_score = 0;
