@@ -2629,7 +2629,10 @@ static void append_subprogram_if_unique(ListNode_t **dest, Tree_t *tree)
         return;
 
     if (subprogram_list_has_decl(*dest, tree))
+    {
+        destroy_tree(tree);
         return;
+    }
 
     append_subprogram_node(dest, tree);
 }
