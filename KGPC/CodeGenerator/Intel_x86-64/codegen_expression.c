@@ -5165,6 +5165,7 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
 
     long long first_index_stride = 1;
     long long first_lower_bound = 0;
+    int shortstring_index = 0;
 
     if (has_info)
     {
@@ -5182,6 +5183,186 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
         long long element_size_ll = 1;
         if (codegen_get_indexable_element_size(array_expr, ctx, &element_size_ll))
             first_index_stride = element_size_ll;
+    }
+
+    /* ShortString indexing is 1-based even though it is stored with a length byte at index 0. */
+    if (codegen_array_access_targets_shortstring(expr, ctx) ||
+        codegen_expr_is_shortstring_value(array_expr))
+    {
+        shortstring_index = 1;
+    }
+    else if (array_expr != NULL && array_expr->type == EXPR_POINTER_DEREF)
+    {
+        struct Expression *ptr_expr = array_expr->expr_data.pointer_deref_data.pointer_expr;
+        KgpcType *ptr_type = NULL;
+        if (ptr_expr != NULL)
+        {
+            if (ptr_expr->pointer_subtype == SHORTSTRING_TYPE ||
+                (ptr_expr->pointer_subtype_id != NULL &&
+                 (pascal_identifier_equals(ptr_expr->pointer_subtype_id, "ShortString") ||
+                  pascal_identifier_equals(ptr_expr->pointer_subtype_id, "AnsiString") ||
+                  pascal_identifier_equals(ptr_expr->pointer_subtype_id, "UnicodeString") ||
+                  pascal_identifier_equals(ptr_expr->pointer_subtype_id, "WideString"))))
+            {
+                shortstring_index = 1;
+            }
+            ptr_type = ptr_expr->resolved_kgpc_type;
+        }
+        if (ptr_type == NULL && ptr_expr != NULL && ptr_expr->type == EXPR_VAR_ID &&
+            ctx != NULL && ctx->symtab != NULL && ptr_expr->expr_data.id != NULL)
+        {
+            HashNode_t *node = NULL;
+            if (FindIdent(&node, ctx->symtab, ptr_expr->expr_data.id) >= 0 && node != NULL)
+                ptr_type = node->type;
+        }
+        if (ptr_type == NULL && ptr_expr != NULL && ptr_expr->type == EXPR_RECORD_ACCESS)
+        {
+            struct RecordField *field = codegen_lookup_record_field_expr(ptr_expr, ctx);
+            if (field != NULL)
+            {
+                if (field->is_pointer)
+                {
+                    if (field->pointer_type == SHORTSTRING_TYPE)
+                        shortstring_index = 1;
+                    else if (field->pointer_type_id != NULL && ctx != NULL && ctx->symtab != NULL)
+                    {
+                        HashNode_t *type_node = NULL;
+                        if (FindIdent(&type_node, ctx->symtab, field->pointer_type_id) >= 0 &&
+                            type_node != NULL && type_node->type != NULL)
+                        {
+                            if (kgpc_type_is_shortstring(type_node->type))
+                                shortstring_index = 1;
+                            else
+                            {
+                                struct TypeAlias *alias = kgpc_type_get_type_alias(type_node->type);
+                                if (alias != NULL && alias->is_shortstring)
+                                    shortstring_index = 1;
+                                else if (kgpc_type_is_array(type_node->type))
+                                {
+                                    int start = 0;
+                                    int end = 0;
+                                    KgpcType *elem = kgpc_type_get_array_element_type(type_node->type);
+                                    if (elem != NULL && kgpc_type_is_char(elem) &&
+                                        kgpc_type_get_array_bounds(type_node->type, &start, &end) == 0 &&
+                                        start == 0 && end >= 0 && end <= 255)
+                                    {
+                                        shortstring_index = 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if (!shortstring_index && field->type_id != NULL && ctx != NULL && ctx->symtab != NULL)
+                {
+                    HashNode_t *type_node = NULL;
+                    if (FindIdent(&type_node, ctx->symtab, field->type_id) >= 0 &&
+                        type_node != NULL)
+                    {
+                        if (type_node->type != NULL && kgpc_type_is_pointer(type_node->type))
+                        {
+                            KgpcType *points_to = type_node->type->info.points_to;
+                            if (points_to != NULL)
+                            {
+                                if (kgpc_type_is_shortstring(points_to))
+                                    shortstring_index = 1;
+                                else
+                                {
+                                    struct TypeAlias *alias = kgpc_type_get_type_alias(points_to);
+                                    if (alias != NULL && alias->is_shortstring)
+                                        shortstring_index = 1;
+                                    else if (kgpc_type_is_array(points_to))
+                                    {
+                                        int start = 0;
+                                        int end = 0;
+                                        KgpcType *elem = kgpc_type_get_array_element_type(points_to);
+                                        if (elem != NULL && kgpc_type_is_char(elem) &&
+                                            kgpc_type_get_array_bounds(points_to, &start, &end) == 0 &&
+                                            start == 0 && end >= 0 && end <= 255)
+                                        {
+                                            shortstring_index = 1;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if (!shortstring_index)
+                        {
+                            struct TypeAlias *alias = get_type_alias_from_node(type_node);
+                            if (alias != NULL && alias->is_pointer)
+                            {
+                                if (alias->pointer_type == SHORTSTRING_TYPE)
+                                    shortstring_index = 1;
+                                else if (alias->pointer_type_id != NULL)
+                                {
+                                    HashNode_t *sub_node = NULL;
+                                    if (FindIdent(&sub_node, ctx->symtab, alias->pointer_type_id) >= 0 &&
+                                        sub_node != NULL && sub_node->type != NULL)
+                                    {
+                                        if (kgpc_type_is_shortstring(sub_node->type))
+                                            shortstring_index = 1;
+                                        else
+                                        {
+                                            struct TypeAlias *sub_alias = kgpc_type_get_type_alias(sub_node->type);
+                                            if (sub_alias != NULL && sub_alias->is_shortstring)
+                                                shortstring_index = 1;
+                                            else if (kgpc_type_is_array(sub_node->type))
+                                            {
+                                                int start = 0;
+                                                int end = 0;
+                                                KgpcType *elem = kgpc_type_get_array_element_type(sub_node->type);
+                                                if (elem != NULL && kgpc_type_is_char(elem) &&
+                                                    kgpc_type_get_array_bounds(sub_node->type, &start, &end) == 0 &&
+                                                    start == 0 && end >= 0 && end <= 255)
+                                                {
+                                                    shortstring_index = 1;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if (ptr_type != NULL && kgpc_type_is_pointer(ptr_type))
+        {
+            KgpcType *points_to = ptr_type->info.points_to;
+            if (points_to != NULL)
+            {
+                if (kgpc_type_is_shortstring(points_to))
+                    shortstring_index = 1;
+                else
+                {
+                    struct TypeAlias *alias = kgpc_type_get_type_alias(points_to);
+                    if (alias != NULL && alias->is_shortstring)
+                        shortstring_index = 1;
+                    else if (kgpc_type_is_array(points_to))
+                    {
+                        int start = 0;
+                        int end = 0;
+                        KgpcType *elem = kgpc_type_get_array_element_type(points_to);
+                        if (elem != NULL && kgpc_type_is_char(elem) &&
+                            kgpc_type_get_array_bounds(points_to, &start, &end) == 0 &&
+                            start == 0 && end >= 0 && end <= 255)
+                        {
+                            shortstring_index = 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if (shortstring_index)
+        first_lower_bound = 1;
+
+    /* For ShortString, skip the length byte so index 1 maps to the first character. */
+    if (shortstring_index)
+    {
+        snprintf(buffer, sizeof(buffer), "\taddq\t$1, %s\n", base_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
     }
 
     if (first_lower_bound > 0)

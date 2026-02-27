@@ -145,10 +145,10 @@ type
   RTLString = AnsiString;
   PAnsiString = ^AnsiString;
   PUnicodeString = ^UnicodeString;
-  PString = ^String;
   { ShortString: length-prefixed string[255] compatible layout.
     Note: most bootstrap-compatible aliases live in KGPC/stdlib.p (the implicit prelude). }
   ShortString = array[0..255] of Char;
+  PString = ^ShortString;
   PWideString = ^WideString;
 
   TLineEndStr = string[3];

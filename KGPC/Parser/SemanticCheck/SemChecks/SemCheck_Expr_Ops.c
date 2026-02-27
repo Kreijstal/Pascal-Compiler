@@ -1487,6 +1487,33 @@ static int semcheck_try_self_field_access(int *type_return, SymTab_t *symtab,
     struct RecordType *field_owner = NULL;
     struct RecordField *field = semcheck_find_class_field_including_hidden(symtab,
         self_record, id, &field_owner);
+    if (getenv("KGPC_DEBUG_MONITOR") != NULL &&
+        id != NULL && pascal_identifier_equals(id, "_MonitorData"))
+    {
+        fprintf(stderr,
+            "[KGPC_DEBUG_MONITOR] try_self_field record=%s field=%s found=%d owner=%s\n",
+            self_record != NULL && self_record->type_id != NULL ? self_record->type_id : "<null>",
+            id,
+            field != NULL,
+            field_owner != NULL && field_owner->type_id != NULL ? field_owner->type_id : "<null>");
+        if (field == NULL && self_record != NULL && self_record->fields != NULL)
+        {
+            int field_count = 0;
+            for (ListNode_t *cur = self_record->fields; cur != NULL && field_count < 5; cur = cur->next)
+            {
+                if (cur->type == LIST_RECORD_FIELD && cur->cur != NULL)
+                {
+                    struct RecordField *rf = (struct RecordField *)cur->cur;
+                    fprintf(stderr,
+                        "  field[%d]=%s hidden=%d\n",
+                        field_count,
+                        rf->name != NULL ? rf->name : "<null>",
+                        rf->is_hidden);
+                    field_count++;
+                }
+            }
+        }
+    }
     if (field == NULL)
         return -1;
 
@@ -1545,6 +1572,13 @@ int semcheck_varid(int *type_return,
             id != NULL ? id : "(null)", with_context_count, expr->line_num);
     }
     int with_status = semcheck_with_try_resolve(id, symtab, &with_expr, expr->line_num);
+    if (getenv("KGPC_DEBUG_MONITOR") != NULL &&
+        id != NULL && pascal_identifier_equals(id, "_MonitorData"))
+    {
+        fprintf(stderr,
+            "[KGPC_DEBUG_MONITOR] varid=%s line=%d with_status=%d with_expr=%p\n",
+            id, expr->line_num, with_status, (void *)with_expr);
+    }
     if (getenv("KGPC_DEBUG_WITH") != NULL &&
         (pascal_identifier_equals(id, "BufPtr") ||
          pascal_identifier_equals(id, "Bytes") ||
@@ -1568,6 +1602,14 @@ int semcheck_varid(int *type_return,
     }
 
     scope_return = FindIdent(&hash_return, symtab, id);
+    if (getenv("KGPC_DEBUG_MONITOR") != NULL &&
+        id != NULL && pascal_identifier_equals(id, "_MonitorData"))
+    {
+        fprintf(stderr,
+            "[KGPC_DEBUG_MONITOR] FindIdent id=%s scope=%d node=%p hash_type=%d\n",
+            id, scope_return, (void *)hash_return,
+            hash_return != NULL ? hash_return->hash_type : -1);
+    }
     if (scope_return == -1 && id != NULL)
     {
         const char *owner = semcheck_get_current_method_owner();
@@ -1917,6 +1959,13 @@ resolved:;
                 self_record = semcheck_resolve_helper_self_record(symtab,
                     helper_self_node, helper_self_record);
             }
+            if (getenv("KGPC_DEBUG_MONITOR") != NULL &&
+                id != NULL && pascal_identifier_equals(id, "_MonitorData"))
+            {
+                fprintf(stderr,
+                    "[KGPC_DEBUG_MONITOR] scope>0 self_node=%p self_record=%p helper_context=%d\n",
+                    (void *)helper_self_node, (void *)self_record, helper_context);
+            }
             int field_result = semcheck_try_self_field_access(type_return, symtab, expr,
                 max_scope_lev, mutating, helper_self_node, self_record, id);
             if (field_result >= 0)
@@ -1970,6 +2019,24 @@ resolved:;
                 {
                     struct RecordType *self_record = semcheck_resolve_helper_self_record(symtab,
                         self_node, helper_self_record);
+                    if (getenv("KGPC_DEBUG_MONITOR") != NULL &&
+                        id != NULL && pascal_identifier_equals(id, "_MonitorData"))
+                    {
+                        fprintf(stderr,
+                            "[KGPC_DEBUG_MONITOR] scope=-1 self_node=%p self_record=%p helper_context=%d\n",
+                            (void *)self_node, (void *)self_record, helper_context);
+                        if (self_record != NULL && self_record->type_id != NULL)
+                        {
+                            char mangled[256];
+                            snprintf(mangled, sizeof(mangled), "%s__%s", self_record->type_id, id);
+                            HashNode_t *mnode = NULL;
+                            int mscope = FindIdent(&mnode, symtab, mangled);
+                            fprintf(stderr,
+                                "[KGPC_DEBUG_MONITOR] mangled lookup %s scope=%d node=%p hash=%d\n",
+                                mangled, mscope, (void *)mnode,
+                                mnode != NULL ? mnode->hash_type : -1);
+                        }
+                    }
                     int field_result = semcheck_try_self_field_access(type_return, symtab, expr,
                         max_scope_lev, mutating, self_node, self_record, id);
                     if (field_result >= 0)
@@ -2596,6 +2663,8 @@ resolved:;
                 {
                     set_type_from_hashtype(&subtype, target_node);
                 }
+                if (subtype == UNKNOWN_TYPE)
+                    subtype = semcheck_map_builtin_type_name(symtab, type_id);
             }
 
             if (subtype == UNKNOWN_TYPE && type_id == NULL && alias != NULL &&
