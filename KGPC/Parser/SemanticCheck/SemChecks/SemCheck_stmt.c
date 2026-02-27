@@ -59,6 +59,262 @@ static double semstmt_now_ms(void) {
 
 void semcheck_expr_set_resolved_type(struct Expression *expr, int type_tag);
 
+static int semcheck_expr_best_line(const struct Expression *expr);
+static int semcheck_expr_best_context(const struct Expression *expr,
+    int *out_line, int *out_col, int *out_source_index);
+static int semcheck_expr_list_best_context(ListNode_t *list,
+    int *out_line, int *out_col, int *out_source_index);
+static int semcheck_expr_list_best_line(ListNode_t *list)
+{
+    while (list != NULL)
+    {
+        struct Expression *item = (struct Expression *)list->cur;
+        int line = semcheck_expr_best_line(item);
+        if (line > 0)
+            return line;
+        list = list->next;
+    }
+    return 0;
+}
+
+static int semcheck_expr_best_line(const struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+    if (expr->line_num > 0)
+        return expr->line_num;
+
+    switch (expr->type)
+    {
+        case EXPR_RELOP:
+        {
+            int line = semcheck_expr_best_line(expr->expr_data.relop_data.left);
+            if (line > 0)
+                return line;
+            return semcheck_expr_best_line(expr->expr_data.relop_data.right);
+        }
+        case EXPR_SIGN_TERM:
+            return semcheck_expr_best_line(expr->expr_data.sign_term);
+        case EXPR_ADDOP:
+        {
+            int line = semcheck_expr_best_line(expr->expr_data.addop_data.left_expr);
+            if (line > 0)
+                return line;
+            return semcheck_expr_best_line(expr->expr_data.addop_data.right_term);
+        }
+        case EXPR_MULOP:
+        {
+            int line = semcheck_expr_best_line(expr->expr_data.mulop_data.left_term);
+            if (line > 0)
+                return line;
+            return semcheck_expr_best_line(expr->expr_data.mulop_data.right_factor);
+        }
+        case EXPR_ARRAY_ACCESS:
+        {
+            int line = semcheck_expr_best_line(expr->expr_data.array_access_data.array_expr);
+            if (line > 0)
+                return line;
+            line = semcheck_expr_best_line(expr->expr_data.array_access_data.index_expr);
+            if (line > 0)
+                return line;
+            return semcheck_expr_list_best_line(expr->expr_data.array_access_data.extra_indices);
+        }
+        case EXPR_RECORD_ACCESS:
+            return semcheck_expr_best_line(expr->expr_data.record_access_data.record_expr);
+        case EXPR_FUNCTION_CALL:
+        {
+            int line = semcheck_expr_list_best_line(expr->expr_data.function_call_data.args_expr);
+            if (line > 0)
+                return line;
+            return semcheck_expr_best_line(expr->expr_data.function_call_data.procedural_var_expr);
+        }
+        case EXPR_POINTER_DEREF:
+            return semcheck_expr_best_line(expr->expr_data.pointer_deref_data.pointer_expr);
+        case EXPR_ADDR:
+            return semcheck_expr_best_line(expr->expr_data.addr_data.expr);
+        case EXPR_TYPECAST:
+            return semcheck_expr_best_line(expr->expr_data.typecast_data.expr);
+        case EXPR_IS:
+            return semcheck_expr_best_line(expr->expr_data.is_data.expr);
+        case EXPR_AS:
+            return semcheck_expr_best_line(expr->expr_data.as_data.expr);
+        case EXPR_SET:
+        {
+            ListNode_t *elements = expr->expr_data.set_data.elements;
+            while (elements != NULL)
+            {
+                struct SetElement *elem = (struct SetElement *)elements->cur;
+                int line = semcheck_expr_best_line(elem ? elem->lower : NULL);
+                if (line > 0)
+                    return line;
+                line = semcheck_expr_best_line(elem ? elem->upper : NULL);
+                if (line > 0)
+                    return line;
+                elements = elements->next;
+            }
+            return 0;
+        }
+        case EXPR_ARRAY_LITERAL:
+            return semcheck_expr_list_best_line(expr->expr_data.array_literal_data.elements);
+        case EXPR_RECORD_CONSTRUCTOR:
+        {
+            ListNode_t *fields = expr->expr_data.record_constructor_data.fields;
+            while (fields != NULL)
+            {
+                struct RecordConstructorField *field = (struct RecordConstructorField *)fields->cur;
+                int line = semcheck_expr_best_line(field ? field->value : NULL);
+                if (line > 0)
+                    return line;
+                fields = fields->next;
+            }
+            return 0;
+        }
+        case EXPR_ANONYMOUS_FUNCTION:
+        case EXPR_ANONYMOUS_PROCEDURE:
+            return 0;
+        default:
+            break;
+    }
+
+    if (expr->field_width != NULL)
+        return semcheck_expr_best_line(expr->field_width);
+    if (expr->field_precision != NULL)
+        return semcheck_expr_best_line(expr->field_precision);
+    return 0;
+}
+
+static int semcheck_expr_list_best_context(ListNode_t *list,
+    int *out_line, int *out_col, int *out_source_index)
+{
+    while (list != NULL)
+    {
+        struct Expression *item = (struct Expression *)list->cur;
+        if (semcheck_expr_best_context(item, out_line, out_col, out_source_index))
+            return 1;
+        list = list->next;
+    }
+    return 0;
+}
+
+static int semcheck_expr_best_context(const struct Expression *expr,
+    int *out_line, int *out_col, int *out_source_index)
+{
+    if (expr == NULL)
+        return 0;
+
+    if (expr->source_index >= 0 || expr->line_num > 0 || expr->col_num > 0)
+    {
+        if (out_line != NULL && expr->line_num > 0)
+            *out_line = expr->line_num;
+        if (out_col != NULL && expr->col_num > 0)
+            *out_col = expr->col_num;
+        if (out_source_index != NULL && expr->source_index >= 0)
+            *out_source_index = expr->source_index;
+        return 1;
+    }
+
+    switch (expr->type)
+    {
+        case EXPR_RELOP:
+            if (semcheck_expr_best_context(expr->expr_data.relop_data.left,
+                    out_line, out_col, out_source_index))
+                return 1;
+            return semcheck_expr_best_context(expr->expr_data.relop_data.right,
+                out_line, out_col, out_source_index);
+        case EXPR_SIGN_TERM:
+            return semcheck_expr_best_context(expr->expr_data.sign_term,
+                out_line, out_col, out_source_index);
+        case EXPR_ADDOP:
+            if (semcheck_expr_best_context(expr->expr_data.addop_data.left_expr,
+                    out_line, out_col, out_source_index))
+                return 1;
+            return semcheck_expr_best_context(expr->expr_data.addop_data.right_term,
+                out_line, out_col, out_source_index);
+        case EXPR_MULOP:
+            if (semcheck_expr_best_context(expr->expr_data.mulop_data.left_term,
+                    out_line, out_col, out_source_index))
+                return 1;
+            return semcheck_expr_best_context(expr->expr_data.mulop_data.right_factor,
+                out_line, out_col, out_source_index);
+        case EXPR_ARRAY_ACCESS:
+            if (semcheck_expr_best_context(expr->expr_data.array_access_data.array_expr,
+                    out_line, out_col, out_source_index))
+                return 1;
+            if (semcheck_expr_best_context(expr->expr_data.array_access_data.index_expr,
+                    out_line, out_col, out_source_index))
+                return 1;
+            return semcheck_expr_list_best_context(expr->expr_data.array_access_data.extra_indices,
+                out_line, out_col, out_source_index);
+        case EXPR_RECORD_ACCESS:
+            return semcheck_expr_best_context(expr->expr_data.record_access_data.record_expr,
+                out_line, out_col, out_source_index);
+        case EXPR_FUNCTION_CALL:
+            if (semcheck_expr_list_best_context(expr->expr_data.function_call_data.args_expr,
+                    out_line, out_col, out_source_index))
+                return 1;
+            return semcheck_expr_best_context(expr->expr_data.function_call_data.procedural_var_expr,
+                out_line, out_col, out_source_index);
+        case EXPR_POINTER_DEREF:
+            return semcheck_expr_best_context(expr->expr_data.pointer_deref_data.pointer_expr,
+                out_line, out_col, out_source_index);
+        case EXPR_ADDR:
+            return semcheck_expr_best_context(expr->expr_data.addr_data.expr,
+                out_line, out_col, out_source_index);
+        case EXPR_TYPECAST:
+            return semcheck_expr_best_context(expr->expr_data.typecast_data.expr,
+                out_line, out_col, out_source_index);
+        case EXPR_IS:
+            return semcheck_expr_best_context(expr->expr_data.is_data.expr,
+                out_line, out_col, out_source_index);
+        case EXPR_AS:
+            return semcheck_expr_best_context(expr->expr_data.as_data.expr,
+                out_line, out_col, out_source_index);
+        case EXPR_SET:
+        {
+            ListNode_t *elements = expr->expr_data.set_data.elements;
+            while (elements != NULL)
+            {
+                struct SetElement *elem = (struct SetElement *)elements->cur;
+                if (semcheck_expr_best_context(elem ? elem->lower : NULL,
+                        out_line, out_col, out_source_index))
+                    return 1;
+                if (semcheck_expr_best_context(elem ? elem->upper : NULL,
+                        out_line, out_col, out_source_index))
+                    return 1;
+                elements = elements->next;
+            }
+            return 0;
+        }
+        case EXPR_ARRAY_LITERAL:
+            return semcheck_expr_list_best_context(expr->expr_data.array_literal_data.elements,
+                out_line, out_col, out_source_index);
+        case EXPR_RECORD_CONSTRUCTOR:
+        {
+            ListNode_t *fields = expr->expr_data.record_constructor_data.fields;
+            while (fields != NULL)
+            {
+                struct RecordConstructorField *field = (struct RecordConstructorField *)fields->cur;
+                if (semcheck_expr_best_context(field ? field->value : NULL,
+                        out_line, out_col, out_source_index))
+                    return 1;
+                fields = fields->next;
+            }
+            return 0;
+        }
+        case EXPR_ANONYMOUS_FUNCTION:
+        case EXPR_ANONYMOUS_PROCEDURE:
+            return 0;
+        default:
+            break;
+    }
+
+    if (expr->field_width != NULL)
+        return semcheck_expr_best_context(expr->field_width, out_line, out_col, out_source_index);
+    if (expr->field_precision != NULL)
+        return semcheck_expr_best_context(expr->field_precision, out_line, out_col, out_source_index);
+    return 0;
+}
+
 static int semcheck_stmt_expr_tag(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev, int mutating)
 {
@@ -6584,8 +6840,13 @@ int semcheck_ifthen(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 
     if(if_type != BOOL)
     {
-        semcheck_error_with_context("Error on line %d, expected relational inside if statement!\n\n",
-                stmt->line_num);
+        int err_line = stmt->line_num;
+        int err_col = stmt->col_num;
+        int err_source_index = -1;
+        semcheck_expr_best_context(relop_expr, &err_line, &err_col, &err_source_index);
+        semcheck_error_with_context_at(err_line, err_col, err_source_index,
+                "Error on line %d, expected relational inside if statement!\n\n",
+                err_line);
         ++return_val;
     }
 
@@ -6615,8 +6876,13 @@ int semcheck_while(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
     return_val += semcheck_stmt_expr_tag(&while_type, symtab, relop_expr, INT_MAX, NO_MUTATE);
     if(while_type != BOOL)
     {
-        semcheck_error_with_context("Error on line %d, expected relational inside while statement!\n\n",
-                stmt->line_num);
+        int err_line = stmt->line_num;
+        int err_col = stmt->col_num;
+        int err_source_index = -1;
+        semcheck_expr_best_context(relop_expr, &err_line, &err_col, &err_source_index);
+        semcheck_error_with_context_at(err_line, err_col, err_source_index,
+                "Error on line %d, expected relational inside while statement!\n\n",
+                err_line);
         ++return_val;
     }
 
@@ -6652,8 +6918,14 @@ int semcheck_repeat(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
     return_val += semcheck_stmt_expr_tag(&until_type, symtab, stmt->stmt_data.repeat_data.until_expr, INT_MAX, NO_MUTATE);
     if (until_type != BOOL)
     {
-        semcheck_error_with_context("Error on line %d, expected relational inside repeat statement!\n\n",
-            stmt->line_num);
+        int err_line = stmt->line_num;
+        int err_col = stmt->col_num;
+        int err_source_index = -1;
+        semcheck_expr_best_context(stmt->stmt_data.repeat_data.until_expr,
+            &err_line, &err_col, &err_source_index);
+        semcheck_error_with_context_at(err_line, err_col, err_source_index,
+            "Error on line %d, expected relational inside repeat statement!\n\n",
+            err_line);
         ++return_val;
     }
 

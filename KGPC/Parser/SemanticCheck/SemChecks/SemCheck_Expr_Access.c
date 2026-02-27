@@ -336,7 +336,8 @@ int semcheck_arrayaccess(int *type_return,
     }
 
     /* Handle pointer deref indexing: p^[i] where p is a pointer to element (e.g., PChar).
-     * Rewrite the array access to index the pointer directly instead of the dereferenced value. */
+     * Rewrite the array access to index the pointer directly instead of the dereferenced value,
+     * but preserve array/string semantics when the pointer targets an array or string. */
     if (!array_expr->is_array_expr && base_type != POINTER_TYPE &&
         array_expr->type == EXPR_POINTER_DEREF)
     {
@@ -346,11 +347,43 @@ int semcheck_arrayaccess(int *type_return,
             KgpcType *ptr_kgpc_type = pointer_expr->resolved_kgpc_type;
             if (ptr_kgpc_type != NULL && kgpc_type_is_pointer(ptr_kgpc_type))
             {
-                /* Replace array_expr with the pointer (skip the deref) so we index the pointer */
-                expr->expr_data.array_access_data.array_expr = pointer_expr;
-                array_expr = pointer_expr;
-                base_kgpc_type = ptr_kgpc_type;
-                base_type = POINTER_TYPE;
+                KgpcType *points_to = ptr_kgpc_type->info.points_to;
+                int points_to_is_string = 0;
+                if (points_to != NULL)
+                {
+                    struct TypeAlias *alias = kgpc_type_get_type_alias(points_to);
+                    if (kgpc_type_is_string(points_to) || kgpc_type_is_shortstring(points_to) ||
+                        (alias != NULL && alias->is_shortstring))
+                    {
+                        points_to_is_string = 1;
+                    }
+                }
+                if (!points_to_is_string)
+                {
+                    if (pointer_expr->pointer_subtype == SHORTSTRING_TYPE ||
+                        pointer_expr->pointer_subtype == STRING_TYPE)
+                        points_to_is_string = 1;
+                    else if (pointer_expr->pointer_subtype_id != NULL)
+                    {
+                        int subtype_tag = semcheck_map_builtin_type_name(symtab,
+                            pointer_expr->pointer_subtype_id);
+                        if (subtype_tag == SHORTSTRING_TYPE || subtype_tag == STRING_TYPE)
+                            points_to_is_string = 1;
+                        else if (pascal_identifier_equals(pointer_expr->pointer_subtype_id, "ShortString") ||
+                            pascal_identifier_equals(pointer_expr->pointer_subtype_id, "AnsiString") ||
+                            pascal_identifier_equals(pointer_expr->pointer_subtype_id, "UnicodeString") ||
+                            pascal_identifier_equals(pointer_expr->pointer_subtype_id, "WideString"))
+                            points_to_is_string = 1;
+                    }
+                }
+                if (points_to == NULL || (!kgpc_type_is_array(points_to) && !points_to_is_string))
+                {
+                    /* Replace array_expr with the pointer (skip the deref) so we index the pointer */
+                    expr->expr_data.array_access_data.array_expr = pointer_expr;
+                    array_expr = pointer_expr;
+                    base_kgpc_type = ptr_kgpc_type;
+                    base_type = POINTER_TYPE;
+                }
             }
         }
     }
@@ -3131,7 +3164,7 @@ int semcheck_funccall(int *type_return,
         
         if (record_info != NULL && record_info->type_id != NULL) {
             /* Ensure owner_type represents the class instance pointer for constructors. */
-            if (record_type_is_class(record_info))
+            if (record_type_is_class(record_info) && !record_info->is_type_helper)
             {
                 if (owner_type != NULL && owner_type->kind == TYPE_KIND_RECORD)
                 {
@@ -3335,7 +3368,7 @@ int semcheck_funccall(int *type_return,
                      * even if the constructor is inherited from a base class. */
                     KgpcType *ctor_return_type = NULL;
                     int return_type_owned = 0;
-                    if (record_info != NULL && record_type_is_class(record_info))
+                    if (record_info != NULL && record_type_is_class(record_info) && !record_info->is_type_helper)
                     {
                         KgpcType *rec_type = create_record_type(record_info);
                         if (rec_type != NULL)
@@ -4029,6 +4062,46 @@ method_call_resolved:
         
         /* Build detailed error message with argument types and available overloads */
         {
+            if (getenv("KGPC_DEBUG_OVERLOAD_FAIL") != NULL)
+            {
+                fprintf(stderr,
+                    "[KGPC_DEBUG_OVERLOAD_FAIL] call=%s line=%d col=%d args=%d\n",
+                    id != NULL ? id : "<null>",
+                    expr->line_num,
+                    expr->col_num,
+                    args_given != NULL ? ListLength(args_given) : 0);
+                int arg_idx = 0;
+                for (ListNode_t *cur = args_given; cur != NULL; cur = cur->next)
+                {
+                    struct Expression *arg = (struct Expression *)cur->cur;
+                    KgpcType *arg_kgpc_type_dbg = NULL;
+                    semcheck_expr_with_type(&arg_kgpc_type_dbg, symtab, arg, max_scope_lev, NO_MUTATE);
+                    const char *kgpc_str = (arg != NULL && arg->resolved_kgpc_type != NULL)
+                        ? kgpc_type_to_string(arg->resolved_kgpc_type)
+                        : (arg_kgpc_type_dbg != NULL ? kgpc_type_to_string(arg_kgpc_type_dbg) : "<null>");
+                    const char *arg_id = NULL;
+                    if (arg != NULL && arg->type == EXPR_VAR_ID)
+                        arg_id = arg->expr_data.id;
+                    fprintf(stderr,
+                        "  arg%d expr_type=%d line=%d col=%d src=%d id=%s kgpc=%s tag=%d ptr_sub=%d ptr_id=%s array_elem=%d array_id=%s\n",
+                        arg_idx,
+                        arg != NULL ? arg->type : -1,
+                        arg != NULL ? arg->line_num : -1,
+                        arg != NULL ? arg->col_num : -1,
+                        arg != NULL ? arg->source_index : -1,
+                        arg_id != NULL ? arg_id : "<null>",
+                        kgpc_str != NULL ? kgpc_str : "<null>",
+                        arg != NULL && arg->resolved_kgpc_type != NULL
+                            ? semcheck_tag_from_kgpc(arg->resolved_kgpc_type)
+                            : semcheck_tag_from_kgpc(arg_kgpc_type_dbg),
+                        arg != NULL ? arg->pointer_subtype : -1,
+                        arg != NULL && arg->pointer_subtype_id != NULL ? arg->pointer_subtype_id : "<null>",
+                        arg != NULL ? arg->array_element_type : -1,
+                        arg != NULL && arg->array_element_type_id != NULL ? arg->array_element_type_id : "<null>");
+                    arg_idx++;
+                }
+            }
+
             /* First, build a string showing the actual argument types */
             char arg_types_buf[1024] = "(";
             int buf_pos = 1;
@@ -4228,6 +4301,30 @@ skip_overload_resolution:
         }
 
         set_type_from_hashtype(type_return, hash_return);
+        if (expr->resolved_kgpc_type == NULL &&
+            hash_return->method_name != NULL &&
+            strncasecmp(hash_return->method_name, "Create", 6) == 0 &&
+            hash_return->owner_class != NULL)
+        {
+            struct RecordType *ctor_owner = semcheck_lookup_record_type(symtab, hash_return->owner_class);
+            if (ctor_owner != NULL && record_type_is_class(ctor_owner) && !ctor_owner->is_type_helper)
+            {
+                KgpcType *record_kgpc = create_record_type(ctor_owner);
+                if (record_kgpc != NULL)
+                {
+                    KgpcType *ptr_type = create_pointer_type(record_kgpc);
+                    if (ptr_type != NULL)
+                    {
+                        semcheck_expr_set_resolved_kgpc_type_shared(expr, ptr_type);
+                        destroy_kgpc_type(ptr_type);
+                    }
+                    else
+                    {
+                        destroy_kgpc_type(record_kgpc);
+                    }
+                }
+            }
+        }
         if (getenv("KGPC_DEBUG_SEMCHECK") != NULL && id != NULL &&
             (pascal_identifier_equals(id, "GetAnsiString") ||
              pascal_identifier_equals(id, "GetString")))
@@ -4293,9 +4390,13 @@ skip_overload_resolution:
                 }
                 int skip_override_for_ctor = 0;
                 {
-                    const char *ctor_method = (hash_return != NULL && hash_return->method_name != NULL)
-                        ? hash_return->method_name
-                        : expr->expr_data.function_call_data.id;
+                    const char *ctor_method = NULL;
+                    if (expr->expr_data.function_call_data.placeholder_method_name != NULL)
+                        ctor_method = expr->expr_data.function_call_data.placeholder_method_name;
+                    else if (hash_return != NULL && hash_return->method_name != NULL)
+                        ctor_method = hash_return->method_name;
+                    else
+                        ctor_method = expr->expr_data.function_call_data.id;
                     if (ctor_method != NULL && strncasecmp(ctor_method, "Create", 6) == 0)
                     {
                         if (expr->resolved_kgpc_type != NULL &&
@@ -4372,13 +4473,18 @@ skip_overload_resolution:
 
         int is_constructor_call = 0;
         if (args_given != NULL && hash_return != NULL &&
-            hash_return->owner_class != NULL && hash_return->method_name != NULL)
+            hash_return->owner_class != NULL)
         {
+            const char *method_name = hash_return->method_name;
+            if (method_name == NULL &&
+                expr->expr_data.function_call_data.placeholder_method_name != NULL)
+                method_name = expr->expr_data.function_call_data.placeholder_method_name;
             struct RecordType *record_info = semcheck_lookup_record_type(symtab, hash_return->owner_class);
-            if (record_info != NULL && record_info->is_class &&
-                (pascal_identifier_equals(hash_return->method_name, "Create") ||
-                 pascal_identifier_equals(hash_return->method_name, "Destroy")) &&
-                !from_cparser_is_method_static(hash_return->owner_class, hash_return->method_name))
+            if (record_info != NULL && record_info->is_class && !record_info->is_type_helper &&
+                method_name != NULL &&
+                (pascal_identifier_equals(method_name, "Create") ||
+                 pascal_identifier_equals(method_name, "Destroy")) &&
+                !from_cparser_is_method_static(hash_return->owner_class, method_name))
             {
                 is_constructor_call = 1;
             }

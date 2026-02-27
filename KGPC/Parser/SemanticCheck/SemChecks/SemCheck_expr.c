@@ -440,6 +440,12 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
     {
         case EXPR_VAR_ID:
         {
+            if (mutating == NO_MUTATE && expr->resolved_kgpc_type != NULL)
+            {
+                if (owns_type != NULL)
+                    *owns_type = 0;
+                return expr->resolved_kgpc_type;
+            }
             /* Prefer explicit symbols to avoid clobbering user-defined "result" variables. */
             HashNode_t *node = NULL;
             if (expr->expr_data.id != NULL &&
@@ -1483,7 +1489,13 @@ int semcheck_expr_main(SymTab_t *symtab, struct Expression *expr,
     }
 
     if (expr->resolved_kgpc_type == NULL && *type_return != UNKNOWN_TYPE)
+    {
         semcheck_expr_set_resolved_type(expr, *type_return);
+        if (*type_return != RECORD_TYPE && *type_return != ARRAY_OF_CONST_TYPE)
+        {
+            expr->resolved_kgpc_type = create_primitive_type(*type_return);
+        }
+    }
     if (out_type != NULL)
         *out_type = expr->resolved_kgpc_type;
     return return_val;

@@ -1082,20 +1082,38 @@ int semcheck_builtin_assigned(int *type_return, SymTab_t *symtab,
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
     if (args == NULL || args->next != NULL)
     {
-        semcheck_error_with_context("Error on line %d, Assigned expects exactly one argument.\n", expr->line_num);
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index,
+            "Error on line %d, Assigned expects exactly one argument.\n", expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
     }
 
     KgpcType *arg_kgpc_type = NULL;
+    struct Expression *arg_expr = (struct Expression *)args->cur;
     int error_count = semcheck_expr_with_type(&arg_kgpc_type, symtab,
-        (struct Expression *)args->cur, max_scope_lev, NO_MUTATE);
+        arg_expr, max_scope_lev, NO_MUTATE);
+    int err_line = expr->line_num;
+    int err_col = expr->col_num;
+    int err_source_index = expr->source_index;
+    if (arg_expr != NULL)
+    {
+        if (arg_expr->line_num > 0)
+            err_line = arg_expr->line_num;
+        if (arg_expr->col_num > 0)
+            err_col = arg_expr->col_num;
+        if (arg_expr->source_index >= 0)
+            err_source_index = arg_expr->source_index;
+    }
     if (getenv("KGPC_DEBUG_ASSIGNED") != NULL)
     {
-        struct Expression *arg_expr = (struct Expression *)args->cur;
+        const char *arg_id = NULL;
+        if (arg_expr != NULL && arg_expr->type == EXPR_VAR_ID)
+            arg_id = arg_expr->expr_data.id;
         fprintf(stderr,
-            "[KGPC_DEBUG_ASSIGNED] expr_type=%d kgpc=%s kind=%d\n",
+            "[KGPC_DEBUG_ASSIGNED] line=%d expr_type=%d id=%s kgpc=%s kind=%d\n",
+            expr->line_num,
             arg_expr != NULL ? arg_expr->type : -1,
+            arg_id != NULL ? arg_id : "<null>",
             arg_kgpc_type != NULL ? kgpc_type_to_string(arg_kgpc_type) : "<null>",
             arg_kgpc_type != NULL ? arg_kgpc_type->kind : -1);
     }
@@ -1106,7 +1124,8 @@ int semcheck_builtin_assigned(int *type_return, SymTab_t *symtab,
                         kgpc_type_equals_tag(arg_kgpc_type, POINTER_TYPE);
     if (error_count == 0 && !is_valid_type)
     {
-        semcheck_error_with_context("Error on line %d, Assigned expects a pointer or procedure variable.\n", expr->line_num);
+        semcheck_error_with_context_at(err_line, err_col, err_source_index,
+            "Error on line %d, Assigned expects a pointer or procedure variable.\n", err_line);
         ++error_count;
     }
 

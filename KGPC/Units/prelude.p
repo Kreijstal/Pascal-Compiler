@@ -59,8 +59,8 @@ type
   WideString = String;
   RawByteString = String;
   PAnsiString = ^AnsiString;
-  PString = ^String;
   ShortString = array[0..255] of Char;
+  PString = ^ShortString;
   PWideString = ^WideString;
 
   TLineEndStr = string[3];

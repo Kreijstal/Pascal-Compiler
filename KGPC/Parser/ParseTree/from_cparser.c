@@ -6690,6 +6690,52 @@ static void collect_class_members(ast_t *node, const char *class_name,
                 list_builder_extend(field_builder, fields);
                 break;
             }
+            case PASCAL_T_VAR_SECTION: {
+                /* Handle var / class var sections inside classes. */
+                int is_class_var_section = 0;
+                if (getenv("KGPC_DEBUG_CLASS_VAR_PARSE") != NULL)
+                {
+                    fprintf(stderr, "[KGPC] class var section nodes:");
+                    for (ast_t *dbg = unwrapped->child; dbg != NULL; dbg = dbg->next)
+                    {
+                        ast_t *node = unwrap_pascal_node(dbg);
+                        const char *name = (node != NULL && node->sym != NULL) ? node->sym->name : NULL;
+                        fprintf(stderr, " (%s:%d)", name ? name : "<null>",
+                            node != NULL ? node->typ : -1);
+                    }
+                    fprintf(stderr, "\n");
+                }
+                for (ast_t *scan = unwrapped->child; scan != NULL; scan = scan->next)
+                {
+                    ast_t *node = unwrap_pascal_node(scan);
+                    if (node != NULL && node->sym != NULL && node->sym->name != NULL &&
+                        strcasecmp(node->sym->name, "class") == 0)
+                    {
+                        is_class_var_section = 1;
+                        break;
+                    }
+                }
+                for (ast_t *child = unwrapped->child; child != NULL; child = child->next)
+                {
+                    if (child->typ == PASCAL_T_FIELD_DECL)
+                    {
+                        ListNode_t *fields = convert_class_field_decl(child);
+                        if (is_class_var_section && fields != NULL)
+                        {
+                            for (ListNode_t *fnode = fields; fnode != NULL; fnode = fnode->next)
+                            {
+                                if (fnode->type == LIST_RECORD_FIELD && fnode->cur != NULL)
+                                {
+                                    struct RecordField *field = (struct RecordField *)fnode->cur;
+                                    field->is_class_var = 1;
+                                }
+                            }
+                        }
+                        list_builder_extend(field_builder, fields);
+                    }
+                }
+                break;
+            }
             case PASCAL_T_METHOD_DECL:
             case PASCAL_T_CONSTRUCTOR_DECL:
             case PASCAL_T_DESTRUCTOR_DECL: {
@@ -6803,7 +6849,14 @@ static struct RecordType *convert_class_type_ex(const char *class_name, ast_t *c
         }
     }
 
-    collect_class_members(body_start, class_name, &field_builder, &property_builder, &method_template_builder, &nested_type_builder);
+    if (body_start != NULL && body_start->typ == PASCAL_T_NONE &&
+        body_start->child != NULL && body_start->next == NULL)
+    {
+        body_start = body_start->child;
+    }
+
+    collect_class_members(body_start, class_name, &field_builder, &property_builder,
+        &method_template_builder, &nested_type_builder);
 
     /* Output collected nested type sections */
     if (nested_types_out != NULL)

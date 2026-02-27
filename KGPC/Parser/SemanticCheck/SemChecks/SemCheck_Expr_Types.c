@@ -2391,21 +2391,17 @@ int semcheck_recordaccess(int *type_return,
                     }
 
                     /* Transform record access into an explicit method call: receiver.Method() */
-                    char *method_id = (method_node->mangled_id != NULL) ?
-                        strdup(method_node->mangled_id) :
-                        ((field_id != NULL) ? strdup(field_id) : NULL);
+                    char *method_id = (field_id != NULL) ? strdup(field_id) : NULL;
 
                     expr->type = EXPR_FUNCTION_CALL;
                     memset(&expr->expr_data.function_call_data, 0,
                         sizeof(expr->expr_data.function_call_data));
-                    expr->expr_data.function_call_data.is_method_call_placeholder = 0;
+                    expr->expr_data.function_call_data.is_method_call_placeholder = 1;
                     expr->expr_data.function_call_data.id = method_id;
-                    if (method_node->mangled_id != NULL)
-                        expr->expr_data.function_call_data.mangled_id =
-                            strdup(method_node->mangled_id);
-                    else if (method_id != NULL)
-                        expr->expr_data.function_call_data.mangled_id = strdup(method_id);
-                    expr->expr_data.function_call_data.resolved_func = method_node;
+                    if (field_id != NULL)
+                        expr->expr_data.function_call_data.placeholder_method_name = strdup(field_id);
+                    expr->expr_data.function_call_data.mangled_id = NULL;
+                    expr->expr_data.function_call_data.resolved_func = NULL;
 
                     if (is_static_method) {
                         expr->expr_data.function_call_data.args_expr = NULL;
@@ -2413,6 +2409,37 @@ int semcheck_recordaccess(int *type_return,
                         struct Expression *receiver = record_expr;
                         ListNode_t *arg_node = CreateListNode(receiver, LIST_EXPR);
                         expr->expr_data.function_call_data.args_expr = arg_node;
+                    }
+
+                    /* Preserve constructor return type for class Create calls before
+                     * semcheck_funccall short-circuits on resolved_func. */
+                    const char *method_name = NULL;
+                    if (method_node->method_name != NULL)
+                        method_name = method_node->method_name;
+                    else if (field_id != NULL)
+                        method_name = field_id;
+                    if (!is_static_method &&
+                        record_info != NULL &&
+                        record_type_is_class(record_info) &&
+                        !record_info->is_type_helper &&
+                        method_name != NULL &&
+                        strncasecmp(method_name, "Create", 6) == 0)
+                    {
+                        KgpcType *record_kgpc = create_record_type(record_info);
+                        if (record_kgpc != NULL)
+                        {
+                            KgpcType *ptr_type = create_pointer_type(record_kgpc);
+                            if (ptr_type != NULL)
+                            {
+                                semcheck_expr_set_resolved_kgpc_type_shared(expr, ptr_type);
+                                semcheck_expr_set_resolved_type(expr, POINTER_TYPE);
+                                destroy_kgpc_type(ptr_type);
+                            }
+                            else
+                            {
+                                destroy_kgpc_type(record_kgpc);
+                            }
+                        }
                     }
 
                     /* Re-run semantic checking as a function call */
