@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #ifndef _WIN32
 #include <strings.h>
 #endif
@@ -392,6 +393,7 @@ static combinator_t *get_or_create_unit_parser(void)
     {
         cached_unit_parser = new_combinator();
         init_pascal_unit_parser(&cached_unit_parser);
+        parser_set_ephemeral_threshold();
     }
     return cached_unit_parser;
 }
@@ -402,6 +404,7 @@ static combinator_t *get_or_create_program_parser(void)
     {
         cached_program_parser = new_combinator();
         init_pascal_complete_program_parser(&cached_program_parser);
+        parser_set_ephemeral_threshold();
     }
     return cached_program_parser;
 }
@@ -520,6 +523,14 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
 {
     if (error_out != NULL)
         *error_out = NULL;
+
+    /* Disable memoization — with ephemeral combinators getting unique IDs,
+     * memo table operations (lookup/insert/clone) cost more than they save. */
+    static bool memo_mode_set = false;
+    if (!memo_mode_set) {
+        parser_set_memo_mode(PARSER_MEMO_DISABLED);
+        memo_mode_set = true;
+    }
 
     ensure_generic_registry();
 
@@ -823,7 +834,15 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
 
     file_to_parse = (char *)path;
 
+    parser_reset_type_profile();
+    struct timespec ts_start, ts_end;
+    clock_gettime(CLOCK_MONOTONIC, &ts_start);
     ParseResult result = parse(input, parser);
+    clock_gettime(CLOCK_MONOTONIC, &ts_end);
+    double parse_ms = (ts_end.tv_sec - ts_start.tv_sec) * 1000.0 + (ts_end.tv_nsec - ts_start.tv_nsec) / 1e6;
+    fprintf(stderr, "  [PARSE_TIME] %s: %.1f ms\n", path, parse_ms);
+    parser_print_type_profile(path);
+
     if (getenv("KGPC_DEBUG_TFPG_AST") != NULL && result.is_success && result.value.ast != NULL)
     {
         fprintf(stderr, "==== Raw cparser AST for %s ====\n", path);

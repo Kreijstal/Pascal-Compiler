@@ -58,6 +58,52 @@ static void* safe_realloc(void* ptr, size_t size);
 ast_t * ast_nil = NULL;
 static size_t next_combinator_id = 1;
 static parser_stats_t g_parser_stats = {0};
+
+/* Combinator free-list to avoid malloc/free overhead for ephemeral combinators */
+static combinator_t *comb_free_list = NULL;
+static size_t comb_free_count = 0;
+#define COMB_FREE_LIST_MAX 4096
+
+/* Ephemeral combinator threshold: combinators with memo_id above this
+ * were created during parsing (not during initial parser construction)
+ * and should skip memoization since their IDs are never reused. */
+static size_t ephemeral_memo_threshold = 0;
+
+/* Lightweight profiling: count parse() calls by combinator type */
+static size_t parse_type_counts[64] = {0};
+void parser_reset_type_profile(void) {
+    memset(parse_type_counts, 0, sizeof(parse_type_counts));
+}
+void parser_print_type_profile(const char* label) {
+    /* Must match parser_type_t enum order exactly */
+    const char* type_names[] = {
+        "P_MATCH", "P_MATCH_RAW", "P_INTEGER", "P_CIDENT", "P_STRING",
+        "P_UNTIL", "P_SUCCEED", "P_ANY_CHAR", "P_SATISFY", "P_CI_KEYWORD",
+        "P_LAYOUT",
+        "COMB_EXPECT", "COMB_SEQ", "COMB_MULTI", "COMB_FLATMAP", "COMB_MANY", "COMB_EXPR",
+        "COMB_OPTIONAL", "COMB_SEP_BY", "COMB_SEP_BY1", "COMB_LEFT", "COMB_RIGHT",
+        "COMB_NOT", "COMB_PEEK",
+        "COMB_GSEQ", "COMB_BETWEEN", "COMB_SEP_END_BY", "COMB_CHAINL1", "COMB_MAP",
+        "COMB_ERRMAP",
+        "COMB_COMMIT",
+        "COMB_FOR_INIT_DISPATCH", "COMB_ASSIGNMENT_GUARD", "COMB_LABEL_GUARD",
+        "COMB_STATEMENT_DISPATCH", "COMB_CLASS_MEMBER_DISPATCH",
+        "COMB_KEYWORD_DISPATCH", "COMB_TYPE_DISPATCH",
+        "COMB_LAZY",
+        "COMB_VARIANT_TAG", "COMB_VARIANT_PART",
+        "COMB_MAIN_BLOCK_CONTENT", "COMB_EXPR_LVALUE",
+        "P_EOI"
+    };
+    int num_names = sizeof(type_names) / sizeof(type_names[0]);
+    fprintf(stderr, "  [PARSE_PROFILE] %s - combinator type call counts:\n", label);
+    for (int i = 0; i < 64; i++) {
+        if (parse_type_counts[i] > 0) {
+            fprintf(stderr, "    %-30s: %12zu calls\n",
+                    i < num_names ? type_names[i] : "UNKNOWN", parse_type_counts[i]);
+        }
+    }
+}
+
 static bool g_parser_stats_enabled = false;
 static parser_memo_mode_t g_memo_mode = PARSER_MEMO_FAILURES_ONLY;
 static bool g_comb_stats_enabled = false;
@@ -81,6 +127,22 @@ void parser_stats_reset(void) {
 
 parser_stats_t parser_stats_snapshot(void) {
     return g_parser_stats;
+}
+
+size_t parser_combinator_count(void) {
+    return next_combinator_id;
+}
+
+/* Mark a combinator as cached (won't be freed by free_combinator) */
+void combinator_mark_cached(combinator_t *comb) {
+    if (comb != NULL)
+        comb->cached = true;
+}
+
+/* Call after initial parser construction to set the ephemeral threshold.
+ * Any combinator created after this point will skip memoization. */
+void parser_set_ephemeral_threshold(void) {
+    ephemeral_memo_threshold = next_combinator_id;
 }
 
 void parser_set_memo_mode(parser_memo_mode_t mode) {
@@ -963,7 +1025,14 @@ char read1(input_t * in) {
 //=============================================================================
 
 combinator_t * new_combinator() {
-    combinator_t *comb = (combinator_t *) safe_malloc(sizeof(combinator_t));
+    combinator_t *comb;
+    if (comb_free_list != NULL) {
+        comb = comb_free_list;
+        comb_free_list = (combinator_t *)comb->extra_to_free;
+        comb_free_count--;
+    } else {
+        comb = (combinator_t *) safe_malloc(sizeof(combinator_t));
+    }
     // Explicitly zero out the entire struct to avoid uninitialised value warnings
     memset(comb, 0, sizeof(combinator_t));
     comb->type = P_MATCH; // Default value, will be overridden
@@ -974,61 +1043,58 @@ combinator_t * new_combinator() {
 
 static ParseResult match_ci_fn(input_t * in, void * args, char* parser_name) {
     char * str = ((match_args *) args)->str;
-    InputState state; save_input_state(in, &state);
-    for (int i = 0, len = strlen(str); i < len; i++) {
-        char c = read1(in);
-        if (tolower(c) != tolower(str[i])) {
-            restore_input_state(in, &state);
-            char* unexpected = strndup(in->buffer + state.start, 10);
-            char* err_msg;
-            if (asprintf(&err_msg, "Parser '%s' Expected '%s' (case-insensitive) but found '%.10s...'", parser_name ? parser_name : "N/A", str, unexpected) < 0) {
-                err_msg = strdup("Expected token (case-insensitive)");
-            }
-            return make_failure_v2(in, parser_name, err_msg, unexpected);
+    int slen = (int)strlen(str);
+    int pos = in->start;
+    if (pos + slen <= in->length && strncasecmp(in->buffer + pos, str, slen) == 0) {
+        for (int i = 0; i < slen; i++) {
+            if (in->buffer[pos + i] == '\n') { in->line++; in->col = 1; }
+            else { in->col++; }
         }
+        in->start = pos + slen;
+        return make_success(ensure_ast_nil_initialized());
     }
-    return make_success(ensure_ast_nil_initialized());
+    return make_failure(in, strdup("Expected token (case-insensitive)"));
 }
 
 static ParseResult match_fn(input_t * in, void * args, char* parser_name) {
     char * str = ((match_args *) args)->str;
-    InputState state; save_input_state(in, &state);
-    for (int i = 0, len = strlen(str); i < len; i++) {
-        char c = read1(in);
-        if (c != str[i]) {
-            restore_input_state(in, &state);
-            char* unexpected = strndup(in->buffer + state.start, 10);
-            char* err_msg;
-            if (asprintf(&err_msg, "Parser '%s' Expected '%s' but found '%.10s...'", parser_name ? parser_name : "N/A", str, unexpected) < 0) {
-                err_msg = strdup("Expected token");
-            }
-            return make_failure_v2(in, parser_name, err_msg, unexpected);
+    int start = in->start;
+    int len = in->length;
+    const char* buf = in->buffer;
+    /* Fast path: check if string matches at current position without read1() overhead */
+    int slen = (int)strlen(str);
+    if (start + slen <= len && memcmp(buf + start, str, slen) == 0) {
+        /* Match succeeded — advance position and update line/col */
+        for (int i = 0; i < slen; i++) {
+            if (buf[start + i] == '\n') { in->line++; in->col = 1; }
+            else { in->col++; }
         }
+        in->start = start + slen;
+        return make_success(ensure_ast_nil_initialized());
     }
-    return make_success(ensure_ast_nil_initialized());
+    /* Failure — use lightweight error without expensive string formatting */
+    return make_failure(in, strdup("Expected token"));
 }
 
 static ParseResult integer_fn(input_t * in, void * args, char* parser_name) {
    prim_args* pargs = (prim_args*)args;
-   InputState state; save_input_state(in, &state);
-   int start_pos_ws = in->start;
-   char c = read1(in);
-   if (!isdigit((unsigned char)c)) {
-       restore_input_state(in, &state);
-       char* unexpected = strndup(in->buffer + state.start, 10);
-       return make_failure_v2(in, parser_name, strdup("Expected a digit."), unexpected);
+   const char* buf = in->buffer;
+   int pos = in->start;
+   int blen = in->length;
+   if (pos >= blen || !isdigit((unsigned char)buf[pos])) {
+       return make_failure(in, strdup("Expected a digit."));
    }
-   while ((c = read1(in)) != EOF) {
-       if (isdigit((unsigned char)c) || c == '_') {
-           continue;
-       }
-       break;
+   pos++;
+   while (pos < blen && (isdigit((unsigned char)buf[pos]) || buf[pos] == '_')) {
+       pos++;
    }
-   if (c != EOF) in->start--;
-   int len = in->start - start_pos_ws;
+   int len = pos - in->start;
    char * text = (char*)safe_malloc(len + 1);
-   strncpy(text, in->buffer + start_pos_ws, len);
+   memcpy(text, buf + in->start, len);
    text[len] = '\0';
+   /* Digits are always on one line */
+   in->col += len;
+   in->start = pos;
    ast_t * ast = new_ast();
    ast->typ = pargs->tag; ast->sym = sym_lookup(text); free(text);
    ast->child = NULL; ast->next = NULL;
@@ -1038,36 +1104,52 @@ static ParseResult integer_fn(input_t * in, void * args, char* parser_name) {
 
 static ParseResult cident_fn(input_t * in, void * args, char* parser_name) {
    prim_args* pargs = (prim_args*)args;
-   InputState state; save_input_state(in, &state);
-   int start_pos_ws = in->start;
-   char c = read1(in);
-   unsigned char uc = (unsigned char)c;
-   if (c == '&') {
-       start_pos_ws = in->start;
-       c = read1(in);
-       uc = (unsigned char)c;
+   const char* buf = in->buffer;
+   int pos = in->start;
+   int blen = in->length;
+
+   if (pos >= blen) {
+       return make_failure(in, strdup("Expected identifier."));
    }
-   if (c == EOF) {
-       restore_input_state(in, &state);
-       return make_failure_v2(in, parser_name, strdup("Expected identifier."), NULL);
-   }
-   if (c != '_' && !(isalpha(uc) || uc >= 0x80)) {
-       restore_input_state(in, &state);
-       char* unexpected = strndup(in->buffer + state.start, 10);
-       return make_failure_v2(in, parser_name, strdup("Expected identifier."), unexpected);
-   }
-   while ((c = read1(in)) != EOF) {
-       uc = (unsigned char)c;
-       if (isalnum(uc) || c == '_' || uc >= 0x80) {
-           continue;
+
+   int start_pos = pos;
+   unsigned char uc = (unsigned char)buf[pos];
+
+   /* Handle & prefix (escaped identifier) */
+   if (uc == '&') {
+       pos++;
+       if (pos >= blen) {
+           return make_failure(in, strdup("Expected identifier."));
        }
-       break;
+       start_pos = pos;
+       uc = (unsigned char)buf[pos];
    }
-   if (c != EOF) in->start--;
-   int len = in->start - start_pos_ws;
+
+   /* First char must be alpha, underscore, or high byte */
+   if (uc != '_' && !(isalpha(uc) || uc >= 0x80)) {
+       return make_failure(in, strdup("Expected identifier."));
+   }
+   pos++;
+
+   /* Consume remaining identifier chars */
+   while (pos < blen) {
+       uc = (unsigned char)buf[pos];
+       if (isalnum(uc) || uc == '_' || uc >= 0x80) {
+           pos++;
+       } else {
+           break;
+       }
+   }
+
+   int len = pos - start_pos;
    char * text = (char*)safe_malloc(len + 1);
-   strncpy(text, in->buffer + start_pos_ws, len);
+   memcpy(text, buf + start_pos, len);
    text[len] = '\0';
+
+   /* Identifiers are single-line — just advance col */
+   in->col += (pos - in->start);
+   in->start = pos;
+
    ast_t * ast = new_ast();
    ast->typ = pargs->tag; ast->sym = sym_lookup(text); free(text);
    ast->child = NULL; ast->next = NULL;
@@ -1138,13 +1220,16 @@ static ParseResult any_char_fn(input_t * in, void * args, char* parser_name) {
 
 static ParseResult satisfy_fn(input_t * in, void * args, char* parser_name) {
     satisfy_args* sargs = (satisfy_args*)args;
-    InputState state; save_input_state(in, &state);
-    char c = read1(in);
-    if (c == EOF || !sargs->pred(c)) {
-        restore_input_state(in, &state);
-        char* unexpected = strndup(in->buffer + state.start, 10);
-        return make_failure_v2(in, parser_name, strdup("Predicate not satisfied."), unexpected);
+    if (in->start >= in->length) {
+        return make_failure(in, strdup("Predicate not satisfied."));
     }
+    char c = in->buffer[in->start];
+    if (!sargs->pred(c)) {
+        return make_failure(in, strdup("Predicate not satisfied."));
+    }
+    /* Advance position */
+    in->start++;
+    if (c == '\n') { in->line++; in->col = 1; } else { in->col++; }
     char str[2] = {c, '\0'};
     ast_t* ast = new_ast();
     ast->typ = sargs->tag;
@@ -1512,17 +1597,30 @@ ParseResult parse(input_t * in, combinator_t * comb) {
     //     fflush(stderr);
     // }
     
+    /* Fast path: when memoization is fully disabled, skip all memo overhead */
+    if (__builtin_expect(g_memo_mode == PARSER_MEMO_DISABLED, 1)) {
+        if (__builtin_expect(g_parser_stats_enabled, 0)) {
+            g_parser_stats.parse_calls++;
+            if (comb->type < 64) parse_type_counts[comb->type]++;
+        }
+        return comb->fn(in, (void *)comb->args, comb->name);
+    }
+
     if (g_parser_stats_enabled) {
         g_parser_stats.parse_calls++;
     }
-    
+    if (comb->type < 64) parse_type_counts[comb->type]++;
+
     // Disable memoization for pascal_layout to prevent memo table explosion
-    // pascal_layout is called at every token position and doesn't need memoization
     bool should_memoize = true;
     if (comb->name && strcmp(comb->name, "pascal_layout") == 0) {
         should_memoize = false;
     }
-    
+    // Skip memoization for ephemeral combinators created during parsing
+    if (ephemeral_memo_threshold > 0 && comb->memo_id >= ephemeral_memo_threshold && !comb->cached) {
+        should_memoize = false;
+    }
+
     if (in->memo == NULL && should_memoize) {
         in->memo = memo_table_create();
     }
@@ -1540,7 +1638,7 @@ ParseResult parse(input_t * in, combinator_t * comb) {
             cstats->type = comb->type;
         }
     }
-    
+
     memo_entry_t* entry = NULL;
     if (should_memoize && in->memo != NULL) {
         entry = memo_table_lookup(in->memo, combinator_id, position);
@@ -1548,7 +1646,7 @@ ParseResult parse(input_t * in, combinator_t * comb) {
     if (entry && entry->has_result) {
         bool can_replay =
             (entry->result.is_success && g_memo_mode == PARSER_MEMO_FULL) ||
-            (!entry->result.is_success && g_memo_mode != PARSER_MEMO_DISABLED);
+            (!entry->result.is_success);
         if (can_replay) {
             if (g_parser_stats_enabled) {
                 g_parser_stats.memo_hits++;
@@ -1589,20 +1687,20 @@ ParseResult parse(input_t * in, combinator_t * comb) {
     if (g_parser_stats_enabled && should_memoize) {
         g_parser_stats.memo_misses++;
     }
-    
+
     if (entry) {
         entry->in_progress = true;
     }
-    
+
     ParseResult result = comb->fn(in, (void *)comb->args, comb->name);
     InputState final_state;
     save_input_state(in, &final_state);
-    
+
     if (entry) {
         entry->in_progress = false;
         bool should_store =
             (result.is_success && g_memo_mode == PARSER_MEMO_FULL) ||
-            (!result.is_success && g_memo_mode != PARSER_MEMO_DISABLED);
+            (!result.is_success);
         if (should_store) {
             memo_table_store_result(entry, &result, &final_state);
         } else if (entry->has_result) {
@@ -1953,6 +2051,7 @@ void free_combinator(combinator_t* comb) {
 
 static void free_combinator_recursive(combinator_t* comb, visited_set* visited, extra_node** extras) {
     if (comb == NULL || visited_set_contains(visited, comb)) return;
+    if (comb->cached) return;  /* Do not free cached/shared combinators */
     visited_set_insert(visited, comb);
 
     // Ensure type is valid to avoid uninitialised value warnings
@@ -1965,7 +2064,13 @@ static void free_combinator_recursive(combinator_t* comb, visited_set* visited, 
             free(comb->args);
             comb->args = NULL;
         }
-        free(comb);
+        if (comb_free_count < COMB_FREE_LIST_MAX) {
+            comb->extra_to_free = (void *)comb_free_list;
+            comb_free_list = comb;
+            comb_free_count++;
+        } else {
+            free(comb);
+        }
         return;
     }
 
@@ -2360,7 +2465,14 @@ static void free_combinator_recursive(combinator_t* comb, visited_set* visited, 
         *extras = node;
         comb->extra_to_free = NULL;
     }
-    free(comb);
+    /* Recycle combinator struct instead of freeing */
+    if (comb_free_count < COMB_FREE_LIST_MAX) {
+        comb->extra_to_free = (void *)comb_free_list;
+        comb_free_list = comb;
+        comb_free_count++;
+    } else {
+        free(comb);
+    }
 }
 
 static void release_extra_nodes(extra_node** extras, visited_set* visited) {

@@ -110,6 +110,7 @@ struct combinator_t {
     void * extra_to_free;
     char* name;
     size_t memo_id;
+    bool cached;  /* If true, free_combinator will skip this combinator */
 };
 
 // For flatMap
@@ -150,6 +151,11 @@ typedef struct parser_stats {
 
 void parser_stats_reset(void);
 parser_stats_t parser_stats_snapshot(void);
+size_t parser_combinator_count(void);
+void combinator_mark_cached(combinator_t *comb);
+void parser_set_ephemeral_threshold(void);
+void parser_print_type_profile(const char* label);
+void parser_reset_type_profile(void);
 
 typedef enum {
     PARSER_MEMO_FULL,
