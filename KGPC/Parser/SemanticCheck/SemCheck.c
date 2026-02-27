@@ -55,6 +55,7 @@ HashNode_t *semcheck_find_type_node_in_owner_chain(SymTab_t *symtab,
 #include <stdarg.h>
 
 #ifdef _WIN32
+/* Windows CRT does not provide strndup; caller owns returned buffer. */
 static char* strndup(const char* s, size_t n)
 {
     size_t len = strnlen(s, n);
