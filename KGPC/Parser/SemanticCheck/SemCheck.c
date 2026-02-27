@@ -9914,14 +9914,6 @@ void semcheck_add_builtins(SymTab_t *symtab)
         {
             tobject->is_class = 1;
             tobject->type_id = strdup("TObject");
-            /* Add _MonitorData: Pointer field (required by FPC RTL objpas) */
-            struct RecordField *monitor_field = (struct RecordField *)calloc(1, sizeof(struct RecordField));
-            if (monitor_field != NULL)
-            {
-                monitor_field->name = strdup("_MonitorData");
-                monitor_field->type = POINTER_TYPE;
-                tobject->fields = CreateListNode(monitor_field, LIST_RECORD_FIELD);
-            }
             KgpcType *tobject_rec = create_record_type(tobject);
             KgpcType *tobject_type = NULL;
             if (tobject_rec != NULL)
