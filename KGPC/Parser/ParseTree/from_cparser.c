@@ -11571,7 +11571,11 @@ static int extract_constant_int(struct Expression *expr, long long *out_value) {
     case EXPR_SIGN_TERM:
         if (extract_constant_int(expr->expr_data.sign_term, out_value) != 0)
             return 1;
-        *out_value = -*out_value;
+        {
+            unsigned long long bits = (unsigned long long)(*out_value);
+            bits = 0ULL - bits;
+            *out_value = (long long)bits;
+        }
         return 0;
     case EXPR_ADDOP: {
         long long left_value = 0;
@@ -11917,40 +11921,6 @@ static struct Expression *convert_binary_expr(ast_t *node, int type) {
     ast_t *right_node = left_node != NULL ? left_node->next : NULL;
     struct Expression *left = convert_expression(left_node);
     struct Expression *right = convert_expression(right_node);
-
-    /*
-     * cparser precedence bug workaround:
-     * For write/writeln format specs like `write(x:Width-2)`, cparser can parse it as
-     * `(x:Width) - 2` (a binary op with a formatted LHS), which then fails semantic
-     * checking because `x:Width` is not a numeric expression.
-     *
-     * If we see any arithmetic binary op where the LHS carries a field width, treat the
-     * RHS as part of the field-width expression instead.
-     */
-    if (left != NULL && left->field_width != NULL && right != NULL) {
-        switch (type) {
-        case PASCAL_T_ADD:
-        case PASCAL_T_SUB:
-        case PASCAL_T_OR:
-            left->field_width = mk_addop(node->line, map_addop_tag(type), left->field_width, right);
-            return left;
-        case PASCAL_T_MUL:
-        case PASCAL_T_DIV:
-        case PASCAL_T_INTDIV:
-        case PASCAL_T_MOD:
-        case PASCAL_T_POWER:
-        case PASCAL_T_AND:
-        case PASCAL_T_XOR:
-        case PASCAL_T_SHL:
-        case PASCAL_T_SHR:
-        case PASCAL_T_ROL:
-        case PASCAL_T_ROR:
-            left->field_width = mk_mulop(node->line, map_mulop_tag(type), left->field_width, right);
-            return left;
-        default:
-            break;
-        }
-    }
 
     switch (type) {
     case PASCAL_T_ADD:

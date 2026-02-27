@@ -1389,6 +1389,57 @@ void test_pascal_precedence(void) {
     free_input(input);
 }
 
+// Test field width format spec precedence: x:Width-2 should parse as x:(Width-2)
+void test_pascal_field_width_precedence(void) {
+    combinator_t* p = create_expression_parser();
+    input_t* input = new_input();
+    input->buffer = strdup("x:Width-2");
+    input->length = strlen("x:Width-2");
+
+    ParseResult res = parse(input, p);
+
+    TEST_ASSERT(res.is_success);
+    // Top level should be FIELD_WIDTH (x : (Width-2))
+    TEST_ASSERT(res.value.ast->typ == PASCAL_T_FIELD_WIDTH);
+
+    // Left child should be identifier 'x'
+    ast_t* left = res.value.ast->child;
+    TEST_ASSERT(left->typ == PASCAL_T_IDENTIFIER);
+    TEST_ASSERT(strcmp(left->sym->name, "x") == 0);
+
+    // Right child should be subtraction (Width - 2)
+    ast_t* right = left->next;
+    TEST_ASSERT(right->typ == PASCAL_T_SUB);
+
+    free_ast(res.value.ast);    free(input->buffer);
+    free_input(input);
+}
+
+// Test field width with multiple colons: x:10:2 should parse as (x:10):2
+void test_pascal_field_width_multiple(void) {
+    combinator_t* p = create_expression_parser();
+    input_t* input = new_input();
+    input->buffer = strdup("x:10:2");
+    input->length = strlen("x:10:2");
+
+    ParseResult res = parse(input, p);
+
+    TEST_ASSERT(res.is_success);
+    // Top level should be FIELD_WIDTH ((x:10) : 2)
+    TEST_ASSERT(res.value.ast->typ == PASCAL_T_FIELD_WIDTH);
+
+    // Left child should be another FIELD_WIDTH (x:10)
+    ast_t* left = res.value.ast->child;
+    TEST_ASSERT(left->typ == PASCAL_T_FIELD_WIDTH);
+
+    // Right child should be integer 2
+    ast_t* right = left->next;
+    TEST_ASSERT(right->typ == PASCAL_T_INTEGER);
+
+    free_ast(res.value.ast);    free(input->buffer);
+    free_input(input);
+}
+
 // Test type casting
 void test_pascal_type_casting(void) {
     combinator_t* p = create_expression_parser();
@@ -5564,6 +5615,8 @@ TEST_LIST = {
     { "test_pascal_address_operator", test_pascal_address_operator },
     { "test_pascal_comprehensive_expression", test_pascal_comprehensive_expression },
     { "test_pascal_precedence", test_pascal_precedence },
+    { "test_pascal_field_width_precedence", test_pascal_field_width_precedence },
+    { "test_pascal_field_width_multiple", test_pascal_field_width_multiple },
     { "test_pascal_type_casting", test_pascal_type_casting },
     { "test_pascal_set_constructor", test_pascal_set_constructor },
     { "test_pascal_empty_set", test_pascal_empty_set },
