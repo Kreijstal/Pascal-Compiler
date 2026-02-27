@@ -11,6 +11,7 @@
 #include <ctype.h>
 #include <stdbool.h>
 
+
 static void set_combinator_name(combinator_t* comb, const char* name) {
     if (comb == NULL)
         return;
@@ -37,6 +38,9 @@ static combinator_t* create_property_decl_parser(void);
 static ast_t* map_const_type_keyword(ast_t* ast);
 
 static combinator_t* create_nested_method_directives(void) {
+    static combinator_t* cached_create_nested_method_directives = NULL;
+    if (cached_create_nested_method_directives != NULL) return cached_create_nested_method_directives;
+
     combinator_t* directive = multi(new_combinator(), PASCAL_T_NONE,
         token(keyword_ci("override")),
         token(keyword_ci("virtual")),
@@ -49,11 +53,13 @@ static combinator_t* create_nested_method_directives(void) {
         NULL
     );
 
-    return many(seq(new_combinator(), PASCAL_T_NONE,
+    cached_create_nested_method_directives = many(seq(new_combinator(), PASCAL_T_NONE,
         directive,
         token(match(";")),
         NULL
     ));
+    combinator_mark_cached(cached_create_nested_method_directives);
+    return cached_create_nested_method_directives;
 }
 
 static bool read_identifier_slice(const char* buffer, int length, int pos, int* out_start, size_t* out_len) {
@@ -402,6 +408,9 @@ static ast_t* map_const_type_keyword(ast_t* ast) {
 // Helper function to create a type reference parser that supports both
 // simple identifiers and constructed types (like TFoo<Integer> or specialize TFoo<Integer>)
 static combinator_t* create_type_ref_parser(void) {
+    static combinator_t* cached_type_ref = NULL;
+    if (cached_type_ref != NULL) return cached_type_ref;
+
     combinator_t** type_arg_ref = (combinator_t**)safe_malloc(sizeof(combinator_t*));
     *type_arg_ref = new_combinator();
 
@@ -428,7 +437,7 @@ static combinator_t* create_type_ref_parser(void) {
     
     // Include array types, records, and other complex type specs
     // This allows class fields to have types like "array of T"
-    return multi(new_combinator(), PASCAL_T_NONE,
+    cached_type_ref = multi(new_combinator(), PASCAL_T_NONE,
         constructed_type,
         array_type(PASCAL_T_ARRAY_TYPE),
         set_type(PASCAL_T_SET),
@@ -437,11 +446,16 @@ static combinator_t* create_type_ref_parser(void) {
         simple_type,
         NULL
     );
+    combinator_mark_cached(cached_type_ref);
+    return cached_type_ref;
 }
 
 // Helper function to create a method type parameter list parser
 // This supports generic methods like: procedure Foo<T>(X: T);
 static combinator_t* create_method_type_param_list(void) {
+    static combinator_t* cached_create_method_type_param_list = NULL;
+    if (cached_create_method_type_param_list != NULL) return cached_create_method_type_param_list;
+
     combinator_t* constraint_keyword = multi(new_combinator(), PASCAL_T_TYPE_CONSTRAINT,
         token(keyword_ci("class")),
         token(keyword_ci("record")),
@@ -467,24 +481,34 @@ static combinator_t* create_method_type_param_list(void) {
         NULL
     );
     
-    return optional(seq(new_combinator(), PASCAL_T_TYPE_PARAM_LIST,
+    cached_create_method_type_param_list = optional(seq(new_combinator(), PASCAL_T_TYPE_PARAM_LIST,
         token(match("<")),
         sep_by(type_param_with_constraint, token(match(","))),
         token(match(">")),
         NULL
     ));
+    combinator_mark_cached(cached_create_method_type_param_list);
+    return cached_create_method_type_param_list;
 }
 
 // Helper function to create a method return type parser
 // Wraps the type in PASCAL_T_RETURN_TYPE for consistent handling
 static combinator_t* create_method_return_type_parser(void) {
-    return seq(new_combinator(), PASCAL_T_RETURN_TYPE,
+    static combinator_t* cached_create_method_return_type_parser = NULL;
+    if (cached_create_method_return_type_parser != NULL) return cached_create_method_return_type_parser;
+
+    cached_create_method_return_type_parser = seq(new_combinator(), PASCAL_T_RETURN_TYPE,
         create_type_ref_parser(),
         NULL
     );
+    combinator_mark_cached(cached_create_method_return_type_parser);
+    return cached_create_method_return_type_parser;
 }
 
 static combinator_t* create_property_decl_parser(void) {
+    static combinator_t* cached_create_property_decl_parser = NULL;
+    if (cached_create_property_decl_parser != NULL) return cached_create_property_decl_parser;
+
     combinator_t* property_indexer_modifier = optional(multi(new_combinator(), PASCAL_T_NONE,
         token(keyword_ci("const")),
         token(keyword_ci("var")),
@@ -506,7 +530,7 @@ static combinator_t* create_property_decl_parser(void) {
         NULL
     ));
 
-    return seq(new_combinator(), PASCAL_T_PROPERTY_DECL,
+    cached_create_property_decl_parser = seq(new_combinator(), PASCAL_T_PROPERTY_DECL,
         optional(token(keyword_ci("class"))),  // Support class properties
         token(keyword_ci("property")),
         token(cident(PASCAL_T_IDENTIFIER)), // property name
@@ -551,15 +575,22 @@ static combinator_t* create_property_decl_parser(void) {
         )),
         NULL
     );
+    combinator_mark_cached(cached_create_property_decl_parser);
+    return cached_create_property_decl_parser;
 }
 
 static combinator_t* create_record_field_attribute_parser(void) {
-    return many(seq(new_combinator(), PASCAL_T_NONE,
+    static combinator_t* cached_create_record_field_attribute_parser = NULL;
+    if (cached_create_record_field_attribute_parser != NULL) return cached_create_record_field_attribute_parser;
+
+    cached_create_record_field_attribute_parser = many(seq(new_combinator(), PASCAL_T_NONE,
         token(match("[")),
         sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
         token(match("]")),
         NULL
     ));
+    combinator_mark_cached(cached_create_record_field_attribute_parser);
+    return cached_create_record_field_attribute_parser;
 }
 
 combinator_t* class_type(tag_t tag) {
@@ -1340,7 +1371,10 @@ combinator_t* type_name(tag_t tag) {
 }
 
 static combinator_t* create_record_field_type_spec(void) {
-    return multi(new_combinator(), PASCAL_T_TYPE_SPEC,
+    static combinator_t* cached_create_record_field_type_spec = NULL;
+    if (cached_create_record_field_type_spec != NULL) return cached_create_record_field_type_spec;
+
+    cached_create_record_field_type_spec = multi(new_combinator(), PASCAL_T_TYPE_SPEC,
         array_type(PASCAL_T_ARRAY_TYPE),
         set_type(PASCAL_T_SET),
         file_type(PASCAL_T_FILE_TYPE),
@@ -1356,9 +1390,14 @@ static combinator_t* create_record_field_type_spec(void) {
         token(cident(PASCAL_T_IDENTIFIER)),
         NULL
     );
+    combinator_mark_cached(cached_create_record_field_type_spec);
+    return cached_create_record_field_type_spec;
 }
 
 static combinator_t* create_record_method_directives(void) {
+    static combinator_t* cached_create_record_method_directives = NULL;
+    if (cached_create_record_method_directives != NULL) return cached_create_record_method_directives;
+
     combinator_t* record_method_directive_keyword = multi(new_combinator(), PASCAL_T_NONE,
         token(create_keyword_parser("static", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("overload", PASCAL_T_IDENTIFIER)),
@@ -1383,11 +1422,16 @@ static combinator_t* create_record_method_directives(void) {
         token(match(";")),
         NULL
     );
-    return many(record_method_directive);
+    cached_create_record_method_directives = many(record_method_directive);
+    combinator_mark_cached(cached_create_record_method_directives);
+    return cached_create_record_method_directives;
 }
 
 // Method directives for class methods - includes virtual, override, reintroduce, etc.
 static combinator_t* create_class_method_directives(void) {
+    static combinator_t* cached_create_class_method_directives = NULL;
+    if (cached_create_class_method_directives != NULL) return cached_create_class_method_directives;
+
     combinator_t* class_method_directive_keyword = multi(new_combinator(), PASCAL_T_NONE,
         token(create_keyword_parser("virtual", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("override", PASCAL_T_IDENTIFIER)),
@@ -1422,7 +1466,9 @@ static combinator_t* create_class_method_directives(void) {
         token(match(";")),
         NULL
     );
-    return many(class_method_directive);
+    cached_create_class_method_directives = many(class_method_directive);
+    combinator_mark_cached(cached_create_class_method_directives);
+    return cached_create_class_method_directives;
 }
 
 typedef struct {

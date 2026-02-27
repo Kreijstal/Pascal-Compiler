@@ -1048,6 +1048,9 @@ combinator_t* operator_name(tag_t tag) {
 
 // Helper function to create parameter parser (reduces code duplication)
 combinator_t* create_pascal_param_parser(void) {
+    static combinator_t* cached_param_parser = NULL;
+    if (cached_param_parser != NULL) return cached_param_parser;
+
     combinator_t* param_seq = seq(new_combinator(), PASCAL_T_NONE,
         create_optional_modifier(),
         create_param_name_list(),
@@ -1057,8 +1060,10 @@ combinator_t* create_pascal_param_parser(void) {
     combinator_t* param = map(param_seq, structure_param_node);
     set_combinator_name(param, "param");
 
-    return optional(between(
+    cached_param_parser = optional(between(
         token(match("(")), token(match(")")), sep_by(param, token(match(";")))));
+    combinator_mark_cached(cached_param_parser);
+    return cached_param_parser;
 }
 
 // Helper function to create generic type lookahead combinator

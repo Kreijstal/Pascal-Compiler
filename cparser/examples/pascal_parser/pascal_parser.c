@@ -86,94 +86,89 @@ static bool try_parse_line_directive(input_t *in) {
     return true;
 }
 
-// --- Helper Functions ---
-static bool consume_pascal_layout(input_t* in) {
-    if (in->start >= in->length) {
-        return false;
+// --- Helper: advance input position from old_pos to new_pos, updating line/col ---
+static void advance_input_pos(input_t* in, int old_pos, int new_pos) {
+    const char* buf = in->buffer;
+    int line = in->line;
+    int col = in->col;
+    for (int i = old_pos; i < new_pos; i++) {
+        if (buf[i] == '\n') { line++; col = 1; }
+        else { col++; }
     }
-    const char* buffer = in->buffer;
-    int pos = in->start;
-    char c = buffer[pos];
-
-    if (isspace((unsigned char)c)) {
-        read1(in);
-        return true;
-    }
-
-    if (c == '{') {
-        /* Check for #line directive first */
-        if (try_parse_line_directive(in)) {
-            return true;  /* Directive consumed, continue layout consumption */
-        }
-
-        /* Normal comment handling */
-        int depth = 0;
-        read1(in); // consume '{'
-        depth = 1;
-        while (in->start < in->length && depth > 0) {
-            char ch = read1(in);
-            if (ch == '{') {
-                depth++;
-            } else if (ch == '}') {
-                depth--;
-            }
-        }
-        return true;
-    }
-
-    if (c == '(' && (pos + 1) < in->length && buffer[pos + 1] == '*') {
-        int depth = 0;
-        read1(in); // '('
-        read1(in); // '*'
-        depth = 1;
-        while (in->start < in->length && depth > 0) {
-            char ch = read1(in);
-            if (ch == '(' && in->start < in->length && in->buffer[in->start] == '*') {
-                read1(in); // consume '*'
-                depth++;
-                continue;
-            }
-            if (ch == '*' && in->start < in->length && in->buffer[in->start] == ')') {
-                read1(in); // consume ')'
-                depth--;
-                continue;
-            }
-        }
-        return true;
-    }
-
-    if (c == '/' && (pos + 1) < in->length && buffer[pos + 1] == '/') {
-        read1(in); // '/'
-        read1(in); // '/'
-        while (in->start < in->length) {
-            char ch = read1(in);
-            if (ch == '\n' || ch == '\r') {
-                break;
-            }
-        }
-        return true;
-    }
-
-    if (c == '/' && (pos + 1) < in->length && buffer[pos + 1] == '/') {
-        /* Line comment: skip until end of line */
-        read1(in); // '/'
-        read1(in); // '/'
-        while (in->start < in->length) {
-            char ch = read1(in);
-            if (ch == '\n')
-                break;
-        }
-        return true;
-    }
-
-    return false;
+    in->start = new_pos;
+    in->line = line;
+    in->col = col;
 }
 
+// --- Helper Functions ---
+/* Fast layout consumer: processes all whitespace and comments in one go
+ * without calling read1() per character. Updates line/col in bulk. */
 static ParseResult pascal_layout_fn(input_t* in, void* args, char* parser_name) {
     (void)args;
     (void)parser_name;
-    while (consume_pascal_layout(in)) {
-        // keep consuming layout elements
+    const char* buf = in->buffer;
+    int pos = in->start;
+    int len = in->length;
+
+    for (;;) {
+        /* Skip whitespace in bulk */
+        while (pos < len && isspace((unsigned char)buf[pos])) {
+            pos++;
+        }
+        if (pos >= len) break;
+
+        char c = buf[pos];
+
+        if (c == '{') {
+            /* Check for #line directive first — need to update input state for it */
+            int saved_pos = pos;
+            advance_input_pos(in, in->start, pos);
+            if (try_parse_line_directive(in)) {
+                pos = in->start;  /* directive advanced the position */
+                continue;
+            }
+            /* Normal { } comment */
+            pos++; /* consume '{' */
+            int depth = 1;
+            while (pos < len && depth > 0) {
+                if (buf[pos] == '{') depth++;
+                else if (buf[pos] == '}') depth--;
+                pos++;
+            }
+            continue;
+        }
+
+        if (c == '(' && (pos + 1) < len && buf[pos + 1] == '*') {
+            pos += 2; /* consume '(' '*' */
+            int depth = 1;
+            while (pos < len && depth > 0) {
+                if (buf[pos] == '(' && (pos + 1) < len && buf[pos + 1] == '*') {
+                    pos += 2; depth++; continue;
+                }
+                if (buf[pos] == '*' && (pos + 1) < len && buf[pos + 1] == ')') {
+                    pos += 2; depth--; continue;
+                }
+                pos++;
+            }
+            continue;
+        }
+
+        if (c == '/' && (pos + 1) < len && buf[pos + 1] == '/') {
+            pos += 2; /* consume '//' */
+            while (pos < len && buf[pos] != '\n' && buf[pos] != '\r') {
+                pos++;
+            }
+            if (pos < len) pos++; /* consume newline */
+            continue;
+        }
+
+        /* Not whitespace or comment — done */
+        break;
+    }
+
+    /* Bulk update line/col from old position to new position */
+    if (pos != in->start) {
+        advance_input_pos(in, in->start, pos);
     }
     return make_success(ast_nil);
 }
