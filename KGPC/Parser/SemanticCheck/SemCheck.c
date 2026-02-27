@@ -75,6 +75,14 @@ static char *g_semcheck_source_buffer = NULL;
 static size_t g_semcheck_source_length = 0;
 static int g_semcheck_warning_count = 0;
 
+#define MAX_SOURCE_BUFFERS 64
+static struct {
+    char *path;
+    char *buffer;
+    size_t length;
+} g_source_buffer_registry[MAX_SOURCE_BUFFERS];
+static int g_source_buffer_count = 0;
+
 void semcheck_set_source_path(const char *path)
 {
     if (g_semcheck_source_path != NULL)
@@ -105,6 +113,39 @@ void semcheck_set_source_buffer(const char *buffer, size_t length)
     memcpy(g_semcheck_source_buffer, buffer, length);
     g_semcheck_source_buffer[length] = '\0';
     g_semcheck_source_length = length;
+}
+
+void semcheck_register_source_buffer(const char *path, const char *buffer, size_t length)
+{
+    if (path == NULL || buffer == NULL || length == 0)
+        return;
+    if (g_source_buffer_count >= MAX_SOURCE_BUFFERS)
+        return;
+    
+    for (int i = 0; i < g_source_buffer_count; i++)
+    {
+        if (g_source_buffer_registry[i].path != NULL &&
+            strcmp(g_source_buffer_registry[i].path, path) == 0)
+        {
+            return;
+        }
+    }
+    
+    g_source_buffer_registry[g_source_buffer_count].path = strdup(path);
+    g_source_buffer_registry[g_source_buffer_count].buffer = (char *)malloc(length + 1);
+    if (g_source_buffer_registry[g_source_buffer_count].path &&
+        g_source_buffer_registry[g_source_buffer_count].buffer)
+    {
+        memcpy(g_source_buffer_registry[g_source_buffer_count].buffer, buffer, length);
+        g_source_buffer_registry[g_source_buffer_count].buffer[length] = '\0';
+        g_source_buffer_registry[g_source_buffer_count].length = length;
+        g_source_buffer_count++;
+    }
+    else
+    {
+        free(g_source_buffer_registry[g_source_buffer_count].path);
+        free(g_source_buffer_registry[g_source_buffer_count].buffer);
+    }
 }
 
 static int semcheck_print_context_from_file(const char *file_path, int line_num, int col_num, int context_lines)
@@ -1325,17 +1366,51 @@ void semantic_error(int line_num, int col_num, const char *format, ...)
     directive_file[0] = '\0';
     if (effective_source_index >= 0)
     {
-        const char *context_buf = preprocessed_source;
-        size_t context_buf_len = preprocessed_length;
-        if (context_buf == NULL || context_buf_len == 0)
+        if (getenv("KGPC_DEBUG_ERROR_CONTEXT"))
+            fprintf(stderr, "[DEBUG] semantic_error: source_index=%d buf_count=%d\n", effective_source_index, g_source_buffer_count);
+        int found_in_registry = 0;
+        for (int i = 0; i < g_source_buffer_count; i++)
         {
-            context_buf = g_semcheck_source_buffer;
-            context_buf_len = g_semcheck_source_length;
+            if (getenv("KGPC_DEBUG_ERROR_CONTEXT"))
+                fprintf(stderr, "[DEBUG]   checking buffer %d: len=%zu path=%s\n", i, g_source_buffer_registry[i].length, g_source_buffer_registry[i].path ? g_source_buffer_registry[i].path : "NULL");
+            if (effective_source_index < (int)g_source_buffer_registry[i].length)
+            {
+                char temp_file[MAX_DIRECTIVE_FILENAME_LEN];
+                temp_file[0] = '\0';
+                int computed_line = semcheck_line_from_source_offset(
+                    g_source_buffer_registry[i].buffer,
+                    g_source_buffer_registry[i].length,
+                    effective_source_index,
+                    temp_file, sizeof(temp_file));
+                if (getenv("KGPC_DEBUG_ERROR_CONTEXT"))
+                    fprintf(stderr, "[DEBUG]     computed_line=%d temp_file='%s'\n", computed_line, temp_file);
+                if (computed_line > 0 && temp_file[0] != '\0')
+                {
+                    effective_line = computed_line;
+                    strncpy(directive_file, temp_file, sizeof(directive_file) - 1);
+                    directive_file[sizeof(directive_file) - 1] = '\0';
+                    found_in_registry = 1;
+                    if (getenv("KGPC_DEBUG_ERROR_CONTEXT"))
+                        fprintf(stderr, "[DEBUG]     SET effective_line=%d directive_file='%s'\n", effective_line, directive_file);
+                    break;
+                }
+            }
         }
-        int computed_line = semcheck_line_from_source_offset(context_buf, context_buf_len, effective_source_index,
-            directive_file, sizeof(directive_file));
-        if (computed_line > 0)
-            effective_line = computed_line;
+        
+        if (!found_in_registry)
+        {
+            const char *context_buf = preprocessed_source;
+            size_t context_buf_len = preprocessed_length;
+            if (context_buf == NULL || context_buf_len == 0)
+            {
+                context_buf = g_semcheck_source_buffer;
+                context_buf_len = g_semcheck_source_length;
+            }
+            int computed_line = semcheck_line_from_source_offset(context_buf, context_buf_len, effective_source_index,
+                directive_file, sizeof(directive_file));
+            if (computed_line > 0)
+                effective_line = computed_line;
+        }
         if (directive_file[0] != '\0')
         {
             fprintf(stderr, "  In %s:\n", directive_file);
