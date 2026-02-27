@@ -1354,6 +1354,18 @@ int semcheck_recordaccess(int *type_return,
         return 1;
     }
 
+    if (record_expr->type == EXPR_FUNCTION_CALL)
+    {
+        int rec_cast_type = UNKNOWN_TYPE;
+        int cast_result = semcheck_try_reinterpret_as_typecast(&rec_cast_type, symtab,
+            record_expr, max_scope_lev);
+        if (cast_result != 0)
+        {
+            *type_return = UNKNOWN_TYPE;
+            return cast_result;
+        }
+    }
+
     if (record_expr->type == EXPR_VAR_ID || record_expr->type == EXPR_RECORD_ACCESS)
     {
         char *qualified_id = NULL;
@@ -3511,6 +3523,11 @@ int semcheck_try_reinterpret_as_typecast(int *type_return,
         return 0;
     if (pascal_identifier_equals(id, "Create"))
         return 0;
+    if (getenv("KGPC_DEBUG_TYPECAST") != NULL &&
+        pascal_identifier_equals(id, "TextRec"))
+    {
+        fprintf(stderr, "[SemCheck] try_typecast TextRec at line %d\n", expr->line_num);
+    }
 
     /* Only reinterpret as a typecast when there is exactly one argument. */
     int arg_count = 0;
@@ -3589,6 +3606,12 @@ int semcheck_try_reinterpret_as_typecast(int *type_return,
     }
     if (!is_type_identifier)
     {
+        if (getenv("KGPC_DEBUG_TYPECAST") != NULL &&
+            pascal_identifier_equals(id, "TextRec"))
+        {
+            fprintf(stderr, "[SemCheck] try_typecast TextRec: not a type identifier (node=%p hash=%d target_type=%d)\n",
+                (void *)type_node, type_node != NULL ? type_node->hash_type : -1, target_type);
+        }
         free(id_copy);
         return 0;
     }

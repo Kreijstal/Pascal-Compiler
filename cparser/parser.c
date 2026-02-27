@@ -1072,8 +1072,11 @@ static ParseResult match_fn(input_t * in, void * args, char* parser_name) {
         in->start = start + slen;
         return make_success(ensure_ast_nil_initialized());
     }
-    /* Failure — use lightweight error without expensive string formatting */
-    return make_failure(in, strdup("Expected token"));
+    /* Failure — include the expected token in the message */
+    char* err_msg;
+    if (asprintf(&err_msg, "Expected '%s'", str) < 0)
+        err_msg = strdup("Expected token");
+    return make_failure(in, err_msg);
 }
 
 static ParseResult integer_fn(input_t * in, void * args, char* parser_name) {

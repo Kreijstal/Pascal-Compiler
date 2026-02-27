@@ -1536,7 +1536,23 @@ int semcheck_varid(int *type_return,
     semcheck_clear_array_info(expr);
 
     struct Expression *with_expr = NULL;
+    if (getenv("KGPC_DEBUG_WITH") != NULL &&
+        (pascal_identifier_equals(id, "BufPtr") ||
+         pascal_identifier_equals(id, "Bytes") ||
+         pascal_identifier_equals(id, "Chars")))
+    {
+        fprintf(stderr, "[KGPC_DEBUG_WITH] varid=%s with_context_count=%zu line=%d\n",
+            id != NULL ? id : "(null)", with_context_count, expr->line_num);
+    }
     int with_status = semcheck_with_try_resolve(id, symtab, &with_expr, expr->line_num);
+    if (getenv("KGPC_DEBUG_WITH") != NULL &&
+        (pascal_identifier_equals(id, "BufPtr") ||
+         pascal_identifier_equals(id, "Bytes") ||
+         pascal_identifier_equals(id, "Chars")))
+    {
+        fprintf(stderr, "[KGPC_DEBUG_WITH] varid=%s with_status=%d with_expr=%p line=%d\n",
+            id != NULL ? id : "(null)", with_status, (void *)with_expr, expr->line_num);
+    }
     if (with_status == 0 && with_expr != NULL)
     {
         if (getenv("KGPC_DEBUG_FIELD") != NULL) {

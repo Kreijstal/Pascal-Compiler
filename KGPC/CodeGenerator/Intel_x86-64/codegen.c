@@ -93,6 +93,7 @@ typedef struct RecordParamWork {
     int is_dynarray;
     int dynarray_elem_size;
     int dynarray_lower_bound;
+    int arg_index;
 } RecordParamWork;
 
 /* Escape a string for use in assembly .string directive */
@@ -1134,6 +1135,21 @@ void codegen_report_error(CodeGenContext *ctx, const char *fmt, ...)
     va_end(args);
     if (ctx != NULL)
         ctx->had_error = 1;
+}
+
+void codegen_report_warning(const CodeGenContext *ctx, const char *fmt, ...)
+{
+    va_list args;
+    va_start(args, fmt);
+    vfprintf(stderr, fmt, args);
+    if (fmt != NULL && fmt[0] != '\0')
+    {
+        size_t len = strlen(fmt);
+        if (len == 0 || fmt[len - 1] != '\n')
+            fputc('\n', stderr);
+    }
+    va_end(args);
+    (void)ctx;
 }
 
 int codegen_had_error(const CodeGenContext *ctx)
@@ -4402,6 +4418,7 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
      * Windows x64: 48(%rbp) is the first stack arg (after saved rbp + return addr + 32-byte shadow space). */
     int stack_arg_offset = codegen_target_is_windows() ? 48 : 16;
     ListNode_t *record_param_queue = NULL;
+    int param_index = 0;
 
     assert(ctx != NULL);
 
@@ -4720,6 +4737,7 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                         work->is_dynarray = is_dynarray_param;
                         work->dynarray_elem_size = dynarray_elem_size;
                         work->dynarray_lower_bound = 0;
+                        work->arg_index = param_index;
 
                         if (work->arg_reg == NULL)
                         {
@@ -4742,6 +4760,7 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                             record_param_queue = PushListNodeBack(record_param_queue, work_node);
 
                         arg_ids = arg_ids->next;
+                        param_index++;
                         continue;
                     }
 
@@ -4953,6 +4972,7 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     if (stack_value_reg != NULL)
                         free_reg(get_reg_stack(), stack_value_reg);
                     arg_ids = arg_ids->next;
+                    param_index++;
                 }
                 break;
             default:
@@ -4999,6 +5019,8 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
             if (presaved_slot != NULL)
             {
                 loaded_param_reg = get_free_reg(get_reg_stack(), &inst_list);
+                if (loaded_param_reg == NULL)
+                    loaded_param_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
                 if (loaded_param_reg != NULL)
                 {
                     snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
@@ -5007,9 +5029,31 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     record_src_reg = loaded_param_reg->bit_64;
                 }
             }
-            else if (work->arg_reg != NULL)
+            if (record_src_reg == NULL && work->arg_reg != NULL)
             {
                 record_src_reg = work->arg_reg;
+            }
+
+            if (record_src_reg == NULL)
+            {
+                if (getenv("KGPC_DEBUG_RECORD_PARAM") != NULL)
+                {
+                    fprintf(stderr,
+                        "[KGPC] record param missing src: subprogram=%s param=%s arg_reg=%s has_stack=%d stack_off=%d arg_index=%d presaved=%p\n",
+                        ctx != NULL && ctx->current_subprogram_id != NULL ? ctx->current_subprogram_id : "(null)",
+                        work->id != NULL ? work->id : "(null)",
+                        work->arg_reg != NULL ? work->arg_reg : "(null)",
+                        work->has_stack_arg,
+                        work->stack_arg_offset,
+                        work->arg_index,
+                        (void *)presaved_slot);
+                }
+                if (work->arg_reg == NULL && !work->has_stack_arg)
+                {
+                    const char *fallback_reg = get_arg_reg64_num(arg_start_index + work->arg_index);
+                    if (fallback_reg != NULL)
+                        record_src_reg = fallback_reg;
+                }
             }
 
             if (record_src_reg == NULL)

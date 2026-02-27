@@ -335,11 +335,31 @@ int semcheck_arrayaccess(int *type_return,
         }
     }
 
+    /* Handle pointer deref indexing: p^[i] where p is a pointer to element (e.g., PChar).
+     * Rewrite the array access to index the pointer directly instead of the dereferenced value. */
+    if (!array_expr->is_array_expr && base_type != POINTER_TYPE &&
+        array_expr->type == EXPR_POINTER_DEREF)
+    {
+        struct Expression *pointer_expr = array_expr->expr_data.pointer_deref_data.pointer_expr;
+        if (pointer_expr != NULL)
+        {
+            KgpcType *ptr_kgpc_type = pointer_expr->resolved_kgpc_type;
+            if (ptr_kgpc_type != NULL && kgpc_type_is_pointer(ptr_kgpc_type))
+            {
+                /* Replace array_expr with the pointer (skip the deref) so we index the pointer */
+                expr->expr_data.array_access_data.array_expr = pointer_expr;
+                array_expr = pointer_expr;
+                base_kgpc_type = ptr_kgpc_type;
+                base_type = POINTER_TYPE;
+            }
+        }
+    }
+
     int base_is_string = (kgpc_type_is_string(base_kgpc_type) && !array_expr->is_array_expr);
     /* Only treat as pointer indexing if NOT an array expression - for arrays of pointers,
      * we want to go through the array path to properly handle element type info */
     int base_is_pointer = (base_type == POINTER_TYPE && !array_expr->is_array_expr);
-    
+
     if (!array_expr->is_array_expr && !base_is_string && !base_is_pointer)
     {
         int property_result = semcheck_try_indexed_property_getter(type_return, symtab,
