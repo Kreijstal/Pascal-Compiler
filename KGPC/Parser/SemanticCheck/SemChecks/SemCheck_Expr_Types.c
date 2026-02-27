@@ -2403,8 +2403,28 @@ int semcheck_recordaccess(int *type_return,
                     expr->expr_data.function_call_data.mangled_id = NULL;
                     expr->expr_data.function_call_data.resolved_func = NULL;
 
+                    /* For static methods:
+                     * - If receiver is a type identifier (TypeName.Method), pass it as first arg
+                     *   so semcheck_funccall can detect and handle the type-qualified call
+                     * - If receiver is an instance variable, no receiver needed for static method
+                     */
                     if (is_static_method) {
-                        expr->expr_data.function_call_data.args_expr = NULL;
+                        if (record_expr->type == EXPR_VAR_ID && record_expr->expr_data.id != NULL) {
+                            /* Check if the receiver is a type name */
+                            HashNode_t *type_node = NULL;
+                            if (FindIdent(&type_node, symtab, record_expr->expr_data.id) != -1 &&
+                                type_node != NULL && type_node->hash_type == HASHTYPE_TYPE) {
+                                /* It's a type-qualified static method call - pass type as first arg */
+                                struct Expression *type_arg = record_expr;
+                                ListNode_t *arg_node = CreateListNode(type_arg, LIST_EXPR);
+                                expr->expr_data.function_call_data.args_expr = arg_node;
+                            } else {
+                                /* It's an instance variable calling a static method - no receiver needed */
+                                expr->expr_data.function_call_data.args_expr = NULL;
+                            }
+                        } else {
+                            expr->expr_data.function_call_data.args_expr = NULL;
+                        }
                     } else {
                         struct Expression *receiver = record_expr;
                         ListNode_t *arg_node = CreateListNode(receiver, LIST_EXPR);

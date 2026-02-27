@@ -761,6 +761,42 @@ int semcheck_funccall(int *type_return,
 
     return_val = 0;
     id = expr->expr_data.function_call_data.id;
+
+    /* If the function call was already resolved (e.g., transformed from RECORD_ACCESS
+     * to FUNCTION_CALL by semcheck_recordaccess for record helper/static methods),
+     * use the cached info. Two cases:
+     * 1) resolved_func is set (from record helper path) — go through overload resolution
+     *    for proper return type propagation.
+     * 2) resolved_func is NULL but is_call_info_valid (from semcheck_set_function_call_target
+     *    which clears resolved_func) — return the cached return type directly. This handles
+     *    re-evaluation of already-resolved method calls (e.g. TEncoding.UTF8 in a chained
+     *    access like TEncoding.UTF8.GetBytes). */
+    if (expr->expr_data.function_call_data.is_call_info_valid) {
+        if (expr->expr_data.function_call_data.resolved_func != NULL) {
+            hash_return = expr->expr_data.function_call_data.resolved_func;
+            scope_return = 0;
+            overload_candidates = CreateListNode(hash_return, LIST_UNSPECIFIED);
+            if (expr->expr_data.function_call_data.mangled_id != NULL)
+                mangled_name = strdup(expr->expr_data.function_call_data.mangled_id);
+            args_given = expr->expr_data.function_call_data.args_expr;
+            goto method_call_resolved;
+        } else if (expr->expr_data.function_call_data.mangled_id != NULL) {
+            /* Already fully resolved — use cached return type */
+            if (type_return != NULL) {
+                KgpcType *cached_type = expr->expr_data.function_call_data.call_kgpc_type;
+                if (cached_type != NULL && cached_type->kind == TYPE_KIND_PROCEDURE) {
+                    KgpcType *ret_type = kgpc_type_get_return_type(cached_type);
+                    if (ret_type != NULL) {
+                        *type_return = semcheck_tag_from_kgpc(ret_type);
+                        if (expr->resolved_kgpc_type == NULL)
+                            semcheck_expr_set_resolved_kgpc_type_shared(expr, ret_type);
+                    }
+                }
+            }
+            goto funccall_cleanup;
+        }
+    }
+
     double timing_start_ms = 0.0;
     if (FUNCCALL_TIMINGS_ENABLED()) {
         timing_start_ms = funccall_now_ms();
@@ -900,7 +936,8 @@ int semcheck_funccall(int *type_return,
         }
     }
     if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
-        fprintf(stderr, "[SemCheck] semcheck_funccall: id='%s'\n", id != NULL ? id : "(null)");
+        fprintf(stderr, "[SemCheck] semcheck_funccall: id='%s' expr=%p resolved_func=%p\n", 
+            id != NULL ? id : "(null)", (void*)expr, (void*)expr->expr_data.function_call_data.resolved_func);
     }
     if (getenv("KGPC_DEBUG_CALL_TYPES") != NULL && id != NULL &&
         pascal_identifier_equals(id, "IsDirectory"))
@@ -3069,9 +3106,37 @@ int semcheck_funccall(int *type_return,
         }
     }
     
-    /* Check for Constructor Call (Create) where first arg is the class type/instance */
+    /* Check for Constructor Call (Create) where first arg is the class type/instance
+     * Also check for static method calls like TCounter.GetDefaultValue where the
+     * first arg is a type identifier and the method is declared as static */
+    int is_potential_static_method_call = 0;
+    if (id != NULL && args_given != NULL) {
+        struct Expression *first_arg = (struct Expression *)args_given->cur;
+        if (first_arg != NULL && first_arg->type == EXPR_VAR_ID &&
+            first_arg->expr_data.id != NULL) {
+            /* Check if first arg is a type identifier */
+            HashNode_t *type_node = NULL;
+            if (FindIdent(&type_node, symtab, first_arg->expr_data.id) != -1 &&
+                type_node != NULL && type_node->hash_type == HASHTYPE_TYPE) {
+                /* It's a type - check if there's a static method with this name */
+                struct RecordType *record_info = get_record_type_from_node(type_node);
+                if (record_info != NULL && record_info->type_id != NULL) {
+                    /* Check if the method exists and is static */
+                    if (from_cparser_is_method_static(record_info->type_id, id)) {
+                        is_potential_static_method_call = 1;
+                        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                            fprintf(stderr, "[SemCheck] semcheck_funccall: detected static method call %s.%s\n",
+                                record_info->type_id, id);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
     if (id != NULL &&
-        (strncasecmp(id, "Create", 6) == 0 || strcasecmp(id, "Destroy") == 0) &&
+        (strncasecmp(id, "Create", 6) == 0 || strcasecmp(id, "Destroy") == 0 ||
+         is_potential_static_method_call) &&
         args_given != NULL) {
         struct Expression *first_arg = (struct Expression *)args_given->cur;
         int first_arg_type_tag;
