@@ -1065,7 +1065,18 @@ int semcheck_prepare_dynarray_high_call(int *type_return, SymTab_t *symtab,
     semcheck_expr_set_resolved_type(expr, LONGINT_TYPE);
     expr->expr_data.function_call_data.is_call_info_valid = 1;
     expr->expr_data.function_call_data.call_hash_type = HASHTYPE_FUNCTION;
-    
+
+    /* Set call_kgpc_type so the cached type path works on re-evaluation
+     * (e.g., when High(arr)+1 is an argument to an overloaded function) */
+    if (expr->expr_data.function_call_data.call_kgpc_type == NULL)
+    {
+        KgpcType *ret_type = create_primitive_type(LONGINT_TYPE);
+        /* create_procedure_type takes ownership of ret_type */
+        KgpcType *func_type = create_procedure_type(NULL, ret_type);
+        if (func_type != NULL)
+            expr->expr_data.function_call_data.call_kgpc_type = func_type;
+    }
+
     if (type_return != NULL)
         *type_return = LONGINT_TYPE;
     return error_count;
