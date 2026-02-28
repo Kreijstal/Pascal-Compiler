@@ -8,7 +8,11 @@
 #include <assert.h>
 #include <string.h>
 #include <limits.h>
+#if defined(__GLIBC__) || (defined(__APPLE__) && defined(__MACH__)) || \
+    defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+#define HAVE_EXECINFO 1
 #include <execinfo.h>
+#endif
 
 #include "codegen.h"
 #include "codegen_expression.h"
@@ -2693,9 +2697,11 @@ static int codegen_sizeof_type(CodeGenContext *ctx, int type_tag, const char *ty
     {
         fprintf(stderr, "[codegen-debug] size-fail: type_tag=%d type_id=%s record_type=%p\n", type_tag, type_id ? type_id : "<null>", (void*)record_type);
         /* Print stack trace */
+#ifdef HAVE_EXECINFO
         void *bt[20];
         int n = backtrace(bt, 20);
         backtrace_symbols_fd(bt, n, 2);
+#endif
     }
     codegen_report_error(ctx, "ERROR: Unable to determine size for expression type %d.", type_tag);
     return 1;
