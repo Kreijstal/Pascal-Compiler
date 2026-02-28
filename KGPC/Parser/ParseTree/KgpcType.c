@@ -171,7 +171,9 @@ KgpcType* create_pointer_type(KgpcType *points_to) {
     KgpcType *type = (KgpcType *)calloc(1, sizeof(KgpcType));
     assert(type != NULL);
     type->kind = TYPE_KIND_POINTER;
-    type->info.points_to = points_to; // Takes ownership of points_to
+    type->info.points_to = points_to;
+    if (points_to != NULL)
+        kgpc_type_retain(points_to);
     type->ref_count = 1;
     return type;
 }
@@ -181,7 +183,10 @@ KgpcType* create_procedure_type(ListNode_t *params, KgpcType *return_type) {
     assert(type != NULL);
     type->kind = TYPE_KIND_PROCEDURE;
     type->info.proc_info.params = CopyListShallow(params); // Takes ownership of a copy
-    type->info.proc_info.return_type = return_type; // Takes ownership
+    type->info.proc_info.owns_params = 0;
+    type->info.proc_info.return_type = return_type;
+    if (return_type != NULL)
+        kgpc_type_retain(return_type);
     type->info.proc_info.definition = NULL;
     type->info.proc_info.return_type_id = NULL;
     type->ref_count = 1;
@@ -198,7 +203,9 @@ KgpcType* create_array_type(KgpcType *element_type, int start_index, int end_ind
     KgpcType *type = (KgpcType *)calloc(1, sizeof(KgpcType));
     assert(type != NULL);
     type->kind = TYPE_KIND_ARRAY;
-    type->info.array_info.element_type = element_type; // Takes ownership
+    type->info.array_info.element_type = element_type;
+    if (element_type != NULL)
+        kgpc_type_retain(element_type);
     type->info.array_info.start_index = start_index;
     type->info.array_info.end_index = end_index;
     type->info.array_info.element_type_id = NULL; // Initialize deferred resolution field
@@ -495,7 +502,10 @@ void destroy_kgpc_type(KgpcType *type) {
             destroy_kgpc_type(type->info.points_to);
             break;
         case TYPE_KIND_PROCEDURE:
-            destroy_list(type->info.proc_info.params);
+            if (type->info.proc_info.owns_params)
+                destroy_list(type->info.proc_info.params);
+            else
+                DestroyList(type->info.proc_info.params);
             destroy_kgpc_type(type->info.proc_info.return_type);
             if (type->info.proc_info.return_type_id != NULL)
             {

@@ -432,7 +432,10 @@ int PushTypeOntoScope(SymTab_t *symtab, char *id, enum VarType var_type,
     /* All cases should create a KgpcType now. If kgpc_type is NULL, it means:
      * - Truly UNTYPED (var_type == HASHVAR_UNTYPED)
      * - This is valid and we use NULL KgpcType */
-    return PushTypeOntoScope_Typed(symtab, id, kgpc_type);
+    int result = PushTypeOntoScope_Typed(symtab, id, kgpc_type);
+    if (kgpc_type != NULL)
+        destroy_kgpc_type(kgpc_type);
+    return result;
 }
 
 /* ===== NEW TYPE SYSTEM FUNCTIONS USING KgpcType ===== */
@@ -531,11 +534,11 @@ int AddBuiltinProc_Typed(SymTab_t *symtab, char *id, KgpcType *type)
     assert(type->kind == TYPE_KIND_PROCEDURE && "Builtin proc must have procedure type");
     assert(type->info.proc_info.return_type == NULL && "Procedure must not have return type");
 
-    kgpc_type_retain(type);
-    int result = AddIdentToTable(symtab->builtins, id, NULL, HASHTYPE_BUILTIN_PROCEDURE, type);
-    if (result != 0)
-        kgpc_type_release(type);
-    return result;
+    /* Builtin procedures own their manually created parameter lists */
+    type->info.proc_info.owns_params = 1;
+
+    /* AddIdentToTable will perform internal retention */
+    return AddIdentToTable(symtab->builtins, id, NULL, HASHTYPE_BUILTIN_PROCEDURE, type);
 }
 
 /* Adds a built-in function with a KgpcType */
@@ -547,11 +550,11 @@ int AddBuiltinFunction_Typed(SymTab_t *symtab, char *id, KgpcType *type)
     assert(type->kind == TYPE_KIND_PROCEDURE && "Builtin function must have procedure type");
     assert(type->info.proc_info.return_type != NULL && "Function must have return type");
 
-    kgpc_type_retain(type);
-    int result = AddIdentToTable(symtab->builtins, id, NULL, HASHTYPE_FUNCTION, type);
-    if (result != 0)
-        kgpc_type_release(type);
-    return result;
+    /* Builtin functions own their manually created parameter lists */
+    type->info.proc_info.owns_params = 1;
+
+    /* AddIdentToTable will perform internal retention */
+    return AddIdentToTable(symtab->builtins, id, NULL, HASHTYPE_FUNCTION, type);
 }
 
 int AddBuiltinRealConst(SymTab_t *symtab, const char *id, double value)
