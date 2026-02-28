@@ -929,6 +929,26 @@ ListNode_t *codegen_call_with_shadow_space(ListNode_t *inst_list, const char *ta
     return inst_list;
 }
 
+static ListNode_t *codegen_promote_char_reg_to_string(ListNode_t *inst_list, Register_t *value_reg)
+{
+    if (value_reg == NULL)
+        return inst_list;
+
+    const char *arg_reg32 = current_arg_reg32(0);
+    if (arg_reg32 == NULL)
+        return inst_list;
+
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", value_reg->bit_32, arg_reg32);
+    inst_list = add_inst(inst_list, buffer);
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_char_to_string");
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", RETURN_REG_64, value_reg->bit_64);
+    inst_list = add_inst(inst_list, buffer);
+    free_arg_regs();
+    return inst_list;
+}
+
 static ListNode_t *codegen_store_exception_value(ListNode_t *inst_list,
     CodeGenContext *ctx, struct Expression *exc_expr, Register_t *value_reg)
 {
@@ -7253,20 +7273,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             int assign_type = expr_get_type_tag(assign_expr);
             if (assign_type == CHAR_TYPE)
             {
-                /* Call kgpc_char_to_string to convert char to string */
-                const char *arg_reg32 = codegen_target_is_windows() ? "%ecx" : "%edi";
-                char buffer[128];
-                
-                /* Move char value to argument register (32-bit, zero-extended) */
-                snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", value_reg->bit_32, arg_reg32);
-                inst_list = add_inst(inst_list, buffer);
-                
-                /* Call the conversion function */
-                inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_char_to_string");
-                
-                /* Move result (string pointer) back to value register */
-                snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", value_reg->bit_64);
-                inst_list = add_inst(inst_list, buffer);
+                inst_list = codegen_promote_char_reg_to_string(inst_list, value_reg);
             }
             
             Register_t *addr_reg = NULL;
@@ -7798,19 +7805,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                     addr_reload->bit_64, addr_save->offset);
                 inst_list = add_inst(inst_list, arg_buffer);
                 
-                /* Call kgpc_char_to_string to convert char to string */
-                const char *arg_reg32 = codegen_target_is_windows() ? "%ecx" : "%edi";
-                
-                /* Move char value to argument register (32-bit, zero-extended) */
-                snprintf(arg_buffer, sizeof(arg_buffer), "\tmovl\t%s, %s\n", value_reg->bit_32, arg_reg32);
-                inst_list = add_inst(inst_list, arg_buffer);
-                
-                /* Call the conversion function */
-                inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_char_to_string");
-                
-                /* Move result (string pointer) back to value register */
-                snprintf(arg_buffer, sizeof(arg_buffer), "\tmovq\t%%rax, %s\n", value_reg->bit_64);
-                inst_list = add_inst(inst_list, arg_buffer);
+                inst_list = codegen_promote_char_reg_to_string(inst_list, value_reg);
                 
                 /* Restore addr_reload */
                 snprintf(arg_buffer, sizeof(arg_buffer), "\tmovq\t-%d(%%rbp), %s\n",
@@ -7995,12 +7990,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             int assign_type_2 = assign_expr != NULL ? expr_get_type_tag(assign_expr) : -1;
             if (assign_type_2 == CHAR_TYPE)
             {
-                const char *arg_reg32 = codegen_target_is_windows() ? "%ecx" : "%edi";
-                snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", value_reg->bit_32, arg_reg32);
-                inst_list = add_inst(inst_list, buffer);
-                inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_char_to_string");
-                snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", value_reg->bit_64);
-                inst_list = add_inst(inst_list, buffer);
+                inst_list = codegen_promote_char_reg_to_string(inst_list, value_reg);
             }
             inst_list = codegen_call_string_assign(inst_list, ctx, addr_reload, value_reg);
         }
@@ -9881,14 +9871,7 @@ ListNode_t *codegen_case(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                         inst_list = codegen_expr_with_result(label_expr, inst_list, ctx, &label_reg);
                         if (label_reg != NULL) {
                             if (label_needs_char_promo) {
-                                const char *arg_reg32 = codegen_target_is_windows() ? "%ecx" : "%edi";
-                                snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", label_reg->bit_32, arg_reg32);
-                                inst_list = add_inst(inst_list, buffer);
-                                inst_list = codegen_vect_reg(inst_list, 0);
-                                inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_char_to_string");
-                                snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", label_reg->bit_64);
-                                inst_list = add_inst(inst_list, buffer);
-                                free_arg_regs();
+                                inst_list = codegen_promote_char_reg_to_string(inst_list, label_reg);
                             }
 
                             const char *arg0 = current_arg_reg64(0);

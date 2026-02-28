@@ -354,6 +354,56 @@ static ListNode_t *codegen_promote_shortstring_reg(ListNode_t *inst_list, CodeGe
     return inst_list;
 }
 
+static ListNode_t *codegen_spill_reg64_temp(ListNode_t *inst_list, const Register_t *reg,
+    const char *temp_name, StackNode_t **spill_slot)
+{
+    if (spill_slot != NULL)
+        *spill_slot = NULL;
+    if (reg == NULL || spill_slot == NULL || temp_name == NULL)
+        return inst_list;
+
+    StackNode_t *slot = add_l_t((char *)temp_name);
+    if (slot == NULL)
+        return inst_list;
+
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", reg->bit_64, slot->offset);
+    inst_list = add_inst(inst_list, buffer);
+    *spill_slot = slot;
+    return inst_list;
+}
+
+static ListNode_t *codegen_restore_spilled_reg64(ListNode_t *inst_list, const Register_t *reg,
+    StackNode_t *spill_slot)
+{
+    if (reg == NULL || spill_slot == NULL)
+        return inst_list;
+
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", spill_slot->offset, reg->bit_64);
+    return add_inst(inst_list, buffer);
+}
+
+static ListNode_t *codegen_promote_char_reg_to_string(ListNode_t *inst_list, Register_t *value_reg)
+{
+    if (value_reg == NULL)
+        return inst_list;
+
+    const char *arg_reg32 = current_arg_reg32(0);
+    if (arg_reg32 == NULL)
+        return inst_list;
+
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", value_reg->bit_32, arg_reg32);
+    inst_list = add_inst(inst_list, buffer);
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_char_to_string");
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", RETURN_REG_64, value_reg->bit_64);
+    inst_list = add_inst(inst_list, buffer);
+    free_arg_regs();
+    return inst_list;
+}
+
 static int codegen_get_char_array_length(const struct Expression *expr, CodeGenContext *ctx,
     long long *out_len)
 {
@@ -6061,42 +6111,21 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
             return inst_list;
         }
 
-        /* Shortstring promotion calls kgpc_shortstring_to_string which clobbers
-         * caller-saved registers (r10, r11).  Spill the OTHER operand before each
-         * promotion and restore after. */
         if (left_is_shortstring)
         {
-            StackNode_t *rhs_spill = add_l_t("relop_shortstr_rhs_spill");
-            if (rhs_spill != NULL)
-            {
-                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
-                    right_reg->bit_64, rhs_spill->offset);
-                inst_list = add_inst(inst_list, buffer);
-            }
+            StackNode_t *rhs_spill = NULL;
+            inst_list = codegen_spill_reg64_temp(inst_list, right_reg,
+                "relop_shortstr_rhs_spill", &rhs_spill);
             inst_list = codegen_promote_shortstring_reg(inst_list, ctx, left_reg);
-            if (rhs_spill != NULL)
-            {
-                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-                    rhs_spill->offset, right_reg->bit_64);
-                inst_list = add_inst(inst_list, buffer);
-            }
+            inst_list = codegen_restore_spilled_reg64(inst_list, right_reg, rhs_spill);
         }
         if (right_is_shortstring)
         {
-            StackNode_t *lhs_spill = add_l_t("relop_shortstr_lhs_spill");
-            if (lhs_spill != NULL)
-            {
-                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
-                    left_reg->bit_64, lhs_spill->offset);
-                inst_list = add_inst(inst_list, buffer);
-            }
+            StackNode_t *lhs_spill = NULL;
+            inst_list = codegen_spill_reg64_temp(inst_list, left_reg,
+                "relop_shortstr_lhs_spill", &lhs_spill);
             inst_list = codegen_promote_shortstring_reg(inst_list, ctx, right_reg);
-            if (lhs_spill != NULL)
-            {
-                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-                    lhs_spill->offset, left_reg->bit_64);
-                inst_list = add_inst(inst_list, buffer);
-            }
+            inst_list = codegen_restore_spilled_reg64(inst_list, left_reg, lhs_spill);
         }
 
         /* Promote char-typed operands (EXPR_CHAR_CODE or single-char EXPR_STRING)
@@ -6105,51 +6134,19 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
          * to STRING_TYPE but the expression evaluator still loads char integers. */
         if (left_needs_char_promo)
         {
-            StackNode_t *rhs_spill = add_l_t("relop_rhs_char_promo");
-            if (rhs_spill != NULL)
-            {
-                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
-                    right_reg->bit_64, rhs_spill->offset);
-                inst_list = add_inst(inst_list, buffer);
-            }
-            const char *arg_reg32 = codegen_target_is_windows() ? "%ecx" : "%edi";
-            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", left_reg->bit_32, arg_reg32);
-            inst_list = add_inst(inst_list, buffer);
-            inst_list = codegen_vect_reg(inst_list, 0);
-            inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_char_to_string");
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", left_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-            free_arg_regs();
-            if (rhs_spill != NULL)
-            {
-                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-                    rhs_spill->offset, right_reg->bit_64);
-                inst_list = add_inst(inst_list, buffer);
-            }
+            StackNode_t *rhs_spill = NULL;
+            inst_list = codegen_spill_reg64_temp(inst_list, right_reg,
+                "relop_rhs_char_promo", &rhs_spill);
+            inst_list = codegen_promote_char_reg_to_string(inst_list, left_reg);
+            inst_list = codegen_restore_spilled_reg64(inst_list, right_reg, rhs_spill);
         }
         if (right_needs_char_promo)
         {
-            StackNode_t *lhs_spill = add_l_t("relop_lhs_char_promo");
-            if (lhs_spill != NULL)
-            {
-                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
-                    left_reg->bit_64, lhs_spill->offset);
-                inst_list = add_inst(inst_list, buffer);
-            }
-            const char *arg_reg32 = codegen_target_is_windows() ? "%ecx" : "%edi";
-            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", right_reg->bit_32, arg_reg32);
-            inst_list = add_inst(inst_list, buffer);
-            inst_list = codegen_vect_reg(inst_list, 0);
-            inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_char_to_string");
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", right_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-            free_arg_regs();
-            if (lhs_spill != NULL)
-            {
-                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-                    lhs_spill->offset, left_reg->bit_64);
-                inst_list = add_inst(inst_list, buffer);
-            }
+            StackNode_t *lhs_spill = NULL;
+            inst_list = codegen_spill_reg64_temp(inst_list, left_reg,
+                "relop_lhs_char_promo", &lhs_spill);
+            inst_list = codegen_promote_char_reg_to_string(inst_list, right_reg);
+            inst_list = codegen_restore_spilled_reg64(inst_list, left_reg, lhs_spill);
         }
 
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", right_reg->bit_64, rhs_arg);
