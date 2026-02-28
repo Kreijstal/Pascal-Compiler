@@ -30,55 +30,55 @@ SymTab_t *InitSymTab();
 /* Pushes a new scope onto the stack (FIFO) */
 void PushScope(SymTab_t *symtab);
 
-int PushConstOntoScope(SymTab_t *symtab, char *id, long long value);
+int PushConstOntoScope(SymTab_t *symtab, const char *id, long long value);
 
 /* Pushes a constant with explicit KgpcType onto the current scope (head) */
-int PushConstOntoScope_Typed(SymTab_t *symtab, char *id, long long value, KgpcType *type);
+int PushConstOntoScope_Typed(SymTab_t *symtab, const char *id, long long value, KgpcType *type);
 
 /* Pushes a real constant onto the current scope (head) */
-int PushRealConstOntoScope(SymTab_t *symtab, char *id, double value);
+int PushRealConstOntoScope(SymTab_t *symtab, const char *id, double value);
 
 /* Pushes a string constant onto the current scope (head) */
-int PushStringConstOntoScope(SymTab_t *symtab, char *id, const char *value);
+int PushStringConstOntoScope(SymTab_t *symtab, const char *id, const char *value);
 
 /* Pushes a set constant (supports 4-byte small sets and 32-byte char sets) */
-int PushSetConstOntoScope(SymTab_t *symtab, char *id, const unsigned char *data,
+int PushSetConstOntoScope(SymTab_t *symtab, const char *id, const unsigned char *data,
     int size_bytes, KgpcType *type);
 
 /* Pushes a new type onto the current scope (head) */
-int PushTypeOntoScope(SymTab_t *symtab, char *id, enum VarType var_type,
+int PushTypeOntoScope(SymTab_t *symtab, const char *id, enum VarType var_type,
     struct RecordType *record_type, struct TypeAlias *type_alias);
 
 /* Type system functions using KgpcType */
 
 /* Pushes a new variable with a KgpcType onto the current scope */
-int PushVarOntoScope_Typed(SymTab_t *symtab, char *id, KgpcType *type);
+int PushVarOntoScope_Typed(SymTab_t *symtab, const char *id, KgpcType *type);
 
 /* Pushes a new array with a KgpcType onto the current scope */
-int PushArrayOntoScope_Typed(SymTab_t *symtab, char *id, KgpcType *type);
+int PushArrayOntoScope_Typed(SymTab_t *symtab, const char *id, KgpcType *type);
 
 /* Pushes a new procedure with a KgpcType onto the current scope */
-int PushProcedureOntoScope_Typed(SymTab_t *symtab, char *id, char *mangled_id, KgpcType *type);
+int PushProcedureOntoScope_Typed(SymTab_t *symtab, const char *id, const char *mangled_id, KgpcType *type);
 
 /* Pushes a new function with a KgpcType onto the current scope */
-int PushFunctionOntoScope_Typed(SymTab_t *symtab, char *id, char *mangled_id, KgpcType *type);
+int PushFunctionOntoScope_Typed(SymTab_t *symtab, const char *id, const char *mangled_id, KgpcType *type);
 
 /* Pushes a new function return value with a KgpcType onto the current scope */
-int PushFuncRetOntoScope_Typed(SymTab_t *symtab, char *id, KgpcType *type);
+int PushFuncRetOntoScope_Typed(SymTab_t *symtab, const char *id, KgpcType *type);
 
 /* Pushes a new type declaration with a KgpcType onto the current scope */
-int PushTypeOntoScope_Typed(SymTab_t *symtab, char *id, KgpcType *type);
+int PushTypeOntoScope_Typed(SymTab_t *symtab, const char *id, KgpcType *type);
 
 /* Builtin declarations using KgpcType */
 
 /* Adds a built-in type with a KgpcType */
-int AddBuiltinType_Typed(SymTab_t *symtab, char *id, KgpcType *type);
+int AddBuiltinType_Typed(SymTab_t *symtab, const char *id, KgpcType *type);
 
 /* Adds a built-in procedure with a KgpcType */
-int AddBuiltinProc_Typed(SymTab_t *symtab, char *id, KgpcType *type);
+int AddBuiltinProc_Typed(SymTab_t *symtab, const char *id, KgpcType *type);
 
 /* Adds a built-in function with a KgpcType */
-int AddBuiltinFunction_Typed(SymTab_t *symtab, char *id, KgpcType *type);
+int AddBuiltinFunction_Typed(SymTab_t *symtab, const char *id, KgpcType *type);
 
 /* Adds a built-in real constant */
 int AddBuiltinRealConst(SymTab_t *symtab, const char *id, double value);

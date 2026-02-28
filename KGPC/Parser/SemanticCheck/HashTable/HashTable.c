@@ -21,7 +21,7 @@
 #include "HashTable.h"
 
 /* Forward declarations for internal helper functions */
-static HashNode_t* create_hash_node(char* id, char* mangled_id, 
+static HashNode_t* create_hash_node(const char* id, const char* mangled_id,
                                    enum HashType hash_type,
                                    KgpcType* type, enum VarType var_type,
                                    struct RecordType* record_type, 
@@ -31,8 +31,8 @@ static int check_collision_allowance(HashNode_t* existing_node, enum HashType ne
 
 /* Internal parameter structure to unify both APIs */
 typedef struct {
-    char* id;
-    char* mangled_id;
+    const char* id;
+    const char* mangled_id;
     enum HashType hash_type;
     KgpcType* type;
     enum VarType var_type;
@@ -154,7 +154,7 @@ static int add_ident_to_table_internal(HashTable_t *table, const HashTableParams
     }
 }
 
-int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id,
+int AddIdentToTable(HashTable_t *table, const char *id, const char *mangled_id,
     enum HashType hash_type, KgpcType *type)
 {
     HashTableParams params = {
@@ -447,7 +447,7 @@ int hashpjw( const char *s )
  * ============================================================================= */
 
 /* Create and initialize a new hash node with default values */
-static HashNode_t* create_hash_node(char* id, char* mangled_id, 
+static HashNode_t* create_hash_node(const char* id, const char* mangled_id,
                                    enum HashType hash_type,
                                    KgpcType* type, enum VarType var_type,
                                    struct RecordType* record_type, 

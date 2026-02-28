@@ -23,6 +23,7 @@
 #include "type_tags.h"
 #include "tree_types.h"
 #include "ident_ref.h"
+#include "tree.h"
 #include "../../format_arg.h"
 #include "../../identifier_utils.h"
 
@@ -494,7 +495,7 @@ void destroy_kgpc_type(KgpcType *type) {
             destroy_kgpc_type(type->info.points_to);
             break;
         case TYPE_KIND_PROCEDURE:
-            DestroyList(type->info.proc_info.params);
+            destroy_list(type->info.proc_info.params);
             destroy_kgpc_type(type->info.proc_info.return_type);
             if (type->info.proc_info.return_type_id != NULL)
             {

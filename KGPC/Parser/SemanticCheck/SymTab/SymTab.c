@@ -46,7 +46,7 @@ void PushScope(SymTab_t *symtab)
             CreateListNode(new_hash, LIST_UNSPECIFIED));
 }
 
-int PushConstOntoScope(SymTab_t *symtab, char *id, long long value)
+int PushConstOntoScope(SymTab_t *symtab, const char *id, long long value)
 {
     assert(symtab != NULL);
     assert(symtab->stack_head != NULL);
@@ -75,16 +75,15 @@ int PushConstOntoScope(SymTab_t *symtab, char *id, long long value)
             node->const_int_value = value;
         }
     }
-    else
-    {
-        /* Failed to add, clean up KgpcType */
-        destroy_kgpc_type(kgpc_type);
-    }
+
+    /* AddIdentToTable retains if successful, or we destroyed it on failure above.
+     * We must always release our local reference from create_primitive_type. */
+    destroy_kgpc_type(kgpc_type);
     return result;
 }
 
 /* Pushes a constant with explicit KgpcType onto the current scope (head) */
-int PushConstOntoScope_Typed(SymTab_t *symtab, char *id, long long value, KgpcType *type)
+int PushConstOntoScope_Typed(SymTab_t *symtab, const char *id, long long value, KgpcType *type)
 {
     assert(symtab != NULL);
     assert(symtab->stack_head != NULL);
@@ -92,7 +91,6 @@ int PushConstOntoScope_Typed(SymTab_t *symtab, char *id, long long value, KgpcTy
     assert(type != NULL && "KgpcType must be provided for typed constant");
 
     HashTable_t *cur_hash = (HashTable_t *)symtab->stack_head->cur;
-    kgpc_type_retain(type);
     int result = AddIdentToTable(cur_hash, id, NULL, HASHTYPE_CONST, type);
     if (result == 0)
     {
@@ -103,15 +101,11 @@ int PushConstOntoScope_Typed(SymTab_t *symtab, char *id, long long value, KgpcTy
             node->const_int_value = value;
         }
     }
-    else
-    {
-        kgpc_type_release(type);
-    }
     return result;
 }
 
 /* Pushes a real constant onto the current scope (head) */
-int PushRealConstOntoScope(SymTab_t *symtab, char *id, double value)
+int PushRealConstOntoScope(SymTab_t *symtab, const char *id, double value)
 {
     assert(symtab != NULL);
     assert(symtab->stack_head != NULL);
@@ -133,16 +127,13 @@ int PushRealConstOntoScope(SymTab_t *symtab, char *id, double value)
             node->const_real_value = value;
         }
     }
-    else
-    {
-        /* Failed to add, clean up KgpcType */
-        destroy_kgpc_type(kgpc_type);
-    }
+
+    destroy_kgpc_type(kgpc_type);
     return result;
 }
 
 /* Pushes a string constant onto the current scope (head) */
-int PushStringConstOntoScope(SymTab_t *symtab, char *id, const char *value)
+int PushStringConstOntoScope(SymTab_t *symtab, const char *id, const char *value)
 {
     assert(symtab != NULL);
     assert(symtab->stack_head != NULL);
@@ -163,24 +154,15 @@ int PushStringConstOntoScope(SymTab_t *symtab, char *id, const char *value)
         {
             node->is_constant = 1;
             node->const_string_value = strdup(value);
-            if (node->const_string_value == NULL)
-            {
-                /* Memory allocation failed, clean up */
-                destroy_kgpc_type(kgpc_type);
-                return 1;
-            }
         }
     }
-    else
-    {
-        /* Failed to add, clean up KgpcType */
-        destroy_kgpc_type(kgpc_type);
-    }
+
+    destroy_kgpc_type(kgpc_type);
     return result;
 }
 
 /* Pushes a set constant with explicit KgpcType and raw bytes */
-int PushSetConstOntoScope(SymTab_t *symtab, char *id, const unsigned char *data,
+int PushSetConstOntoScope(SymTab_t *symtab, const char *id, const unsigned char *data,
     int size_bytes, KgpcType *type)
 {
     assert(symtab != NULL);
@@ -400,7 +382,7 @@ ListNode_t *FindAllIdentsInNearestScope(SymTab_t *symtab, const char *id)
 }
 
 /* Pushes a new type onto the current scope (head) */
-int PushTypeOntoScope(SymTab_t *symtab, char *id, enum VarType var_type,
+int PushTypeOntoScope(SymTab_t *symtab, const char *id, enum VarType var_type,
     struct RecordType *record_type, struct TypeAlias *type_alias)
 {
     assert(symtab != NULL);
@@ -432,13 +414,16 @@ int PushTypeOntoScope(SymTab_t *symtab, char *id, enum VarType var_type,
     /* All cases should create a KgpcType now. If kgpc_type is NULL, it means:
      * - Truly UNTYPED (var_type == HASHVAR_UNTYPED)
      * - This is valid and we use NULL KgpcType */
-    return PushTypeOntoScope_Typed(symtab, id, kgpc_type);
+    int result = PushTypeOntoScope_Typed(symtab, id, kgpc_type);
+    if (kgpc_type != NULL)
+        destroy_kgpc_type(kgpc_type);
+    return result;
 }
 
 /* ===== NEW TYPE SYSTEM FUNCTIONS USING KgpcType ===== */
 
 /* Pushes a new variable with a KgpcType onto the current scope */
-int PushVarOntoScope_Typed(SymTab_t *symtab, char *id, KgpcType *type)
+int PushVarOntoScope_Typed(SymTab_t *symtab, const char *id, KgpcType *type)
 {
     assert(symtab != NULL);
     assert(symtab->stack_head != NULL);
@@ -451,7 +436,7 @@ int PushVarOntoScope_Typed(SymTab_t *symtab, char *id, KgpcType *type)
 }
 
 /* Pushes a new array with a KgpcType onto the current scope */
-int PushArrayOntoScope_Typed(SymTab_t *symtab, char *id, KgpcType *type)
+int PushArrayOntoScope_Typed(SymTab_t *symtab, const char *id, KgpcType *type)
 {
     assert(symtab != NULL);
     assert(symtab->stack_head != NULL);
@@ -463,7 +448,7 @@ int PushArrayOntoScope_Typed(SymTab_t *symtab, char *id, KgpcType *type)
 }
 
 /* Pushes a new procedure with a KgpcType onto the current scope */
-int PushProcedureOntoScope_Typed(SymTab_t *symtab, char *id, char *mangled_id, KgpcType *type)
+int PushProcedureOntoScope_Typed(SymTab_t *symtab, const char *id, const char *mangled_id, KgpcType *type)
 {
     assert(symtab != NULL);
     assert(symtab->stack_head != NULL);
@@ -476,7 +461,7 @@ int PushProcedureOntoScope_Typed(SymTab_t *symtab, char *id, char *mangled_id, K
 }
 
 /* Pushes a new function with a KgpcType onto the current scope */
-int PushFunctionOntoScope_Typed(SymTab_t *symtab, char *id, char *mangled_id, KgpcType *type)
+int PushFunctionOntoScope_Typed(SymTab_t *symtab, const char *id, const char *mangled_id, KgpcType *type)
 {
     assert(symtab != NULL);
     assert(symtab->stack_head != NULL);
@@ -489,7 +474,7 @@ int PushFunctionOntoScope_Typed(SymTab_t *symtab, char *id, char *mangled_id, Kg
 }
 
 /* Pushes a new function return value with a KgpcType onto the current scope */
-int PushFuncRetOntoScope_Typed(SymTab_t *symtab, char *id, KgpcType *type)
+int PushFuncRetOntoScope_Typed(SymTab_t *symtab, const char *id, KgpcType *type)
 {
     assert(symtab != NULL);
     assert(symtab->stack_head != NULL);
@@ -501,7 +486,7 @@ int PushFuncRetOntoScope_Typed(SymTab_t *symtab, char *id, KgpcType *type)
 }
 
 /* Pushes a new type declaration with a KgpcType onto the current scope */
-int PushTypeOntoScope_Typed(SymTab_t *symtab, char *id, KgpcType *type)
+int PushTypeOntoScope_Typed(SymTab_t *symtab, const char *id, KgpcType *type)
 {
     assert(symtab != NULL);
     assert(symtab->stack_head != NULL);
@@ -513,7 +498,7 @@ int PushTypeOntoScope_Typed(SymTab_t *symtab, char *id, KgpcType *type)
 }
 
 /* Adds a built-in type with a KgpcType */
-int AddBuiltinType_Typed(SymTab_t *symtab, char *id, KgpcType *type)
+int AddBuiltinType_Typed(SymTab_t *symtab, const char *id, KgpcType *type)
 {
     assert(symtab != NULL);
     assert(id != NULL);
@@ -523,7 +508,7 @@ int AddBuiltinType_Typed(SymTab_t *symtab, char *id, KgpcType *type)
 }
 
 /* Adds a built-in procedure with a KgpcType */
-int AddBuiltinProc_Typed(SymTab_t *symtab, char *id, KgpcType *type)
+int AddBuiltinProc_Typed(SymTab_t *symtab, const char *id, KgpcType *type)
 {
     assert(symtab != NULL);
     assert(id != NULL);
@@ -531,15 +516,13 @@ int AddBuiltinProc_Typed(SymTab_t *symtab, char *id, KgpcType *type)
     assert(type->kind == TYPE_KIND_PROCEDURE && "Builtin proc must have procedure type");
     assert(type->info.proc_info.return_type == NULL && "Procedure must not have return type");
 
-    kgpc_type_retain(type);
+    /* AddIdentToTable already retains the type for the symbol table's ownership. */
     int result = AddIdentToTable(symtab->builtins, id, NULL, HASHTYPE_BUILTIN_PROCEDURE, type);
-    if (result != 0)
-        kgpc_type_release(type);
     return result;
 }
 
 /* Adds a built-in function with a KgpcType */
-int AddBuiltinFunction_Typed(SymTab_t *symtab, char *id, KgpcType *type)
+int AddBuiltinFunction_Typed(SymTab_t *symtab, const char *id, KgpcType *type)
 {
     assert(symtab != NULL);
     assert(id != NULL);
@@ -547,10 +530,8 @@ int AddBuiltinFunction_Typed(SymTab_t *symtab, char *id, KgpcType *type)
     assert(type->kind == TYPE_KIND_PROCEDURE && "Builtin function must have procedure type");
     assert(type->info.proc_info.return_type != NULL && "Function must have return type");
 
-    kgpc_type_retain(type);
+    /* AddIdentToTable already retains the type for the symbol table's ownership. */
     int result = AddIdentToTable(symtab->builtins, id, NULL, HASHTYPE_FUNCTION, type);
-    if (result != 0)
-        kgpc_type_release(type);
     return result;
 }
 
@@ -563,7 +544,7 @@ int AddBuiltinRealConst(SymTab_t *symtab, const char *id, double value)
     if (type == NULL)
         return 1;
 
-    int result = AddIdentToTable(symtab->builtins, (char *)id, NULL, HASHTYPE_CONST, type);
+    int result = AddIdentToTable(symtab->builtins, id, NULL, HASHTYPE_CONST, type);
     if (result == 0)
     {
         HashNode_t *node = FindIdentInTable(symtab->builtins, id);
@@ -573,10 +554,8 @@ int AddBuiltinRealConst(SymTab_t *symtab, const char *id, double value)
             node->const_real_value = value;
         }
     }
-    else
-    {
-        destroy_kgpc_type(type);
-    }
+
+    destroy_kgpc_type(type);
     return result;
 }
 
@@ -590,7 +569,7 @@ int AddBuiltinStringConst(SymTab_t *symtab, const char *id, const char *value)
     if (type == NULL)
         return 1;
 
-    int result = AddIdentToTable(symtab->builtins, (char *)id, NULL, HASHTYPE_CONST, type);
+    int result = AddIdentToTable(symtab->builtins, id, NULL, HASHTYPE_CONST, type);
     if (result == 0)
     {
         HashNode_t *node = FindIdentInTable(symtab->builtins, id);
@@ -598,17 +577,10 @@ int AddBuiltinStringConst(SymTab_t *symtab, const char *id, const char *value)
         {
             node->is_constant = 1;
             node->const_string_value = strdup(value);
-            if (node->const_string_value == NULL)
-            {
-                destroy_kgpc_type(type);
-                return 1;
-            }
         }
     }
-    else
-    {
-        destroy_kgpc_type(type);
-    }
+
+    destroy_kgpc_type(type);
     return result;
 }
 
@@ -625,7 +597,7 @@ int AddBuiltinIntConst(SymTab_t *symtab, const char *id, long long value)
     if (type == NULL)
         return 1;
 
-    int result = AddIdentToTable(symtab->builtins, (char *)id, NULL, HASHTYPE_CONST, type);
+    int result = AddIdentToTable(symtab->builtins, id, NULL, HASHTYPE_CONST, type);
     if (result == 0)
     {
         HashNode_t *node = FindIdentInTable(symtab->builtins, id);
@@ -635,10 +607,8 @@ int AddBuiltinIntConst(SymTab_t *symtab, const char *id, long long value)
             node->const_int_value = value;
         }
     }
-    else
-    {
-        destroy_kgpc_type(type);
-    }
+
+    destroy_kgpc_type(type);
     return result;
 }
 
@@ -651,7 +621,7 @@ int AddBuiltinCharConst(SymTab_t *symtab, const char *id, unsigned char value)
     if (type == NULL)
         return 1;
 
-    int result = AddIdentToTable(symtab->builtins, (char *)id, NULL, HASHTYPE_CONST, type);
+    int result = AddIdentToTable(symtab->builtins, id, NULL, HASHTYPE_CONST, type);
     if (result == 0)
     {
         HashNode_t *node = FindIdentInTable(symtab->builtins, id);
@@ -661,10 +631,8 @@ int AddBuiltinCharConst(SymTab_t *symtab, const char *id, unsigned char value)
             node->const_int_value = (long long)value;
         }
     }
-    else
-    {
-        destroy_kgpc_type(type);
-    }
+
+    destroy_kgpc_type(type);
     return result;
 }
 
