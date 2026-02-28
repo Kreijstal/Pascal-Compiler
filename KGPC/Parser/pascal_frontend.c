@@ -10,6 +10,7 @@
 #endif
 
 #include "ErrVars.h"
+#include "SemanticCheck/SemCheck.h"
 
 /* Global storage for user-defined preprocessor configuration */
 #define MAX_USER_INCLUDE_PATHS 64
@@ -794,6 +795,7 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
         }
     }
     set_preprocessed_context(buffer, length, path);
+    semcheck_register_source_buffer(path, buffer, length);
 
     /* Detect {$MODE objfpc} in the preprocessed source.
      * If found, set flag so ObjPas unit can be auto-imported.
