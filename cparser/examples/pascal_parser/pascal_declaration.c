@@ -3691,7 +3691,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         token(keyword_ci("noreturn")),
         token(keyword_ci("iocheck")),
         token(keyword_ci("assembler")),
-        token(keyword_ci("nostackframe")),
+        token(create_keyword_parser("nostackframe", PASCAL_T_IDENTIFIER)),
         NULL
     );
     combinator_t* implementation_routine_directive = seq(new_combinator(), PASCAL_T_NONE,

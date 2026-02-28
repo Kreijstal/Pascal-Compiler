@@ -5991,7 +5991,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                         if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD)
                         {
                             struct RecordType *new_record = tree->tree_data.type_decl_data.info.record;
-                            struct RecordType *existing_record = hashnode_get_record_type(existing);
+                            struct RecordType *existing_record = get_record_type_from_node(existing);
                             if (new_record != NULL && new_record->is_class &&
                                 existing_record != NULL && existing_record->is_class)
                             {
@@ -6018,6 +6018,69 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                         if (!is_forward_class_completion)
                         {
                             /* Already declared, skip */
+                            cur = cur->next;
+                            continue;
+                        }
+                        else
+                        {
+                            /* Forward class completion: update existing record in-place.
+                             * We must update in-place because existing code (e.g. Self
+                             * parameters in method implementations) already holds pointers
+                             * to the forward declaration's RecordType. Shadowing would not
+                             * update those existing references. */
+                            struct RecordType *new_record = tree->tree_data.type_decl_data.info.record;
+                            struct RecordType *existing_record = get_record_type_from_node(existing);
+                            if (existing_record != NULL && new_record != NULL)
+                            {
+                                /* Move new fields into existing record, keeping hidden fields at front */
+                                ListNode_t *old_fields = existing_record->fields;
+                                existing_record->fields = new_record->fields;
+                                new_record->fields = NULL; /* Transfer ownership to existing */
+                                /* Re-add hidden fields from forward decl at front */
+                                while (old_fields != NULL)
+                                {
+                                    ListNode_t *next = old_fields->next;
+                                    if (old_fields->type == LIST_RECORD_FIELD && old_fields->cur != NULL)
+                                    {
+                                        struct RecordField *f = (struct RecordField *)old_fields->cur;
+                                        if (record_field_is_hidden(f))
+                                        {
+                                            old_fields->next = NULL;
+                                            existing_record->fields = PushListNodeFront(existing_record->fields, old_fields);
+                                        }
+                                    }
+                                    old_fields = next;
+                                }
+                                /* Transfer method templates, properties, parent class, interfaces */
+                                if (new_record->method_templates != NULL)
+                                {
+                                    existing_record->method_templates = new_record->method_templates;
+                                    new_record->method_templates = NULL;
+                                }
+                                if (new_record->properties != NULL)
+                                {
+                                    existing_record->properties = new_record->properties;
+                                    new_record->properties = NULL;
+                                }
+                                if (new_record->parent_class_name != NULL && existing_record->parent_class_name == NULL)
+                                    existing_record->parent_class_name = strdup(new_record->parent_class_name);
+                                if (new_record->interface_names != NULL)
+                                {
+                                    existing_record->interface_names = new_record->interface_names;
+                                    existing_record->num_interfaces = new_record->num_interfaces;
+                                    new_record->interface_names = NULL;
+                                    new_record->num_interfaces = 0;
+                                }
+                                /* Store kgpc_type in tree for later reuse */
+                                if (tree->tree_data.type_decl_data.kgpc_type == NULL && existing->type != NULL)
+                                {
+                                    tree->tree_data.type_decl_data.kgpc_type = existing->type;
+                                    kgpc_type_retain(existing->type);
+                                }
+                                mark_hashnode_unit_info(symtab, existing,
+                                    tree->tree_data.type_decl_data.defined_in_unit,
+                                    tree->tree_data.type_decl_data.unit_is_public);
+                            }
                             cur = cur->next;
                             continue;
                         }
@@ -6084,7 +6147,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                     existing->hash_type == HASHTYPE_TYPE &&
                                     existing->type != NULL)
                                 {
-                                    struct RecordType *existing_record = hashnode_get_record_type(existing);
+                                    struct RecordType *existing_record = get_record_type_from_node(existing);
                                     if (existing_record != NULL && existing_record->is_class)
                                     {
                                         /* Check if existing is a forward declaration (only hidden fields) */
@@ -8435,8 +8498,20 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                     }
                     if (pointee_node != NULL && pointee_node->type != NULL)
                     {
-                        kgpc_type_retain(pointee_node->type);
-                        tree->tree_data.type_decl_data.kgpc_type->info.points_to = pointee_node->type;
+                        /* Snapshot the record type so that later in-place replacement
+                         * of the symbol table's record_info (for unit-private shadowing)
+                         * does not corrupt this pointer's target. */
+                        KgpcType *points_to_type = pointee_node->type;
+                        if (points_to_type->kind == TYPE_KIND_RECORD &&
+                            points_to_type->info.record_info != NULL)
+                        {
+                            points_to_type = create_record_type(points_to_type->info.record_info);
+                        }
+                        else
+                        {
+                            kgpc_type_retain(points_to_type);
+                        }
+                        tree->tree_data.type_decl_data.kgpc_type->info.points_to = points_to_type;
                     }
                 }
                 if (getenv("KGPC_DEBUG_PROC_TYPE") != NULL &&
@@ -8778,8 +8853,9 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
          * not if it exists as a builtin or in a parent scope. */
         HashNode_t *existing_type = NULL;
         int scope_level = FindIdent(&existing_type, symtab, tree->tree_data.type_decl_data.id);
-        int already_predeclared = (scope_level == 0 && existing_type != NULL && 
+        int already_predeclared = (scope_level == 0 && existing_type != NULL &&
                                    existing_type->hash_type == HASHTYPE_TYPE);
+
 
         /* Skip symbol table registration for generic declarations - they're only in the registry */
         if (tree->tree_data.type_decl_data.kind == TYPE_DECL_GENERIC)
@@ -8881,8 +8957,18 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                     }
                     if (pointee_node != NULL && pointee_node->type != NULL)
                     {
-                        kgpc_type_retain(pointee_node->type);
-                        existing_type->type->info.points_to = pointee_node->type;
+                        /* Snapshot record type (see comment at first pointer resolution point) */
+                        KgpcType *points_to_type = pointee_node->type;
+                        if (points_to_type->kind == TYPE_KIND_RECORD &&
+                            points_to_type->info.record_info != NULL)
+                        {
+                            points_to_type = create_record_type(points_to_type->info.record_info);
+                        }
+                        else
+                        {
+                            kgpc_type_retain(points_to_type);
+                        }
+                        existing_type->type->info.points_to = points_to_type;
                     }
                 }
             }
@@ -9090,8 +9176,18 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
         }
         if (pointee_node != NULL && pointee_node->type != NULL)
         {
-            kgpc_type_retain(pointee_node->type);
-            alias_node->type->info.points_to = pointee_node->type;
+            /* Snapshot record type (see comment at first pointer resolution point) */
+            KgpcType *points_to_type = pointee_node->type;
+            if (points_to_type->kind == TYPE_KIND_RECORD &&
+                points_to_type->info.record_info != NULL)
+            {
+                points_to_type = create_record_type(points_to_type->info.record_info);
+            }
+            else
+            {
+                kgpc_type_retain(points_to_type);
+            }
+            alias_node->type->info.points_to = points_to_type;
         }
         cur = cur->next;
     }
@@ -10039,51 +10135,6 @@ void semcheck_add_builtins(SymTab_t *symtab)
 
     /* Primitive pointer type */
     add_builtin_type_owned(symtab, "Pointer", create_primitive_type(POINTER_TYPE));
-    if (!stdlib_loaded_flag())
-    {
-        add_builtin_alias_type(symtab, "TClass", POINTER_TYPE, (int)sizeof(void *));
-        struct RecordType *tobject = (struct RecordType *)calloc(1, sizeof(struct RecordType));
-        if (tobject != NULL)
-        {
-            tobject->is_class = 1;
-            tobject->type_id = strdup("TObject");
-            KgpcType *tobject_rec = create_record_type(tobject);
-            KgpcType *tobject_type = NULL;
-            if (tobject_rec != NULL)
-                tobject_type = create_pointer_type(tobject_rec);
-            if (tobject_type != NULL)
-            {
-                AddBuiltinType_Typed(symtab, strdup("TObject"), tobject_type);
-                destroy_kgpc_type(tobject_type);
-            }
-            else if (tobject_rec != NULL)
-            {
-                destroy_kgpc_type(tobject_rec);
-            }
-        }
-
-        struct RecordType *tinterfaced = (struct RecordType *)calloc(1, sizeof(struct RecordType));
-        if (tinterfaced != NULL)
-        {
-            tinterfaced->is_class = 1;
-            tinterfaced->type_id = strdup("TInterfacedObject");
-            tinterfaced->parent_class_name = strdup("TObject");
-            KgpcType *tinterfaced_rec = create_record_type(tinterfaced);
-            KgpcType *tinterfaced_type = NULL;
-            if (tinterfaced_rec != NULL)
-                tinterfaced_type = create_pointer_type(tinterfaced_rec);
-            if (tinterfaced_type != NULL)
-            {
-                AddBuiltinType_Typed(symtab, strdup("TInterfacedObject"), tinterfaced_type);
-                destroy_kgpc_type(tinterfaced_type);
-            }
-            else if (tinterfaced_rec != NULL)
-            {
-                destroy_kgpc_type(tinterfaced_rec);
-            }
-        }
-    }
-
     /* Common ordinal aliases (match KGPC system.p sizes) */
     add_builtin_type_owned(symtab, "Byte", create_primitive_type_with_size(BYTE_TYPE, 1));
     add_builtin_type_owned(symtab, "ShortInt", create_primitive_type_with_size(INT_TYPE, 1));

@@ -1763,10 +1763,10 @@ int main(int argc, char **argv)
     SymTab_t *symtab = start_semcheck(user_tree, &sem_result);
     if (track_time)
         g_time_semantic += current_time_seconds() - sem_start;
-    
+
     /* Add frontend errors to semantic result */
     sem_result += frontend_errors;
-    
+
     int exit_code = 0;
 
     if (sem_result <= 0)

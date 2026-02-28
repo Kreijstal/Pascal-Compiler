@@ -1750,8 +1750,9 @@ ListNode_t *gencode_jmp(int type, int inverse, char *label, ListNode_t *inst_lis
     return add_inst(inst_list, buffer);
 }
 
-/* Generates a function header */
-void codegen_function_header(char *func_name, CodeGenContext *ctx)
+/* Generates a function header.
+ * If nostackframe is set, only emits the label without prologue (push %rbp / mov %rsp, %rbp). */
+void codegen_function_header_ex(char *func_name, CodeGenContext *ctx, int nostackframe)
 {
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
@@ -1762,12 +1763,16 @@ void codegen_function_header(char *func_name, CodeGenContext *ctx)
     fprintf(ctx->output_file, ".globl\t%s\n", func_name);
     if (codegen_target_is_windows())
         fprintf(ctx->output_file, "\t.seh_proc\t%s\n", func_name);
-    fprintf(ctx->output_file, "%s:\n\tpushq\t%%rbp\n", func_name);
-    if (codegen_target_is_windows())
-        fprintf(ctx->output_file, "\t.seh_pushreg\t%%rbp\n");
-    fprintf(ctx->output_file, "\tmovq\t%%rsp, %%rbp\n");
-    if (codegen_target_is_windows())
-        fprintf(ctx->output_file, "\t.seh_setframe\t%%rbp, 0\n");
+    if (nostackframe) {
+        fprintf(ctx->output_file, "%s:\n", func_name);
+    } else {
+        fprintf(ctx->output_file, "%s:\n\tpushq\t%%rbp\n", func_name);
+        if (codegen_target_is_windows())
+            fprintf(ctx->output_file, "\t.seh_pushreg\t%%rbp\n");
+        fprintf(ctx->output_file, "\tmovq\t%%rsp, %%rbp\n");
+        if (codegen_target_is_windows())
+            fprintf(ctx->output_file, "\t.seh_setframe\t%%rbp, 0\n");
+    }
 
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
@@ -1775,15 +1780,24 @@ void codegen_function_header(char *func_name, CodeGenContext *ctx)
     return;
 }
 
-/* Generates a function footer */
-void codegen_function_footer(char *func_name, CodeGenContext *ctx)
+void codegen_function_header(char *func_name, CodeGenContext *ctx)
+{
+    codegen_function_header_ex(func_name, ctx, 0);
+}
+
+/* Generates a function footer.
+ * If nostackframe is set, emits only ret without leave. */
+void codegen_function_footer_ex(char *func_name, CodeGenContext *ctx, int nostackframe)
 {
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
     #endif
     assert(func_name != NULL);
     assert(ctx != NULL);
-    fprintf(ctx->output_file, "\tnop\n\tleave\n\tret\n");
+    if (nostackframe)
+        fprintf(ctx->output_file, "\tret\n");
+    else
+        fprintf(ctx->output_file, "\tnop\n\tleave\n\tret\n");
     if (codegen_target_is_windows())
         fprintf(ctx->output_file, "\t.seh_endproc\n");
 
@@ -1791,6 +1805,11 @@ void codegen_function_footer(char *func_name, CodeGenContext *ctx)
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
     return;
+}
+
+void codegen_function_footer(char *func_name, CodeGenContext *ctx)
+{
+    codegen_function_footer_ex(func_name, ctx, 0);
 }
 
 
@@ -3297,6 +3316,7 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
         assert(sub != NULL);
         assert(sub->type == TREE_SUBPROGRAM);
 
+
         const char *mangled_id = sub->tree_data.subprogram_data.mangled_id;
         if (mangled_id != NULL && ctx->emitted_subprograms != NULL)
         {
@@ -3497,10 +3517,11 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
         }
     }
     
-    codegen_function_header(sub_id, ctx);
-    codegen_stack_space(ctx);
+    codegen_function_header_ex(sub_id, ctx, proc->nostackframe);
+    if (!proc->nostackframe)
+        codegen_stack_space(ctx);
     codegen_inst_list(inst_list, ctx);
-    codegen_function_footer(sub_id, ctx);
+    codegen_function_footer_ex(sub_id, ctx, proc->nostackframe);
     free_inst_list(inst_list);
     pop_stackscope();
     PopScope(symtab);
@@ -4124,10 +4145,11 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
         inst_list = add_inst(inst_list, buffer);
     }
     
-    codegen_function_header(sub_id, ctx);
-    codegen_stack_space(ctx);
+    codegen_function_header_ex(sub_id, ctx, func->nostackframe);
+    if (!func->nostackframe)
+        codegen_stack_space(ctx);
     codegen_inst_list(inst_list, ctx);
-    codegen_function_footer(sub_id, ctx);
+    codegen_function_footer_ex(sub_id, ctx, func->nostackframe);
     free_inst_list(inst_list);
     pop_stackscope();
     PopScope(symtab);
