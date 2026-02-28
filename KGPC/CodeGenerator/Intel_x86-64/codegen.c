@@ -1825,7 +1825,7 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
     init_stackmng();
 
     codegen_program_header(input_file_name, ctx);
-    codegen_rodata(ctx);
+    codegen_rodata(ctx, symtab);
     codegen_emit_enum_typeinfo(ctx, symtab, 0);
     codegen_vmt(ctx, symtab, tree);
 
@@ -1877,7 +1877,7 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
     init_stackmng();
 
     codegen_program_header(input_file_name, ctx);
-    codegen_rodata(ctx);
+    codegen_rodata(ctx, symtab);
     codegen_emit_enum_typeinfo(ctx, symtab, 1);
 
     /* Generate code for unit subprograms */
@@ -1945,7 +1945,106 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
     codegen_reset_except_stack(ctx);
 }
 
-void codegen_rodata(CodeGenContext *ctx)
+static int codegen_is_valid_asm_symbol_name(const char *id)
+{
+    if (id == NULL || id[0] == '\0')
+        return 0;
+
+    if (!(isalpha((unsigned char)id[0]) || id[0] == '_'))
+        return 0;
+
+    for (size_t i = 1; id[i] != '\0'; ++i)
+    {
+        if (!(isalnum((unsigned char)id[i]) || id[i] == '_'))
+            return 0;
+    }
+
+    return 1;
+}
+
+static int codegen_const_symbol_emitted(ListNode_t *emitted_symbols, const char *id)
+{
+    ListNode_t *cur = emitted_symbols;
+    while (cur != NULL)
+    {
+        if (cur->cur != NULL && strcmp((const char *)cur->cur, id) == 0)
+            return 1;
+        cur = cur->next;
+    }
+    return 0;
+}
+
+static void codegen_emit_integer_const_equivs_from_table(CodeGenContext *ctx,
+    HashTable_t *table, ListNode_t **emitted_symbols)
+{
+    assert(ctx != NULL);
+    assert(emitted_symbols != NULL);
+
+    if (table == NULL)
+        return;
+
+    for (int bucket = 0; bucket < TABLE_SIZE; ++bucket)
+    {
+        ListNode_t *bucket_node = table->table[bucket];
+        while (bucket_node != NULL)
+        {
+            HashNode_t *symbol = (HashNode_t *)bucket_node->cur;
+            if (symbol != NULL &&
+                symbol->hash_type == HASHTYPE_CONST &&
+                symbol->is_constant &&
+                symbol->const_string_value == NULL &&
+                symbol->const_set_value == NULL &&
+                symbol->id != NULL &&
+                codegen_is_valid_asm_symbol_name(symbol->id) &&
+                !codegen_const_symbol_emitted(*emitted_symbols, symbol->id))
+            {
+                int type_tag = codegen_tag_from_kgpc(symbol->type);
+                if (is_ordinal_type(type_tag))
+                {
+                    fprintf(ctx->output_file, ".equ %s, %lld\n", symbol->id, symbol->const_int_value);
+                    char *emitted_copy = strdup(symbol->id);
+                    if (emitted_copy != NULL)
+                    {
+                        ListNode_t *new_node = CreateListNode(emitted_copy, LIST_STRING);
+                        if (*emitted_symbols == NULL)
+                            *emitted_symbols = new_node;
+                        else
+                            *emitted_symbols = PushListNodeBack(*emitted_symbols, new_node);
+                    }
+                }
+            }
+            bucket_node = bucket_node->next;
+        }
+    }
+}
+
+static void codegen_emit_integer_const_equivs(CodeGenContext *ctx, SymTab_t *symtab)
+{
+    assert(ctx != NULL);
+    assert(symtab != NULL);
+
+    ListNode_t *emitted_symbols = NULL;
+
+    /* Prefer user/global scopes first, then builtins. */
+    ListNode_t *scope_node = symtab->stack_head;
+    while (scope_node != NULL)
+    {
+        codegen_emit_integer_const_equivs_from_table(ctx, (HashTable_t *)scope_node->cur,
+            &emitted_symbols);
+        scope_node = scope_node->next;
+    }
+    codegen_emit_integer_const_equivs_from_table(ctx, symtab->builtins, &emitted_symbols);
+
+    ListNode_t *cur = emitted_symbols;
+    while (cur != NULL)
+    {
+        free(cur->cur);
+        cur = cur->next;
+    }
+    DestroyList(emitted_symbols);
+}
+
+void codegen_rodata(CodeGenContext *ctx, SymTab_t *symtab)
 {
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
@@ -1975,10 +2074,7 @@ void codegen_rodata(CodeGenContext *ctx)
     fprintf(ctx->output_file, ".format_str_n:\n");
     fprintf(ctx->output_file, ".string \"\\n\"\n");
     fprintf(ctx->output_file, ".text\n");
-    /* FPC RTL x86_64 inline assembly constants */
-    fprintf(ctx->output_file, ".equ ErmsThreshold, 1536\n");
-    fprintf(ctx->output_file, ".equ NtThreshold, 262144\n");
-    fprintf(ctx->output_file, ".equ PrefetchDistance, 512\n");
+    codegen_emit_integer_const_equivs(ctx, symtab);
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
