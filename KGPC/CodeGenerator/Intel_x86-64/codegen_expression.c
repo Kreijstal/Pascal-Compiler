@@ -8,7 +8,8 @@
 #include <assert.h>
 #include <string.h>
 #include <limits.h>
-#if defined(__GLIBC__) || (defined(__APPLE__) && defined(__MACH__))
+#if defined(__GLIBC__) || (defined(__APPLE__) && defined(__MACH__)) || \
+    defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
 #define HAVE_EXECINFO 1
 #include <execinfo.h>
 #endif
