@@ -2601,6 +2601,33 @@ sys.exit(3)
         self.assertEqual(lines, expected_lines)
         self.assertEqual(process.returncode, 0)
 
+    def test_inline_asm_uses_pascal_const_equ(self):
+        """Ensures inline asm constants are emitted from Pascal const declarations."""
+        input_file = os.path.join(TEST_CASES_DIR, "asm_const_equ.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "asm_const_equ.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "asm_const_equ")
+
+        run_compiler(input_file, asm_file)
+
+        with open(asm_file, "r", encoding="utf-8") as f:
+            asm_source = f.read()
+
+        self.assertIn(".equ MagicValue, 1234", asm_source)
+        self.assertNotIn(".equ ErmsThreshold, 1536", asm_source)
+        self.assertNotIn(".equ NtThreshold, 262144", asm_source)
+        self.assertNotIn(".equ PrefetchDistance, 512", asm_source)
+
+        self.compile_executable(asm_file, executable_file)
+
+        process = subprocess.run(
+            [executable_file],
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+        self.assertEqual(process.returncode, 0)
+        self.assertEqual(process.stdout, "OK\n")
+
     def test_unix_gethostname(self):
         """Ensures the Unix unit exposes GetHostName with actual hostname output."""
         input_file = os.path.join(TEST_CASES_DIR, "unix_gethostname_demo.p")
