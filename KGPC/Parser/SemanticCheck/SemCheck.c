@@ -1629,17 +1629,43 @@ void semcheck_error_with_context(const char *format, ...)
     directive_file[0] = '\0';
     if (effective_source_index >= 0)
     {
-        const char *context_buf = preprocessed_source;
-        size_t context_buf_len = preprocessed_length;
-        if (context_buf == NULL || context_buf_len == 0)
+        int found_in_registry = 0;
+        for (int i = 0; i < g_source_buffer_count; i++)
         {
-            context_buf = g_semcheck_source_buffer;
-            context_buf_len = g_semcheck_source_length;
+            if (effective_source_index < (int)g_source_buffer_registry[i].length)
+            {
+                char temp_file[MAX_DIRECTIVE_FILENAME_LEN];
+                temp_file[0] = '\0';
+                int computed_line = semcheck_line_from_source_offset(
+                    g_source_buffer_registry[i].buffer,
+                    g_source_buffer_registry[i].length,
+                    effective_source_index,
+                    temp_file, sizeof(temp_file));
+                if (computed_line > 0 && temp_file[0] != '\0')
+                {
+                    effective_line = computed_line;
+                    strncpy(directive_file, temp_file, sizeof(directive_file) - 1);
+                    directive_file[sizeof(directive_file) - 1] = '\0';
+                    found_in_registry = 1;
+                    break;
+                }
+            }
         }
-        int computed_line = semcheck_line_from_source_offset(context_buf, context_buf_len, effective_source_index,
-            directive_file, sizeof(directive_file));
-        if (computed_line > 0)
-            effective_line = computed_line;
+        
+        if (!found_in_registry)
+        {
+            const char *context_buf = preprocessed_source;
+            size_t context_buf_len = preprocessed_length;
+            if (context_buf == NULL || context_buf_len == 0)
+            {
+                context_buf = g_semcheck_source_buffer;
+                context_buf_len = g_semcheck_source_length;
+            }
+            int computed_line = semcheck_line_from_source_offset(context_buf, context_buf_len, effective_source_index,
+                directive_file, sizeof(directive_file));
+            if (computed_line > 0)
+                effective_line = computed_line;
+        }
         if (directive_file[0] != '\0')
         {
             fprintf(stderr, "  In %s:\n", directive_file);
