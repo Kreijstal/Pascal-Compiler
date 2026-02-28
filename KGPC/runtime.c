@@ -5655,9 +5655,16 @@ int kgpc_delete_file(const char *path)
     return (rc == 0) ? 1 : 0;
 }
 
-/* Wrapper for memcpy to be called from assembly code */
+/* Wrapper for memcpy to be called from assembly code.
+   NULL-safe: if src is NULL, zeroes dest (Pascal semantics for nil PChar to shortstring). */
 void *kgpc_memcpy_wrapper(void *dest, const void *src, size_t n)
 {
+    if (src == NULL)
+    {
+        if (dest != NULL && n > 0)
+            memset(dest, 0, n);
+        return dest;
+    }
     return memcpy(dest, src, n);
 }
 

@@ -1797,7 +1797,11 @@ void destroy_expr(struct Expression *expr)
           break;
 
         case EXPR_ADDR_OF_PROC:
-          /* Nothing to free - procedure_symbol is a reference, not owned */
+          /* procedure_symbol is a reference (not owned), but string copies are owned */
+          if (expr->expr_data.addr_of_proc_data.proc_mangled_id != NULL)
+              free(expr->expr_data.addr_of_proc_data.proc_mangled_id);
+          if (expr->expr_data.addr_of_proc_data.proc_id != NULL)
+              free(expr->expr_data.addr_of_proc_data.proc_id);
           break;
 
         case EXPR_ANONYMOUS_FUNCTION:

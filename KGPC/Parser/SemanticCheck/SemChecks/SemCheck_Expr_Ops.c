@@ -460,7 +460,9 @@ relop_fallback:
                         string_ok = 1;
                     }
                 }
-                int char_ok = (type_first == CHAR_TYPE && type_second == CHAR_TYPE);
+                int char_ok = (type_first == CHAR_TYPE && type_second == CHAR_TYPE) ||
+                              (type_first == CHAR_TYPE && is_integer_type(type_second)) ||
+                              (is_integer_type(type_first) && type_second == CHAR_TYPE);
                 /* Allow comparison of pointers AND procedures */
                 int pointer_ok = ((type_first == POINTER_TYPE || type_first == PROCEDURE) && 
                                   (type_second == POINTER_TYPE || type_second == PROCEDURE));
@@ -606,7 +608,9 @@ relop_fallback:
                         string_ok = 1;
                     }
                 }
-                int char_ok = (type_first == CHAR_TYPE && type_second == CHAR_TYPE);
+                int char_ok = (type_first == CHAR_TYPE && type_second == CHAR_TYPE) ||
+                              (type_first == CHAR_TYPE && is_integer_type(type_second)) ||
+                              (is_integer_type(type_first) && type_second == CHAR_TYPE);
                 /* Allow comparison of pointers AND procedures */
                 int pointer_ok = ((type_first == POINTER_TYPE || type_first == PROCEDURE) && 
                                   (type_second == POINTER_TYPE || type_second == PROCEDURE));
@@ -2714,6 +2718,20 @@ resolved:;
                 }
             }
             
+            if (subtype == UNKNOWN_TYPE && type_id == NULL && getenv("KGPC_DEBUG_CG_ERR"))
+            {
+                fprintf(stderr, "[semcheck-debug] varid pointer UNKNOWN: id=%s line=%d hash_type=%d\n",
+                    id, expr->line_num, hash_return->hash_type);
+                fprintf(stderr, "[semcheck-debug]   alias=%p", (void*)alias);
+                if (alias) fprintf(stderr, " alias_name=%s is_pointer=%d pointer_type=%d pointer_type_id=%s",
+                    alias->alias_name ? alias->alias_name : "<null>",
+                    alias->is_pointer, alias->pointer_type,
+                    alias->pointer_type_id ? alias->pointer_type_id : "<null>");
+                fprintf(stderr, "\n");
+                fprintf(stderr, "[semcheck-debug]   hash_return->type=%p", (void*)hash_return->type);
+                if (hash_return->type) fprintf(stderr, " kind=%d", hash_return->type->kind);
+                fprintf(stderr, "\n");
+            }
             semcheck_set_pointer_info(expr, subtype, type_id);
             if (expr->resolved_kgpc_type != NULL &&
                 kgpc_type_is_pointer(expr->resolved_kgpc_type) &&

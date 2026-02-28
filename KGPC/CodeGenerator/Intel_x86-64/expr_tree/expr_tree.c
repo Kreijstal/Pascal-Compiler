@@ -2521,14 +2521,17 @@ cleanup_constructor:
     }
     else if (expr->type == EXPR_ADDR_OF_PROC)
     {
-        HashNode_t *proc_symbol = expr->expr_data.addr_of_proc_data.procedure_symbol;
-        if (proc_symbol == NULL || proc_symbol->mangled_id == NULL)
+        /* Use owned string copies — procedure_symbol may be dangling after PopScope */
+        const char *proc_label = expr->expr_data.addr_of_proc_data.proc_mangled_id;
+        if (proc_label == NULL)
+            proc_label = expr->expr_data.addr_of_proc_data.proc_id;
+        if (proc_label == NULL)
         {
             codegen_report_error(ctx, "ERROR: Missing symbol information for procedure address.");
             return inst_list;
         }
         /* Use leaq (Load Effective Address) with RIP-relative addressing to get the address of the procedure's label */
-        snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", proc_symbol->mangled_id, target_reg->bit_64);
+        snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", proc_label, target_reg->bit_64);
         return add_inst(inst_list, buffer);
     }
     else if (expr->type == EXPR_ANONYMOUS_FUNCTION || expr->type == EXPR_ANONYMOUS_PROCEDURE)
@@ -4108,8 +4111,12 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                         invert_cmp = 1;
                     }
 
+                    /* Spill the other operand before shortstring promotion calls,
+                     * since function calls clobber caller-saved registers. */
+                    int ca_right_needs_spill = (right_reg != NULL) || (right != NULL && right[0] == '%');
+                    int ca_left_needs_spill = (left_reg != NULL) || (left != NULL && left[0] == '%');
                     StackNode_t *spill_other = NULL;
-                    if (left_is_shortstring && right_reg != NULL)
+                    if (left_is_shortstring && ca_right_needs_spill)
                     {
                         spill_other = add_l_t("relop_rhs_preserve");
                         if (spill_other != NULL)
@@ -4129,7 +4136,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                     }
 
                     spill_other = NULL;
-                    if (right_is_shortstring && left_reg != NULL)
+                    if (right_is_shortstring && ca_left_needs_spill)
                     {
                         spill_other = add_l_t("relop_lhs_preserve");
                         if (spill_other != NULL)
@@ -4217,8 +4224,13 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                 }
                 if (left_is_string && right_is_string)
                 {
+                    /* Spill the other operand before shortstring promotion calls,
+                     * since function calls clobber caller-saved registers (r10, r11, etc.).
+                     * Check both right_reg and whether the operand is a volatile register. */
+                    int right_needs_spill = (right_reg != NULL) || (right != NULL && right[0] == '%');
+                    int left_needs_spill = (left_reg != NULL) || (left != NULL && left[0] == '%');
                     StackNode_t *spill_other = NULL;
-                    if (left_is_shortstring && right_reg != NULL)
+                    if (left_is_shortstring && right_needs_spill)
                     {
                         spill_other = add_l_t("relop_rhs_preserve");
                         if (spill_other != NULL)
@@ -4238,7 +4250,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                     }
 
                     spill_other = NULL;
-                    if (right_is_shortstring && left_reg != NULL)
+                    if (right_is_shortstring && left_needs_spill)
                     {
                         spill_other = add_l_t("relop_lhs_preserve");
                         if (spill_other != NULL)

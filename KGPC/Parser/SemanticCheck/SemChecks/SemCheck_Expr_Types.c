@@ -4029,6 +4029,8 @@ int semcheck_addressof(int *type_return,
                 destroy_expr(inner);
                 expr->type = EXPR_ADDR_OF_PROC;
                 expr->expr_data.addr_of_proc_data.procedure_symbol = proc_symbol;
+                expr->expr_data.addr_of_proc_data.proc_mangled_id = proc_symbol->mangled_id ? strdup(proc_symbol->mangled_id) : NULL;
+                expr->expr_data.addr_of_proc_data.proc_id = proc_symbol->id ? strdup(proc_symbol->id) : NULL;
             }
         }
         else if (inner->type == EXPR_FUNCTION_CALL && inner->expr_data.function_call_data.args_expr == NULL)
@@ -4039,13 +4041,15 @@ int semcheck_addressof(int *type_return,
             {
                 HashNode_t *proc_symbol = NULL;
                 if (FindIdent(&proc_symbol, symtab, func_id) >= 0 &&
-                    proc_symbol != NULL && 
+                    proc_symbol != NULL &&
                     (proc_symbol->hash_type == HASHTYPE_FUNCTION || proc_symbol->hash_type == HASHTYPE_PROCEDURE))
                 {
                     expr->expr_data.addr_data.expr = NULL;
                     destroy_expr(inner);
                     expr->type = EXPR_ADDR_OF_PROC;
                     expr->expr_data.addr_of_proc_data.procedure_symbol = proc_symbol;
+                    expr->expr_data.addr_of_proc_data.proc_mangled_id = proc_symbol->mangled_id ? strdup(proc_symbol->mangled_id) : NULL;
+                    expr->expr_data.addr_of_proc_data.proc_id = proc_symbol->id ? strdup(proc_symbol->id) : NULL;
                 }
             }
         }

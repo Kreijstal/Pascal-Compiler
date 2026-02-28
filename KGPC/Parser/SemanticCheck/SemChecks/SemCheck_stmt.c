@@ -4169,6 +4169,8 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                     /* Transform the expression to EXPR_ADDR_OF_PROC */
                     expr->type = EXPR_ADDR_OF_PROC;
                     expr->expr_data.addr_of_proc_data.procedure_symbol = rhs_symbol;
+                    expr->expr_data.addr_of_proc_data.proc_mangled_id = rhs_symbol->mangled_id ? strdup(rhs_symbol->mangled_id) : NULL;
+                    expr->expr_data.addr_of_proc_data.proc_id = rhs_symbol->id ? strdup(rhs_symbol->id) : NULL;
                 }
             }
         }
@@ -6680,6 +6682,8 @@ proccall_parent_resolve_done:
                             /* Transform the expression to EXPR_ADDR_OF_PROC */
                             arg_expr->type = EXPR_ADDR_OF_PROC;
                             arg_expr->expr_data.addr_of_proc_data.procedure_symbol = arg_node;
+                            arg_expr->expr_data.addr_of_proc_data.proc_mangled_id = arg_node->mangled_id ? strdup(arg_node->mangled_id) : NULL;
+                            arg_expr->expr_data.addr_of_proc_data.proc_id = arg_node->id ? strdup(arg_node->id) : NULL;
                         }
                     }
                 }
