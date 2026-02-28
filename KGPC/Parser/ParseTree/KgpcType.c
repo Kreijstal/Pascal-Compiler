@@ -24,6 +24,7 @@
 #include "tree_types.h"
 #include "ident_ref.h"
 #include "tree.h"
+#include "tree.h"
 #include "../../format_arg.h"
 #include "../../identifier_utils.h"
 
