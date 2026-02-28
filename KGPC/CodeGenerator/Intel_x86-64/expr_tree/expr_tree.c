@@ -1428,6 +1428,58 @@ static ListNode_t *promote_shortstring_reg_operand(ListNode_t *inst_list, CodeGe
     return inst_list;
 }
 
+static ListNode_t *spill_reg64_operand(ListNode_t *inst_list, const char *reg_operand,
+    StackNode_t **spill_slot, const char *temp_name)
+{
+    if (spill_slot != NULL)
+        *spill_slot = NULL;
+    if (spill_slot == NULL || reg_operand == NULL || temp_name == NULL)
+        return inst_list;
+
+    StackNode_t *slot = add_l_t((char *)temp_name);
+    if (slot == NULL)
+        return inst_list;
+
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", reg_operand, slot->offset);
+    inst_list = add_inst(inst_list, buffer);
+    *spill_slot = slot;
+    return inst_list;
+}
+
+static ListNode_t *restore_spilled_reg64_operand(ListNode_t *inst_list, const char *reg_operand,
+    StackNode_t *spill_slot)
+{
+    if (reg_operand == NULL || spill_slot == NULL)
+        return inst_list;
+
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", spill_slot->offset, reg_operand);
+    return add_inst(inst_list, buffer);
+}
+
+static ListNode_t *promote_char_reg_operand_to_string(ListNode_t *inst_list,
+    const char *reg_operand, const Register_t *reg)
+{
+    if (reg_operand == NULL || reg == NULL)
+        return inst_list;
+
+    const char *arg_reg32 = current_arg_reg32(0);
+    const char *value_reg32 = reg_to_reg32(reg_operand, reg);
+    if (arg_reg32 == NULL || value_reg32 == NULL)
+        return inst_list;
+
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", value_reg32, arg_reg32);
+    inst_list = add_inst(inst_list, buffer);
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_char_to_string");
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", RETURN_REG_64, reg_operand);
+    inst_list = add_inst(inst_list, buffer);
+    free_arg_regs();
+    return inst_list;
+}
+
 static ListNode_t *emit_move_ptr_operand(ListNode_t *inst_list, const char *src,
     const Register_t *src_reg, const char *dst)
 {
@@ -4232,42 +4284,22 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                     StackNode_t *spill_other = NULL;
                     if (left_is_shortstring && right_needs_spill)
                     {
-                        spill_other = add_l_t("relop_rhs_preserve");
-                        if (spill_other != NULL)
-                        {
-                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
-                                right, spill_other->offset);
-                            inst_list = add_inst(inst_list, buffer);
-                        }
+                        inst_list = spill_reg64_operand(inst_list, right, &spill_other,
+                            "relop_rhs_preserve");
                     }
                     if (left_is_shortstring)
                         inst_list = promote_shortstring_reg_operand(inst_list, ctx, left, left_reg);
-                    if (spill_other != NULL)
-                    {
-                        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-                            spill_other->offset, right);
-                        inst_list = add_inst(inst_list, buffer);
-                    }
+                    inst_list = restore_spilled_reg64_operand(inst_list, right, spill_other);
 
                     spill_other = NULL;
                     if (right_is_shortstring && left_needs_spill)
                     {
-                        spill_other = add_l_t("relop_lhs_preserve");
-                        if (spill_other != NULL)
-                        {
-                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
-                                left, spill_other->offset);
-                            inst_list = add_inst(inst_list, buffer);
-                        }
+                        inst_list = spill_reg64_operand(inst_list, left, &spill_other,
+                            "relop_lhs_preserve");
                     }
                     if (right_is_shortstring)
                         inst_list = promote_shortstring_reg_operand(inst_list, ctx, right, right_reg);
-                    if (spill_other != NULL)
-                    {
-                        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-                            spill_other->offset, left);
-                        inst_list = add_inst(inst_list, buffer);
-                    }
+                    inst_list = restore_spilled_reg64_operand(inst_list, left, spill_other);
 
                     /* Promote char-typed operands (EXPR_CHAR_CODE or single-char
                      * EXPR_STRING resolved to CHAR_TYPE) to string pointers.
@@ -4281,32 +4313,11 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                         StackNode_t *rhs_save = NULL;
                         if (right_reg != NULL)
                         {
-                            rhs_save = add_l_t("relop_rhs_charpromo");
-                            if (rhs_save != NULL)
-                            {
-                                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
-                                    right, rhs_save->offset);
-                                inst_list = add_inst(inst_list, buffer);
-                            }
+                            inst_list = spill_reg64_operand(inst_list, right, &rhs_save,
+                                "relop_rhs_charpromo");
                         }
-                        const char *arg_reg32 = codegen_target_is_windows() ? "%ecx" : "%edi";
-                        const char *left32c = reg_to_reg32(left, left_reg);
-                        if (left32c != NULL)
-                        {
-                            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", left32c, arg_reg32);
-                            inst_list = add_inst(inst_list, buffer);
-                        }
-                        inst_list = codegen_vect_reg(inst_list, 0);
-                        inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_char_to_string");
-                        snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", left);
-                        inst_list = add_inst(inst_list, buffer);
-                        free_arg_regs();
-                        if (rhs_save != NULL)
-                        {
-                            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-                                rhs_save->offset, right);
-                            inst_list = add_inst(inst_list, buffer);
-                        }
+                        inst_list = promote_char_reg_operand_to_string(inst_list, left, left_reg);
+                        inst_list = restore_spilled_reg64_operand(inst_list, right, rhs_save);
                     }
                     if (right_expr != NULL &&
                         (right_expr->type == EXPR_CHAR_CODE ||
@@ -4316,32 +4327,11 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                         StackNode_t *lhs_save = NULL;
                         if (left_reg != NULL)
                         {
-                            lhs_save = add_l_t("relop_lhs_charpromo");
-                            if (lhs_save != NULL)
-                            {
-                                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
-                                    left, lhs_save->offset);
-                                inst_list = add_inst(inst_list, buffer);
-                            }
+                            inst_list = spill_reg64_operand(inst_list, left, &lhs_save,
+                                "relop_lhs_charpromo");
                         }
-                        const char *arg_reg32 = codegen_target_is_windows() ? "%ecx" : "%edi";
-                        const char *right32c = reg_to_reg32(right, right_reg);
-                        if (right32c != NULL)
-                        {
-                            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", right32c, arg_reg32);
-                            inst_list = add_inst(inst_list, buffer);
-                        }
-                        inst_list = codegen_vect_reg(inst_list, 0);
-                        inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_char_to_string");
-                        snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", right);
-                        inst_list = add_inst(inst_list, buffer);
-                        free_arg_regs();
-                        if (lhs_save != NULL)
-                        {
-                            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-                                lhs_save->offset, left);
-                            inst_list = add_inst(inst_list, buffer);
-                        }
+                        inst_list = promote_char_reg_operand_to_string(inst_list, right, right_reg);
+                        inst_list = restore_spilled_reg64_operand(inst_list, left, lhs_save);
                     }
 
                     const char *arg0 = current_arg_reg64(0);
