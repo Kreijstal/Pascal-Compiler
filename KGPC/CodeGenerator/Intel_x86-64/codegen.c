@@ -2063,6 +2063,156 @@ static void codegen_emit_integer_const_equivs(CodeGenContext *ctx, SymTab_t *sym
     DestroyList(emitted_symbols);
 }
 
+static void codegen_emit_local_const_equivs(CodeGenContext *ctx, SymTab_t *symtab)
+{
+    assert(ctx != NULL);
+    assert(symtab != NULL);
+
+    if (symtab->stack_head == NULL || symtab->stack_head->cur == NULL)
+        return;
+
+    ListNode_t *emitted_symbols = NULL;
+    codegen_emit_integer_const_equivs_from_table(ctx, (HashTable_t *)symtab->stack_head->cur,
+        &emitted_symbols);
+
+    ListNode_t *cur = emitted_symbols;
+    while (cur != NULL)
+    {
+        free(cur->cur);
+        cur = cur->next;
+    }
+    DestroyList(emitted_symbols);
+}
+
+static int codegen_eval_const_expr(struct Expression *expr, long long *out_value)
+{
+    if (expr == NULL || out_value == NULL)
+        return 0;
+
+    switch (expr->type)
+    {
+        case EXPR_INUM:
+            *out_value = expr->expr_data.i_num;
+            return 1;
+        case EXPR_BOOL:
+            *out_value = expr->expr_data.bool_value ? 1 : 0;
+            return 1;
+        case EXPR_CHAR_CODE:
+            *out_value = (unsigned char)(expr->expr_data.char_code & 0xFF);
+            return 1;
+        case EXPR_SIGN_TERM:
+            if (expr->expr_data.sign_term != NULL)
+            {
+                long long inner;
+                if (codegen_eval_const_expr(expr->expr_data.sign_term, &inner))
+                {
+                    *out_value = -inner;
+                    return 1;
+                }
+            }
+            return 0;
+        case EXPR_ADDOP:
+        {
+            long long left, right;
+            if (codegen_eval_const_expr(expr->expr_data.addop_data.left_expr, &left) &&
+                codegen_eval_const_expr(expr->expr_data.addop_data.right_term, &right))
+            {
+                switch (expr->expr_data.addop_data.addop_type)
+                {
+                    case PLUS:
+                        *out_value = left + right;
+                        return 1;
+                    case MINUS:
+                        *out_value = left - right;
+                        return 1;
+                    case OR:
+                        *out_value = left | right;
+                        return 1;
+                    case XOR:
+                        *out_value = left ^ right;
+                        return 1;
+                }
+            }
+            return 0;
+        }
+        case EXPR_MULOP:
+        {
+            long long left, right;
+            if (codegen_eval_const_expr(expr->expr_data.mulop_data.left_term, &left) &&
+                codegen_eval_const_expr(expr->expr_data.mulop_data.right_factor, &right))
+            {
+                switch (expr->expr_data.mulop_data.mulop_type)
+                {
+                    case STAR:
+                        *out_value = left * right;
+                        return 1;
+                    case SLASH:
+                        if (right != 0)
+                        {
+                            *out_value = left / right;
+                            return 1;
+                        }
+                        return 0;
+                    case DIV:
+                        if (right != 0)
+                        {
+                            *out_value = left / right;
+                            return 1;
+                        }
+                        return 0;
+                    case MOD:
+                        if (right != 0)
+                        {
+                            *out_value = left % right;
+                            return 1;
+                        }
+                        return 0;
+                    case AND:
+                        *out_value = left & right;
+                        return 1;
+                    case SHL:
+                        *out_value = left << right;
+                        return 1;
+                    case SHR:
+                        *out_value = (unsigned long long)left >> right;
+                        return 1;
+                }
+            }
+            return 0;
+        }
+        default:
+            return 0;
+    }
+}
+
+static void codegen_emit_const_decl_equivs_from_list(CodeGenContext *ctx, ListNode_t *const_decls)
+{
+    assert(ctx != NULL);
+
+    if (const_decls == NULL)
+        return;
+
+    for (ListNode_t *cur = const_decls; cur != NULL; cur = cur->next)
+    {
+        Tree_t *decl = (Tree_t *)cur->cur;
+        if (decl == NULL || decl->type != TREE_CONST_DECL)
+            continue;
+
+        const char *id = decl->tree_data.const_decl_data.id;
+        struct Expression *value = decl->tree_data.const_decl_data.value;
+
+        if (id == NULL || value == NULL)
+            continue;
+
+        if (!codegen_is_valid_asm_symbol_name(id))
+            continue;
+
+        long long const_value = 0;
+        if (codegen_eval_const_expr(value, &const_value))
+            fprintf(ctx->output_file, ".equ %s, %lld\n", id, const_value);
+    }
+}
+
 void codegen_rodata(CodeGenContext *ctx, SymTab_t *symtab)
 {
     #ifdef DEBUG_CODEGEN
@@ -3517,6 +3667,8 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
         }
     }
     
+    codegen_emit_local_const_equivs(ctx, symtab);
+    codegen_emit_const_decl_equivs_from_list(ctx, proc->const_declarations);
     codegen_function_header_ex(sub_id, ctx, proc->nostackframe);
     if (!proc->nostackframe)
         codegen_stack_space(ctx);
@@ -4145,6 +4297,8 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
         inst_list = add_inst(inst_list, buffer);
     }
     
+    codegen_emit_local_const_equivs(ctx, symtab);
+    codegen_emit_const_decl_equivs_from_list(ctx, func->const_declarations);
     codegen_function_header_ex(sub_id, ctx, func->nostackframe);
     if (!func->nostackframe)
         codegen_stack_space(ctx);
