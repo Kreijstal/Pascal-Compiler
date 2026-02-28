@@ -797,6 +797,19 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
     set_preprocessed_context(buffer, length, path);
     semcheck_register_source_buffer(path, buffer, length);
 
+    /* Debug: dump full preprocessed buffer */
+    if (getenv("KGPC_DUMP_PREPROC")) {
+        char dumppath[256];
+        const char *base = strrchr(path, '/');
+        base = base ? base + 1 : path;
+        snprintf(dumppath, sizeof(dumppath), "/tmp/preproc_%s.txt", base);
+        FILE *dumpf = fopen(dumppath, "w");
+        if (dumpf) {
+            fwrite(buffer, 1, length, dumpf);
+            fclose(dumpf);
+        }
+    }
+
     /* Detect {$MODE objfpc} in the preprocessed source.
      * If found, set flag so ObjPas unit can be auto-imported.
      * Note: {$H+/-} detection moved to before preprocessing since that directive

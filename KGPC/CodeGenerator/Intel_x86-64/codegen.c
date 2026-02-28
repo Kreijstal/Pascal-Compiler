@@ -1975,6 +1975,10 @@ void codegen_rodata(CodeGenContext *ctx)
     fprintf(ctx->output_file, ".format_str_n:\n");
     fprintf(ctx->output_file, ".string \"\\n\"\n");
     fprintf(ctx->output_file, ".text\n");
+    /* FPC RTL x86_64 inline assembly constants */
+    fprintf(ctx->output_file, ".equ ErmsThreshold, 1536\n");
+    fprintf(ctx->output_file, ".equ NtThreshold, 262144\n");
+    fprintf(ctx->output_file, ".equ PrefetchDistance, 512\n");
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif

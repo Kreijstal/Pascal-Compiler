@@ -995,7 +995,11 @@ ListNode_t *codegen_condition_expr(struct Expression *expr, ListNode_t *inst_lis
     CodeGenContext *ctx, int *relop_type)
 {
     if (expr == NULL)
+    {
+        if (relop_type != NULL)
+            *relop_type = NE;
         return inst_list;
+    }
 
     if (expr->type == EXPR_RELOP)
         return codegen_simple_relop(expr, inst_list, ctx, relop_type);
@@ -1003,7 +1007,14 @@ ListNode_t *codegen_condition_expr(struct Expression *expr, ListNode_t *inst_lis
     Register_t *value_reg = NULL;
     inst_list = codegen_evaluate_expr(expr, inst_list, ctx, &value_reg);
     if (value_reg == NULL)
+    {
+        if (getenv("KGPC_DEBUG_CG_ERR"))
+            fprintf(stderr, "[codegen-debug] condition_expr: value_reg NULL for expr type=%d line=%d\n",
+                (int)expr->type, expr->line_num);
+        if (relop_type != NULL)
+            *relop_type = NE;
         return inst_list;
+    }
 
     char buffer[64];
     snprintf(buffer, sizeof(buffer), "\ttestl\t%s, %s\n", value_reg->bit_32, value_reg->bit_32);
@@ -4001,8 +4012,134 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
             inst_list = codegen_continue_stmt(stmt, inst_list, ctx, symtab);
             break;
         case STMT_ASM_BLOCK:
-            inst_list = add_inst(inst_list, stmt->stmt_data.asm_block_data.code);
+        {
+            const char *src = stmt->stmt_data.asm_block_data.code;
+            if (src != NULL)
+            {
+                static int asm_block_counter = 0;
+                int block_id = asm_block_counter++;
+                size_t len = strlen(src);
+                /* Allocate generously for label suffix expansion */
+                size_t alloc_size = len * 2 + 4096;
+                char *cleaned = malloc(alloc_size);
+                if (cleaned != NULL)
+                {
+                    size_t j = 0;
+                    for (size_t i = 0; i < len && j < alloc_size - 64; i++)
+                    {
+                        /* Strip Pascal-style {...} comments */
+                        if (src[i] == '{')
+                        {
+                            while (i < len && src[i] != '}')
+                                i++;
+                            continue;
+                        }
+                        /* Strip C++ style // comments */
+                        if (src[i] == '/' && i + 1 < len && src[i + 1] == '/')
+                        {
+                            while (i < len && src[i] != '\n')
+                                i++;
+                            if (i < len)
+                                cleaned[j++] = '\n';
+                            continue;
+                        }
+                        /* Fix jmpq -> jmp for direct jumps (jmpq only valid for indirect) */
+                        if (i + 4 < len && strncmp(src + i, "jmpq", 4) == 0 &&
+                            (i == 0 || isspace((unsigned char)src[i-1])) &&
+                            isspace((unsigned char)src[i + 4]))
+                        {
+                            cleaned[j++] = 'j';
+                            cleaned[j++] = 'm';
+                            cleaned[j++] = 'p';
+                            i += 3; /* skip "jmpq", loop will advance past 'q' */
+                            continue;
+                        }
+                        /* Make local labels unique by appending block_id suffix.
+                         * Match ".L" at start of line (label definition) or after whitespace/comma (reference) */
+                        if (src[i] == '.' && i + 1 < len && src[i + 1] == 'L' &&
+                            (i == 0 || src[i-1] == '\n' || isspace((unsigned char)src[i-1]) ||
+                             src[i-1] == ',' || src[i-1] == '$'))
+                        {
+                            /* Copy the label name */
+                            size_t label_start = j;
+                            while (i < len && j < alloc_size - 32 &&
+                                   (isalnum((unsigned char)src[i]) || src[i] == '.' || src[i] == '_' || src[i] == 'L'))
+                            {
+                                cleaned[j++] = src[i++];
+                            }
+                            /* Append unique suffix */
+                            j += snprintf(cleaned + j, 16, "_%d", block_id);
+                            i--; /* will be incremented by loop */
+                            continue;
+                        }
+                        cleaned[j++] = src[i];
+                    }
+                    cleaned[j] = '\0';
+                    /* Replace bare "ret" instructions with "leave\n\tret"
+                     * to restore the frame pointer that KGPC's function
+                     * prologue set up.  FPC's optimised inline assembly
+                     * assumes naked functions; we need the epilogue. */
+                    {
+                        size_t clen = j;
+                        /* Worst-case: every "ret" becomes "leave\n\tret" (+5 chars each) */
+                        size_t patched_alloc = clen * 2 + 64;
+                        char *patched = malloc(patched_alloc);
+                        if (patched != NULL)
+                        {
+                            size_t pi = 0;
+                            for (size_t ci = 0; ci < clen && pi < patched_alloc - 32; ci++)
+                            {
+                                /* Match standalone "ret" (preceded by newline/space or start, followed by newline/space/end) */
+                                if (cleaned[ci] == 'r' && ci + 2 < clen &&
+                                    cleaned[ci + 1] == 'e' && cleaned[ci + 2] == 't' &&
+                                    (ci == 0 || cleaned[ci - 1] == '\n' || cleaned[ci - 1] == '\t' || cleaned[ci - 1] == ' ') &&
+                                    (ci + 3 >= clen || cleaned[ci + 3] == '\n' || cleaned[ci + 3] == ' ' || cleaned[ci + 3] == '\t'))
+                                {
+                                    /* Check it's not "leave\n\tret" already */
+                                    int already_has_leave = 0;
+                                    if (pi >= 6)
+                                    {
+                                        /* Look back for "leave" followed by whitespace */
+                                        size_t back = pi - 1;
+                                        while (back > 0 && (patched[back] == ' ' || patched[back] == '\t' || patched[back] == '\n'))
+                                            back--;
+                                        if (back >= 4 && strncmp(patched + back - 4, "leave", 5) == 0)
+                                            already_has_leave = 1;
+                                    }
+                                    if (!already_has_leave)
+                                    {
+                                        memcpy(patched + pi, "leave\n\tret", 10);
+                                        pi += 10;
+                                    }
+                                    else
+                                    {
+                                        patched[pi++] = 'r';
+                                        patched[pi++] = 'e';
+                                        patched[pi++] = 't';
+                                    }
+                                    ci += 2; /* skip "ret" */
+                                    continue;
+                                }
+                                patched[pi++] = cleaned[ci];
+                            }
+                            patched[pi] = '\0';
+                            inst_list = add_inst(inst_list, patched);
+                            free(patched);
+                        }
+                        else
+                        {
+                            inst_list = add_inst(inst_list, cleaned);
+                        }
+                    }
+                    free(cleaned);
+                }
+                else
+                {
+                    inst_list = add_inst(inst_list, src);
+                }
+            }
             break;
+        }
         case STMT_EXIT:
         {
             inst_list = add_inst(inst_list, "\t# EXIT statement\n");
@@ -5555,7 +5692,20 @@ static ListNode_t *codegen_builtin_incdec(struct Statement *stmt, ListNode_t *in
     if (target_is_pointer)
     {
         if (codegen_sizeof_pointer_target(ctx, target_expr, &pointer_step) != 0 || pointer_step <= 0)
+        {
+            if (getenv("KGPC_DEBUG_CG_ERR"))
+            {
+                fprintf(stderr, "[codegen-debug] Inc/Dec pointer target size fail: target type=%d line=%d",
+                    (int)target_expr->type, target_expr->line_num);
+                if (target_expr->type == EXPR_VAR_ID)
+                    fprintf(stderr, " id=%s", target_expr->expr_data.id ? target_expr->expr_data.id : "<null>");
+                fprintf(stderr, " pointer_subtype=%d pointer_subtype_id=%s func=%s\n",
+                    target_expr->pointer_subtype,
+                    target_expr->pointer_subtype_id ? target_expr->pointer_subtype_id : "<null>",
+                    ctx->current_subprogram_id ? ctx->current_subprogram_id : "<unknown>");
+            }
             pointer_step = 1;
+        }
     }
 
     if (target_is_pointer && pointer_step != 1)
@@ -6921,8 +7071,6 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
     assign_expr = stmt->stmt_data.var_assign_data.expr;
 
     if (var_expr != NULL && var_expr->type == EXPR_TYPECAST &&
-        var_expr->expr_data.typecast_data.target_type_id != NULL &&
-        pascal_identifier_equals(var_expr->expr_data.typecast_data.target_type_id, "unaligned") &&
         var_expr->expr_data.typecast_data.expr != NULL)
     {
         var_expr = var_expr->expr_data.typecast_data.expr;
@@ -7843,6 +7991,17 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
 
         if (var_type_2 == STRING_TYPE)
         {
+            /* If assigning a char to a string field, promote it first */
+            int assign_type_2 = assign_expr != NULL ? expr_get_type_tag(assign_expr) : -1;
+            if (assign_type_2 == CHAR_TYPE)
+            {
+                const char *arg_reg32 = codegen_target_is_windows() ? "%ecx" : "%edi";
+                snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", value_reg->bit_32, arg_reg32);
+                inst_list = add_inst(inst_list, buffer);
+                inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_char_to_string");
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", value_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+            }
             inst_list = codegen_call_string_assign(inst_list, ctx, addr_reload, value_reg);
         }
         else if (use_qword)
@@ -7936,6 +8095,14 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
         if (addr_reg == NULL)
         {
+            if (getenv("KGPC_DEBUG_CG_ERR"))
+            {
+                fprintf(stderr, "[codegen-debug] pointer-assign reg fail: pointer_expr type=%d line=%d",
+                    (int)pointer_expr->type, pointer_expr->line_num);
+                if (pointer_expr->type == EXPR_VAR_ID)
+                    fprintf(stderr, " id=%s", pointer_expr->expr_data.id ? pointer_expr->expr_data.id : "<null>");
+                fprintf(stderr, "\n");
+            }
             free_expr_tree(pointer_tree);
             return codegen_fail_register(ctx, inst_list, NULL,
                 "ERROR: Unable to allocate register for pointer assignment address.");
@@ -8583,7 +8750,7 @@ ListNode_t *codegen_if_then(struct Statement *stmt, ListNode_t *inst_list, CodeG
     assert(ctx != NULL);
     assert(symtab != NULL);
 
-    int relop_type, inverse;
+    int relop_type = NE, inverse;
     struct Expression *expr;
     struct Statement *if_stmt, *else_stmt;
     char label1[18], label2[18], buffer[50];
@@ -8632,7 +8799,7 @@ ListNode_t *codegen_while(struct Statement *stmt, ListNode_t *inst_list, CodeGen
     assert(ctx != NULL);
     assert(symtab != NULL);
 
-    int relop_type;
+    int relop_type = NE;
     struct Expression *expr;
     struct Statement *while_stmt;
     char cond_label[18], body_label[18], exit_label[18], incr_label[18], buffer[256];
@@ -8679,7 +8846,7 @@ ListNode_t *codegen_repeat(struct Statement *stmt, ListNode_t *inst_list, CodeGe
     assert(symtab != NULL);
 
     char body_label[18], exit_label[18], buffer[50];
-    int relop_type;
+    int relop_type = NE;
     ListNode_t *body_list = stmt->stmt_data.repeat_data.body_list;
 
     gen_label(body_label, 18, ctx);

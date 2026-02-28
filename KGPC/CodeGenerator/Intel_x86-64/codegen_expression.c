@@ -8,6 +8,7 @@
 #include <assert.h>
 #include <string.h>
 #include <limits.h>
+#include <execinfo.h>
 
 #include "codegen.h"
 #include "codegen_expression.h"
@@ -1478,6 +1479,7 @@ static int codegen_format_arg_kind_for_expr(struct Expression *expr)
     {
         case INT_TYPE:
         case LONGINT_TYPE:
+        case ENUM_TYPE:
             return KGPC_TVAR_KIND_INT;
         case BOOL:
             return KGPC_TVAR_KIND_BOOL;
@@ -1486,6 +1488,7 @@ static int codegen_format_arg_kind_for_expr(struct Expression *expr)
         case REAL_TYPE:
             return KGPC_TVAR_KIND_REAL;
         case STRING_TYPE:
+        case SHORTSTRING_TYPE:
             return KGPC_TVAR_KIND_STRING;
         case POINTER_TYPE:
             return KGPC_TVAR_KIND_POINTER;
@@ -2686,6 +2689,14 @@ static int codegen_sizeof_type(CodeGenContext *ctx, int type_tag, const char *ty
         return 1;
     }
 
+    if (getenv("KGPC_DEBUG_CG_ERR"))
+    {
+        fprintf(stderr, "[codegen-debug] size-fail: type_tag=%d type_id=%s record_type=%p\n", type_tag, type_id ? type_id : "<null>", (void*)record_type);
+        /* Print stack trace */
+        void *bt[20];
+        int n = backtrace(bt, 20);
+        backtrace_symbols_fd(bt, n, 2);
+    }
     codegen_report_error(ctx, "ERROR: Unable to determine size for expression type %d.", type_tag);
     return 1;
 }
@@ -3134,6 +3145,11 @@ int codegen_sizeof_pointer_target(CodeGenContext *ctx, struct Expression *pointe
         codegen_report_error(ctx, "ERROR: Unable to determine record size for pointer target.");
         return 1;
     }
+
+    /* For untyped pointers (Pointer type with no target info), return failure
+     * without reporting an error — the caller handles this by defaulting to step=1 */
+    if (subtype == UNKNOWN_TYPE && type_id == NULL && record_type == NULL)
+        return 1;
 
     return codegen_sizeof_type(ctx, subtype, type_id, record_type, size_out, 0);
 }
@@ -6039,10 +6055,43 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
             return inst_list;
         }
 
+        /* Shortstring promotion calls kgpc_shortstring_to_string which clobbers
+         * caller-saved registers (r10, r11).  Spill the OTHER operand before each
+         * promotion and restore after. */
         if (left_is_shortstring)
+        {
+            StackNode_t *rhs_spill = add_l_t("relop_shortstr_rhs_spill");
+            if (rhs_spill != NULL)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                    right_reg->bit_64, rhs_spill->offset);
+                inst_list = add_inst(inst_list, buffer);
+            }
             inst_list = codegen_promote_shortstring_reg(inst_list, ctx, left_reg);
+            if (rhs_spill != NULL)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                    rhs_spill->offset, right_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+        }
         if (right_is_shortstring)
+        {
+            StackNode_t *lhs_spill = add_l_t("relop_shortstr_lhs_spill");
+            if (lhs_spill != NULL)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                    left_reg->bit_64, lhs_spill->offset);
+                inst_list = add_inst(inst_list, buffer);
+            }
             inst_list = codegen_promote_shortstring_reg(inst_list, ctx, right_reg);
+            if (lhs_spill != NULL)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                    lhs_spill->offset, left_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+        }
 
         /* Promote char-typed operands (EXPR_CHAR_CODE or single-char EXPR_STRING)
          * that hold raw integer values to string pointers before calling
