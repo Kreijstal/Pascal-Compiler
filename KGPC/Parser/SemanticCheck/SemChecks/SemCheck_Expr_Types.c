@@ -2868,20 +2868,12 @@ int semcheck_recordaccess(int *type_return,
                 free(mangled_const);
         }
 
-        semcheck_error_with_context("Error on line %d, record field %s not found.\n", expr->line_num, field_id);
-        if (getenv("KGPC_DEBUG_FIELD") != NULL)
-        {
-            struct Expression *rec_expr = expr->expr_data.record_access_data.record_expr;
-            const char *rec_type_name = (record_info && record_info->type_id) ? record_info->type_id : "<null>";
-            int rec_expr_type = rec_expr ? rec_expr->type : -1;
-            fprintf(stderr,
-                "[SemCheck] field '%s' not found on record '%s' (expr_type=%d, record_type=%d) at line %d\n",
-                field_id ? field_id : "<null>",
-                rec_type_name,
-                rec_expr_type,
-                record_type,
-                expr->line_num);
-        }
+        if (record_info != NULL && record_info->type_id != NULL)
+            semcheck_error_with_context("Error on line %d, record field %s not found on type '%s'.\n",
+                expr->line_num, field_id, record_info->type_id);
+        else
+            semcheck_error_with_context("Error on line %d, record field %s not found.\n",
+                expr->line_num, field_id);
         *type_return = UNKNOWN_TYPE;
         return error_count + 1;
     }

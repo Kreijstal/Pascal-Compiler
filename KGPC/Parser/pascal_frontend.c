@@ -771,6 +771,16 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
                                                          &preprocess_error);
     pascal_preprocessor_free(preprocessor);
 
+    /* Temp debug: dump preprocessed output for system.pp */
+    if (getenv("KGPC_DUMP_PP") != NULL && path != NULL && strstr(path, "system.pp") != NULL) {
+        FILE *dump = fopen("/tmp/system_pp_preprocessed.txt", "w");
+        if (dump != NULL) {
+            fwrite(preprocessed_buffer, 1, preprocessed_length, dump);
+            fclose(dump);
+            fprintf(stderr, "[PP] Dumped preprocessed system.pp to /tmp/system_pp_preprocessed.txt (%zu bytes)\n", preprocessed_length);
+        }
+    }
+
     if (preprocessed_buffer == NULL)
     {
         report_preprocessor_error(error_out, path, preprocess_error);

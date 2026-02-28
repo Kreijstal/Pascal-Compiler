@@ -4095,62 +4095,7 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                         cleaned[j++] = src[i];
                     }
                     cleaned[j] = '\0';
-                    /* Replace bare "ret" instructions with "leave\n\tret"
-                     * to restore the frame pointer that KGPC's function
-                     * prologue set up.  FPC's optimised inline assembly
-                     * assumes naked functions; we need the epilogue. */
-                    {
-                        size_t clen = j;
-                        /* Worst-case: every "ret" becomes "leave\n\tret" (+5 chars each) */
-                        size_t patched_alloc = clen * 2 + 64;
-                        char *patched = malloc(patched_alloc);
-                        if (patched != NULL)
-                        {
-                            size_t pi = 0;
-                            for (size_t ci = 0; ci < clen && pi < patched_alloc - 32; ci++)
-                            {
-                                /* Match standalone "ret" (preceded by newline/space or start, followed by newline/space/end) */
-                                if (cleaned[ci] == 'r' && ci + 2 < clen &&
-                                    cleaned[ci + 1] == 'e' && cleaned[ci + 2] == 't' &&
-                                    (ci == 0 || cleaned[ci - 1] == '\n' || cleaned[ci - 1] == '\t' || cleaned[ci - 1] == ' ') &&
-                                    (ci + 3 >= clen || cleaned[ci + 3] == '\n' || cleaned[ci + 3] == ' ' || cleaned[ci + 3] == '\t'))
-                                {
-                                    /* Check it's not "leave\n\tret" already */
-                                    int already_has_leave = 0;
-                                    if (pi >= 6)
-                                    {
-                                        /* Look back for "leave" followed by whitespace */
-                                        size_t back = pi - 1;
-                                        while (back > 0 && (patched[back] == ' ' || patched[back] == '\t' || patched[back] == '\n'))
-                                            back--;
-                                        if (back >= 4 && strncmp(patched + back - 4, "leave", 5) == 0)
-                                            already_has_leave = 1;
-                                    }
-                                    if (!already_has_leave)
-                                    {
-                                        memcpy(patched + pi, "leave\n\tret", 10);
-                                        pi += 10;
-                                    }
-                                    else
-                                    {
-                                        patched[pi++] = 'r';
-                                        patched[pi++] = 'e';
-                                        patched[pi++] = 't';
-                                    }
-                                    ci += 2; /* skip "ret" */
-                                    continue;
-                                }
-                                patched[pi++] = cleaned[ci];
-                            }
-                            patched[pi] = '\0';
-                            inst_list = add_inst(inst_list, patched);
-                            free(patched);
-                        }
-                        else
-                        {
-                            inst_list = add_inst(inst_list, cleaned);
-                        }
-                    }
+                    inst_list = add_inst(inst_list, cleaned);
                     free(cleaned);
                 }
                 else

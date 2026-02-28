@@ -13817,6 +13817,19 @@ static struct Statement *convert_block(ast_t *block_node) {
     return mk_compoundstatement(block_node->line, list);
 }
 
+/* Recursively search an AST subtree for a keyword (case-insensitive).
+ * Returns 1 if found, 0 otherwise. Limits depth to avoid runaway recursion. */
+static int ast_has_keyword(ast_t *node, const char *keyword, int max_depth) {
+    if (node == NULL || max_depth <= 0)
+        return 0;
+    if (node->sym != NULL && node->sym->name != NULL &&
+        strcasecmp(node->sym->name, keyword) == 0)
+        return 1;
+    if (ast_has_keyword(node->child, keyword, max_depth - 1))
+        return 1;
+    return ast_has_keyword(node->next, keyword, max_depth);
+}
+
 static Tree_t *convert_method_impl(ast_t *method_node) {
     if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
         fprintf(stderr, "[KGPC] convert_method_impl entry (method_node=%p)\n", (void*)method_node);
@@ -14181,9 +14194,10 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     list_builder_init(&label_builder);
     ListNode_t *nested_subs = NULL;
     struct Statement *body = NULL;
+    int is_nostackframe = 0;
     ast_t *type_section_ast = NULL;  /* Track local type section for enum resolution */
     ListNode_t *type_decls = NULL;
-    
+
     /* Return type information for methods that are functions (like class operators) */
     char *return_type_id = NULL;
     int return_type = UNKNOWN_TYPE;
@@ -14353,6 +14367,23 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
             body = mk_compoundstatement(node->line, list_builder_finish(&stmts_builder));
             break;
         }
+        case PASCAL_T_IDENTIFIER: {
+            char *dir_sym = dup_symbol(node);
+            if (dir_sym != NULL) {
+                if (strcasecmp(dir_sym, "nostackframe") == 0)
+                    is_nostackframe = 1;
+                free(dir_sym);
+            }
+            if (node->child != NULL && node->child->typ == PASCAL_T_IDENTIFIER) {
+                char *dir_child = dup_symbol(node->child);
+                if (dir_child != NULL) {
+                    if (strcasecmp(dir_child, "nostackframe") == 0)
+                        is_nostackframe = 1;
+                    free(dir_child);
+                }
+            }
+            break;
+        }
         default:
             break;
         }
@@ -14387,6 +14418,10 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
                            label_decls, type_decls, list_builder_finish(&var_builder),
                            nested_subs, body, 0, 0);
     }
+    if (!is_nostackframe)
+        is_nostackframe = ast_has_keyword(method_node, "nostackframe", 8);
+    if (tree != NULL && is_nostackframe)
+        tree->tree_data.subprogram_data.nostackframe = 1;
     if (tree != NULL) {
         if (has_return_type)
             tree->tree_data.subprogram_data.return_type_ref =
@@ -14566,6 +14601,7 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
     ListNode_t *nested_subs = NULL;
     struct Statement *body = NULL;
     int is_external = 0;
+    int is_nostackframe = 0;
     char *external_alias = NULL;
     ast_t *type_section_ast = NULL;  /* Track local type section for enum resolution */
     ListNode_t *type_decls = NULL;
@@ -14616,11 +14652,20 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
             break;
         }
         case PASCAL_T_IDENTIFIER: {
+            char *self_sym = dup_symbol(cur);
+            if (self_sym != NULL) {
+                if (strcasecmp(self_sym, "nostackframe") == 0) {
+                    is_nostackframe = 1;
+                }
+                free(self_sym);
+            }
             if (cur->child != NULL && cur->child->typ == PASCAL_T_IDENTIFIER) {
                 char *directive = dup_symbol(cur->child);
                 if (directive != NULL) {
-                    if (is_external_directive(directive)) {
+                    if (is_external_directive(directive))
                         is_external = 1;
+                    else if (strcasecmp(directive, "nostackframe") == 0) {
+                        is_nostackframe = 1;
                     }
                 }
                 free(directive);
@@ -14644,6 +14689,10 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
     Tree_t *tree = mk_procedure(proc_node->line, id, params, const_decls,
                                 label_decls, type_decls, list_builder_finish(&var_decls_builder),
                                 nested_subs, body, is_external, 0);
+    if (!is_nostackframe)
+        is_nostackframe = ast_has_keyword(proc_node, "nostackframe", 8);
+    if (tree != NULL && is_nostackframe)
+        tree->tree_data.subprogram_data.nostackframe = 1;
     if (tree != NULL && external_alias != NULL)
         tree->tree_data.subprogram_data.cname_override = external_alias;
     else if (external_alias != NULL)
@@ -14850,6 +14899,7 @@ static Tree_t *convert_function(ast_t *func_node) {
     ListNode_t *nested_subs = NULL;
     struct Statement *body = NULL;
     int is_external = 0;
+    int is_nostackframe = 0;
     char *external_alias = NULL;
     ast_t *type_section_ast = NULL;  /* Track local type section for enum resolution */
     ListNode_t *type_decls = NULL;
@@ -14903,18 +14953,20 @@ static Tree_t *convert_function(ast_t *func_node) {
         case PASCAL_T_IDENTIFIER: {
             char *self_sym = dup_symbol(cur);
             if (self_sym != NULL) {
-                if (is_external_directive(self_sym)) {
+                if (is_external_directive(self_sym))
                     is_external = 1;
-                }
+                else if (strcasecmp(self_sym, "nostackframe") == 0)
+                    is_nostackframe = 1;
                 free(self_sym);
             }
 
             if (cur->child != NULL && cur->child->typ == PASCAL_T_IDENTIFIER) {
                 char *directive = dup_symbol(cur->child);
                 if (directive != NULL) {
-                    if (is_external_directive(directive)) {
+                    if (is_external_directive(directive))
                         is_external = 1;
-                    }
+                    else if (strcasecmp(directive, "nostackframe") == 0)
+                        is_nostackframe = 1;
                 }
                 free(directive);
             }
@@ -14937,6 +14989,10 @@ static Tree_t *convert_function(ast_t *func_node) {
     Tree_t *tree = mk_function(func_node->line, id, params, const_decls,
                                 label_decls, type_decls, list_builder_finish(&var_decls_builder), nested_subs, body,
                                 return_type, return_type_id, inline_return_type, is_external, 0);
+    if (!is_nostackframe)
+        is_nostackframe = ast_has_keyword(func_node, "nostackframe", 8);
+    if (tree != NULL && is_nostackframe)
+        tree->tree_data.subprogram_data.nostackframe = 1;
     if (tree != NULL)
         tree->tree_data.subprogram_data.return_type_ref =
             return_type_ref != NULL ? return_type_ref : type_ref_from_single_name(return_type_id);
