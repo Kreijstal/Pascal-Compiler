@@ -1366,13 +1366,9 @@ void semantic_error(int line_num, int col_num, const char *format, ...)
     directive_file[0] = '\0';
     if (effective_source_index >= 0)
     {
-        if (getenv("KGPC_DEBUG_ERROR_CONTEXT"))
-            fprintf(stderr, "[DEBUG] semantic_error: source_index=%d buf_count=%d\n", effective_source_index, g_source_buffer_count);
         int found_in_registry = 0;
         for (int i = 0; i < g_source_buffer_count; i++)
         {
-            if (getenv("KGPC_DEBUG_ERROR_CONTEXT"))
-                fprintf(stderr, "[DEBUG]   checking buffer %d: len=%zu path=%s\n", i, g_source_buffer_registry[i].length, g_source_buffer_registry[i].path ? g_source_buffer_registry[i].path : "NULL");
             if (effective_source_index < (int)g_source_buffer_registry[i].length)
             {
                 char temp_file[MAX_DIRECTIVE_FILENAME_LEN];
@@ -1382,16 +1378,12 @@ void semantic_error(int line_num, int col_num, const char *format, ...)
                     g_source_buffer_registry[i].length,
                     effective_source_index,
                     temp_file, sizeof(temp_file));
-                if (getenv("KGPC_DEBUG_ERROR_CONTEXT"))
-                    fprintf(stderr, "[DEBUG]     computed_line=%d temp_file='%s'\n", computed_line, temp_file);
                 if (computed_line > 0 && temp_file[0] != '\0')
                 {
                     effective_line = computed_line;
                     strncpy(directive_file, temp_file, sizeof(directive_file) - 1);
                     directive_file[sizeof(directive_file) - 1] = '\0';
                     found_in_registry = 1;
-                    if (getenv("KGPC_DEBUG_ERROR_CONTEXT"))
-                        fprintf(stderr, "[DEBUG]     SET effective_line=%d directive_file='%s'\n", effective_line, directive_file);
                     break;
                 }
             }
@@ -1507,17 +1499,43 @@ void semcheck_error_with_context_at(int line_num, int col_num, int source_index,
     directive_file[0] = '\0';
     if (source_index >= 0)
     {
-        const char *context_buf = preprocessed_source;
-        size_t context_buf_len = context_len;
-        if (context_buf == NULL || context_buf_len == 0)
+        int found_in_registry = 0;
+        for (int i = 0; i < g_source_buffer_count; i++)
         {
-            context_buf = g_semcheck_source_buffer;
-            context_buf_len = g_semcheck_source_length;
+            if (source_index < (int)g_source_buffer_registry[i].length)
+            {
+                char temp_file[MAX_DIRECTIVE_FILENAME_LEN];
+                temp_file[0] = '\0';
+                int computed_line = semcheck_line_from_source_offset(
+                    g_source_buffer_registry[i].buffer,
+                    g_source_buffer_registry[i].length,
+                    source_index,
+                    temp_file, sizeof(temp_file));
+                if (computed_line > 0 && temp_file[0] != '\0')
+                {
+                    effective_line = computed_line;
+                    strncpy(directive_file, temp_file, sizeof(directive_file) - 1);
+                    directive_file[sizeof(directive_file) - 1] = '\0';
+                    found_in_registry = 1;
+                    break;
+                }
+            }
         }
-        int computed_line = semcheck_line_from_source_offset(context_buf, context_buf_len, source_index,
-            directive_file, sizeof(directive_file));
-        if (computed_line > 0)
-            effective_line = computed_line;
+        
+        if (!found_in_registry)
+        {
+            const char *context_buf = preprocessed_source;
+            size_t context_buf_len = context_len;
+            if (context_buf == NULL || context_buf_len == 0)
+            {
+                context_buf = g_semcheck_source_buffer;
+                context_buf_len = g_semcheck_source_length;
+            }
+            int computed_line = semcheck_line_from_source_offset(context_buf, context_buf_len, source_index,
+                directive_file, sizeof(directive_file));
+            if (computed_line > 0)
+                effective_line = computed_line;
+        }
         if (directive_file[0] != '\0')
         {
             /* Print "In include_file:" context before the error */
