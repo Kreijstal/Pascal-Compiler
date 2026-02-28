@@ -70,6 +70,7 @@ typedef struct Tree
             struct KgpcType *kgpc_type;
             int defined_in_unit;
             int unit_is_public;
+            char *source_unit_name;
             union
             {
                 struct

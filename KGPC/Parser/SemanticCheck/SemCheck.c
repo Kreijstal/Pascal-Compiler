@@ -2675,6 +2675,7 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symt
     HashNode_t *best = NULL;
     int best_unit_rank = INT_MAX / 2;
     int best_scope_level = INT_MAX / 2;
+    int best_same_unit = 0;
     ListNode_t *cur = matches;
     while (cur != NULL)
     {
@@ -2688,6 +2689,12 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symt
                 unit_rank = node->defined_in_unit ? 1 : 0;
             int scope_level = semcheck_scope_level_for_type_candidate(symtab, node);
 
+            int same_unit = 0;
+            if (!prefer_unit_defined && g_semcheck_current_unit_name != NULL &&
+                node->source_unit_name != NULL &&
+                pascal_identifier_equals(node->source_unit_name, g_semcheck_current_unit_name))
+                same_unit = 1;
+
             int take = 0;
             if (best == NULL)
             {
@@ -2700,8 +2707,13 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symt
                 else if (unit_rank == best_unit_rank && scope_level < best_scope_level)
                     take = 1;
             }
-            else if (scope_level < best_scope_level ||
-                     (scope_level == best_scope_level && unit_rank < best_unit_rank))
+            else if (same_unit > best_same_unit)
+            {
+                take = 1;
+            }
+            else if (same_unit == best_same_unit &&
+                     (scope_level < best_scope_level ||
+                      (scope_level == best_scope_level && unit_rank < best_unit_rank)))
             {
                 take = 1;
             }
@@ -2711,6 +2723,7 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symt
                 best = node;
                 best_unit_rank = unit_rank;
                 best_scope_level = scope_level;
+                best_same_unit = same_unit;
             }
         }
         cur = cur->next;
@@ -2906,6 +2919,11 @@ static inline void mark_hashnode_unit_info(SymTab_t *symtab, HashNode_t *node,
     }
 
     free(qualified_id);
+}
+
+static inline void mark_hashnode_source_unit(HashNode_t *node, const char *unit_name) {
+    if (node == NULL || unit_name == NULL || node->source_unit_name != NULL) return;
+    node->source_unit_name = strdup(unit_name);
 }
 
 static Tree_t *g_semcheck_current_subprogram = NULL;
@@ -5922,6 +5940,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             mark_hashnode_unit_info(symtab, existing,
                                 tree->tree_data.type_decl_data.defined_in_unit,
                                 tree->tree_data.type_decl_data.unit_is_public);
+                            mark_hashnode_source_unit(existing, tree->tree_data.type_decl_data.source_unit_name);
                         }
                         cur = cur->next;
                         continue;
@@ -5974,15 +5993,28 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                 mark_hashnode_unit_info(symtab, existing,
                                     tree->tree_data.type_decl_data.defined_in_unit,
                                     tree->tree_data.type_decl_data.unit_is_public);
+                                mark_hashnode_source_unit(existing, tree->tree_data.type_decl_data.source_unit_name);
                             }
                             cur = cur->next;
                             continue;
                         }
                     }
 
-                    /* Allow local types to shadow imported unit types */
+                    /* Allow local types to shadow imported unit types.
+                     * Also allow record types from the current unit to coexist with
+                     * imported same-name records (e.g. SysUtils.tsiginfo vs System.tsiginfo). */
+                    int current_unit_record_coexist = (
+                        tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD &&
+                        g_semcheck_current_unit_name != NULL &&
+                        existing->source_unit_name != NULL &&
+                        tree->tree_data.type_decl_data.source_unit_name != NULL &&
+                        pascal_identifier_equals(tree->tree_data.type_decl_data.source_unit_name,
+                            g_semcheck_current_unit_name) &&
+                        !pascal_identifier_equals(existing->source_unit_name,
+                            g_semcheck_current_unit_name));
                     if (!(existing->defined_in_unit &&
-                          !tree->tree_data.type_decl_data.defined_in_unit))
+                          !tree->tree_data.type_decl_data.defined_in_unit) &&
+                        !current_unit_record_coexist)
                     {
                         /* Check if this is a forward class declaration being completed.
                          * Forward: "TObject = class;" creates empty class, then full definition follows.
@@ -6080,13 +6112,14 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                 mark_hashnode_unit_info(symtab, existing,
                                     tree->tree_data.type_decl_data.defined_in_unit,
                                     tree->tree_data.type_decl_data.unit_is_public);
+                                mark_hashnode_source_unit(existing, tree->tree_data.type_decl_data.source_unit_name);
                             }
                             cur = cur->next;
                             continue;
                         }
                     }
                 }
-                
+
                 /* Predeclare record types so they can be referenced (e.g., as function returns) */
                 if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD)
                 {
@@ -6223,9 +6256,12 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             HashNode_t *type_node = semcheck_find_type_node_with_unit_flag(symtab,
                                 type_id, tree->tree_data.type_decl_data.defined_in_unit);
                             if (type_node != NULL)
+                            {
                                 mark_hashnode_unit_info(symtab, type_node,
                                     tree->tree_data.type_decl_data.defined_in_unit,
                                     tree->tree_data.type_decl_data.unit_is_public);
+                                mark_hashnode_source_unit(type_node, tree->tree_data.type_decl_data.source_unit_name);
+                            }
                         }
                     }
                 }
@@ -6267,15 +6303,18 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                 HashNode_t *type_node = semcheck_find_type_node_with_unit_flag(symtab,
                                     type_id, tree->tree_data.type_decl_data.defined_in_unit);
                                 if (type_node != NULL)
+                                {
                                     mark_hashnode_unit_info(symtab, type_node,
                                         tree->tree_data.type_decl_data.defined_in_unit,
                                         tree->tree_data.type_decl_data.unit_is_public);
+                                    mark_hashnode_source_unit(type_node, tree->tree_data.type_decl_data.source_unit_name);
+                                }
                             }
                         }
                         cur = cur->next;
                         continue;
                     }
-                    
+
                     /* Handle inline record aliases (e.g., generic specializations) */
                     if (alias->inline_record_type != NULL)
                     {
@@ -6304,9 +6343,12 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                 HashNode_t *type_node = semcheck_find_type_node_with_unit_flag(symtab,
                                     record_name, tree->tree_data.type_decl_data.defined_in_unit);
                                 if (type_node != NULL)
+                                {
                                     mark_hashnode_unit_info(symtab, type_node,
                                         tree->tree_data.type_decl_data.defined_in_unit,
                                         tree->tree_data.type_decl_data.unit_is_public);
+                                    mark_hashnode_source_unit(type_node, tree->tree_data.type_decl_data.source_unit_name);
+                                }
                             }
                         }
 
@@ -6323,9 +6365,12 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             HashNode_t *type_node = semcheck_find_type_node_with_unit_flag(symtab,
                                 type_id, tree->tree_data.type_decl_data.defined_in_unit);
                             if (type_node != NULL)
+                            {
                                 mark_hashnode_unit_info(symtab, type_node,
                                     tree->tree_data.type_decl_data.defined_in_unit,
                                     tree->tree_data.type_decl_data.unit_is_public);
+                                mark_hashnode_source_unit(type_node, tree->tree_data.type_decl_data.source_unit_name);
+                            }
                         }
 
                         cur = cur->next;
@@ -6376,9 +6421,12 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                 HashNode_t *type_node = semcheck_find_type_node_with_unit_flag(symtab,
                                     type_id, tree->tree_data.type_decl_data.defined_in_unit);
                                 if (type_node != NULL)
+                                {
                                     mark_hashnode_unit_info(symtab, type_node,
                                         tree->tree_data.type_decl_data.defined_in_unit,
                                         tree->tree_data.type_decl_data.unit_is_public);
+                                    mark_hashnode_source_unit(type_node, tree->tree_data.type_decl_data.source_unit_name);
+                                }
                             }
                         }
                         cur = cur->next;
@@ -6405,9 +6453,12 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                 HashNode_t *type_node = semcheck_find_type_node_with_unit_flag(symtab,
                                     type_id, tree->tree_data.type_decl_data.defined_in_unit);
                                 if (type_node != NULL)
+                                {
                                     mark_hashnode_unit_info(symtab, type_node,
                                         tree->tree_data.type_decl_data.defined_in_unit,
                                         tree->tree_data.type_decl_data.unit_is_public);
+                                    mark_hashnode_source_unit(type_node, tree->tree_data.type_decl_data.source_unit_name);
+                                }
                             }
                             cur = cur->next;
                             continue;
@@ -6497,9 +6548,12 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                 HashNode_t *type_node = semcheck_find_type_node_with_unit_flag(symtab,
                                     type_id, tree->tree_data.type_decl_data.defined_in_unit);
                                 if (type_node != NULL)
+                                {
                                     mark_hashnode_unit_info(symtab, type_node,
                                         tree->tree_data.type_decl_data.defined_in_unit,
                                         tree->tree_data.type_decl_data.unit_is_public);
+                                    mark_hashnode_source_unit(type_node, tree->tree_data.type_decl_data.source_unit_name);
+                                }
                             }
                         }
                         cur = cur->next;
@@ -6716,9 +6770,12 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             HashNode_t *type_node = semcheck_find_type_node_with_unit_flag(symtab,
                                 type_id, tree->tree_data.type_decl_data.defined_in_unit);
                             if (type_node != NULL)
+                            {
                                 mark_hashnode_unit_info(symtab, type_node,
                                     tree->tree_data.type_decl_data.defined_in_unit,
                                     tree->tree_data.type_decl_data.unit_is_public);
+                                mark_hashnode_source_unit(type_node, tree->tree_data.type_decl_data.source_unit_name);
+                            }
                         }
                     }
                     else if (getenv("KGPC_DEBUG_PREDECLARE") != NULL)
@@ -8498,20 +8555,8 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                     }
                     if (pointee_node != NULL && pointee_node->type != NULL)
                     {
-                        /* Snapshot the record type so that later in-place replacement
-                         * of the symbol table's record_info (for unit-private shadowing)
-                         * does not corrupt this pointer's target. */
-                        KgpcType *points_to_type = pointee_node->type;
-                        if (points_to_type->kind == TYPE_KIND_RECORD &&
-                            points_to_type->info.record_info != NULL)
-                        {
-                            points_to_type = create_record_type(points_to_type->info.record_info);
-                        }
-                        else
-                        {
-                            kgpc_type_retain(points_to_type);
-                        }
-                        tree->tree_data.type_decl_data.kgpc_type->info.points_to = points_to_type;
+                        kgpc_type_retain(pointee_node->type);
+                        tree->tree_data.type_decl_data.kgpc_type->info.points_to = pointee_node->type;
                     }
                 }
                 if (getenv("KGPC_DEBUG_PROC_TYPE") != NULL &&
@@ -8850,11 +8895,24 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
         /* Check if this type was already pre-declared by predeclare_types().
          * If so, skip the push to avoid "redeclaration" errors.
          * IMPORTANT: Only skip if the type exists in the CURRENT scope (scope level 0),
-         * not if it exists as a builtin or in a parent scope. */
+         * not if it exists as a builtin or in a parent scope.
+         * Also don't treat as predeclared if existing is from a different source unit. */
         HashNode_t *existing_type = NULL;
         int scope_level = FindIdent(&existing_type, symtab, tree->tree_data.type_decl_data.id);
         int already_predeclared = (scope_level == 0 && existing_type != NULL &&
                                    existing_type->hash_type == HASHTYPE_TYPE);
+        if (already_predeclared &&
+            tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD &&
+            g_semcheck_current_unit_name != NULL &&
+            existing_type->source_unit_name != NULL &&
+            tree->tree_data.type_decl_data.source_unit_name != NULL &&
+            pascal_identifier_equals(tree->tree_data.type_decl_data.source_unit_name,
+                g_semcheck_current_unit_name) &&
+            !pascal_identifier_equals(existing_type->source_unit_name,
+                g_semcheck_current_unit_name))
+        {
+            already_predeclared = 0;
+        }
 
 
         /* Skip symbol table registration for generic declarations - they're only in the registry */
@@ -8869,27 +8927,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
         }
         else if (already_predeclared)
         {
-            /* If a private/local record type reuses a name that already exists in scope
-             * (e.g. implementation-only tsiginfo shadowing imported tsiginfo), update
-             * the existing symbol's record payload to this declaration instead of silently
-             * discarding the new layout. */
-            if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD &&
-                record_info != NULL &&
-                existing_type != NULL &&
-                existing_type->type != NULL &&
-                !tree->tree_data.type_decl_data.unit_is_public)
-            {
-                if (existing_type->type->kind == TYPE_KIND_RECORD)
-                {
-                    existing_type->type->info.record_info = record_info;
-                }
-                else if (existing_type->type->kind == TYPE_KIND_POINTER &&
-                         existing_type->type->info.points_to != NULL &&
-                         existing_type->type->info.points_to->kind == TYPE_KIND_RECORD)
-                {
-                    existing_type->type->info.points_to->info.record_info = record_info;
-                }
-            }
+            mark_hashnode_source_unit(existing_type, tree->tree_data.type_decl_data.source_unit_name);
 
             /* Type was already registered by predeclare_types().
              * We still need to update any additional metadata like array bounds. */
@@ -8957,18 +8995,8 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                     }
                     if (pointee_node != NULL && pointee_node->type != NULL)
                     {
-                        /* Snapshot record type (see comment at first pointer resolution point) */
-                        KgpcType *points_to_type = pointee_node->type;
-                        if (points_to_type->kind == TYPE_KIND_RECORD &&
-                            points_to_type->info.record_info != NULL)
-                        {
-                            points_to_type = create_record_type(points_to_type->info.record_info);
-                        }
-                        else
-                        {
-                            kgpc_type_retain(points_to_type);
-                        }
-                        existing_type->type->info.points_to = points_to_type;
+                        kgpc_type_retain(pointee_node->type);
+                        existing_type->type->info.points_to = pointee_node->type;
                     }
                 }
             }
@@ -9075,6 +9103,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 mark_hashnode_unit_info(symtab, type_node,
                     tree->tree_data.type_decl_data.defined_in_unit,
                     tree->tree_data.type_decl_data.unit_is_public);
+                mark_hashnode_source_unit(type_node, tree->tree_data.type_decl_data.source_unit_name);
             }
 
             /* For generic specializations with inline record types, also register the
@@ -9176,18 +9205,8 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
         }
         if (pointee_node != NULL && pointee_node->type != NULL)
         {
-            /* Snapshot record type (see comment at first pointer resolution point) */
-            KgpcType *points_to_type = pointee_node->type;
-            if (points_to_type->kind == TYPE_KIND_RECORD &&
-                points_to_type->info.record_info != NULL)
-            {
-                points_to_type = create_record_type(points_to_type->info.record_info);
-            }
-            else
-            {
-                kgpc_type_retain(points_to_type);
-            }
-            alias_node->type->info.points_to = points_to_type;
+            kgpc_type_retain(pointee_node->type);
+            alias_node->type->info.points_to = pointee_node->type;
         }
         cur = cur->next;
     }
