@@ -1360,6 +1360,18 @@ class TestCompiler(unittest.TestCase):
         # And we should not see the `add` instruction.
         self.assertNotIn("addl", optimized_asm)
 
+    def test_forward_class_constructor_assignment_no_duplicate_self_move(self):
+        input_file, asm_file, _ = self._get_test_paths("forward_class_ctor_assign")
+        run_compiler(input_file, asm_file)
+        asm_lines = read_file_content(asm_file).splitlines()
+        for i in range(len(asm_lines) - 1):
+            self.assertFalse(
+                asm_lines[i] == asm_lines[i + 1]
+                and asm_lines[i].startswith("\tmovq\t")
+                and asm_lines[i].endswith(", %rdi"),
+                f"duplicate constructor self move found at line {i + 1}: {asm_lines[i]}",
+            )
+
     def test_dateutils_custom(self):
         """Tests DateUtils with custom regex verification."""
         input_file = os.path.join(TEST_CASES_DIR, "missing_dateutils.p")
