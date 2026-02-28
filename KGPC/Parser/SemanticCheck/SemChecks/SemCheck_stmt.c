@@ -1586,6 +1586,9 @@ static int try_resolve_builtin_procedure(SymTab_t *symtab,
     if (proc_id == NULL || !pascal_identifier_equals(proc_id, expected_name))
         return 0;
 
+    if (stmt->stmt_data.procedure_call_data.is_method_call_placeholder)
+        return 0;
+
     /* Prefer user-defined/prologue procedures over builtins when available. */
     HashNode_t *existing = NULL;
     int force_builtin = pascal_identifier_equals(expected_name, "Assign");
@@ -4628,7 +4631,21 @@ skip_type_receiver_rewrite:
             if (!is_unit_qualifier &&
                 FindIdent(&unit_check, symtab, potential_unit_name) == -1)
             {
-                is_unit_qualifier = 1;
+                int looks_like_self_field = 0;
+                HashNode_t *self_node = NULL;
+                if (FindIdent(&self_node, symtab, "Self") != -1 && self_node != NULL)
+                {
+                    struct RecordType *self_record = semcheck_stmt_get_record_type_from_node(self_node);
+                    if (self_record != NULL &&
+                        semcheck_find_class_field_including_hidden(symtab, self_record,
+                            potential_unit_name, NULL) != NULL)
+                    {
+                        looks_like_self_field = 1;
+                    }
+                }
+
+                if (!looks_like_self_field)
+                    is_unit_qualifier = 1;
             }
 
             if (is_unit_qualifier)
