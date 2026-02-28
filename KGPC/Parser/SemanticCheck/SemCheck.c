@@ -9934,7 +9934,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
                 tobject_type = create_pointer_type(tobject_rec);
             if (tobject_type != NULL)
             {
-                AddBuiltinType_Typed(symtab, strdup("TObject"), tobject_type);
+                AddBuiltinType_Typed(symtab, "TObject", tobject_type);
                 destroy_kgpc_type(tobject_type);
             }
             else if (tobject_rec != NULL)
@@ -9955,7 +9955,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
                 tinterfaced_type = create_pointer_type(tinterfaced_rec);
             if (tinterfaced_type != NULL)
             {
-                AddBuiltinType_Typed(symtab, strdup("TInterfacedObject"), tinterfaced_type);
+                AddBuiltinType_Typed(symtab, "TInterfacedObject", tinterfaced_type);
                 destroy_kgpc_type(tinterfaced_type);
             }
             else if (tinterfaced_rec != NULL)
@@ -10020,8 +10020,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         free(setstring_name);
     }
 
-    char *pchar_to_shortstr_name = strdup("fpc_pchar_to_shortstr");
-    if (pchar_to_shortstr_name != NULL)
+    if (1)
     {
         ListNode_t *param_res = semcheck_create_builtin_param_with_id(
             "res", SHORTSTRING_TYPE, "shortstring", 1);
@@ -10033,10 +10032,10 @@ void semcheck_add_builtins(SymTab_t *symtab)
             KgpcType *proc_type = create_procedure_type(param_res, NULL);
             assert(proc_type != NULL &&
                 "Failed to create fpc_pchar_to_shortstr procedure type");
-            AddBuiltinProc_Typed(symtab, pchar_to_shortstr_name, proc_type);
+            AddBuiltinProc_Typed(symtab, "fpc_pchar_to_shortstr", proc_type);
             destroy_kgpc_type(proc_type);
+            DestroyList(param_res);
         }
-        free(pchar_to_shortstr_name);
     }
 
     char *write_name = strdup("write");
@@ -10048,65 +10047,48 @@ void semcheck_add_builtins(SymTab_t *symtab)
         free(write_name);
     }
 
-    char *writeln_name = strdup("writeln");
-    if (writeln_name != NULL) {
+    {
         KgpcType *writeln_type = create_procedure_type(NULL, NULL);
-        assert(writeln_type != NULL && "Failed to create writeln procedure type");
-        AddBuiltinProc_Typed(symtab, writeln_name, writeln_type);
+        AddBuiltinProc_Typed(symtab, "writeln", writeln_type);
         destroy_kgpc_type(writeln_type);
-        free(writeln_name);
     }
 
-    char *writestr_name = strdup("writestr");
-    if (writestr_name != NULL) {
+    {
         KgpcType *writestr_type = create_procedure_type(NULL, NULL);
-        assert(writestr_type != NULL && "Failed to create writestr procedure type");
-        AddBuiltinProc_Typed(symtab, writestr_name, writestr_type);
+        AddBuiltinProc_Typed(symtab, "writestr", writestr_type);
         destroy_kgpc_type(writestr_type);
-        free(writestr_name);
     }
 
-    char *read_name = strdup("read");
-    if (read_name != NULL) {
+    {
         KgpcType *read_type = create_procedure_type(NULL, NULL);
-        assert(read_type != NULL && "Failed to create read procedure type");
-        AddBuiltinProc_Typed(symtab, read_name, read_type);
+        AddBuiltinProc_Typed(symtab, "read", read_type);
         destroy_kgpc_type(read_type);
-        free(read_name);
     }
 
-    char *readln_name = strdup("readln");
-    if (readln_name != NULL) {
+    {
         KgpcType *readln_type = create_procedure_type(NULL, NULL);
-        assert(readln_type != NULL && "Failed to create readln procedure type");
-        AddBuiltinProc_Typed(symtab, readln_name, readln_type);
+        AddBuiltinProc_Typed(symtab, "readln", readln_type);
         destroy_kgpc_type(readln_type);
-        free(readln_name);
     }
-    char *halt_name = strdup("Halt");
-    if (halt_name != NULL) {
+
+    {
         KgpcType *halt_type = create_procedure_type(NULL, NULL);
-        assert(halt_type != NULL && "Failed to create Halt procedure type");
-        AddBuiltinProc_Typed(symtab, halt_name, halt_type);
+        AddBuiltinProc_Typed(symtab, "Halt", halt_type);
         destroy_kgpc_type(halt_type);
-        free(halt_name);
     }
-    char *error_name = strdup("Error");
-    if (error_name != NULL) {
+
+    {
         KgpcType *error_type = create_procedure_type(NULL, NULL);
-        assert(error_type != NULL && "Failed to create Error procedure type");
-        AddBuiltinProc_Typed(symtab, error_name, error_type);
+        AddBuiltinProc_Typed(symtab, "Error", error_type);
         destroy_kgpc_type(error_type);
-        free(error_name);
     }
-    char *assign_name = strdup("Assign");
-    if (assign_name != NULL) {
+
+    {
         KgpcType *assign_type = create_procedure_type(NULL, NULL);
-        assert(assign_type != NULL && "Failed to create Assign procedure type");
-        AddBuiltinProc_Typed(symtab, assign_name, assign_type);
+        AddBuiltinProc_Typed(symtab, "Assign", assign_type);
         destroy_kgpc_type(assign_type);
-        free(assign_name);
     }
+
     const char *sysutils_hooks[] = {
         "InitExceptions",
         "InitInternational",
@@ -10117,130 +10099,74 @@ void semcheck_add_builtins(SymTab_t *symtab)
     };
     for (size_t i = 0; i < sizeof(sysutils_hooks) / sizeof(sysutils_hooks[0]); ++i)
     {
-        char *hook_name = strdup(sysutils_hooks[i]);
-        if (hook_name != NULL) {
-            KgpcType *hook_type = create_procedure_type(NULL, NULL);
-            assert(hook_type != NULL && "Failed to create sysutils hook type");
-            AddBuiltinProc_Typed(symtab, hook_name, hook_type);
-            destroy_kgpc_type(hook_type);
-            free(hook_name);
-        }
+        KgpcType *hook_type = create_procedure_type(NULL, NULL);
+        AddBuiltinProc_Typed(symtab, sysutils_hooks[i], hook_type);
+        destroy_kgpc_type(hook_type);
     }
-    char *close_name = strdup("Close");
-    if (close_name != NULL) {
+
+    {
         KgpcType *close_type = create_procedure_type(NULL, NULL);
-        assert(close_type != NULL && "Failed to create Close procedure type");
-        AddBuiltinProc_Typed(symtab, close_name, close_type);
+        AddBuiltinProc_Typed(symtab, "Close", close_type);
         destroy_kgpc_type(close_type);
-        free(close_name);
     }
-    char *settextcp_name = strdup("SetTextCodePage");
-    if (settextcp_name != NULL) {
+
+    {
         KgpcType *settextcp_type = create_procedure_type(NULL, NULL);
-        assert(settextcp_type != NULL && "Failed to create SetTextCodePage procedure type");
-        AddBuiltinProc_Typed(symtab, settextcp_name, settextcp_type);
+        AddBuiltinProc_Typed(symtab, "SetTextCodePage", settextcp_type);
         destroy_kgpc_type(settextcp_type);
-        free(settextcp_name);
     }
-    char *getmem_proc = strdup("GetMem");
-    if (getmem_proc != NULL) {
+
+    {
         KgpcType *getmem_type = create_procedure_type(NULL, NULL);
-        assert(getmem_type != NULL && "Failed to create GetMem procedure type");
-        AddBuiltinProc_Typed(symtab, getmem_proc, getmem_type);
+        AddBuiltinProc_Typed(symtab, "GetMem", getmem_type);
         destroy_kgpc_type(getmem_type);
-        free(getmem_proc);
     }
-    char *move_proc = strdup("Move");
-    if (move_proc != NULL) {
-        ListNode_t *move_params = NULL;
-        ListNode_t *move_tail = NULL;
-        ListNode_t *param = NULL;
+    {
+        ListNode_t *p1 = semcheck_create_builtin_param_var("source", UNKNOWN_TYPE);
+        ListNode_t *p2 = semcheck_create_builtin_param_var("dest", UNKNOWN_TYPE);
+        ListNode_t *p3 = semcheck_create_builtin_param("count", LONGINT_TYPE);
+        if (p1 != NULL) p1->next = p2;
+        if (p2 != NULL) p2->next = p3;
 
-        param = semcheck_create_builtin_param_var("source", UNKNOWN_TYPE);
-        if (param != NULL) {
-            move_params = param;
-            move_tail = param;
-        }
-
-        param = semcheck_create_builtin_param_var("dest", UNKNOWN_TYPE);
-        if (param != NULL) {
-            if (move_tail != NULL)
-                move_tail->next = param;
-            else
-                move_params = param;
-            move_tail = param;
-        }
-
-        param = semcheck_create_builtin_param("count", LONGINT_TYPE);
-        if (param != NULL) {
-            if (move_tail != NULL)
-                move_tail->next = param;
-            else
-                move_params = param;
-        }
-
-        KgpcType *move_type = create_procedure_type(move_params, NULL);
-        assert(move_type != NULL && "Failed to create Move procedure type");
-        AddBuiltinProc_Typed(symtab, move_proc, move_type);
+        KgpcType *move_type = create_procedure_type(p1, NULL);
+        AddBuiltinProc_Typed(symtab, "Move", move_type);
         destroy_kgpc_type(move_type);
-        free(move_proc);
+        if (p1 != NULL) DestroyList(p1);
     }
-    char *realloc_proc = strdup("ReallocMem");
-    if (realloc_proc != NULL) {
+    {
         KgpcType *realloc_type = create_procedure_type(NULL, NULL);
-        assert(realloc_type != NULL && "Failed to create ReallocMem procedure type");
-        AddBuiltinProc_Typed(symtab, realloc_proc, realloc_type);
+        AddBuiltinProc_Typed(symtab, "ReallocMem", realloc_type);
         destroy_kgpc_type(realloc_type);
-        free(realloc_proc);
     }
-    char *setcodepage_proc = strdup("SetCodePage");
-    if (setcodepage_proc != NULL) {
+    {
         KgpcType *setcodepage_type = create_procedure_type(NULL, NULL);
-        assert(setcodepage_type != NULL && "Failed to create SetCodePage procedure type");
-        AddBuiltinProc_Typed(symtab, setcodepage_proc, setcodepage_type);
+        AddBuiltinProc_Typed(symtab, "SetCodePage", setcodepage_type);
         destroy_kgpc_type(setcodepage_type);
-        free(setcodepage_proc);
     }
-    char *freemem_proc = strdup("FreeMem");
-    if (freemem_proc != NULL) {
+    {
         KgpcType *freemem_type = create_procedure_type(NULL, NULL);
-        assert(freemem_type != NULL && "Failed to create FreeMem procedure type");
-        AddBuiltinProc_Typed(symtab, freemem_proc, freemem_type);
+        AddBuiltinProc_Typed(symtab, "FreeMem", freemem_type);
         destroy_kgpc_type(freemem_type);
-        free(freemem_proc);
     }
-    char *val_name = strdup("Val");
-    if (val_name != NULL) {
+    {
         KgpcType *val_type = create_procedure_type(NULL, NULL);
-        assert(val_type != NULL && "Failed to create Val procedure type");
-        AddBuiltinProc_Typed(symtab, val_name, val_type);
+        AddBuiltinProc_Typed(symtab, "Val", val_type);
         destroy_kgpc_type(val_type);
-        free(val_name);
     }
-    char *str_name = strdup("Str");
-    if (str_name != NULL) {
+    {
         KgpcType *str_type = create_procedure_type(NULL, NULL);
-        assert(str_type != NULL && "Failed to create Str procedure type");
-        AddBuiltinProc_Typed(symtab, str_name, str_type);
+        AddBuiltinProc_Typed(symtab, "Str", str_type);
         destroy_kgpc_type(str_type);
-        free(str_name);
     }
-
-    char *insert_name = strdup("Insert");
-    if (insert_name != NULL) {
+    {
         KgpcType *insert_type = create_procedure_type(NULL, NULL);
-        assert(insert_type != NULL && "Failed to create Insert procedure type");
-        AddBuiltinProc_Typed(symtab, insert_name, insert_type);
+        AddBuiltinProc_Typed(symtab, "Insert", insert_type);
         destroy_kgpc_type(insert_type);
-        free(insert_name);
     }
-    char *delete_name = strdup("Delete");
-    if (delete_name != NULL) {
+    {
         KgpcType *delete_type = create_procedure_type(NULL, NULL);
-        assert(delete_type != NULL && "Failed to create Delete procedure type");
-        AddBuiltinProc_Typed(symtab, delete_name, delete_type);
+        AddBuiltinProc_Typed(symtab, "Delete", delete_type);
         destroy_kgpc_type(delete_type);
-        free(delete_name);
     }
 
     {
@@ -10250,7 +10176,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         KgpcType *swap_int = create_procedure_type(param_int, create_primitive_type(INT_TYPE));
         if (swap_int != NULL)
         {
-            AddBuiltinFunction_Typed(symtab, strdup(swap_name), swap_int);
+            AddBuiltinFunction_Typed(symtab, swap_name, swap_int);
             destroy_kgpc_type(swap_int);
         }
         if (param_int != NULL)
@@ -10260,7 +10186,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         KgpcType *swap_long = create_procedure_type(param_long, create_primitive_type(LONGINT_TYPE));
         if (swap_long != NULL)
         {
-            AddBuiltinFunction_Typed(symtab, strdup(swap_name), swap_long);
+            AddBuiltinFunction_Typed(symtab, swap_name, swap_long);
             destroy_kgpc_type(swap_long);
         }
         if (param_long != NULL)
@@ -10270,7 +10196,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         KgpcType *swap_int64 = create_procedure_type(param_int64, create_primitive_type(INT64_TYPE));
         if (swap_int64 != NULL)
         {
-            AddBuiltinFunction_Typed(symtab, strdup(swap_name), swap_int64);
+            AddBuiltinFunction_Typed(symtab, swap_name, swap_int64);
             destroy_kgpc_type(swap_int64);
         }
         if (param_int64 != NULL)
@@ -10278,68 +10204,47 @@ void semcheck_add_builtins(SymTab_t *symtab)
     }
 
 
-    char *inc_name = strdup("Inc");
-    if (inc_name != NULL) {
+    {
         KgpcType *inc_type = create_procedure_type(NULL, NULL);
-        assert(inc_type != NULL && "Failed to create Inc procedure type");
-        AddBuiltinProc_Typed(symtab, inc_name, inc_type);
+        AddBuiltinProc_Typed(symtab, "Inc", inc_type);
         destroy_kgpc_type(inc_type);
-        free(inc_name);
     }
 
-    char *dec_name = strdup("Dec");
-    if (dec_name != NULL) {
+    {
         KgpcType *dec_type = create_procedure_type(NULL, NULL);
-        assert(dec_type != NULL && "Failed to create Dec procedure type");
-        AddBuiltinProc_Typed(symtab, dec_name, dec_type);
+        AddBuiltinProc_Typed(symtab, "Dec", dec_type);
         destroy_kgpc_type(dec_type);
-        free(dec_name);
     }
 
-    char *include_name = strdup("Include");
-    if (include_name != NULL) {
+    {
         KgpcType *include_type = create_procedure_type(NULL, NULL);
-        assert(include_type != NULL && "Failed to create Include procedure type");
-        AddBuiltinProc_Typed(symtab, include_name, include_type);
+        AddBuiltinProc_Typed(symtab, "Include", include_type);
         destroy_kgpc_type(include_type);
-        free(include_name);
     }
 
-    char *exclude_name = strdup("Exclude");
-    if (exclude_name != NULL) {
+    {
         KgpcType *exclude_type = create_procedure_type(NULL, NULL);
-        assert(exclude_type != NULL && "Failed to create Exclude procedure type");
-        AddBuiltinProc_Typed(symtab, exclude_name, exclude_type);
+        AddBuiltinProc_Typed(symtab, "Exclude", exclude_type);
         destroy_kgpc_type(exclude_type);
-        free(exclude_name);
     }
 
 
-    char *new_name = strdup("New");
-    if (new_name != NULL) {
+    {
         KgpcType *new_type = create_procedure_type(NULL, NULL);
-        assert(new_type != NULL && "Failed to create New procedure type");
-        AddBuiltinProc_Typed(symtab, new_name, new_type);
+        AddBuiltinProc_Typed(symtab, "New", new_type);
         destroy_kgpc_type(new_type);
-        free(new_name);
     }
 
-    char *dispose_name = strdup("Dispose");
-    if (dispose_name != NULL) {
+    {
         KgpcType *dispose_type = create_procedure_type(NULL, NULL);
-        assert(dispose_type != NULL && "Failed to create Dispose procedure type");
-        AddBuiltinProc_Typed(symtab, dispose_name, dispose_type);
+        AddBuiltinProc_Typed(symtab, "Dispose", dispose_type);
         destroy_kgpc_type(dispose_type);
-        free(dispose_name);
     }
 
-    char *assert_name = strdup("Assert");
-    if (assert_name != NULL) {
+    {
         KgpcType *assert_type = create_procedure_type(NULL, NULL);
-        assert(assert_type != NULL && "Failed to create Assert procedure type");
-        AddBuiltinProc_Typed(symtab, assert_name, assert_type);
+        AddBuiltinProc_Typed(symtab, "Assert", assert_type);
         destroy_kgpc_type(assert_type);
-        free(assert_name);
     }
 
     /* Builtin functions - functions have return types */
@@ -10374,7 +10279,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         KgpcType *interlocked_type = create_procedure_type(params, return_type);
         if (interlocked_type != NULL)
         {
-            AddBuiltinFunction_Typed(symtab, strdup(interlocked_name), interlocked_type);
+            AddBuiltinFunction_Typed(symtab, interlocked_name, interlocked_type);
             destroy_kgpc_type(interlocked_type);
         }
         if (params != NULL)
@@ -10387,7 +10292,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         interlocked_type = create_procedure_type(params, return_type);
         if (interlocked_type != NULL)
         {
-            AddBuiltinFunction_Typed(symtab, strdup(interlocked_name), interlocked_type);
+            AddBuiltinFunction_Typed(symtab, interlocked_name, interlocked_type);
             destroy_kgpc_type(interlocked_type);
         }
         if (params != NULL)
@@ -10400,7 +10305,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         interlocked_type = create_procedure_type(params, return_type);
         if (interlocked_type != NULL)
         {
-            AddBuiltinFunction_Typed(symtab, strdup(interlocked_name), interlocked_type);
+            AddBuiltinFunction_Typed(symtab, interlocked_name, interlocked_type);
             destroy_kgpc_type(interlocked_type);
         }
         if (params != NULL)
@@ -10413,7 +10318,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         interlocked_type = create_procedure_type(params, return_type);
         if (interlocked_type != NULL)
         {
-            AddBuiltinFunction_Typed(symtab, strdup(interlocked_name), interlocked_type);
+            AddBuiltinFunction_Typed(symtab, interlocked_name, interlocked_type);
             destroy_kgpc_type(interlocked_type);
         }
         if (params != NULL)
@@ -10655,7 +10560,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         KgpcType *func_type = create_procedure_type(params, return_type);
         if (func_type != NULL)
         {
-            AddBuiltinFunction_Typed(symtab, strdup(func_name), func_type);
+            AddBuiltinFunction_Typed(symtab, func_name, func_type);
             destroy_kgpc_type(func_type);
         }
         if (params != NULL)
@@ -10668,7 +10573,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         func_type = create_procedure_type(params, return_type);
         if (func_type != NULL)
         {
-            AddBuiltinFunction_Typed(symtab, strdup(func_name), func_type);
+            AddBuiltinFunction_Typed(symtab, func_name, func_type);
             destroy_kgpc_type(func_type);
         }
         if (params != NULL)
@@ -10681,7 +10586,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         func_type = create_procedure_type(params, return_type);
         if (func_type != NULL)
         {
-            AddBuiltinFunction_Typed(symtab, strdup(func_name), func_type);
+            AddBuiltinFunction_Typed(symtab, func_name, func_type);
             destroy_kgpc_type(func_type);
         }
         if (params != NULL)
@@ -10694,7 +10599,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         func_type = create_procedure_type(params, return_type);
         if (func_type != NULL)
         {
-            AddBuiltinFunction_Typed(symtab, strdup(func_name), func_type);
+            AddBuiltinFunction_Typed(symtab, func_name, func_type);
             destroy_kgpc_type(func_type);
         }
         if (params != NULL)
@@ -10711,7 +10616,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         KgpcType *func_type = create_procedure_type(params, return_type);
         if (func_type != NULL)
         {
-            AddBuiltinFunction_Typed(symtab, strdup(func_name), func_type);
+            AddBuiltinFunction_Typed(symtab, func_name, func_type);
             destroy_kgpc_type(func_type);
         }
         if (params != NULL)
@@ -10726,7 +10631,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         KgpcType *popcnt_byte = create_procedure_type(param_byte, create_primitive_type(BYTE_TYPE));
         if (popcnt_byte != NULL)
         {
-            AddBuiltinFunction_Typed(symtab, strdup(func_name), popcnt_byte);
+            AddBuiltinFunction_Typed(symtab, func_name, popcnt_byte);
             destroy_kgpc_type(popcnt_byte);
         }
         if (param_byte != NULL)
@@ -10736,7 +10641,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         KgpcType *popcnt_word = create_procedure_type(param_word, create_primitive_type(BYTE_TYPE));
         if (popcnt_word != NULL)
         {
-            AddBuiltinFunction_Typed(symtab, strdup(func_name), popcnt_word);
+            AddBuiltinFunction_Typed(symtab, func_name, popcnt_word);
             destroy_kgpc_type(popcnt_word);
         }
         if (param_word != NULL)
@@ -10746,7 +10651,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         KgpcType *popcnt_dword = create_procedure_type(param_dword, create_primitive_type(BYTE_TYPE));
         if (popcnt_dword != NULL)
         {
-            AddBuiltinFunction_Typed(symtab, strdup(func_name), popcnt_dword);
+            AddBuiltinFunction_Typed(symtab, func_name, popcnt_dword);
             destroy_kgpc_type(popcnt_dword);
         }
         if (param_dword != NULL)
@@ -10756,7 +10661,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         KgpcType *popcnt_qword = create_procedure_type(param_qword, create_primitive_type(BYTE_TYPE));
         if (popcnt_qword != NULL)
         {
-            AddBuiltinFunction_Typed(symtab, strdup(func_name), popcnt_qword);
+            AddBuiltinFunction_Typed(symtab, func_name, popcnt_qword);
             destroy_kgpc_type(popcnt_qword);
         }
         if (param_qword != NULL)
@@ -10774,7 +10679,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         KgpcType *func_type = create_procedure_type(params, return_type);
         if (func_type != NULL)
         {
-            AddBuiltinFunction_Typed(symtab, strdup(func_name), func_type);
+            AddBuiltinFunction_Typed(symtab, func_name, func_type);
             destroy_kgpc_type(func_type);
         }
         if (params != NULL)
@@ -10792,7 +10697,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         KgpcType *func_type = create_procedure_type(params, return_type);
         if (func_type != NULL)
         {
-            AddBuiltinFunction_Typed(symtab, strdup(func_name), func_type);
+            AddBuiltinFunction_Typed(symtab, func_name, func_type);
             destroy_kgpc_type(func_type);
         }
         if (params != NULL)
@@ -10806,7 +10711,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         KgpcType *func_type = create_procedure_type(param_s, NULL);
         if (func_type != NULL)
         {
-            AddBuiltinProc_Typed(symtab, strdup(func_name), func_type);
+            AddBuiltinProc_Typed(symtab, func_name, func_type);
             destroy_kgpc_type(func_type);
         }
         if (param_s != NULL)
@@ -10832,7 +10737,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
             KgpcType *func_type = create_procedure_type(param, return_type);
             if (func_type != NULL)
             {
-                AddBuiltinFunction_Typed(symtab, strdup(bsr_bsf[i].name), func_type);
+                AddBuiltinFunction_Typed(symtab, bsr_bsf[i].name, func_type);
                 destroy_kgpc_type(func_type);
             }
             if (param != NULL)
@@ -10858,7 +10763,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
                 KgpcType *func_type = create_procedure_type(NULL, return_type);
                 if (func_type != NULL)
                 {
-                    AddBuiltinFunction_Typed(symtab, strdup(frame_intrinsics[i]), func_type);
+                    AddBuiltinFunction_Typed(symtab, frame_intrinsics[i], func_type);
                     destroy_kgpc_type(func_type);
                 }
             }
@@ -10869,7 +10774,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
                 KgpcType *func_type = create_procedure_type(param, return_type);
                 if (func_type != NULL)
                 {
-                    AddBuiltinFunction_Typed(symtab, strdup(frame_intrinsics[i]), func_type);
+                    AddBuiltinFunction_Typed(symtab, frame_intrinsics[i], func_type);
                     destroy_kgpc_type(func_type);
                 }
                 if (param != NULL)
@@ -10889,34 +10794,34 @@ void semcheck_add_builtins(SymTab_t *symtab)
             ListNode_t *p1 = semcheck_create_builtin_param("Target", INT_TYPE);
             ListNode_t *p2 = semcheck_create_builtin_param("NewValue", INT_TYPE);
             ListNode_t *p3 = semcheck_create_builtin_param("Comparand", INT_TYPE);
-            p1->next = p2;
-            p2->next = p3;
+            if (p1 != NULL) p1->next = p2;
+            if (p2 != NULL) p2->next = p3;
             KgpcType *return_type = create_primitive_type(INT_TYPE);
             KgpcType *func_type = create_procedure_type(p1, return_type);
             if (func_type != NULL)
             {
-                AddBuiltinFunction_Typed(symtab, strdup("AtomicCmpExchange"), func_type);
-                AddBuiltinFunction_Typed(symtab, strdup("InterlockedCompareExchange"), func_type);
+                AddBuiltinFunction_Typed(symtab, "AtomicCmpExchange", func_type);
+                AddBuiltinFunction_Typed(symtab, "InterlockedCompareExchange", func_type);
                 destroy_kgpc_type(func_type);
             }
-            DestroyList(p1);
+            if (p1 != NULL) DestroyList(p1);
         }
         /* Pointer overload: AtomicCmpExchange(var Target: Pointer; NewValue: Pointer; Comparand: Pointer): Pointer */
         {
             ListNode_t *p1 = semcheck_create_builtin_param("Target", POINTER_TYPE);
             ListNode_t *p2 = semcheck_create_builtin_param("NewValue", POINTER_TYPE);
             ListNode_t *p3 = semcheck_create_builtin_param("Comparand", POINTER_TYPE);
-            p1->next = p2;
-            p2->next = p3;
+            if (p1 != NULL) p1->next = p2;
+            if (p2 != NULL) p2->next = p3;
             KgpcType *return_type = create_primitive_type(POINTER_TYPE);
             KgpcType *func_type = create_procedure_type(p1, return_type);
             if (func_type != NULL)
             {
-                AddBuiltinFunction_Typed(symtab, strdup("AtomicCmpExchange"), func_type);
-                AddBuiltinFunction_Typed(symtab, strdup("InterlockedCompareExchange"), func_type);
+                AddBuiltinFunction_Typed(symtab, "AtomicCmpExchange", func_type);
+                AddBuiltinFunction_Typed(symtab, "InterlockedCompareExchange", func_type);
                 destroy_kgpc_type(func_type);
             }
-            DestroyList(p1);
+            if (p1 != NULL) DestroyList(p1);
         }
         /* AtomicExchange(var Target: Integer; Value: Integer): Integer */
         {
@@ -10927,8 +10832,8 @@ void semcheck_add_builtins(SymTab_t *symtab)
             KgpcType *func_type = create_procedure_type(p1, return_type);
             if (func_type != NULL)
             {
-                AddBuiltinFunction_Typed(symtab, strdup("AtomicExchange"), func_type);
-                AddBuiltinFunction_Typed(symtab, strdup("InterlockedExchange"), func_type);
+                AddBuiltinFunction_Typed(symtab, "AtomicExchange", func_type);
+                AddBuiltinFunction_Typed(symtab, "InterlockedExchange", func_type);
                 destroy_kgpc_type(func_type);
             }
             DestroyList(p1);
@@ -10942,8 +10847,8 @@ void semcheck_add_builtins(SymTab_t *symtab)
             KgpcType *func_type = create_procedure_type(p1, return_type);
             if (func_type != NULL)
             {
-                AddBuiltinFunction_Typed(symtab, strdup("AtomicExchange"), func_type);
-                AddBuiltinFunction_Typed(symtab, strdup("InterlockedExchange"), func_type);
+                AddBuiltinFunction_Typed(symtab, "AtomicExchange", func_type);
+                AddBuiltinFunction_Typed(symtab, "InterlockedExchange", func_type);
                 destroy_kgpc_type(func_type);
             }
             DestroyList(p1);
@@ -10963,7 +10868,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
                     KgpcType *func_type = create_procedure_type(p1, return_type);
                     if (func_type != NULL)
                     {
-                        AddBuiltinFunction_Typed(symtab, strdup(names[i]), func_type);
+                        AddBuiltinFunction_Typed(symtab, names[i], func_type);
                         destroy_kgpc_type(func_type);
                     }
                     DestroyList(p1);
@@ -10977,7 +10882,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
                     KgpcType *func_type = create_procedure_type(p1, return_type);
                     if (func_type != NULL)
                     {
-                        AddBuiltinFunction_Typed(symtab, strdup(names[i]), func_type);
+                        AddBuiltinFunction_Typed(symtab, names[i], func_type);
                         destroy_kgpc_type(func_type);
                     }
                     DestroyList(p1);
@@ -10991,8 +10896,8 @@ void semcheck_add_builtins(SymTab_t *symtab)
             KgpcType *func_type = create_procedure_type(p1, return_type);
             if (func_type != NULL)
             {
-                AddBuiltinFunction_Typed(symtab, strdup("bitsizeof"), func_type);
-                AddBuiltinFunction_Typed(symtab, strdup("BitSizeOf"), func_type);
+                AddBuiltinFunction_Typed(symtab, "bitsizeof", func_type);
+                AddBuiltinFunction_Typed(symtab, "BitSizeOf", func_type);
                 destroy_kgpc_type(func_type);
             }
             DestroyList(p1);
@@ -11005,7 +10910,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
             KgpcType *proc_type = create_procedure_type(p1, NULL);
             if (proc_type != NULL)
             {
-                AddBuiltinProc_Typed(symtab, strdup("Finalize"), proc_type);
+                AddBuiltinProc_Typed(symtab, "Finalize", proc_type);
                 destroy_kgpc_type(proc_type);
             }
             DestroyList(p1);
@@ -11018,7 +10923,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
             KgpcType *proc_type = create_procedure_type(p1, NULL);
             if (proc_type != NULL)
             {
-                AddBuiltinProc_Typed(symtab, strdup("Initialize"), proc_type);
+                AddBuiltinProc_Typed(symtab, "Initialize", proc_type);
                 destroy_kgpc_type(proc_type);
             }
             DestroyList(p1);

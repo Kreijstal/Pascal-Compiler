@@ -108,7 +108,7 @@ HashTable_t *InitHashTable();
 
 /* Adds an identifier to the table */
 /* Returns 0 if successfully added, 1 if the identifier already exists */
-int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id,
+int AddIdentToTable(HashTable_t *table, const char *id, const char *mangled_id,
     enum HashType hash_type, KgpcType *type);
 
 /* Searches for the given identifier in the table. Returns NULL if not found */

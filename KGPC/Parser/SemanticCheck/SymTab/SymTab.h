@@ -72,13 +72,13 @@ int PushTypeOntoScope_Typed(SymTab_t *symtab, char *id, KgpcType *type);
 /* Builtin declarations using KgpcType */
 
 /* Adds a built-in type with a KgpcType */
-int AddBuiltinType_Typed(SymTab_t *symtab, char *id, KgpcType *type);
+int AddBuiltinType_Typed(SymTab_t *symtab, const char *id, KgpcType *type);
 
 /* Adds a built-in procedure with a KgpcType */
-int AddBuiltinProc_Typed(SymTab_t *symtab, char *id, KgpcType *type);
+int AddBuiltinProc_Typed(SymTab_t *symtab, const char *id, KgpcType *type);
 
 /* Adds a built-in function with a KgpcType */
-int AddBuiltinFunction_Typed(SymTab_t *symtab, char *id, KgpcType *type);
+int AddBuiltinFunction_Typed(SymTab_t *symtab, const char *id, KgpcType *type);
 
 /* Adds a built-in real constant */
 int AddBuiltinRealConst(SymTab_t *symtab, const char *id, double value);

@@ -513,7 +513,7 @@ int PushTypeOntoScope_Typed(SymTab_t *symtab, char *id, KgpcType *type)
 }
 
 /* Adds a built-in type with a KgpcType */
-int AddBuiltinType_Typed(SymTab_t *symtab, char *id, KgpcType *type)
+int AddBuiltinType_Typed(SymTab_t *symtab, const char *id, KgpcType *type)
 {
     assert(symtab != NULL);
     assert(id != NULL);
@@ -523,7 +523,7 @@ int AddBuiltinType_Typed(SymTab_t *symtab, char *id, KgpcType *type)
 }
 
 /* Adds a built-in procedure with a KgpcType */
-int AddBuiltinProc_Typed(SymTab_t *symtab, char *id, KgpcType *type)
+int AddBuiltinProc_Typed(SymTab_t *symtab, const char *id, KgpcType *type)
 {
     assert(symtab != NULL);
     assert(id != NULL);
@@ -539,7 +539,7 @@ int AddBuiltinProc_Typed(SymTab_t *symtab, char *id, KgpcType *type)
 }
 
 /* Adds a built-in function with a KgpcType */
-int AddBuiltinFunction_Typed(SymTab_t *symtab, char *id, KgpcType *type)
+int AddBuiltinFunction_Typed(SymTab_t *symtab, const char *id, KgpcType *type)
 {
     assert(symtab != NULL);
     assert(id != NULL);

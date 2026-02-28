@@ -154,12 +154,12 @@ static int add_ident_to_table_internal(HashTable_t *table, const HashTableParams
     }
 }
 
-int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id,
+int AddIdentToTable(HashTable_t *table, const char *id, const char *mangled_id,
     enum HashType hash_type, KgpcType *type)
 {
     HashTableParams params = {
-        .id = id,
-        .mangled_id = mangled_id,
+        .id = (char *)id,
+        .mangled_id = (char *)mangled_id,
         .hash_type = hash_type,
         .type = type,
         .var_type = HASHVAR_UNTYPED,
