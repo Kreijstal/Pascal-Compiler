@@ -40,6 +40,7 @@ typedef struct {
     // A list of Tree_t* nodes, where each node is a TREE_VAR_DECL representing a parameter.
     // This reuses the existing, well-understood structure for parameter declarations.
     ListNode_t *params;
+    int owns_params;
     
     // For functions, this points to the return type.
     // For procedures, this is NULL.
