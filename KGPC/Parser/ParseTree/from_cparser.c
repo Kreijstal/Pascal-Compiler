@@ -9683,29 +9683,16 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
     }
 
     KgpcType *kgpc_type = NULL;
-    if (spec_node != NULL)
-        kgpc_type = convert_type_spec_to_kgpctype(spec_node, NULL);
-
-    if (record_type != NULL && record_type->is_interface)
-    {
-        if (kgpc_type != NULL)
-            destroy_kgpc_type(kgpc_type);
-        KgpcType *rec_type = create_record_type(record_type);
-        if (rec_type != NULL)
-            kgpc_type = create_pointer_type(rec_type);
-        else
-            kgpc_type = NULL;
-    }
-
-    /* If KgpcType wasn't created (e.g. for classes/records handled by legacy path), create it now */
-    if (kgpc_type == NULL && record_type != NULL) {
+    if (record_type != NULL) {
         KgpcType *rec_type = create_record_type(record_type);
         if (record_type->is_class || record_type->is_interface) {
-            /* Classes are pointers to records */
+            /* Classes and interfaces are pointers to records */
             kgpc_type = create_pointer_type(rec_type);
         } else {
             kgpc_type = rec_type;
         }
+    } else if (spec_node != NULL) {
+        kgpc_type = convert_type_spec_to_kgpctype(spec_node, NULL);
     }
 
     Tree_t *decl = NULL;
