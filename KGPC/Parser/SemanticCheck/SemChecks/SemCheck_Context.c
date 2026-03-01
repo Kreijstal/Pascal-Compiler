@@ -207,6 +207,42 @@ struct RecordType *resolve_record_type_for_with(SymTab_t *symtab,
                 target_node != NULL)
                 record_info = get_record_type_from_node(target_node);
         }
+        /* Fallback for function call results: when a method/function returns a
+         * class type (pointer to record), the resolved_kgpc_type may be a bare
+         * pointer without embedded record info. Look up the return type from the
+         * call's resolved function symbol to find the pointed-to record. */
+        if (record_info == NULL && context_expr->type == EXPR_FUNCTION_CALL)
+        {
+            HashNode_t *func_node = context_expr->expr_data.function_call_data.resolved_func;
+            if (func_node != NULL && func_node->type != NULL)
+            {
+                KgpcType *ret_type = kgpc_type_get_return_type(func_node->type);
+                if (ret_type != NULL && kgpc_type_is_pointer(ret_type) &&
+                    ret_type->info.points_to != NULL &&
+                    kgpc_type_is_record(ret_type->info.points_to))
+                {
+                    record_info = kgpc_type_get_record(ret_type->info.points_to);
+                }
+                else if (ret_type != NULL && kgpc_type_is_pointer(ret_type))
+                {
+                    /* pointer without embedded record - try type alias */
+                    struct TypeAlias *alias = kgpc_type_get_type_alias(ret_type);
+                    const char *alias_name = (alias != NULL) ? alias->alias_name : NULL;
+                    if (alias_name == NULL && ret_type->info.points_to != NULL)
+                    {
+                        alias = kgpc_type_get_type_alias(ret_type->info.points_to);
+                        alias_name = (alias != NULL) ? alias->alias_name : NULL;
+                    }
+                    if (alias_name != NULL)
+                    {
+                        HashNode_t *alias_node = NULL;
+                        if (FindIdent(&alias_node, symtab, alias_name) != -1 &&
+                            alias_node != NULL)
+                            record_info = get_record_type_from_node(alias_node);
+                    }
+                }
+            }
+        }
         return record_info;
     }
 
