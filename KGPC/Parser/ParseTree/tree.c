@@ -2155,6 +2155,7 @@ Tree_t *mk_program(int line_num, char *id, ListNode_t *args, ListNode_t *uses,
     assert(new_tree != NULL);
 
     new_tree->line_num = line_num;
+    new_tree->source_index = -1;
     new_tree->type = TREE_PROGRAM_TYPE;
     new_tree->tree_data.program_data.program_id = id;
     new_tree->tree_data.program_data.args_char = args;
@@ -2186,6 +2187,7 @@ Tree_t *mk_unit(int line_num, char *id, ListNode_t *interface_uses,
     assert(new_tree != NULL);
 
     new_tree->line_num = line_num;
+    new_tree->source_index = -1;
     new_tree->type = TREE_UNIT;
     new_tree->tree_data.unit_data.unit_id = id;
     new_tree->tree_data.unit_data.interface_uses = interface_uses;
@@ -2210,6 +2212,7 @@ Tree_t *mk_typedecl(int line_num, char *id, int start, int end)
     assert(new_tree != NULL);
 
     new_tree->line_num = line_num;
+    new_tree->source_index = -1;
     new_tree->type = TREE_TYPE_DECL;
     new_tree->tree_data.type_decl_data.id = id;
     new_tree->tree_data.type_decl_data.kind = TYPE_DECL_RANGE;
@@ -2230,6 +2233,7 @@ Tree_t *mk_record_type(int line_num, char *id, struct RecordType *record_type)
     assert(new_tree != NULL);
 
     new_tree->line_num = line_num;
+    new_tree->source_index = -1;
     new_tree->type = TREE_TYPE_DECL;
     new_tree->tree_data.type_decl_data.id = id;
     new_tree->tree_data.type_decl_data.kind = TYPE_DECL_RECORD;
@@ -2252,6 +2256,7 @@ Tree_t *mk_procedure(int line_num, char *id, ListNode_t *args, ListNode_t *const
     assert(new_tree != NULL);
 
     new_tree->line_num = line_num;
+    new_tree->source_index = -1;
     new_tree->type = TREE_SUBPROGRAM;
     new_tree->tree_data.subprogram_data.sub_type = TREE_SUBPROGRAM_PROC;
     new_tree->tree_data.subprogram_data.id = id;
@@ -2290,6 +2295,7 @@ Tree_t *mk_function(int line_num, char *id, ListNode_t *args, ListNode_t *const_
     assert(new_tree != NULL);
 
     new_tree->line_num = line_num;
+    new_tree->source_index = -1;
     new_tree->type = TREE_SUBPROGRAM;
     new_tree->tree_data.subprogram_data.sub_type = TREE_SUBPROGRAM_FUNC;
     new_tree->tree_data.subprogram_data.id = id;
@@ -2331,6 +2337,7 @@ Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type, char *type_id,
     assert(new_tree != NULL);
 
     new_tree->line_num = line_num;
+    new_tree->source_index = -1;
     new_tree->type = TREE_VAR_DECL;
     new_tree->tree_data.var_decl_data.ids = ids;
     new_tree->tree_data.var_decl_data.type = type;
@@ -2362,6 +2369,7 @@ Tree_t *mk_typealiasdecl(int line_num, char *id, int is_array, int actual_type, 
     assert(new_tree != NULL);
 
     new_tree->line_num = line_num;
+    new_tree->source_index = -1;
     new_tree->type = TREE_TYPE_DECL;
     new_tree->tree_data.type_decl_data.id = id;
     new_tree->tree_data.type_decl_data.kind = TYPE_DECL_ALIAS;
@@ -2454,6 +2462,7 @@ Tree_t *mk_arraydecl(int line_num, ListNode_t *ids, int type, char *type_id, int
     assert(new_tree != NULL);
 
     new_tree->line_num = line_num;
+    new_tree->source_index = -1;
     new_tree->type = TREE_ARR_DECL;
     new_tree->tree_data.arr_decl_data.ids = ids;
     new_tree->tree_data.arr_decl_data.type = type;
@@ -2482,6 +2491,7 @@ Tree_t *mk_constdecl(int line_num, char *id, char *type_id, struct Expression *v
     assert(new_tree != NULL);
 
     new_tree->line_num = line_num;
+    new_tree->source_index = -1;
     new_tree->type = TREE_CONST_DECL;
     new_tree->tree_data.const_decl_data.id = id;
     new_tree->tree_data.const_decl_data.type_id = type_id;

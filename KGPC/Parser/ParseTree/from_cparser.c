@@ -14003,6 +14003,8 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
                             ListNode_t *op_label_decls = list_builder_finish(&op_label_builder);
                             Tree_t *tree = mk_function(method_node->line, mangled_name, params, op_const_decls,
                                 op_label_decls, op_type_decls, op_var_decls, op_nested_subs, body, return_type, return_type_id, inline_return_type, 0, 0);
+                            if (tree != NULL)
+                                tree->source_index = method_node->index;
                             if (tree != NULL && result_var_name_method != NULL) {
                                 tree->tree_data.subprogram_data.return_type_ref =
                                     return_type_ref != NULL ? type_ref_clone(return_type_ref)
@@ -14436,6 +14438,8 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
                            label_decls, type_decls, list_builder_finish(&var_builder),
                            nested_subs, body, 0, 0);
     }
+    if (tree != NULL)
+        tree->source_index = method_node->index;
     if (!is_nostackframe)
         is_nostackframe = ast_has_keyword(method_node, "nostackframe", 8);
     if (tree != NULL && is_nostackframe)
@@ -14734,6 +14738,8 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
     Tree_t *tree = mk_procedure(proc_node->line, id, params, const_decls,
                                 label_decls, type_decls, list_builder_finish(&var_decls_builder),
                                 nested_subs, body, is_external, 0);
+    if (tree != NULL)
+        tree->source_index = proc_node->index;
     if (!is_nostackframe)
         is_nostackframe = ast_has_keyword(proc_node, "nostackframe", 8);
     if (tree != NULL && is_nostackframe)
@@ -15047,6 +15053,8 @@ static Tree_t *convert_function(ast_t *func_node) {
     Tree_t *tree = mk_function(func_node->line, id, params, const_decls,
                                 label_decls, type_decls, list_builder_finish(&var_decls_builder), nested_subs, body,
                                 return_type, return_type_id, inline_return_type, is_external, 0);
+    if (tree != NULL)
+        tree->source_index = func_node->index;
     if (!is_nostackframe)
         is_nostackframe = ast_has_keyword(func_node, "nostackframe", 8);
     if (tree != NULL && is_nostackframe)

@@ -26,6 +26,7 @@ enum TreeType{TREE_PROGRAM_TYPE, TREE_SUBPROGRAM, TREE_VAR_DECL, TREE_ARR_DECL,
 typedef struct Tree
 {
     int line_num;
+    int source_index;
     int type;
     union tree_data
     {

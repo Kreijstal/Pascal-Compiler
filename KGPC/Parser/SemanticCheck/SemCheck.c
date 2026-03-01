@@ -1083,8 +1083,66 @@ static int semcheck_line_from_source_offset(const char *buffer, size_t length, i
     return current_line_at_offset;
 }
 
-/* Find the file that contains a given line number by scanning line directives */
-static void semcheck_file_from_line_number(int line_num, char *file_out, size_t file_out_size)
+/* Find the file from a source byte offset by scanning backwards for line directives */
+static void semcheck_file_from_source_index(int source_index, char *file_out, size_t file_out_size)
+{
+    if (file_out == NULL || file_out_size == 0)
+        return;
+    
+    file_out[0] = '\0';
+    
+    if (source_index < 0)
+        return;
+    
+    const char *buffer = preprocessed_source;
+    size_t length = preprocessed_length;
+    if (buffer == NULL || length == 0)
+    {
+        buffer = g_semcheck_source_buffer;
+        length = g_semcheck_source_length;
+    }
+    if (buffer == NULL || length == 0 || (size_t)source_index >= length)
+        return;
+    
+    /* Scan backwards from source_index to find the most recent #line directive */
+    int scan_pos = source_index;
+    while (scan_pos > 0) {
+        /* Find start of current line */
+        int line_start = scan_pos;
+        while (line_start > 0 && buffer[line_start - 1] != '\n')
+            --line_start;
+        
+        /* Check if this line is a #line directive */
+        size_t line_len = 0;
+        int temp_pos = line_start;
+        while ((size_t)temp_pos < length && buffer[temp_pos] != '\n') {
+            ++temp_pos;
+            ++line_len;
+        }
+        
+        char directive_file[512] = "";
+        int directive_line = semcheck_parse_line_directive(buffer + line_start, line_len,
+                                                            directive_file, sizeof(directive_file));
+        if (directive_line >= 0) {
+            if (directive_file[0] != '\0') {
+                strncpy(file_out, directive_file, file_out_size - 1);
+                file_out[file_out_size - 1] = '\0';
+            }
+            return;
+        }
+        
+        /* Move to previous line */
+        if (line_start > 0)
+            scan_pos = line_start - 1;
+        else
+            break;
+    }
+}
+
+/* Find the file that contains a given line number by scanning line directives.
+ * NOTE: This is a fallback for when source_index is not available.
+ * Prefer using source_index with semcheck_file_from_source_index when possible. */
+static void semcheck_file_from_buffer_line_number(int line_num, char *file_out, size_t file_out_size)
 {
     if (file_out == NULL || file_out_size == 0 || line_num <= 0)
         return;
@@ -1413,7 +1471,7 @@ void semantic_error(int line_num, int col_num, const char *format, ...)
     else if (effective_line > 0)
     {
         /* Look up file from line number when source_index is not available */
-        semcheck_file_from_line_number(effective_line, directive_file, sizeof(directive_file));
+        semcheck_file_from_buffer_line_number(effective_line, directive_file, sizeof(directive_file));
     }
 
     const char *file_path = (directive_file[0] != '\0')
@@ -1462,7 +1520,7 @@ void semantic_error_at(int line_num, int col_num, int source_index, const char *
     else if (line_num > 0)
     {
         /* Look up file from line number when source_index is not available */
-        semcheck_file_from_line_number(line_num, directive_file, sizeof(directive_file));
+        semcheck_file_from_buffer_line_number(line_num, directive_file, sizeof(directive_file));
     }
 
     const char *file_path = (directive_file[0] != '\0')
@@ -14384,10 +14442,18 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             }
             else
             {
+                char file_buf[512] = "";
+                if (subprogram->source_index >= 0)
+                    semcheck_file_from_source_index(subprogram->source_index, file_buf, sizeof(file_buf));
+                else
+                    semcheck_file_from_buffer_line_number(subprogram->line_num, file_buf, sizeof(file_buf));
                 /* FPC treats this as a warning, not an error - function result may be uninitialized */
-                fprintf(stderr,
-                    "Warning in function %s: function result does not seem to be set\n\n",
-                    subprogram->tree_data.subprogram_data.id);
+                if (file_buf[0] != '\0')
+                    fprintf(stderr, "%s(%d): warning: function %s result does not seem to be set\n\n",
+                        file_buf, subprogram->line_num, subprogram->tree_data.subprogram_data.id);
+                else
+                    fprintf(stderr, "line %d: warning: function %s result does not seem to be set\n\n",
+                        subprogram->line_num, subprogram->tree_data.subprogram_data.id);
                 g_semcheck_warning_count++;
             }
         }
