@@ -6715,12 +6715,16 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
     if (arg_start_index < 0)
         arg_start_index = 0;
 
+    int is_varargs_function = 0;
     if (proc_type != NULL && proc_type->kind == TYPE_KIND_PROCEDURE &&
         proc_type->info.proc_info.definition != NULL)
     {
         Tree_t *def = proc_type->info.proc_info.definition;
         if (def->type == TREE_SUBPROGRAM || def->type == TREE_SUBPROGRAM_PROC || def->type == TREE_SUBPROGRAM_FUNC)
+        {
             is_external_c_function = def->tree_data.subprogram_data.cname_flag;
+            is_varargs_function = def->tree_data.subprogram_data.is_varargs;
+        }
     }
 
     arg_num = 0;
@@ -8362,6 +8366,30 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                     proc_name,
                     describe_expression_kind(source_expr));
             exit(1);
+        }
+    }
+
+    /* Windows x64 varargs ABI: float/double arguments passed in XMM registers
+     * must also be mirrored into the corresponding integer register.
+     * The callee uses va_arg which reads from integer registers, so the
+     * caller must place the value in both locations. */
+    if (g_current_codegen_abi == KGPC_TARGET_ABI_WINDOWS && is_varargs_function && arg_infos != NULL)
+    {
+        for (int i = 0; i < arg_num; ++i)
+        {
+            if (arg_infos[i].assigned_class == ARG_CLASS_SSE &&
+                !arg_infos[i].pass_via_stack &&
+                arg_infos[i].assigned_index >= 0)
+            {
+                int reg_slot = arg_infos[i].assigned_index;
+                const char *xmm_reg = current_arg_reg_xmm(reg_slot);
+                const char *int_reg = get_arg_reg64_num(reg_slot);
+                assert(xmm_reg != NULL);
+                assert(int_reg != NULL);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
+                    xmm_reg, int_reg);
+                inst_list = add_inst(inst_list, buffer);
+            }
         }
     }
 
