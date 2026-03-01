@@ -1842,6 +1842,34 @@ int semcheck_recordaccess(int *type_return,
         }
     }
 
+    /* Unit-qualified identifier resolution: UnitName.Identifier
+     * When the base expression is a unit name, resolve field_id directly
+     * from the symbol table and transform this expression accordingly. */
+    if (record_expr->type == EXPR_VAR_ID && record_expr->expr_data.id != NULL &&
+        semcheck_is_unit_name(record_expr->expr_data.id))
+    {
+        HashNode_t *unit_sym = NULL;
+        if (FindIdent(&unit_sym, symtab, field_id) >= 0 && unit_sym != NULL)
+        {
+            /* Transform EXPR_RECORD_ACCESS into EXPR_VAR_ID for the resolved identifier */
+            destroy_expr(record_expr);
+            free(expr->expr_data.record_access_data.field_id);
+            expr->expr_data.record_access_data.record_expr = NULL;
+            expr->expr_data.record_access_data.field_id = NULL;
+            expr->type = EXPR_VAR_ID;
+            expr->expr_data.id = strdup(field_id);
+            if (expr->expr_data.id == NULL)
+            {
+                *type_return = UNKNOWN_TYPE;
+                return 1;
+            }
+            KgpcType *resolved_kgpc = NULL;
+            int result = semcheck_expr_with_type(&resolved_kgpc, symtab, expr, max_scope_lev, mutating);
+            *type_return = semcheck_tag_from_kgpc(resolved_kgpc);
+            return result;
+        }
+    }
+
     int error_count = 0;
     int record_type = UNKNOWN_TYPE;
     KgpcType *record_kgpc_type = NULL;
