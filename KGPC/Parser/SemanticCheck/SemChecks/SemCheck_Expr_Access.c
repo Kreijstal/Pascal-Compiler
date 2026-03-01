@@ -271,6 +271,34 @@ int semcheck_arrayaccess(int *type_return,
                 expr, max_scope_lev, mutating);
             if (property_result >= 0)
                 return return_val + property_result;
+
+            /* If the EXPR_VAR_ID was not found in scope AND indexed property
+             * resolution from Self failed, try the WITH context.  This handles
+             * patterns like:
+             *   with SomeList do  WriteLn(Items[i]);
+             * where Items is an indexed property of SomeList's class.
+             * Transform the base from EXPR_VAR_ID to EXPR_RECORD_ACCESS so
+             * that semcheck_try_indexed_property_getter's RECORD_ACCESS path
+             * can detect the indexed property with its enclosing record. */
+            struct Expression *with_expr = NULL;
+            int with_status = semcheck_with_try_resolve(
+                array_expr->expr_data.id, symtab, &with_expr, expr->line_num);
+            if (with_status == 0 && with_expr != NULL)
+            {
+                char *field_id = array_expr->expr_data.id;
+                array_expr->expr_data.id = NULL;
+                array_expr->type = EXPR_RECORD_ACCESS;
+                memset(&array_expr->expr_data.record_access_data, 0,
+                    sizeof(array_expr->expr_data.record_access_data));
+                array_expr->expr_data.record_access_data.record_expr = with_expr;
+                array_expr->expr_data.record_access_data.field_id = field_id;
+                array_expr->expr_data.record_access_data.field_offset = 0;
+
+                property_result = semcheck_try_indexed_property_getter(
+                    type_return, symtab, expr, max_scope_lev, mutating);
+                if (property_result >= 0)
+                    return return_val + property_result;
+            }
         }
     }
     else if (array_expr->type == EXPR_RECORD_ACCESS)
