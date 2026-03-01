@@ -7010,6 +7010,16 @@ static struct RecordType *convert_interface_type_ex(const char *interface_name, 
     record->properties = list_builder_finish(&property_builder);
     record->method_templates = list_builder_finish(&method_template_builder);
     record->parent_class_name = parent_interface_name;
+    /* In FPC, interfaces without an explicit parent implicitly inherit from
+     * IInterface (a.k.a. IUnknown).  Set the default parent so that methods
+     * like _AddRef, _Release, QueryInterface are found by the class-method
+     * walker when resolving field access on derived interfaces. */
+    if (record->parent_class_name == NULL && interface_name != NULL &&
+        !pascal_identifier_equals(interface_name, "IInterface") &&
+        !pascal_identifier_equals(interface_name, "IUnknown"))
+    {
+        record->parent_class_name = strdup("IInterface");
+    }
     record->methods = NULL;
     record->is_class = 0;
     record->is_interface = 1;
