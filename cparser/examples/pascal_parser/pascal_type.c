@@ -1244,7 +1244,7 @@ combinator_t* interface_type(tag_t tag) {
         token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
         NULL
     );
-    combinator_t* interface_guid = optional(seq(new_combinator(), PASCAL_T_NONE,
+    combinator_t* interface_guid = optional(seq(new_combinator(), PASCAL_T_INTERFACE_GUID,
         token(match("[")),
         sep_by(interface_guid_item, token(match(","))),
         token(match("]")),
