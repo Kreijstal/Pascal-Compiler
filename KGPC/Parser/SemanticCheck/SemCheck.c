@@ -1240,6 +1240,11 @@ static void semcheck_file_from_buffer_line_number(int line_num, char *file_out, 
 static int g_semcheck_error_line = 0;
 static int g_semcheck_error_col = 0;
 static int g_semcheck_error_source_index = -1;
+/* When set, source_index values are from a foreign preprocessed buffer
+ * (unit-imported subprogram bodies) and must not be stored in the error
+ * context, since resolve_error_source_context cannot disambiguate which
+ * buffer the offset belongs to. */
+static int g_semcheck_error_suppress_source_index = 0;
 
 void semcheck_set_error_context(int line_num, int col_num, int source_index)
 {
@@ -1249,7 +1254,8 @@ void semcheck_set_error_context(int line_num, int col_num, int source_index)
         g_semcheck_error_line = line_num;
     if (col_num > 0 || g_semcheck_error_col == 0)
         g_semcheck_error_col = col_num;
-    if (source_index >= 0 || g_semcheck_error_source_index < 0)
+    if (!g_semcheck_error_suppress_source_index &&
+        (source_index >= 0 || g_semcheck_error_source_index < 0))
         g_semcheck_error_source_index = source_index;
 }
 
@@ -2685,11 +2691,15 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symt
                 same_unit = 1;
 
             if (debug_tsize)
-                fprintf(stderr, "[TSIZE] candidate id='%s' defined_in_unit=%d source_unit_idx=%d "
+            {
+                const char *uname = unit_registry_get(node->source_unit_index);
+                fprintf(stderr, "[TSIZE] candidate id='%s' defined_in_unit=%d source_unit_idx=%d(%s) "
                     "unit_rank=%d scope_level=%d same_unit=%d type=%p kind=%d\n",
                     node->id ? node->id : "<null>", node->defined_in_unit,
-                    node->source_unit_index, unit_rank, scope_level, same_unit,
+                    node->source_unit_index, uname ? uname : "?",
+                    unit_rank, scope_level, same_unit,
                     (void *)node->type, node->type ? node->type->kind : -1);
+            }
 
             int take = 0;
             if (best == NULL)
@@ -8793,27 +8803,32 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
         int scope_level = FindIdent(&existing_type, symtab, tree->tree_data.type_decl_data.id);
         int already_predeclared = (scope_level == 0 && existing_type != NULL &&
                                    existing_type->hash_type == HASHTYPE_TYPE);
-        /* If existing type is from a different unit, find the correct predeclared
-         * entry from the same source unit. With cross-unit coexistence, multiple entries
-         * with the same name may exist in the same scope. This handles both record-record
-         * conflicts (e.g. System.tsiginfo vs SysUtils.tsiginfo) and alias-record
-         * conflicts (e.g. System.TSize alias vs Types.TSize record). */
+        /* If existing type is from a different source than the current declaration,
+         * find the correct predeclared entry from the same source. With cross-unit
+         * coexistence, multiple entries with the same name may exist in the same scope.
+         * This handles:
+         *  - record-record conflicts (e.g. System.tsiginfo vs SysUtils.tsiginfo)
+         *  - alias-record conflicts (e.g. System.TSize alias vs Types.TSize record)
+         *  - unit-vs-program conflicts (e.g. prelude TGUID vs program's own TGUID) */
+        int skip_type_tree = 0;
         if (already_predeclared &&
-            existing_type->source_unit_index != 0 &&
-            tree->tree_data.type_decl_data.source_unit_index != 0 &&
-            existing_type->source_unit_index != tree->tree_data.type_decl_data.source_unit_index)
+            ((existing_type->source_unit_index != 0 &&
+              tree->tree_data.type_decl_data.source_unit_index != 0 &&
+              existing_type->source_unit_index != tree->tree_data.type_decl_data.source_unit_index) ||
+             (tree->tree_data.type_decl_data.defined_in_unit &&
+              !existing_type->defined_in_unit)))
         {
             /* Search all entries for the one from the same source unit */
             ListNode_t *all_matches = FindAllIdents(symtab, tree->tree_data.type_decl_data.id);
             HashNode_t *same_unit_entry = NULL;
             ListNode_t *m = all_matches;
+            int target_idx = tree->tree_data.type_decl_data.source_unit_index;
             while (m != NULL)
             {
                 HashNode_t *candidate = (HashNode_t *)m->cur;
                 if (candidate != NULL &&
                     candidate->hash_type == HASHTYPE_TYPE &&
-                    candidate->source_unit_index != 0 &&
-                    candidate->source_unit_index == tree->tree_data.type_decl_data.source_unit_index)
+                    candidate->source_unit_index == target_idx)
                 {
                     same_unit_entry = candidate;
                     break;
@@ -8824,7 +8839,23 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
             if (same_unit_entry != NULL)
                 existing_type = same_unit_entry;
             else
-                already_predeclared = 0;
+            {
+                /* No predeclared entry from the same unit exists.
+                 * Skip this type tree entirely to avoid corrupting the
+                 * existing entry from a different source. */
+                skip_type_tree = 1;
+            }
+        }
+        if (skip_type_tree)
+        {
+            /* Clean up kgpc_type ownership before skipping */
+            if (tree->tree_data.type_decl_data.kgpc_type != NULL)
+            {
+                destroy_kgpc_type(tree->tree_data.type_decl_data.kgpc_type);
+                tree->tree_data.type_decl_data.kgpc_type = NULL;
+            }
+            cur = cur->next;
+            continue;
         }
 
 
@@ -9008,16 +9039,23 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
         }
         else
         {
-            /* Find the newly pushed entry to mark it with unit info.
-             * Use FindIdent (returns front-most entry) first, since the new
-             * entry hasn't been marked defined_in_unit yet. Fall back to
-             * semcheck_find_type_node_with_unit_flag for pre-existing entries. */
+            /* Find the entry to mark with unit info.
+             * For predeclared types, use the already-resolved existing_type
+             * (which may have been redirected by the cross-unit search above).
+             * For newly pushed types, use FindIdent to get the fresh entry. */
             HashNode_t *type_node = NULL;
-            FindIdent(&type_node, symtab, tree->tree_data.type_decl_data.id);
-            if (type_node == NULL || type_node->hash_type != HASHTYPE_TYPE)
-                type_node = semcheck_find_type_node_with_unit_flag(symtab,
-                    tree->tree_data.type_decl_data.id,
-                    tree->tree_data.type_decl_data.defined_in_unit);
+            if (already_predeclared)
+            {
+                type_node = existing_type;
+            }
+            else
+            {
+                FindIdent(&type_node, symtab, tree->tree_data.type_decl_data.id);
+                if (type_node == NULL || type_node->hash_type != HASHTYPE_TYPE)
+                    type_node = semcheck_find_type_node_with_unit_flag(symtab,
+                        tree->tree_data.type_decl_data.id,
+                        tree->tree_data.type_decl_data.defined_in_unit);
+            }
             if (type_node != NULL)
             {
                 mark_hashnode_unit_info(symtab, type_node,
@@ -11172,24 +11210,53 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
             {
                 /* Imported declarations must stay bound to imported symbols.
                  * When the subprogram's source unit is known, prefer a type
-                 * from that same unit to handle TSize ambiguity (POSIX size_t
-                 * from BaseUnix vs record from Types). */
+                 * that was visible at the function's declaration site:
+                 *  1) Exact match: type from the same source unit
+                 *  2) Closest ancestor: type with highest source_unit_index
+                 *     that is <= the function's source unit index (i.e., a
+                 *     type from a unit loaded before/with the function's unit)
+                 *  3) Generic fallback */
                 resolved_type = NULL;
                 if (g_semcheck_imported_decl_unit_index > 0 && decl_type_id != NULL)
                 {
+                    HashNode_t *closest_ancestor = NULL;
+                    int closest_idx = 0;
                     ListNode_t *candidates = FindAllIdents(symtab, decl_type_id);
                     ListNode_t *c = candidates;
+                    int debug_imported = (getenv("KGPC_DEBUG_TSIZE") != NULL &&
+                                         pascal_identifier_equals(decl_type_id, "TSize"));
+                    if (debug_imported)
+                        fprintf(stderr, "[IMPORTED_DECL] TSize lookup, imported_unit_idx=%d\n",
+                            g_semcheck_imported_decl_unit_index);
                     while (c != NULL)
                     {
                         HashNode_t *n = (HashNode_t *)c->cur;
-                        if (n != NULL && n->hash_type == HASHTYPE_TYPE &&
-                            n->source_unit_index == g_semcheck_imported_decl_unit_index)
+                        if (n != NULL && n->hash_type == HASHTYPE_TYPE)
                         {
-                            resolved_type = n;
-                            break;
+                            if (debug_imported)
+                                fprintf(stderr, "[IMPORTED_DECL]   candidate src_idx=%d kind=%d\n",
+                                    n->source_unit_index, n->type ? n->type->kind : -1);
+                            if (n->source_unit_index == g_semcheck_imported_decl_unit_index)
+                            {
+                                resolved_type = n;
+                                break;
+                            }
+                            /* Track best ancestor: highest index still <= function's unit */
+                            if (n->source_unit_index > 0 &&
+                                n->source_unit_index <= g_semcheck_imported_decl_unit_index &&
+                                n->source_unit_index > closest_idx)
+                            {
+                                closest_ancestor = n;
+                                closest_idx = n->source_unit_index;
+                            }
                         }
                         c = c->next;
                     }
+                    if (debug_imported)
+                        fprintf(stderr, "[IMPORTED_DECL]   result: exact=%p ancestor=%p (idx=%d)\n",
+                            (void *)resolved_type, (void *)closest_ancestor, closest_idx);
+                    if (resolved_type == NULL && closest_ancestor != NULL)
+                        resolved_type = closest_ancestor;
                     if (candidates != NULL)
                         DestroyList(candidates);
                 }
@@ -13493,7 +13560,30 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         int before_args = return_val;
         int saved_imported_unit = g_semcheck_imported_decl_unit_index;
         if (subprogram->tree_data.subprogram_data.defined_in_unit)
+        {
             g_semcheck_imported_decl_unit_index = subprogram->tree_data.subprogram_data.source_unit_index;
+            if (getenv("KGPC_DEBUG_TSIZE") != NULL)
+            {
+                /* Check if any arg has TSize type_id */
+                ListNode_t *a = subprogram->tree_data.subprogram_data.args_var;
+                while (a != NULL)
+                {
+                    if (a->type == LIST_TREE && a->cur != NULL)
+                    {
+                        Tree_t *ad = (Tree_t *)a->cur;
+                        if (ad->type == TREE_VAR_DECL && ad->tree_data.var_decl_data.type_id != NULL &&
+                            pascal_identifier_equals(ad->tree_data.var_decl_data.type_id, "TSize"))
+                        {
+                            fprintf(stderr, "[SUBPROGRAM_TSIZE] func=%s source_unit_idx=%d param_type_id=%s\n",
+                                subprogram->tree_data.subprogram_data.id ? subprogram->tree_data.subprogram_data.id : "<null>",
+                                subprogram->tree_data.subprogram_data.source_unit_index,
+                                ad->tree_data.var_decl_data.type_id);
+                        }
+                    }
+                    a = a->next;
+                }
+            }
+        }
         return_val += semcheck_decls(symtab, subprogram->tree_data.subprogram_data.args_var);
         g_semcheck_imported_decl_unit_index = saved_imported_unit;
         semcheck_debug_error_step("args_decls", subprogram, before_args, return_val);
@@ -13664,6 +13754,18 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         return return_val;
     }
 
+    /* Suppress source_index usage for unit-imported subprogram bodies.
+     * Their expressions carry source_index values from a different
+     * preprocessed buffer, and resolve_error_source_context cannot
+     * disambiguate buffers, producing misleading file:line locations. */
+    int saved_suppress = g_semcheck_error_suppress_source_index;
+    int saved_error_source_index = g_semcheck_error_source_index;
+    if (subprogram->tree_data.subprogram_data.defined_in_unit)
+    {
+        g_semcheck_error_suppress_source_index = 1;
+        g_semcheck_error_source_index = -1;
+    }
+
     /* Functions cannot have side effects, so need to call a special function in that case */
     if(sub_type == TREE_SUBPROGRAM_PROC)
     {
@@ -13803,6 +13905,10 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
 
     g_semcheck_current_subprogram = prev_current_subprogram;
     PopScope(symtab);
+
+    /* Restore error context / suppress flag after body processing. */
+    g_semcheck_error_suppress_source_index = saved_suppress;
+    g_semcheck_error_source_index = saved_error_source_index;
 
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_subprogram %s returning at end: %d\n", subprogram->tree_data.subprogram_data.id, return_val);
