@@ -3354,8 +3354,13 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                                 if (need_bare_alias) {
                                     /* Use .bss section with explicit label so .set can reference it.
                                        .comm symbols can't be the target of .set, so we allocate
-                                       explicitly and use .pushsection/.popsection to preserve context. */
-                                    fprintf(ctx->output_file, "\t.pushsection .bss\n");
+                                       explicitly and switch to .bss then back to .text. */
+                                    if (codegen_target_is_windows()) {
+                                        /* PE/COFF: .pushsection is not supported; use explicit section switches */
+                                        fprintf(ctx->output_file, "\t.section .bss\n");
+                                    } else {
+                                        fprintf(ctx->output_file, "\t.pushsection .bss\n");
+                                    }
                                     fprintf(ctx->output_file, "\t.align\t%d\n", alignment);
                                     fprintf(ctx->output_file, ".globl\t%s\n", static_label);
                                     fprintf(ctx->output_file, "%s:\n", static_label);
@@ -3363,7 +3368,11 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                                     fprintf(ctx->output_file, ".globl\t%s\n", (const char *)id_list->cur);
                                     fprintf(ctx->output_file, "\t.set\t%s, %s\n",
                                         (const char *)id_list->cur, static_label);
-                                    fprintf(ctx->output_file, "\t.popsection\n");
+                                    if (codegen_target_is_windows()) {
+                                        fprintf(ctx->output_file, "\t.section .text\n");
+                                    } else {
+                                        fprintf(ctx->output_file, "\t.popsection\n");
+                                    }
                                 } else {
                                     if (cname_override != NULL) {
                                         /* Public name: make it globally visible */
