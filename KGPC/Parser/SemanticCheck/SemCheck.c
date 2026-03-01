@@ -3849,7 +3849,15 @@ static int get_builtin_type_bounds(const char *base_name,
     if (base_name == NULL)
         return 0;
 
-    struct { const char *names[3]; long long low; long long high; } table[] = {
+    typedef struct {
+        const char *names[3];
+        long long low;
+        long long high;
+    } TypeBoundsEntry;
+    /* Note: QWord/UInt64 high is INT64_MAX (not UINT64_MAX) because the
+     * const-expression evaluator uses signed long long throughout.  Proper
+     * unsigned 64-bit semantics are not yet supported. */
+    static const TypeBoundsEntry table[] = {
         { {"Int64",    NULL,       NULL},         (-9223372036854775807LL - 1), 9223372036854775807LL },
         { {"QWord",    "UInt64",   NULL},         0LL,                         9223372036854775807LL  },
         { {"LongInt",  "Integer",  NULL},         -2147483648LL,               2147483647LL           },
