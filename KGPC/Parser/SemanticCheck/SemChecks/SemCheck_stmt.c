@@ -5472,6 +5472,23 @@ skip_type_receiver_rewrite:
                     args_given = stmt->stmt_data.procedure_call_data.expr_args;
                     static_arg_already_removed = 1;
                 }
+                else if (is_static && !receiver_is_type_ident && args_given != NULL)
+                {
+                    /* Static method called from within the class with implicit Self prepended.
+                     * Self must be stripped since static methods have no Self parameter.
+                     * Check if the first arg is "Self". */
+                    struct Expression *receiver_expr = (struct Expression *)args_given->cur;
+                    if (receiver_expr != NULL && receiver_expr->type == EXPR_VAR_ID &&
+                        receiver_expr->expr_data.id != NULL &&
+                        pascal_identifier_equals(receiver_expr->expr_data.id, "Self"))
+                    {
+                        ListNode_t *old_head = args_given;
+                        stmt->stmt_data.procedure_call_data.expr_args = old_head->next;
+                        old_head->next = NULL;
+                        args_given = stmt->stmt_data.procedure_call_data.expr_args;
+                        static_arg_already_removed = 1;
+                    }
+                }
             }
             else
             {
@@ -5747,6 +5764,18 @@ skip_type_receiver_rewrite:
                 /* For static methods, remove the first argument (the type identifier) */
                 args_given = args_given->next;
                 stmt->stmt_data.procedure_call_data.expr_args = args_given;
+            }
+            else if (is_static && !receiver_is_type_ident && args_given != NULL)
+            {
+                /* Static method called with implicit Self - strip it */
+                struct Expression *receiver_expr = (struct Expression *)args_given->cur;
+                if (receiver_expr != NULL && receiver_expr->type == EXPR_VAR_ID &&
+                    receiver_expr->expr_data.id != NULL &&
+                    pascal_identifier_equals(receiver_expr->expr_data.id, "Self"))
+                {
+                    args_given = args_given->next;
+                    stmt->stmt_data.procedure_call_data.expr_args = args_given;
+                }
             }
         }
         
