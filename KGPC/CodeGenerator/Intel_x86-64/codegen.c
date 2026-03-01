@@ -2382,6 +2382,84 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
         }
     }
 
+    /* Emit interface method dispatch thunks.
+     * For each interface a class implements, generate global symbols for the
+     * interface method names that forward to the implementing class methods.
+     * This enables interface method calls (e.g., FStream.Read(...)) to link
+     * when emitted as direct calls to the interface method mangled name.
+     * TODO: Replace with proper vtable-based interface dispatch for cases
+     * where multiple classes implement the same interface. */
+    if (record_info->num_interfaces > 0 && !record_info->is_interface) {
+        for (int iidx = 0; iidx < record_info->num_interfaces; iidx++) {
+            const char *iface_name = record_info->interface_names[iidx];
+            if (iface_name == NULL) continue;
+            /* Look up the interface to get its method list */
+            HashNode_t *iface_node = NULL;
+            struct RecordType *iface_record = NULL;
+            if (FindIdent(&iface_node, symtab, iface_name) == 0 && iface_node != NULL) {
+                iface_record = get_record_type_from_node(iface_node);
+                if (iface_record == NULL && iface_node->type != NULL &&
+                    iface_node->type->kind == TYPE_KIND_POINTER &&
+                    iface_node->type->info.points_to != NULL &&
+                    iface_node->type->info.points_to->kind == TYPE_KIND_RECORD)
+                    iface_record = iface_node->type->info.points_to->info.record_info;
+            }
+            if (iface_record == NULL) continue;
+            /* Interface methods are stored in method_templates (not methods).
+             * Iterate over method_templates to find the method names. */
+            ListNode_t *iface_methods_list = iface_record->method_templates;
+            if (iface_methods_list == NULL) continue;
+            ListNode_t *iface_method = iface_methods_list;
+            while (iface_method != NULL) {
+                struct MethodTemplate *imethod = (struct MethodTemplate *)iface_method->cur;
+                if (imethod != NULL && imethod->name != NULL) {
+                    /* Build the class's implementation mangled name: ClassName__MethodName */
+                    char impl_base[512];
+                    snprintf(impl_base, sizeof(impl_base), "%s__%s", class_label, imethod->name);
+                    /* Find the implementing method in the symbol table to get its full mangled name */
+                    ListNode_t *impl_candidates = FindAllIdents(symtab, impl_base);
+                    HashNode_t *impl_func = NULL;
+                    for (ListNode_t *ic = impl_candidates; ic != NULL; ic = ic->next) {
+                        HashNode_t *cand = (HashNode_t *)ic->cur;
+                        if (cand != NULL && cand->mangled_id != NULL &&
+                            cand->type != NULL && cand->type->kind == TYPE_KIND_PROCEDURE &&
+                            cand->type->info.proc_info.definition != NULL) {
+                            impl_func = cand;
+                            break;
+                        }
+                    }
+                    if (impl_func != NULL && impl_func->mangled_id != NULL) {
+                        /* Build the interface method mangled name: InterfaceName__MethodName */
+                        char iface_base[512];
+                        snprintf(iface_base, sizeof(iface_base), "%s__%s", iface_name, imethod->name);
+                        /* Find the interface method's full mangled name */
+                        ListNode_t *iface_candidates = FindAllIdents(symtab, iface_base);
+                        HashNode_t *iface_func = NULL;
+                        for (ListNode_t *ic = iface_candidates; ic != NULL; ic = ic->next) {
+                            HashNode_t *cand = (HashNode_t *)ic->cur;
+                            if (cand != NULL && cand->mangled_id != NULL &&
+                                (cand->hash_type == HASHTYPE_FUNCTION ||
+                                 cand->hash_type == HASHTYPE_PROCEDURE)) {
+                                iface_func = cand;
+                                break;
+                            }
+                        }
+                        if (iface_func != NULL && iface_func->mangled_id != NULL) {
+                            fprintf(ctx->output_file, "\n# Interface dispatch: %s.%s -> %s.%s\n",
+                                iface_name, imethod->name, class_label, imethod->name);
+                            fprintf(ctx->output_file, ".globl %s\n", iface_func->mangled_id);
+                            fprintf(ctx->output_file, ".set %s, %s\n",
+                                iface_func->mangled_id, impl_func->mangled_id);
+                        }
+                        if (iface_candidates != NULL) DestroyList(iface_candidates);
+                    }
+                    if (impl_candidates != NULL) DestroyList(impl_candidates);
+                }
+                iface_method = iface_method->next;
+            }
+        }
+    }
+
     /* Emit writable storage for class vars. */
     if (record_type_is_class(record_info) || record_has_class_vars(record_info) ||
         record_has_class_method_templates(record_info) || record_has_method_decls(record_info))

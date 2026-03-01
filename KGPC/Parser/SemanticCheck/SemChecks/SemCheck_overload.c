@@ -981,6 +981,19 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
                 q.exact_pointer_subtype = 1;
                 return q;
             }
+            /* When pointer subtypes differ, check if the pointed-to types
+             * are compatible integers (e.g. ^LongInt vs ^Cardinal/^DWORD).
+             * FPC allows implicit conversion between pointers to same-sized
+             * integer types in value parameter contexts. */
+            if (is_integer_type(actual_sub) && is_integer_type(formal_sub))
+                return semcheck_make_quality(MATCH_CONVERSION);
+            /* Also try kgpc_type_conversion_rank on the pointed-to types */
+            if (actual_kgpc->info.points_to != NULL && formal_kgpc->info.points_to != NULL)
+            {
+                int rank = kgpc_type_conversion_rank(actual_kgpc->info.points_to, formal_kgpc->info.points_to);
+                if (rank >= 0)
+                    return semcheck_make_quality(MATCH_CONVERSION);
+            }
             return semcheck_make_quality(MATCH_INCOMPATIBLE);
         }
         if (actual_sub != UNKNOWN_TYPE || formal_sub != UNKNOWN_TYPE)
