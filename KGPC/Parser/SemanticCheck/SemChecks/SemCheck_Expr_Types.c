@@ -1415,14 +1415,27 @@ int semcheck_recordaccess(int *type_return,
 
             if (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
             {
+                /* Determine the resolved type tag for the qualified type.
+                 * Only set kgpc_type/tag for enum types to enable
+                 * TClass.TEnum.Value resolution.  Other type references
+                 * should stay UNKNOWN_TYPE to avoid codegen side-effects. */
+                int resolved_tag = UNKNOWN_TYPE;
+                struct TypeAlias *ta = hashnode_get_type_alias(type_node);
+                if (ta != NULL && ta->is_enum)
+                    resolved_tag = ENUM_TYPE;
+
                 destroy_expr(record_expr);
                 free(expr->expr_data.record_access_data.field_id);
                 expr->expr_data.record_access_data.record_expr = NULL;
                 expr->expr_data.record_access_data.field_id = NULL;
                 expr->type = EXPR_VAR_ID;
                 expr->expr_data.id = strdup(resolved_id);
+                if (resolved_tag == ENUM_TYPE && type_node->type != NULL)
+                    semcheck_expr_set_resolved_kgpc_type_shared(expr, type_node->type);
+                if (resolved_tag != UNKNOWN_TYPE)
+                    semcheck_expr_set_resolved_type(expr, resolved_tag);
                 free(qualified_id);
-                *type_return = UNKNOWN_TYPE;
+                *type_return = resolved_tag;
                 return 0;
             }
             free(qualified_id);
@@ -1474,6 +1487,49 @@ int semcheck_recordaccess(int *type_return,
                         *type_return = ENUM_TYPE;
                         return 0;
                     }
+                }
+            }
+            /* Check for nested type access: TMyClass.TMyEnum where TMyEnum is a
+             * nested type registered as "TMyClass.TMyEnum" in the symbol table. */
+            {
+                size_t owner_len = strlen(record_expr->expr_data.id);
+                size_t field_len = strlen(field_id);
+                char *qualified = (char *)malloc(owner_len + 1 + field_len + 1);
+                if (qualified != NULL)
+                {
+                    snprintf(qualified, owner_len + 1 + field_len + 1, "%s.%s",
+                        record_expr->expr_data.id, field_id);
+                    HashNode_t *nested_node = NULL;
+                    if (FindIdent(&nested_node, symtab, qualified) >= 0 &&
+                        nested_node != NULL && nested_node->hash_type == HASHTYPE_TYPE)
+                    {
+                        struct TypeAlias *nta = hashnode_get_type_alias(nested_node);
+                        int nested_tag = UNKNOWN_TYPE;
+                        if (nta != NULL && nta->is_enum)
+                            nested_tag = ENUM_TYPE;
+                        else if (nested_node->type != NULL)
+                            nested_tag = semcheck_tag_from_kgpc(nested_node->type);
+
+                        /* Replace record_access with EXPR_VAR_ID for the qualified type */
+                        if (record_expr != NULL)
+                        {
+                            destroy_expr(record_expr);
+                            expr->expr_data.record_access_data.record_expr = NULL;
+                        }
+                        if (expr->expr_data.record_access_data.field_id != NULL)
+                        {
+                            free(expr->expr_data.record_access_data.field_id);
+                            expr->expr_data.record_access_data.field_id = NULL;
+                        }
+                        expr->type = EXPR_VAR_ID;
+                        expr->expr_data.id = qualified;
+                        semcheck_expr_set_resolved_type(expr, nested_tag);
+                        if (nested_node->type != NULL)
+                            semcheck_expr_set_resolved_kgpc_type_shared(expr, nested_node->type);
+                        *type_return = nested_tag;
+                        return 0;
+                    }
+                    free(qualified);
                 }
             }
         }
@@ -2070,6 +2126,50 @@ int semcheck_recordaccess(int *type_return,
             expr->expr_data.relop_data.right = right_expr;
 
             return semcheck_expr_legacy_tag(type_return, symtab, expr, max_scope_lev, mutating);
+        }
+        else if (record_type == ENUM_TYPE && field_id != NULL)
+        {
+            /* Scoped enum through nested type: TClass.TEnum.Value
+             * The inner access resolved to an enum type; look up field_id as a literal. */
+            const char *enum_type_name = expr_type_name;
+            if (enum_type_name == NULL && record_expr->resolved_kgpc_type != NULL &&
+                record_expr->resolved_kgpc_type->type_alias != NULL)
+            {
+                enum_type_name = record_expr->resolved_kgpc_type->type_alias->alias_name;
+                if (enum_type_name == NULL)
+                    enum_type_name = record_expr->resolved_kgpc_type->type_alias->target_type_id;
+            }
+            long long enum_value = 0;
+            int resolved = 0;
+            if (enum_type_name != NULL)
+                resolved = semcheck_resolve_scoped_enum_literal(symtab, enum_type_name, field_id, &enum_value);
+            if (!resolved)
+            {
+                /* Try looking up the field_id directly as a global enum constant */
+                HashNode_t *enum_node = NULL;
+                if (FindIdent(&enum_node, symtab, field_id) >= 0 && enum_node != NULL &&
+                    enum_node->hash_type == HASHTYPE_CONST)
+                {
+                    resolved = 1;
+                    if (enum_node->type != NULL && enum_node->type->kind == TYPE_KIND_PRIMITIVE)
+                        enum_value = enum_node->const_int_value;
+                    else
+                        enum_value = enum_node->const_int_value;
+                }
+            }
+            if (resolved)
+            {
+                expr->type = EXPR_INUM;
+                expr->expr_data.i_num = enum_value;
+                semcheck_expr_set_resolved_type(expr, ENUM_TYPE);
+                if (record_expr->resolved_kgpc_type != NULL)
+                    semcheck_expr_set_resolved_kgpc_type_shared(expr, record_expr->resolved_kgpc_type);
+                *type_return = ENUM_TYPE;
+                return 0;
+            }
+            semcheck_error_with_context("Error on line %d, field access requires a record value.\n\n", expr->line_num);
+            *type_return = UNKNOWN_TYPE;
+            return error_count + 1;
         }
         else
         {
@@ -2866,6 +2966,53 @@ int semcheck_recordaccess(int *type_return,
             }
             if (mangled_const != NULL)
                 free(mangled_const);
+        }
+
+        /* For classes, check if the field is a nested type (e.g., TClass.TNestedEnum).
+         * Nested types are registered as "ClassName.NestedTypeName" in the symbol table. */
+        if (record_info != NULL && record_info->type_id != NULL && field_id != NULL)
+        {
+            size_t owner_len = strlen(record_info->type_id);
+            size_t field_len = strlen(field_id);
+            char *qualified_name = (char *)malloc(owner_len + 1 + field_len + 1);
+            if (qualified_name != NULL)
+            {
+                snprintf(qualified_name, owner_len + 1 + field_len + 1, "%s.%s",
+                    record_info->type_id, field_id);
+                HashNode_t *type_node = NULL;
+                if (FindIdent(&type_node, symtab, qualified_name) >= 0 &&
+                    type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+                {
+                    /* Found a nested type.  Transform the record access into
+                     * a reference to this type so further accesses (e.g.
+                     * TClass.TEnum.Value) can resolve correctly. */
+                    struct TypeAlias *ta = hashnode_get_type_alias(type_node);
+                    int nested_type_tag = UNKNOWN_TYPE;
+                    if (ta != NULL && ta->is_enum)
+                        nested_type_tag = ENUM_TYPE;
+                    else if (type_node->type != NULL)
+                        nested_type_tag = semcheck_tag_from_kgpc(type_node->type);
+
+                    /* Transform to EXPR_VAR_ID pointing at the qualified type name
+                     * so that outer record_access (e.g. .EnumValue) can resolve
+                     * it via the existing scoped-enum handler. */
+                    destroy_expr(record_expr);
+                    expr->expr_data.record_access_data.record_expr = NULL;
+                    if (expr->expr_data.record_access_data.field_id != NULL)
+                    {
+                        free(expr->expr_data.record_access_data.field_id);
+                        expr->expr_data.record_access_data.field_id = NULL;
+                    }
+                    expr->type = EXPR_VAR_ID;
+                    expr->expr_data.id = qualified_name;
+                    semcheck_expr_set_resolved_type(expr, nested_type_tag);
+                    if (type_node->type != NULL)
+                        semcheck_expr_set_resolved_kgpc_type_shared(expr, type_node->type);
+                    *type_return = nested_type_tag;
+                    return 0;
+                }
+                free(qualified_name);
+            }
         }
 
         if (record_info != NULL && record_info->type_id != NULL)
