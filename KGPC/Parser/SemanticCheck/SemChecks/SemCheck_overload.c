@@ -1780,6 +1780,42 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                 }
 
                 MatchQuality quality = semcheck_make_quality(MATCH_INCOMPATIBLE);
+
+                /* When the formal parameter is an array type but the argument
+                 * is not an array, the candidate is generally incompatible.
+                 * Without this check, resolve_param_type returns the *element*
+                 * type (e.g. BYTE_TYPE for "array of Byte") and classify_match
+                 * may spuriously promote a scalar argument (e.g. Boolean) to
+                 * an integer match, hiding the correct untyped overload.
+                 *
+                 * Exception: string/char arguments can match "array of Char"
+                 * parameters (FPC auto-converts the string to a char array). */
+                if (formal_is_array_decl && !arg_is_array)
+                {
+                    int allow_string_to_char_array = 0;
+                    if (is_string_type(arg_tag) || arg_tag == CHAR_TYPE)
+                    {
+                        /* Check if formal element type is Char */
+                        KgpcType *formal_elem = NULL;
+                        if (formal_kgpc != NULL && formal_kgpc->kind == TYPE_KIND_ARRAY)
+                            formal_elem = kgpc_type_get_array_element_type_resolved(
+                                formal_kgpc, symtab);
+                        int elem_tag = formal_elem ? semcheck_tag_from_kgpc(formal_elem)
+                                                   : formal_tag;
+                        if (elem_tag == CHAR_TYPE)
+                            allow_string_to_char_array = 1;
+                    }
+                    if (!allow_string_to_char_array)
+                    {
+                        candidate_valid = 0;
+                        if (owns_formal && formal_kgpc != NULL)
+                            destroy_kgpc_type(formal_kgpc);
+                        if (owns_arg && arg_kgpc != NULL)
+                            destroy_kgpc_type(arg_kgpc);
+                        break;
+                    }
+                }
+
                 if (formal_kgpc == NULL)
                 {
                     quality = semcheck_make_quality(MATCH_PROMOTION);
