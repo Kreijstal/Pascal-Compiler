@@ -1501,11 +1501,20 @@ int main(int argc, char **argv)
         /* Load used units */
         UnitSet visited_units;
         unit_set_init(&visited_units);
-        
+
+        /* Mark the current unit as visited so circular dependencies
+         * (e.g. types.pp → Math → types.pp) don't re-import it. */
+        if (user_tree->tree_data.unit_data.unit_id != NULL)
+        {
+            char *self_lower = lowercase_copy(user_tree->tree_data.unit_data.unit_id);
+            if (self_lower != NULL)
+                unit_set_add(&visited_units, self_lower);
+        }
+
         /* NOTE: For FPC compatibility, system types (SizeInt, PAnsiChar, etc.)
          * are now included in the system prelude and available to all compilations.
          * Explicit system unit loading is not needed. */
-        
+
         /* Load units from interface and implementation uses clauses */
         if (!use_stdlib &&
             !pascal_identifier_equals(user_tree->tree_data.unit_data.unit_id, "System"))

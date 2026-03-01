@@ -72,6 +72,7 @@ static char* strndup(const char* s, size_t n)
 
 static ListNode_t *g_semcheck_unit_names = NULL;
 static int g_semcheck_current_unit_index = 0;
+static int g_semcheck_imported_decl_unit_index = 0;
 static char *g_semcheck_source_path = NULL;
 static char *g_semcheck_source_buffer = NULL;
 static size_t g_semcheck_source_length = 0;
@@ -2662,6 +2663,8 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symt
     int best_unit_rank = INT_MAX / 2;
     int best_scope_level = INT_MAX / 2;
     int best_same_unit = 0;
+    int debug_tsize = (getenv("KGPC_DEBUG_TSIZE") != NULL && rendered != NULL &&
+                       pascal_identifier_equals(rendered, "TSize"));
     ListNode_t *cur = matches;
     while (cur != NULL)
     {
@@ -2681,6 +2684,13 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symt
                 node->source_unit_index == g_semcheck_current_unit_index)
                 same_unit = 1;
 
+            if (debug_tsize)
+                fprintf(stderr, "[TSIZE] candidate id='%s' defined_in_unit=%d source_unit_idx=%d "
+                    "unit_rank=%d scope_level=%d same_unit=%d type=%p kind=%d\n",
+                    node->id ? node->id : "<null>", node->defined_in_unit,
+                    node->source_unit_index, unit_rank, scope_level, same_unit,
+                    (void *)node->type, node->type ? node->type->kind : -1);
+
             int take = 0;
             if (best == NULL)
             {
@@ -2699,10 +2709,16 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symt
             }
             else if (same_unit == best_same_unit &&
                      (scope_level < best_scope_level ||
-                      (scope_level == best_scope_level && unit_rank < best_unit_rank)))
+                      (scope_level == best_scope_level && unit_rank < best_unit_rank) ||
+                      (scope_level == best_scope_level && unit_rank == best_unit_rank &&
+                       node->source_unit_index > 0 && best->source_unit_index > 0 &&
+                       node->source_unit_index > best->source_unit_index)))
             {
                 take = 1;
             }
+
+            if (debug_tsize)
+                fprintf(stderr, "[TSIZE]   take=%d\n", take);
 
             if (take)
             {
@@ -2713,6 +2729,30 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symt
             }
         }
         cur = cur->next;
+    }
+    if (debug_tsize && best != NULL)
+    {
+        fprintf(stderr, "[TSIZE] WINNER id='%s' defined_in_unit=%d source_unit_idx=%d kind=%d",
+            best->id ? best->id : "<null>", best->defined_in_unit,
+            best->source_unit_index, best->type ? best->type->kind : -1);
+        if (best->type != NULL && best->type->kind == TYPE_KIND_RECORD)
+        {
+            struct RecordType *ri = best->type->info.record_info;
+            fprintf(stderr, " record_info=%p", (void *)ri);
+            if (ri != NULL)
+            {
+                int fc = 0;
+                ListNode_t *f = ri->fields;
+                while (f != NULL) { fc++; f = f->next; }
+                fprintf(stderr, " field_count=%d type_id='%s'", fc,
+                    ri->type_id ? ri->type_id : "<null>");
+            }
+        }
+        else if (best->type != NULL && best->type->kind == TYPE_KIND_PRIMITIVE)
+        {
+            fprintf(stderr, " prim_tag=%d", best->type->info.primitive_type_tag);
+        }
+        fprintf(stderr, "\n");
     }
     if (matches != NULL)
         DestroyList(matches);
@@ -8743,11 +8783,12 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
         int scope_level = FindIdent(&existing_type, symtab, tree->tree_data.type_decl_data.id);
         int already_predeclared = (scope_level == 0 && existing_type != NULL &&
                                    existing_type->hash_type == HASHTYPE_TYPE);
-        /* If existing record type is from a different unit, find the correct predeclared
+        /* If existing type is from a different unit, find the correct predeclared
          * entry from the same source unit. With cross-unit coexistence, multiple entries
-         * with the same name may exist in the same scope. */
+         * with the same name may exist in the same scope. This handles both record-record
+         * conflicts (e.g. System.tsiginfo vs SysUtils.tsiginfo) and alias-record
+         * conflicts (e.g. System.TSize alias vs Types.TSize record). */
         if (already_predeclared &&
-            tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD &&
             existing_type->source_unit_index != 0 &&
             tree->tree_data.type_decl_data.source_unit_index != 0 &&
             existing_type->source_unit_index != tree->tree_data.type_decl_data.source_unit_index)
@@ -8957,9 +8998,16 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
         }
         else
         {
-            HashNode_t *type_node = semcheck_find_type_node_with_unit_flag(symtab,
-                tree->tree_data.type_decl_data.id,
-                tree->tree_data.type_decl_data.defined_in_unit);
+            /* Find the newly pushed entry to mark it with unit info.
+             * Use FindIdent (returns front-most entry) first, since the new
+             * entry hasn't been marked defined_in_unit yet. Fall back to
+             * semcheck_find_type_node_with_unit_flag for pre-existing entries. */
+            HashNode_t *type_node = NULL;
+            FindIdent(&type_node, symtab, tree->tree_data.type_decl_data.id);
+            if (type_node == NULL || type_node->hash_type != HASHTYPE_TYPE)
+                type_node = semcheck_find_type_node_with_unit_flag(symtab,
+                    tree->tree_data.type_decl_data.id,
+                    tree->tree_data.type_decl_data.defined_in_unit);
             if (type_node != NULL)
             {
                 mark_hashnode_unit_info(symtab, type_node,
@@ -11113,24 +11161,31 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
             if (tree->tree_data.var_decl_data.defined_in_unit)
             {
                 /* Imported declarations must stay bound to imported symbols.
-                 * Never allow local fallback here: local shadow types can
-                 * silently corrupt signatures (e.g. UnixType.TSize). */
-                resolved_type = semcheck_find_type_node_with_unit_flag_ref(symtab,
-                    decl_type_ref, decl_type_id, 1);
-                if (resolved_type != NULL && resolved_type->type != NULL &&
-                    resolved_type->type->kind == TYPE_KIND_RECORD &&
-                    (decl_type_base != NULL &&
-                     (pascal_identifier_equals(decl_type_base, "TSize") ||
-                      pascal_identifier_equals(decl_type_base, "tsize"))))
+                 * When the subprogram's source unit is known, prefer a type
+                 * from that same unit to handle TSize ambiguity (POSIX size_t
+                 * from BaseUnix vs record from Types). */
+                resolved_type = NULL;
+                if (g_semcheck_imported_decl_unit_index > 0 && decl_type_id != NULL)
                 {
-                    HashNode_t *size_node = semcheck_find_type_node_with_unit_flag(symtab,
-                        "size_t", 1);
-                    if (size_node == NULL || size_node->type == NULL)
-                        size_node = semcheck_find_preferred_type_node(symtab, "size_t");
-                    if (size_node != NULL && size_node->type != NULL &&
-                        size_node->type->kind != TYPE_KIND_RECORD)
-                        resolved_type = size_node;
+                    ListNode_t *candidates = FindAllIdents(symtab, decl_type_id);
+                    ListNode_t *c = candidates;
+                    while (c != NULL)
+                    {
+                        HashNode_t *n = (HashNode_t *)c->cur;
+                        if (n != NULL && n->hash_type == HASHTYPE_TYPE &&
+                            n->source_unit_index == g_semcheck_imported_decl_unit_index)
+                        {
+                            resolved_type = n;
+                            break;
+                        }
+                        c = c->next;
+                    }
+                    if (candidates != NULL)
+                        DestroyList(candidates);
                 }
+                if (resolved_type == NULL)
+                    resolved_type = semcheck_find_type_node_with_unit_flag_ref(symtab,
+                        decl_type_ref, decl_type_id, 1);
             }
             else
             {
@@ -13426,7 +13481,11 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     }
     {
         int before_args = return_val;
+        int saved_imported_unit = g_semcheck_imported_decl_unit_index;
+        if (subprogram->tree_data.subprogram_data.defined_in_unit)
+            g_semcheck_imported_decl_unit_index = subprogram->tree_data.subprogram_data.source_unit_index;
         return_val += semcheck_decls(symtab, subprogram->tree_data.subprogram_data.args_var);
+        g_semcheck_imported_decl_unit_index = saved_imported_unit;
         semcheck_debug_error_step("args_decls", subprogram, before_args, return_val);
     }
 #ifdef DEBUG
