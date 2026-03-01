@@ -3769,6 +3769,38 @@ int semcheck_reinterpret_typecast_as_call(int *type_return, SymTab_t *symtab,
 }
 
 
+/* Try to find a bare method name in the current class for @MethodName patterns.
+ * Returns the method HashNode_t if found, NULL otherwise. */
+static HashNode_t *find_implicit_self_method(SymTab_t *symtab, const char *name)
+{
+    if (name == NULL)
+        return NULL;
+    const char *owner_id = semcheck_get_current_method_owner();
+    if (owner_id == NULL)
+        return NULL;
+    HashNode_t *owner_node = NULL;
+    if (FindIdent(&owner_node, symtab, owner_id) < 0 || owner_node == NULL)
+        return NULL;
+    struct RecordType *owner_rec = NULL;
+    if (owner_node->type != NULL)
+    {
+        if (kgpc_type_is_record(owner_node->type))
+            owner_rec = kgpc_type_get_record(owner_node->type);
+        else if (kgpc_type_is_pointer(owner_node->type) &&
+                 owner_node->type->info.points_to != NULL &&
+                 kgpc_type_is_record(owner_node->type->info.points_to))
+            owner_rec = kgpc_type_get_record(owner_node->type->info.points_to);
+    }
+    if (owner_rec == NULL)
+        return NULL;
+    HashNode_t *method_node = semcheck_find_class_method(symtab, owner_rec, name, NULL);
+    if (method_node != NULL &&
+        (method_node->hash_type == HASHTYPE_FUNCTION ||
+         method_node->hash_type == HASHTYPE_PROCEDURE))
+        return method_node;
+    return NULL;
+}
+
 int semcheck_addressof(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating)
 {
@@ -3808,6 +3840,13 @@ int semcheck_addressof(int *type_return,
             inner_type = PROCEDURE;
             treated_as_proc_ref = 1;
         }
+        /* Fallback: bare method name inside a method body (e.g. @ReadData
+         * where ReadData is a method of the current class). */
+        if (!treated_as_proc_ref && find_implicit_self_method(symtab, inner->expr_data.id) != NULL)
+        {
+            inner_type = PROCEDURE;
+            treated_as_proc_ref = 1;
+        }
     }
     /* Also check if inner is already a FUNCTION_CALL with no args - this can happen
      * when the parser sees a function identifier and auto-converts it to a call.
@@ -3828,6 +3867,13 @@ int semcheck_addressof(int *type_return,
             {
                 /* This is @FunctionName where FunctionName was auto-converted to a call.
                  * Skip overload resolution - we just want the function's address. */
+                inner_type = PROCEDURE;
+                treated_as_proc_ref = 1;
+            }
+            /* Fallback: bare method name auto-converted to call inside a method body */
+            if (!treated_as_proc_ref &&
+                find_implicit_self_method(symtab, func_id) != NULL)
+            {
                 inner_type = PROCEDURE;
                 treated_as_proc_ref = 1;
             }
@@ -4036,6 +4082,17 @@ int semcheck_addressof(int *type_return,
                 proc_type = proc_symbol->type;
                 proc_type_owned = 0; /* Shared reference */
             }
+            /* Fallback: implicit Self method */
+            if (proc_type == NULL)
+            {
+                HashNode_t *method_node = find_implicit_self_method(symtab, proc_id);
+                if (method_node != NULL &&
+                    method_node->type != NULL && method_node->type->kind == TYPE_KIND_PROCEDURE)
+                {
+                    proc_type = method_node->type;
+                    proc_type_owned = 0;
+                }
+            }
         }
         
         if (proc_type != NULL)
@@ -4051,6 +4108,16 @@ int semcheck_addressof(int *type_return,
             HashNode_t *proc_symbol = NULL;
             if (FindIdent(&proc_symbol, symtab, inner->expr_data.id) >= 0 &&
                 proc_symbol != NULL && 
+                (proc_symbol->hash_type == HASHTYPE_PROCEDURE || proc_symbol->hash_type == HASHTYPE_FUNCTION))
+            {
+                /* Found directly */
+            }
+            else
+            {
+                /* Try implicit Self method lookup */
+                proc_symbol = find_implicit_self_method(symtab, inner->expr_data.id);
+            }
+            if (proc_symbol != NULL &&
                 (proc_symbol->hash_type == HASHTYPE_PROCEDURE || proc_symbol->hash_type == HASHTYPE_FUNCTION))
             {
                 expr->expr_data.addr_data.expr = NULL;
@@ -4080,6 +4147,16 @@ int semcheck_addressof(int *type_return,
                 HashNode_t *proc_symbol = NULL;
                 if (FindIdent(&proc_symbol, symtab, func_id) >= 0 &&
                     proc_symbol != NULL &&
+                    (proc_symbol->hash_type == HASHTYPE_FUNCTION || proc_symbol->hash_type == HASHTYPE_PROCEDURE))
+                {
+                    /* Found directly */
+                }
+                else
+                {
+                    /* Try implicit Self method lookup */
+                    proc_symbol = find_implicit_self_method(symtab, func_id);
+                }
+                if (proc_symbol != NULL &&
                     (proc_symbol->hash_type == HASHTYPE_FUNCTION || proc_symbol->hash_type == HASHTYPE_PROCEDURE))
                 {
                     expr->expr_data.addr_data.expr = NULL;
