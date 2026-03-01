@@ -1344,6 +1344,8 @@ void destroy_tree(Tree_t *tree)
 
         case TREE_TYPE_DECL:
             free(tree->tree_data.type_decl_data.id);
+            if (tree->tree_data.type_decl_data.source_unit_name != NULL)
+                free(tree->tree_data.type_decl_data.source_unit_name);
             if (tree->tree_data.type_decl_data.kgpc_type != NULL)
             {
                 destroy_kgpc_type(tree->tree_data.type_decl_data.kgpc_type);
