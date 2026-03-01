@@ -1361,9 +1361,14 @@ class TestCompiler(unittest.TestCase):
         self.assertNotIn("addl", optimized_asm)
 
     def test_forward_class_constructor_assignment_no_duplicate_self_move(self):
+        """Verify that the constructor codegen emits exactly one Self-move into
+        the first argument register before the constructor call, and that no
+        duplicate consecutive movq instructions target %rdi."""
         input_file, asm_file, _ = self._get_test_paths("forward_class_ctor_assign")
         run_compiler(input_file, asm_file)
         asm_lines = read_file_content(asm_file).splitlines()
+
+        # 1. No duplicate consecutive movq into %rdi anywhere in the file.
         for i in range(len(asm_lines) - 1):
             self.assertFalse(
                 asm_lines[i] == asm_lines[i + 1]
@@ -1371,6 +1376,35 @@ class TestCompiler(unittest.TestCase):
                 and asm_lines[i].endswith(", %rdi"),
                 f"duplicate constructor self move found at line {i + 1}: {asm_lines[i]}",
             )
+
+        # 2. Verify the expected call sequence:
+        #    calloc → save instance → VMT init → Self move → call constructor.
+        #    There must be exactly ONE movq into %rdi between the VMT store and
+        #    the constructor call.
+        call_idx = None
+        for i, line in enumerate(asm_lines):
+            if "\tcall\ttfoo__create_p" in line:
+                call_idx = i
+                break
+        self.assertIsNotNone(call_idx, "constructor call not found in assembly")
+
+        # Count movq ..., %rdi instructions between calloc return and the call.
+        calloc_idx = None
+        for i in range(call_idx - 1, -1, -1):
+            if "\tcall\tcalloc" in asm_lines[i]:
+                calloc_idx = i
+                break
+        self.assertIsNotNone(calloc_idx, "calloc call not found before constructor")
+
+        self_moves = [
+            line for line in asm_lines[calloc_idx:call_idx]
+            if line.startswith("\tmovq\t") and line.endswith(", %rdi")
+        ]
+        self.assertEqual(
+            len(self_moves), 1,
+            f"Expected exactly 1 Self-move into %rdi between calloc and constructor call, "
+            f"found {len(self_moves)}: {self_moves}",
+        )
 
     def test_dateutils_custom(self):
         """Tests DateUtils with custom regex verification."""

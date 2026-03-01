@@ -4020,9 +4020,19 @@ int semcheck_addressof(int *type_return,
                 expr->expr_data.addr_data.expr = NULL;
                 destroy_expr(inner);
                 expr->type = EXPR_ADDR_OF_PROC;
-                expr->expr_data.addr_of_proc_data.procedure_symbol = proc_symbol;
                 expr->expr_data.addr_of_proc_data.proc_mangled_id = proc_symbol->mangled_id ? strdup(proc_symbol->mangled_id) : NULL;
                 expr->expr_data.addr_of_proc_data.proc_id = proc_symbol->id ? strdup(proc_symbol->id) : NULL;
+                /* Resolve the type NOW while the symbol is still alive,
+                 * instead of relying on procedure_symbol later. */
+                if (proc_symbol->type != NULL)
+                {
+                    kgpc_type_retain(proc_symbol->type);
+                    expr->resolved_kgpc_type = create_pointer_type(proc_symbol->type);
+                }
+                else
+                {
+                    expr->resolved_kgpc_type = create_pointer_type(NULL);
+                }
             }
         }
         else if (inner->type == EXPR_FUNCTION_CALL && inner->expr_data.function_call_data.args_expr == NULL)
@@ -4039,9 +4049,18 @@ int semcheck_addressof(int *type_return,
                     expr->expr_data.addr_data.expr = NULL;
                     destroy_expr(inner);
                     expr->type = EXPR_ADDR_OF_PROC;
-                    expr->expr_data.addr_of_proc_data.procedure_symbol = proc_symbol;
                     expr->expr_data.addr_of_proc_data.proc_mangled_id = proc_symbol->mangled_id ? strdup(proc_symbol->mangled_id) : NULL;
                     expr->expr_data.addr_of_proc_data.proc_id = proc_symbol->id ? strdup(proc_symbol->id) : NULL;
+                    /* Resolve the type NOW while the symbol is still alive. */
+                    if (proc_symbol->type != NULL)
+                    {
+                        kgpc_type_retain(proc_symbol->type);
+                        expr->resolved_kgpc_type = create_pointer_type(proc_symbol->type);
+                    }
+                    else
+                    {
+                        expr->resolved_kgpc_type = create_pointer_type(NULL);
+                    }
                 }
             }
         }

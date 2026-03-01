@@ -2723,7 +2723,6 @@ void codegen_inst_list(ListNode_t *inst_list, CodeGenContext *ctx)
     CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
     #endif
     char *inst;
-    char *prev_inst = NULL;
 
     assert(ctx != NULL);
 
@@ -2732,16 +2731,7 @@ void codegen_inst_list(ListNode_t *inst_list, CodeGenContext *ctx)
         inst = (char *)inst_list->cur;
         assert(inst != NULL);
 
-        if (prev_inst != NULL && strcmp(prev_inst, inst) == 0 &&
-            strncmp(inst, "\tmovq\t", 6) == 0 &&
-            strstr(inst, ", %rdi\n") != NULL)
-        {
-            inst_list = inst_list->next;
-            continue;
-        }
-
         fprintf(ctx->output_file, "%s", inst);
-        prev_inst = inst;
 
         inst_list = inst_list->next;
     }

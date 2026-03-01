@@ -2106,29 +2106,11 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 }
             }
 
-            /* Move the newly allocated instance pointer into the correct argument register slot
-             * for the implicit Self parameter, accounting for a possible static-link argument. */
+            /* Record the Self parameter slot so it can be emitted AFTER argument
+             * evaluation (which may clobber caller-saved registers including the
+             * Self register).  The actual movq is deferred to the block below
+             * codegen_pass_arguments. */
             self_index = arg_start_index;
-            const char *sysv_int_args[] = { "%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9" };
-            const char *win_int_args[]  = { "%rcx", "%rdx", "%r8", "%r9" };
-            const char *self_reg = NULL;
-            if (codegen_target_is_windows()) {
-                if (self_index < (int)(sizeof(win_int_args) / sizeof(win_int_args[0])))
-                    self_reg = win_int_args[self_index];
-            } else {
-                if (self_index < (int)(sizeof(sysv_int_args) / sizeof(sysv_int_args[0])))
-                    self_reg = sysv_int_args[self_index];
-            }
-            if (self_reg != NULL) {
-                if (constructor_instance_slot != NULL) {
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-                        constructor_instance_slot->offset, self_reg);
-                } else {
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
-                        constructor_instance_reg->bit_64, self_reg);
-                }
-                inst_list = add_inst(inst_list, buffer);
-            }
 
             /* Skip the first argument (class type) in the argument list */
             if (args_to_pass != NULL)
@@ -2215,7 +2197,8 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             }
         }
         
-        /* For constructors, pass the allocated instance as the first argument (Self) */
+        /* For constructors, emit the Self argument into the correct register
+         * AFTER argument evaluation so that argument-passing code cannot clobber it. */
         if (is_constructor && constructor_instance_reg != NULL && self_index >= 0)
         {
             const char *self_arg_reg = current_arg_reg64(self_index);
@@ -2573,15 +2556,11 @@ cleanup_constructor:
     }
     else if (expr->type == EXPR_ADDR_OF_PROC)
     {
-        /* Use owned string copies — procedure_symbol may be dangling after PopScope */
+        /* Use owned string copies for the procedure label */
         const char *proc_label = expr->expr_data.addr_of_proc_data.proc_mangled_id;
         if (proc_label == NULL)
             proc_label = expr->expr_data.addr_of_proc_data.proc_id;
-        if (proc_label == NULL)
-        {
-            codegen_report_error(ctx, "ERROR: Missing symbol information for procedure address.");
-            return inst_list;
-        }
+        assert(proc_label != NULL && "EXPR_ADDR_OF_PROC must have proc_mangled_id or proc_id set");
         /* Use leaq (Load Effective Address) with RIP-relative addressing to get the address of the procedure's label */
         snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", proc_label, target_reg->bit_64);
         return add_inst(inst_list, buffer);

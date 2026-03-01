@@ -3064,16 +3064,17 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                                 }
                             }
                             
-                            /* Pass the allocated instance as the first argument (Self) */
-                            const char *self_arg_reg = current_arg_reg64(0);
-                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
-                                constructor_instance_reg->bit_64, self_arg_reg);
-                            inst_list = add_inst(inst_list, buffer);
-                            
                             /* Pass remaining arguments starting from index 1 (skip class type argument) */
                             inst_list = codegen_pass_arguments(
                                 src_expr->expr_data.function_call_data.args_expr, inst_list, ctx,
                                 func_type, func_id, 1, src_expr);
+
+                            /* Emit Self AFTER argument evaluation so that arg-passing code
+                             * cannot clobber the Self register (e.g. %rdi on SysV). */
+                            const char *self_arg_reg = current_arg_reg64(0);
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
+                                constructor_instance_reg->bit_64, self_arg_reg);
+                            inst_list = add_inst(inst_list, buffer);
                             
                             /* Call the constructor */
                             snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", func_mangled_name);
