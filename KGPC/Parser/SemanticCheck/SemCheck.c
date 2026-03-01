@@ -5941,6 +5941,21 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                 if (!has_non_hidden && new_has_body)
                                     is_forward_class_completion = 1;
                             }
+                            /* Also handle forward interface declarations:
+                             * "IMyIntf = interface;" followed by the full definition. */
+                            if (new_record != NULL && new_record->is_interface &&
+                                existing_record != NULL && existing_record->is_interface)
+                            {
+                                int existing_has_body = (existing_record->fields != NULL ||
+                                    existing_record->properties != NULL ||
+                                    existing_record->method_templates != NULL);
+                                int new_has_body = (new_record->fields != NULL ||
+                                    new_record->properties != NULL ||
+                                    new_record->method_templates != NULL ||
+                                    new_record->parent_class_name != NULL);
+                                if (!existing_has_body && new_has_body)
+                                    is_forward_class_completion = 1;
+                            }
                         }
                         if (!is_forward_class_completion)
                         {
