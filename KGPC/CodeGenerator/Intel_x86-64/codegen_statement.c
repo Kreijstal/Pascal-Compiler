@@ -8281,6 +8281,7 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         if (discard_reg != NULL)
             free_reg(get_reg_stack(), discard_reg);
         call_expr->expr_data.function_call_data.args_expr = NULL;
+        call_expr->expr_data.function_call_data.call_kgpc_type = NULL;
         destroy_expr(call_expr);
         return inst_list;
     }

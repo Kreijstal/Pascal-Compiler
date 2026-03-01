@@ -1681,6 +1681,7 @@ int semcheck_funccall(int *type_return,
                         }
 
                         /* Cache call info for codegen */
+                        kgpc_type_retain(proc_type);
                         expr->expr_data.function_call_data.call_kgpc_type = proc_type;
                         expr->expr_data.function_call_data.call_hash_type =
                             (kgpc_type_get_return_type(proc_type) == NULL) ? HASHTYPE_PROCEDURE : HASHTYPE_FUNCTION;

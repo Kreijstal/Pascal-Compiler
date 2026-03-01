@@ -335,6 +335,19 @@ void DestroyHashTable(HashTable_t *table)
         while(cur != NULL)
         {
             hash_node = (HashNode_t *)cur->cur;
+            if (hash_node->type != NULL)
+            {
+                if (getenv("KGPC_DEBUG_TYPE_FREE") != NULL)
+                {
+                    fprintf(stderr,
+                        "[KgpcType] hashnode '%s' (type=%d) destroy type=%p ref=%d\n",
+                        hash_node->id ? hash_node->id : "<null>",
+                        hash_node->hash_type,
+                        (void *)hash_node->type,
+                        hash_node->type->ref_count);
+                }
+                destroy_kgpc_type(hash_node->type);
+            }
             if (hash_node->id != NULL)
                 free(hash_node->id);
             if (hash_node->canonical_id != NULL)
@@ -349,19 +362,6 @@ void DestroyHashTable(HashTable_t *table)
                 free(hash_node->mangled_id);
             /* method_name, owner_class, owner_class_full, owner_class_outer
              * are interned strings -- do not free individually. */
-            if (hash_node->type != NULL)
-            {
-                if (getenv("KGPC_DEBUG_TYPE_FREE") != NULL)
-                {
-                    fprintf(stderr,
-                        "[KgpcType] hashnode '%s' (type=%d) destroy type=%p ref=%d\n",
-                        hash_node->id ? hash_node->id : "<null>",
-                        hash_node->hash_type,
-                        (void *)hash_node->type,
-                        hash_node->type->ref_count);
-                }
-                destroy_kgpc_type(hash_node->type);
-            }
             /* Builtin procedures are handled separately - do not call DestroyBuiltin here */
             /* to avoid double-free issues */
 
