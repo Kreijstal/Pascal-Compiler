@@ -13808,10 +13808,6 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         }
         semcheck_propagate_method_identity(symtab, subprogram);
 
-        /* Propagate varargs flag from tree to hash node */
-        if (existing_decl != NULL && subprogram->tree_data.subprogram_data.is_varargs)
-            existing_decl->is_varargs = 1;
-
         PushScope(symtab);
 
         /* For method implementations, add class vars to scope */
@@ -13935,10 +13931,6 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                 existing_decl->owner_class_outer = strdup(subprogram->tree_data.subprogram_data.owner_class_outer);
         }
         semcheck_propagate_method_identity(symtab, subprogram);
-
-        /* Propagate varargs flag from tree to hash node */
-        if (existing_decl != NULL && subprogram->tree_data.subprogram_data.is_varargs)
-            existing_decl->is_varargs = 1;
 
         PushScope(symtab);
         if (getenv("KGPC_DEBUG_TYPE_HELPER") != NULL)
@@ -14416,8 +14408,6 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                         subprogram->tree_data.subprogram_data.requires_static_link ? 1 : 0;
                     node->has_nested_requiring_link =
                         subprogram->tree_data.subprogram_data.has_nested_requiring_link ? 1 : 0;
-                    if (subprogram->tree_data.subprogram_data.is_varargs)
-                        node->is_varargs = 1;
                 }
             }
             iter = iter->next;
@@ -14641,13 +14631,6 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
                 subprogram->line_num, subprogram->tree_data.subprogram_data.id);
             return_val += func_return;
         }
-
-        /* Propagate varargs flag to the hash node */
-        if (subprogram->tree_data.subprogram_data.is_varargs) {
-            HashNode_t *node = NULL;
-            if (FindIdent(&node, symtab, id_to_use_for_lookup) == 0 && node != NULL)
-                node->is_varargs = 1;
-        }
     }
     else // Function
     {
@@ -14678,13 +14661,6 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
             fprintf(stderr, "On line %d: redeclaration of name %s!\n",
                 subprogram->line_num, subprogram->tree_data.subprogram_data.id);
             return_val += func_return;
-        }
-
-        /* Propagate varargs flag to the hash node */
-        if (subprogram->tree_data.subprogram_data.is_varargs) {
-            HashNode_t *node = NULL;
-            if (FindIdent(&node, symtab, id_to_use_for_lookup) == 0 && node != NULL)
-                node->is_varargs = 1;
         }
     }
     

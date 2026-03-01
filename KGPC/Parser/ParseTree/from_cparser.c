@@ -355,7 +355,6 @@ static size_t g_scoped_enum_source_length = 0;
 
 static ast_t *unwrap_pascal_node(ast_t *node);
 static char *dup_symbol(ast_t *node);
-static char *extract_external_name_from_node(ast_t *node);
 
 static int split_absolute_target(const char *absolute_target,
     char **out_base, char **out_field)
@@ -8255,7 +8254,6 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
         /* Skip EXTERNAL_NAME and PUBLIC_NAME modifiers - they're handled later */
         if (init_node != NULL && 
             init_node->typ != PASCAL_T_EXTERNAL_NAME && 
-            init_node->typ != PASCAL_T_EXTERNAL_NAME_EXPR &&
             init_node->typ != PASCAL_T_PUBLIC_NAME) {
             struct Expression *init_expr = convert_expression(init_node);
             if (init_expr != NULL) {
@@ -8342,22 +8340,6 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
                 if (cname_override != NULL)
                     free(cname_override);
                 cname_override = dup_symbol(scan->child);
-            } else if (scan->child != NULL) {
-                /* Child may be EXTERNAL_NAME_EXPR wrapping the string */
-                char *name = extract_external_name_from_node(scan);
-                if (name != NULL) {
-                    if (cname_override != NULL)
-                        free(cname_override);
-                    cname_override = name;
-                }
-            }
-            is_external = 1;
-        } else if (scan->typ == PASCAL_T_EXTERNAL_NAME_EXPR) {
-            char *name = extract_external_name_from_node(scan);
-            if (name != NULL) {
-                if (cname_override != NULL)
-                    free(cname_override);
-                cname_override = name;
             }
             is_external = 1;
         } else if (scan->typ == PASCAL_T_PUBLIC_NAME) {
@@ -14569,22 +14551,6 @@ static int extract_generic_type_params(ast_t *type_param_list, char ***out_param
     return count;
 }
 
-static char *extract_external_name_from_node(ast_t *node)
-{
-    if (node == NULL || node->child == NULL)
-        return NULL;
-
-    if (node->child->typ == PASCAL_T_STRING)
-        return dup_symbol(node->child);
-
-    if (node->child->typ == PASCAL_T_EXTERNAL_NAME_EXPR &&
-        node->child->child != NULL &&
-        node->child->child->typ == PASCAL_T_STRING)
-        return dup_symbol(node->child->child);
-
-    return NULL;
-}
-
 static Tree_t *convert_procedure(ast_t *proc_node) {
     ast_t *cur = proc_node->child;
     char *id = NULL;
@@ -14636,7 +14602,6 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
     struct Statement *body = NULL;
     int is_external = 0;
     int is_nostackframe = 0;
-    int is_varargs = 0;
     char *external_alias = NULL;
     ast_t *type_section_ast = NULL;  /* Track local type section for enum resolution */
     ListNode_t *type_decls = NULL;
@@ -14691,8 +14656,6 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
             if (self_sym != NULL) {
                 if (strcasecmp(self_sym, "nostackframe") == 0) {
                     is_nostackframe = 1;
-                } else if (strcasecmp(self_sym, "varargs") == 0) {
-                    is_varargs = 1;
                 }
                 free(self_sym);
             }
@@ -14703,8 +14666,6 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
                         is_external = 1;
                     else if (strcasecmp(directive, "nostackframe") == 0) {
                         is_nostackframe = 1;
-                    } else if (strcasecmp(directive, "varargs") == 0) {
-                        is_varargs = 1;
                     }
                 }
                 free(directive);
@@ -14712,14 +14673,10 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
             break;
         }
         case PASCAL_T_EXTERNAL_NAME:
-        case PASCAL_T_EXTERNAL_NAME_EXPR:
-            {
-                char *name = extract_external_name_from_node(cur);
-                if (name != NULL) {
-                    if (external_alias != NULL)
-                        free(external_alias);
-                    external_alias = name;
-                }
+            if (cur->child != NULL && cur->child->typ == PASCAL_T_STRING) {
+                if (external_alias != NULL)
+                    free(external_alias);
+                external_alias = dup_symbol(cur->child);
             }
             break;
         default:
@@ -14728,8 +14685,6 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
         cur = cur->next;
     }
 
-    if (!is_varargs)
-        is_varargs = ast_has_keyword(proc_node, "varargs", 8);
     ListNode_t *label_decls = list_builder_finish(&label_decls_builder);
     Tree_t *tree = mk_procedure(proc_node->line, id, params, const_decls,
                                 label_decls, type_decls, list_builder_finish(&var_decls_builder),
@@ -14738,8 +14693,6 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
         is_nostackframe = ast_has_keyword(proc_node, "nostackframe", 8);
     if (tree != NULL && is_nostackframe)
         tree->tree_data.subprogram_data.nostackframe = 1;
-    if (tree != NULL && is_varargs)
-        tree->tree_data.subprogram_data.is_varargs = 1;
     if (tree != NULL && external_alias != NULL)
         tree->tree_data.subprogram_data.cname_override = external_alias;
     else if (external_alias != NULL)
@@ -14947,7 +14900,6 @@ static Tree_t *convert_function(ast_t *func_node) {
     struct Statement *body = NULL;
     int is_external = 0;
     int is_nostackframe = 0;
-    int is_varargs = 0;
     char *external_alias = NULL;
     ast_t *type_section_ast = NULL;  /* Track local type section for enum resolution */
     ListNode_t *type_decls = NULL;
@@ -15005,8 +14957,6 @@ static Tree_t *convert_function(ast_t *func_node) {
                     is_external = 1;
                 else if (strcasecmp(self_sym, "nostackframe") == 0)
                     is_nostackframe = 1;
-                else if (strcasecmp(self_sym, "varargs") == 0)
-                    is_varargs = 1;
                 free(self_sym);
             }
 
@@ -15017,22 +14967,16 @@ static Tree_t *convert_function(ast_t *func_node) {
                         is_external = 1;
                     else if (strcasecmp(directive, "nostackframe") == 0)
                         is_nostackframe = 1;
-                    else if (strcasecmp(directive, "varargs") == 0)
-                        is_varargs = 1;
                 }
                 free(directive);
             }
             break;
         }
         case PASCAL_T_EXTERNAL_NAME:
-        case PASCAL_T_EXTERNAL_NAME_EXPR:
-            {
-                char *name = extract_external_name_from_node(cur);
-                if (name != NULL) {
-                    if (external_alias != NULL)
-                        free(external_alias);
-                    external_alias = name;
-                }
+            if (cur->child != NULL && cur->child->typ == PASCAL_T_STRING) {
+                if (external_alias != NULL)
+                    free(external_alias);
+                external_alias = dup_symbol(cur->child);
             }
             break;
         default:
@@ -15041,8 +14985,6 @@ static Tree_t *convert_function(ast_t *func_node) {
         cur = cur->next;
     }
 
-    if (!is_varargs)
-        is_varargs = ast_has_keyword(func_node, "varargs", 8);
     ListNode_t *label_decls = list_builder_finish(&label_decls_builder);
     Tree_t *tree = mk_function(func_node->line, id, params, const_decls,
                                 label_decls, type_decls, list_builder_finish(&var_decls_builder), nested_subs, body,
@@ -15051,8 +14993,6 @@ static Tree_t *convert_function(ast_t *func_node) {
         is_nostackframe = ast_has_keyword(func_node, "nostackframe", 8);
     if (tree != NULL && is_nostackframe)
         tree->tree_data.subprogram_data.nostackframe = 1;
-    if (tree != NULL && is_varargs)
-        tree->tree_data.subprogram_data.is_varargs = 1;
     if (tree != NULL)
         tree->tree_data.subprogram_data.return_type_ref =
             return_type_ref != NULL ? return_type_ref : type_ref_from_single_name(return_type_id);

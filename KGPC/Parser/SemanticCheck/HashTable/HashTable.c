@@ -487,7 +487,6 @@ static HashNode_t* create_hash_node(char* id, char* mangled_id,
     hash_node->const_set_size = 0;
     hash_node->const_set_label = NULL;
     hash_node->is_var_parameter = 0;
-    hash_node->is_varargs = 0;
     hash_node->requires_static_link = 0;
     hash_node->has_nested_requiring_link = 0;
     hash_node->defined_in_unit = 0;

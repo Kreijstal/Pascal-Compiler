@@ -122,7 +122,6 @@ typedef struct Tree
             char *owner_class_full;       /* Full dotted class path for nested classes, e.g. "TOuter.TInner" (NULL for non-methods or non-nested) */
             char *owner_class_outer;      /* Outer class path for nested classes, e.g. "TOuter" for "TOuter.TInner" (NULL if not nested) */
             int nostackframe;             /* 1 if declared with nostackframe directive (skip prologue/epilogue) */
-            int is_varargs;               /* 1 if declared with varargs directive (C-style variadic) */
         } subprogram_data;
 
         /* A variable declaration */

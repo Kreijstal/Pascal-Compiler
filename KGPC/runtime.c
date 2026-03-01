@@ -67,59 +67,6 @@ static char *kgpc_apply_field_width(char *value, int64_t width);
 #endif
 #endif
 
-#ifdef __linux__
-#ifdef __x86_64__
-long FPC_SYSCALL0(long sysnr) {
-    long ret;
-    __asm__ volatile ("syscall" : "=a"(ret) : "a"(sysnr) : "rcx", "r11", "memory");
-    if (ret < 0 && ret >= -4095) { errno = -ret; return -1; }
-    return ret;
-}
-long FPC_SYSCALL1(long sysnr, long p1) {
-    long ret;
-    __asm__ volatile ("syscall" : "=a"(ret) : "a"(sysnr), "D"(p1) : "rcx", "r11", "memory");
-    if (ret < 0 && ret >= -4095) { errno = -ret; return -1; }
-    return ret;
-}
-long FPC_SYSCALL2(long sysnr, long p1, long p2) {
-    long ret;
-    __asm__ volatile ("syscall" : "=a"(ret) : "a"(sysnr), "D"(p1), "S"(p2) : "rcx", "r11", "memory");
-    if (ret < 0 && ret >= -4095) { errno = -ret; return -1; }
-    return ret;
-}
-long FPC_SYSCALL3(long sysnr, long p1, long p2, long p3) {
-    long ret;
-    __asm__ volatile ("syscall" : "=a"(ret) : "a"(sysnr), "D"(p1), "S"(p2), "d"(p3) : "rcx", "r11", "memory");
-    if (ret < 0 && ret >= -4095) { errno = -ret; return -1; }
-    return ret;
-}
-long FPC_SYSCALL4(long sysnr, long p1, long p2, long p3, long p4) {
-    long ret;
-    register long r10 __asm__("r10") = p4;
-    __asm__ volatile ("syscall" : "=a"(ret) : "a"(sysnr), "D"(p1), "S"(p2), "d"(p3), "r"(r10) : "rcx", "r11", "memory");
-    if (ret < 0 && ret >= -4095) { errno = -ret; return -1; }
-    return ret;
-}
-long FPC_SYSCALL5(long sysnr, long p1, long p2, long p3, long p4, long p5) {
-    long ret;
-    register long r10 __asm__("r10") = p4;
-    register long r8 __asm__("r8") = p5;
-    __asm__ volatile ("syscall" : "=a"(ret) : "a"(sysnr), "D"(p1), "S"(p2), "d"(p3), "r"(r10), "r"(r8) : "rcx", "r11", "memory");
-    if (ret < 0 && ret >= -4095) { errno = -ret; return -1; }
-    return ret;
-}
-long FPC_SYSCALL6(long sysnr, long p1, long p2, long p3, long p4, long p5, long p6) {
-    long ret;
-    register long r10 __asm__("r10") = p4;
-    register long r8 __asm__("r8") = p5;
-    register long r9 __asm__("r9") = p6;
-    __asm__ volatile ("syscall" : "=a"(ret) : "a"(sysnr), "D"(p1), "S"(p2), "d"(p3), "r"(r10), "r"(r8), "r"(r9) : "rcx", "r11", "memory");
-    if (ret < 0 && ret >= -4095) { errno = -ret; return -1; }
-    return ret;
-}
-#endif
-#endif
-
 int64_t kgpc_current_exception = 0;
 static __thread int kgpc_ioresult = 0;
 static int kgpc_threading_used = 0;

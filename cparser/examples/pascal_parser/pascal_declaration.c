@@ -1821,15 +1821,7 @@ void init_pascal_unit_parser(combinator_t** p) {
             ), wrap_public_name_clause),
             map(seq(new_combinator(), PASCAL_T_NONE,
                 token(keyword_ci("external")),
-                optional(seq(new_combinator(), PASCAL_T_NONE,  // optional lib name (string or ident, but not 'name' keyword)
-                    pnot(peek(token(keyword_ci("name")))),
-                    multi(new_combinator(), PASCAL_T_NONE,
-                        token(pascal_string(PASCAL_T_STRING)),
-                        token(cident(PASCAL_T_IDENTIFIER)),
-                        NULL
-                    ),
-                    NULL
-                )),
+                optional(token(pascal_string(PASCAL_T_STRING))),  // optional lib name
                 optional(seq(new_combinator(), PASCAL_T_NONE,
                     token(keyword_ci("name")),
                     token(pascal_string(PASCAL_T_STRING)),
@@ -1986,26 +1978,14 @@ void init_pascal_unit_parser(combinator_t** p) {
         token(create_keyword_parser("nostackframe", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("safecall", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("softfloat", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("varargs", PASCAL_T_IDENTIFIER)),
         NULL
     );
 
     // Extended external directive argument components
-    // Support string concatenation in external name: 'name' or 'name'+const1+const2
-    combinator_t* external_name_concat_expr = seq(new_combinator(), PASCAL_T_EXTERNAL_NAME_EXPR,
-        token(pascal_string(PASCAL_T_STRING)),
-        many(seq(new_combinator(), PASCAL_T_NONE,
-            token(match("+")),
-            token(cident(PASCAL_T_IDENTIFIER)),
-            NULL
-        )),
-        NULL
-    );
-
     combinator_t* external_name_clause = map(
         seq(new_combinator(), PASCAL_T_NONE,
             token(keyword_ci("name")),
-            external_name_concat_expr,
+            token(pascal_string(PASCAL_T_STRING)),
             NULL
         ),
         wrap_external_name_clause
@@ -2170,7 +2150,6 @@ void init_pascal_unit_parser(combinator_t** p) {
         token(create_keyword_parser("nostackframe", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("safecall", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("softfloat", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("varargs", PASCAL_T_IDENTIFIER)),
         NULL
     );
     combinator_t* pre_headeronly_directive = seq(new_combinator(), PASCAL_T_NONE,
@@ -2888,21 +2867,10 @@ void init_pascal_procedure_parser(combinator_t** p) {
     );
 
     // Extended external directive argument components
-    // Support string concatenation in external name: 'name' or 'name'+const1+const2
-    combinator_t* external_name_concat_expr = seq(new_combinator(), PASCAL_T_EXTERNAL_NAME_EXPR,
-        token(pascal_string(PASCAL_T_STRING)),
-        many(seq(new_combinator(), PASCAL_T_NONE,
-            token(match("+")),
-            token(cident(PASCAL_T_IDENTIFIER)),
-            NULL
-        )),
-        NULL
-    );
-
     combinator_t* external_name_clause = map(
         seq(new_combinator(), PASCAL_T_NONE,
             token(keyword_ci("name")),
-            external_name_concat_expr,
+            token(pascal_string(PASCAL_T_STRING)),
             NULL
         ),
         wrap_external_name_clause
@@ -3263,43 +3231,22 @@ void init_pascal_complete_program_parser(combinator_t** p) {
 
     // Support 'external name <string>' clause for variables (FPC bootstrap compatibility)
     // FPC syntax: var x: type; external name 'symbol'; (note: semicolon before external)
-    // Support string concatenation: external name 'symbol'+const1+const2
-    combinator_t* var_external_name_expr = seq(new_combinator(), PASCAL_T_EXTERNAL_NAME_EXPR,
-        token(pascal_string(PASCAL_T_STRING)),
-        many(seq(new_combinator(), PASCAL_T_NONE,
-            token(match("+")),
-            token(cident(PASCAL_T_IDENTIFIER)),
-            NULL
-        )),
-        NULL
-    );
-
     combinator_t* var_external_name_clause = map(
         seq(new_combinator(), PASCAL_T_NONE,
             token(keyword_ci("external")),
             token(keyword_ci("name")),
-            var_external_name_expr,
+            token(pascal_string(PASCAL_T_STRING)),
             NULL
         ),
         wrap_external_name_clause
     );
 
     // Support 'public name <string>' clause for variables (FPC bootstrap compatibility)
-    combinator_t* var_public_name_expr = seq(new_combinator(), PASCAL_T_EXTERNAL_NAME_EXPR,
-        token(pascal_string(PASCAL_T_STRING)),
-        many(seq(new_combinator(), PASCAL_T_NONE,
-            token(match("+")),
-            token(cident(PASCAL_T_IDENTIFIER)),
-            NULL
-        )),
-        NULL
-    );
-
     combinator_t* var_public_name_clause = map(
         seq(new_combinator(), PASCAL_T_NONE,
             token(keyword_ci("public")),
             token(keyword_ci("name")),
-            var_public_name_expr,
+            token(pascal_string(PASCAL_T_STRING)),
             NULL
         ),
         wrap_public_name_clause
@@ -3643,8 +3590,6 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         token(create_keyword_parser("cdecl", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("stdcall", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("register", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("cppdecl", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("mwpascal", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("export", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("external", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("weakexternal", PASCAL_T_IDENTIFIER)),
@@ -3656,36 +3601,18 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         token(create_keyword_parser("platform", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("deprecated", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("library", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("experimental", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("local", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("noreturn", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("iocheck", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("forward", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("rtlproc", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("compilerproc", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("nostackframe", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("safecall", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("softfloat", PASCAL_T_IDENTIFIER)),
-        token(create_keyword_parser("varargs", PASCAL_T_IDENTIFIER)),
         NULL
     );
 
-    // Extended external directive argument components
-    // Support string concatenation in external name: 'name' or 'name'+const1+const2
-    combinator_t* external_name_concat_expr = seq(new_combinator(), PASCAL_T_EXTERNAL_NAME_EXPR,
-        token(pascal_string(PASCAL_T_STRING)),
-        many(seq(new_combinator(), PASCAL_T_NONE,
-            token(match("+")),
-            token(cident(PASCAL_T_IDENTIFIER)),
-            NULL
-        )),
-        NULL
-    );
-
+    // Copy exact working structure from unit parser
     combinator_t* external_name_clause = map(
         seq(new_combinator(), PASCAL_T_NONE,
             token(keyword_ci("name")),
-            external_name_concat_expr,
+            token(pascal_string(PASCAL_T_STRING)),
             NULL
         ),
         wrap_external_name_clause

@@ -84,7 +84,6 @@ typedef struct HashNode
     char *const_set_label;          /* Optional emitted label for codegen reuse */
 
     int is_var_parameter;
-    int is_varargs;                /* 1 if declared with varargs directive (C-style variadic) */
     int requires_static_link;      /* 1 if this function needs to RECEIVE a static link from caller */
     int has_nested_requiring_link; /* 1 if this function has nested children that need static links */
     int defined_in_unit;

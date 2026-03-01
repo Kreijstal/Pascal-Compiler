@@ -1271,7 +1271,7 @@ int semcheck_funccall(int *type_return,
                                     ListNode_t *candidate_params = kgpc_type_get_procedure_params(candidate->type);
                                     int candidate_expects_self = 0;
                                     int candidate_compatible = semcheck_method_accepts_arg_count(candidate_params,
-                                        args_count, &candidate_expects_self, candidate->is_varargs);
+                                        args_count, &candidate_expects_self);
                                     
                                     if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                                         fprintf(stderr, "[SemCheck] Method overload check: candidate=%s params=%d args=%d compatible=%d\n",
@@ -1304,7 +1304,7 @@ int semcheck_funccall(int *type_return,
                         {
                             method_params = kgpc_type_get_procedure_params(method_node->type);
                             method_params_len = semcheck_count_total_params(method_params);
-                            int found_compatible = semcheck_method_accepts_arg_count(method_params, args_count, &expects_self, method_node->is_varargs);
+                            int found_compatible = semcheck_method_accepts_arg_count(method_params, args_count, &expects_self);
                             if (!found_compatible)
                                 method_node = NULL;
                         }
@@ -1356,7 +1356,7 @@ int semcheck_funccall(int *type_return,
                                                     ListNode_t *correct_params = kgpc_type_get_procedure_params(correct_method->type);
                                                     correct_params_len = semcheck_count_total_params(correct_params);
                                                     correct_compatible = semcheck_method_accepts_arg_count(correct_params, args_count,
-                                                        &correct_expects_self, correct_method->is_varargs);
+                                                        &correct_expects_self);
                                                 }
 
                                                 if (correct_method != NULL && correct_params_len > 0 &&
@@ -5076,7 +5076,7 @@ skip_overload_resolution:
             {
                 allow_forward_params = 1;
             }
-            if (!allow_forward_params && !(hash_return != NULL && hash_return->is_varargs))
+            if (!allow_forward_params)
             {
                 semcheck_error_with_context("Error on line %d, on function call %s, too many arguments given!\n\n",
                     expr->line_num, id);
