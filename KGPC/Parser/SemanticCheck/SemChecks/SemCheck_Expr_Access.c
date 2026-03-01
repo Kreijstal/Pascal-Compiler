@@ -436,8 +436,10 @@ int semcheck_arrayaccess(int *type_return,
 
     if (base_is_string)
     {
-        /* WideString / UnicodeString elements are WideChar (CHAR_TYPE, 2 bytes).
-         * Regular strings use CHAR_TYPE (1 byte). Both are character types. */
+        /* String indexing yields a character. WideString/UnicodeString elements
+         * are WideChar while regular strings use AnsiChar. Both resolve to
+         * CHAR_TYPE at the semantic analysis level; character width differences
+         * are handled later during code generation. */
         element_type = CHAR_TYPE;
     }
     else if (base_is_pointer)
@@ -2584,10 +2586,21 @@ int semcheck_funccall(int *type_return,
                         {
                             /* Build Self.field access expression */
                             struct Expression *self_expr = mk_varid(expr->line_num, strdup("Self"));
-                            assert(self_expr != NULL);
+                            if (self_expr == NULL)
+                            {
+                                *type_return = UNKNOWN_TYPE;
+                                final_status = ++return_val;
+                                goto funccall_cleanup;
+                            }
                             struct Expression *field_access = mk_recordaccess(
                                 expr->line_num, self_expr, strdup(id));
-                            assert(field_access != NULL);
+                            if (field_access == NULL)
+                            {
+                                destroy_expr(self_expr);
+                                *type_return = UNKNOWN_TYPE;
+                                final_status = ++return_val;
+                                goto funccall_cleanup;
+                            }
 
                             /* Resolve the field access expression */
                             KgpcType *field_kgpc = NULL;

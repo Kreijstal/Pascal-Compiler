@@ -393,6 +393,12 @@ struct Expression *clone_expression(const struct Expression *expr)
             clone->expr_data.function_call_data.mangled_id =
                 expr->expr_data.function_call_data.mangled_id != NULL ?
                     strdup(expr->expr_data.function_call_data.mangled_id) : NULL;
+            if (expr->expr_data.function_call_data.mangled_id != NULL &&
+                clone->expr_data.function_call_data.mangled_id == NULL)
+            {
+                destroy_expr(clone);
+                return NULL;
+            }
             clone->expr_data.function_call_data.args_expr =
                 clone_expr_list(expr->expr_data.function_call_data.args_expr);
             clone->expr_data.function_call_data.resolved_func =
@@ -417,6 +423,12 @@ struct Expression *clone_expression(const struct Expression *expr)
             clone->expr_data.function_call_data.placeholder_method_name =
                 expr->expr_data.function_call_data.placeholder_method_name != NULL ?
                     strdup(expr->expr_data.function_call_data.placeholder_method_name) : NULL;
+            if (expr->expr_data.function_call_data.placeholder_method_name != NULL &&
+                clone->expr_data.function_call_data.placeholder_method_name == NULL)
+            {
+                destroy_expr(clone);
+                return NULL;
+            }
             clone->expr_data.function_call_data.is_virtual_call =
                 expr->expr_data.function_call_data.is_virtual_call;
             clone->expr_data.function_call_data.vmt_index =
@@ -424,11 +436,23 @@ struct Expression *clone_expression(const struct Expression *expr)
             clone->expr_data.function_call_data.self_class_name =
                 expr->expr_data.function_call_data.self_class_name != NULL ?
                     strdup(expr->expr_data.function_call_data.self_class_name) : NULL;
+            if (expr->expr_data.function_call_data.self_class_name != NULL &&
+                clone->expr_data.function_call_data.self_class_name == NULL)
+            {
+                destroy_expr(clone);
+                return NULL;
+            }
             clone->expr_data.function_call_data.arg0_is_dynarray_descriptor =
                 expr->expr_data.function_call_data.arg0_is_dynarray_descriptor;
             clone->expr_data.function_call_data.call_qualifier =
                 expr->expr_data.function_call_data.call_qualifier != NULL ?
                     strdup(expr->expr_data.function_call_data.call_qualifier) : NULL;
+            if (expr->expr_data.function_call_data.call_qualifier != NULL &&
+                clone->expr_data.function_call_data.call_qualifier == NULL)
+            {
+                destroy_expr(clone);
+                return NULL;
+            }
             break;
         }
         default:
