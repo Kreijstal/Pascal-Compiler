@@ -242,6 +242,18 @@ int semcheck_with_try_resolve(const char *field_id, SymTab_t *symtab,
             *out_record_expr = clone;
             return 0;
         }
+
+        /* Also check class/record properties (e.g. Items, Count, ...) */
+        struct ClassProperty *prop = semcheck_find_class_property(symtab,
+            entry->record_type, field_id, NULL);
+        if (prop != NULL)
+        {
+            struct Expression *clone = clone_expression(entry->context_expr);
+            if (clone == NULL)
+                return -1;
+            *out_record_expr = clone;
+            return 0;
+        }
     }
 
     return 1;

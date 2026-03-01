@@ -5921,7 +5921,14 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                     }
                                     fnode = fnode->next;
                                 }
-                                if (!has_non_hidden && new_record->fields != NULL)
+                                /* The full definition may have fields, properties,
+                                 * method templates, or a parent class – any of these
+                                 * indicate a real class body replacing the forward stub. */
+                                int new_has_body = (new_record->fields != NULL ||
+                                    new_record->properties != NULL ||
+                                    new_record->method_templates != NULL ||
+                                    new_record->parent_class_name != NULL);
+                                if (!has_non_hidden && new_has_body)
                                     is_forward_class_completion = 1;
                             }
                         }
@@ -5956,7 +5963,10 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                         if (record_field_is_hidden(f))
                                         {
                                             old_fields->next = NULL;
-                                            existing_record->fields = PushListNodeFront(existing_record->fields, old_fields);
+                                            if (existing_record->fields != NULL)
+                                                existing_record->fields = PushListNodeFront(existing_record->fields, old_fields);
+                                            else
+                                                existing_record->fields = old_fields;
                                         }
                                     }
                                     old_fields = next;
