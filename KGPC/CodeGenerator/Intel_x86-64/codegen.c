@@ -2723,7 +2723,6 @@ void codegen_inst_list(ListNode_t *inst_list, CodeGenContext *ctx)
     CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
     #endif
     char *inst;
-    char *prev_inst = NULL;
 
     assert(ctx != NULL);
 

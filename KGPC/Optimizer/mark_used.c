@@ -11,6 +11,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <assert.h>
 #include "identifier_utils.h"
 
 /* Hash table to map mangled_id -> Tree_t* (subprogram) */
@@ -277,15 +278,13 @@ static void mark_expr_calls(struct Expression *expr, SubprogramMap *map) {
             break;
             
         case EXPR_ADDR_OF_PROC: {
-            /* Use owned string copies — procedure_symbol may be dangling after PopScope */
             const char *mangled_id = expr->expr_data.addr_of_proc_data.proc_mangled_id;
             if (mangled_id == NULL)
                 mangled_id = expr->expr_data.addr_of_proc_data.proc_id;
-            if (mangled_id != NULL) {
-                Tree_t *called_sub = map_find(map, mangled_id);
-                if (called_sub != NULL) {
-                    mark_subprogram_recursive(called_sub, map);
-                }
+            assert(mangled_id != NULL && "EXPR_ADDR_OF_PROC must have proc_mangled_id or proc_id set");
+            Tree_t *called_sub = map_find(map, mangled_id);
+            if (called_sub != NULL) {
+                mark_subprogram_recursive(called_sub, map);
             }
             break;
         }
