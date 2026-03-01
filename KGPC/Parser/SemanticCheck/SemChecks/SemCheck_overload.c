@@ -1001,7 +1001,9 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
             /* When an untyped Pointer is passed to a class/interface formal
              * (TObject, TClass, IInterface), score it worse than a typed
              * pointer formal (PTypeInfo, PChar, etc.).  FPC prefers plain
-             * pointer conversions over class-pointer conversions. */
+             * pointer conversions over class-pointer conversions.
+             * Additionally, prefer class formals (TObject) over interface
+             * formals (IInterface) to resolve ambiguity in Supports() etc. */
             if (actual_sub == UNKNOWN_TYPE && formal_sub == RECORD_TYPE &&
                 formal_kgpc->info.points_to != NULL &&
                 formal_kgpc->info.points_to->kind == TYPE_KIND_RECORD &&
@@ -1010,6 +1012,11 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
             {
                 MatchQuality q = semcheck_make_quality(MATCH_CONVERSION);
                 q.exact_pointer_subtype = 0;  /* no bonus */
+                /* Interfaces rank worse than classes: when Pointer matches both
+                 * Supports(TObject,...) and Supports(IInterface,...), prefer the
+                 * class overload, matching FPC behavior. */
+                if (formal_kgpc->info.points_to->info.record_info->is_interface)
+                    q.int_promo_rank = 1;
                 return q;
             }
             /* Untyped pointer -> typed non-class pointer: prefer this */
