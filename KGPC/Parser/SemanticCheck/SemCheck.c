@@ -9894,17 +9894,20 @@ static void register_unary_builtin_func(SymTab_t *symtab, const char *name,
     const char *param_name, int arg_type_tag, int return_type_tag)
 {
     assert(name != NULL && param_name != NULL);
+    char *dup_name = strdup(name);
+    assert(dup_name != NULL && "register_unary_builtin_func: strdup failed");
     ListNode_t *param = semcheck_create_builtin_param(param_name, arg_type_tag);
     KgpcType *return_type = create_primitive_type(return_type_tag);
     KgpcType *func_type = create_procedure_type(param, return_type);
     if (func_type != NULL)
     {
-        AddBuiltinFunction_Typed(symtab, strdup(name), func_type);
+        AddBuiltinFunction_Typed(symtab, dup_name, func_type);
         destroy_kgpc_type(func_type);
     }
     if (param != NULL)
         DestroyList(param);
     destroy_kgpc_type(return_type);
+    free(dup_name);
 }
 
 /* Register an overloaded binary built-in function:
@@ -9916,6 +9919,8 @@ static void register_binary_builtin_func(SymTab_t *symtab, const char *name,
     int return_type_tag)
 {
     assert(name != NULL && p1_name != NULL && p2_name != NULL);
+    char *dup_name = strdup(name);
+    assert(dup_name != NULL && "register_binary_builtin_func: strdup failed");
     ListNode_t *p1 = semcheck_create_builtin_param(p1_name, p1_type_tag);
     ListNode_t *p2 = semcheck_create_builtin_param(p2_name, p2_type_tag);
     ListNode_t *params = ConcatList(p1, p2);
@@ -9923,12 +9928,13 @@ static void register_binary_builtin_func(SymTab_t *symtab, const char *name,
     KgpcType *func_type = create_procedure_type(params, return_type);
     if (func_type != NULL)
     {
-        AddBuiltinFunction_Typed(symtab, strdup(name), func_type);
+        AddBuiltinFunction_Typed(symtab, dup_name, func_type);
         destroy_kgpc_type(func_type);
     }
     if (params != NULL)
         DestroyList(params);
     destroy_kgpc_type(return_type);
+    free(dup_name);
 }
 
 void semcheck_add_builtins(SymTab_t *symtab)
@@ -10528,9 +10534,13 @@ void semcheck_add_builtins(SymTab_t *symtab)
                 KgpcType *func_type = create_procedure_type(p1, return_type);
                 if (func_type != NULL)
                 {
-                    AddBuiltinFunction_Typed(symtab, strdup("AtomicCmpExchange"), func_type);
-                    AddBuiltinFunction_Typed(symtab, strdup("InterlockedCompareExchange"), func_type);
+                    char *n1 = strdup("AtomicCmpExchange");
+                    char *n2 = strdup("InterlockedCompareExchange");
+                    AddBuiltinFunction_Typed(symtab, n1, func_type);
+                    AddBuiltinFunction_Typed(symtab, n2, func_type);
                     destroy_kgpc_type(func_type);
+                    free(n1);
+                    free(n2);
                 }
                 DestroyList(p1);
                 destroy_kgpc_type(return_type);
