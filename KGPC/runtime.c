@@ -6346,3 +6346,35 @@ void *kgpc_get_frame_p(void *frame)
     (void)frame;
     return __builtin_frame_address(0);
 }
+
+/* FPC atomic intrinsics — these are [internproc] builtins in FPC that have
+ * no Pascal body.  KGPC emits calls to the mangled names below. */
+long atomicincrement_i_i(long *target, long value)
+{
+    return __sync_add_and_fetch(target, value);
+}
+
+long atomicdecrement_i(long *target)
+{
+    return __sync_sub_and_fetch(target, 1);
+}
+
+void *atomiccmpexchange_p_p_p(void **target, void *new_val, void *comparand)
+{
+    return __sync_val_compare_and_swap(target, comparand, new_val);
+}
+
+void *atomicexchange_p_p(void **target, void *new_val)
+{
+    return __atomic_exchange_n(target, new_val, __ATOMIC_SEQ_CST);
+}
+
+long FPC_INTERLOCKEDEXCHANGEADD(long *target, long value)
+{
+    return __sync_fetch_and_add(target, value);
+}
+
+long long FPC_INTERLOCKEDCOMPAREEXCHANGE64(long long *target, long long new_val, long long comparand)
+{
+    return __sync_val_compare_and_swap(target, comparand, new_val);
+}

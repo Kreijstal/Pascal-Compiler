@@ -1751,8 +1751,9 @@ ListNode_t *gencode_jmp(int type, int inverse, char *label, ListNode_t *inst_lis
 }
 
 /* Generates a function header.
- * If nostackframe is set, only emits the label without prologue (push %rbp / mov %rsp, %rbp). */
-void codegen_function_header_ex(char *func_name, CodeGenContext *ctx, int nostackframe)
+ * If nostackframe is set, only emits the label without prologue (push %rbp / mov %rsp, %rbp).
+ * If cname_override is set and differs from func_name, emits an additional .globl + label alias. */
+void codegen_function_header_ex_alias(char *func_name, CodeGenContext *ctx, int nostackframe, const char *cname_override)
 {
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
@@ -1760,6 +1761,11 @@ void codegen_function_header_ex(char *func_name, CodeGenContext *ctx, int nostac
     assert(func_name != NULL);
     assert(ctx != NULL);
     codegen_emit_function_debug_comments(func_name, ctx);
+    /* Emit alias label from cname_override (e.g. [Public,Alias:'FPC_DO_EXIT']) */
+    if (cname_override != NULL && strcmp(cname_override, func_name) != 0) {
+        fprintf(ctx->output_file, ".globl\t%s\n", cname_override);
+        fprintf(ctx->output_file, "%s:\n", cname_override);
+    }
     fprintf(ctx->output_file, ".globl\t%s\n", func_name);
     if (codegen_target_is_windows())
         fprintf(ctx->output_file, "\t.seh_proc\t%s\n", func_name);
@@ -1778,6 +1784,11 @@ void codegen_function_header_ex(char *func_name, CodeGenContext *ctx, int nostac
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
     return;
+}
+
+void codegen_function_header_ex(char *func_name, CodeGenContext *ctx, int nostackframe)
+{
+    codegen_function_header_ex_alias(func_name, ctx, nostackframe, NULL);
 }
 
 void codegen_function_header(char *func_name, CodeGenContext *ctx)
@@ -2859,6 +2870,74 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
     codegen_function_locals(data->var_declaration, ctx, symtab);
     codegen_subprograms(data->subprograms, ctx, symtab);
 
+    /* Post-pass: emit .set aliases for cname_override values.
+       Forward declarations with [Alias:'FPC_DO_EXIT'] have cname_override set
+       but no body; the matching implementation has a body but no cname_override.
+       Scan for forward decls with aliases and match them to implementations by id. */
+    if (ctx->output_file != NULL) {
+        int debug_alias = (getenv("KGPC_DEBUG_ALIAS") != NULL);
+        ListNode_t *alias_scan = data->subprograms;
+        while (alias_scan != NULL) {
+            if (alias_scan->type == LIST_TREE && alias_scan->cur != NULL) {
+                Tree_t *sub = (Tree_t *)alias_scan->cur;
+                if (sub->type == TREE_SUBPROGRAM) {
+                    const char *alias = sub->tree_data.subprogram_data.cname_override;
+                    if (debug_alias && alias != NULL) {
+                        fprintf(stderr, "[ALIAS] id=%s mangled=%s alias=%s has_body=%d\n",
+                            sub->tree_data.subprogram_data.id ? sub->tree_data.subprogram_data.id : "<null>",
+                            sub->tree_data.subprogram_data.mangled_id ? sub->tree_data.subprogram_data.mangled_id : "<null>",
+                            alias, sub->tree_data.subprogram_data.statement_list != NULL);
+                    }
+                    if (alias != NULL) {
+                        const char *mangled = sub->tree_data.subprogram_data.mangled_id;
+                        const char *id = sub->tree_data.subprogram_data.id;
+                        const char *label = (mangled != NULL) ? mangled : id;
+                        /* If this node has a body, emit alias directly */
+                        if (sub->tree_data.subprogram_data.statement_list != NULL &&
+                            label != NULL && strcmp(alias, label) != 0) {
+                            fprintf(ctx->output_file, ".globl\t%s\n", alias);
+                            fprintf(ctx->output_file, "\t.set\t%s, %s\n", alias, label);
+                        }
+                        /* If this is a forward decl (no body), find the implementation.
+                           Match by id, or by cname_override (e.g. `external name 'FPC_DO_EXIT'`
+                           referencing a function that has [Alias:'FPC_DO_EXIT']). */
+                        else if (sub->tree_data.subprogram_data.statement_list == NULL) {
+                            ListNode_t *impl_scan = data->subprograms;
+                            while (impl_scan != NULL) {
+                                if (impl_scan->type == LIST_TREE && impl_scan->cur != NULL) {
+                                    Tree_t *impl = (Tree_t *)impl_scan->cur;
+                                    if (impl != sub && impl->type == TREE_SUBPROGRAM &&
+                                        impl->tree_data.subprogram_data.statement_list != NULL) {
+                                        /* Match by id */
+                                        int matched = 0;
+                                        if (id != NULL && impl->tree_data.subprogram_data.id != NULL &&
+                                            strcasecmp(impl->tree_data.subprogram_data.id, id) == 0)
+                                            matched = 1;
+                                        /* Match by alias matching impl's cname_override */
+                                        if (!matched && impl->tree_data.subprogram_data.cname_override != NULL &&
+                                            strcasecmp(impl->tree_data.subprogram_data.cname_override, alias) == 0)
+                                            matched = 1;
+                                        if (matched) {
+                                            const char *impl_mangled = impl->tree_data.subprogram_data.mangled_id;
+                                            const char *impl_label = (impl_mangled != NULL) ? impl_mangled : impl->tree_data.subprogram_data.id;
+                                            if (impl_label != NULL && strcmp(alias, impl_label) != 0) {
+                                                fprintf(ctx->output_file, ".globl\t%s\n", alias);
+                                                fprintf(ctx->output_file, "\t.set\t%s, %s\n", alias, impl_label);
+                                            }
+                                            break;
+                                        }
+                                    }
+                                }
+                                impl_scan = impl_scan->next;
+                            }
+                        }
+                    }
+                }
+            }
+            alias_scan = alias_scan->next;
+        }
+    }
+
     inst_list = NULL;
     inst_list = codegen_var_initializers(data->var_declaration, inst_list, ctx, symtab);
     if (data->body_statement == NULL && getenv("KGPC_DEBUG_BODY") != NULL) {
@@ -2883,6 +2962,23 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
     codegen_inst_list(inst_list, ctx);
     codegen_function_footer(prgm_name, ctx);
     free_inst_list(inst_list);
+
+    /* Emit INITFINAL table — FPC system unit references this to run unit
+       init/finalization.  KGPC inlines that code into main, so emit a
+       minimal table with TableCount = 0. */
+    if (ctx->output_file != NULL) {
+        fprintf(ctx->output_file, "\n.data\n");
+        fprintf(ctx->output_file, ".globl\tINITFINAL\n");
+        fprintf(ctx->output_file, "INITFINAL:\n");
+        fprintf(ctx->output_file, "\t.long\t0\n");  /* TableCount = 0 */
+    }
+
+    /* Emit FPC_RESOURCESTRINGTABLES as a zero-length table (no resource strings). */
+    if (ctx->output_file != NULL) {
+        fprintf(ctx->output_file, ".globl\tFPC_RESOURCESTRINGTABLES\n");
+        fprintf(ctx->output_file, "FPC_RESOURCESTRINGTABLES:\n");
+        fprintf(ctx->output_file, "\t.quad\t0\n");
+    }
 
     pop_stackscope();
 
@@ -3250,12 +3346,32 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                                 /* No .comm directive needed - the symbol is defined elsewhere */
                             } else {
                                 int alignment = alloc_size >= 8 ? 8 : DOUBLEWORD;
-                                if (cname_override != NULL) {
-                                    /* Public name: make it globally visible */
-                                    fprintf(ctx->output_file, "\t.globl\t%s\n", static_label);
+                                /* Check whether we need a bare-name alias for inline asm references.
+                                   .set cannot target .comm symbols, so use .bss allocation instead. */
+                                int need_bare_alias = (cname_override == NULL && id_list->cur != NULL &&
+                                                       tree->tree_data.var_decl_data.defined_in_unit &&
+                                                       strcmp((const char *)id_list->cur, static_label) != 0);
+                                if (need_bare_alias) {
+                                    /* Use .bss section with explicit label so .set can reference it.
+                                       .comm symbols can't be the target of .set, so we allocate
+                                       explicitly and use .pushsection/.popsection to preserve context. */
+                                    fprintf(ctx->output_file, "\t.pushsection .bss\n");
+                                    fprintf(ctx->output_file, "\t.align\t%d\n", alignment);
+                                    fprintf(ctx->output_file, ".globl\t%s\n", static_label);
+                                    fprintf(ctx->output_file, "%s:\n", static_label);
+                                    fprintf(ctx->output_file, "\t.zero\t%d\n", alloc_size);
+                                    fprintf(ctx->output_file, ".globl\t%s\n", (const char *)id_list->cur);
+                                    fprintf(ctx->output_file, "\t.set\t%s, %s\n",
+                                        (const char *)id_list->cur, static_label);
+                                    fprintf(ctx->output_file, "\t.popsection\n");
+                                } else {
+                                    if (cname_override != NULL) {
+                                        /* Public name: make it globally visible */
+                                        fprintf(ctx->output_file, "\t.globl\t%s\n", static_label);
+                                    }
+                                    fprintf(ctx->output_file, "\t.comm\t%s,%d,%d\n",
+                                        static_label, alloc_size, alignment);
                                 }
-                                fprintf(ctx->output_file, "\t.comm\t%s,%d,%d\n",
-                                    static_label, alloc_size, alignment);
                             }
                         }
                         add_static_var((char *)id_list->cur, alloc_size, static_label);
@@ -3747,7 +3863,7 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     
     codegen_emit_local_const_equivs(ctx, symtab);
     codegen_emit_const_decl_equivs_from_list(ctx, proc->const_declarations);
-    codegen_function_header_ex(sub_id, ctx, proc->nostackframe);
+    codegen_function_header_ex_alias(sub_id, ctx, proc->nostackframe, proc->cname_override);
     if (!proc->nostackframe)
         codegen_stack_space(ctx);
     codegen_inst_list(inst_list, ctx);
@@ -4377,7 +4493,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     
     codegen_emit_local_const_equivs(ctx, symtab);
     codegen_emit_const_decl_equivs_from_list(ctx, func->const_declarations);
-    codegen_function_header_ex(sub_id, ctx, func->nostackframe);
+    codegen_function_header_ex_alias(sub_id, ctx, func->nostackframe, func->cname_override);
     if (!func->nostackframe)
         codegen_stack_space(ctx);
     codegen_inst_list(inst_list, ctx);

@@ -14649,6 +14649,12 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
     ListNode_t *type_decls = NULL;
 
     while (cur != NULL) {
+        if (getenv("KGPC_DEBUG_PROC_DIRECTIVE") != NULL) {
+            fprintf(stderr, "[KGPC] convert_procedure directive node: typ=%d sym=%s child_typ=%d\n",
+                cur->typ,
+                (cur->sym != NULL && cur->sym->name != NULL) ? cur->sym->name : "<null>",
+                (cur->child != NULL) ? cur->child->typ : -1);
+        }
         switch (cur->typ) {
         case PASCAL_T_TYPE_SECTION:
             append_type_decls_from_section(cur, &type_decls, &nested_subs,
@@ -14700,6 +14706,24 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
                     is_nostackframe = 1;
                 } else if (strcasecmp(self_sym, "varargs") == 0) {
                     is_varargs = 1;
+                } else if (strcasecmp(self_sym, "alias") == 0) {
+                    /* [Alias:'NAME'] bracket directive — the string value is
+                       either a child node or the next sibling (depending on
+                       how the PEG grammar flattened the seq). */
+                    ast_t *val = cur->child;
+                    if (val == NULL || val->typ != PASCAL_T_STRING)
+                        val = cur->next;  /* sibling layout */
+                    if (val != NULL && val->typ == PASCAL_T_STRING) {
+                        char *name = dup_symbol(val);
+                        if (name != NULL) {
+                            if (external_alias != NULL)
+                                free(external_alias);
+                            external_alias = name;
+                        }
+                        /* Skip the string node so the outer loop doesn't revisit it */
+                        if (val == cur->next)
+                            cur = cur->next;
+                    }
                 }
                 free(self_sym);
             }
@@ -15016,6 +15040,25 @@ static Tree_t *convert_function(ast_t *func_node) {
                     is_nostackframe = 1;
                 else if (strcasecmp(self_sym, "varargs") == 0)
                     is_varargs = 1;
+                else if (strcasecmp(self_sym, "alias") == 0) {
+                    /* [Alias:'NAME'] bracket directive — the string value is
+                       either a child node or the next sibling (depending on
+                       how the PEG grammar flattened the seq). */
+                    ast_t *val = cur->child;
+                    if (val == NULL || val->typ != PASCAL_T_STRING)
+                        val = cur->next;  /* sibling layout */
+                    if (val != NULL && val->typ == PASCAL_T_STRING) {
+                        char *name = dup_symbol(val);
+                        if (name != NULL) {
+                            if (external_alias != NULL)
+                                free(external_alias);
+                            external_alias = name;
+                        }
+                        /* Skip the string node so the outer loop doesn't revisit it */
+                        if (val == cur->next)
+                            cur = cur->next;
+                    }
+                }
                 free(self_sym);
             }
 
