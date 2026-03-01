@@ -742,6 +742,13 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
         free(buffer);
         return false;
     }
+    if (!pascal_preprocessor_define(preprocessor, "FPC_USE_LIBC"))
+    {
+        report_preprocessor_error(error_out, path, "unable to define FPC_USE_LIBC symbol");
+        pascal_preprocessor_free(preprocessor);
+        free(buffer);
+        return false;
+    }
 #endif
 
     /* Define MSWINDOWS when targeting Windows (but not for Cygwin/MSYS which expose a POSIX API) */

@@ -1549,7 +1549,7 @@ static int semcheck_call_with_proc_var(SymTab_t *symtab, struct Statement *stmt,
         args_given = args_given->next;
     }
 
-    if (formal_params == NULL && args_given != NULL)
+    if (formal_params == NULL && args_given != NULL && !proc_node->is_varargs)
     {
         semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index,
             "Error on line %d, on procedure call %s, too many arguments given!\n\n",
@@ -6745,7 +6745,7 @@ proccall_parent_resolve_done:
             if (allow_implicit_self_only)
                 args_given = NULL;
         }
-        if(true_args == NULL && args_given != NULL)
+        if(true_args == NULL && args_given != NULL && !(sym_return != NULL && sym_return->is_varargs))
         {
             semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index,
                 "Error on line %d, on procedure call %s, too many arguments given!\n\n",
