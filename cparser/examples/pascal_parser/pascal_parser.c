@@ -388,6 +388,7 @@ const char* pascal_tag_to_string(tag_t tag) {
         // New enhanced parser types
         case PASCAL_T_COMPILER_DIRECTIVE: return "COMPILER_DIRECTIVE";
         case PASCAL_T_EXTERNAL_NAME: return "EXTERNAL_NAME";
+        case PASCAL_T_EXTERNAL_NAME_EXPR: return "EXTERNAL_NAME_EXPR";
         case PASCAL_T_PUBLIC_NAME: return "PUBLIC_NAME";
         case PASCAL_T_ABSOLUTE_CLAUSE: return "ABSOLUTE_CLAUSE";
         case PASCAL_T_COMMENT: return "COMMENT";
