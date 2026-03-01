@@ -4096,7 +4096,77 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                         cleaned[j++] = src[i];
                     }
                     cleaned[j] = '\0';
-                    inst_list = add_inst(inst_list, cleaned);
+
+                    /* Substitute Pascal parameter/variable names with stack operands
+                       or ABI registers.  FPC's inline asm uses parameter names (e.g.
+                       'buf', 'len') that the compiler resolves.  For nostackframe
+                       functions, use the ABI registers (e.g. %rdi, %rsi, %rdx...).
+                       For regular functions, use the stack offset -N(%rbp). */
+                    {
+                        size_t clen = strlen(cleaned);
+                        size_t sub_alloc = clen * 3 + 4096;
+                        char *substituted = malloc(sub_alloc);
+                        if (substituted != NULL) {
+                            size_t si = 0, sj = 0;
+                            while (si < clen && sj < sub_alloc - 64) {
+                                /* Identifier: starts with letter or _, not preceded by % or . */
+                                if ((isalpha((unsigned char)cleaned[si]) || cleaned[si] == '_') &&
+                                    (si == 0 || (!isalnum((unsigned char)cleaned[si-1]) &&
+                                                 cleaned[si-1] != '_' && cleaned[si-1] != '%' &&
+                                                 cleaned[si-1] != '.')))
+                                {
+                                    size_t id_start = si;
+                                    while (si < clen && (isalnum((unsigned char)cleaned[si]) || cleaned[si] == '_'))
+                                        si++;
+                                    size_t id_len = si - id_start;
+                                    char id_buf[256];
+                                    int did_substitute = 0;
+                                    if (id_len < sizeof(id_buf)) {
+                                        memcpy(id_buf, cleaned + id_start, id_len);
+                                        id_buf[id_len] = '\0';
+
+                                        /* For nostackframe: check asm_params for ABI register mapping */
+                                        if (ctx->is_nostackframe && ctx->asm_param_count > 0) {
+                                            for (int pi = 0; pi < ctx->asm_param_count; pi++) {
+                                                if (ctx->asm_params[pi].name != NULL &&
+                                                    strcasecmp(id_buf, ctx->asm_params[pi].name) == 0) {
+                                                    const char *reg = get_arg_reg64_num(ctx->asm_params[pi].reg_index);
+                                                    if (reg != NULL) {
+                                                        int n = snprintf(substituted + sj, sub_alloc - sj, "%s", reg);
+                                                        sj += (n > 0 ? (size_t)n : 0);
+                                                        did_substitute = 1;
+                                                    }
+                                                    break;
+                                                }
+                                            }
+                                        }
+
+                                        /* For regular functions: look up in stack scope */
+                                        if (!did_substitute) {
+                                            StackNode_t *snode = find_label(id_buf);
+                                            if (snode != NULL && !snode->is_static && snode->offset != 0) {
+                                                int n = snprintf(substituted + sj, sub_alloc - sj,
+                                                                 "-%d(%%rbp)", snode->offset);
+                                                sj += (n > 0 ? (size_t)n : 0);
+                                                did_substitute = 1;
+                                            }
+                                        }
+                                    }
+                                    if (!did_substitute) {
+                                        memcpy(substituted + sj, cleaned + id_start, id_len);
+                                        sj += id_len;
+                                    }
+                                } else {
+                                    substituted[sj++] = cleaned[si++];
+                                }
+                            }
+                            substituted[sj] = '\0';
+                            inst_list = add_inst(inst_list, substituted);
+                            free(substituted);
+                        } else {
+                            inst_list = add_inst(inst_list, cleaned);
+                        }
+                    }
                     free(cleaned);
                 }
                 else
