@@ -753,7 +753,7 @@ int semcheck_is_expr(int *type_return,
             }
         }
     }
-    
+
     if (!is_valid_target)
     {
         semcheck_error_with_context("Error on line %d, \"is\" operator requires a class type on the right-hand side.\n\n",

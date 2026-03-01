@@ -6974,17 +6974,49 @@ static struct RecordType *convert_interface_type_ex(const char *interface_name, 
     uint16_t guid_d3 = 0;
     uint8_t guid_d4[8] = {0};
     ast_t *body_start = interface_node->child;
+    /* Skip optional GUID attribute: ['{...}'] or [SGUIDConst].
+     * With PASCAL_T_INTERFACE_GUID, the GUID is now wrapped in its own node. */
+    if (body_start != NULL && body_start->typ == PASCAL_T_INTERFACE_GUID) {
+        /* Extract GUID string from inside the GUID node if available */
+        ast_t *guid_child = body_start->child;
+        while (guid_child != NULL) {
+            if (guid_child->typ == PASCAL_T_STRING && guid_child->sym != NULL &&
+                guid_child->sym->name != NULL) {
+                guid_string = strdup(guid_child->sym->name);
+                has_guid = parse_guid_literal(guid_child->sym->name, &guid_d1, &guid_d2, &guid_d3, guid_d4);
+                break;
+            }
+            guid_child = guid_child->next;
+        }
+        body_start = body_start->next;
+    }
+
     if (body_start != NULL && body_start->typ == PASCAL_T_IDENTIFIER) {
         if (body_start->sym != NULL && body_start->sym->name != NULL)
             parent_interface_name = strdup(body_start->sym->name);
         body_start = body_start->next;
     }
 
-    /* Optional GUID string follows parent identifier, e.g. ['{...}'] */
+    /* Optional GUID string follows parent identifier (when GUID is a string literal) */
     if (body_start != NULL && body_start->typ == PASCAL_T_STRING) {
         if (body_start->sym != NULL && body_start->sym->name != NULL) {
             guid_string = strdup(body_start->sym->name);
             has_guid = parse_guid_literal(body_start->sym->name, &guid_d1, &guid_d2, &guid_d3, guid_d4);
+        }
+        body_start = body_start->next;
+    }
+
+    /* Skip GUID attribute if it follows the parent identifier */
+    if (body_start != NULL && body_start->typ == PASCAL_T_INTERFACE_GUID) {
+        ast_t *guid_child = body_start->child;
+        while (guid_child != NULL && !has_guid) {
+            if (guid_child->typ == PASCAL_T_STRING && guid_child->sym != NULL &&
+                guid_child->sym->name != NULL) {
+                guid_string = strdup(guid_child->sym->name);
+                has_guid = parse_guid_literal(guid_child->sym->name, &guid_d1, &guid_d2, &guid_d3, guid_d4);
+                break;
+            }
+            guid_child = guid_child->next;
         }
         body_start = body_start->next;
     }
