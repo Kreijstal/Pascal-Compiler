@@ -6175,6 +6175,45 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                         alias->target_type_id) &&
                         !alias->is_pointer && !alias->is_array && !alias->is_set &&
                         !alias->is_enum && !alias->is_file;
+
+                    /* WideChar/UnicodeChar must be predeclared as CHAR_TYPE before
+                     * apply_builtin_integer_alias_metadata converts them to WORD_TYPE. */
+                    if (alias->is_char_alias && type_id != NULL &&
+                        (pascal_identifier_equals(type_id, "WideChar") ||
+                         pascal_identifier_equals(type_id, "UnicodeChar")))
+                    {
+                        if (alias->alias_name == NULL)
+                            alias->alias_name = strdup(type_id);
+                        alias->storage_size = 2;
+                        KgpcType *kgpc_type = create_primitive_type_with_size(CHAR_TYPE, 2);
+                        if (kgpc_type != NULL)
+                        {
+                            kgpc_type_set_type_alias(kgpc_type, alias);
+                            if (tree->tree_data.type_decl_data.kgpc_type == NULL)
+                            {
+                                tree->tree_data.type_decl_data.kgpc_type = kgpc_type;
+                                kgpc_type_retain(kgpc_type);
+                            }
+                            int result = PushTypeOntoScope_Typed(symtab, (char *)type_id, kgpc_type);
+                            if (result > 0)
+                                errors += result;
+                            else
+                            {
+                                HashNode_t *type_node = semcheck_find_type_node_with_unit_flag(symtab,
+                                    type_id, tree->tree_data.type_decl_data.defined_in_unit);
+                                if (type_node != NULL)
+                                {
+                                    mark_hashnode_unit_info(symtab, type_node,
+                                        tree->tree_data.type_decl_data.defined_in_unit,
+                                        tree->tree_data.type_decl_data.unit_is_public);
+                                    mark_hashnode_source_unit(type_node, tree->tree_data.type_decl_data.source_unit_index);
+                                }
+                            }
+                        }
+                        cur = cur->next;
+                        continue;
+                    }
+
                     if (alias->target_type_id != NULL)
                         apply_builtin_integer_alias_metadata(alias, alias->target_type_id);
                     else if (type_id != NULL)
