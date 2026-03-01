@@ -1363,24 +1363,27 @@ class TestCompiler(unittest.TestCase):
     def test_forward_class_constructor_assignment_no_duplicate_self_move(self):
         """Verify that the constructor codegen emits exactly one Self-move into
         the first argument register before the constructor call, and that no
-        duplicate consecutive movq instructions target %rdi."""
+        duplicate consecutive movq instructions target the first arg register."""
         input_file, asm_file, _ = self._get_test_paths("forward_class_ctor_assign")
         run_compiler(input_file, asm_file)
         asm_lines = read_file_content(asm_file).splitlines()
 
-        # 1. No duplicate consecutive movq into %rdi anywhere in the file.
+        # The first argument register depends on the target ABI.
+        first_arg_reg = "%rcx" if IS_WINDOWS_ABI else "%rdi"
+
+        # 1. No duplicate consecutive movq into the first arg register anywhere in the file.
         for i in range(len(asm_lines) - 1):
             self.assertFalse(
                 asm_lines[i] == asm_lines[i + 1]
                 and asm_lines[i].startswith("\tmovq\t")
-                and asm_lines[i].endswith(", %rdi"),
+                and asm_lines[i].endswith(f", {first_arg_reg}"),
                 f"duplicate constructor self move found at line {i + 1}: {asm_lines[i]}",
             )
 
         # 2. Verify the expected call sequence:
         #    calloc → save instance → VMT init → Self move → call constructor.
-        #    There must be exactly ONE movq into %rdi between the VMT store and
-        #    the constructor call.
+        #    There must be exactly ONE movq into the first arg register between
+        #    the VMT store and the constructor call.
         call_idx = None
         for i, line in enumerate(asm_lines):
             if "\tcall\ttfoo__create_p" in line:
@@ -1388,7 +1391,7 @@ class TestCompiler(unittest.TestCase):
                 break
         self.assertIsNotNone(call_idx, "constructor call not found in assembly")
 
-        # Count movq ..., %rdi instructions between calloc return and the call.
+        # Count movq ..., <first_arg_reg> instructions between calloc return and the call.
         calloc_idx = None
         for i in range(call_idx - 1, -1, -1):
             if "\tcall\tcalloc" in asm_lines[i]:
@@ -1398,11 +1401,11 @@ class TestCompiler(unittest.TestCase):
 
         self_moves = [
             line for line in asm_lines[calloc_idx:call_idx]
-            if line.startswith("\tmovq\t") and line.endswith(", %rdi")
+            if line.startswith("\tmovq\t") and line.endswith(f", {first_arg_reg}")
         ]
         self.assertEqual(
             len(self_moves), 1,
-            f"Expected exactly 1 Self-move into %rdi between calloc and constructor call, "
+            f"Expected exactly 1 Self-move into {first_arg_reg} between calloc and constructor call, "
             f"found {len(self_moves)}: {self_moves}",
         )
 
