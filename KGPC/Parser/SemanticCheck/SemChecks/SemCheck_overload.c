@@ -1546,7 +1546,8 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                 first_actual != NULL && first_actual->type == EXPR_VAR_ID &&
                 first_actual->expr_data.id != NULL &&
                 pascal_identifier_equals(first_actual->expr_data.id, "Self") &&
-                total_params > 0 && given_count == total_params - 1)
+                total_params > 0 && given_count == total_params - 1 &&
+                given_count < required_params)
             {
                 allow_implicit_leading_self = 1;
             }
