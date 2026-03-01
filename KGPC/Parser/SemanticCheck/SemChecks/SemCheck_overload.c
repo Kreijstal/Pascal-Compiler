@@ -391,7 +391,7 @@ int semcheck_count_required_params(ListNode_t *params)
     return required;
 }
 
-int semcheck_method_accepts_arg_count(ListNode_t *params, int arg_count, int *expects_self_out)
+int semcheck_method_accepts_arg_count(ListNode_t *params, int arg_count, int *expects_self_out, int is_varargs)
 {
     int expects_self = 0;
     int total_params = semcheck_count_total_params(params);
@@ -425,6 +425,10 @@ int semcheck_method_accepts_arg_count(ListNode_t *params, int arg_count, int *ex
 
     if (expects_self_out != NULL)
         *expects_self_out = expects_self;
+
+    /* For varargs functions, only check the lower bound */
+    if (is_varargs)
+        return (arg_count >= required_params);
 
     return (arg_count >= required_params && arg_count <= total_params);
 }
@@ -1416,7 +1420,8 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
         int arity_matches = ((given_count >= required_params && given_count <= total_params) ||
             (total_params == 0 && given_count > 0 &&
              candidate->type != NULL &&
-             candidate->type->info.proc_info.definition == NULL));
+             candidate->type->info.proc_info.definition == NULL) ||
+            (candidate->is_varargs && given_count >= required_params));
         if (!arity_matches && allow_implicit_leading_self)
         {
             int adj_total = total_params - 1;
