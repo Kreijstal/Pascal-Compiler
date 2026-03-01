@@ -83,6 +83,8 @@ kgpc_cparser_sources = [
   'Optimizer/mark_used.c',
   'stacktrace.c',
   'unit_paths.c',
+  'unit_registry.c',
+  'string_intern.c',
 ]
 
 kgpc_cparser_exe = executable('kgpc', kgpc_cparser_sources,

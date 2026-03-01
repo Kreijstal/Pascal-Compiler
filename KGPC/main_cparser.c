@@ -46,6 +46,7 @@ static int unsetenv(const char *name)
 #include "pascal_declaration.h"
 
 #include "flags.h"
+#include "unit_registry.h"
 #include "Parser/ParseTree/tree.h"
 #include "Parser/ParseTree/from_cparser.h"
 #include "Parser/pascal_frontend.h"
@@ -793,7 +794,7 @@ static void append_initialization_statement(Tree_t *program, struct Statement *i
     destroy_stmt(init_stmt);
 }
 
-static void mark_unit_subprograms(ListNode_t *sub_list)
+static void mark_unit_subprograms(ListNode_t *sub_list, int unit_index)
 {
     ListNode_t *node = sub_list;
     while (node != NULL)
@@ -802,13 +803,17 @@ static void mark_unit_subprograms(ListNode_t *sub_list)
         {
             Tree_t *sub = (Tree_t *)node->cur;
             if (sub->type == TREE_SUBPROGRAM)
+            {
                 sub->tree_data.subprogram_data.defined_in_unit = 1;
+                if (unit_index > 0 && sub->tree_data.subprogram_data.source_unit_index == 0)
+                    sub->tree_data.subprogram_data.source_unit_index = unit_index;
+            }
         }
         node = node->next;
     }
 }
 
-static void mark_unit_type_decls(ListNode_t *type_list, int is_public, const char *unit_name)
+static void mark_unit_type_decls(ListNode_t *type_list, int is_public, int unit_index)
 {
     ListNode_t *node = type_list;
     while (node != NULL)
@@ -820,8 +825,8 @@ static void mark_unit_type_decls(ListNode_t *type_list, int is_public, const cha
             {
                 decl->tree_data.type_decl_data.defined_in_unit = 1;
                 decl->tree_data.type_decl_data.unit_is_public = is_public ? 1 : 0;
-                if (unit_name != NULL && decl->tree_data.type_decl_data.source_unit_name == NULL)
-                    decl->tree_data.type_decl_data.source_unit_name = strdup(unit_name);
+                if (unit_index > 0 && decl->tree_data.type_decl_data.source_unit_index == 0)
+                    decl->tree_data.type_decl_data.source_unit_index = unit_index;
             }
         }
         node = node->next;
@@ -1016,8 +1021,8 @@ static void merge_unit_into_target(Tree_t *target, Tree_t *unit_tree)
     assert(var_list != NULL);
     assert(sub_list != NULL);
 
-    mark_unit_type_decls(unit_tree->tree_data.unit_data.interface_type_decls, 1,
-        unit_tree->tree_data.unit_data.unit_id);
+    int unit_idx = unit_registry_add(unit_tree->tree_data.unit_data.unit_id);
+    mark_unit_type_decls(unit_tree->tree_data.unit_data.interface_type_decls, 1, unit_idx);
     if (getenv("KGPC_DEBUG_TFPG") != NULL) {
         ListNode_t *dbg = unit_tree->tree_data.unit_data.interface_type_decls;
         while (dbg != NULL) {
@@ -1067,8 +1072,7 @@ static void merge_unit_into_target(Tree_t *target, Tree_t *unit_tree)
     *var_list = ConcatList(*var_list, unit_tree->tree_data.unit_data.interface_var_decls);
     unit_tree->tree_data.unit_data.interface_var_decls = NULL;
 
-    mark_unit_type_decls(unit_tree->tree_data.unit_data.implementation_type_decls, 0,
-        unit_tree->tree_data.unit_data.unit_id);
+    mark_unit_type_decls(unit_tree->tree_data.unit_data.implementation_type_decls, 0, unit_idx);
     if (getenv("KGPC_DEBUG_TFPG") != NULL) {
         ListNode_t *dbg = unit_tree->tree_data.unit_data.implementation_type_decls;
         while (dbg != NULL) {
@@ -1100,7 +1104,7 @@ static void merge_unit_into_target(Tree_t *target, Tree_t *unit_tree)
     *var_list = ConcatList(*var_list, unit_tree->tree_data.unit_data.implementation_var_decls);
     unit_tree->tree_data.unit_data.implementation_var_decls = NULL;
 
-    mark_unit_subprograms(unit_tree->tree_data.unit_data.subprograms);
+    mark_unit_subprograms(unit_tree->tree_data.unit_data.subprograms, unit_idx);
     *sub_list = ConcatList(*sub_list, unit_tree->tree_data.unit_data.subprograms);
     unit_tree->tree_data.unit_data.subprograms = NULL;
 
@@ -1449,7 +1453,8 @@ int main(int argc, char **argv)
                 mark_stdlib_var_params(prelude_subs);
             if (prelude_subs != NULL)
             {
-                mark_unit_subprograms(prelude_subs);
+                int sys_idx = unit_registry_add("System");
+                mark_unit_subprograms(prelude_subs, sys_idx);
                 ListNode_t *last = prelude_subs;
                 while (last->next != NULL)
                     last = last->next;
@@ -1457,12 +1462,12 @@ int main(int argc, char **argv)
                 user_tree->tree_data.unit_data.subprograms = prelude_subs;
                 clear_prelude_subprograms(prelude_tree);
             }
-            
+
             /* Merge prelude types into unit for FPC compatibility (SizeInt, PAnsiChar, etc.) */
             ListNode_t *prelude_types = get_prelude_type_decls(prelude_tree);
             if (prelude_types != NULL)
             {
-                mark_unit_type_decls(prelude_types, 1, "System");  /* Mark as exported from unit */
+                mark_unit_type_decls(prelude_types, 1, unit_registry_add("System"));
                 user_tree->tree_data.unit_data.interface_type_decls =
                     ConcatList(prelude_types, user_tree->tree_data.unit_data.interface_type_decls);
                 clear_prelude_type_decls(prelude_tree);
@@ -1662,8 +1667,8 @@ int main(int argc, char **argv)
         {
             /* Mark prelude (system.p) subprograms as library procedures so they don't
              * incorrectly get static links when merged into user programs */
-            mark_unit_subprograms(prelude_subs);
-            
+            mark_unit_subprograms(prelude_subs, unit_registry_add("System"));
+
             ListNode_t *last = prelude_subs;
             while (last->next != NULL)
                 last = last->next;
@@ -1676,7 +1681,7 @@ int main(int argc, char **argv)
         ListNode_t *prelude_types = get_prelude_type_decls(prelude_tree);
         if (prelude_types != NULL)
         {
-            mark_unit_type_decls(prelude_types, 1, "System");
+            mark_unit_type_decls(prelude_types, 1, unit_registry_add("System"));
             user_tree->tree_data.program_data.type_declaration =
                 ConcatList(prelude_types, user_tree->tree_data.program_data.type_declaration);
             clear_prelude_type_decls(prelude_tree);

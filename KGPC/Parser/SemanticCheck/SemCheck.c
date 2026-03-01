@@ -32,6 +32,8 @@
 #include "SemChecks/SemCheck_sizeof.h"
 #include "../../flags.h"
 #include "../../identifier_utils.h"
+#include "../../unit_registry.h"
+#include "../../string_intern.h"
 #include "../../Optimizer/optimizer.h"
 #include "../pascal_frontend.h"
 #include "../ParseTree/tree.h"
@@ -69,7 +71,7 @@ static char* strndup(const char* s, size_t n)
 #endif
 
 static ListNode_t *g_semcheck_unit_names = NULL;
-static char *g_semcheck_current_unit_name = NULL;
+static int g_semcheck_current_unit_index = 0;
 static char *g_semcheck_source_path = NULL;
 static char *g_semcheck_source_buffer = NULL;
 static size_t g_semcheck_source_length = 0;
@@ -202,11 +204,7 @@ static void semcheck_unit_names_reset(void)
     }
     DestroyList(g_semcheck_unit_names);
     g_semcheck_unit_names = NULL;
-    if (g_semcheck_current_unit_name != NULL)
-    {
-        free(g_semcheck_current_unit_name);
-        g_semcheck_current_unit_name = NULL;
-    }
+    g_semcheck_current_unit_index = 0;
 }
 
 static void semcheck_unit_name_add(const char *name)
@@ -262,9 +260,12 @@ int semcheck_is_unit_name(const char *name)
         return 0;
     if (pascal_identifier_equals(name, "System"))
         return 1;
-    if (g_semcheck_current_unit_name != NULL &&
-        pascal_identifier_equals(name, g_semcheck_current_unit_name))
-        return 1;
+    if (g_semcheck_current_unit_index > 0)
+    {
+        const char *cur_name = unit_registry_get(g_semcheck_current_unit_index);
+        if (cur_name != NULL && pascal_identifier_equals(name, cur_name))
+            return 1;
+    }
 
     ListNode_t *cur = g_semcheck_unit_names;
     while (cur != NULL)
@@ -2487,6 +2488,23 @@ static void copy_method_decl_defaults_to_impl(SymTab_t *symtab, Tree_t *subprogr
     free(class_name);
 }
 
+/* Copy method identity fields (interned strings) from a subprogram tree
+ * node into a hash node, if the hash node doesn't already have them. */
+static void copy_method_identity_to_node(HashNode_t *node, Tree_t *subprogram)
+{
+    if (node == NULL || subprogram == NULL ||
+        subprogram->tree_data.subprogram_data.method_name == NULL)
+        return;
+    if (node->method_name == NULL)
+        node->method_name = subprogram->tree_data.subprogram_data.method_name;
+    if (node->owner_class == NULL)
+        node->owner_class = subprogram->tree_data.subprogram_data.owner_class;
+    if (node->owner_class_full == NULL)
+        node->owner_class_full = subprogram->tree_data.subprogram_data.owner_class_full;
+    if (node->owner_class_outer == NULL)
+        node->owner_class_outer = subprogram->tree_data.subprogram_data.owner_class_outer;
+}
+
 static void semcheck_propagate_method_identity(SymTab_t *symtab, Tree_t *subprogram)
 {
     if (symtab == NULL || subprogram == NULL)
@@ -2512,21 +2530,7 @@ static void semcheck_propagate_method_identity(SymTab_t *symtab, Tree_t *subprog
                 candidate->type->info.proc_info.definition == NULL)
                 candidate->type->info.proc_info.definition = subprogram;
 
-            if (candidate->method_name == NULL &&
-                subprogram->tree_data.subprogram_data.method_name != NULL)
-                candidate->method_name = strdup(subprogram->tree_data.subprogram_data.method_name);
-
-            if (candidate->owner_class == NULL &&
-                subprogram->tree_data.subprogram_data.owner_class != NULL)
-                candidate->owner_class = strdup(subprogram->tree_data.subprogram_data.owner_class);
-
-            if (candidate->owner_class_full == NULL &&
-                subprogram->tree_data.subprogram_data.owner_class_full != NULL)
-                candidate->owner_class_full = strdup(subprogram->tree_data.subprogram_data.owner_class_full);
-
-            if (candidate->owner_class_outer == NULL &&
-                subprogram->tree_data.subprogram_data.owner_class_outer != NULL)
-                candidate->owner_class_outer = strdup(subprogram->tree_data.subprogram_data.owner_class_outer);
+            copy_method_identity_to_node(candidate, subprogram);
         }
         cur = cur->next;
     }
@@ -2748,9 +2752,9 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symt
             int scope_level = semcheck_scope_level_for_type_candidate(symtab, node);
 
             int same_unit = 0;
-            if (!prefer_unit_defined && g_semcheck_current_unit_name != NULL &&
-                node->source_unit_name != NULL &&
-                pascal_identifier_equals(node->source_unit_name, g_semcheck_current_unit_name))
+            if (!prefer_unit_defined && g_semcheck_current_unit_index != 0 &&
+                node->source_unit_index != 0 &&
+                node->source_unit_index == g_semcheck_current_unit_index)
                 same_unit = 1;
 
             int take = 0;
@@ -2946,15 +2950,16 @@ static inline void mark_hashnode_unit_info(SymTab_t *symtab, HashNode_t *node,
     if (symtab != NULL)
         SymTab_MoveHashNodeToBack(symtab, node);
 
+    const char *cur_unit_str = unit_registry_get(g_semcheck_current_unit_index);
     if (symtab == NULL || node->hash_type != HASHTYPE_TYPE ||
-        g_semcheck_current_unit_name == NULL || node->id == NULL)
+        cur_unit_str == NULL || node->id == NULL)
         return;
 
-    size_t qualified_len = strlen(g_semcheck_current_unit_name) + 1 + strlen(node->id) + 1;
+    size_t qualified_len = strlen(cur_unit_str) + 1 + strlen(node->id) + 1;
     char *qualified_id = (char *)malloc(qualified_len);
     if (qualified_id == NULL)
         return;
-    snprintf(qualified_id, qualified_len, "%s.%s", g_semcheck_current_unit_name, node->id);
+    snprintf(qualified_id, qualified_len, "%s.%s", cur_unit_str, node->id);
 
     HashNode_t *existing = NULL;
     if (FindIdent(&existing, symtab, qualified_id) < 0 || existing == NULL)
@@ -2979,9 +2984,9 @@ static inline void mark_hashnode_unit_info(SymTab_t *symtab, HashNode_t *node,
     free(qualified_id);
 }
 
-static inline void mark_hashnode_source_unit(HashNode_t *node, const char *unit_name) {
-    if (node == NULL || unit_name == NULL || node->source_unit_name != NULL) return;
-    node->source_unit_name = strdup(unit_name);
+static inline void mark_hashnode_source_unit(HashNode_t *node, int unit_index) {
+    if (node == NULL || unit_index <= 0 || node->source_unit_index != 0) return;
+    node->source_unit_index = unit_index;
 }
 
 static Tree_t *g_semcheck_current_subprogram = NULL;
@@ -5969,10 +5974,18 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                     /* If the existing symbol is a non-record alias and we are now defining
                      * a record with the same name, replace the alias with the record.
                      * This is required for units that import a type alias (e.g. TSize = LongInt)
-                     * and then define their own record TSize with methods. */
+                     * and then define their own record TSize with methods.
+                     * However, if they come from different units, push as a new entry
+                     * so per-unit type resolution can pick the right one. */
+                    int cross_unit_replace = 0;
+                    if (tree->tree_data.type_decl_data.source_unit_index != 0 &&
+                        existing->source_unit_index != 0 &&
+                        tree->tree_data.type_decl_data.source_unit_index != existing->source_unit_index)
+                        cross_unit_replace = 1;
                     if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD &&
                         existing->hash_type == HASHTYPE_TYPE &&
-                        get_record_type_from_node(existing) == NULL)
+                        get_record_type_from_node(existing) == NULL &&
+                        !cross_unit_replace)
                     {
                         struct RecordType *record_info = tree->tree_data.type_decl_data.info.record;
                         if (record_info != NULL)
@@ -5998,7 +6011,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             mark_hashnode_unit_info(symtab, existing,
                                 tree->tree_data.type_decl_data.defined_in_unit,
                                 tree->tree_data.type_decl_data.unit_is_public);
-                            mark_hashnode_source_unit(existing, tree->tree_data.type_decl_data.source_unit_name);
+                            mark_hashnode_source_unit(existing, tree->tree_data.type_decl_data.source_unit_index);
                         }
                         cur = cur->next;
                         continue;
@@ -6051,28 +6064,25 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                 mark_hashnode_unit_info(symtab, existing,
                                     tree->tree_data.type_decl_data.defined_in_unit,
                                     tree->tree_data.type_decl_data.unit_is_public);
-                                mark_hashnode_source_unit(existing, tree->tree_data.type_decl_data.source_unit_name);
+                                mark_hashnode_source_unit(existing, tree->tree_data.type_decl_data.source_unit_index);
                             }
                             cur = cur->next;
                             continue;
                         }
                     }
 
-                    /* Allow local types to shadow imported unit types.
-                     * Also allow record types from the current unit to coexist with
-                     * imported same-name records (e.g. SysUtils.tsiginfo vs System.tsiginfo). */
-                    int current_unit_record_coexist = (
+                    /* Allow record types from different units to coexist as separate entries.
+                     * This handles cases like System.tsiginfo vs SysUtils.tsiginfo and
+                     * UnixType.TSize (alias) vs Types.TSize (record).
+                     * The ranking logic picks the right one based on same-unit preference. */
+                    int cross_unit_coexist = (
                         tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD &&
-                        g_semcheck_current_unit_name != NULL &&
-                        existing->source_unit_name != NULL &&
-                        tree->tree_data.type_decl_data.source_unit_name != NULL &&
-                        pascal_identifier_equals(tree->tree_data.type_decl_data.source_unit_name,
-                            g_semcheck_current_unit_name) &&
-                        !pascal_identifier_equals(existing->source_unit_name,
-                            g_semcheck_current_unit_name));
+                        existing->source_unit_index != 0 &&
+                        tree->tree_data.type_decl_data.source_unit_index != 0 &&
+                        existing->source_unit_index != tree->tree_data.type_decl_data.source_unit_index);
                     if (!(existing->defined_in_unit &&
                           !tree->tree_data.type_decl_data.defined_in_unit) &&
-                        !current_unit_record_coexist)
+                        !cross_unit_coexist)
                     {
                         /* Check if this is a forward class declaration being completed.
                          * Forward: "TObject = class;" creates empty class, then full definition follows.
@@ -6170,7 +6180,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                 mark_hashnode_unit_info(symtab, existing,
                                     tree->tree_data.type_decl_data.defined_in_unit,
                                     tree->tree_data.type_decl_data.unit_is_public);
-                                mark_hashnode_source_unit(existing, tree->tree_data.type_decl_data.source_unit_name);
+                                mark_hashnode_source_unit(existing, tree->tree_data.type_decl_data.source_unit_index);
                             }
                             cur = cur->next;
                             continue;
@@ -6311,14 +6321,18 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                         }
                         else
                         {
-                            HashNode_t *type_node = semcheck_find_type_node_with_unit_flag(symtab,
-                                type_id, tree->tree_data.type_decl_data.defined_in_unit);
-                            if (type_node != NULL)
+                            /* Use FindIdent to get the most recently pushed entry (front of list).
+                             * We can't use semcheck_find_type_node_with_unit_flag here because
+                             * the newly pushed entry hasn't been marked yet (defined_in_unit=0),
+                             * so that function would skip it and find an older entry instead. */
+                            HashNode_t *type_node = NULL;
+                            FindIdent(&type_node, symtab, type_id);
+                            if (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
                             {
                                 mark_hashnode_unit_info(symtab, type_node,
                                     tree->tree_data.type_decl_data.defined_in_unit,
                                     tree->tree_data.type_decl_data.unit_is_public);
-                                mark_hashnode_source_unit(type_node, tree->tree_data.type_decl_data.source_unit_name);
+                                mark_hashnode_source_unit(type_node, tree->tree_data.type_decl_data.source_unit_index);
                             }
                         }
                     }
@@ -6365,7 +6379,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                     mark_hashnode_unit_info(symtab, type_node,
                                         tree->tree_data.type_decl_data.defined_in_unit,
                                         tree->tree_data.type_decl_data.unit_is_public);
-                                    mark_hashnode_source_unit(type_node, tree->tree_data.type_decl_data.source_unit_name);
+                                    mark_hashnode_source_unit(type_node, tree->tree_data.type_decl_data.source_unit_index);
                                 }
                             }
                         }
@@ -6405,7 +6419,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                     mark_hashnode_unit_info(symtab, type_node,
                                         tree->tree_data.type_decl_data.defined_in_unit,
                                         tree->tree_data.type_decl_data.unit_is_public);
-                                    mark_hashnode_source_unit(type_node, tree->tree_data.type_decl_data.source_unit_name);
+                                    mark_hashnode_source_unit(type_node, tree->tree_data.type_decl_data.source_unit_index);
                                 }
                             }
                         }
@@ -6427,7 +6441,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                 mark_hashnode_unit_info(symtab, type_node,
                                     tree->tree_data.type_decl_data.defined_in_unit,
                                     tree->tree_data.type_decl_data.unit_is_public);
-                                mark_hashnode_source_unit(type_node, tree->tree_data.type_decl_data.source_unit_name);
+                                mark_hashnode_source_unit(type_node, tree->tree_data.type_decl_data.source_unit_index);
                             }
                         }
 
@@ -6483,7 +6497,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                     mark_hashnode_unit_info(symtab, type_node,
                                         tree->tree_data.type_decl_data.defined_in_unit,
                                         tree->tree_data.type_decl_data.unit_is_public);
-                                    mark_hashnode_source_unit(type_node, tree->tree_data.type_decl_data.source_unit_name);
+                                    mark_hashnode_source_unit(type_node, tree->tree_data.type_decl_data.source_unit_index);
                                 }
                             }
                         }
@@ -6515,7 +6529,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                     mark_hashnode_unit_info(symtab, type_node,
                                         tree->tree_data.type_decl_data.defined_in_unit,
                                         tree->tree_data.type_decl_data.unit_is_public);
-                                    mark_hashnode_source_unit(type_node, tree->tree_data.type_decl_data.source_unit_name);
+                                    mark_hashnode_source_unit(type_node, tree->tree_data.type_decl_data.source_unit_index);
                                 }
                             }
                             cur = cur->next;
@@ -6610,7 +6624,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                     mark_hashnode_unit_info(symtab, type_node,
                                         tree->tree_data.type_decl_data.defined_in_unit,
                                         tree->tree_data.type_decl_data.unit_is_public);
-                                    mark_hashnode_source_unit(type_node, tree->tree_data.type_decl_data.source_unit_name);
+                                    mark_hashnode_source_unit(type_node, tree->tree_data.type_decl_data.source_unit_index);
                                 }
                             }
                         }
@@ -6832,7 +6846,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                 mark_hashnode_unit_info(symtab, type_node,
                                     tree->tree_data.type_decl_data.defined_in_unit,
                                     tree->tree_data.type_decl_data.unit_is_public);
-                                mark_hashnode_source_unit(type_node, tree->tree_data.type_decl_data.source_unit_name);
+                                mark_hashnode_source_unit(type_node, tree->tree_data.type_decl_data.source_unit_index);
                             }
                         }
                     }
@@ -8959,17 +8973,37 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
         int scope_level = FindIdent(&existing_type, symtab, tree->tree_data.type_decl_data.id);
         int already_predeclared = (scope_level == 0 && existing_type != NULL &&
                                    existing_type->hash_type == HASHTYPE_TYPE);
+        /* If existing record type is from a different unit, find the correct predeclared
+         * entry from the same source unit. With cross-unit coexistence, multiple entries
+         * with the same name may exist in the same scope. */
         if (already_predeclared &&
             tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD &&
-            g_semcheck_current_unit_name != NULL &&
-            existing_type->source_unit_name != NULL &&
-            tree->tree_data.type_decl_data.source_unit_name != NULL &&
-            pascal_identifier_equals(tree->tree_data.type_decl_data.source_unit_name,
-                g_semcheck_current_unit_name) &&
-            !pascal_identifier_equals(existing_type->source_unit_name,
-                g_semcheck_current_unit_name))
+            existing_type->source_unit_index != 0 &&
+            tree->tree_data.type_decl_data.source_unit_index != 0 &&
+            existing_type->source_unit_index != tree->tree_data.type_decl_data.source_unit_index)
         {
-            already_predeclared = 0;
+            /* Search all entries for the one from the same source unit */
+            ListNode_t *all_matches = FindAllIdents(symtab, tree->tree_data.type_decl_data.id);
+            HashNode_t *same_unit_entry = NULL;
+            ListNode_t *m = all_matches;
+            while (m != NULL)
+            {
+                HashNode_t *candidate = (HashNode_t *)m->cur;
+                if (candidate != NULL &&
+                    candidate->hash_type == HASHTYPE_TYPE &&
+                    candidate->source_unit_index != 0 &&
+                    candidate->source_unit_index == tree->tree_data.type_decl_data.source_unit_index)
+                {
+                    same_unit_entry = candidate;
+                    break;
+                }
+                m = m->next;
+            }
+            destroy_list(all_matches);
+            if (same_unit_entry != NULL)
+                existing_type = same_unit_entry;
+            else
+                already_predeclared = 0;
         }
 
 
@@ -8985,7 +9019,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
         }
         else if (already_predeclared)
         {
-            mark_hashnode_source_unit(existing_type, tree->tree_data.type_decl_data.source_unit_name);
+            mark_hashnode_source_unit(existing_type, tree->tree_data.type_decl_data.source_unit_index);
 
             /* Type was already registered by predeclare_types().
              * We still need to update any additional metadata like array bounds. */
@@ -9161,7 +9195,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 mark_hashnode_unit_info(symtab, type_node,
                     tree->tree_data.type_decl_data.defined_in_unit,
                     tree->tree_data.type_decl_data.unit_is_public);
-                mark_hashnode_source_unit(type_node, tree->tree_data.type_decl_data.source_unit_name);
+                mark_hashnode_source_unit(type_node, tree->tree_data.type_decl_data.source_unit_index);
             }
 
             /* For generic specializations with inline record types, also register the
@@ -9907,7 +9941,7 @@ static int semcheck_const_decls_local(SymTab_t *symtab, ListNode_t *const_decls)
 
 static int semcheck_const_expr_refs_current_unit_qualified_id(struct Expression *expr)
 {
-    if (expr == NULL || g_semcheck_current_unit_name == NULL)
+    if (expr == NULL || g_semcheck_current_unit_index == 0)
         return 0;
     if (expr->type != EXPR_RECORD_ACCESS)
         return 0;
@@ -9916,7 +9950,8 @@ static int semcheck_const_expr_refs_current_unit_qualified_id(struct Expression 
     if (owner == NULL || owner->type != EXPR_VAR_ID || owner->expr_data.id == NULL)
         return 0;
 
-    return pascal_identifier_equals(owner->expr_data.id, g_semcheck_current_unit_name);
+    const char *cur_unit_str = unit_registry_get(g_semcheck_current_unit_index);
+    return cur_unit_str != NULL && pascal_identifier_equals(owner->expr_data.id, cur_unit_str);
 }
 
 static int semcheck_const_decls_imported_filtered(SymTab_t *symtab, ListNode_t *const_decls,
@@ -11530,7 +11565,7 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
     semcheck_unit_name_add("System");
     semcheck_unit_name_add(tree->tree_data.unit_data.unit_id);
     if (tree->tree_data.unit_data.unit_id != NULL)
-        g_semcheck_current_unit_name = strdup(tree->tree_data.unit_data.unit_id);
+        g_semcheck_current_unit_index = unit_registry_add(tree->tree_data.unit_data.unit_id);
     semcheck_unit_names_add_list(tree->tree_data.unit_data.interface_uses);
     semcheck_unit_names_add_list(tree->tree_data.unit_data.implementation_uses);
 
@@ -13850,20 +13885,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             }
         }
 
-        /* Copy method identity fields from the subprogram tree to the symbol. */
-        if (existing_decl != NULL && subprogram->tree_data.subprogram_data.method_name != NULL)
-        {
-            if (existing_decl->method_name == NULL)
-                existing_decl->method_name = strdup(subprogram->tree_data.subprogram_data.method_name);
-            if (existing_decl->owner_class == NULL && subprogram->tree_data.subprogram_data.owner_class != NULL)
-                existing_decl->owner_class = strdup(subprogram->tree_data.subprogram_data.owner_class);
-            if (existing_decl->owner_class_full == NULL &&
-                subprogram->tree_data.subprogram_data.owner_class_full != NULL)
-                existing_decl->owner_class_full = strdup(subprogram->tree_data.subprogram_data.owner_class_full);
-            if (existing_decl->owner_class_outer == NULL &&
-                subprogram->tree_data.subprogram_data.owner_class_outer != NULL)
-                existing_decl->owner_class_outer = strdup(subprogram->tree_data.subprogram_data.owner_class_outer);
-        }
+        copy_method_identity_to_node(existing_decl, subprogram);
         semcheck_propagate_method_identity(symtab, subprogram);
 
         /* Propagate varargs flag from tree to hash node */
@@ -13978,20 +14000,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             }
         }
 
-        /* Copy method identity fields from the subprogram tree to the symbol. */
-        if (existing_decl != NULL && subprogram->tree_data.subprogram_data.method_name != NULL)
-        {
-            if (existing_decl->method_name == NULL)
-                existing_decl->method_name = strdup(subprogram->tree_data.subprogram_data.method_name);
-            if (existing_decl->owner_class == NULL && subprogram->tree_data.subprogram_data.owner_class != NULL)
-                existing_decl->owner_class = strdup(subprogram->tree_data.subprogram_data.owner_class);
-            if (existing_decl->owner_class_full == NULL &&
-                subprogram->tree_data.subprogram_data.owner_class_full != NULL)
-                existing_decl->owner_class_full = strdup(subprogram->tree_data.subprogram_data.owner_class_full);
-            if (existing_decl->owner_class_outer == NULL &&
-                subprogram->tree_data.subprogram_data.owner_class_outer != NULL)
-                existing_decl->owner_class_outer = strdup(subprogram->tree_data.subprogram_data.owner_class_outer);
-        }
+        copy_method_identity_to_node(existing_decl, subprogram);
         semcheck_propagate_method_identity(symtab, subprogram);
 
         /* Propagate varargs flag from tree to hash node */
@@ -14447,9 +14456,12 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                     semcheck_file_from_source_index(subprogram->source_index, file_buf, sizeof(file_buf));
                 if (file_buf[0] == '\0')
                     semcheck_file_from_buffer_line_number(subprogram->line_num, file_buf, sizeof(file_buf));
-                if (file_buf[0] == '\0' && getenv("KGPC_DEBUG_SOURCE_INDEX") != NULL)
-                    fprintf(stderr, "[DEBUG] file_buf empty for %s line=%d source_index=%d\n",
-                        subprogram->tree_data.subprogram_data.id, subprogram->line_num, subprogram->source_index);
+                if (file_buf[0] == '\0' && subprogram->tree_data.subprogram_data.source_unit_index != 0)
+                {
+                    const char *uname = unit_registry_get(subprogram->tree_data.subprogram_data.source_unit_index);
+                    if (uname != NULL)
+                        snprintf(file_buf, sizeof(file_buf), "%s", uname);
+                }
                 /* FPC treats this as a warning, not an error - function result may be uninitialized */
                 if (file_buf[0] != '\0')
                     fprintf(stderr, "%s(%d): warning: function %s result does not seem to be set\n",

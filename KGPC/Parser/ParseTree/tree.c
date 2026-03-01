@@ -1277,14 +1277,8 @@ void destroy_tree(Tree_t *tree)
               free_ast(tree->tree_data.subprogram_data.generic_template_ast);
           if (tree->tree_data.subprogram_data.result_var_name != NULL)
               free(tree->tree_data.subprogram_data.result_var_name);
-          if (tree->tree_data.subprogram_data.method_name != NULL)
-              free(tree->tree_data.subprogram_data.method_name);
-          if (tree->tree_data.subprogram_data.owner_class != NULL)
-              free(tree->tree_data.subprogram_data.owner_class);
-          if (tree->tree_data.subprogram_data.owner_class_full != NULL)
-              free(tree->tree_data.subprogram_data.owner_class_full);
-          if (tree->tree_data.subprogram_data.owner_class_outer != NULL)
-              free(tree->tree_data.subprogram_data.owner_class_outer);
+          /* method_name, owner_class, owner_class_full, owner_class_outer
+           * are interned strings -- do not free individually. */
           break;
 
         case TREE_VAR_DECL:
@@ -1344,8 +1338,6 @@ void destroy_tree(Tree_t *tree)
 
         case TREE_TYPE_DECL:
             free(tree->tree_data.type_decl_data.id);
-            if (tree->tree_data.type_decl_data.source_unit_name != NULL)
-                free(tree->tree_data.type_decl_data.source_unit_name);
             if (tree->tree_data.type_decl_data.kgpc_type != NULL)
             {
                 destroy_kgpc_type(tree->tree_data.type_decl_data.kgpc_type);

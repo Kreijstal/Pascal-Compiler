@@ -89,7 +89,7 @@ typedef struct HashNode
     int has_nested_requiring_link; /* 1 if this function has nested children that need static links */
     int defined_in_unit;
     int unit_is_public;
-    char *source_unit_name;
+    int source_unit_index; /* Unit registry index (0 = local/unknown) */
 
     char *method_name;    /* Bare method name (NULL for non-methods) */
     char *owner_class;    /* Owning class name (NULL for non-methods) */

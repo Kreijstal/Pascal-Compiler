@@ -26,6 +26,7 @@ static char* strndup(const char* s, size_t n)
 #endif
 
 #include "from_cparser.h"
+#include "../../string_intern.h"
 
 #include "../List/List.h"
 #include "tree.h"
@@ -1193,8 +1194,8 @@ static void register_class_method_ex(const char *class_name, const char *method_
     if (binding == NULL)
         return;
 
-    binding->class_name = strdup(class_name);
-    binding->method_name = strdup(method_name);
+    binding->class_name = (char *)string_intern(class_name);
+    binding->method_name = (char *)string_intern(method_name);
     binding->is_virtual = is_virtual;
     binding->is_override = is_override;
     binding->is_static = is_static;
@@ -1204,8 +1205,7 @@ static void register_class_method_ex(const char *class_name, const char *method_
         node = CreateListNode(binding, LIST_UNSPECIFIED);
 
     if (node == NULL) {
-        free(binding->class_name);
-        free(binding->method_name);
+        /* class_name and method_name are interned -- do not free */
         free(binding);
         return;
     }
@@ -14463,19 +14463,19 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         {
             tree->tree_data.subprogram_data.mangled_id = strdup(proc_name);
         }
-        tree->tree_data.subprogram_data.method_name = strdup(method_name);
-        tree->tree_data.subprogram_data.owner_class = strdup(effective_class);
+        tree->tree_data.subprogram_data.method_name = (char *)string_intern(method_name);
+        tree->tree_data.subprogram_data.owner_class = (char *)string_intern(effective_class);
         if (effective_class_full != NULL && effective_class_full != effective_class)
-            tree->tree_data.subprogram_data.owner_class_full = strdup(effective_class_full);
+            tree->tree_data.subprogram_data.owner_class_full = (char *)string_intern(effective_class_full);
         if (tree->tree_data.subprogram_data.owner_class_full == NULL &&
             tree->tree_data.subprogram_data.owner_class != NULL &&
             strchr(tree->tree_data.subprogram_data.owner_class, '.') != NULL)
         {
             tree->tree_data.subprogram_data.owner_class_full =
-                strdup(tree->tree_data.subprogram_data.owner_class);
+                tree->tree_data.subprogram_data.owner_class;
         }
         if (effective_class_outer != NULL)
-            tree->tree_data.subprogram_data.owner_class_outer = strdup(effective_class_outer);
+            tree->tree_data.subprogram_data.owner_class_outer = (char *)string_intern(effective_class_outer);
         if (tree->tree_data.subprogram_data.owner_class_outer == NULL &&
             tree->tree_data.subprogram_data.owner_class_full != NULL)
         {
@@ -14484,9 +14484,12 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
             if (last_dot != NULL && last_dot > full)
             {
                 size_t len = (size_t)(last_dot - full);
-                char *outer = strndup(full, len);
-                if (outer != NULL)
-                    tree->tree_data.subprogram_data.owner_class_outer = outer;
+                char *temp = strndup(full, len);
+                if (temp != NULL)
+                {
+                    tree->tree_data.subprogram_data.owner_class_outer = (char *)string_intern(temp);
+                    free(temp);
+                }
             }
         }
         if (num_generic_type_params > 0) {
