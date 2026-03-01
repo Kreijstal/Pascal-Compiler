@@ -997,7 +997,30 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
             return semcheck_make_quality(MATCH_INCOMPATIBLE);
         }
         if (actual_sub != UNKNOWN_TYPE || formal_sub != UNKNOWN_TYPE)
+        {
+            /* When an untyped Pointer is passed to a class/interface formal
+             * (TObject, TClass, IInterface), score it worse than a typed
+             * pointer formal (PTypeInfo, PChar, etc.).  FPC prefers plain
+             * pointer conversions over class-pointer conversions. */
+            if (actual_sub == UNKNOWN_TYPE && formal_sub == RECORD_TYPE &&
+                formal_kgpc->info.points_to != NULL &&
+                formal_kgpc->info.points_to->kind == TYPE_KIND_RECORD &&
+                formal_kgpc->info.points_to->info.record_info != NULL &&
+                record_type_is_class(formal_kgpc->info.points_to->info.record_info))
+            {
+                MatchQuality q = semcheck_make_quality(MATCH_CONVERSION);
+                q.exact_pointer_subtype = 0;  /* no bonus */
+                return q;
+            }
+            /* Untyped pointer -> typed non-class pointer: prefer this */
+            if (actual_sub == UNKNOWN_TYPE)
+            {
+                MatchQuality q = semcheck_make_quality(MATCH_CONVERSION);
+                q.exact_pointer_subtype = 1;  /* bonus for pointer match */
+                return q;
+            }
             return semcheck_make_quality(MATCH_CONVERSION);
+        }
         return semcheck_make_quality(MATCH_PROMOTION);
     }
 
@@ -1320,6 +1343,84 @@ static int semcheck_quality_penalty_sum(int arg_count, const MatchQuality *q)
         total += p;
     }
     return total;
+}
+
+/* Compute class inheritance depth from a KgpcType that points to a class record.
+ * Returns 0 if not a class, or the depth (TObject=1, TBits=2 if TBits inherits TObject, etc.) */
+static int semcheck_class_depth(KgpcType *type, SymTab_t *symtab)
+{
+    if (type == NULL || symtab == NULL)
+        return 0;
+    struct RecordType *rec = NULL;
+    if (type->kind == TYPE_KIND_POINTER && type->info.points_to != NULL &&
+        type->info.points_to->kind == TYPE_KIND_RECORD)
+        rec = type->info.points_to->info.record_info;
+    else if (type->kind == TYPE_KIND_RECORD)
+        rec = type->info.record_info;
+    if (rec == NULL || !record_type_is_class(rec))
+        return 0;
+    int depth = 1;
+    const char *parent = rec->parent_class_name;
+    while (parent != NULL && depth < 100) {
+        depth++;
+        HashNode_t *parent_node = NULL;
+        if (FindIdent(&parent_node, symtab, (char *)parent) == -1 || parent_node == NULL)
+            break;
+        struct RecordType *parent_rec = NULL;
+        if (parent_node->type != NULL) {
+            if (parent_node->type->kind == TYPE_KIND_RECORD)
+                parent_rec = parent_node->type->info.record_info;
+            else if (parent_node->type->kind == TYPE_KIND_POINTER &&
+                     parent_node->type->info.points_to != NULL &&
+                     parent_node->type->info.points_to->kind == TYPE_KIND_RECORD)
+                parent_rec = parent_node->type->info.points_to->info.record_info;
+        }
+        if (parent_rec == NULL)
+            break;
+        parent = parent_rec->parent_class_name;
+    }
+    return depth;
+}
+
+/* Compare two overload candidates by formal class-type specificity.
+ * Returns -1 if candidate is more specific, 1 if best is more specific, 0 if equal. */
+static int semcheck_compare_class_specificity(HashNode_t *candidate, HashNode_t *best_match, SymTab_t *symtab)
+{
+    if (candidate == NULL || best_match == NULL || candidate->type == NULL || best_match->type == NULL)
+        return 0;
+    ListNode_t *cand_params = kgpc_type_get_procedure_params(candidate->type);
+    ListNode_t *best_params = kgpc_type_get_procedure_params(best_match->type);
+    int cand_depth_total = 0;
+    int best_depth_total = 0;
+    while (cand_params != NULL && best_params != NULL) {
+        Tree_t *cand_decl = (Tree_t *)cand_params->cur;
+        Tree_t *best_decl = (Tree_t *)best_params->cur;
+        if (cand_decl != NULL && best_decl != NULL &&
+            cand_decl->type == TREE_VAR_DECL && best_decl->type == TREE_VAR_DECL) {
+            /* Try cached kgpc_type first, then look up by type_id */
+            KgpcType *cand_type = cand_decl->tree_data.var_decl_data.cached_kgpc_type;
+            KgpcType *best_type = best_decl->tree_data.var_decl_data.cached_kgpc_type;
+            if (cand_type == NULL && cand_decl->tree_data.var_decl_data.type_id != NULL) {
+                HashNode_t *node = NULL;
+                if (FindIdent(&node, symtab, cand_decl->tree_data.var_decl_data.type_id) != -1 && node != NULL)
+                    cand_type = node->type;
+            }
+            if (best_type == NULL && best_decl->tree_data.var_decl_data.type_id != NULL) {
+                HashNode_t *node = NULL;
+                if (FindIdent(&node, symtab, best_decl->tree_data.var_decl_data.type_id) != -1 && node != NULL)
+                    best_type = node->type;
+            }
+            cand_depth_total += semcheck_class_depth(cand_type, symtab);
+            best_depth_total += semcheck_class_depth(best_type, symtab);
+        }
+        cand_params = cand_params->next;
+        best_params = best_params->next;
+    }
+    if (cand_depth_total > best_depth_total)
+        return -1;
+    if (best_depth_total > cand_depth_total)
+        return 1;
+    return 0;
 }
 
 /* Count untyped var params in a candidate's parameter list */
@@ -2128,6 +2229,13 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                         kgpc_type_get_procedure_params(best_match->type), symtab);
                     if (cand_param_size != best_param_size)
                         specificity_cmp = cand_param_size < best_param_size ? -1 : 1;
+                }
+                if (specificity_cmp == 0)
+                {
+                    /* Prefer the overload with more specific (more-derived) class formal
+                     * parameters.  E.g., Equals(TBits) should beat Equals(TObject) when
+                     * the actual argument is TBits. */
+                    specificity_cmp = semcheck_compare_class_specificity(candidate, best_match, symtab);
                 }
                 if (specificity_cmp == 0)
                 {
