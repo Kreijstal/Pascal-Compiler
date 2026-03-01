@@ -408,7 +408,15 @@ int semcheck_arrayaccess(int *type_return,
 
     if (base_is_string)
     {
-        element_type = CHAR_TYPE;
+        /* WideString / UnicodeString elements are WideChar (WORD_TYPE, 2 bytes). */
+        int is_wide = 0;
+        if (base_kgpc_type != NULL && base_kgpc_type->type_alias != NULL &&
+            base_kgpc_type->type_alias->alias_name != NULL)
+        {
+            is_wide = (pascal_identifier_equals(base_kgpc_type->type_alias->alias_name, "WideString") ||
+                       pascal_identifier_equals(base_kgpc_type->type_alias->alias_name, "UnicodeString"));
+        }
+        element_type = is_wide ? WORD_TYPE : CHAR_TYPE;
     }
     else if (base_is_pointer)
     {
