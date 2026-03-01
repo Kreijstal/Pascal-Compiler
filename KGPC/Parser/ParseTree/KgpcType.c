@@ -1093,6 +1093,13 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
         rhs_type->info.points_to == NULL)
         return 1;
 
+    /* Two procedure types are compatible (FPC allows assigning between
+     * procedure-of-object types without strict signature matching in many
+     * contexts).  A stricter check could compare parameter lists, but FPC
+     * itself is lenient for `@Method` assignments. */
+    if (lhs_type->kind == TYPE_KIND_PROCEDURE && rhs_type->kind == TYPE_KIND_PROCEDURE)
+        return 1;
+
     /* Allow procedure variables to accept explicit @proc references or NIL */
     if (lhs_type->kind == TYPE_KIND_PROCEDURE && rhs_type->kind == TYPE_KIND_POINTER)
     {

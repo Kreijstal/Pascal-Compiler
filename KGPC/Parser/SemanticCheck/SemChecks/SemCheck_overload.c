@@ -1042,6 +1042,20 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
             return semcheck_make_quality(MATCH_CONVERSION);
     }
 
+    /* @Method produces POINTER_TYPE wrapping a TYPE_KIND_PROCEDURE.
+     * Allow it to match a PROCEDURE formal parameter. */
+    if (actual_tag == POINTER_TYPE && formal_tag == PROCEDURE)
+    {
+        if (actual_kgpc != NULL && kgpc_type_is_pointer(actual_kgpc) &&
+            actual_kgpc->info.points_to != NULL &&
+            actual_kgpc->info.points_to->kind == TYPE_KIND_PROCEDURE)
+            return semcheck_make_quality(MATCH_PROMOTION);
+        /* Also accept untyped @Method (pointer without inner type info) */
+        if (actual_kgpc != NULL && kgpc_type_is_pointer(actual_kgpc) &&
+            actual_kgpc->info.points_to == NULL)
+            return semcheck_make_quality(MATCH_CONVERSION);
+    }
+
     return semcheck_make_quality(MATCH_INCOMPATIBLE);
 }
 
