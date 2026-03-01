@@ -3823,17 +3823,47 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
 
     /* Recursively generate nested subprograms */
     codegen_subprograms(proc->subprograms, ctx, symtab);
-    
+
+    /* Set up asm parameter mapping for nostackframe functions.
+       These functions skip the frame prologue, so inline asm should use
+       ABI registers directly instead of stack offsets. */
+    int prev_is_nostackframe = ctx->is_nostackframe;
+    int prev_asm_param_count = ctx->asm_param_count;
+    ctx->is_nostackframe = proc->nostackframe;
+    ctx->asm_param_count = 0;
+    if (proc->nostackframe && proc->args_var != NULL) {
+        int pi = arg_start_index;
+        ListNode_t *a = proc->args_var;
+        while (a != NULL && pi < 16) {
+            if (a->type == LIST_TREE && a->cur != NULL) {
+                Tree_t *param = (Tree_t *)a->cur;
+                if (param->type == TREE_VAR_DECL && param->tree_data.var_decl_data.ids != NULL) {
+                    ListNode_t *id_node = param->tree_data.var_decl_data.ids;
+                    while (id_node != NULL && pi < 16) {
+                        if (id_node->cur != NULL) {
+                            ctx->asm_params[ctx->asm_param_count].name = (const char *)id_node->cur;
+                            ctx->asm_params[ctx->asm_param_count].reg_index = pi;
+                            ctx->asm_param_count++;
+                            pi++;
+                        }
+                        id_node = id_node->next;
+                    }
+                }
+            }
+            a = a->next;
+        }
+    }
+
     inst_list = codegen_var_initializers(proc->declarations, inst_list, ctx, symtab);
     inst_list = codegen_stmt(proc->statement_list, inst_list, ctx, symtab);
-    
+
     /* For constructors (methods with __Create in name), return Self in %rax.
      * Constructors receive Self in the first parameter and should return it
      * to allow constructor chaining and assignment. */
     int is_constructor = 0;
     if (sub_id != NULL && pascal_strcasestr(sub_id, "__create") != NULL)
         is_constructor = 1;
-    
+
     if (is_constructor && num_args > 0)
     {
         /* Self is the first parameter. For class methods, it's in %rdi (or first stack slot).
@@ -3872,6 +3902,8 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     pop_stackscope();
     PopScope(symtab);
 
+    ctx->is_nostackframe = prev_is_nostackframe;
+    ctx->asm_param_count = prev_asm_param_count;
     ctx->current_subprogram_id = prev_sub_id;
     ctx->current_subprogram_mangled = prev_sub_mangled;
     ctx->current_subprogram_method_name = prev_sub_method_name;
@@ -4336,7 +4368,35 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
         ctx->returns_dynamic_array = saved_returns_dynamic_array;
         ctx->dynamic_array_descriptor_size = saved_dynamic_array_descriptor_size;
     }
-    
+
+    /* Set up asm parameter mapping for nostackframe functions. */
+    int prev_is_nostackframe = ctx->is_nostackframe;
+    int prev_asm_param_count = ctx->asm_param_count;
+    ctx->is_nostackframe = func->nostackframe;
+    ctx->asm_param_count = 0;
+    if (func->nostackframe && func->args_var != NULL) {
+        int pi = arg_start_index;
+        ListNode_t *a = func->args_var;
+        while (a != NULL && pi < 16) {
+            if (a->type == LIST_TREE && a->cur != NULL) {
+                Tree_t *param = (Tree_t *)a->cur;
+                if (param->type == TREE_VAR_DECL && param->tree_data.var_decl_data.ids != NULL) {
+                    ListNode_t *id_node = param->tree_data.var_decl_data.ids;
+                    while (id_node != NULL && pi < 16) {
+                        if (id_node->cur != NULL) {
+                            ctx->asm_params[ctx->asm_param_count].name = (const char *)id_node->cur;
+                            ctx->asm_params[ctx->asm_param_count].reg_index = pi;
+                            ctx->asm_param_count++;
+                            pi++;
+                        }
+                        id_node = id_node->next;
+                    }
+                }
+            }
+            a = a->next;
+        }
+    }
+
     inst_list = codegen_var_initializers(func->declarations, inst_list, ctx, symtab);
     inst_list = codegen_stmt(func->statement_list, inst_list, ctx, symtab);
     
@@ -4502,6 +4562,8 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     pop_stackscope();
     PopScope(symtab);
 
+    ctx->is_nostackframe = prev_is_nostackframe;
+    ctx->asm_param_count = prev_asm_param_count;
     ctx->current_subprogram_id = prev_sub_id;
     ctx->current_subprogram_mangled = prev_sub_mangled;
     ctx->current_subprogram_method_name = prev_sub_method_name;

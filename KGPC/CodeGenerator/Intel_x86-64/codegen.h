@@ -236,6 +236,15 @@ typedef struct {
     CodeGenWithContext *with_stack;
     int with_depth;
     int with_capacity;
+
+    /* Asm parameter substitution for nostackframe functions.
+       When is_nostackframe is set, asm blocks substitute param names with ABI registers. */
+    int is_nostackframe;
+    int asm_param_count;
+    struct {
+        const char *name;   /* Pascal parameter name */
+        int reg_index;      /* SysV ABI register index (0=%rdi,1=%rsi,...) */
+    } asm_params[16];
 } CodeGenContext;
 
 /* Generates a label */

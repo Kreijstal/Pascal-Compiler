@@ -613,6 +613,19 @@ static void build_subprogram_map(ListNode_t *sub_list, SubprogramMap *map) {
                     }
                 }
                 
+                /* Also register the unmangled id so that inline asm references
+                   (which use original Pascal names) can find the function. */
+                const char *plain_id = sub->tree_data.subprogram_data.id;
+                if (plain_id != NULL && (mangled_id == NULL || strcasecmp(plain_id, mangled_id) != 0)) {
+                    if (map_find(map, plain_id) == NULL)
+                        map_add(map, plain_id, sub);
+                }
+                /* Also register cname_override (alias) so DCE can match alias references. */
+                const char *cname = sub->tree_data.subprogram_data.cname_override;
+                if (cname != NULL && map_find(map, cname) == NULL) {
+                    map_add(map, cname, sub);
+                }
+
                 /* Recursively process nested subprograms */
                 if (sub->tree_data.subprogram_data.subprograms != NULL) {
                     build_subprogram_map(sub->tree_data.subprogram_data.subprograms, map);
@@ -661,6 +674,24 @@ void mark_used_functions(Tree_t *program, SymTab_t *symtab) {
             mark_stmt_calls((struct Statement*)final->cur, &map);
         }
         final = final->next;
+    }
+
+    /* Scan typed constant and variable initializers for function references.
+       These contain EXPR_ADDR_OF_PROC (e.g. @NoBeginThread) that DCE must preserve. */
+    {
+        ListNode_t *var_node = program->tree_data.program_data.var_declaration;
+        while (var_node != NULL) {
+            if (var_node->type == LIST_TREE && var_node->cur != NULL) {
+                Tree_t *vdecl = (Tree_t*)var_node->cur;
+                if (vdecl->type == TREE_VAR_DECL) {
+                    struct Statement *init = vdecl->tree_data.var_decl_data.initializer;
+                    if (init != NULL) {
+                        mark_stmt_calls(init, &map);
+                    }
+                }
+            }
+            var_node = var_node->next;
+        }
     }
 
     /* Ensure VMT methods are retained even if they are not explicitly called. */
