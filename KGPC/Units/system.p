@@ -60,6 +60,7 @@ type
   TObject = class
   public
     _MonitorData: Pointer;
+    constructor Create;
     destructor Destroy; virtual;
     class function ClassName: ShortString; virtual;
     class function ClassParent: TClass; virtual;
@@ -1268,6 +1269,10 @@ begin
 end;
 
 { TObject methods }
+
+constructor TObject.Create;
+begin
+end;
 
 class function TObject.ClassName: ShortString;
 var

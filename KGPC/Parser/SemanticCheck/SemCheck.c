@@ -14445,14 +14445,17 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                 char file_buf[512] = "";
                 if (subprogram->source_index >= 0)
                     semcheck_file_from_source_index(subprogram->source_index, file_buf, sizeof(file_buf));
-                else
+                if (file_buf[0] == '\0')
                     semcheck_file_from_buffer_line_number(subprogram->line_num, file_buf, sizeof(file_buf));
+                if (file_buf[0] == '\0' && getenv("KGPC_DEBUG_SOURCE_INDEX") != NULL)
+                    fprintf(stderr, "[DEBUG] file_buf empty for %s line=%d source_index=%d\n",
+                        subprogram->tree_data.subprogram_data.id, subprogram->line_num, subprogram->source_index);
                 /* FPC treats this as a warning, not an error - function result may be uninitialized */
                 if (file_buf[0] != '\0')
-                    fprintf(stderr, "%s(%d): warning: function %s result does not seem to be set\n\n",
+                    fprintf(stderr, "%s(%d): warning: function %s result does not seem to be set\n",
                         file_buf, subprogram->line_num, subprogram->tree_data.subprogram_data.id);
                 else
-                    fprintf(stderr, "line %d: warning: function %s result does not seem to be set\n\n",
+                    fprintf(stderr, "line %d: warning: function %s result does not seem to be set\n",
                         subprogram->line_num, subprogram->tree_data.subprogram_data.id);
                 g_semcheck_warning_count++;
             }
