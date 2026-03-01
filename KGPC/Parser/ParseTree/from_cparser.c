@@ -7000,6 +7000,7 @@ static struct RecordType *convert_interface_type_ex(const char *interface_name, 
     /* Optional GUID string follows parent identifier (when GUID is a string literal) */
     if (body_start != NULL && body_start->typ == PASCAL_T_STRING) {
         if (body_start->sym != NULL && body_start->sym->name != NULL) {
+            free(guid_string);
             guid_string = strdup(body_start->sym->name);
             has_guid = parse_guid_literal(body_start->sym->name, &guid_d1, &guid_d2, &guid_d3, guid_d4);
         }
@@ -7012,6 +7013,7 @@ static struct RecordType *convert_interface_type_ex(const char *interface_name, 
         while (guid_child != NULL && !has_guid) {
             if (guid_child->typ == PASCAL_T_STRING && guid_child->sym != NULL &&
                 guid_child->sym->name != NULL) {
+                free(guid_string);
                 guid_string = strdup(guid_child->sym->name);
                 has_guid = parse_guid_literal(guid_child->sym->name, &guid_d1, &guid_d2, &guid_d3, guid_d4);
                 break;
