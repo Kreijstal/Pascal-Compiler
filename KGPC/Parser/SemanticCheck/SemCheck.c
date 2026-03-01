@@ -654,6 +654,30 @@ static int map_var_type_to_type_tag(enum VarType var_type)
 
 }
 
+/* Inverse of map_var_type_to_type_tag: converts a type tag from
+ * semcheck_map_builtin_type_name_local() to the corresponding VarType. */
+static enum VarType map_type_tag_to_var_type(int type_tag)
+{
+    switch (type_tag)
+    {
+        case INT_TYPE:        return HASHVAR_INTEGER;
+        case LONGINT_TYPE:    return HASHVAR_LONGINT;
+        case INT64_TYPE:      return HASHVAR_INT64;
+        case REAL_TYPE:       return HASHVAR_REAL;
+        case BOOL:            return HASHVAR_BOOLEAN;
+        case CHAR_TYPE:       return HASHVAR_CHAR;
+        case STRING_TYPE:     return HASHVAR_PCHAR;
+        case SHORTSTRING_TYPE:return HASHVAR_SHORTSTRING;
+        case POINTER_TYPE:    return HASHVAR_POINTER;
+        case BYTE_TYPE:       return HASHVAR_INTEGER;
+        case WORD_TYPE:       return HASHVAR_INTEGER;
+        case LONGWORD_TYPE:   return HASHVAR_LONGINT;
+        case QWORD_TYPE:      return HASHVAR_LONGINT;
+        case FILE_TYPE:       return HASHVAR_FILE;
+        default:              return HASHVAR_UNTYPED;
+    }
+}
+
 static int semcheck_find_ident_with_qualified_fallback(HashNode_t **out, SymTab_t *symtab,
     const char *id)
 {
@@ -1407,6 +1431,56 @@ static void semcheck_debug_error_step(const char *step, Tree_t *subprogram, int 
         g_semcheck_error_source_index);
 }
 
+/* Resolve source context from a byte offset: search the source buffer registry
+ * and fall back to the preprocessed/raw source buffer.  Returns the resolved
+ * line number (>0 on success, 0 when nothing could be resolved).  On success
+ * the directive file name is written to *directive_file_out.  The caller must
+ * provide a buffer of at least MAX_DIRECTIVE_FILENAME_LEN bytes. */
+static int resolve_error_source_context(int source_index,
+    char *directive_file_out, size_t dir_size, int search_registry)
+{
+    assert(directive_file_out != NULL);
+    directive_file_out[0] = '\0';
+
+    if (source_index < 0)
+        return 0;
+
+    if (search_registry)
+    {
+        for (int i = 0; i < g_source_buffer_count; i++)
+        {
+            if (source_index < (int)g_source_buffer_registry[i].length)
+            {
+                char temp_file[MAX_DIRECTIVE_FILENAME_LEN];
+                temp_file[0] = '\0';
+                int computed_line = semcheck_line_from_source_offset(
+                    g_source_buffer_registry[i].buffer,
+                    g_source_buffer_registry[i].length,
+                    source_index,
+                    temp_file, sizeof(temp_file));
+                if (computed_line > 0 && temp_file[0] != '\0')
+                {
+                    strncpy(directive_file_out, temp_file, dir_size - 1);
+                    directive_file_out[dir_size - 1] = '\0';
+                    return computed_line;
+                }
+            }
+        }
+    }
+
+    /* Fall back to main preprocessed/source buffer */
+    const char *context_buf = preprocessed_source;
+    size_t context_buf_len = preprocessed_length;
+    if (context_buf == NULL || context_buf_len == 0)
+    {
+        context_buf = g_semcheck_source_buffer;
+        context_buf_len = g_semcheck_source_length;
+    }
+    int computed_line = semcheck_line_from_source_offset(context_buf, context_buf_len, source_index,
+        directive_file_out, dir_size);
+    return (computed_line > 0) ? computed_line : 0;
+}
+
 /* Helper function to print semantic error with source code context */
 void semantic_error(int line_num, int col_num, const char *format, ...)
 {
@@ -1425,43 +1499,10 @@ void semantic_error(int line_num, int col_num, const char *format, ...)
     directive_file[0] = '\0';
     if (effective_source_index >= 0)
     {
-        int found_in_registry = 0;
-        for (int i = 0; i < g_source_buffer_count; i++)
-        {
-            if (effective_source_index < (int)g_source_buffer_registry[i].length)
-            {
-                char temp_file[MAX_DIRECTIVE_FILENAME_LEN];
-                temp_file[0] = '\0';
-                int computed_line = semcheck_line_from_source_offset(
-                    g_source_buffer_registry[i].buffer,
-                    g_source_buffer_registry[i].length,
-                    effective_source_index,
-                    temp_file, sizeof(temp_file));
-                if (computed_line > 0 && temp_file[0] != '\0')
-                {
-                    effective_line = computed_line;
-                    strncpy(directive_file, temp_file, sizeof(directive_file) - 1);
-                    directive_file[sizeof(directive_file) - 1] = '\0';
-                    found_in_registry = 1;
-                    break;
-                }
-            }
-        }
-        
-        if (!found_in_registry)
-        {
-            const char *context_buf = preprocessed_source;
-            size_t context_buf_len = preprocessed_length;
-            if (context_buf == NULL || context_buf_len == 0)
-            {
-                context_buf = g_semcheck_source_buffer;
-                context_buf_len = g_semcheck_source_length;
-            }
-            int computed_line = semcheck_line_from_source_offset(context_buf, context_buf_len, effective_source_index,
-                directive_file, sizeof(directive_file));
-            if (computed_line > 0)
-                effective_line = computed_line;
-        }
+        int resolved_line = resolve_error_source_context(
+            effective_source_index, directive_file, sizeof(directive_file), 1);
+        if (resolved_line > 0)
+            effective_line = resolved_line;
         if (directive_file[0] != '\0')
         {
             fprintf(stderr, "  In %s:\n", directive_file);
@@ -1502,17 +1543,10 @@ void semantic_error_at(int line_num, int col_num, int source_index, const char *
     directive_file[0] = '\0';
     if (source_index >= 0)
     {
-        const char *context_buf = preprocessed_source;
-        size_t context_buf_len = preprocessed_length;
-        if (context_buf == NULL || context_buf_len == 0)
-        {
-            context_buf = g_semcheck_source_buffer;
-            context_buf_len = g_semcheck_source_length;
-        }
-        int computed_line = semcheck_line_from_source_offset(context_buf, context_buf_len, source_index,
-            directive_file, sizeof(directive_file));
-        if (computed_line > 0)
-            line_num = computed_line;
+        int resolved_line = resolve_error_source_context(
+            source_index, directive_file, sizeof(directive_file), 0);
+        if (resolved_line > 0)
+            line_num = resolved_line;
         if (directive_file[0] != '\0')
         {
             fprintf(stderr, "  In %s:\n", directive_file);
@@ -1538,78 +1572,16 @@ void semantic_error_at(int line_num, int col_num, int source_index, const char *
     print_error_context(line_num, col_num, source_index, directive_file);
 }
 
-void semcheck_error_with_context_at(int line_num, int col_num, int source_index,
-    const char *format, ...)
+/* Core formatting helper for the _with_context error functions.
+ * Prints the error prefix, rewrites the legacy "Error on line %d" format, and
+ * emits a trailing newline.  The caller must have already resolved the
+ * effective line/col/source_index and directive_file.
+ *
+ * After return, the va_list is in an indeterminate state. */
+static void v_semcheck_format_error_with_context(
+    const char *file_path, int effective_line, int effective_col,
+    int source_index, const char *format, va_list args)
 {
-    size_t context_len = preprocessed_length;
-    if (context_len == 0 && preprocessed_source != NULL)
-        context_len = strlen(preprocessed_source);
-
-    int effective_line = line_num;
-    int effective_col = col_num;
-
-    /* Fall back to last known good line/col for synthetic nodes with line 0 */
-    if (effective_line <= 0 && g_semcheck_error_line > 0)
-        effective_line = g_semcheck_error_line;
-    if (effective_col <= 0 && g_semcheck_error_col > 0)
-        effective_col = g_semcheck_error_col;
-
-    char directive_file[MAX_DIRECTIVE_FILENAME_LEN];
-    directive_file[0] = '\0';
-    if (source_index >= 0)
-    {
-        int found_in_registry = 0;
-        for (int i = 0; i < g_source_buffer_count; i++)
-        {
-            if (source_index < (int)g_source_buffer_registry[i].length)
-            {
-                char temp_file[MAX_DIRECTIVE_FILENAME_LEN];
-                temp_file[0] = '\0';
-                int computed_line = semcheck_line_from_source_offset(
-                    g_source_buffer_registry[i].buffer,
-                    g_source_buffer_registry[i].length,
-                    source_index,
-                    temp_file, sizeof(temp_file));
-                if (computed_line > 0 && temp_file[0] != '\0')
-                {
-                    effective_line = computed_line;
-                    strncpy(directive_file, temp_file, sizeof(directive_file) - 1);
-                    directive_file[sizeof(directive_file) - 1] = '\0';
-                    found_in_registry = 1;
-                    break;
-                }
-            }
-        }
-        
-        if (!found_in_registry)
-        {
-            const char *context_buf = preprocessed_source;
-            size_t context_buf_len = context_len;
-            if (context_buf == NULL || context_buf_len == 0)
-            {
-                context_buf = g_semcheck_source_buffer;
-                context_buf_len = g_semcheck_source_length;
-            }
-            int computed_line = semcheck_line_from_source_offset(context_buf, context_buf_len, source_index,
-                directive_file, sizeof(directive_file));
-            if (computed_line > 0)
-                effective_line = computed_line;
-        }
-        if (directive_file[0] != '\0')
-        {
-            /* Print "In include_file:" context before the error */
-            fprintf(stderr, "  In %s:\n", directive_file);
-        }
-        if (effective_col <= 0 && g_semcheck_error_col > 0)
-            effective_col = g_semcheck_error_col;
-    }
-
-    const char *file_path = (directive_file[0] != '\0')
-        ? directive_file
-        : semcheck_get_error_path();
-
-    va_list args;
-    va_start(args, format);
     semcheck_print_error_prefix(file_path, effective_line, effective_col);
     if (format != NULL && strncmp(format, "Error on line %d", 16) == 0)
     {
@@ -1618,7 +1590,7 @@ void semcheck_error_with_context_at(int line_num, int col_num, int source_index,
         const char *rest = format + 16;
         if (rest[0] == ',' && rest[1] == ' ')
             rest += 2;
-        else if (rest[0] == ',' )
+        else if (rest[0] == ',')
             rest += 1;
         else if (rest[0] == ':' && rest[1] == ' ')
             rest += 2;
@@ -1628,14 +1600,17 @@ void semcheck_error_with_context_at(int line_num, int col_num, int source_index,
     {
         vfprintf(stderr, format, args);
     }
-    va_end(args);
 
     size_t len = format ? strlen(format) : 0;
-    if (len == 0 || format[len - 1] != '\n') {
+    if (len == 0 || format[len - 1] != '\n')
         fprintf(stderr, "\n");
-    }
 
-    if (effective_line > 0) {
+    /* Inline source context */
+    if (effective_line > 0)
+    {
+        size_t context_len = preprocessed_length;
+        if (context_len == 0 && preprocessed_source != NULL)
+            context_len = strlen(preprocessed_source);
         const char *context_buf = preprocessed_source;
         size_t context_buf_len = context_len;
         if (context_buf == NULL || context_buf_len == 0)
@@ -1665,12 +1640,46 @@ void semcheck_error_with_context_at(int line_num, int col_num, int source_index,
     fprintf(stderr, "\n");
 }
 
+void semcheck_error_with_context_at(int line_num, int col_num, int source_index,
+    const char *format, ...)
+{
+    int effective_line = line_num;
+    int effective_col = col_num;
+
+    /* Fall back to last known good line/col for synthetic nodes with line 0 */
+    if (effective_line <= 0 && g_semcheck_error_line > 0)
+        effective_line = g_semcheck_error_line;
+    if (effective_col <= 0 && g_semcheck_error_col > 0)
+        effective_col = g_semcheck_error_col;
+
+    char directive_file[MAX_DIRECTIVE_FILENAME_LEN];
+    directive_file[0] = '\0';
+    if (source_index >= 0)
+    {
+        int resolved_line = resolve_error_source_context(
+            source_index, directive_file, sizeof(directive_file), 1);
+        if (resolved_line > 0)
+            effective_line = resolved_line;
+        if (directive_file[0] != '\0')
+            fprintf(stderr, "  In %s:\n", directive_file);
+        if (effective_col <= 0 && g_semcheck_error_col > 0)
+            effective_col = g_semcheck_error_col;
+    }
+
+    const char *file_path = (directive_file[0] != '\0')
+        ? directive_file
+        : semcheck_get_error_path();
+
+    va_list args;
+    va_start(args, format);
+    v_semcheck_format_error_with_context(file_path, effective_line, effective_col,
+        source_index, format, args);
+    va_end(args);
+}
+
 /* Helper for legacy error prints that already include "Error on line %d". */
 void semcheck_error_with_context(const char *format, ...)
 {
-    size_t context_len = preprocessed_length;
-    if (context_len == 0 && preprocessed_source != NULL)
-        context_len = strlen(preprocessed_source);
     int line_num = 0;
     int effective_line = 0;
     int effective_col = 0;
@@ -1688,47 +1697,12 @@ void semcheck_error_with_context(const char *format, ...)
     directive_file[0] = '\0';
     if (effective_source_index >= 0)
     {
-        int found_in_registry = 0;
-        for (int i = 0; i < g_source_buffer_count; i++)
-        {
-            if (effective_source_index < (int)g_source_buffer_registry[i].length)
-            {
-                char temp_file[MAX_DIRECTIVE_FILENAME_LEN];
-                temp_file[0] = '\0';
-                int computed_line = semcheck_line_from_source_offset(
-                    g_source_buffer_registry[i].buffer,
-                    g_source_buffer_registry[i].length,
-                    effective_source_index,
-                    temp_file, sizeof(temp_file));
-                if (computed_line > 0 && temp_file[0] != '\0')
-                {
-                    effective_line = computed_line;
-                    strncpy(directive_file, temp_file, sizeof(directive_file) - 1);
-                    directive_file[sizeof(directive_file) - 1] = '\0';
-                    found_in_registry = 1;
-                    break;
-                }
-            }
-        }
-        
-        if (!found_in_registry)
-        {
-            const char *context_buf = preprocessed_source;
-            size_t context_buf_len = preprocessed_length;
-            if (context_buf == NULL || context_buf_len == 0)
-            {
-                context_buf = g_semcheck_source_buffer;
-                context_buf_len = g_semcheck_source_length;
-            }
-            int computed_line = semcheck_line_from_source_offset(context_buf, context_buf_len, effective_source_index,
-                directive_file, sizeof(directive_file));
-            if (computed_line > 0)
-                effective_line = computed_line;
-        }
+        int resolved_line = resolve_error_source_context(
+            effective_source_index, directive_file, sizeof(directive_file), 1);
+        if (resolved_line > 0)
+            effective_line = resolved_line;
         if (directive_file[0] != '\0')
-        {
             fprintf(stderr, "  In %s:\n", directive_file);
-        }
         if (g_semcheck_error_col > 0)
             effective_col = g_semcheck_error_col;
     }
@@ -1745,59 +1719,9 @@ void semcheck_error_with_context(const char *format, ...)
         ? directive_file
         : semcheck_get_error_path();
 
-    /* If the format starts with "Error on line %d", rewrite that part to use the effective line. */
-    semcheck_print_error_prefix(file_path, effective_line, effective_col);
-    if (format != NULL && strncmp(format, "Error on line %d", 16) == 0)
-    {
-        int original_line = va_arg(args, int);
-        (void)original_line;
-        const char *rest = format + 16;
-        if (rest[0] == ',' && rest[1] == ' ')
-            rest += 2;
-        else if (rest[0] == ',' )
-            rest += 1;
-        else if (rest[0] == ':' && rest[1] == ' ')
-            rest += 2;
-        vfprintf(stderr, rest, args);
-    }
-    else
-    {
-        vfprintf(stderr, format, args);
-    }
+    v_semcheck_format_error_with_context(file_path, effective_line, effective_col,
+        effective_source_index, format, args);
     va_end(args);
-
-    size_t len = format ? strlen(format) : 0;
-    if (len == 0 || format[len - 1] != '\n') {
-        fprintf(stderr, "\n");
-    }
-
-    if (effective_line > 0) {
-        const char *context_buf = preprocessed_source;
-        size_t context_buf_len = context_len;
-        if (context_buf == NULL || context_buf_len == 0)
-        {
-            context_buf = g_semcheck_source_buffer;
-            context_buf_len = g_semcheck_source_length;
-        }
-        if (getenv("KGPC_DEBUG_SEM_CONTEXT") != NULL)
-        {
-            fprintf(stderr,
-                "[SemCheck] context file=%s pre_len=%zu buf_len=%zu line=%d col=%d\n",
-                file_path != NULL ? file_path : "<null>",
-                context_len,
-                context_buf_len,
-                effective_line,
-                effective_col);
-        }
-        int printed = print_source_context_at_offset(context_buf, context_buf_len,
-            effective_source_index, effective_line, effective_col, 2);
-        if (!printed)
-            printed = semcheck_print_context_from_file(file_path, effective_line, effective_col, 2);
-        if (!printed && file_path != NULL)
-            print_source_context(file_path, effective_line, effective_col, 2);
-    }
-
-    fprintf(stderr, "\n");
 }
 
 /* Main is a special keyword at the moment for code generation */
@@ -2861,40 +2785,19 @@ static HashNode_t *semcheck_find_type_node_with_unit_flag_ref(SymTab_t *symtab,
         return NULL;
     }
 
-    ListNode_t *matches = FindAllIdents(symtab, lookup_id);
-    if (matches == NULL && type_ref != NULL)
+    /* Try the rendered/mangled name first */
+    HashNode_t *result = semcheck_find_type_node_with_unit_flag(symtab, lookup_id, defined_in_unit);
+
+    /* Fall back to the bare base name when the mangled name yields nothing */
+    if (result == NULL && type_ref != NULL)
     {
         const char *base = type_ref_base_name(type_ref);
         if (base != NULL && base != lookup_id)
-            matches = FindAllIdents(symtab, base);
+            result = semcheck_find_type_node_with_unit_flag(symtab, base, defined_in_unit);
     }
 
-    HashNode_t *best = NULL;
-    HashNode_t *fallback_outermost = NULL;
-    ListNode_t *cur = matches;
-    while (cur != NULL)
-    {
-        HashNode_t *node = (HashNode_t *)cur->cur;
-        if (node != NULL && node->hash_type == HASHTYPE_TYPE)
-        {
-            if (node->defined_in_unit == defined_in_unit)
-            {
-                best = node;
-                break;
-            }
-            if (best == NULL)
-                best = node;
-            fallback_outermost = node;
-        }
-        cur = cur->next;
-    }
-    if (best != NULL && best->defined_in_unit != defined_in_unit && defined_in_unit)
-        best = fallback_outermost;
-
-    if (matches != NULL)
-        DestroyList(matches);
     free(rendered);
-    return best;
+    return result;
 }
 
 /* Helper function to get VarType from HashNode */
@@ -3896,6 +3799,71 @@ static int semcheck_param_list_equivalent(ListNode_t *lhs, ListNode_t *rhs)
     return (lcur == NULL && rcur == NULL);
 }
 
+/* Extract and validate a single argument from a const-expression function call.
+ * Returns the argument expression on success, or NULL on failure (with error
+ * printed to stderr). */
+static struct Expression *extract_single_const_arg(ListNode_t *args, const char *func_name)
+{
+    assert(func_name != NULL);
+    if (args == NULL || args->next != NULL)
+    {
+        fprintf(stderr, "Error: %s in const expression requires exactly one argument.\n", func_name);
+        return NULL;
+    }
+    struct Expression *arg = (struct Expression *)args->cur;
+    if (arg == NULL)
+    {
+        fprintf(stderr, "Error: %s argument is NULL.\n", func_name);
+        return NULL;
+    }
+    return arg;
+}
+
+/* Look up the low and high bounds of a built-in Pascal type by name.
+ * Returns 1 on success (bounds written to *low_out and *high_out), 0 if the
+ * type is not a recognised built-in. */
+static int get_builtin_type_bounds(const char *base_name,
+    long long *low_out, long long *high_out)
+{
+    assert(low_out != NULL && high_out != NULL);
+    if (base_name == NULL)
+        return 0;
+
+    typedef struct {
+        const char *names[3];
+        long long low;
+        long long high;
+    } TypeBoundsEntry;
+    /* Note: QWord/UInt64 high is INT64_MAX (not UINT64_MAX) because the
+     * const-expression evaluator uses signed long long throughout.  Proper
+     * unsigned 64-bit semantics are not yet supported. */
+    static const TypeBoundsEntry table[] = {
+        { {"Int64",    NULL,       NULL},         (-9223372036854775807LL - 1), 9223372036854775807LL },
+        { {"QWord",    "UInt64",   NULL},         0LL,                         9223372036854775807LL  },
+        { {"LongInt",  "Integer",  NULL},         -2147483648LL,               2147483647LL           },
+        { {"Cardinal", "LongWord", "DWord"},      0LL,                         4294967295LL           },
+        { {"SmallInt", NULL,       NULL},         -32768LL,                    32767LL                },
+        { {"Word",     NULL,       NULL},         0LL,                         65535LL                },
+        { {"ShortInt", NULL,       NULL},         -128LL,                      127LL                  },
+        { {"Byte",     NULL,       NULL},         0LL,                         255LL                  },
+        { {"Boolean",  NULL,       NULL},         0LL,                         1LL                    },
+        { {"Char",     "AnsiChar", NULL},         0LL,                         255LL                  },
+    };
+    for (size_t i = 0; i < sizeof(table) / sizeof(table[0]); ++i)
+    {
+        for (int j = 0; j < 3 && table[i].names[j] != NULL; ++j)
+        {
+            if (pascal_identifier_equals(base_name, table[i].names[j]))
+            {
+                *low_out = table[i].low;
+                *high_out = table[i].high;
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
 static int evaluate_real_const_expr(SymTab_t *symtab, struct Expression *expr, double *out_value)
 {
     if (expr == NULL || out_value == NULL)
@@ -3994,32 +3962,16 @@ static int evaluate_real_const_expr(SymTab_t *symtab, struct Expression *expr, d
             ListNode_t *args = expr->expr_data.function_call_data.args_expr;
             if (id != NULL && is_real_type_name(symtab, id))
             {
-                if (args == NULL || args->next != NULL)
-                {
-                    fprintf(stderr, "Error: %s in const expression requires exactly one argument.\n", id);
-                    return 1;
-                }
-                struct Expression *arg = (struct Expression *)args->cur;
+                struct Expression *arg = extract_single_const_arg(args, id);
                 if (arg == NULL)
-                {
-                    fprintf(stderr, "Error: %s argument is NULL.\n", id);
                     return 1;
-                }
                 return evaluate_real_const_expr(symtab, arg, out_value);
             }
             if (id != NULL && pascal_identifier_equals(id, "Ln"))
             {
-                if (args == NULL || args->next != NULL)
-                {
-                    fprintf(stderr, "Error: Ln in const expression requires exactly one argument.\n");
-                    return 1;
-                }
-                struct Expression *arg = (struct Expression *)args->cur;
+                struct Expression *arg = extract_single_const_arg(args, "Ln");
                 if (arg == NULL)
-                {
-                    fprintf(stderr, "Error: Ln argument is NULL.\n");
                     return 1;
-                }
                 double value = 0.0;
                 if (evaluate_real_const_expr(symtab, arg, &value) != 0)
                     return 1;
@@ -4805,19 +4757,9 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
             
             if (id != NULL && pascal_identifier_equals(id, "Ord"))
             {
-                /* Check that we have exactly one argument */
-                if (args == NULL || args->next != NULL)
-                {
-                    fprintf(stderr, "Error: Ord in const expression requires exactly one argument.\n");
-                    return 1;
-                }
-                
-                struct Expression *arg = (struct Expression *)args->cur;
+                struct Expression *arg = extract_single_const_arg(args, "Ord");
                 if (arg == NULL)
-                {
-                    fprintf(stderr, "Error: Ord argument is NULL.\n");
                     return 1;
-                }
                 
                 /* Handle character literal */
                 if (arg->type == EXPR_STRING)
@@ -4893,18 +4835,9 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
             /* Handle High() function for constant expressions */
             if (id != NULL && pascal_identifier_equals(id, "High"))
             {
-                if (args == NULL || args->next != NULL)
-                {
-                    fprintf(stderr, "Error: High in const expression requires exactly one argument.\n");
-                    return 1;
-                }
-                
-                struct Expression *arg = (struct Expression *)args->cur;
+                struct Expression *arg = extract_single_const_arg(args, "High");
                 if (arg == NULL)
-                {
-                    fprintf(stderr, "Error: High argument is NULL.\n");
                     return 1;
-                }
                 
                 /* High expects a type identifier */
                 if (arg->type == EXPR_VAR_ID || arg->type == EXPR_RECORD_ACCESS)
@@ -4940,65 +4873,14 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                         lookup_name = resolved;
                     
                     /* Map common type names to their High values */
-                    if (base_name != NULL && pascal_identifier_equals(base_name, "Int64")) {
-                        *out_value = 9223372036854775807LL; /* INT64_MAX */
-                        status = 0;
-                        goto high_cleanup;
-                    }
-                    if (base_name != NULL &&
-                        (pascal_identifier_equals(base_name, "QWord") ||
-                         pascal_identifier_equals(base_name, "UInt64"))) {
-                        /* Treat QWord as signed 64-bit until unsigned semantics are supported. */
-                        *out_value = 9223372036854775807LL;
-                        status = 0;
-                        goto high_cleanup;
-                    }
-                    if (base_name != NULL &&
-                        (pascal_identifier_equals(base_name, "LongInt") ||
-                         pascal_identifier_equals(base_name, "Integer"))) {
-                        *out_value = 2147483647LL; /* INT32_MAX */
-                        status = 0;
-                        goto high_cleanup;
-                    }
-                    if (base_name != NULL &&
-                        (pascal_identifier_equals(base_name, "Cardinal") ||
-                         pascal_identifier_equals(base_name, "LongWord") ||
-                         pascal_identifier_equals(base_name, "DWord"))) {
-                        *out_value = 4294967295LL; /* UINT32_MAX */
-                        status = 0;
-                        goto high_cleanup;
-                    }
-                    if (base_name != NULL && pascal_identifier_equals(base_name, "SmallInt")) {
-                        *out_value = 32767LL; /* INT16_MAX */
-                        status = 0;
-                        goto high_cleanup;
-                    }
-                    if (base_name != NULL && pascal_identifier_equals(base_name, "Word")) {
-                        *out_value = 65535LL; /* UINT16_MAX */
-                        status = 0;
-                        goto high_cleanup;
-                    }
-                    if (base_name != NULL && pascal_identifier_equals(base_name, "ShortInt")) {
-                        *out_value = 127LL; /* INT8_MAX */
-                        status = 0;
-                        goto high_cleanup;
-                    }
-                    if (base_name != NULL && pascal_identifier_equals(base_name, "Byte")) {
-                        *out_value = 255LL; /* UINT8_MAX */
-                        status = 0;
-                        goto high_cleanup;
-                    }
-                    if (base_name != NULL && pascal_identifier_equals(base_name, "Boolean")) {
-                        *out_value = 1LL;
-                        status = 0;
-                        goto high_cleanup;
-                    }
-                    if (base_name != NULL &&
-                        (pascal_identifier_equals(base_name, "Char") ||
-                         pascal_identifier_equals(base_name, "AnsiChar"))) {
-                        *out_value = 255LL;
-                        status = 0;
-                        goto high_cleanup;
+                    {
+                        long long bounds_low, bounds_high;
+                        if (get_builtin_type_bounds(base_name, &bounds_low, &bounds_high))
+                        {
+                            *out_value = bounds_high;
+                            status = 0;
+                            goto high_cleanup;
+                        }
                     }
                     fprintf(stderr, "Error: High(%s) - unsupported type in const expression.\n",
                         qualified_name != NULL ? qualified_name : arg->expr_data.id);
@@ -5016,18 +4898,9 @@ high_cleanup:
             /* Handle Low() function for constant expressions */
             if (id != NULL && pascal_identifier_equals(id, "Low"))
             {
-                if (args == NULL || args->next != NULL)
-                {
-                    fprintf(stderr, "Error: Low in const expression requires exactly one argument.\n");
-                    return 1;
-                }
-                
-                struct Expression *arg = (struct Expression *)args->cur;
+                struct Expression *arg = extract_single_const_arg(args, "Low");
                 if (arg == NULL)
-                {
-                    fprintf(stderr, "Error: Low argument is NULL.\n");
                     return 1;
-                }
                 
                 /* Low expects a type identifier */
                 if (arg->type == EXPR_VAR_ID || arg->type == EXPR_RECORD_ACCESS)
@@ -5063,64 +4936,14 @@ high_cleanup:
                         lookup_name = resolved;
                         
                     /* Map common type names to their Low values */
-                    if (base_name != NULL && pascal_identifier_equals(base_name, "Int64")) {
-                        *out_value = (-9223372036854775807LL - 1); /* INT64_MIN */
-                        status = 0;
-                        goto low_cleanup;
-                    }
-                    if (base_name != NULL &&
-                        (pascal_identifier_equals(base_name, "QWord") ||
-                         pascal_identifier_equals(base_name, "UInt64"))) {
-                        *out_value = 0LL;
-                        status = 0;
-                        goto low_cleanup;
-                    }
-                    if (base_name != NULL &&
-                        (pascal_identifier_equals(base_name, "LongInt") ||
-                         pascal_identifier_equals(base_name, "Integer"))) {
-                        *out_value = -2147483648LL; /* INT32_MIN */
-                        status = 0;
-                        goto low_cleanup;
-                    }
-                    if (base_name != NULL &&
-                        (pascal_identifier_equals(base_name, "Cardinal") ||
-                         pascal_identifier_equals(base_name, "LongWord") ||
-                         pascal_identifier_equals(base_name, "DWord"))) {
-                        *out_value = 0LL;
-                        status = 0;
-                        goto low_cleanup;
-                    }
-                    if (base_name != NULL && pascal_identifier_equals(base_name, "SmallInt")) {
-                        *out_value = -32768LL; /* INT16_MIN */
-                        status = 0;
-                        goto low_cleanup;
-                    }
-                    if (base_name != NULL && pascal_identifier_equals(base_name, "Word")) {
-                        *out_value = 0LL;
-                        status = 0;
-                        goto low_cleanup;
-                    }
-                    if (base_name != NULL && pascal_identifier_equals(base_name, "ShortInt")) {
-                        *out_value = -128LL; /* INT8_MIN */
-                        status = 0;
-                        goto low_cleanup;
-                    }
-                    if (base_name != NULL && pascal_identifier_equals(base_name, "Byte")) {
-                        *out_value = 0LL;
-                        status = 0;
-                        goto low_cleanup;
-                    }
-                    if (base_name != NULL && pascal_identifier_equals(base_name, "Boolean")) {
-                        *out_value = 0LL;
-                        status = 0;
-                        goto low_cleanup;
-                    }
-                    if (base_name != NULL &&
-                        (pascal_identifier_equals(base_name, "Char") ||
-                         pascal_identifier_equals(base_name, "AnsiChar"))) {
-                        *out_value = 0LL;
-                        status = 0;
-                        goto low_cleanup;
+                    {
+                        long long bounds_low, bounds_high;
+                        if (get_builtin_type_bounds(base_name, &bounds_low, &bounds_high))
+                        {
+                            *out_value = bounds_low;
+                            status = 0;
+                            goto low_cleanup;
+                        }
                     }
                     fprintf(stderr, "Error: Low(%s) - unsupported type in const expression.\n",
                         qualified_name != NULL ? qualified_name : arg->expr_data.id);
@@ -5138,18 +4961,9 @@ low_cleanup:
             /* Handle SizeOf() function for constant expressions */
             if (id != NULL && pascal_identifier_equals(id, "SizeOf"))
             {
-                if (args == NULL || args->next != NULL)
-                {
-                    fprintf(stderr, "Error: SizeOf in const expression requires exactly one argument.\n");
-                    return 1;
-                }
-                
-                struct Expression *arg = (struct Expression *)args->cur;
+                struct Expression *arg = extract_single_const_arg(args, "SizeOf");
                 if (arg == NULL)
-                {
-                    fprintf(stderr, "Error: SizeOf argument is NULL.\n");
                     return 1;
-                }
                 
                 /* SizeOf expects a type identifier */
                 if (arg->type == EXPR_VAR_ID)
@@ -5247,18 +5061,9 @@ low_cleanup:
             /* Handle Chr() function for constant expressions */
             if (id != NULL && pascal_identifier_equals(id, "Chr"))
             {
-                if (args == NULL || args->next != NULL)
-                {
-                    fprintf(stderr, "Error: Chr in const expression requires exactly one argument.\n");
-                    return 1;
-                }
-                
-                struct Expression *arg = (struct Expression *)args->cur;
+                struct Expression *arg = extract_single_const_arg(args, "Chr");
                 if (arg == NULL)
-                {
-                    fprintf(stderr, "Error: Chr argument is NULL.\n");
                     return 1;
-                }
                 
                 /* Evaluate the argument as a const expression */
                 long long char_code;
@@ -5282,18 +5087,9 @@ low_cleanup:
             /* Handle Pointer() typecast for constant expressions (FPC bootstrap dl.pp) */
             if (id != NULL && pascal_identifier_equals(id, "Pointer"))
             {
-                if (args == NULL || args->next != NULL)
-                {
-                    fprintf(stderr, "Error: Pointer in const expression requires exactly one argument.\n");
-                    return 1;
-                }
-                
-                struct Expression *arg = (struct Expression *)args->cur;
+                struct Expression *arg = extract_single_const_arg(args, "Pointer");
                 if (arg == NULL)
-                {
-                    fprintf(stderr, "Error: Pointer argument is NULL.\n");
                     return 1;
-                }
                 
                 /* Evaluate the argument as a const expression */
                 long long ptr_value;
@@ -5310,18 +5106,9 @@ low_cleanup:
             /* Handle PtrInt() and PtrUInt() typecasts for constant expressions */
             if (id != NULL && (pascal_identifier_equals(id, "PtrInt") || pascal_identifier_equals(id, "PtrUInt")))
             {
-                if (args == NULL || args->next != NULL)
-                {
-                    fprintf(stderr, "Error: %s in const expression requires exactly one argument.\n", id);
-                    return 1;
-                }
-                
-                struct Expression *arg = (struct Expression *)args->cur;
+                struct Expression *arg = extract_single_const_arg(args, id);
                 if (arg == NULL)
-                {
-                    fprintf(stderr, "Error: %s argument is NULL.\n", id);
                     return 1;
-                }
                 
                 /* Evaluate the argument as a const expression */
                 long long int_value;
@@ -5338,17 +5125,9 @@ low_cleanup:
             /* Handle Trunc() for constant expressions */
             if (id != NULL && pascal_identifier_equals(id, "Trunc"))
             {
-                if (args == NULL || args->next != NULL)
-                {
-                    fprintf(stderr, "Error: Trunc in const expression requires exactly one argument.\n");
-                    return 1;
-                }
-                struct Expression *arg = (struct Expression *)args->cur;
+                struct Expression *arg = extract_single_const_arg(args, "Trunc");
                 if (arg == NULL)
-                {
-                    fprintf(stderr, "Error: Trunc argument is NULL.\n");
                     return 1;
-                }
                 double real_value = 0.0;
                 if (evaluate_real_const_expr(symtab, arg, &real_value) == 0)
                 {
@@ -5382,18 +5161,9 @@ low_cleanup:
                                pascal_identifier_equals(id, "LongInt") ||
                                pascal_identifier_equals(id, "HRESULT")))
             {
-                if (args == NULL || args->next != NULL)
-                {
-                    fprintf(stderr, "Error: %s in const expression requires exactly one argument.\n", id);
-                    return 1;
-                }
-                
-                struct Expression *arg = (struct Expression *)args->cur;
+                struct Expression *arg = extract_single_const_arg(args, id);
                 if (arg == NULL)
-                {
-                    fprintf(stderr, "Error: %s argument is NULL.\n", id);
                     return 1;
-                }
                 
                 /* Evaluate the argument as a const expression */
                 long long int_value;
@@ -10088,6 +9858,85 @@ static void ensure_builtin_alias_type_if_missing(SymTab_t *symtab, const char *n
         add_builtin_alias_type(symtab, name, base_type, storage_size);
 }
 
+static void register_simple_builtin_proc(SymTab_t *symtab, const char *name)
+{
+    assert(name != NULL && "register_simple_builtin_proc: name must not be NULL");
+    char *dup_name = strdup(name);
+    assert(dup_name != NULL && "register_simple_builtin_proc: strdup failed");
+    KgpcType *proc_type = create_procedure_type(NULL, NULL);
+    assert(proc_type != NULL && "register_simple_builtin_proc: failed to create procedure type");
+    AddBuiltinProc_Typed(symtab, dup_name, proc_type);
+    destroy_kgpc_type(proc_type);
+    free(dup_name);
+}
+
+/* Register a simple built-in function (no parameters) with the given return
+ * type tag (e.g. LONGINT_TYPE, CHAR_TYPE, POINTER_TYPE). */
+static void register_simple_builtin_func(SymTab_t *symtab, const char *name,
+    int return_type_tag)
+{
+    assert(name != NULL && "register_simple_builtin_func: name must not be NULL");
+    char *dup_name = strdup(name);
+    assert(dup_name != NULL && "register_simple_builtin_func: strdup failed");
+    KgpcType *return_type = create_primitive_type(return_type_tag);
+    assert(return_type != NULL && "register_simple_builtin_func: failed to create return type");
+    KgpcType *func_type = create_procedure_type(NULL, return_type);
+    assert(func_type != NULL && "register_simple_builtin_func: failed to create function type");
+    AddBuiltinFunction_Typed(symtab, dup_name, func_type);
+    destroy_kgpc_type(func_type);
+    destroy_kgpc_type(return_type);
+    free(dup_name);
+}
+
+/* Register an overloaded unary built-in function: name(param_name: arg_type): ret_type.
+ * Caller may invoke this multiple times with different type tags to register overloads. */
+static void register_unary_builtin_func(SymTab_t *symtab, const char *name,
+    const char *param_name, int arg_type_tag, int return_type_tag)
+{
+    assert(name != NULL && param_name != NULL);
+    char *dup_name = strdup(name);
+    assert(dup_name != NULL && "register_unary_builtin_func: strdup failed");
+    ListNode_t *param = semcheck_create_builtin_param(param_name, arg_type_tag);
+    KgpcType *return_type = create_primitive_type(return_type_tag);
+    KgpcType *func_type = create_procedure_type(param, return_type);
+    if (func_type != NULL)
+    {
+        AddBuiltinFunction_Typed(symtab, dup_name, func_type);
+        destroy_kgpc_type(func_type);
+    }
+    if (param != NULL)
+        DestroyList(param);
+    destroy_kgpc_type(return_type);
+    free(dup_name);
+}
+
+/* Register an overloaded binary built-in function:
+ * name(p1_name: p1_type; p2_name: p2_type): ret_type.
+ * Caller may invoke multiple times with different types for overloads. */
+static void register_binary_builtin_func(SymTab_t *symtab, const char *name,
+    const char *p1_name, int p1_type_tag,
+    const char *p2_name, int p2_type_tag,
+    int return_type_tag)
+{
+    assert(name != NULL && p1_name != NULL && p2_name != NULL);
+    char *dup_name = strdup(name);
+    assert(dup_name != NULL && "register_binary_builtin_func: strdup failed");
+    ListNode_t *p1 = semcheck_create_builtin_param(p1_name, p1_type_tag);
+    ListNode_t *p2 = semcheck_create_builtin_param(p2_name, p2_type_tag);
+    ListNode_t *params = ConcatList(p1, p2);
+    KgpcType *return_type = create_primitive_type(return_type_tag);
+    KgpcType *func_type = create_procedure_type(params, return_type);
+    if (func_type != NULL)
+    {
+        AddBuiltinFunction_Typed(symtab, dup_name, func_type);
+        destroy_kgpc_type(func_type);
+    }
+    if (params != NULL)
+        DestroyList(params);
+    destroy_kgpc_type(return_type);
+    free(dup_name);
+}
+
 void semcheck_add_builtins(SymTab_t *symtab)
 {
 
@@ -10284,22 +10133,16 @@ void semcheck_add_builtins(SymTab_t *symtab)
     AddBuiltinRealConst(symtab, "Pi", acos(-1.0));
 
     /* Builtin procedures - procedures have no return type */
-    char *setlength_name = strdup("SetLength");
-    if (setlength_name != NULL) {
-        KgpcType *setlength_type = create_procedure_type(NULL, NULL);
-        assert(setlength_type != NULL && "Failed to create SetLength procedure type");
-        AddBuiltinProc_Typed(symtab, setlength_name, setlength_type);
-        destroy_kgpc_type(setlength_type);
-        free(setlength_name);
-    }
-
-    char *setstring_name = strdup("SetString");
-    if (setstring_name != NULL) {
-        KgpcType *setstring_type = create_procedure_type(NULL, NULL);
-        assert(setstring_type != NULL && "Failed to create SetString procedure type");
-        AddBuiltinProc_Typed(symtab, setstring_name, setstring_type);
-        destroy_kgpc_type(setstring_type);
-        free(setstring_name);
+    {
+        static const char *simple_procs[] = {
+            "SetLength", "SetString", "write", "writeln", "writestr",
+            "read", "readln", "Halt", "Error", "Assign", "Close",
+            "SetTextCodePage", "GetMem", "ReallocMem", "SetCodePage",
+            "FreeMem", "Val", "Str", "Insert", "Delete", "Inc", "Dec",
+            "Include", "Exclude", "New", "Dispose", "Assert"
+        };
+        for (size_t i = 0; i < sizeof(simple_procs) / sizeof(simple_procs[0]); ++i)
+            register_simple_builtin_proc(symtab, simple_procs[i]);
     }
 
     char *pchar_to_shortstr_name = strdup("fpc_pchar_to_shortstr");
@@ -10321,74 +10164,6 @@ void semcheck_add_builtins(SymTab_t *symtab)
         free(pchar_to_shortstr_name);
     }
 
-    char *write_name = strdup("write");
-    if (write_name != NULL) {
-        KgpcType *write_type = create_procedure_type(NULL, NULL);
-        assert(write_type != NULL && "Failed to create write procedure type");
-        AddBuiltinProc_Typed(symtab, write_name, write_type);
-        destroy_kgpc_type(write_type);
-        free(write_name);
-    }
-
-    char *writeln_name = strdup("writeln");
-    if (writeln_name != NULL) {
-        KgpcType *writeln_type = create_procedure_type(NULL, NULL);
-        assert(writeln_type != NULL && "Failed to create writeln procedure type");
-        AddBuiltinProc_Typed(symtab, writeln_name, writeln_type);
-        destroy_kgpc_type(writeln_type);
-        free(writeln_name);
-    }
-
-    char *writestr_name = strdup("writestr");
-    if (writestr_name != NULL) {
-        KgpcType *writestr_type = create_procedure_type(NULL, NULL);
-        assert(writestr_type != NULL && "Failed to create writestr procedure type");
-        AddBuiltinProc_Typed(symtab, writestr_name, writestr_type);
-        destroy_kgpc_type(writestr_type);
-        free(writestr_name);
-    }
-
-    char *read_name = strdup("read");
-    if (read_name != NULL) {
-        KgpcType *read_type = create_procedure_type(NULL, NULL);
-        assert(read_type != NULL && "Failed to create read procedure type");
-        AddBuiltinProc_Typed(symtab, read_name, read_type);
-        destroy_kgpc_type(read_type);
-        free(read_name);
-    }
-
-    char *readln_name = strdup("readln");
-    if (readln_name != NULL) {
-        KgpcType *readln_type = create_procedure_type(NULL, NULL);
-        assert(readln_type != NULL && "Failed to create readln procedure type");
-        AddBuiltinProc_Typed(symtab, readln_name, readln_type);
-        destroy_kgpc_type(readln_type);
-        free(readln_name);
-    }
-    char *halt_name = strdup("Halt");
-    if (halt_name != NULL) {
-        KgpcType *halt_type = create_procedure_type(NULL, NULL);
-        assert(halt_type != NULL && "Failed to create Halt procedure type");
-        AddBuiltinProc_Typed(symtab, halt_name, halt_type);
-        destroy_kgpc_type(halt_type);
-        free(halt_name);
-    }
-    char *error_name = strdup("Error");
-    if (error_name != NULL) {
-        KgpcType *error_type = create_procedure_type(NULL, NULL);
-        assert(error_type != NULL && "Failed to create Error procedure type");
-        AddBuiltinProc_Typed(symtab, error_name, error_type);
-        destroy_kgpc_type(error_type);
-        free(error_name);
-    }
-    char *assign_name = strdup("Assign");
-    if (assign_name != NULL) {
-        KgpcType *assign_type = create_procedure_type(NULL, NULL);
-        assert(assign_type != NULL && "Failed to create Assign procedure type");
-        AddBuiltinProc_Typed(symtab, assign_name, assign_type);
-        destroy_kgpc_type(assign_type);
-        free(assign_name);
-    }
     const char *sysutils_hooks[] = {
         "InitExceptions",
         "InitInternational",
@@ -10398,40 +10173,8 @@ void semcheck_add_builtins(SymTab_t *symtab)
         "SysBeep"
     };
     for (size_t i = 0; i < sizeof(sysutils_hooks) / sizeof(sysutils_hooks[0]); ++i)
-    {
-        char *hook_name = strdup(sysutils_hooks[i]);
-        if (hook_name != NULL) {
-            KgpcType *hook_type = create_procedure_type(NULL, NULL);
-            assert(hook_type != NULL && "Failed to create sysutils hook type");
-            AddBuiltinProc_Typed(symtab, hook_name, hook_type);
-            destroy_kgpc_type(hook_type);
-            free(hook_name);
-        }
-    }
-    char *close_name = strdup("Close");
-    if (close_name != NULL) {
-        KgpcType *close_type = create_procedure_type(NULL, NULL);
-        assert(close_type != NULL && "Failed to create Close procedure type");
-        AddBuiltinProc_Typed(symtab, close_name, close_type);
-        destroy_kgpc_type(close_type);
-        free(close_name);
-    }
-    char *settextcp_name = strdup("SetTextCodePage");
-    if (settextcp_name != NULL) {
-        KgpcType *settextcp_type = create_procedure_type(NULL, NULL);
-        assert(settextcp_type != NULL && "Failed to create SetTextCodePage procedure type");
-        AddBuiltinProc_Typed(symtab, settextcp_name, settextcp_type);
-        destroy_kgpc_type(settextcp_type);
-        free(settextcp_name);
-    }
-    char *getmem_proc = strdup("GetMem");
-    if (getmem_proc != NULL) {
-        KgpcType *getmem_type = create_procedure_type(NULL, NULL);
-        assert(getmem_type != NULL && "Failed to create GetMem procedure type");
-        AddBuiltinProc_Typed(symtab, getmem_proc, getmem_type);
-        destroy_kgpc_type(getmem_type);
-        free(getmem_proc);
-    }
+        register_simple_builtin_proc(symtab, sysutils_hooks[i]);
+
     char *move_proc = strdup("Move");
     if (move_proc != NULL) {
         ListNode_t *move_params = NULL;
@@ -10467,449 +10210,60 @@ void semcheck_add_builtins(SymTab_t *symtab)
         destroy_kgpc_type(move_type);
         free(move_proc);
     }
-    char *realloc_proc = strdup("ReallocMem");
-    if (realloc_proc != NULL) {
-        KgpcType *realloc_type = create_procedure_type(NULL, NULL);
-        assert(realloc_type != NULL && "Failed to create ReallocMem procedure type");
-        AddBuiltinProc_Typed(symtab, realloc_proc, realloc_type);
-        destroy_kgpc_type(realloc_type);
-        free(realloc_proc);
-    }
-    char *setcodepage_proc = strdup("SetCodePage");
-    if (setcodepage_proc != NULL) {
-        KgpcType *setcodepage_type = create_procedure_type(NULL, NULL);
-        assert(setcodepage_type != NULL && "Failed to create SetCodePage procedure type");
-        AddBuiltinProc_Typed(symtab, setcodepage_proc, setcodepage_type);
-        destroy_kgpc_type(setcodepage_type);
-        free(setcodepage_proc);
-    }
-    char *freemem_proc = strdup("FreeMem");
-    if (freemem_proc != NULL) {
-        KgpcType *freemem_type = create_procedure_type(NULL, NULL);
-        assert(freemem_type != NULL && "Failed to create FreeMem procedure type");
-        AddBuiltinProc_Typed(symtab, freemem_proc, freemem_type);
-        destroy_kgpc_type(freemem_type);
-        free(freemem_proc);
-    }
-    char *val_name = strdup("Val");
-    if (val_name != NULL) {
-        KgpcType *val_type = create_procedure_type(NULL, NULL);
-        assert(val_type != NULL && "Failed to create Val procedure type");
-        AddBuiltinProc_Typed(symtab, val_name, val_type);
-        destroy_kgpc_type(val_type);
-        free(val_name);
-    }
-    char *str_name = strdup("Str");
-    if (str_name != NULL) {
-        KgpcType *str_type = create_procedure_type(NULL, NULL);
-        assert(str_type != NULL && "Failed to create Str procedure type");
-        AddBuiltinProc_Typed(symtab, str_name, str_type);
-        destroy_kgpc_type(str_type);
-        free(str_name);
-    }
-
-    char *insert_name = strdup("Insert");
-    if (insert_name != NULL) {
-        KgpcType *insert_type = create_procedure_type(NULL, NULL);
-        assert(insert_type != NULL && "Failed to create Insert procedure type");
-        AddBuiltinProc_Typed(symtab, insert_name, insert_type);
-        destroy_kgpc_type(insert_type);
-        free(insert_name);
-    }
-    char *delete_name = strdup("Delete");
-    if (delete_name != NULL) {
-        KgpcType *delete_type = create_procedure_type(NULL, NULL);
-        assert(delete_type != NULL && "Failed to create Delete procedure type");
-        AddBuiltinProc_Typed(symtab, delete_name, delete_type);
-        destroy_kgpc_type(delete_type);
-        free(delete_name);
-    }
 
     {
-        const char *swap_name = "SwapEndian";
-
-        ListNode_t *param_int = semcheck_create_builtin_param("AValue", INT_TYPE);
-        KgpcType *return_type_int = create_primitive_type(INT_TYPE);
-        KgpcType *swap_int = create_procedure_type(param_int, return_type_int);
-        if (swap_int != NULL)
-        {
-            AddBuiltinFunction_Typed(symtab, strdup(swap_name), swap_int);
-            destroy_kgpc_type(swap_int);
-        }
-        if (param_int != NULL)
-            DestroyList(param_int);
-        destroy_kgpc_type(return_type_int);
-
-        ListNode_t *param_long = semcheck_create_builtin_param("AValue", LONGINT_TYPE);
-        KgpcType *return_type_long = create_primitive_type(LONGINT_TYPE);
-        KgpcType *swap_long = create_procedure_type(param_long, return_type_long);
-        if (swap_long != NULL)
-        {
-            AddBuiltinFunction_Typed(symtab, strdup(swap_name), swap_long);
-            destroy_kgpc_type(swap_long);
-        }
-        if (param_long != NULL)
-            DestroyList(param_long);
-        destroy_kgpc_type(return_type_long);
-
-        ListNode_t *param_int64 = semcheck_create_builtin_param("AValue", INT64_TYPE);
-        KgpcType *return_type_int64 = create_primitive_type(INT64_TYPE);
-        KgpcType *swap_int64 = create_procedure_type(param_int64, return_type_int64);
-        if (swap_int64 != NULL)
-        {
-            AddBuiltinFunction_Typed(symtab, strdup(swap_name), swap_int64);
-            destroy_kgpc_type(swap_int64);
-        }
-        if (param_int64 != NULL)
-            DestroyList(param_int64);
-        destroy_kgpc_type(return_type_int64);
-    }
-
-
-    char *inc_name = strdup("Inc");
-    if (inc_name != NULL) {
-        KgpcType *inc_type = create_procedure_type(NULL, NULL);
-        assert(inc_type != NULL && "Failed to create Inc procedure type");
-        AddBuiltinProc_Typed(symtab, inc_name, inc_type);
-        destroy_kgpc_type(inc_type);
-        free(inc_name);
-    }
-
-    char *dec_name = strdup("Dec");
-    if (dec_name != NULL) {
-        KgpcType *dec_type = create_procedure_type(NULL, NULL);
-        assert(dec_type != NULL && "Failed to create Dec procedure type");
-        AddBuiltinProc_Typed(symtab, dec_name, dec_type);
-        destroy_kgpc_type(dec_type);
-        free(dec_name);
-    }
-
-    char *include_name = strdup("Include");
-    if (include_name != NULL) {
-        KgpcType *include_type = create_procedure_type(NULL, NULL);
-        assert(include_type != NULL && "Failed to create Include procedure type");
-        AddBuiltinProc_Typed(symtab, include_name, include_type);
-        destroy_kgpc_type(include_type);
-        free(include_name);
-    }
-
-    char *exclude_name = strdup("Exclude");
-    if (exclude_name != NULL) {
-        KgpcType *exclude_type = create_procedure_type(NULL, NULL);
-        assert(exclude_type != NULL && "Failed to create Exclude procedure type");
-        AddBuiltinProc_Typed(symtab, exclude_name, exclude_type);
-        destroy_kgpc_type(exclude_type);
-        free(exclude_name);
-    }
-
-
-    char *new_name = strdup("New");
-    if (new_name != NULL) {
-        KgpcType *new_type = create_procedure_type(NULL, NULL);
-        assert(new_type != NULL && "Failed to create New procedure type");
-        AddBuiltinProc_Typed(symtab, new_name, new_type);
-        destroy_kgpc_type(new_type);
-        free(new_name);
-    }
-
-    char *dispose_name = strdup("Dispose");
-    if (dispose_name != NULL) {
-        KgpcType *dispose_type = create_procedure_type(NULL, NULL);
-        assert(dispose_type != NULL && "Failed to create Dispose procedure type");
-        AddBuiltinProc_Typed(symtab, dispose_name, dispose_type);
-        destroy_kgpc_type(dispose_type);
-        free(dispose_name);
-    }
-
-    char *assert_name = strdup("Assert");
-    if (assert_name != NULL) {
-        KgpcType *assert_type = create_procedure_type(NULL, NULL);
-        assert(assert_type != NULL && "Failed to create Assert procedure type");
-        AddBuiltinProc_Typed(symtab, assert_name, assert_type);
-        destroy_kgpc_type(assert_type);
-        free(assert_name);
+        static const int swap_types[] = {INT_TYPE, LONGINT_TYPE, INT64_TYPE};
+        for (size_t i = 0; i < sizeof(swap_types) / sizeof(swap_types[0]); ++i)
+            register_unary_builtin_func(symtab, "SwapEndian", "AValue", swap_types[i], swap_types[i]);
     }
 
     /* Builtin functions - functions have return types */
-    char *length_name = strdup("Length");
-    if (length_name != NULL) {
-        KgpcType *return_type = kgpc_type_from_var_type(HASHVAR_LONGINT);
-        assert(return_type != NULL && "Failed to create return type for Length");
-        KgpcType *length_type = create_procedure_type(NULL, return_type);
-        assert(length_type != NULL && "Failed to create Length function type");
-        AddBuiltinFunction_Typed(symtab, length_name, length_type);
-        destroy_kgpc_type(length_type);
-        destroy_kgpc_type(return_type);
-        free(length_name);
-    }
-
-    char *getmem_func = strdup("GetMem");
-    if (getmem_func != NULL) {
-        KgpcType *return_type = create_primitive_type(POINTER_TYPE);
-        assert(return_type != NULL && "Failed to create return type for GetMem");
-        KgpcType *getmem_type = create_procedure_type(NULL, return_type);
-        assert(getmem_type != NULL && "Failed to create GetMem function type");
-        AddBuiltinFunction_Typed(symtab, getmem_func, getmem_type);
-        destroy_kgpc_type(getmem_type);
-        destroy_kgpc_type(return_type);
-        free(getmem_func);
+    {
+        typedef struct { const char *name; int return_tag; } SimpleBuiltinFunc;
+        static const SimpleBuiltinFunc simple_funcs[] = {
+            {"Length",       LONGINT_TYPE},
+            {"GetMem",       POINTER_TYPE},
+            {"ToSingleByteFileSystemEncodedFileName", STRING_TYPE},
+            {"ArrayStringToPPchar", POINTER_TYPE},
+            {"Copy",         STRING_TYPE},
+            {"Concat",       STRING_TYPE},
+            {"EOF",          BOOL},
+            {"EOLN",         BOOL},
+            {"SizeOf",       LONGINT_TYPE},
+            {"Chr",          CHAR_TYPE},
+            {"Ord",          LONGINT_TYPE},
+            {"Odd",          BOOL},
+            {"UpCase",       CHAR_TYPE},
+            {"Sqr",          LONGINT_TYPE},
+            {"Ln",           REAL_TYPE},
+            {"Exp",          REAL_TYPE},
+            {"Random",       REAL_TYPE},
+            {"RandomRange",  LONGINT_TYPE},
+            {"High",         LONGINT_TYPE},
+        };
+        for (size_t i = 0; i < sizeof(simple_funcs) / sizeof(simple_funcs[0]); ++i)
+            register_simple_builtin_func(symtab, simple_funcs[i].name, simple_funcs[i].return_tag);
     }
     {
         const char *interlocked_name = "InterlockedExchangeAdd";
-
-        ListNode_t *param_target = semcheck_create_builtin_param_var("Target", INT_TYPE);
-        ListNode_t *param_value = semcheck_create_builtin_param("Source", INT_TYPE);
-        ListNode_t *params = ConcatList(param_target, param_value);
-        KgpcType *return_type = create_primitive_type(INT_TYPE);
-        KgpcType *interlocked_type = create_procedure_type(params, return_type);
-        if (interlocked_type != NULL)
+        static const int interlocked_types[] = {INT_TYPE, LONGINT_TYPE, INT64_TYPE, POINTER_TYPE};
+        for (size_t i = 0; i < sizeof(interlocked_types) / sizeof(interlocked_types[0]); ++i)
         {
-            AddBuiltinFunction_Typed(symtab, strdup(interlocked_name), interlocked_type);
-            destroy_kgpc_type(interlocked_type);
+            int t = interlocked_types[i];
+            ListNode_t *param_target = semcheck_create_builtin_param_var("Target", t);
+            ListNode_t *param_value = semcheck_create_builtin_param("Source", t);
+            ListNode_t *params = ConcatList(param_target, param_value);
+            KgpcType *return_type = create_primitive_type(t);
+            KgpcType *interlocked_type = create_procedure_type(params, return_type);
+            if (interlocked_type != NULL)
+            {
+                AddBuiltinFunction_Typed(symtab, strdup(interlocked_name), interlocked_type);
+                destroy_kgpc_type(interlocked_type);
+            }
+            if (params != NULL)
+                DestroyList(params);
+            destroy_kgpc_type(return_type);
         }
-        if (params != NULL)
-            DestroyList(params);
-        destroy_kgpc_type(return_type);
-
-        param_target = semcheck_create_builtin_param_var("Target", LONGINT_TYPE);
-        param_value = semcheck_create_builtin_param("Source", LONGINT_TYPE);
-        params = ConcatList(param_target, param_value);
-        return_type = create_primitive_type(LONGINT_TYPE);
-        interlocked_type = create_procedure_type(params, return_type);
-        if (interlocked_type != NULL)
-        {
-            AddBuiltinFunction_Typed(symtab, strdup(interlocked_name), interlocked_type);
-            destroy_kgpc_type(interlocked_type);
-        }
-        if (params != NULL)
-            DestroyList(params);
-        destroy_kgpc_type(return_type);
-
-        param_target = semcheck_create_builtin_param_var("Target", INT64_TYPE);
-        param_value = semcheck_create_builtin_param("Source", INT64_TYPE);
-        params = ConcatList(param_target, param_value);
-        return_type = create_primitive_type(INT64_TYPE);
-        interlocked_type = create_procedure_type(params, return_type);
-        if (interlocked_type != NULL)
-        {
-            AddBuiltinFunction_Typed(symtab, strdup(interlocked_name), interlocked_type);
-            destroy_kgpc_type(interlocked_type);
-        }
-        if (params != NULL)
-            DestroyList(params);
-        destroy_kgpc_type(return_type);
-
-        param_target = semcheck_create_builtin_param_var("Target", POINTER_TYPE);
-        param_value = semcheck_create_builtin_param("Source", POINTER_TYPE);
-        params = ConcatList(param_target, param_value);
-        return_type = create_primitive_type(POINTER_TYPE);
-        interlocked_type = create_procedure_type(params, return_type);
-        if (interlocked_type != NULL)
-        {
-            AddBuiltinFunction_Typed(symtab, strdup(interlocked_name), interlocked_type);
-            destroy_kgpc_type(interlocked_type);
-        }
-        if (params != NULL)
-            DestroyList(params);
-        destroy_kgpc_type(return_type);
-    }
-    char *to_singlebyte = strdup("ToSingleByteFileSystemEncodedFileName");
-    if (to_singlebyte != NULL) {
-        KgpcType *return_type = kgpc_type_from_var_type(HASHVAR_PCHAR);
-        assert(return_type != NULL && "Failed to create return type for ToSingleByteFileSystemEncodedFileName");
-        KgpcType *to_singlebyte_type = create_procedure_type(NULL, return_type);
-        assert(to_singlebyte_type != NULL && "Failed to create ToSingleByteFileSystemEncodedFileName function type");
-        AddBuiltinFunction_Typed(symtab, to_singlebyte, to_singlebyte_type);
-        destroy_kgpc_type(to_singlebyte_type);
-        destroy_kgpc_type(return_type);
-        free(to_singlebyte);
-    }
-    char *array_to_ppchar = strdup("ArrayStringToPPchar");
-    if (array_to_ppchar != NULL) {
-        KgpcType *return_type = create_primitive_type(POINTER_TYPE);
-        assert(return_type != NULL && "Failed to create return type for ArrayStringToPPchar");
-        KgpcType *array_to_ppchar_type = create_procedure_type(NULL, return_type);
-        assert(array_to_ppchar_type != NULL && "Failed to create ArrayStringToPPchar function type");
-        AddBuiltinFunction_Typed(symtab, array_to_ppchar, array_to_ppchar_type);
-        destroy_kgpc_type(array_to_ppchar_type);
-        destroy_kgpc_type(return_type);
-        free(array_to_ppchar);
-    }
-
-    char *copy_name = strdup("Copy");
-    if (copy_name != NULL) {
-        KgpcType *return_type = kgpc_type_from_var_type(HASHVAR_PCHAR);
-        assert(return_type != NULL && "Failed to create return type for Copy");
-        KgpcType *copy_type = create_procedure_type(NULL, return_type);
-        assert(copy_type != NULL && "Failed to create Copy function type");
-        AddBuiltinFunction_Typed(symtab, copy_name, copy_type);
-        destroy_kgpc_type(copy_type);
-        destroy_kgpc_type(return_type);
-        free(copy_name);
-    }
-    char *concat_name = strdup("Concat");
-    if (concat_name != NULL) {
-        KgpcType *return_type = create_primitive_type(STRING_TYPE);
-        assert(return_type != NULL && "Failed to create return type for Concat");
-        KgpcType *concat_type = create_procedure_type(NULL, return_type);
-        assert(concat_type != NULL && "Failed to create Concat function type");
-        AddBuiltinFunction_Typed(symtab, concat_name, concat_type);
-        destroy_kgpc_type(concat_type);
-        destroy_kgpc_type(return_type);
-        free(concat_name);
-    }
-    char *eof_name = strdup("EOF");
-    if (eof_name != NULL) {
-        KgpcType *return_type = kgpc_type_from_var_type(HASHVAR_BOOLEAN);
-        assert(return_type != NULL && "Failed to create return type for EOF");
-        KgpcType *eof_type = create_procedure_type(NULL, return_type);
-        assert(eof_type != NULL && "Failed to create EOF function type");
-        AddBuiltinFunction_Typed(symtab, eof_name, eof_type);
-        destroy_kgpc_type(eof_type);
-        destroy_kgpc_type(return_type);
-        free(eof_name);
-    }
-
-    char *eoln_name = strdup("EOLN");
-    if (eoln_name != NULL) {
-        KgpcType *return_type = kgpc_type_from_var_type(HASHVAR_BOOLEAN);
-        assert(return_type != NULL && "Failed to create return type for EOLN");
-        KgpcType *eoln_type = create_procedure_type(NULL, return_type);
-        assert(eoln_type != NULL && "Failed to create EOLN function type");
-        AddBuiltinFunction_Typed(symtab, eoln_name, eoln_type);
-        destroy_kgpc_type(eoln_type);
-        destroy_kgpc_type(return_type);
-        free(eoln_name);
-    }
-
-    char *sizeof_name = strdup("SizeOf");
-    if (sizeof_name != NULL) {
-        KgpcType *return_type = kgpc_type_from_var_type(HASHVAR_LONGINT);
-        assert(return_type != NULL && "Failed to create return type for SizeOf");
-        KgpcType *sizeof_type = create_procedure_type(NULL, return_type);
-        assert(sizeof_type != NULL && "Failed to create SizeOf function type");
-        AddBuiltinFunction_Typed(symtab, sizeof_name, sizeof_type);
-        destroy_kgpc_type(sizeof_type);
-        destroy_kgpc_type(return_type);
-        free(sizeof_name);
-    }
-
-    char *chr_name = strdup("Chr");
-    if (chr_name != NULL) {
-        KgpcType *return_type = kgpc_type_from_var_type(HASHVAR_CHAR);
-        assert(return_type != NULL && "Failed to create return type for Chr");
-        KgpcType *chr_type = create_procedure_type(NULL, return_type);
-        assert(chr_type != NULL && "Failed to create Chr function type");
-        AddBuiltinFunction_Typed(symtab, chr_name, chr_type);
-        destroy_kgpc_type(chr_type);
-        destroy_kgpc_type(return_type);
-        free(chr_name);
-    }
-
-    char *ord_name = strdup("Ord");
-    if (ord_name != NULL) {
-        KgpcType *return_type = kgpc_type_from_var_type(HASHVAR_LONGINT);
-        assert(return_type != NULL && "Failed to create return type for Ord");
-        KgpcType *ord_type = create_procedure_type(NULL, return_type);
-        assert(ord_type != NULL && "Failed to create Ord function type");
-        AddBuiltinFunction_Typed(symtab, ord_name, ord_type);
-        destroy_kgpc_type(ord_type);
-        destroy_kgpc_type(return_type);
-        free(ord_name);
-    }
-
-    char *odd_name = strdup("Odd");
-    if (odd_name != NULL) {
-        KgpcType *return_type = kgpc_type_from_var_type(HASHVAR_BOOLEAN);
-        assert(return_type != NULL && "Failed to create return type for Odd");
-        KgpcType *odd_type = create_procedure_type(NULL, return_type);
-        assert(odd_type != NULL && "Failed to create Odd function type");
-        AddBuiltinFunction_Typed(symtab, odd_name, odd_type);
-        destroy_kgpc_type(odd_type);
-        destroy_kgpc_type(return_type);
-        free(odd_name);
-    }
-    char *upcase_name = strdup("UpCase");
-    if (upcase_name != NULL) {
-        KgpcType *return_type = kgpc_type_from_var_type(HASHVAR_CHAR);
-        assert(return_type != NULL && "Failed to create return type for UpCase");
-        KgpcType *upcase_type = create_procedure_type(NULL, return_type);
-        assert(upcase_type != NULL && "Failed to create UpCase function type");
-        AddBuiltinFunction_Typed(symtab, upcase_name, upcase_type);
-        destroy_kgpc_type(upcase_type);
-        destroy_kgpc_type(return_type);
-        free(upcase_name);
-    }
-
-    char *sqr_name = strdup("Sqr");
-    if (sqr_name != NULL) {
-        KgpcType *return_type = kgpc_type_from_var_type(HASHVAR_LONGINT);
-        assert(return_type != NULL && "Failed to create return type for Sqr");
-        KgpcType *sqr_type = create_procedure_type(NULL, return_type);
-        assert(sqr_type != NULL && "Failed to create Sqr function type");
-        AddBuiltinFunction_Typed(symtab, sqr_name, sqr_type);
-        destroy_kgpc_type(sqr_type);
-        destroy_kgpc_type(return_type);
-        free(sqr_name);
-    }
-
-    char *ln_name = strdup("Ln");
-    if (ln_name != NULL) {
-        KgpcType *return_type = kgpc_type_from_var_type(HASHVAR_REAL);
-        assert(return_type != NULL && "Failed to create return type for Ln");
-        KgpcType *ln_type = create_procedure_type(NULL, return_type);
-        assert(ln_type != NULL && "Failed to create Ln function type");
-        AddBuiltinFunction_Typed(symtab, ln_name, ln_type);
-        destroy_kgpc_type(ln_type);
-        destroy_kgpc_type(return_type);
-        free(ln_name);
-    }
-
-    char *exp_name = strdup("Exp");
-    if (exp_name != NULL) {
-        KgpcType *return_type = kgpc_type_from_var_type(HASHVAR_REAL);
-        assert(return_type != NULL && "Failed to create return type for Exp");
-        KgpcType *exp_type = create_procedure_type(NULL, return_type);
-        assert(exp_type != NULL && "Failed to create Exp function type");
-        AddBuiltinFunction_Typed(symtab, exp_name, exp_type);
-        destroy_kgpc_type(exp_type);
-        destroy_kgpc_type(return_type);
-        free(exp_name);
-    }
-
-    char *random_name = strdup("Random");
-    if (random_name != NULL) {
-        KgpcType *return_type = kgpc_type_from_var_type(HASHVAR_REAL);
-        assert(return_type != NULL && "Failed to create return type for Random");
-        KgpcType *random_type = create_procedure_type(NULL, return_type);
-        assert(random_type != NULL && "Failed to create Random function type");
-        AddBuiltinFunction_Typed(symtab, random_name, random_type);
-        destroy_kgpc_type(random_type);
-        destroy_kgpc_type(return_type);
-        free(random_name);
-    }
-    char *randomrange_name = strdup("RandomRange");
-    if (randomrange_name != NULL) {
-        KgpcType *return_type = kgpc_type_from_var_type(HASHVAR_LONGINT);
-        assert(return_type != NULL && "Failed to create return type for RandomRange");
-        KgpcType *randomrange_type = create_procedure_type(NULL, return_type);
-        assert(randomrange_type != NULL && "Failed to create RandomRange function type");
-        AddBuiltinFunction_Typed(symtab, randomrange_name, randomrange_type);
-        destroy_kgpc_type(randomrange_type);
-        destroy_kgpc_type(return_type);
-        free(randomrange_name);
-    }
-
-    char *high_name = strdup("High");
-    if (high_name != NULL) {
-        KgpcType *return_type = kgpc_type_from_var_type(HASHVAR_LONGINT);
-        assert(return_type != NULL && "Failed to create return type for High");
-        KgpcType *high_type = create_procedure_type(NULL, return_type);
-        assert(high_type != NULL && "Failed to create High function type");
-        AddBuiltinFunction_Typed(symtab, high_name, high_type);
-        destroy_kgpc_type(high_type);
-        destroy_kgpc_type(return_type);
-        free(high_name);
     }
 
     /* Standard I/O file variables - stdin, stdout, stderr */
@@ -11034,55 +10388,9 @@ void semcheck_add_builtins(SymTab_t *symtab)
 
     /* PopCnt: function PopCnt(AValue: QWord): Byte - counts set bits */
     {
-        const char *func_name = "PopCnt";
-        /* Overloads for different integer sizes */
-        ListNode_t *param_byte = semcheck_create_builtin_param("AValue", BYTE_TYPE);
-        KgpcType *return_type_byte = create_primitive_type(BYTE_TYPE);
-        KgpcType *popcnt_byte = create_procedure_type(param_byte, return_type_byte);
-        if (popcnt_byte != NULL)
-        {
-            AddBuiltinFunction_Typed(symtab, strdup(func_name), popcnt_byte);
-            destroy_kgpc_type(popcnt_byte);
-        }
-        if (param_byte != NULL)
-            DestroyList(param_byte);
-        destroy_kgpc_type(return_type_byte);
-
-        ListNode_t *param_word = semcheck_create_builtin_param("AValue", WORD_TYPE);
-        KgpcType *return_type_word = create_primitive_type(BYTE_TYPE);
-        KgpcType *popcnt_word = create_procedure_type(param_word, return_type_word);
-        if (popcnt_word != NULL)
-        {
-            AddBuiltinFunction_Typed(symtab, strdup(func_name), popcnt_word);
-            destroy_kgpc_type(popcnt_word);
-        }
-        if (param_word != NULL)
-            DestroyList(param_word);
-        destroy_kgpc_type(return_type_word);
-
-        ListNode_t *param_dword = semcheck_create_builtin_param("AValue", LONGWORD_TYPE);
-        KgpcType *return_type_dword = create_primitive_type(BYTE_TYPE);
-        KgpcType *popcnt_dword = create_procedure_type(param_dword, return_type_dword);
-        if (popcnt_dword != NULL)
-        {
-            AddBuiltinFunction_Typed(symtab, strdup(func_name), popcnt_dword);
-            destroy_kgpc_type(popcnt_dword);
-        }
-        if (param_dword != NULL)
-            DestroyList(param_dword);
-        destroy_kgpc_type(return_type_dword);
-
-        ListNode_t *param_qword = semcheck_create_builtin_param("AValue", QWORD_TYPE);
-        KgpcType *return_type_qword = create_primitive_type(BYTE_TYPE);
-        KgpcType *popcnt_qword = create_procedure_type(param_qword, return_type_qword);
-        if (popcnt_qword != NULL)
-        {
-            AddBuiltinFunction_Typed(symtab, strdup(func_name), popcnt_qword);
-            destroy_kgpc_type(popcnt_qword);
-        }
-        if (param_qword != NULL)
-            DestroyList(param_qword);
-        destroy_kgpc_type(return_type_qword);
+        static const int popcnt_types[] = {BYTE_TYPE, WORD_TYPE, LONGWORD_TYPE, QWORD_TYPE};
+        for (size_t i = 0; i < sizeof(popcnt_types) / sizeof(popcnt_types[0]); ++i)
+            register_unary_builtin_func(symtab, "PopCnt", "AValue", popcnt_types[i], BYTE_TYPE);
     }
 
     /* IndexChar: function IndexChar(const buf; len: SizeInt; b: Char): SizeInt */
@@ -11211,73 +10519,42 @@ void semcheck_add_builtins(SymTab_t *symtab)
      * In FPC these are compiler intrinsics that work on any ordinal/pointer type.
      * We register them with Integer parameters as a common overload. */
     {
-        /* AtomicCmpExchange(var Target: Integer; NewValue: Integer; Comparand: Integer): Integer */
+        /* AtomicCmpExchange(var Target: T; NewValue: T; Comparand: T): T */
         {
-            ListNode_t *p1 = semcheck_create_builtin_param("Target", INT_TYPE);
-            ListNode_t *p2 = semcheck_create_builtin_param("NewValue", INT_TYPE);
-            ListNode_t *p3 = semcheck_create_builtin_param("Comparand", INT_TYPE);
-            p1->next = p2;
-            p2->next = p3;
-            KgpcType *return_type = create_primitive_type(INT_TYPE);
-            KgpcType *func_type = create_procedure_type(p1, return_type);
-            if (func_type != NULL)
+            static const int cmpxchg_types[] = {INT_TYPE, POINTER_TYPE};
+            for (size_t i = 0; i < sizeof(cmpxchg_types) / sizeof(cmpxchg_types[0]); ++i)
             {
-                AddBuiltinFunction_Typed(symtab, strdup("AtomicCmpExchange"), func_type);
-                AddBuiltinFunction_Typed(symtab, strdup("InterlockedCompareExchange"), func_type);
-                destroy_kgpc_type(func_type);
+                int t = cmpxchg_types[i];
+                ListNode_t *p1 = semcheck_create_builtin_param("Target", t);
+                ListNode_t *p2 = semcheck_create_builtin_param("NewValue", t);
+                ListNode_t *p3 = semcheck_create_builtin_param("Comparand", t);
+                p1->next = p2;
+                p2->next = p3;
+                KgpcType *return_type = create_primitive_type(t);
+                KgpcType *func_type = create_procedure_type(p1, return_type);
+                if (func_type != NULL)
+                {
+                    char *n1 = strdup("AtomicCmpExchange");
+                    char *n2 = strdup("InterlockedCompareExchange");
+                    AddBuiltinFunction_Typed(symtab, n1, func_type);
+                    AddBuiltinFunction_Typed(symtab, n2, func_type);
+                    destroy_kgpc_type(func_type);
+                    free(n1);
+                    free(n2);
+                }
+                DestroyList(p1);
+                destroy_kgpc_type(return_type);
             }
-            DestroyList(p1);
-            destroy_kgpc_type(return_type);
         }
-        /* Pointer overload: AtomicCmpExchange(var Target: Pointer; NewValue: Pointer; Comparand: Pointer): Pointer */
+        /* AtomicExchange(var Target: T; Value: T): T */
         {
-            ListNode_t *p1 = semcheck_create_builtin_param("Target", POINTER_TYPE);
-            ListNode_t *p2 = semcheck_create_builtin_param("NewValue", POINTER_TYPE);
-            ListNode_t *p3 = semcheck_create_builtin_param("Comparand", POINTER_TYPE);
-            p1->next = p2;
-            p2->next = p3;
-            KgpcType *return_type = create_primitive_type(POINTER_TYPE);
-            KgpcType *func_type = create_procedure_type(p1, return_type);
-            if (func_type != NULL)
+            static const int xchg_types[] = {INT_TYPE, POINTER_TYPE};
+            for (size_t i = 0; i < sizeof(xchg_types) / sizeof(xchg_types[0]); ++i)
             {
-                AddBuiltinFunction_Typed(symtab, strdup("AtomicCmpExchange"), func_type);
-                AddBuiltinFunction_Typed(symtab, strdup("InterlockedCompareExchange"), func_type);
-                destroy_kgpc_type(func_type);
+                int t = xchg_types[i];
+                register_binary_builtin_func(symtab, "AtomicExchange", "Target", t, "Value", t, t);
+                register_binary_builtin_func(symtab, "InterlockedExchange", "Target", t, "Value", t, t);
             }
-            DestroyList(p1);
-            destroy_kgpc_type(return_type);
-        }
-        /* AtomicExchange(var Target: Integer; Value: Integer): Integer */
-        {
-            ListNode_t *p1 = semcheck_create_builtin_param("Target", INT_TYPE);
-            ListNode_t *p2 = semcheck_create_builtin_param("Value", INT_TYPE);
-            p1->next = p2;
-            KgpcType *return_type = create_primitive_type(INT_TYPE);
-            KgpcType *func_type = create_procedure_type(p1, return_type);
-            if (func_type != NULL)
-            {
-                AddBuiltinFunction_Typed(symtab, strdup("AtomicExchange"), func_type);
-                AddBuiltinFunction_Typed(symtab, strdup("InterlockedExchange"), func_type);
-                destroy_kgpc_type(func_type);
-            }
-            DestroyList(p1);
-            destroy_kgpc_type(return_type);
-        }
-        /* Pointer overload: AtomicExchange(var Target: Pointer; Value: Pointer): Pointer */
-        {
-            ListNode_t *p1 = semcheck_create_builtin_param("Target", POINTER_TYPE);
-            ListNode_t *p2 = semcheck_create_builtin_param("Value", POINTER_TYPE);
-            p1->next = p2;
-            KgpcType *return_type = create_primitive_type(POINTER_TYPE);
-            KgpcType *func_type = create_procedure_type(p1, return_type);
-            if (func_type != NULL)
-            {
-                AddBuiltinFunction_Typed(symtab, strdup("AtomicExchange"), func_type);
-                AddBuiltinFunction_Typed(symtab, strdup("InterlockedExchange"), func_type);
-                destroy_kgpc_type(func_type);
-            }
-            DestroyList(p1);
-            destroy_kgpc_type(return_type);
         }
         /* AtomicIncrement/AtomicDecrement(var Target: Integer; Value: Integer): Integer */
         {
@@ -11288,48 +10565,15 @@ void semcheck_add_builtins(SymTab_t *symtab)
             for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++)
             {
                 /* One-arg overload */
-                {
-                    ListNode_t *p1 = semcheck_create_builtin_param("Target", INT_TYPE);
-                    KgpcType *return_type = create_primitive_type(INT_TYPE);
-                    KgpcType *func_type = create_procedure_type(p1, return_type);
-                    if (func_type != NULL)
-                    {
-                        AddBuiltinFunction_Typed(symtab, strdup(names[i]), func_type);
-                        destroy_kgpc_type(func_type);
-                    }
-                    DestroyList(p1);
-                    destroy_kgpc_type(return_type);
-                }
+                register_unary_builtin_func(symtab, names[i], "Target", INT_TYPE, INT_TYPE);
                 /* Two-arg overload */
-                {
-                    ListNode_t *p1 = semcheck_create_builtin_param("Target", INT_TYPE);
-                    ListNode_t *p2 = semcheck_create_builtin_param("Value", INT_TYPE);
-                    p1->next = p2;
-                    KgpcType *return_type = create_primitive_type(INT_TYPE);
-                    KgpcType *func_type = create_procedure_type(p1, return_type);
-                    if (func_type != NULL)
-                    {
-                        AddBuiltinFunction_Typed(symtab, strdup(names[i]), func_type);
-                        destroy_kgpc_type(func_type);
-                    }
-                    DestroyList(p1);
-                    destroy_kgpc_type(return_type);
-                }
+                register_binary_builtin_func(symtab, names[i], "Target", INT_TYPE, "Value", INT_TYPE, INT_TYPE);
             }
         }
         /* bitsizeof(T): Integer - returns size in bits */
         {
-            ListNode_t *p1 = semcheck_create_builtin_param("x", INT_TYPE);
-            KgpcType *return_type = create_primitive_type(INT_TYPE);
-            KgpcType *func_type = create_procedure_type(p1, return_type);
-            if (func_type != NULL)
-            {
-                AddBuiltinFunction_Typed(symtab, strdup("bitsizeof"), func_type);
-                AddBuiltinFunction_Typed(symtab, strdup("BitSizeOf"), func_type);
-                destroy_kgpc_type(func_type);
-            }
-            DestroyList(p1);
-            destroy_kgpc_type(return_type);
+            register_unary_builtin_func(symtab, "bitsizeof", "x", INT_TYPE, INT_TYPE);
+            register_unary_builtin_func(symtab, "BitSizeOf", "x", INT_TYPE, INT_TYPE);
         }
         /* Finalize(var v): frees managed resources.
          * POINTER_TYPE is used as a placeholder parameter type; actual type
@@ -12204,35 +11448,17 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         if (getenv("KGPC_DEBUG_TYPE_HELPER") != NULL && ids && ids->cur)
                             fprintf(stderr, "[KGPC] semcheck_decls: %s has type_id=%s but type_node is NULL\n",
                                 (char*)ids->cur, type_id);
-                        /* Check for builtin types */
-                        if (pascal_identifier_equals(type_id, "Integer"))
-                            var_type = HASHVAR_INTEGER;
-                        else if (pascal_identifier_equals(type_id, "LongInt"))
-                            var_type = HASHVAR_LONGINT;
-                        else if (pascal_identifier_equals(type_id, "SizeUInt") || pascal_identifier_equals(type_id, "QWord") || 
-                                 pascal_identifier_equals(type_id, "NativeUInt"))
-                            var_type = HASHVAR_LONGINT;  /* Unsigned 64-bit on x86-64 */
-                        else if (pascal_identifier_equals(type_id, "Real") || pascal_identifier_equals(type_id, "Double"))
-                            var_type = HASHVAR_REAL;
-                        else if (pascal_identifier_equals(type_id, "String") || pascal_identifier_equals(type_id, "AnsiString") ||
-                                 pascal_identifier_equals(type_id, "RawByteString") ||
-                                 pascal_identifier_equals(type_id, "UnicodeString") ||
-                                 pascal_identifier_equals(type_id, "WideString"))
-                            var_type = HASHVAR_PCHAR;
-                        else if (pascal_identifier_equals(type_id, "ShortString"))
+                        /* Use the central type-name mapper first */
+                        int tag = semcheck_map_builtin_type_name_local(type_id);
+                        if (tag == SHORTSTRING_TYPE)
                         {
                             /* ShortString is array[0..255] of Char with length at index 0 */
                             var_type = HASHVAR_ARRAY;
                         }
-                        else if (pascal_identifier_equals(type_id, "Char") ||
-                                 pascal_identifier_equals(type_id, "AnsiChar"))
-                            var_type = HASHVAR_CHAR;
-                        else if (pascal_identifier_equals(type_id, "Boolean"))
-                            var_type = HASHVAR_BOOLEAN;
-                        else if (pascal_identifier_equals(type_id, "Pointer"))
-                            var_type = HASHVAR_POINTER;
-                        else if (pascal_identifier_equals(type_id, "Byte") || pascal_identifier_equals(type_id, "Word"))
-                            var_type = HASHVAR_INTEGER;
+                        else if (tag != UNKNOWN_TYPE)
+                        {
+                            var_type = map_type_tag_to_var_type(tag);
+                        }
                         /* Handle FPC system pointer types (PInt64, PByte, etc.) */
                         else if (semcheck_is_builtin_pointer_type_id(type_id))
                             var_type = HASHVAR_POINTER;
