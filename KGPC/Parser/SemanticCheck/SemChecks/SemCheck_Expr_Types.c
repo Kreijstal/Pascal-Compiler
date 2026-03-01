@@ -3833,6 +3833,42 @@ int semcheck_addressof(int *type_return,
             }
         }
     }
+    /* Handle @obj.Method - address of a method through record access.
+     * The inner expression is EXPR_RECORD_ACCESS where the field is a method name.
+     * We need to detect this before semcheck converts it to a function call. */
+    else if (inner->type == EXPR_RECORD_ACCESS &&
+             inner->expr_data.record_access_data.field_id != NULL)
+    {
+        const char *field_id = inner->expr_data.record_access_data.field_id;
+        struct Expression *record_expr = inner->expr_data.record_access_data.record_expr;
+        if (record_expr != NULL)
+        {
+            /* Resolve the base expression to get its record type */
+            KgpcType *record_kgpc = NULL;
+            semcheck_expr_with_type(&record_kgpc, symtab, record_expr, max_scope_lev, NO_MUTATE);
+            int record_tag = semcheck_tag_from_kgpc(record_kgpc);
+            struct RecordType *rec_info = NULL;
+            if (record_tag == RECORD_TYPE && record_kgpc != NULL && kgpc_type_is_record(record_kgpc))
+                rec_info = kgpc_type_get_record(record_kgpc);
+            else if (record_tag == POINTER_TYPE && record_kgpc != NULL &&
+                     kgpc_type_is_pointer(record_kgpc) &&
+                     record_kgpc->info.points_to != NULL &&
+                     kgpc_type_is_record(record_kgpc->info.points_to))
+                rec_info = kgpc_type_get_record(record_kgpc->info.points_to);
+
+            if (rec_info != NULL)
+            {
+                HashNode_t *method_node = semcheck_find_class_method(symtab, rec_info, field_id, NULL);
+                if (method_node != NULL &&
+                    (method_node->hash_type == HASHTYPE_FUNCTION ||
+                     method_node->hash_type == HASHTYPE_PROCEDURE))
+                {
+                    inner_type = PROCEDURE;
+                    treated_as_proc_ref = 1;
+                }
+            }
+        }
+    }
 
     if (!treated_as_proc_ref)
     {
@@ -4056,6 +4092,52 @@ int semcheck_addressof(int *type_return,
                     {
                         kgpc_type_retain(proc_symbol->type);
                         expr->resolved_kgpc_type = create_pointer_type(proc_symbol->type);
+                    }
+                    else
+                    {
+                        expr->resolved_kgpc_type = create_pointer_type(NULL);
+                    }
+                }
+            }
+        }
+        else if (inner->type == EXPR_RECORD_ACCESS &&
+                 inner->expr_data.record_access_data.field_id != NULL)
+        {
+            /* @obj.Method - get the method symbol from the record type */
+            const char *field_id = inner->expr_data.record_access_data.field_id;
+            struct Expression *record_expr = inner->expr_data.record_access_data.record_expr;
+            struct RecordType *rec_info = NULL;
+
+            if (record_expr != NULL && record_expr->resolved_kgpc_type != NULL)
+            {
+                KgpcType *rt = record_expr->resolved_kgpc_type;
+                if (kgpc_type_is_record(rt))
+                    rec_info = kgpc_type_get_record(rt);
+                else if (kgpc_type_is_pointer(rt) &&
+                         rt->info.points_to != NULL &&
+                         kgpc_type_is_record(rt->info.points_to))
+                    rec_info = kgpc_type_get_record(rt->info.points_to);
+            }
+
+            if (rec_info != NULL)
+            {
+                struct RecordType *actual_owner = NULL;
+                HashNode_t *method_node = semcheck_find_class_method(symtab, rec_info, field_id, &actual_owner);
+                if (method_node != NULL &&
+                    (method_node->hash_type == HASHTYPE_FUNCTION ||
+                     method_node->hash_type == HASHTYPE_PROCEDURE))
+                {
+                    expr->expr_data.addr_data.expr = NULL;
+                    destroy_expr(inner);
+                    expr->type = EXPR_ADDR_OF_PROC;
+                    expr->expr_data.addr_of_proc_data.proc_mangled_id =
+                        method_node->mangled_id ? strdup(method_node->mangled_id) : NULL;
+                    expr->expr_data.addr_of_proc_data.proc_id =
+                        method_node->id ? strdup(method_node->id) : NULL;
+                    if (method_node->type != NULL)
+                    {
+                        kgpc_type_retain(method_node->type);
+                        expr->resolved_kgpc_type = create_pointer_type(method_node->type);
                     }
                     else
                     {
