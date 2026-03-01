@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <assert.h>
+#include <ctype.h>
 #include "identifier_utils.h"
 
 /* Hash table to map mangled_id -> Tree_t* (subprogram) */
@@ -511,7 +512,68 @@ static void mark_stmt_calls(struct Statement *stmt, SubprogramMap *map) {
         case STMT_LABEL:
             mark_stmt_calls(stmt->stmt_data.label_data.stmt, map);
             break;
-            
+
+        case STMT_ASM_BLOCK: {
+            /* Scan inline asm text for call/jmp/leaq/movq targets and mark
+               referenced subprograms as used so DCE doesn't eliminate them. */
+            const char *asm_code = stmt->stmt_data.asm_block_data.code;
+            if (asm_code != NULL) {
+                const char *p = asm_code;
+                while (*p != '\0') {
+                    /* Skip leading whitespace */
+                    while (*p != '\0' && isspace((unsigned char)*p)) p++;
+                    if (*p == '\0') break;
+
+                    /* Read mnemonic */
+                    const char *mnem_start = p;
+                    while (*p != '\0' && !isspace((unsigned char)*p) && *p != '\n') p++;
+                    size_t mnem_len = (size_t)(p - mnem_start);
+
+                    int is_ref_insn = 0;
+                    if ((mnem_len == 4 && strncmp(mnem_start, "call", 4) == 0) ||
+                        (mnem_len == 5 && strncmp(mnem_start, "callq", 5) == 0) ||
+                        (mnem_len == 3 && strncmp(mnem_start, "jmp", 3) == 0) ||
+                        (mnem_len == 4 && strncmp(mnem_start, "jmpq", 4) == 0) ||
+                        (mnem_len == 4 && strncmp(mnem_start, "leaq", 4) == 0) ||
+                        (mnem_len == 4 && strncmp(mnem_start, "movq", 4) == 0) ||
+                        (mnem_len == 3 && strncmp(mnem_start, "lea", 3) == 0) ||
+                        (mnem_len == 3 && strncmp(mnem_start, "mov", 3) == 0)) {
+                        is_ref_insn = 1;
+                    }
+
+                    if (is_ref_insn) {
+                        /* Skip whitespace after mnemonic */
+                        while (*p != '\0' && *p != '\n' && isspace((unsigned char)*p)) p++;
+                        /* Extract operand: a symbol name before (, or end of line/comma */
+                        const char *sym_start = p;
+                        while (*p != '\0' && *p != '\n' && *p != '(' && *p != ',' &&
+                               *p != ' ' && *p != '\t') p++;
+                        size_t sym_len = (size_t)(p - sym_start);
+                        if (sym_len > 0 && sym_len < 256) {
+                            char sym_buf[256];
+                            memcpy(sym_buf, sym_start, sym_len);
+                            sym_buf[sym_len] = '\0';
+                            /* Strip leading $ or * prefix */
+                            const char *sym = sym_buf;
+                            if (*sym == '$' || *sym == '*') sym++;
+                            /* Skip purely numeric operands and register refs */
+                            if (*sym != '\0' && *sym != '%' && *sym != '-' &&
+                                !(*sym >= '0' && *sym <= '9')) {
+                                Tree_t *found = map_find(map, sym);
+                                if (found != NULL) {
+                                    mark_subprogram_recursive(found, map);
+                                }
+                            }
+                        }
+                    }
+                    /* Advance to next line */
+                    while (*p != '\0' && *p != '\n') p++;
+                    if (*p == '\n') p++;
+                }
+            }
+            break;
+        }
+
         default:
             /* Other statements don't have expressions to check */
             break;
