@@ -1397,8 +1397,8 @@ class TestCompiler(unittest.TestCase):
         self.assertIsNotNone(calloc_idx, "calloc call not found before constructor")
 
         self_moves = [
-            ln for ln in asm_lines[calloc_idx:call_idx]
-            if ln.startswith("\tmovq\t") and ln.endswith(", %rdi")
+            line for line in asm_lines[calloc_idx:call_idx]
+            if line.startswith("\tmovq\t") and line.endswith(", %rdi")
         ]
         self.assertEqual(
             len(self_moves), 1,
