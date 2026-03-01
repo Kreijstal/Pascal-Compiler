@@ -71,7 +71,7 @@ typedef struct Tree
             struct KgpcType *kgpc_type;
             int defined_in_unit;
             int unit_is_public;
-            char *source_unit_name;
+            int source_unit_index; /* Unit registry index (0 = local/unknown) */
             union
             {
                 struct
@@ -109,6 +109,7 @@ typedef struct Tree
             int has_nested_requiring_link;  /* 1 if this function has nested children that need static links */
             int defined_in_unit;
             int unit_is_public; /* 1 if declared in interface section, 0 if implementation only */
+            int source_unit_index; /* Unit registry index (0 = local/unknown) */
 
             ListNode_t *declarations;
             ListNode_t *subprograms;
