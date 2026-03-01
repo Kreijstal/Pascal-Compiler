@@ -3482,6 +3482,18 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                                         free(call_mangled);
                                     }
 
+                                    /* Fallback: use semcheck_resolve_overload when exact mangling
+                                     * doesn't match (e.g., dynamic array types with different alias names) */
+                                    if (parent_method_node == NULL)
+                                    {
+                                        HashNode_t *best_match = NULL;
+                                        int best_rank = 0, num_best = 0;
+                                        semcheck_resolve_overload(&best_match, &best_rank, &num_best,
+                                            parent_candidates, self_arg, symtab, call_expr, INT_MAX, 0);
+                                        if (best_match != NULL && num_best == 1)
+                                            parent_method_node = best_match;
+                                    }
+
                                     self_arg->next = NULL;
                                     destroy_expr(self_expr);
                                     free(self_arg);
