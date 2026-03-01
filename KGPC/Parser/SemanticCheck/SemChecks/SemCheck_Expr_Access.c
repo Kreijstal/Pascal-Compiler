@@ -349,14 +349,27 @@ int semcheck_arrayaccess(int *type_return,
                 field_access->expr_data.record_access_data.record_expr = array_expr;
                 field_access->expr_data.record_access_data.field_id = strdup(rec->default_indexed_property);
 
-                /* We need to semcheck this new expression so its array info is populated */
+                expr->expr_data.array_access_data.array_expr = field_access;
+                array_expr = field_access;
+
+                /* Try indexed property getter first.  For true indexed properties
+                 * (e.g. property Items[Index: Integer]: String read GetItem; default)
+                 * this rewrites the whole EXPR_ARRAY_ACCESS into a getter call and
+                 * returns the correct property result type.  We must do this BEFORE
+                 * calling semcheck_expr_with_type on the field_access, because that
+                 * would eagerly invoke the property getter without the index argument,
+                 * losing the indexed-property semantics. */
+                int ipg_result = semcheck_try_indexed_property_getter(type_return, symtab,
+                    expr, max_scope_lev, mutating);
+                if (ipg_result >= 0)
+                    return return_val + ipg_result;
+
+                /* Not an indexed property — evaluate the field access so array info
+                 * is populated (e.g. for a default-indexed field like FItems). */
                 int field_type = UNKNOWN_TYPE;
                 KgpcType *field_kgpc_type = NULL;
                 semcheck_expr_with_type(&field_kgpc_type, symtab, field_access, max_scope_lev, mutating);
                 field_type = semcheck_tag_from_kgpc(field_kgpc_type);
-
-                expr->expr_data.array_access_data.array_expr = field_access;
-                array_expr = field_access;
                 base_type = field_type;
                 /* Continue with the rest of semcheck using the new array_expr */
             }
