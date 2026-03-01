@@ -1191,17 +1191,20 @@ int semcheck_expr_main(SymTab_t *symtab, struct Expression *expr,
         case EXPR_ADDR_OF_PROC:
         {
             *type_return = POINTER_TYPE;
+            /* Resolve the type from the symbol table if it wasn't set at creation.
+             * This can happen when MangleFunctionNameFromCallSite triggers
+             * semcheck_expr_main on args before the main argument-checking pass. */
             if (expr->resolved_kgpc_type == NULL)
             {
-                KgpcType *proc_type = NULL;
-                if (expr->expr_data.addr_of_proc_data.procedure_symbol != NULL &&
-                    expr->expr_data.addr_of_proc_data.procedure_symbol->type != NULL)
-                    proc_type = expr->expr_data.addr_of_proc_data.procedure_symbol->type;
-
-                if (proc_type != NULL)
+                const char *lookup_id = expr->expr_data.addr_of_proc_data.proc_id;
+                assert(lookup_id != NULL &&
+                       "EXPR_ADDR_OF_PROC must have proc_id set");
+                HashNode_t *proc_node = NULL;
+                if (FindIdent(&proc_node, symtab, lookup_id) >= 0 &&
+                    proc_node != NULL && proc_node->type != NULL)
                 {
-                    kgpc_type_retain(proc_type);
-                    expr->resolved_kgpc_type = create_pointer_type(proc_type);
+                    kgpc_type_retain(proc_node->type);
+                    expr->resolved_kgpc_type = create_pointer_type(proc_node->type);
                 }
                 else
                 {
