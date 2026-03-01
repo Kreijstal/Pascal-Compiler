@@ -1533,6 +1533,11 @@ static int codegen_format_arg_kind_for_expr(struct Expression *expr)
     {
         case INT_TYPE:
         case LONGINT_TYPE:
+        case BYTE_TYPE:
+        case WORD_TYPE:
+        case LONGWORD_TYPE:
+        case INT64_TYPE:
+        case QWORD_TYPE:
         case ENUM_TYPE:
             return KGPC_TVAR_KIND_INT;
         case BOOL:
@@ -1584,7 +1589,8 @@ static ListNode_t *codegen_materialize_array_of_const(struct Expression *expr,
         if (kind < 0)
         {
             codegen_report_error(ctx,
-                "ERROR: Unsupported argument type in array of const literal.");
+                "ERROR: Unsupported argument type %d in array of const literal.",
+                expr_get_type_tag(element_expr));
             free_reg(get_reg_stack(), value_reg);
             return inst_list;
         }
