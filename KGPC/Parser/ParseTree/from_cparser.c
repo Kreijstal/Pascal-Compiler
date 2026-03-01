@@ -6134,6 +6134,12 @@ static struct ClassProperty *convert_property_decl(ast_t *property_node)
             cursor = cursor->next;
             continue;
         }
+        if (cursor->typ == PASCAL_T_DEFAULT_PROPERTY)
+        {
+            is_default = 1;
+            cursor = cursor->next;
+            continue;
+        }
         ast_t *unwrapped = unwrap_pascal_node(cursor);
         if (unwrapped == NULL)
         {

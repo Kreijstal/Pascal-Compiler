@@ -567,7 +567,7 @@ static combinator_t* create_property_decl_parser(void) {
         )),
         token(match(";")),
         // Optional trailing "default;" directive used in FGL-like properties
-        optional(seq(new_combinator(), PASCAL_T_NONE,
+        optional(seq(new_combinator(), PASCAL_T_DEFAULT_PROPERTY,
             token(keyword_ci("default")),
             optional(token(integer(PASCAL_T_INTEGER))),
             token(match(";")),
@@ -795,7 +795,7 @@ combinator_t* class_type(tag_t tag) {
         )),
         token(match(";")),
         // Optional trailing "default;" directive used in FGL-like properties
-        optional(seq(new_combinator(), PASCAL_T_NONE,
+        optional(seq(new_combinator(), PASCAL_T_DEFAULT_PROPERTY,
             token(keyword_ci("default")),
             optional(token(integer(PASCAL_T_INTEGER))),
             token(match(";")),
@@ -1211,7 +1211,7 @@ combinator_t* interface_type(tag_t tag) {
             NULL
         )),
         token(match(";")),
-        optional(seq(new_combinator(), PASCAL_T_NONE,
+        optional(seq(new_combinator(), PASCAL_T_DEFAULT_PROPERTY,
             token(keyword_ci("default")),
             optional(token(integer(PASCAL_T_INTEGER))),
             token(match(";")),
