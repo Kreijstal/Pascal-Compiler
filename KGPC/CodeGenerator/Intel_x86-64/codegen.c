@@ -2776,7 +2776,19 @@ static void codegen_emit_record_classvar_storage(CodeGenContext *ctx, SymTab_t *
             fprintf(ctx->output_file, "\t.zero\t%lld\n", class_var_size - offset);
     }
 
+    /* Emit stub TYPEINFO/VMT symbols for advanced records.
+     * This record was added to emitted_classes[], so the alias loop will
+     * generate .set directives referencing these symbols (e.g., for pointer
+     * type aliases like PPropInfo = ^TPropInfo).  Without these stubs,
+     * strict linkers like ld.lld report undefined symbol errors. */
     fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());
+    fprintf(ctx->output_file, "\t.align 8\n");
+    fprintf(ctx->output_file, ".globl %s_TYPEINFO\n", class_label);
+    fprintf(ctx->output_file, "%s_TYPEINFO:\n", class_label);
+    fprintf(ctx->output_file, "\t.quad\t0\n");  /* No parent class */
+    fprintf(ctx->output_file, ".globl %s_VMT\n", class_label);
+    fprintf(ctx->output_file, "%s_VMT:\n", class_label);
+    fprintf(ctx->output_file, "\t.quad\t%s_TYPEINFO\n", class_label);
 }
 
 /* Generate Virtual Method Tables (VMT) for classes with virtual methods */
