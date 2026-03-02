@@ -4275,6 +4275,39 @@ method_call_resolved:
     {
         if (id != NULL && pascal_identifier_equals(id, "AllocMem"))
             return semcheck_builtin_allocmem(type_return, symtab, expr, max_scope_lev);
+
+        /* WITH context fallback: if the function call couldn't be resolved in
+         * normal scope, try resolving via active WITH contexts.  This handles
+         * patterns like:  with SomeList.LockList do Add(Self);
+         * where Add is a method of the WITH target's class. */
+        if (id != NULL && with_context_count > 0)
+        {
+            struct Expression *with_expr = NULL;
+            int wm = semcheck_with_try_resolve_method(id, symtab, &with_expr, expr->line_num);
+            if (wm == 0 && with_expr != NULL)
+            {
+                /* Prepend the WITH context expression as Self argument */
+                ListNode_t *self_node = CreateListNode(with_expr, LIST_EXPR);
+                if (self_node != NULL)
+                {
+                    self_node->next = expr->expr_data.function_call_data.args_expr;
+                    expr->expr_data.function_call_data.args_expr = self_node;
+                    /* Free overload list before retry */
+                    DestroyList(overload_candidates);
+                    overload_candidates = NULL;
+                    free(mangled_name);
+                    mangled_name = NULL;
+                    /* Re-evaluate as a method call from scratch */
+                    int retry_result = semcheck_funccall(type_return, symtab, expr,
+                        max_scope_lev, mutating);
+                    return retry_result;
+                }
+                else
+                {
+                    destroy_expr(with_expr);
+                }
+            }
+        }
         
         /* Build detailed error message with argument types and available overloads */
         {

@@ -294,3 +294,33 @@ int semcheck_with_try_resolve(const char *field_id, SymTab_t *symtab,
 
     return 1;
 }
+
+/* Variant of semcheck_with_try_resolve that also checks class methods.
+ * Used for function call resolution where Add/Remove/etc. need to be
+ * resolved through a WITH context when not found in normal scope. */
+int semcheck_with_try_resolve_method(const char *method_id, SymTab_t *symtab,
+    struct Expression **out_record_expr, int line_num)
+{
+    if (method_id == NULL || out_record_expr == NULL)
+        return 1;
+
+    for (size_t index = with_context_count; index > 0; --index)
+    {
+        WithContextEntry *entry = &with_context_stack[index - 1];
+        if (entry->record_type == NULL)
+            continue;
+
+        HashNode_t *method_node = semcheck_find_class_method(symtab,
+            entry->record_type, method_id, NULL);
+        if (method_node != NULL)
+        {
+            struct Expression *clone = clone_expression(entry->context_expr);
+            if (clone == NULL)
+                return -1;
+            *out_record_expr = clone;
+            return 0;
+        }
+    }
+
+    return 1;
+}
