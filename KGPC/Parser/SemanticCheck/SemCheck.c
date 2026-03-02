@@ -10906,7 +10906,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
             for (size_t i = 0; i < sizeof(cmpxchg_types) / sizeof(cmpxchg_types[0]); ++i)
             {
                 int t = cmpxchg_types[i];
-                ListNode_t *p1 = semcheck_create_builtin_param("Target", t);
+                ListNode_t *p1 = semcheck_create_builtin_param_var("Target", t);
                 ListNode_t *p2 = semcheck_create_builtin_param("NewValue", t);
                 ListNode_t *p3 = semcheck_create_builtin_param("Comparand", t);
                 p1->next = p2;
@@ -10927,17 +10927,34 @@ void semcheck_add_builtins(SymTab_t *symtab)
                 destroy_kgpc_type(return_type);
             }
         }
-        /* AtomicExchange(var Target: T; Value: T): T */
+        /* AtomicExchange(var Target: T; Value: T): T
+         * Target is a var parameter — must be passed by reference. */
         {
             static const int xchg_types[] = {INT_TYPE, POINTER_TYPE};
             for (size_t i = 0; i < sizeof(xchg_types) / sizeof(xchg_types[0]); ++i)
             {
                 int t = xchg_types[i];
-                register_binary_builtin_func(symtab, "AtomicExchange", "Target", t, "Value", t, t);
-                register_binary_builtin_func(symtab, "InterlockedExchange", "Target", t, "Value", t, t);
+                ListNode_t *p1 = semcheck_create_builtin_param_var("Target", t);
+                ListNode_t *p2 = semcheck_create_builtin_param("Value", t);
+                p1->next = p2;
+                KgpcType *return_type = create_primitive_type(t);
+                KgpcType *func_type = create_procedure_type(p1, return_type);
+                if (func_type != NULL)
+                {
+                    char *n1 = strdup("AtomicExchange");
+                    char *n2 = strdup("InterlockedExchange");
+                    AddBuiltinFunction_Typed(symtab, n1, func_type);
+                    AddBuiltinFunction_Typed(symtab, n2, func_type);
+                    destroy_kgpc_type(func_type);
+                    free(n1);
+                    free(n2);
+                }
+                DestroyList(p1);
+                destroy_kgpc_type(return_type);
             }
         }
-        /* AtomicIncrement/AtomicDecrement(var Target: Integer; Value: Integer): Integer */
+        /* AtomicIncrement/AtomicDecrement(var Target: Integer[; Value: Integer]): Integer
+         * Target is a var parameter — must be passed by reference. */
         {
             const char *names[] = {
                 "AtomicIncrement", "AtomicDecrement",
@@ -10945,10 +10962,39 @@ void semcheck_add_builtins(SymTab_t *symtab)
             };
             for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++)
             {
-                /* One-arg overload */
-                register_unary_builtin_func(symtab, names[i], "Target", INT_TYPE, INT_TYPE);
-                /* Two-arg overload */
-                register_binary_builtin_func(symtab, names[i], "Target", INT_TYPE, "Value", INT_TYPE, INT_TYPE);
+                /* One-arg overload: name(var Target: Integer): Integer */
+                {
+                    char *dup_name = strdup(names[i]);
+                    ListNode_t *p1 = semcheck_create_builtin_param_var("Target", INT_TYPE);
+                    KgpcType *return_type = create_primitive_type(INT_TYPE);
+                    KgpcType *func_type = create_procedure_type(p1, return_type);
+                    if (func_type != NULL)
+                    {
+                        AddBuiltinFunction_Typed(symtab, dup_name, func_type);
+                        destroy_kgpc_type(func_type);
+                    }
+                    if (p1 != NULL)
+                        DestroyList(p1);
+                    destroy_kgpc_type(return_type);
+                    free(dup_name);
+                }
+                /* Two-arg overload: name(var Target: Integer; Value: Integer): Integer */
+                {
+                    char *dup_name = strdup(names[i]);
+                    ListNode_t *p1 = semcheck_create_builtin_param_var("Target", INT_TYPE);
+                    ListNode_t *p2 = semcheck_create_builtin_param("Value", INT_TYPE);
+                    p1->next = p2;
+                    KgpcType *return_type = create_primitive_type(INT_TYPE);
+                    KgpcType *func_type = create_procedure_type(p1, return_type);
+                    if (func_type != NULL)
+                    {
+                        AddBuiltinFunction_Typed(symtab, dup_name, func_type);
+                        destroy_kgpc_type(func_type);
+                    }
+                    DestroyList(p1);
+                    destroy_kgpc_type(return_type);
+                    free(dup_name);
+                }
             }
         }
         /* bitsizeof(T): Integer - returns size in bits */

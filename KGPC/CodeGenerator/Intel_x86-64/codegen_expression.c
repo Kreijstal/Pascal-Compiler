@@ -3899,6 +3899,9 @@ ListNode_t *codegen_addressof_leaf(struct Expression *expr, ListNode_t *inst_lis
     return inst_list;
 }
 
+/* Recompute the field offset for a class var access when the CLASSVAR storage
+ * only contains class var fields (not the full instance layout).  Returns the
+ * class-var-only offset for the field named `field_id`, or -1 if not found. */
 ListNode_t *codegen_record_field_address(struct Expression *expr, ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t **out_reg)
 {
@@ -3972,6 +3975,13 @@ ListNode_t *codegen_record_field_address(struct Expression *expr, ListNode_t *in
     }
 
     long long offset = expr->expr_data.record_access_data.field_offset;
+    /* When accessing a class var via type reference (TMyClass.FValue), the
+     * CLASSVAR storage layout starts at offset 0, but the semcheck computes
+     * field offsets with a POINTER_SIZE_BYTES (8) prefix for the VMT pointer
+     * (since classes have an implicit VMT slot at offset 0 in instances).
+     * Subtract the VMT size so the offset matches the CLASSVAR layout. */
+    if (is_type_ref && is_class_field && offset >= 8)
+        offset -= 8;
     if (offset != 0)
     {
         char buffer[64];
@@ -6760,6 +6770,26 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         if ((procedure_name != NULL && strcmp(procedure_name, "kgpc_trunc_currency") == 0) ||
             (call_mangled != NULL && strcmp(call_mangled, "kgpc_trunc_currency") == 0))
             expected_type = INT64_TYPE;
+        /* Sqr / Abs: the semcheck rewrites these builtins to call
+         * kgpc_sqr_int32/int64/real or kgpc_abs_int/longint/real based on the
+         * argument type.  When the FPC RTL system unit is loaded,
+         * FindIdent("Sqr"/"Abs") may resolve to the ValReal overload, causing
+         * codegen_param_expected_type to return REAL_TYPE even for integer
+         * arguments.  Override expected_type from the mangled call target. */
+        if (call_mangled != NULL)
+        {
+            if (strcmp(call_mangled, "kgpc_sqr_int32") == 0 ||
+                strcmp(call_mangled, "kgpc_abs_int") == 0)
+                expected_type = INT_TYPE;
+            else if (strcmp(call_mangled, "kgpc_sqr_int64") == 0 ||
+                     strcmp(call_mangled, "kgpc_abs_longint") == 0)
+                expected_type = INT64_TYPE;
+            else if (strcmp(call_mangled, "kgpc_sqr_real") == 0 ||
+                     strcmp(call_mangled, "kgpc_abs_real") == 0)
+                expected_type = REAL_TYPE;
+            else if (strcmp(call_mangled, "kgpc_abs_unsigned") == 0)
+                expected_type = LONGINT_TYPE;
+        }
         if (expected_type == UNKNOWN_TYPE && procedure_name != NULL &&
             pascal_identifier_equals(procedure_name, "Sqr"))
         {
