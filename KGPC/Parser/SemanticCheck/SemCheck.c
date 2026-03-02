@@ -1166,8 +1166,7 @@ static void semcheck_file_from_source_index(int source_index, char *file_out, si
                                                             directive_file, sizeof(directive_file));
         if (directive_line >= 0) {
             if (directive_file[0] != '\0') {
-                strncpy(file_out, directive_file, file_out_size - 1);
-                file_out[file_out_size - 1] = '\0';
+                snprintf(file_out, file_out_size, "%s", directive_file);
             }
             return;
         }
