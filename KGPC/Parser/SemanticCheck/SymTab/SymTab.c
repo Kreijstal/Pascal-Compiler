@@ -75,11 +75,8 @@ int PushConstOntoScope(SymTab_t *symtab, char *id, long long value)
             node->const_int_value = value;
         }
     }
-    else
-    {
-        /* Failed to add, clean up KgpcType */
-        destroy_kgpc_type(kgpc_type);
-    }
+    /* Release creator's reference - hash table retained its own on success */
+    destroy_kgpc_type(kgpc_type);
     return result;
 }
 
@@ -92,7 +89,6 @@ int PushConstOntoScope_Typed(SymTab_t *symtab, char *id, long long value, KgpcTy
     assert(type != NULL && "KgpcType must be provided for typed constant");
 
     HashTable_t *cur_hash = (HashTable_t *)symtab->stack_head->cur;
-    kgpc_type_retain(type);
     int result = AddIdentToTable(cur_hash, id, NULL, HASHTYPE_CONST, type);
     if (result == 0)
     {
@@ -102,10 +98,6 @@ int PushConstOntoScope_Typed(SymTab_t *symtab, char *id, long long value, KgpcTy
             node->is_constant = 1;
             node->const_int_value = value;
         }
-    }
-    else
-    {
-        kgpc_type_release(type);
     }
     return result;
 }
@@ -133,11 +125,8 @@ int PushRealConstOntoScope(SymTab_t *symtab, char *id, double value)
             node->const_real_value = value;
         }
     }
-    else
-    {
-        /* Failed to add, clean up KgpcType */
-        destroy_kgpc_type(kgpc_type);
-    }
+    /* Release creator's reference - hash table retained its own on success */
+    destroy_kgpc_type(kgpc_type);
     return result;
 }
 
@@ -165,17 +154,15 @@ int PushStringConstOntoScope(SymTab_t *symtab, char *id, const char *value)
             node->const_string_value = strdup(value);
             if (node->const_string_value == NULL)
             {
-                /* Memory allocation failed, clean up */
+                /* Memory allocation failed - type is still in hash table,
+                 * release creator's reference only */
                 destroy_kgpc_type(kgpc_type);
                 return 1;
             }
         }
     }
-    else
-    {
-        /* Failed to add, clean up KgpcType */
-        destroy_kgpc_type(kgpc_type);
-    }
+    /* Release creator's reference - hash table retained its own on success */
+    destroy_kgpc_type(kgpc_type);
     return result;
 }
 
