@@ -45,6 +45,9 @@ tests/test_cases/test_fpc_*
 __pycache__/
 *.pyc
 
+failing-tests/
+meson-logs/
+
 quasi-msys2/
 /preprocessed_dump.pas
 *.ppu

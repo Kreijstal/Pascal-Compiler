@@ -1,0 +1,21 @@
+#!/bin/sh
+# Pre-commit hook: reject binary files.
+# Install: git config core.hooksPath .githooks
+#    or:   ln -sf ../../.githooks/no-binaries .git/hooks/pre-commit
+
+against=HEAD
+if ! git rev-parse --verify HEAD >/dev/null 2>&1; then
+    # Initial commit: diff against an empty tree
+    against=$(git hash-object -t tree /dev/null)
+fi
+
+binary_files=$(git diff --cached --numstat --diff-filter=ACR "$against" -- |
+    awk '$1 == "-" && $2 == "-" { print $3 }')
+
+if [ -n "$binary_files" ]; then
+    echo "ERROR: Refusing to commit binary files:" >&2
+    echo "$binary_files" | sed 's/^/  /' >&2
+    echo "" >&2
+    echo "If this is intentional, use: git commit --no-verify" >&2
+    exit 1
+fi
