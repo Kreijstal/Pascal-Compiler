@@ -295,9 +295,10 @@ int semcheck_with_try_resolve(const char *field_id, SymTab_t *symtab,
     return 1;
 }
 
-/* Variant of semcheck_with_try_resolve that also checks class methods.
- * Used for function call resolution where Add/Remove/etc. need to be
- * resolved through a WITH context when not found in normal scope. */
+/* Variant of semcheck_with_try_resolve that also checks class methods
+ * and record fields with procedural types.
+ * Returns: 0 = class method found, 2 = procedural field found,
+ *          1 = not found, -1 = error */
 int semcheck_with_try_resolve_method(const char *method_id, SymTab_t *symtab,
     struct Expression **out_record_expr, int line_num)
 {
@@ -310,6 +311,7 @@ int semcheck_with_try_resolve_method(const char *method_id, SymTab_t *symtab,
         if (entry->record_type == NULL)
             continue;
 
+        /* Check class methods first */
         HashNode_t *method_node = semcheck_find_class_method(symtab,
             entry->record_type, method_id, NULL);
         if (method_node != NULL)
@@ -319,6 +321,35 @@ int semcheck_with_try_resolve_method(const char *method_id, SymTab_t *symtab,
                 return -1;
             *out_record_expr = clone;
             return 0;
+        }
+
+        /* Also check record fields with procedural type (e.g. CompareFn: TCompareFunc) */
+        struct RecordField *field_desc = NULL;
+        long long offset = 0;
+        int rf_result = resolve_record_field(symtab, entry->record_type, method_id,
+                &field_desc, &offset, line_num, 1);
+        if (rf_result == 0 && field_desc != NULL)
+        {
+            /* Check if field has a procedural type, either directly or via type_id lookup */
+            int is_proc_field = (field_desc->proc_type != NULL);
+            if (!is_proc_field && field_desc->type_id != NULL)
+            {
+                HashNode_t *type_node = NULL;
+                if (FindIdent(&type_node, symtab, field_desc->type_id) != -1 &&
+                    type_node != NULL && type_node->type != NULL &&
+                    type_node->type->kind == TYPE_KIND_PROCEDURE)
+                {
+                    is_proc_field = 1;
+                }
+            }
+            if (is_proc_field)
+            {
+                struct Expression *clone = clone_expression(entry->context_expr);
+                if (clone == NULL)
+                    return -1;
+                *out_record_expr = clone;
+                return 2; /* procedural field, not a method */
+            }
         }
     }
 
