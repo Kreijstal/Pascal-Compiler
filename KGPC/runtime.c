@@ -3418,6 +3418,127 @@ void kgpc_reallocmem(void **target, size_t new_size)
     *target = resized;
 }
 
+/* =====================================================================
+ * FPC RTL heap-manager overrides.
+ *
+ * When compiling against the FPC RTL (--no-stdlib), the FPC system unit
+ * emits its own HeapInc allocator with weak SysGetMem/SysFreeMem/etc.
+ * symbols.  HeapInc requires InitHeap() to be called first, which KGPC
+ * does not do.  Instead we provide strong symbols that forward straight
+ * to libc, so the linker picks these over the weak HeapInc versions.
+ *
+ * FPC ABI: SysGetMem(size: PtrInt): Pointer
+ *          SysFreeMem(p: Pointer): PtrInt  (returns 0 on success)
+ *          SysReallocMem(p: Pointer; size: PtrInt): Pointer
+ *          SysFreeMemSize(p: Pointer; size: PtrInt): PtrInt
+ *          SysTryResizeMem(p: Pointer; size: PtrInt): Pointer
+ * ===================================================================== */
+
+void *SysGetMem(intptr_t size)
+{
+    if (size <= 0)
+        return NULL;
+    return malloc((size_t)size);
+}
+
+intptr_t SysFreeMem(void *p)
+{
+    free(p);
+    return 0;
+}
+
+void *SysReallocMem(void *p, intptr_t size)
+{
+    if (size <= 0)
+    {
+        free(p);
+        return NULL;
+    }
+    return realloc(p, (size_t)size);
+}
+
+intptr_t SysFreeMemSize(void *p, intptr_t size)
+{
+    (void)size;
+    free(p);
+    return 0;
+}
+
+void *SysTryResizeMem(void *p, intptr_t size)
+{
+    if (size <= 0)
+    {
+        free(p);
+        return NULL;
+    }
+    return realloc(p, (size_t)size);
+}
+
+/* Top-level FPC heap entry points (mangled names as emitted by KGPC).
+ * The FPC RTL's versions call through MemoryManager function pointers,
+ * which are all NULL (BSS) because KGPC doesn't emit typed const
+ * initializers yet.  Providing strong definitions here bypasses the
+ * MemoryManager indirection entirely. */
+
+/* function GetMem(size: PtrInt): Pointer */
+void *getmem_i64(intptr_t size)
+{
+    if (size <= 0)
+        return NULL;
+    return malloc((size_t)size);
+}
+
+/* function GetMem(out p: Pointer; size: PtrInt): Pointer */
+void *getmem_p_i64(void **p, intptr_t size)
+{
+    void *result = NULL;
+    if (size > 0)
+        result = malloc((size_t)size);
+    if (p != NULL)
+        *p = result;
+    return result;
+}
+
+/* procedure FreeMem(p: Pointer) */
+void freemem_p(void *p)
+{
+    free(p);
+}
+
+/* function FreeMem(p: Pointer; size: PtrInt): PtrInt */
+intptr_t freemem_p_i64(void *p, intptr_t size)
+{
+    (void)size;
+    free(p);
+    return 0;
+}
+
+/* function AllocMem(size: PtrInt): Pointer */
+void *sysallocmem_i64(intptr_t size)
+{
+    if (size <= 0)
+        return NULL;
+    return calloc(1, (size_t)size);
+}
+
+/* function ReallocMem(var p: Pointer; size: PtrInt): Pointer */
+void *sysreallocmem_p_i64(void *p, intptr_t size)
+{
+    if (size <= 0)
+    {
+        free(p);
+        return NULL;
+    }
+    return realloc(p, (size_t)size);
+}
+
+/* function SysMemSize(p: Pointer): PtrInt */
+intptr_t sysmemsize_p(void *p)
+{
+    (void)p;
+    return 0; /* Cannot determine malloc'd block size portably */
+}
+
 char *kgpc_string_concat(const char *lhs, const char *rhs)
 {
     if (lhs == NULL)

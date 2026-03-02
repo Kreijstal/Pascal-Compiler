@@ -1854,10 +1854,21 @@ ListNode_t *gencode_jmp(int type, int inverse, char *label, ListNode_t *inst_lis
     return add_inst(inst_list, buffer);
 }
 
+/* Forward declaration */
+void codegen_function_header_ex_alias_vis(char *func_name, CodeGenContext *ctx, int nostackframe, const char *cname_override, int emit_weak);
+
 /* Generates a function header.
  * If nostackframe is set, only emits the label without prologue (push %rbp / mov %rsp, %rbp).
  * If cname_override is set and differs from func_name, emits an additional .globl + label alias. */
 void codegen_function_header_ex_alias(char *func_name, CodeGenContext *ctx, int nostackframe, const char *cname_override)
+{
+    codegen_function_header_ex_alias_vis(func_name, ctx, nostackframe, cname_override, 0);
+}
+
+/* Emit the function header. When emit_weak is non-zero, emit .weak instead of
+ * .globl so that the runtime library can provide strong overrides (e.g. for
+ * FPC RTL heap functions that require uninitialised HeapInc). */
+void codegen_function_header_ex_alias_vis(char *func_name, CodeGenContext *ctx, int nostackframe, const char *cname_override, int emit_weak)
 {
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
@@ -1865,12 +1876,13 @@ void codegen_function_header_ex_alias(char *func_name, CodeGenContext *ctx, int 
     assert(func_name != NULL);
     assert(ctx != NULL);
     codegen_emit_function_debug_comments(func_name, ctx);
+    const char *vis = emit_weak ? ".weak" : ".globl";
     /* Emit alias label from cname_override (e.g. [Public,Alias:'FPC_DO_EXIT']) */
     if (cname_override != NULL && strcmp(cname_override, func_name) != 0) {
-        fprintf(ctx->output_file, ".globl\t%s\n", cname_override);
+        fprintf(ctx->output_file, "%s\t%s\n", vis, cname_override);
         fprintf(ctx->output_file, "%s:\n", cname_override);
     }
-    fprintf(ctx->output_file, ".globl\t%s\n", func_name);
+    fprintf(ctx->output_file, "%s\t%s\n", vis, func_name);
     if (codegen_target_is_windows())
         fprintf(ctx->output_file, "\t.seh_proc\t%s\n", func_name);
     if (nostackframe) {
@@ -4440,7 +4452,7 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     
     codegen_emit_local_const_equivs(ctx, symtab);
     codegen_emit_const_decl_equivs_from_list(ctx, proc->const_declarations);
-    codegen_function_header_ex_alias(sub_id, ctx, proc->nostackframe, proc->cname_override);
+    codegen_function_header_ex_alias_vis(sub_id, ctx, proc->nostackframe, proc->cname_override, proc->defined_in_unit);
     if (!proc->nostackframe)
         codegen_stack_space(ctx);
     codegen_inst_list(inst_list, ctx);
@@ -5136,7 +5148,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     
     codegen_emit_local_const_equivs(ctx, symtab);
     codegen_emit_const_decl_equivs_from_list(ctx, func->const_declarations);
-    codegen_function_header_ex_alias(sub_id, ctx, func->nostackframe, func->cname_override);
+    codegen_function_header_ex_alias_vis(sub_id, ctx, func->nostackframe, func->cname_override, func->defined_in_unit);
     if (!func->nostackframe)
         codegen_stack_space(ctx);
     codegen_inst_list(inst_list, ctx);
