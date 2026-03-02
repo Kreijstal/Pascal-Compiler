@@ -1086,6 +1086,44 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
             return semcheck_make_quality(MATCH_CONVERSION);
     }
 
+    /* Class/interface TYPE name used as class reference (TClass) argument.
+     * In FPC, bare type names like IComponentRef or TMyClass can be passed
+     * where TClass is expected.  The actual is RECORD_TYPE (class/interface
+     * record) while the formal is POINTER_TYPE -> class/record.  Treat as
+     * a conversion match. */
+    if (actual_tag == RECORD_TYPE && formal_tag == POINTER_TYPE &&
+        actual_kgpc != NULL && actual_kgpc->kind == TYPE_KIND_RECORD &&
+        formal_kgpc != NULL && formal_kgpc->kind == TYPE_KIND_POINTER)
+    {
+        /* Check that the formal points to a class/record type.
+         * TClass is pointer-to-record; the inner type may be either
+         * TYPE_KIND_RECORD or TYPE_KIND_PRIMITIVE with RECORD_TYPE tag. */
+        int formal_points_to_class = 0;
+        if (formal_kgpc->info.points_to != NULL)
+        {
+            KgpcType *inner = formal_kgpc->info.points_to;
+            if (inner->kind == TYPE_KIND_RECORD)
+            {
+                formal_points_to_class = (inner->info.record_info != NULL) ?
+                    record_type_is_class(inner->info.record_info) : 1;
+            }
+            else if (inner->kind == TYPE_KIND_PRIMITIVE &&
+                     inner->info.primitive_type_tag == RECORD_TYPE)
+            {
+                formal_points_to_class = 1;
+            }
+        }
+        else
+        {
+            /* Untyped pointer — may represent TClass */
+            int sub = kgpc_type_get_pointer_subtype_tag(formal_kgpc);
+            if (sub == RECORD_TYPE)
+                formal_points_to_class = 1;
+        }
+        if (formal_points_to_class)
+            return semcheck_make_quality(MATCH_CONVERSION);
+    }
+
     return semcheck_make_quality(MATCH_INCOMPATIBLE);
 }
 
