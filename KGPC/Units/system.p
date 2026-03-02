@@ -11,6 +11,7 @@ type
   ShortInt = -128..127;          { 8-bit signed }
   Word = 0..65535;               { 16-bit unsigned }
   SmallInt = -32768..32767;      { 16-bit signed }
+  Integer = LongInt;             { 32-bit signed (FPC objfpc mode default) }
   Cardinal = 0..4294967295;      { 32-bit unsigned }
   LongWord = Cardinal;           { 32-bit unsigned }
   DWord = Cardinal;              { 32-bit unsigned }

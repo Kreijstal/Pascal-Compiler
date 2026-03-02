@@ -1213,15 +1213,15 @@ int semcheck_builtin_abs(int *type_return, SymTab_t *symtab,
             mangled_name = "kgpc_abs_unsigned";
             result_type = arg_type;
         }
-        else if (arg_type == INT64_TYPE || arg_type == LONGINT_TYPE)
+        else if (arg_type == INT64_TYPE)
         {
-            /* 64-bit and 32-bit signed long types use the 64-bit abs helper */
+            /* 64-bit signed type uses the 64-bit abs helper */
             mangled_name = "kgpc_abs_longint";
             result_type = arg_type;
         }
         else if (is_integer_type(arg_type))
         {
-            /* Smaller signed integer types (INT_TYPE) use 32-bit abs */
+            /* 32-bit and smaller signed integer types (INT_TYPE, LONGINT_TYPE) use 32-bit abs */
             mangled_name = "kgpc_abs_int";
             result_type = arg_type;
         }
