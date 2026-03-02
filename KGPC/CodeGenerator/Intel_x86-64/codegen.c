@@ -3804,7 +3804,7 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                                 /* External variable: don't allocate storage, just reference the symbol */
                                 /* No .comm directive needed - the symbol is defined elsewhere */
                             } else {
-                                int alignment = alloc_size >= 8 ? 8 : DOUBLEWORD;
+                                int alignment = alloc_size >= 16 ? 16 : (alloc_size >= 8 ? 8 : DOUBLEWORD);
                                 /* Check whether we need a bare-name alias for inline asm references.
                                    .set cannot target .comm symbols, so use .bss allocation instead. */
                                 int need_bare_alias = (cname_override == NULL && id_list->cur != NULL &&

@@ -3994,9 +3994,11 @@ method_call_resolved:
                 HashNode_t *other = (HashNode_t *)check->cur;
                 if (other != first_match && other != NULL &&
                     (other->hash_type == HASHTYPE_FUNCTION || other->hash_type == HASHTYPE_PROCEDURE) &&
-                    semcheck_candidates_share_signature(symtab, first_match, other))
+                    semcheck_candidates_share_signature(symtab, first_match, other) &&
+                    !semcheck_candidates_string_subtypes_differ(symtab, first_match, other))
                 {
-                    /* There's another candidate with equivalent signature - defer to full resolution */
+                    /* There's another candidate with equivalent signature and
+                     * no string-subtype difference - defer to full resolution */
                     best_match = NULL;
                     num_best_matches = 0;
                     mangled_matches = 0;
@@ -4031,7 +4033,6 @@ method_call_resolved:
             goto funccall_cleanup;
         }
     }
-
     if (best_match != NULL && overload_candidates != NULL && overload_candidates->next != NULL)
     {
         HashNode_t *override_match = NULL;
@@ -4043,9 +4044,15 @@ method_call_resolved:
         if (override_status == 0 && override_match != NULL && override_count == 1 &&
             override_match != best_match)
         {
-            best_match = override_match;
-            best_score = override_score;
-            num_best_matches = override_count;
+            /* Don't override when the candidates differ in string subtypes
+             * (e.g. RawByteString vs UnicodeString). The mangled-name shortcut
+             * has more specific type information from call-site mangling. */
+            if (!semcheck_candidates_string_subtypes_differ(symtab, best_match, override_match))
+            {
+                best_match = override_match;
+                best_score = override_score;
+                num_best_matches = override_count;
+            }
         }
     }
 
