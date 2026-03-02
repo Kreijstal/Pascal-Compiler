@@ -4279,32 +4279,99 @@ method_call_resolved:
         /* WITH context fallback: if the function call couldn't be resolved in
          * normal scope, try resolving via active WITH contexts.  This handles
          * patterns like:  with SomeList.LockList do Add(Self);
-         * where Add is a method of the WITH target's class. */
+         * where Add is a method of the WITH target's class.
+         * Also handles procedural fields: with ctx^ do Result := CompareFn(args) */
         if (id != NULL && with_context_count > 0)
         {
             struct Expression *with_expr = NULL;
             int wm = semcheck_with_try_resolve_method(id, symtab, &with_expr, expr->line_num);
-            if (wm == 0 && with_expr != NULL)
+            if ((wm == 0 || wm == 2) && with_expr != NULL)
             {
-                /* Prepend the WITH context expression as Self argument */
-                ListNode_t *self_node = CreateListNode(with_expr, LIST_EXPR);
-                if (self_node != NULL)
+                if (wm == 2)
                 {
-                    self_node->next = expr->expr_data.function_call_data.args_expr;
-                    expr->expr_data.function_call_data.args_expr = self_node;
-                    /* Free overload list before retry */
-                    DestroyList(overload_candidates);
-                    overload_candidates = NULL;
-                    free(mangled_name);
-                    mangled_name = NULL;
-                    /* Re-evaluate as a method call from scratch */
-                    int retry_result = semcheck_funccall(type_return, symtab, expr,
-                        max_scope_lev, mutating);
-                    return retry_result;
+                    /* Procedural field: transform into record access + indirect call.
+                     * Convert: CompareFn(args) -> (with_expr.CompareFn)(args)
+                     * Create an EXPR_RECORD_ACCESS for the field, evaluate it to get
+                     * the procedural type, then set up as a procedural variable call. */
+                    struct Expression *field_access = (struct Expression *)calloc(1, sizeof(struct Expression));
+                    if (field_access != NULL)
+                    {
+                        field_access->type = EXPR_RECORD_ACCESS;
+                        field_access->line_num = expr->line_num;
+                        field_access->col_num = expr->col_num;
+                        field_access->expr_data.record_access_data.record_expr = with_expr;
+                        field_access->expr_data.record_access_data.field_id = strdup(id);
+                        field_access->expr_data.record_access_data.field_offset = 0;
+
+                        /* Evaluate the record access to resolve the procedural type */
+                        int field_tag = UNKNOWN_TYPE;
+                        semcheck_expr_with_type(&field_tag, symtab, field_access, max_scope_lev, NO_MUTATE);
+
+                        KgpcType *proc_kgpc_type = field_access->resolved_kgpc_type;
+                        if (proc_kgpc_type != NULL && proc_kgpc_type->kind == TYPE_KIND_PROCEDURE)
+                        {
+                            /* Set return type from the procedural type */
+                            KgpcType *ret = proc_kgpc_type->info.proc_info.return_type;
+                            if (ret != NULL)
+                            {
+                                *type_return = semcheck_tag_from_kgpc(ret);
+                                semcheck_expr_set_resolved_kgpc_type_shared(expr, ret);
+                            }
+
+                            /* Convert to procedural variable call */
+                            expr->expr_data.function_call_data.is_procedural_var_call = 1;
+                            expr->expr_data.function_call_data.procedural_var_symbol = NULL;
+                            expr->expr_data.function_call_data.procedural_var_expr = field_access;
+                            expr->expr_data.function_call_data.is_method_call_placeholder = 0;
+                            expr->expr_data.function_call_data.call_kgpc_type = proc_kgpc_type;
+                            kgpc_type_retain(proc_kgpc_type);
+                            expr->expr_data.function_call_data.is_call_info_valid = 1;
+
+                            /* Type-check arguments */
+                            for (ListNode_t *arg_cur = expr->expr_data.function_call_data.args_expr;
+                                 arg_cur != NULL; arg_cur = arg_cur->next)
+                            {
+                                struct Expression *arg = (struct Expression *)arg_cur->cur;
+                                if (arg != NULL)
+                                    semcheck_expr_with_type(NULL, symtab, arg, max_scope_lev, NO_MUTATE);
+                            }
+
+                            DestroyList(overload_candidates);
+                            free(mangled_name);
+                            return return_val;
+                        }
+                        else
+                        {
+                            destroy_expr(field_access);
+                        }
+                    }
+                    else
+                    {
+                        destroy_expr(with_expr);
+                    }
                 }
                 else
                 {
-                    destroy_expr(with_expr);
+                    /* Class method: prepend the WITH context expression as Self argument */
+                    ListNode_t *self_node = CreateListNode(with_expr, LIST_EXPR);
+                    if (self_node != NULL)
+                    {
+                        self_node->next = expr->expr_data.function_call_data.args_expr;
+                        expr->expr_data.function_call_data.args_expr = self_node;
+                        /* Free overload list before retry */
+                        DestroyList(overload_candidates);
+                        overload_candidates = NULL;
+                        free(mangled_name);
+                        mangled_name = NULL;
+                        /* Re-evaluate as a method call from scratch */
+                        int retry_result = semcheck_funccall(type_return, symtab, expr,
+                            max_scope_lev, mutating);
+                        return retry_result;
+                    }
+                    else
+                    {
+                        destroy_expr(with_expr);
+                    }
                 }
             }
         }
