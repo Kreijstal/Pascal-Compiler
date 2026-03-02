@@ -1720,11 +1720,39 @@ int semcheck_recordaccess(int *type_return,
         if (find_result == -1 || unit_is_qualifier)
         {
             /* Identifier not found - might be a unit qualifier.
-             * Try to look up the field_id directly as it may be an exported constant/var. */
+             * Try to look up the field_id directly as it may be an exported constant/var.
+             * When qualifier is "System", prefer the builtin (non-unit-imported) entry
+             * since later unit imports (e.g., objpas MaxInt) may shadow system builtins. */
             HashNode_t *field_node = NULL;
             char *field_id_copy = strdup(field_id);
             if (field_id_copy != NULL && FindIdent(&field_node, symtab, field_id_copy) >= 0 && field_node != NULL)
             {
+                /* For unit-qualified access, find the entry from the correct unit */
+                if (unit_is_qualifier && pascal_identifier_equals(unit_id, "System"))
+                {
+                    ListNode_t *all_nodes = FindAllIdents(symtab, field_id);
+                    ListNode_t *cur_node = all_nodes;
+                    HashNode_t *system_entry = NULL;
+                    while (cur_node != NULL)
+                    {
+                        HashNode_t *n = (HashNode_t *)cur_node->cur;
+                        if (n != NULL && n->hash_type == field_node->hash_type && !n->defined_in_unit)
+                        {
+                            system_entry = n;
+                            break;
+                        }
+                        cur_node = cur_node->next;
+                    }
+                    if (system_entry != NULL)
+                        field_node = system_entry;
+                    /* Free the list nodes (not the HashNode_t payloads) */
+                    while (all_nodes != NULL)
+                    {
+                        ListNode_t *tmp = all_nodes->next;
+                        free(all_nodes);
+                        all_nodes = tmp;
+                    }
+                }
                 free(field_id_copy);
                 /* Found the field as a direct identifier - transform the expression */
                 if (field_node->hash_type == HASHTYPE_CONST)
