@@ -1965,7 +1965,11 @@ int semcheck_recordaccess(int *type_return,
     int error_count = 0;
     int record_type = UNKNOWN_TYPE;
     KgpcType *record_kgpc_type = NULL;
-    error_count += semcheck_expr_with_type(&record_kgpc_type, symtab, record_expr, max_scope_lev, mutating);
+    /* Evaluate the record/object expression as a read: in `obj.field := val`,
+     * `obj` is read (to obtain the container), only `field` is mutated.
+     * Using NO_MUTATE avoids false "property is read-only" errors when an
+     * indexed property returns a class reference whose member is assigned. */
+    error_count += semcheck_expr_with_type(&record_kgpc_type, symtab, record_expr, max_scope_lev, NO_MUTATE);
     record_type = semcheck_tag_from_kgpc(record_kgpc_type);
 
     if (record_type == ENUM_TYPE)
