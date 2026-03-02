@@ -4352,8 +4352,8 @@ method_call_resolved:
                         field_access->expr_data.record_access_data.field_offset = 0;
 
                         /* Evaluate the record access to resolve the procedural type */
-                        int field_tag = UNKNOWN_TYPE;
-                        semcheck_expr_with_type(&field_tag, symtab, field_access, max_scope_lev, NO_MUTATE);
+                        KgpcType *field_kgpc_type = NULL;
+                        semcheck_expr_with_type(&field_kgpc_type, symtab, field_access, max_scope_lev, NO_MUTATE);
 
                         KgpcType *proc_kgpc_type = field_access->resolved_kgpc_type;
                         if (proc_kgpc_type != NULL && proc_kgpc_type->kind == TYPE_KIND_PROCEDURE)
@@ -4725,7 +4725,24 @@ skip_overload_resolution:
             {
                 int mapped = semcheck_map_builtin_type_name(symtab, ret_id);
                 if (mapped != UNKNOWN_TYPE)
+                {
                     ret_type = create_primitive_type(mapped);
+                    /* Preserve type_alias for RawByteString/UnicodeString so
+                     * overload resolution can distinguish them. */
+                    if (ret_type != NULL &&
+                        (strcasecmp(ret_id, "RawByteString") == 0 ||
+                         strcasecmp(ret_id, "UnicodeString") == 0))
+                    {
+                        struct TypeAlias *alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
+                        if (alias != NULL) {
+                            alias->alias_name = strdup(ret_id);
+                            alias->base_type = mapped;
+                            kgpc_type_set_type_alias(ret_type, alias);
+                            free(alias->alias_name);
+                            free(alias);
+                        }
+                    }
+                }
             }
 
             if (ret_type != NULL)
@@ -4746,6 +4763,28 @@ skip_overload_resolution:
         if (hash_return->type != NULL && hash_return->type->kind == TYPE_KIND_PROCEDURE)
         {
             KgpcType *return_type = kgpc_type_get_return_type(hash_return->type);
+            /* Ensure type_alias is preserved for RawByteString/UnicodeString return
+             * types so overload resolution at call sites can distinguish them. */
+            if (return_type != NULL &&
+                return_type->kind == TYPE_KIND_PRIMITIVE &&
+                return_type->info.primitive_type_tag == STRING_TYPE &&
+                return_type->type_alias == NULL &&
+                hash_return->type->info.proc_info.return_type_id != NULL)
+            {
+                const char *ret_id = hash_return->type->info.proc_info.return_type_id;
+                if (strcasecmp(ret_id, "RawByteString") == 0 ||
+                    strcasecmp(ret_id, "UnicodeString") == 0)
+                {
+                    struct TypeAlias *alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
+                    if (alias != NULL) {
+                        alias->alias_name = strdup(ret_id);
+                        alias->base_type = STRING_TYPE;
+                        kgpc_type_set_type_alias(return_type, alias);
+                        free(alias->alias_name);
+                        free(alias);
+                    }
+                }
+            }
             if (return_type != NULL)
             {
                 if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {

@@ -22,22 +22,56 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y flex bison libfl-dev libunwind-dev libgmp-dev
+        sudo apt-get install -y flex bison libfl-dev libunwind-dev libgmp-dev gdb
         pip install meson ninja
 
     - name: Configure build
-      run: meson setup builddir --buildtype=release -Dwith_gmp=enabled
+      run: meson setup builddir --buildtype=release -Db_debug=true -Dwith_gmp=enabled
 
     - name: Build
       run: meson compile -C builddir
 
+    - name: Enable core dumps
+      run: |
+        ulimit -c unlimited
+        sudo sh -c 'echo "/tmp/cores/core.%e.%p" > /proc/sys/kernel/core_pattern'
+        mkdir -p /tmp/cores
+
     - name: Run tests
-      run: meson test -C builddir
+      env:
+        KGPC_CI_FAILURE_DIR: builddir/failing-tests
+        KGPC_TEST_VERBOSE: "1"
+      run: |
+        ulimit -c unlimited
+        rm -rf builddir/failing-tests
+        meson test -v -C builddir
+
+    - name: Collect crash backtraces
+      if: failure()
+      run: |
+        echo "=== Checking for core dumps ==="
+        ls -la /tmp/cores/ 2>/dev/null || echo "No cores directory"
+        for core in /tmp/cores/core.*; do
+          [ -f "$core" ] || continue
+          echo "=== Backtrace from $core ==="
+          gdb -batch -ex "thread apply all bt full" \
+            builddir/KGPC/kgpc "$core" 2>&1 || file "$core"
+        done
 
     - name: Upload meson logs (on failure)
       if: failure()
       uses: actions/upload-artifact@v4
       with:
         name: meson-logs-linux
-        path: builddir/meson-logs/
+        path: |
+          builddir/meson-logs/
+          builddir/failing-tests/
+        if-no-files-found: ignore
+
+    - name: Upload core dumps
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: core-dumps-linux
+        path: /tmp/cores/
         if-no-files-found: ignore

@@ -250,6 +250,9 @@ typedef struct {
        Set to 0 when not used (e.g. nostackframe functions). */
     int callee_save_rbx_offset;
     int callee_save_r12_offset;
+    int callee_save_r13_offset;
+    int callee_save_r14_offset;
+    int callee_save_r15_offset;
 } CodeGenContext;
 
 /* Generates a label */

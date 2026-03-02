@@ -1917,6 +1917,12 @@ void codegen_function_footer_ex(char *func_name, CodeGenContext *ctx, int nostac
             fprintf(ctx->output_file, "\tmovq\t-%d(%%rbp), %%rbx\n", ctx->callee_save_rbx_offset);
         if (ctx->callee_save_r12_offset > 0)
             fprintf(ctx->output_file, "\tmovq\t-%d(%%rbp), %%r12\n", ctx->callee_save_r12_offset);
+        if (ctx->callee_save_r13_offset > 0)
+            fprintf(ctx->output_file, "\tmovq\t-%d(%%rbp), %%r13\n", ctx->callee_save_r13_offset);
+        if (ctx->callee_save_r14_offset > 0)
+            fprintf(ctx->output_file, "\tmovq\t-%d(%%rbp), %%r14\n", ctx->callee_save_r14_offset);
+        if (ctx->callee_save_r15_offset > 0)
+            fprintf(ctx->output_file, "\tmovq\t-%d(%%rbp), %%r15\n", ctx->callee_save_r15_offset);
         fprintf(ctx->output_file, "\tnop\n\tleave\n\tret\n");
     }
     if (codegen_target_is_windows())
@@ -2032,12 +2038,21 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
 
         int prev_callee_rbx = ctx->callee_save_rbx_offset;
         int prev_callee_r12 = ctx->callee_save_r12_offset;
+        int prev_callee_r13 = ctx->callee_save_r13_offset;
+        int prev_callee_r14 = ctx->callee_save_r14_offset;
+        int prev_callee_r15 = ctx->callee_save_r15_offset;
         push_stackscope();
         {
             StackNode_t *rbx_slot = add_l_t_bytes("__callee_rbx", 8);
             StackNode_t *r12_slot = add_l_t_bytes("__callee_r12", 8);
+            StackNode_t *r13_slot = add_l_t_bytes("__callee_r13", 8);
+            StackNode_t *r14_slot = add_l_t_bytes("__callee_r14", 8);
+            StackNode_t *r15_slot = add_l_t_bytes("__callee_r15", 8);
             ctx->callee_save_rbx_offset = rbx_slot->offset;
             ctx->callee_save_r12_offset = r12_slot->offset;
+            ctx->callee_save_r13_offset = r13_slot->offset;
+            ctx->callee_save_r14_offset = r14_slot->offset;
+            ctx->callee_save_r15_offset = r15_slot->offset;
         }
         ListNode_t *inst_list = NULL;
         inst_list = codegen_stmt(tree->tree_data.unit_data.initialization, inst_list, ctx, symtab);
@@ -2052,6 +2067,12 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
             fprintf(ctx->output_file, "\tmovq\t-%d(%%rbp), %%rbx\n", ctx->callee_save_rbx_offset);
         if (ctx->callee_save_r12_offset > 0)
             fprintf(ctx->output_file, "\tmovq\t-%d(%%rbp), %%r12\n", ctx->callee_save_r12_offset);
+        if (ctx->callee_save_r13_offset > 0)
+            fprintf(ctx->output_file, "\tmovq\t-%d(%%rbp), %%r13\n", ctx->callee_save_r13_offset);
+        if (ctx->callee_save_r14_offset > 0)
+            fprintf(ctx->output_file, "\tmovq\t-%d(%%rbp), %%r14\n", ctx->callee_save_r14_offset);
+        if (ctx->callee_save_r15_offset > 0)
+            fprintf(ctx->output_file, "\tmovq\t-%d(%%rbp), %%r15\n", ctx->callee_save_r15_offset);
         fprintf(ctx->output_file, "\tleave\n");
         fprintf(ctx->output_file, "\tret\n");
 
@@ -2059,6 +2080,9 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
         pop_stackscope();
         ctx->callee_save_rbx_offset = prev_callee_rbx;
         ctx->callee_save_r12_offset = prev_callee_r12;
+        ctx->callee_save_r13_offset = prev_callee_r13;
+        ctx->callee_save_r14_offset = prev_callee_r14;
+        ctx->callee_save_r15_offset = prev_callee_r15;
     }
 
     /* Generate finalization section if present */
@@ -2070,12 +2094,21 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
 
         int prev_callee_rbx = ctx->callee_save_rbx_offset;
         int prev_callee_r12 = ctx->callee_save_r12_offset;
+        int prev_callee_r13 = ctx->callee_save_r13_offset;
+        int prev_callee_r14 = ctx->callee_save_r14_offset;
+        int prev_callee_r15 = ctx->callee_save_r15_offset;
         push_stackscope();
         {
             StackNode_t *rbx_slot = add_l_t_bytes("__callee_rbx", 8);
             StackNode_t *r12_slot = add_l_t_bytes("__callee_r12", 8);
+            StackNode_t *r13_slot = add_l_t_bytes("__callee_r13", 8);
+            StackNode_t *r14_slot = add_l_t_bytes("__callee_r14", 8);
+            StackNode_t *r15_slot = add_l_t_bytes("__callee_r15", 8);
             ctx->callee_save_rbx_offset = rbx_slot->offset;
             ctx->callee_save_r12_offset = r12_slot->offset;
+            ctx->callee_save_r13_offset = r13_slot->offset;
+            ctx->callee_save_r14_offset = r14_slot->offset;
+            ctx->callee_save_r15_offset = r15_slot->offset;
         }
         ListNode_t *inst_list = NULL;
         inst_list = codegen_stmt(tree->tree_data.unit_data.finalization, inst_list, ctx, symtab);
@@ -2090,6 +2123,12 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
             fprintf(ctx->output_file, "\tmovq\t-%d(%%rbp), %%rbx\n", ctx->callee_save_rbx_offset);
         if (ctx->callee_save_r12_offset > 0)
             fprintf(ctx->output_file, "\tmovq\t-%d(%%rbp), %%r12\n", ctx->callee_save_r12_offset);
+        if (ctx->callee_save_r13_offset > 0)
+            fprintf(ctx->output_file, "\tmovq\t-%d(%%rbp), %%r13\n", ctx->callee_save_r13_offset);
+        if (ctx->callee_save_r14_offset > 0)
+            fprintf(ctx->output_file, "\tmovq\t-%d(%%rbp), %%r14\n", ctx->callee_save_r14_offset);
+        if (ctx->callee_save_r15_offset > 0)
+            fprintf(ctx->output_file, "\tmovq\t-%d(%%rbp), %%r15\n", ctx->callee_save_r15_offset);
         fprintf(ctx->output_file, "\tleave\n");
         fprintf(ctx->output_file, "\tret\n");
 
@@ -2097,6 +2136,9 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
         pop_stackscope();
         ctx->callee_save_rbx_offset = prev_callee_rbx;
         ctx->callee_save_r12_offset = prev_callee_r12;
+        ctx->callee_save_r13_offset = prev_callee_r13;
+        ctx->callee_save_r14_offset = prev_callee_r14;
+        ctx->callee_save_r15_offset = prev_callee_r15;
     }
 
     codegen_program_footer(ctx);
@@ -3039,6 +3081,12 @@ void codegen_stack_space(CodeGenContext *ctx)
         fprintf(ctx->output_file, "\tmovq\t%%rbx, -%d(%%rbp)\n", ctx->callee_save_rbx_offset);
     if (ctx->callee_save_r12_offset > 0)
         fprintf(ctx->output_file, "\tmovq\t%%r12, -%d(%%rbp)\n", ctx->callee_save_r12_offset);
+    if (ctx->callee_save_r13_offset > 0)
+        fprintf(ctx->output_file, "\tmovq\t%%r13, -%d(%%rbp)\n", ctx->callee_save_r13_offset);
+    if (ctx->callee_save_r14_offset > 0)
+        fprintf(ctx->output_file, "\tmovq\t%%r14, -%d(%%rbp)\n", ctx->callee_save_r14_offset);
+    if (ctx->callee_save_r15_offset > 0)
+        fprintf(ctx->output_file, "\tmovq\t%%r15, -%d(%%rbp)\n", ctx->callee_save_r15_offset);
 
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
@@ -3103,21 +3151,31 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
     int prev_depth = ctx->current_subprogram_lexical_depth;
     int prev_callee_rbx = ctx->callee_save_rbx_offset;
     int prev_callee_r12 = ctx->callee_save_r12_offset;
+    int prev_callee_r13 = ctx->callee_save_r13_offset;
+    int prev_callee_r14 = ctx->callee_save_r14_offset;
+    int prev_callee_r15 = ctx->callee_save_r15_offset;
     ctx->current_subprogram_id = prgm_name;
     ctx->current_subprogram_mangled = prgm_name;
     ctx->current_subprogram_lexical_depth = 0;
 
     push_stackscope();
 
-    /* Allocate stack slots for callee-saved registers */
+    codegen_function_locals(data->var_declaration, ctx, symtab);
+
+    /* Allocate callee-save slots AFTER locals so t-section offsets don't collide */
     {
         StackNode_t *rbx_slot = add_l_t_bytes("__callee_rbx", 8);
         StackNode_t *r12_slot = add_l_t_bytes("__callee_r12", 8);
+        StackNode_t *r13_slot = add_l_t_bytes("__callee_r13", 8);
+        StackNode_t *r14_slot = add_l_t_bytes("__callee_r14", 8);
+        StackNode_t *r15_slot = add_l_t_bytes("__callee_r15", 8);
         ctx->callee_save_rbx_offset = rbx_slot->offset;
         ctx->callee_save_r12_offset = r12_slot->offset;
+        ctx->callee_save_r13_offset = r13_slot->offset;
+        ctx->callee_save_r14_offset = r14_slot->offset;
+        ctx->callee_save_r15_offset = r15_slot->offset;
     }
 
-    codegen_function_locals(data->var_declaration, ctx, symtab);
     codegen_subprograms(data->subprograms, ctx, symtab);
 
     /* Build hash set of emitted subprogram labels for O(1) lookups */
@@ -3255,7 +3313,11 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
                         !is_external_import &&
                         !codegen_set_contains(&emitted_labels, fwd_mangled) &&
                         !codegen_set_contains(&emitted_cname_aliases, fwd_mangled)) {
-                        /* Find matching implementation by id */
+                        /* Find matching implementation by id.
+                         * Skip overloaded functions — aliasing one overload to
+                         * another (e.g. fileexists_rbs_b → fileexists_us_b)
+                         * causes infinite recursion when the target calls the
+                         * aliased overload. */
                         ListNode_t *impl_scan = data->subprograms;
                         while (impl_scan != NULL) {
                             if (impl_scan->type == LIST_TREE && impl_scan->cur != NULL) {
@@ -3268,6 +3330,16 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
                                     if (impl_mangled != NULL &&
                                         strcasecmp(fwd_mangled, impl_mangled) != 0 &&
                                         codegen_set_contains(&emitted_labels, impl_mangled)) {
+                                        /* Only alias when the impl used a cname_override
+                                         * (e.g. [Alias:'FPC_ANSISTR_DECR_REF']) so the
+                                         * label name differs from the mangled name purely
+                                         * due to aliasing, NOT different overload signatures.
+                                         * If neither has cname_override, the different
+                                         * mangled names mean different parameter types
+                                         * (e.g. fileexists_rbs_b vs fileexists_us_b). */
+                                        if (fwd_cname == NULL &&
+                                            impl->tree_data.subprogram_data.cname_override == NULL)
+                                            goto next_fwd;
                                         codegen_set_insert(&emitted_cname_aliases, fwd_mangled);
                                         fprintf(ctx->output_file, ".weak\t%s\n", fwd_mangled);
                                         fprintf(ctx->output_file, "\t.set\t%s, %s\n", fwd_mangled, impl_mangled);
@@ -3280,6 +3352,7 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
                     }
                 }
             }
+            next_fwd:
             fwd_scan = fwd_scan->next;
         }
     }
@@ -3368,6 +3441,9 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
     ctx->current_subprogram_lexical_depth = prev_depth;
     ctx->callee_save_rbx_offset = prev_callee_rbx;
     ctx->callee_save_r12_offset = prev_callee_r12;
+    ctx->callee_save_r13_offset = prev_callee_r13;
+    ctx->callee_save_r14_offset = prev_callee_r14;
+    ctx->callee_save_r15_offset = prev_callee_r15;
 
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
@@ -4081,6 +4157,42 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
             continue;
         }
 
+        /* If a LATER subprogram from the SAME UNIT has the same mangled_id and
+         * a body, skip this one.  This handles platform-specific overrides:
+         * e.g. Unix sysutils.pp defines FileExists(RawByteString) after the
+         * generic filutil.inc version.  The later definition wins.
+         * We restrict to same-unit to avoid cross-unit mangling collisions
+         * (e.g. FpClosedir(var TDirRec) vs FpClosedir(PDirRec) from different
+         * units may collide in mangled name but are distinct functions). */
+        if (mangled_id != NULL)
+        {
+            int this_unit = sub->tree_data.subprogram_data.source_unit_index;
+            int has_later_override = 0;
+            ListNode_t *later = sub_list->next;
+            while (later != NULL)
+            {
+                if (later->type == LIST_TREE && later->cur != NULL)
+                {
+                    Tree_t *later_sub = (Tree_t *)later->cur;
+                    if (later_sub->type == TREE_SUBPROGRAM &&
+                        later_sub->tree_data.subprogram_data.statement_list != NULL &&
+                        later_sub->tree_data.subprogram_data.mangled_id != NULL &&
+                        later_sub->tree_data.subprogram_data.source_unit_index == this_unit &&
+                        strcmp(later_sub->tree_data.subprogram_data.mangled_id, mangled_id) == 0)
+                    {
+                        has_later_override = 1;
+                        break;
+                    }
+                }
+                later = later->next;
+            }
+            if (has_later_override)
+            {
+                sub_list = sub_list->next;
+                continue;
+            }
+        }
+
         /* Skip unused functions (dead code elimination / reachability pass). */
         if (!disable_dce_flag() && !sub->tree_data.subprogram_data.is_used)
         {
@@ -4141,19 +4253,21 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     const char *prev_sub_owner_class_full = ctx->current_subprogram_owner_class_full;
     int prev_callee_rbx = ctx->callee_save_rbx_offset;
     int prev_callee_r12 = ctx->callee_save_r12_offset;
+    int prev_callee_r13 = ctx->callee_save_r13_offset;
+    int prev_callee_r14 = ctx->callee_save_r14_offset;
+    int prev_callee_r15 = ctx->callee_save_r15_offset;
 
     push_stackscope();
     inst_list = NULL;
 
-    /* Allocate stack slots for callee-saved registers */
-    if (!proc_tree->tree_data.subprogram_data.nostackframe) {
-        StackNode_t *rbx_slot = add_l_t_bytes("__callee_rbx", 8);
-        StackNode_t *r12_slot = add_l_t_bytes("__callee_r12", 8);
-        ctx->callee_save_rbx_offset = rbx_slot->offset;
-        ctx->callee_save_r12_offset = r12_slot->offset;
-    } else {
+    /* Callee-save slots are allocated AFTER arguments and locals (below)
+     * so that the t-section offsets account for the z and x section sizes. */
+    if (proc_tree->tree_data.subprogram_data.nostackframe) {
         ctx->callee_save_rbx_offset = 0;
         ctx->callee_save_r12_offset = 0;
+        ctx->callee_save_r13_offset = 0;
+        ctx->callee_save_r14_offset = 0;
+        ctx->callee_save_r15_offset = 0;
     }
 
     /* Static links are supported for nested procedures/functions (depth >= 1), but NOT for:
@@ -4226,6 +4340,21 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     }
     
     codegen_function_locals(proc->declarations, ctx, symtab);
+
+    /* Allocate callee-save slots AFTER args (z) and locals (x) so that
+     * the t-section offset = z_offset + x_offset + t_offset doesn't collide. */
+    if (!proc_tree->tree_data.subprogram_data.nostackframe) {
+        StackNode_t *rbx_slot = add_l_t_bytes("__callee_rbx", 8);
+        StackNode_t *r12_slot = add_l_t_bytes("__callee_r12", 8);
+        StackNode_t *r13_slot = add_l_t_bytes("__callee_r13", 8);
+        StackNode_t *r14_slot = add_l_t_bytes("__callee_r14", 8);
+        StackNode_t *r15_slot = add_l_t_bytes("__callee_r15", 8);
+        ctx->callee_save_rbx_offset = rbx_slot->offset;
+        ctx->callee_save_r12_offset = r12_slot->offset;
+        ctx->callee_save_r13_offset = r13_slot->offset;
+        ctx->callee_save_r14_offset = r14_slot->offset;
+        ctx->callee_save_r15_offset = r15_slot->offset;
+    }
 
     /* Recursively generate nested subprograms */
     codegen_subprograms(proc->subprograms, ctx, symtab);
@@ -4318,6 +4447,9 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ctx->current_subprogram_lexical_depth = prev_depth;
     ctx->callee_save_rbx_offset = prev_callee_rbx;
     ctx->callee_save_r12_offset = prev_callee_r12;
+    ctx->callee_save_r13_offset = prev_callee_r13;
+    ctx->callee_save_r14_offset = prev_callee_r14;
+    ctx->callee_save_r15_offset = prev_callee_r15;
 
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
@@ -4361,19 +4493,21 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     const char *prev_sub_owner_class_full = ctx->current_subprogram_owner_class_full;
     int prev_callee_rbx = ctx->callee_save_rbx_offset;
     int prev_callee_r12 = ctx->callee_save_r12_offset;
+    int prev_callee_r13 = ctx->callee_save_r13_offset;
+    int prev_callee_r14 = ctx->callee_save_r14_offset;
+    int prev_callee_r15 = ctx->callee_save_r15_offset;
 
     push_stackscope();
     inst_list = NULL;
 
-    /* Allocate stack slots for callee-saved registers */
-    if (!func_tree->tree_data.subprogram_data.nostackframe) {
-        StackNode_t *rbx_slot = add_l_t_bytes("__callee_rbx", 8);
-        StackNode_t *r12_slot = add_l_t_bytes("__callee_r12", 8);
-        ctx->callee_save_rbx_offset = rbx_slot->offset;
-        ctx->callee_save_r12_offset = r12_slot->offset;
-    } else {
+    /* Callee-save slots are allocated AFTER arguments and locals (below)
+     * so that the t-section offsets account for the z and x section sizes. */
+    if (func_tree->tree_data.subprogram_data.nostackframe) {
         ctx->callee_save_rbx_offset = 0;
         ctx->callee_save_r12_offset = 0;
+        ctx->callee_save_r13_offset = 0;
+        ctx->callee_save_r14_offset = 0;
+        ctx->callee_save_r15_offset = 0;
     }
 
     /* Static links are supported for nested functions (depth >= 1), but NOT for:
@@ -4782,6 +4916,21 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
 
     codegen_function_locals(func->declarations, ctx, symtab);
 
+    /* Allocate callee-save slots AFTER args (z) and locals (x) so that
+     * the t-section offset = z_offset + x_offset + t_offset doesn't collide. */
+    if (!func_tree->tree_data.subprogram_data.nostackframe) {
+        StackNode_t *rbx_slot = add_l_t_bytes("__callee_rbx", 8);
+        StackNode_t *r12_slot = add_l_t_bytes("__callee_r12", 8);
+        StackNode_t *r13_slot = add_l_t_bytes("__callee_r13", 8);
+        StackNode_t *r14_slot = add_l_t_bytes("__callee_r14", 8);
+        StackNode_t *r15_slot = add_l_t_bytes("__callee_r15", 8);
+        ctx->callee_save_rbx_offset = rbx_slot->offset;
+        ctx->callee_save_r12_offset = r12_slot->offset;
+        ctx->callee_save_r13_offset = r13_slot->offset;
+        ctx->callee_save_r14_offset = r14_slot->offset;
+        ctx->callee_save_r15_offset = r15_slot->offset;
+    }
+
     /* Recursively generate nested subprograms */
     {
         int saved_returns_dynamic_array = ctx->returns_dynamic_array;
@@ -4994,6 +5143,9 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ctx->current_subprogram_lexical_depth = prev_depth;
     ctx->callee_save_rbx_offset = prev_callee_rbx;
     ctx->callee_save_r12_offset = prev_callee_r12;
+    ctx->callee_save_r13_offset = prev_callee_r13;
+    ctx->callee_save_r14_offset = prev_callee_r14;
+    ctx->callee_save_r15_offset = prev_callee_r15;
     ctx->returns_dynamic_array = prev_returns_dynamic_array;
     ctx->dynamic_array_descriptor_size = prev_dynamic_array_descriptor_size;
 
@@ -5254,27 +5406,23 @@ void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx, SymT
     const char *prev_sub_mangled = ctx->current_subprogram_mangled;
     int prev_callee_rbx = ctx->callee_save_rbx_offset;
     int prev_callee_r12 = ctx->callee_save_r12_offset;
+    int prev_callee_r13 = ctx->callee_save_r13_offset;
+    int prev_callee_r14 = ctx->callee_save_r14_offset;
+    int prev_callee_r15 = ctx->callee_save_r15_offset;
 
     push_stackscope();
 
     /* Allocate stack slots for callee-saved registers */
-    {
-        StackNode_t *rbx_slot = add_l_t_bytes("__callee_rbx", 8);
-        StackNode_t *r12_slot = add_l_t_bytes("__callee_r12", 8);
-        ctx->callee_save_rbx_offset = rbx_slot->offset;
-        ctx->callee_save_r12_offset = r12_slot->offset;
-    }
-
     ListNode_t *inst_list = NULL;
     int num_args = (anon->parameters == NULL) ? 0 : ListLength(anon->parameters);
     int lexical_depth = codegen_get_lexical_depth(ctx) + 1;
     int prev_depth = ctx->current_subprogram_lexical_depth;
     ctx->current_subprogram_lexical_depth = lexical_depth;
     int is_nested = (lexical_depth >= 1);
-    
+
     ctx->current_subprogram_id = anon->generated_name;
     ctx->current_subprogram_mangled = anon->generated_name;
-    
+
     /* Anonymous methods are always nested (they're defined inside some other context).
      * They always need a static link to access variables from their parent scope (closure).
      * The static link is passed in %rdi (first register) and parameters are shifted by 1.
@@ -5282,10 +5430,10 @@ void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx, SymT
     StackNode_t *static_link = NULL;
     int will_need_static_link = is_nested;
     int arg_start_index = (will_need_static_link && num_args > 0) ? 1 : 0;
-    
+
     /* Process parameters (convert from TREE_VAR_DECL to stack allocations) */
     inst_list = codegen_subprogram_arguments(anon->parameters, inst_list, ctx, symtab, arg_start_index);
-    
+
     /* Add static link after parameters */
     if (will_need_static_link)
     {
@@ -5314,7 +5462,22 @@ void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx, SymT
     
     /* No local variable declarations in anonymous methods (they're inline) */
     /* No nested subprograms in anonymous methods */
-    
+
+    /* Allocate callee-save slots AFTER args (z) and locals (x) so that
+     * the t-section offset = z_offset + x_offset + t_offset doesn't collide. */
+    {
+        StackNode_t *rbx_slot = add_l_t_bytes("__callee_rbx", 8);
+        StackNode_t *r12_slot = add_l_t_bytes("__callee_r12", 8);
+        StackNode_t *r13_slot = add_l_t_bytes("__callee_r13", 8);
+        StackNode_t *r14_slot = add_l_t_bytes("__callee_r14", 8);
+        StackNode_t *r15_slot = add_l_t_bytes("__callee_r15", 8);
+        ctx->callee_save_rbx_offset = rbx_slot->offset;
+        ctx->callee_save_r12_offset = r12_slot->offset;
+        ctx->callee_save_r13_offset = r13_slot->offset;
+        ctx->callee_save_r14_offset = r14_slot->offset;
+        ctx->callee_save_r15_offset = r15_slot->offset;
+    }
+
     /* Generate the body */
     if (anon->body != NULL)
     {
@@ -5360,6 +5523,9 @@ void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx, SymT
     ctx->current_subprogram_lexical_depth = prev_depth;
     ctx->callee_save_rbx_offset = prev_callee_rbx;
     ctx->callee_save_r12_offset = prev_callee_r12;
+    ctx->callee_save_r13_offset = prev_callee_r13;
+    ctx->callee_save_r14_offset = prev_callee_r14;
+    ctx->callee_save_r15_offset = prev_callee_r15;
 
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);

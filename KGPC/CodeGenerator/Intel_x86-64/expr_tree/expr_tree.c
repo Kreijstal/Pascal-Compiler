@@ -2220,6 +2220,22 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         if (static_link_expr_active)
             codegen_end_expression(ctx);
 
+        /* Set %al for the SysV varargs ABI.
+         * For varargs functions, %al must be an upper bound on the number of XMM
+         * registers used.  Use 8 (the maximum) as a conservative upper bound.
+         * For non-varargs functions, %al is ignored by the callee but we set it
+         * to 0 to avoid stale values from previous operations. */
+        {
+            int is_varargs_call = 0;
+            if (func_type != NULL && func_type->kind == TYPE_KIND_PROCEDURE &&
+                func_type->info.proc_info.definition != NULL)
+            {
+                Tree_t *def = func_type->info.proc_info.definition;
+                is_varargs_call = def->tree_data.subprogram_data.is_varargs;
+            }
+            inst_list = codegen_vect_reg(inst_list, is_varargs_call ? 8 : 0);
+        }
+
         /* Check if this is a call through a procedural variable */
         if (expr->expr_data.function_call_data.is_procedural_var_call)
         {
@@ -3511,10 +3527,13 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
             type = expr->expr_data.addop_data.addop_type;
             if (expr_get_type_tag(expr) == SET_TYPE)
             {
+                /* Set operations use 32-bit instructions; ensure register names are 32-bit */
+                const char *left32 = (left_reg != NULL) ? left_reg->bit_32 : left;
+                const char *right32 = (right_reg != NULL) ? right_reg->bit_32 : right;
                 switch(type)
                 {
                     case PLUS:
-                        snprintf(buffer, sizeof(buffer), "\torl\t%s, %s\n", right, left);
+                        snprintf(buffer, sizeof(buffer), "\torl\t%s, %s\n", right32, left32);
                         inst_list = add_inst(inst_list, buffer);
                         break;
                     case MINUS:
@@ -3522,7 +3541,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                         {
                             unsigned long mask = strtoul(right + 1, NULL, 0);
                             unsigned int complement = ~((unsigned int)mask);
-                            snprintf(buffer, sizeof(buffer), "\tandl\t$%u, %s\n", complement, left);
+                            snprintf(buffer, sizeof(buffer), "\tandl\t$%u, %s\n", complement, left32);
                             inst_list = add_inst(inst_list, buffer);
                         }
                         else
@@ -3533,11 +3552,11 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                             else if (left_reg != NULL && left_reg->reg_id == REG_R11)
                                 scratch_reg = "%r10d";
 
-                            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", right, scratch_reg);
+                            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", right32, scratch_reg);
                             inst_list = add_inst(inst_list, buffer);
                             snprintf(buffer, sizeof(buffer), "\tnotl\t%s\n", scratch_reg);
                             inst_list = add_inst(inst_list, buffer);
-                            snprintf(buffer, sizeof(buffer), "\tandl\t%s, %s\n", scratch_reg, left);
+                            snprintf(buffer, sizeof(buffer), "\tandl\t%s, %s\n", scratch_reg, left32);
                             inst_list = add_inst(inst_list, buffer);
                         }
                         break;
@@ -3805,14 +3824,17 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
             }
             if (expr_get_type_tag(expr) == SET_TYPE)
             {
+                /* Set operations use 32-bit instructions; ensure register names are 32-bit */
+                const char *left32 = (left_reg != NULL) ? left_reg->bit_32 : left;
+                const char *right32 = (right_reg != NULL) ? right_reg->bit_32 : right;
                 switch(type)
                 {
                     case STAR:
-                        snprintf(buffer, sizeof(buffer), "\tandl\t%s, %s\n", right, left);
+                        snprintf(buffer, sizeof(buffer), "\tandl\t%s, %s\n", right32, left32);
                         inst_list = add_inst(inst_list, buffer);
                         break;
                     case XOR:
-                        snprintf(buffer, sizeof(buffer), "\txorl\t%s, %s\n", right, left);
+                        snprintf(buffer, sizeof(buffer), "\txorl\t%s, %s\n", right32, left32);
                         inst_list = add_inst(inst_list, buffer);
                         break;
                     default:
