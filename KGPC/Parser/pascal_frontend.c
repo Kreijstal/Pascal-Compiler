@@ -554,11 +554,12 @@ static char *compute_ast_cache_path(const char *source_path)
 
     size_t dir_len = strlen(g_ast_cache_dir);
     size_t name_len = strlen(basename);
-    /* <dir>/<basename>.ast_cache */
-    char *cache_path = (char *)malloc(dir_len + 1 + name_len + 11);
+    /* <dir>/<basename>.ast_cache\0 — 11 = strlen(".ast_cache") + 1 for '/' */
+    size_t total = dir_len + 1 + name_len + 10 + 1;
+    char *cache_path = (char *)malloc(total);
     if (cache_path == NULL)
         return NULL;
-    sprintf(cache_path, "%s/%s.ast_cache", g_ast_cache_dir, basename);
+    snprintf(cache_path, total, "%s/%s.ast_cache", g_ast_cache_dir, basename);
     return cache_path;
 }
 
@@ -596,7 +597,6 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
             if (ast_cache_load(cache_path, &cached_ast, &cached_pp_buf, &cached_pp_len))
             {
                 free(cache_path);
-                fprintf(stderr, "[cache] Loaded cached AST for %s\n", path);
                 /* Set up preprocessed source context (needed for semcheck error reporting) */
                 set_preprocessed_context(cached_pp_buf, cached_pp_len, path);
                 semcheck_register_source_buffer(path, cached_pp_buf, cached_pp_len);
@@ -1015,8 +1015,7 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
                 char *save_cache_path = compute_ast_cache_path(path);
                 if (save_cache_path != NULL && result.value.ast != NULL)
                 {
-                    if (ast_cache_save(save_cache_path, result.value.ast, buffer, length))
-                        fprintf(stderr, "[cache] Saved AST cache for %s\n", path);
+                    ast_cache_save(save_cache_path, result.value.ast, buffer, length);
                 }
                 free(save_cache_path);
             }
