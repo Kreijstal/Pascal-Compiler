@@ -48,6 +48,7 @@ void set_hash_meta(HashNode_t *node, int mutating);
 
 int semcheck_with_push(struct Expression *context_expr, struct RecordType *record_type);
 void semcheck_with_pop(void);
+extern size_t with_context_count;
 int semcheck_with_try_resolve(const char *field_id, SymTab_t *symtab,
     struct Expression **out_record_expr, int line_num);
 int semcheck_with_try_resolve_method(const char *method_id, SymTab_t *symtab,

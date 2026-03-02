@@ -6399,6 +6399,38 @@ proccall_parent_resolve_done:
             return return_val + semcheck_call_with_proc_var(symtab, stmt, proc_var, max_scope_lev);
         }
 
+        /* WITH context fallback: if the procedure call couldn't be resolved in
+         * normal scope, try resolving via active WITH contexts.  This handles
+         * patterns like:  with SomeList.LockList do Add(Self);
+         * where Add is a method of the WITH target's class. */
+        if (proc_id != NULL && with_context_count > 0)
+        {
+            struct Expression *with_expr = NULL;
+            int wm = semcheck_with_try_resolve_method(proc_id, symtab, &with_expr, stmt->line_num);
+            if (wm == 0 && with_expr != NULL)
+            {
+                /* Prepend the WITH context expression as Self argument */
+                ListNode_t *self_node = CreateListNode(with_expr, LIST_EXPR);
+                if (self_node != NULL)
+                {
+                    self_node->next = stmt->stmt_data.procedure_call_data.expr_args;
+                    stmt->stmt_data.procedure_call_data.expr_args = self_node;
+                    /* Mark as method call so the retry resolves via class method lookup */
+                    stmt->stmt_data.procedure_call_data.is_method_call_placeholder = 1;
+                    /* Free overload list before retry */
+                    DestroyList(overload_candidates);
+                    overload_candidates = NULL;
+                    free(mangled_name);
+                    mangled_name = NULL;
+                    /* Re-evaluate as a method call from scratch */
+                    return semcheck_proccall(symtab, stmt, max_scope_lev);
+                }
+                else
+                {
+                    destroy_expr(with_expr);
+                }
+            }
+        }
 
         /* Build detailed error message with argument types and available overloads */
         {
