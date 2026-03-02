@@ -43,6 +43,7 @@ KGPC_PATH = os.path.join(build_dir, "KGPC/kgpc.exe" if IS_WINDOWS_ABI else "KGPC
 TEST_CASES_DIR = "tests/test_cases"
 INPUT_DATA_DIR = TEST_CASES_DIR
 TEST_OUTPUT_DIR = "tests/output"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 GOLDEN_AST_DIR = "tests/golden_ast"
 # Default execution timeout per compiled test program (seconds).
 # Can be overridden via environment variable KGPC_TEST_TIMEOUT for slower machines.
@@ -131,6 +132,7 @@ UNIT_ONLY_TESTS = {
     "fpc_interface_const_after_external",
     "fpc_qualified_const_import",
     "property_indexed_unit",
+    "tdd_external_unit_var",
     "tdd_variant_shadow_record",
     "unit_cardinal_type",
     "unit_high_type_const",
@@ -1040,33 +1042,38 @@ class TestCompiler(unittest.TestCase):
         # points to Linux wrapper scripts that Wine/Windows Python cannot execute.
         # We need to find and use the Windows-native compiler from MSYS2 instead.
         if IS_WINE:
-            # Look for gcc.exe in the quasi-msys2 directory structure
+            # Look for clang.exe or gcc.exe in the quasi-msys2 directory structure
             # Use relative paths from build_dir to avoid absolute Windows paths
             msys2_search_paths = [
-                # Look in quasi-msys2/root/{ucrt64,mingw64}/bin/
+                # Look in quasi-msys2/root/{clang64,ucrt64,mingw64}/bin/
+                os.path.join(build_dir, "..", "quasi-msys2", "root", "clang64", "bin"),
                 os.path.join(build_dir, "..", "quasi-msys2", "root", "ucrt64", "bin"),
                 os.path.join(build_dir, "..", "quasi-msys2", "root", "mingw64", "bin"),
             ]
             
-            wine_gcc = None
+            wine_cc = None
             for search_dir in msys2_search_paths:
                 normalized_dir = os.path.normpath(search_dir)
-                gcc_path = os.path.join(normalized_dir, "gcc.exe")
-                if os.path.exists(gcc_path):
-                    wine_gcc = gcc_path
+                # Prefer clang.exe, fall back to gcc.exe
+                for cc_name in ["clang.exe", "gcc.exe"]:
+                    cc_path = os.path.join(normalized_dir, cc_name)
+                    if os.path.exists(cc_path):
+                        wine_cc = cc_path
+                        break
+                if wine_cc:
                     break
             
-            if wine_gcc:
-                # Use the Windows-native GCC
-                cls.c_compiler_cmd = [wine_gcc]
-                cls.c_compiler_display = f"{cc_raw} (using Wine-compatible {wine_gcc})"
-                print(f"Wine detected: Using Windows-native GCC at {wine_gcc}", file=sys.stderr)
+            if wine_cc:
+                # Use the Windows-native compiler
+                cls.c_compiler_cmd = [wine_cc]
+                cls.c_compiler_display = f"{cc_raw} (using Wine-compatible {wine_cc})"
+                print(f"Wine detected: Using Windows-native compiler at {wine_cc}", file=sys.stderr)
             else:
-                # Fallback: try to use gcc.exe directly from PATH
+                # Fallback: try to use clang.exe or gcc.exe directly from PATH
                 # The quasi-msys2 environment should have added the bin dir to PATH
-                cls.c_compiler_cmd = ["gcc.exe"]
-                cls.c_compiler_display = f"{cc_raw} (using Wine-compatible gcc.exe from PATH)"
-                print(f"Wine detected: Using gcc.exe from PATH (searched: {msys2_search_paths})", file=sys.stderr)
+                cls.c_compiler_cmd = ["clang.exe"]
+                cls.c_compiler_display = f"{cc_raw} (using Wine-compatible clang.exe from PATH)"
+                print(f"Wine detected: Using clang.exe from PATH (searched: {msys2_search_paths})", file=sys.stderr)
 
         cls.runtime_library = os.environ.get("KGPC_RUNTIME_LIB")
         if not cls.runtime_library:
@@ -1352,6 +1359,55 @@ class TestCompiler(unittest.TestCase):
         self.assertIn("movl\t$5", optimized_asm)
         # And we should not see the `add` instruction.
         self.assertNotIn("addl", optimized_asm)
+
+    def test_forward_class_constructor_assignment_no_duplicate_self_move(self):
+        """Verify that the constructor codegen emits exactly one Self-move into
+        the first argument register before the constructor call, and that no
+        duplicate consecutive movq instructions target the first arg register."""
+        input_file, asm_file, _ = self._get_test_paths("forward_class_ctor_assign")
+        run_compiler(input_file, asm_file)
+        asm_lines = read_file_content(asm_file).splitlines()
+
+        # The first argument register depends on the target ABI.
+        first_arg_reg = "%rcx" if IS_WINDOWS_ABI else "%rdi"
+
+        # 1. No duplicate consecutive movq into the first arg register anywhere in the file.
+        for i in range(len(asm_lines) - 1):
+            self.assertFalse(
+                asm_lines[i] == asm_lines[i + 1]
+                and asm_lines[i].startswith("\tmovq\t")
+                and asm_lines[i].endswith(f", {first_arg_reg}"),
+                f"duplicate constructor self move found at line {i + 1}: {asm_lines[i]}",
+            )
+
+        # 2. Verify the expected call sequence:
+        #    calloc → save instance → VMT init → Self move → call constructor.
+        #    There must be exactly ONE movq into the first arg register between
+        #    the VMT store and the constructor call.
+        call_idx = None
+        for i, line in enumerate(asm_lines):
+            if "\tcall\ttfoo__create_p" in line:
+                call_idx = i
+                break
+        self.assertIsNotNone(call_idx, "constructor call not found in assembly")
+
+        # Count movq ..., <first_arg_reg> instructions between calloc return and the call.
+        calloc_idx = None
+        for i in range(call_idx - 1, -1, -1):
+            if "\tcall\tcalloc" in asm_lines[i]:
+                calloc_idx = i
+                break
+        self.assertIsNotNone(calloc_idx, "calloc call not found before constructor")
+
+        self_moves = [
+            line for line in asm_lines[calloc_idx:call_idx]
+            if line.startswith("\tmovq\t") and line.endswith(f", {first_arg_reg}")
+        ]
+        self.assertEqual(
+            len(self_moves), 1,
+            f"Expected exactly 1 Self-move into {first_arg_reg} between calloc and constructor call, "
+            f"found {len(self_moves)}: {self_moves}",
+        )
 
     def test_dateutils_custom(self):
         """Tests DateUtils with custom regex verification."""
@@ -1975,6 +2031,9 @@ class TestCompiler(unittest.TestCase):
         executable_file = os.path.join(TEST_OUTPUT_DIR, "real_arithmetic")
 
         run_compiler(input_file, asm_file)
+        self.record_failure_context(
+            input_file=input_file, asm_file=asm_file,
+            executable_file=executable_file)
         self.compile_executable(asm_file, executable_file)
 
         result = subprocess.run(
@@ -2590,6 +2649,33 @@ sys.exit(3)
         ]
         self.assertEqual(lines, expected_lines)
         self.assertEqual(process.returncode, 0)
+
+    def test_inline_asm_uses_pascal_const_equ(self):
+        """Ensures inline asm constants are emitted from Pascal const declarations."""
+        input_file = os.path.join(TEST_CASES_DIR, "asm_const_equ.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "asm_const_equ.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "asm_const_equ")
+
+        run_compiler(input_file, asm_file)
+
+        with open(asm_file, "r", encoding="utf-8") as f:
+            asm_source = f.read()
+
+        self.assertIn(".equ MagicValue, 1234", asm_source)
+        self.assertNotIn(".equ ErmsThreshold, 1536", asm_source)
+        self.assertNotIn(".equ NtThreshold, 262144", asm_source)
+        self.assertNotIn(".equ PrefetchDistance, 512", asm_source)
+
+        self.compile_executable(asm_file, executable_file)
+
+        process = subprocess.run(
+            [executable_file],
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+        self.assertEqual(process.returncode, 0)
+        self.assertEqual(process.stdout, "OK\n")
 
     def test_unix_gethostname(self):
         """Ensures the Unix unit exposes GetHostName with actual hostname output."""

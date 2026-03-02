@@ -37,6 +37,7 @@ static const char* expression_identifier_keywords[] = {
     "object", "class",
     "integer", "real", "boolean", "char", "string",
     "byte", "word", "longint",
+    "procedure",
     // Object-oriented helpers that must be usable as identifiers in expressions
     "self",
     // Boolean literals - needed for scoped enums like TUseBoolStrs.False
@@ -67,35 +68,25 @@ bool pascal_keyword_allowed_in_expression(const char* str) {
 // Word-boundary aware case-insensitive keyword matching
 static ParseResult keyword_ci_fn(input_t* in, void* args, char* parser_name) {
     char* str = ((match_args*)args)->str;
-    InputState state;
-    save_input_state(in, &state);
+    int len = (int)strlen(str);
+    int pos = in->start;
 
-    int len = strlen(str);
-
-    // Match the keyword case-insensitively
-    for (int i = 0; i < len; i++) {
-        char c = read1(in);
-        if (tolower(c) != tolower(str[i])) {
-            restore_input_state(in, &state);
-            char* err_msg;
-            int ret = asprintf(&err_msg, "Expected keyword '%s' (case-insensitive)", str);
-            (void)ret;
-            return make_failure_v2(in, parser_name, err_msg, NULL);
-        }
+    /* Fast path: check bounds, case-insensitive match, and word boundary without read1() */
+    if (pos + len > in->length || strncasecmp(in->buffer + pos, str, len) != 0) {
+        return make_failure(in, strdup("Expected keyword"));
     }
 
     // Check for word boundary: next character should not be alphanumeric or underscore
-    if (in->start < in->length) {
-        char next_char = in->buffer[in->start];
+    if (pos + len < in->length) {
+        char next_char = in->buffer[pos + len];
         if (isalnum((unsigned char)next_char) || next_char == '_') {
-            restore_input_state(in, &state);
-            char* err_msg;
-            int ret = asprintf(&err_msg, "Expected keyword '%s', not part of identifier", str);
-            (void)ret;
-            return make_failure_v2(in, parser_name, err_msg, NULL);
+            return make_failure(in, strdup("Expected keyword, not part of identifier"));
         }
     }
 
+    /* Advance position — keywords are always on one line, just advance col */
+    in->start = pos + len;
+    in->col += len;
     return make_success(ast_nil);
 }
 
@@ -123,29 +114,23 @@ static ParseResult match_keyword_fn(input_t* in, void* args, char* parser_name) 
     int len = strlen(keyword);
 
     if (in->start + len > in->length || strncasecmp(in->buffer + in->start, keyword, len) != 0) {
-        char* err_msg;
-        int ret = asprintf(&err_msg, "Expected keyword '%s'", keyword);
-        (void)ret;
-        return make_failure_v2(in, parser_name, err_msg, NULL);
+        return make_failure(in, strdup("Expected keyword"));
     }
 
     if (in->start + len < in->length) {
         char next_char = in->buffer[in->start + len];
-        if (isalnum(next_char) || next_char == '_') {
-            char* err_msg;
-            int ret = asprintf(&err_msg, "Expected keyword '%s', not part of identifier", keyword);
-            (void)ret;
-            return make_failure_v2(in, parser_name, err_msg, NULL);
+        if (isalnum((unsigned char)next_char) || next_char == '_') {
+            return make_failure(in, strdup("Expected keyword, not part of identifier"));
         }
     }
 
     char* matched_text = (char*)safe_malloc(len + 1);
-    strncpy(matched_text, in->buffer + in->start, len);
+    memcpy(matched_text, in->buffer + in->start, len);
     matched_text[len] = '\0';
 
-    for (int i = 0; i < len; i++) {
-        read1(in); // Advance input to update line/col info
-    }
+    /* Keywords are always on one line — just advance col */
+    in->start += len;
+    in->col += len;
 
     ast_t* ast = new_ast();
     ast->typ = k_args->tag;

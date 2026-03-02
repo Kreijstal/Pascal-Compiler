@@ -45,6 +45,7 @@ kgpc_cparser_sources = [
   'main_cparser.c',
   'flags.c',
   'Parser/ParseTree/from_cparser.c',
+  'Parser/ParseTree/ident_ref.c',
   'Parser/List/List.c',
   'Parser/ParseTree/tree.c',
   'Parser/ParseTree/KgpcType.c',
@@ -82,6 +83,8 @@ kgpc_cparser_sources = [
   'Optimizer/mark_used.c',
   'stacktrace.c',
   'unit_paths.c',
+  'unit_registry.c',
+  'string_intern.c',
 ]
 
 kgpc_cparser_exe = executable('kgpc', kgpc_cparser_sources,

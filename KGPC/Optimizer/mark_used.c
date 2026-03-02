@@ -11,37 +11,58 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <assert.h>
+#include <ctype.h>
 #include "identifier_utils.h"
 
-/* Hash table to map mangled_id -> Tree_t* (subprogram) */
-typedef struct {
+/* Hash map to map mangled_id -> Tree_t* (subprogram) with O(1) lookup */
+#define SUBPROG_MAP_BUCKETS 211
+
+typedef struct SubprogramEntry {
     char *canonical_id;
     Tree_t *subprogram;
+    struct SubprogramEntry *next;
 } SubprogramEntry;
 
 typedef struct {
-    SubprogramEntry *entries;
-    int count;
-    int capacity;
+    SubprogramEntry *buckets[SUBPROG_MAP_BUCKETS];
+    /* Secondary index: keyed by lowered unmangled id for fallback lookups */
+    SubprogramEntry *id_buckets[SUBPROG_MAP_BUCKETS];
 } SubprogramMap;
 
+static unsigned subprog_hash(const char *s) {
+    unsigned h = 0;
+    for (; *s; s++)
+        h = h * 31 + (unsigned char)*s;
+    return h % SUBPROG_MAP_BUCKETS;
+}
+
 static void map_init(SubprogramMap *map) {
-    map->entries = NULL;
-    map->count = 0;
-    map->capacity = 0;
+    memset(map, 0, sizeof(*map));
 }
 
 static void map_destroy(SubprogramMap *map) {
     if (map == NULL)
         return;
-    for (int i = 0; i < map->count; i++) {
-        free(map->entries[i].canonical_id);
-        map->entries[i].canonical_id = NULL;
+    for (int i = 0; i < SUBPROG_MAP_BUCKETS; i++) {
+        SubprogramEntry *e = map->buckets[i];
+        while (e != NULL) {
+            SubprogramEntry *next = e->next;
+            free(e->canonical_id);
+            free(e);
+            e = next;
+        }
+        map->buckets[i] = NULL;
+
+        e = map->id_buckets[i];
+        while (e != NULL) {
+            SubprogramEntry *next = e->next;
+            free(e->canonical_id);
+            free(e);
+            e = next;
+        }
+        map->id_buckets[i] = NULL;
     }
-    free(map->entries);
-    map->entries = NULL;
-    map->count = 0;
-    map->capacity = 0;
 }
 
 static void map_add(SubprogramMap *map, const char *mangled_id, Tree_t *subprogram) {
@@ -49,21 +70,33 @@ static void map_add(SubprogramMap *map, const char *mangled_id, Tree_t *subprogr
     char *canonical_id = pascal_identifier_lower_dup(mangled_id);
     if (canonical_id == NULL)
         return;
-    
-    if (map->count >= map->capacity) {
-        int new_capacity = map->capacity == 0 ? 64 : map->capacity * 2;
-        SubprogramEntry *new_entries = realloc(map->entries, new_capacity * sizeof(SubprogramEntry));
-        if (new_entries == NULL) {
-            free(canonical_id);
-            return;
+
+    /* Primary index: by canonical (lowered) mangled_id */
+    unsigned idx = subprog_hash(canonical_id);
+    SubprogramEntry *entry = malloc(sizeof(SubprogramEntry));
+    if (entry == NULL) { free(canonical_id); return; }
+    entry->canonical_id = canonical_id;
+    entry->subprogram = subprogram;
+    entry->next = map->buckets[idx];
+    map->buckets[idx] = entry;
+
+    /* Secondary index: by lowered unmangled id */
+    const char *id = subprogram->tree_data.subprogram_data.id;
+    if (id != NULL) {
+        char *lower_id = pascal_identifier_lower_dup(id);
+        if (lower_id != NULL) {
+            unsigned id_idx = subprog_hash(lower_id);
+            SubprogramEntry *id_entry = malloc(sizeof(SubprogramEntry));
+            if (id_entry != NULL) {
+                id_entry->canonical_id = lower_id;
+                id_entry->subprogram = subprogram;
+                id_entry->next = map->id_buckets[id_idx];
+                map->id_buckets[id_idx] = id_entry;
+            } else {
+                free(lower_id);
+            }
         }
-        map->entries = new_entries;
-        map->capacity = new_capacity;
     }
-    
-    map->entries[map->count].canonical_id = canonical_id;
-    map->entries[map->count].subprogram = subprogram;
-    map->count++;
 }
 
 static Tree_t* map_find(SubprogramMap *map, const char *mangled_id) {
@@ -72,13 +105,13 @@ static Tree_t* map_find(SubprogramMap *map, const char *mangled_id) {
     if (lookup_id == NULL)
         return NULL;
 
+    /* Primary lookup: by canonical mangled_id */
+    unsigned idx = subprog_hash(lookup_id);
     Tree_t *fallback = NULL;
-    for (int i = 0; i < map->count; i++) {
-        if (map->entries[i].canonical_id != NULL &&
-            strcmp(map->entries[i].canonical_id, lookup_id) == 0) {
-            Tree_t *sub = map->entries[i].subprogram;
-            if (sub != NULL && sub->tree_data.subprogram_data.statement_list != NULL)
-            {
+    for (SubprogramEntry *e = map->buckets[idx]; e != NULL; e = e->next) {
+        if (strcmp(e->canonical_id, lookup_id) == 0) {
+            Tree_t *sub = e->subprogram;
+            if (sub != NULL && sub->tree_data.subprogram_data.statement_list != NULL) {
                 free(lookup_id);
                 return sub;
             }
@@ -87,14 +120,13 @@ static Tree_t* map_find(SubprogramMap *map, const char *mangled_id) {
         }
     }
 
-    /* Fallback: try searching by id if mangled_id not found or only forward decls exist */
+    /* Fallback: try searching by unmangled id */
+    unsigned id_idx = subprog_hash(lookup_id);
     Tree_t *id_fallback = NULL;
-    for (int i = 0; i < map->count; i++) {
-        Tree_t *sub = map->entries[i].subprogram;
-        if (sub != NULL && sub->tree_data.subprogram_data.id != NULL &&
-            pascal_identifier_equals(sub->tree_data.subprogram_data.id, mangled_id)) {
-            if (sub->tree_data.subprogram_data.statement_list != NULL)
-            {
+    for (SubprogramEntry *e = map->id_buckets[id_idx]; e != NULL; e = e->next) {
+        if (strcmp(e->canonical_id, lookup_id) == 0) {
+            Tree_t *sub = e->subprogram;
+            if (sub != NULL && sub->tree_data.subprogram_data.statement_list != NULL) {
                 free(lookup_id);
                 return sub;
             }
@@ -118,28 +150,37 @@ static void mark_subprograms_by_id(SubprogramMap *map, const char *id);
 /* Mark a subprogram and recursively mark all functions it calls */
 static void mark_subprogram_recursive(Tree_t *sub, SubprogramMap *map) {
     if (sub == NULL || sub->type != TREE_SUBPROGRAM) return;
-    
+
     /* Already marked? */
     if (sub->tree_data.subprogram_data.is_used) return;
-    
+
     /* Mark as used */
     sub->tree_data.subprogram_data.is_used = 1;
-    
-    /* IMPORTANT: If there's a forward declaration, we need to mark it too */
-    /* The map contains the implementation, but codegen iterates through ALL nodes */
-    /* So we need to find and mark any other nodes with the same mangled_id */
-    char *mangled_id = sub->tree_data.subprogram_data.mangled_id;
-    if (mangled_id != NULL) {
-        /* We'll mark all occurrences by iterating through the map entries */
-        /* Actually, we can't easily do this without access to the full list */
-        /* Instead, we'll handle this in build_subprogram_map by linking them */
-    }
-    
-    /* Traverse the body to find calls */
+
+    /* If this node has no body, try to find the implementation by plain id.
+     * This handles the case where a forward declaration (mangled_id="runerror_i")
+     * and implementation (mangled_id="FPC_RUNERROR") have different mangled names
+     * but the same Pascal identifier.  Mark ALL overloads with the same name —
+     * map_find alone picks only one and may pick the wrong overload. */
     struct Statement *body = sub->tree_data.subprogram_data.statement_list;
-    if (body != NULL) {
-        mark_stmt_calls(body, map);
+    if (body == NULL) {
+        const char *plain_id = sub->tree_data.subprogram_data.id;
+        if (plain_id != NULL) {
+            mark_subprograms_by_id(map, plain_id);
+        }
+        /* If this forward decl has a cname_override (e.g., [external name 'FPC_FINALIZE']),
+         * also mark the implementation that shares the same alias. */
+        const char *cname = sub->tree_data.subprogram_data.cname_override;
+        if (cname != NULL) {
+            Tree_t *impl = map_find(map, cname);
+            if (impl != NULL && impl != sub)
+                mark_subprogram_recursive(impl, map);
+        }
+        return;
     }
+
+    /* Traverse the body to find calls */
+    mark_stmt_calls(body, map);
 }
 
 /* Helper to check if a pointer looks valid (not garbage from uninitialized union members) */
@@ -172,7 +213,6 @@ static void mark_expr_calls(struct Expression *expr, SubprogramMap *map) {
         case EXPR_CHAR_CODE:
         case EXPR_BOOL:
         case EXPR_NIL:
-        case EXPR_TYPEINFO:
         case EXPR_ANONYMOUS_FUNCTION:
         case EXPR_ANONYMOUS_PROCEDURE:
             return;
@@ -278,14 +318,13 @@ static void mark_expr_calls(struct Expression *expr, SubprogramMap *map) {
             break;
             
         case EXPR_ADDR_OF_PROC: {
-            if (expr->expr_data.addr_of_proc_data.procedure_symbol != NULL) {
-                char *mangled_id = expr->expr_data.addr_of_proc_data.procedure_symbol->mangled_id;
-                if (mangled_id != NULL) {
-                    Tree_t *called_sub = map_find(map, mangled_id);
-                    if (called_sub != NULL) {
-                        mark_subprogram_recursive(called_sub, map);
-                    }
-                }
+            const char *mangled_id = expr->expr_data.addr_of_proc_data.proc_mangled_id;
+            if (mangled_id == NULL)
+                mangled_id = expr->expr_data.addr_of_proc_data.proc_id;
+            assert(mangled_id != NULL && "EXPR_ADDR_OF_PROC must have proc_mangled_id or proc_id set");
+            Tree_t *called_sub = map_find(map, mangled_id);
+            if (called_sub != NULL) {
+                mark_subprogram_recursive(called_sub, map);
             }
             break;
         }
@@ -508,11 +547,77 @@ static void mark_stmt_calls(struct Statement *stmt, SubprogramMap *map) {
         case STMT_INHERITED:
             mark_expr_calls(stmt->stmt_data.inherited_data.call_expr, map);
             break;
-            
+
+        case STMT_EXIT:
+            if (stmt->stmt_data.exit_data.return_expr != NULL)
+                mark_expr_calls(stmt->stmt_data.exit_data.return_expr, map);
+            break;
+
         case STMT_LABEL:
             mark_stmt_calls(stmt->stmt_data.label_data.stmt, map);
             break;
-            
+
+        case STMT_ASM_BLOCK: {
+            /* Scan inline asm text for call/jmp/leaq/movq targets and mark
+               referenced subprograms as used so DCE doesn't eliminate them. */
+            const char *asm_code = stmt->stmt_data.asm_block_data.code;
+            if (asm_code != NULL) {
+                const char *p = asm_code;
+                while (*p != '\0') {
+                    /* Skip leading whitespace */
+                    while (*p != '\0' && isspace((unsigned char)*p)) p++;
+                    if (*p == '\0') break;
+
+                    /* Read mnemonic */
+                    const char *mnem_start = p;
+                    while (*p != '\0' && !isspace((unsigned char)*p) && *p != '\n') p++;
+                    size_t mnem_len = (size_t)(p - mnem_start);
+
+                    int is_ref_insn = 0;
+                    if ((mnem_len == 4 && strncmp(mnem_start, "call", 4) == 0) ||
+                        (mnem_len == 5 && strncmp(mnem_start, "callq", 5) == 0) ||
+                        (mnem_len == 3 && strncmp(mnem_start, "jmp", 3) == 0) ||
+                        (mnem_len == 4 && strncmp(mnem_start, "jmpq", 4) == 0) ||
+                        (mnem_len == 4 && strncmp(mnem_start, "leaq", 4) == 0) ||
+                        (mnem_len == 4 && strncmp(mnem_start, "movq", 4) == 0) ||
+                        (mnem_len == 3 && strncmp(mnem_start, "lea", 3) == 0) ||
+                        (mnem_len == 3 && strncmp(mnem_start, "mov", 3) == 0)) {
+                        is_ref_insn = 1;
+                    }
+
+                    if (is_ref_insn) {
+                        /* Skip whitespace after mnemonic */
+                        while (*p != '\0' && *p != '\n' && isspace((unsigned char)*p)) p++;
+                        /* Extract operand: a symbol name before (, or end of line/comma */
+                        const char *sym_start = p;
+                        while (*p != '\0' && *p != '\n' && *p != '(' && *p != ',' &&
+                               *p != ' ' && *p != '\t') p++;
+                        size_t sym_len = (size_t)(p - sym_start);
+                        if (sym_len > 0 && sym_len < 256) {
+                            char sym_buf[256];
+                            memcpy(sym_buf, sym_start, sym_len);
+                            sym_buf[sym_len] = '\0';
+                            /* Strip leading $ or * prefix */
+                            const char *sym = sym_buf;
+                            if (*sym == '$' || *sym == '*') sym++;
+                            /* Skip purely numeric operands and register refs */
+                            if (*sym != '\0' && *sym != '%' && *sym != '-' &&
+                                !(*sym >= '0' && *sym <= '9')) {
+                                Tree_t *found = map_find(map, sym);
+                                if (found != NULL) {
+                                    mark_subprogram_recursive(found, map);
+                                }
+                            }
+                        }
+                    }
+                    /* Advance to next line */
+                    while (*p != '\0' && *p != '\n') p++;
+                    if (*p == '\n') p++;
+                }
+            }
+            break;
+        }
+
         default:
             /* Other statements don't have expressions to check */
             break;
@@ -552,6 +657,21 @@ static void build_subprogram_map(ListNode_t *sub_list, SubprogramMap *map) {
                     }
                 }
                 
+                /* Also register the unmangled id so that inline asm references
+                   (which use original Pascal names) can find the function.
+                 * Always add (even if a prior entry exists) because map_find
+                 * prefers entries with bodies — this ensures forward declarations
+                 * registered earlier don't shadow the implementation. */
+                const char *plain_id = sub->tree_data.subprogram_data.id;
+                if (plain_id != NULL && (mangled_id == NULL || strcasecmp(plain_id, mangled_id) != 0)) {
+                    map_add(map, plain_id, sub);
+                }
+                /* Also register cname_override (alias) so DCE can match alias references. */
+                const char *cname = sub->tree_data.subprogram_data.cname_override;
+                if (cname != NULL && map_find(map, cname) == NULL) {
+                    map_add(map, cname, sub);
+                }
+
                 /* Recursively process nested subprograms */
                 if (sub->tree_data.subprogram_data.subprograms != NULL) {
                     build_subprogram_map(sub->tree_data.subprogram_data.subprograms, map);
@@ -600,6 +720,24 @@ void mark_used_functions(Tree_t *program, SymTab_t *symtab) {
             mark_stmt_calls((struct Statement*)final->cur, &map);
         }
         final = final->next;
+    }
+
+    /* Scan typed constant and variable initializers for function references.
+       These contain EXPR_ADDR_OF_PROC (e.g. @NoBeginThread) that DCE must preserve. */
+    {
+        ListNode_t *var_node = program->tree_data.program_data.var_declaration;
+        while (var_node != NULL) {
+            if (var_node->type == LIST_TREE && var_node->cur != NULL) {
+                Tree_t *vdecl = (Tree_t*)var_node->cur;
+                if (vdecl->type == TREE_VAR_DECL) {
+                    struct Statement *init = vdecl->tree_data.var_decl_data.initializer;
+                    if (init != NULL) {
+                        mark_stmt_calls(init, &map);
+                    }
+                }
+            }
+            var_node = var_node->next;
+        }
     }
 
     /* Ensure VMT methods are retained even if they are not explicitly called. */
@@ -675,6 +813,69 @@ static void mark_vmt_methods_used(Tree_t *program, SubprogramMap *map)
                         }
                         method_node = method_node->next;
                     }
+
+                    /* Mark interface dispatch targets: for each interface this class
+                     * implements, mark the class's implementing methods as used.
+                     * e.g., TInterfacedObject._AddRef for IUnknown._AddRef */
+                    if (record_info->num_interfaces > 0 && record_info->interface_names != NULL)
+                    {
+                        const char *class_id = type_tree->tree_data.type_decl_data.id;
+                        for (int iidx = 0; iidx < record_info->num_interfaces; iidx++)
+                        {
+                            const char *iface_name = record_info->interface_names[iidx];
+                            if (iface_name == NULL || class_id == NULL) continue;
+                            /* Find the interface type in the type declarations list */
+                            struct RecordType *iface_record = NULL;
+                            ListNode_t *search = program->tree_data.program_data.type_declaration;
+                            while (search != NULL) {
+                                if (search->type == LIST_TREE && search->cur != NULL) {
+                                    Tree_t *st = (Tree_t *)search->cur;
+                                    if (st->type == TREE_TYPE_DECL && st->tree_data.type_decl_data.id != NULL &&
+                                        strcasecmp(st->tree_data.type_decl_data.id, iface_name) == 0) {
+                                        if (st->tree_data.type_decl_data.kind == TYPE_DECL_RECORD)
+                                            iface_record = st->tree_data.type_decl_data.info.record;
+                                        else if (st->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS)
+                                            iface_record = st->tree_data.type_decl_data.info.alias.inline_record_type;
+                                        break;
+                                    }
+                                }
+                                search = search->next;
+                            }
+                            /* Use method_templates for interfaces (methods is NULL for interfaces) */
+                            ListNode_t *imethod_list = NULL;
+                            int use_method_templates = 0;
+                            if (iface_record != NULL) {
+                                if (iface_record->methods != NULL)
+                                    imethod_list = iface_record->methods;
+                                else if (iface_record->method_templates != NULL) {
+                                    imethod_list = iface_record->method_templates;
+                                    use_method_templates = 1;
+                                }
+                            }
+                            if (imethod_list != NULL)
+                            {
+                                ListNode_t *imethod = imethod_list;
+                                while (imethod != NULL) {
+                                    const char *method_name = NULL;
+                                    if (use_method_templates) {
+                                        struct MethodTemplate *mt = (struct MethodTemplate *)imethod->cur;
+                                        if (mt != NULL) method_name = mt->name;
+                                    } else {
+                                        struct MethodInfo *mi = (struct MethodInfo *)imethod->cur;
+                                        if (mi != NULL) method_name = mi->name;
+                                    }
+                                    if (method_name != NULL) {
+                                        /* Build: ClassName__MethodName */
+                                        char impl_id[512];
+                                        snprintf(impl_id, sizeof(impl_id), "%s__%s",
+                                            class_id, method_name);
+                                        mark_subprograms_by_id(map, impl_id);
+                                    }
+                                    imethod = imethod->next;
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -687,15 +888,19 @@ static void mark_subprograms_by_id(SubprogramMap *map, const char *id)
     if (map == NULL || id == NULL)
         return;
 
-    for (int i = 0; i < map->count; i++)
+    char *lower_id = pascal_identifier_lower_dup(id);
+    if (lower_id == NULL)
+        return;
+
+    unsigned idx = subprog_hash(lower_id);
+    for (SubprogramEntry *e = map->id_buckets[idx]; e != NULL; e = e->next)
     {
-        Tree_t *sub = map->entries[i].subprogram;
-        if (sub == NULL || sub->type != TREE_SUBPROGRAM)
-            continue;
-        const char *sub_id = sub->tree_data.subprogram_data.id;
-        if (sub_id != NULL && pascal_identifier_equals(sub_id, id))
+        if (strcmp(e->canonical_id, lower_id) == 0)
         {
-            mark_subprogram_recursive(sub, map);
+            Tree_t *sub = e->subprogram;
+            if (sub != NULL && sub->type == TREE_SUBPROGRAM)
+                mark_subprogram_recursive(sub, map);
         }
     }
+    free(lower_id);
 }

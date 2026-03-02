@@ -53,12 +53,22 @@ void semcheck_set_error_context(int line_num, int col_num, int source_index);
 void semcheck_clear_error_context(void);
 void semcheck_set_source_path(const char *path);
 void semcheck_set_source_buffer(const char *buffer, size_t length);
+void semcheck_register_source_buffer(const char *path, const char *buffer, size_t length);
 
 HashNode_t *semcheck_find_type_node_with_kgpc_type(SymTab_t *symtab, const char *type_id);
+HashNode_t *semcheck_find_type_node_with_kgpc_type_ref(SymTab_t *symtab,
+    const struct TypeRef *type_ref, const char *type_id);
 int semcheck_is_unit_name(const char *name);
+int semcheck_resolve_scoped_enum_literal(SymTab_t *symtab, const char *type_name,
+    const char *literal_name, long long *out_value);
+int semcheck_resolve_scoped_enum_literal_ref(SymTab_t *symtab, const struct QualifiedIdent *type_ref,
+    const char *literal_name, long long *out_value);
 const char *semcheck_get_current_subprogram_id(void);
 const char *semcheck_get_current_subprogram_result_var_name(void);
+const char *semcheck_get_current_subprogram_method_name(void);
+const char *semcheck_get_current_subprogram_owner_class(void);
+const char *semcheck_get_current_subprogram_owner_class_full(void);
+const char *semcheck_get_current_subprogram_owner_class_outer(void);
 KgpcType *semcheck_get_current_subprogram_return_kgpc_type(struct SymTab *symtab, int *owns_type);
-int semcheck_current_subprogram_is_function(void);
 
 #endif

@@ -28,17 +28,28 @@
 #include "../NameMangling.h"
 #include "../HashTable/HashTable.h"
 #include "../SymTab/SymTab.h"
+#include "../../ParseTree/generic_types.h"
 #include "../../ParseTree/tree.h"
 #include "../../ParseTree/tree_types.h"
+#include "../../ParseTree/ident_ref.h"
 #include "../../ParseTree/type_tags.h"
 #include "../../List/List.h"
 
+HashNode_t *semcheck_find_preferred_type_node(SymTab_t *symtab, const char *type_id);
+
 /* Forward declaration from SemCheck_Expr_Resolve.c */
 const char *semcheck_type_tag_name(int type_tag);
+HashNode_t *semcheck_find_type_node_in_owner_chain(SymTab_t *symtab,
+    const char *type_id, const char *owner_full, const char *owner_outer);
+const char *semcheck_get_current_subprogram_owner_class_full(void);
+const char *semcheck_get_current_subprogram_owner_class_outer(void);
 int semcheck_typecheck_array_literal(struct Expression *expr, SymTab_t *symtab,
     int max_scope_lev, int expected_type, const char *expected_type_id, int line_num);
 int set_type_from_hashtype(int *type, HashNode_t *hash_node);
 struct RecordType *semcheck_lookup_record_type(SymTab_t *symtab, const char *type_id);
+int semcheck_convert_set_literal_to_array_literal(struct Expression *expr);
+int semcheck_try_reinterpret_as_typecast(int *type_return,
+    SymTab_t *symtab, struct Expression *expr, int max_scope_lev);
 
 #define SEMSTMT_TIMINGS_ENABLED() (getenv("KGPC_DEBUG_SEMSTMT_TIMINGS") != NULL)
 
@@ -47,6 +58,262 @@ static double semstmt_now_ms(void) {
 }
 
 void semcheck_expr_set_resolved_type(struct Expression *expr, int type_tag);
+
+static int semcheck_expr_best_line(const struct Expression *expr);
+static int semcheck_expr_best_context(const struct Expression *expr,
+    int *out_line, int *out_col, int *out_source_index);
+static int semcheck_expr_list_best_context(ListNode_t *list,
+    int *out_line, int *out_col, int *out_source_index);
+static int semcheck_expr_list_best_line(ListNode_t *list)
+{
+    while (list != NULL)
+    {
+        struct Expression *item = (struct Expression *)list->cur;
+        int line = semcheck_expr_best_line(item);
+        if (line > 0)
+            return line;
+        list = list->next;
+    }
+    return 0;
+}
+
+static int semcheck_expr_best_line(const struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+    if (expr->line_num > 0)
+        return expr->line_num;
+
+    switch (expr->type)
+    {
+        case EXPR_RELOP:
+        {
+            int line = semcheck_expr_best_line(expr->expr_data.relop_data.left);
+            if (line > 0)
+                return line;
+            return semcheck_expr_best_line(expr->expr_data.relop_data.right);
+        }
+        case EXPR_SIGN_TERM:
+            return semcheck_expr_best_line(expr->expr_data.sign_term);
+        case EXPR_ADDOP:
+        {
+            int line = semcheck_expr_best_line(expr->expr_data.addop_data.left_expr);
+            if (line > 0)
+                return line;
+            return semcheck_expr_best_line(expr->expr_data.addop_data.right_term);
+        }
+        case EXPR_MULOP:
+        {
+            int line = semcheck_expr_best_line(expr->expr_data.mulop_data.left_term);
+            if (line > 0)
+                return line;
+            return semcheck_expr_best_line(expr->expr_data.mulop_data.right_factor);
+        }
+        case EXPR_ARRAY_ACCESS:
+        {
+            int line = semcheck_expr_best_line(expr->expr_data.array_access_data.array_expr);
+            if (line > 0)
+                return line;
+            line = semcheck_expr_best_line(expr->expr_data.array_access_data.index_expr);
+            if (line > 0)
+                return line;
+            return semcheck_expr_list_best_line(expr->expr_data.array_access_data.extra_indices);
+        }
+        case EXPR_RECORD_ACCESS:
+            return semcheck_expr_best_line(expr->expr_data.record_access_data.record_expr);
+        case EXPR_FUNCTION_CALL:
+        {
+            int line = semcheck_expr_list_best_line(expr->expr_data.function_call_data.args_expr);
+            if (line > 0)
+                return line;
+            return semcheck_expr_best_line(expr->expr_data.function_call_data.procedural_var_expr);
+        }
+        case EXPR_POINTER_DEREF:
+            return semcheck_expr_best_line(expr->expr_data.pointer_deref_data.pointer_expr);
+        case EXPR_ADDR:
+            return semcheck_expr_best_line(expr->expr_data.addr_data.expr);
+        case EXPR_TYPECAST:
+            return semcheck_expr_best_line(expr->expr_data.typecast_data.expr);
+        case EXPR_IS:
+            return semcheck_expr_best_line(expr->expr_data.is_data.expr);
+        case EXPR_AS:
+            return semcheck_expr_best_line(expr->expr_data.as_data.expr);
+        case EXPR_SET:
+        {
+            ListNode_t *elements = expr->expr_data.set_data.elements;
+            while (elements != NULL)
+            {
+                struct SetElement *elem = (struct SetElement *)elements->cur;
+                int line = semcheck_expr_best_line(elem ? elem->lower : NULL);
+                if (line > 0)
+                    return line;
+                line = semcheck_expr_best_line(elem ? elem->upper : NULL);
+                if (line > 0)
+                    return line;
+                elements = elements->next;
+            }
+            return 0;
+        }
+        case EXPR_ARRAY_LITERAL:
+            return semcheck_expr_list_best_line(expr->expr_data.array_literal_data.elements);
+        case EXPR_RECORD_CONSTRUCTOR:
+        {
+            ListNode_t *fields = expr->expr_data.record_constructor_data.fields;
+            while (fields != NULL)
+            {
+                struct RecordConstructorField *field = (struct RecordConstructorField *)fields->cur;
+                int line = semcheck_expr_best_line(field ? field->value : NULL);
+                if (line > 0)
+                    return line;
+                fields = fields->next;
+            }
+            return 0;
+        }
+        case EXPR_ANONYMOUS_FUNCTION:
+        case EXPR_ANONYMOUS_PROCEDURE:
+            return 0;
+        default:
+            break;
+    }
+
+    if (expr->field_width != NULL)
+        return semcheck_expr_best_line(expr->field_width);
+    if (expr->field_precision != NULL)
+        return semcheck_expr_best_line(expr->field_precision);
+    return 0;
+}
+
+static int semcheck_expr_list_best_context(ListNode_t *list,
+    int *out_line, int *out_col, int *out_source_index)
+{
+    while (list != NULL)
+    {
+        struct Expression *item = (struct Expression *)list->cur;
+        if (semcheck_expr_best_context(item, out_line, out_col, out_source_index))
+            return 1;
+        list = list->next;
+    }
+    return 0;
+}
+
+static int semcheck_expr_best_context(const struct Expression *expr,
+    int *out_line, int *out_col, int *out_source_index)
+{
+    if (expr == NULL)
+        return 0;
+
+    if (expr->source_index >= 0 || expr->line_num > 0 || expr->col_num > 0)
+    {
+        if (out_line != NULL && expr->line_num > 0)
+            *out_line = expr->line_num;
+        if (out_col != NULL && expr->col_num > 0)
+            *out_col = expr->col_num;
+        if (out_source_index != NULL && expr->source_index >= 0)
+            *out_source_index = expr->source_index;
+        return 1;
+    }
+
+    switch (expr->type)
+    {
+        case EXPR_RELOP:
+            if (semcheck_expr_best_context(expr->expr_data.relop_data.left,
+                    out_line, out_col, out_source_index))
+                return 1;
+            return semcheck_expr_best_context(expr->expr_data.relop_data.right,
+                out_line, out_col, out_source_index);
+        case EXPR_SIGN_TERM:
+            return semcheck_expr_best_context(expr->expr_data.sign_term,
+                out_line, out_col, out_source_index);
+        case EXPR_ADDOP:
+            if (semcheck_expr_best_context(expr->expr_data.addop_data.left_expr,
+                    out_line, out_col, out_source_index))
+                return 1;
+            return semcheck_expr_best_context(expr->expr_data.addop_data.right_term,
+                out_line, out_col, out_source_index);
+        case EXPR_MULOP:
+            if (semcheck_expr_best_context(expr->expr_data.mulop_data.left_term,
+                    out_line, out_col, out_source_index))
+                return 1;
+            return semcheck_expr_best_context(expr->expr_data.mulop_data.right_factor,
+                out_line, out_col, out_source_index);
+        case EXPR_ARRAY_ACCESS:
+            if (semcheck_expr_best_context(expr->expr_data.array_access_data.array_expr,
+                    out_line, out_col, out_source_index))
+                return 1;
+            if (semcheck_expr_best_context(expr->expr_data.array_access_data.index_expr,
+                    out_line, out_col, out_source_index))
+                return 1;
+            return semcheck_expr_list_best_context(expr->expr_data.array_access_data.extra_indices,
+                out_line, out_col, out_source_index);
+        case EXPR_RECORD_ACCESS:
+            return semcheck_expr_best_context(expr->expr_data.record_access_data.record_expr,
+                out_line, out_col, out_source_index);
+        case EXPR_FUNCTION_CALL:
+            if (semcheck_expr_list_best_context(expr->expr_data.function_call_data.args_expr,
+                    out_line, out_col, out_source_index))
+                return 1;
+            return semcheck_expr_best_context(expr->expr_data.function_call_data.procedural_var_expr,
+                out_line, out_col, out_source_index);
+        case EXPR_POINTER_DEREF:
+            return semcheck_expr_best_context(expr->expr_data.pointer_deref_data.pointer_expr,
+                out_line, out_col, out_source_index);
+        case EXPR_ADDR:
+            return semcheck_expr_best_context(expr->expr_data.addr_data.expr,
+                out_line, out_col, out_source_index);
+        case EXPR_TYPECAST:
+            return semcheck_expr_best_context(expr->expr_data.typecast_data.expr,
+                out_line, out_col, out_source_index);
+        case EXPR_IS:
+            return semcheck_expr_best_context(expr->expr_data.is_data.expr,
+                out_line, out_col, out_source_index);
+        case EXPR_AS:
+            return semcheck_expr_best_context(expr->expr_data.as_data.expr,
+                out_line, out_col, out_source_index);
+        case EXPR_SET:
+        {
+            ListNode_t *elements = expr->expr_data.set_data.elements;
+            while (elements != NULL)
+            {
+                struct SetElement *elem = (struct SetElement *)elements->cur;
+                if (semcheck_expr_best_context(elem ? elem->lower : NULL,
+                        out_line, out_col, out_source_index))
+                    return 1;
+                if (semcheck_expr_best_context(elem ? elem->upper : NULL,
+                        out_line, out_col, out_source_index))
+                    return 1;
+                elements = elements->next;
+            }
+            return 0;
+        }
+        case EXPR_ARRAY_LITERAL:
+            return semcheck_expr_list_best_context(expr->expr_data.array_literal_data.elements,
+                out_line, out_col, out_source_index);
+        case EXPR_RECORD_CONSTRUCTOR:
+        {
+            ListNode_t *fields = expr->expr_data.record_constructor_data.fields;
+            while (fields != NULL)
+            {
+                struct RecordConstructorField *field = (struct RecordConstructorField *)fields->cur;
+                if (semcheck_expr_best_context(field ? field->value : NULL,
+                        out_line, out_col, out_source_index))
+                    return 1;
+                fields = fields->next;
+            }
+            return 0;
+        }
+        case EXPR_ANONYMOUS_FUNCTION:
+        case EXPR_ANONYMOUS_PROCEDURE:
+            return 0;
+        default:
+            break;
+    }
+
+    if (expr->field_width != NULL)
+        return semcheck_expr_best_context(expr->field_width, out_line, out_col, out_source_index);
+    if (expr->field_precision != NULL)
+        return semcheck_expr_best_context(expr->field_precision, out_line, out_col, out_source_index);
+    return 0;
+}
 
 static int semcheck_stmt_expr_tag(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev, int mutating)
@@ -858,6 +1125,62 @@ static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
     return hashnode_get_type_alias(node);
 }
 
+static KgpcType *resolve_param_type_with_owner(Tree_t *param_decl, SymTab_t *symtab,
+    const char *owner_full, const char *owner_outer, int *param_type_owned)
+{
+    KgpcType *param_type = resolve_type_from_vardecl(param_decl, symtab, param_type_owned);
+    if (param_type != NULL || param_decl == NULL || symtab == NULL)
+        return param_type;
+
+    const char *type_id = NULL;
+    if (param_decl->type == TREE_VAR_DECL)
+        type_id = param_decl->tree_data.var_decl_data.type_id;
+    else if (param_decl->type == TREE_ARR_DECL)
+        type_id = param_decl->tree_data.arr_decl_data.type_id;
+
+    if (type_id == NULL)
+        return NULL;
+
+    const char *resolved_owner_full = owner_full;
+    const char *resolved_owner_outer = owner_outer;
+    if (resolved_owner_full == NULL && resolved_owner_outer == NULL)
+    {
+        resolved_owner_full = semcheck_get_current_subprogram_owner_class_full();
+        resolved_owner_outer = semcheck_get_current_subprogram_owner_class_outer();
+        if (resolved_owner_full == NULL)
+            resolved_owner_full = semcheck_get_current_method_owner();
+    }
+
+    HashNode_t *type_node = semcheck_find_type_node_in_owner_chain(symtab, type_id,
+        resolved_owner_full, resolved_owner_outer);
+    if (type_node == NULL)
+        return NULL;
+
+    if (type_node->type != NULL)
+    {
+        kgpc_type_retain(type_node->type);
+        if (param_type_owned != NULL)
+            *param_type_owned = 1;
+        return type_node->type;
+    }
+
+    struct TypeAlias *alias = get_type_alias_from_node(type_node);
+    if (alias != NULL)
+    {
+        KgpcType *alias_type = create_kgpc_type_from_type_alias(alias, symtab, 0);
+        if (alias_type != NULL)
+        {
+            if (alias->kgpc_type == alias_type)
+                kgpc_type_retain(alias_type);
+            if (param_type_owned != NULL)
+                *param_type_owned = 1;
+            return alias_type;
+        }
+    }
+
+    return NULL;
+}
+
 static HashNode_t *lookup_hashnode(SymTab_t *symtab, const char *id)
 {
     if (symtab == NULL || id == NULL)
@@ -1043,40 +1366,6 @@ static void semcheck_stmt_set_call_kgpc_type(struct Statement *stmt, KgpcType *t
     }
 }
 
-static int semcheck_expr_is_char_set(SymTab_t *symtab, struct Expression *expr)
-{
-    if (expr == NULL)
-        return 0;
-
-    if (expr->resolved_kgpc_type != NULL)
-    {
-        struct TypeAlias *alias = expr->resolved_kgpc_type->type_alias;
-        if (alias != NULL && alias->is_set &&
-            (alias->set_element_type == CHAR_TYPE ||
-             (alias->set_element_type_id != NULL &&
-              (pascal_identifier_equals(alias->set_element_type_id, "Char") ||
-               pascal_identifier_equals(alias->set_element_type_id, "AnsiChar")))))
-            return 1;
-    }
-
-    if (expr->type == EXPR_VAR_ID && symtab != NULL)
-    {
-        HashNode_t *node = NULL;
-        if (FindIdent(&node, symtab, expr->expr_data.id) >= 0 && node != NULL)
-        {
-            struct TypeAlias *alias = get_type_alias_from_node(node);
-            if (alias != NULL && alias->is_set &&
-                (alias->set_element_type == CHAR_TYPE ||
-                 (alias->set_element_type_id != NULL &&
-                  (pascal_identifier_equals(alias->set_element_type_id, "Char") ||
-                   pascal_identifier_equals(alias->set_element_type_id, "AnsiChar")))))
-                return 1;
-        }
-    }
-
-    return 0;
-}
-
 /* Helper to check if a TypeAlias represents WideChar/UnicodeChar.
  * WideChar = Word (integer type), so we check alias_name, not CHAR_TYPE. */
 static int semcheck_alias_is_widechar(struct TypeAlias *alias)
@@ -1164,7 +1453,6 @@ static int semcheck_set_stmt_call_mangled_id(SymTab_t *symtab, struct Statement 
 static int semcheck_call_with_proc_var(SymTab_t *symtab, struct Statement *stmt, HashNode_t *proc_node,
     int max_scope_lev)
 {
-    (void)max_scope_lev;
     if (proc_node == NULL || proc_node->type == NULL ||
         proc_node->type->kind != TYPE_KIND_PROCEDURE)
         return 0;
@@ -1173,6 +1461,19 @@ static int semcheck_call_with_proc_var(SymTab_t *symtab, struct Statement *stmt,
     ListNode_t *formal_params = proc_node->type->info.proc_info.params;
     ListNode_t *args_given = stmt->stmt_data.procedure_call_data.expr_args;
     int arg_index = 0;
+    const char *callee_owner_full = proc_node->owner_class_full;
+    const char *callee_owner_outer = proc_node->owner_class_outer;
+    if (callee_owner_full == NULL && callee_owner_outer == NULL)
+    {
+        Tree_t *proc_def = proc_node->type->info.proc_info.definition;
+        if (proc_def != NULL && proc_def->type == TREE_SUBPROGRAM)
+        {
+            callee_owner_full = proc_def->tree_data.subprogram_data.owner_class_full;
+            callee_owner_outer = proc_def->tree_data.subprogram_data.owner_class_outer;
+            if (callee_owner_full == NULL)
+                callee_owner_full = proc_def->tree_data.subprogram_data.owner_class;
+        }
+    }
 
     while (formal_params != NULL && args_given != NULL)
     {
@@ -1184,6 +1485,14 @@ static int semcheck_call_with_proc_var(SymTab_t *symtab, struct Statement *stmt,
         struct Expression *arg_expr = (struct Expression *)args_given->cur;
 
         /* Phase 3: Use KgpcType for comprehensive type checking */
+        if (arg_expr != NULL && arg_expr->type == EXPR_FUNCTION_CALL)
+        {
+            int cast_type = UNKNOWN_TYPE;
+            int cast_result = semcheck_try_reinterpret_as_typecast(&cast_type, symtab,
+                arg_expr, max_scope_lev);
+            if (cast_result != 0)
+                return cast_result;
+        }
         
         /* Resolve KgpcType for the argument expression */
         int arg_type_owned = 0;
@@ -1192,9 +1501,11 @@ static int semcheck_call_with_proc_var(SymTab_t *symtab, struct Statement *stmt,
         /* Resolve KgpcType for the formal parameter */
         int param_type_owned = 0;
         KgpcType *param_type = NULL;
-        if (param_decl != NULL && param_decl->type == TREE_VAR_DECL)
+        if (param_decl != NULL &&
+            (param_decl->type == TREE_VAR_DECL || param_decl->type == TREE_ARR_DECL))
         {
-            param_type = resolve_type_from_vardecl(param_decl, symtab, &param_type_owned);
+            param_type = resolve_param_type_with_owner(param_decl, symtab,
+                callee_owner_full, callee_owner_outer, &param_type_owned);
         }
 
 
@@ -1238,7 +1549,7 @@ static int semcheck_call_with_proc_var(SymTab_t *symtab, struct Statement *stmt,
         args_given = args_given->next;
     }
 
-    if (formal_params == NULL && args_given != NULL)
+    if (formal_params == NULL && args_given != NULL && !proc_node->is_varargs)
     {
         semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index,
             "Error on line %d, on procedure call %s, too many arguments given!\n\n",
@@ -1275,9 +1586,14 @@ static int try_resolve_builtin_procedure(SymTab_t *symtab,
     if (proc_id == NULL || !pascal_identifier_equals(proc_id, expected_name))
         return 0;
 
+    if (stmt->stmt_data.procedure_call_data.is_method_call_placeholder)
+        return 0;
+
     /* Prefer user-defined/prologue procedures over builtins when available. */
     HashNode_t *existing = NULL;
-    int force_builtin = pascal_identifier_equals(expected_name, "Assign");
+    int force_builtin = pascal_identifier_equals(expected_name, "Assign") ||
+                        pascal_identifier_equals(expected_name, "Val") ||
+                        pascal_identifier_equals(expected_name, "Str");
     if (!force_builtin &&
         FindIdent(&existing, symtab, proc_id) != -1 && existing != NULL &&
         existing->hash_type != HASHTYPE_BUILTIN_PROCEDURE)
@@ -1392,15 +1708,7 @@ static int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, 
                 set_hash_meta(array_node, BOTH_MUTATE_REFERENCE);
                 
                 /* Check if it's a dynamic array using KgpcType first, then legacy field */
-                int is_dynamic = 0;
-                if (array_node->type != NULL)
-                {
-                    is_dynamic = kgpc_type_is_dynamic_array(array_node->type);
-                }
-                else
-                {
-                    is_dynamic = hashnode_is_dynamic_array(array_node);
-                }
+                int is_dynamic = hashnode_is_dynamic_array(array_node);
                 
                 if (is_dynamic &&
                     (array_node->hash_type == HASHTYPE_ARRAY ||
@@ -1419,16 +1727,8 @@ static int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, 
         }
         else if (array_expr != NULL && array_expr->type == EXPR_ARRAY_ACCESS)
         {
-            if (array_expr->resolved_kgpc_type != NULL &&
-                kgpc_type_is_array(array_expr->resolved_kgpc_type) &&
-                kgpc_type_is_dynamic_array(array_expr->resolved_kgpc_type))
-            {
-                is_valid_array = 1;
-            }
-            else if (array_expr->is_array_expr && array_expr->array_is_dynamic)
-            {
-                is_valid_array = 1;
-            }
+            /* Array access result - valid for nested dynamic arrays (array of array of ...) */
+            is_valid_array = 1;
         }
         
         if (!is_valid_array)
@@ -1670,7 +1970,16 @@ static int semcheck_builtin_strproc(SymTab_t *symtab, struct Statement *stmt, in
     }
 
     int target_type = UNKNOWN_TYPE;
-    return_val += semcheck_stmt_expr_tag(&target_type, symtab, target_expr, max_scope_lev, MUTATE);
+    int target_err = semcheck_stmt_expr_tag(&target_type, symtab, target_expr, max_scope_lev, MUTATE);
+    if (target_err > 0 && target_expr != NULL && target_expr->type == EXPR_TYPECAST)
+    {
+        /* Allow Inc on typecasted pointer expressions like Inc(PAnsiChar(p), ...) */
+        target_err = semcheck_stmt_expr_tag(&target_type, symtab, target_expr, max_scope_lev, NO_MUTATE);
+        struct Expression *inner = target_expr->expr_data.typecast_data.expr;
+        if (inner != NULL)
+            target_err += semcheck_stmt_expr_tag(NULL, symtab, inner, max_scope_lev, MUTATE);
+    }
+    return_val += target_err;
     if (target_type != STRING_TYPE && target_type != SHORTSTRING_TYPE)
     {
         semcheck_error_with_context("Error on line %d, Str output must be a string variable.\n", stmt->line_num);
@@ -1897,7 +2206,19 @@ static int semcheck_builtin_inc(SymTab_t *symtab, struct Statement *stmt, int ma
         struct Expression *value_expr = (struct Expression *)args->next->cur;
         int value_type = UNKNOWN_TYPE;
         return_val += semcheck_stmt_expr_tag(&value_type, symtab, value_expr, max_scope_lev, NO_MUTATE);
-        if (!is_integer_type(value_type))
+        int value_is_integer = is_integer_type(value_type);
+        if (!value_is_integer && value_expr != NULL)
+        {
+            if (value_expr->type == EXPR_INUM)
+                value_is_integer = 1;
+            else if (value_expr->type == EXPR_FUNCTION_CALL &&
+                     value_expr->expr_data.function_call_data.id != NULL &&
+                     pascal_identifier_equals(value_expr->expr_data.function_call_data.id, "SizeOf"))
+            {
+                value_is_integer = 1;
+            }
+        }
+        if (!value_is_integer)
         {
             semcheck_error_with_context("Error on line %d, Inc increment must be an integer.\n", stmt->line_num);
             ++return_val;
@@ -2629,13 +2950,27 @@ static int semcheck_builtin_dispose(SymTab_t *symtab, struct Statement *stmt, in
 /* Semantic check on a normal statement */
 int semcheck_stmt(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
-    return semcheck_stmt_main(symtab, stmt, max_scope_lev);
+    int ret = semcheck_stmt_main(symtab, stmt, max_scope_lev);
+    if (ret > 0 && getenv("KGPC_DEBUG_ERRORS") != NULL && stmt != NULL)
+    {
+        fprintf(stderr,
+            "[KGPC_DEBUG_ERRORS] stmt_error type=%d line=%d col=%d src=%d ret=%d\n",
+            stmt->type, stmt->line_num, stmt->col_num, stmt->source_index, ret);
+    }
+    return ret;
 }
 
 /* Semantic check on a function statement (no side effects allowed) */
 int semcheck_func_stmt(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
-    return semcheck_stmt_main(symtab, stmt, max_scope_lev);
+    int ret = semcheck_stmt_main(symtab, stmt, max_scope_lev);
+    if (ret > 0 && getenv("KGPC_DEBUG_ERRORS") != NULL && stmt != NULL)
+    {
+        fprintf(stderr,
+            "[KGPC_DEBUG_ERRORS] func_stmt_error type=%d line=%d col=%d src=%d ret=%d\n",
+            stmt->type, stmt->line_num, stmt->col_num, stmt->source_index, ret);
+    }
+    return ret;
 }
 
 static int semcheck_break_stmt(struct Statement *stmt)
@@ -3023,24 +3358,16 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                     {
                         /* For inherited procedure calls, check if we need to handle Create/Destroy with no parent */
                         const char *method_name = call_expr->expr_data.function_call_data.id;
-                        char *method_name_buf = NULL;
-                        char *owner_name_buf = NULL;
-                        if (method_name != NULL)
+                        const char *owner_name_from_node = NULL;
                         {
-                            const char *sep = strstr(method_name, "__");
-                            if (sep != NULL)
+                            HashNode_t *call_method_node = NULL;
+                            if (method_name != NULL &&
+                                FindIdent(&call_method_node, symtab, method_name) != -1 &&
+                                call_method_node != NULL)
                             {
-                                size_t owner_len = (size_t)(sep - method_name);
-                                size_t meth_len = strlen(sep + 2);
-                                owner_name_buf = (char *)malloc(owner_len + 1);
-                                method_name_buf = (char *)malloc(meth_len + 1);
-                                if (owner_name_buf != NULL && method_name_buf != NULL)
-                                {
-                                    memcpy(owner_name_buf, method_name, owner_len);
-                                    owner_name_buf[owner_len] = '\0';
-                                    memcpy(method_name_buf, sep + 2, meth_len + 1);
-                                    method_name = method_name_buf;
-                                }
+                                if (call_method_node->method_name != NULL)
+                                    method_name = call_method_node->method_name;
+                                owner_name_from_node = call_method_node->owner_class;
                             }
                         }
                         HashNode_t *self_node = NULL;
@@ -3097,8 +3424,8 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                         if (current_class == NULL)
                         {
                             const char *owner_id = semcheck_get_current_method_owner();
-                            if (owner_id == NULL && owner_name_buf != NULL)
-                                owner_id = owner_name_buf;
+                            if (owner_id == NULL && owner_name_from_node != NULL)
+                                owner_id = owner_name_from_node;
                             if (owner_id != NULL)
                             {
                                 HashNode_t *owner_node = NULL;
@@ -3116,10 +3443,8 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                                 current_class && current_class->type_id ? current_class->type_id : "<null>",
                                 parent_class_name ? parent_class_name : "<null>");
                         }
-                        if (owner_name_buf != NULL)
-                            free(owner_name_buf);
-                        if (method_name_buf != NULL)
-                            free(method_name_buf);
+                        /* method_name and owner_name_from_node point to HashNode fields,
+                         * no need to free */
 
                         /* If a parent exists, call the parent class method */
                         HashNode_t *parent_method_node = NULL;
@@ -3157,6 +3482,18 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                                             }
                                         }
                                         free(call_mangled);
+                                    }
+
+                                    /* Fallback: use semcheck_resolve_overload when exact mangling
+                                     * doesn't match (e.g., dynamic array types with different alias names) */
+                                    if (parent_method_node == NULL)
+                                    {
+                                        HashNode_t *best_match = NULL;
+                                        int best_rank = 0, num_best = 0;
+                                        semcheck_resolve_overload(&best_match, &best_rank, &num_best,
+                                            parent_candidates, self_arg, symtab, call_expr, INT_MAX, 0);
+                                        if (best_match != NULL && num_best == 1)
+                                            parent_method_node = best_match;
                                     }
 
                                     self_arg->next = NULL;
@@ -3364,6 +3701,7 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
     int return_val;
     int type_first, type_second;
     struct Expression *var, *expr;
+    int lhs_was_typecast;
 
     assert(symtab != NULL);
     assert(stmt != NULL);
@@ -3377,6 +3715,7 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
 
     var = stmt->stmt_data.var_assign_data.var;
     expr = stmt->stmt_data.var_assign_data.expr;
+    lhs_was_typecast = (var != NULL && var->type == EXPR_TYPECAST);
 
     rewrite_tfpglist_constructor_if_needed(symtab, max_scope_lev, var,
         &stmt->stmt_data.var_assign_data.expr);
@@ -3386,11 +3725,59 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
     /* Left side var assigns must abide by scoping rules */
     if (SEMSTMT_TIMINGS_ENABLED()) {
         double t0 = semstmt_now_ms();
+        int before_lhs = return_val;
         return_val += semcheck_stmt_expr_tag(&type_first, symtab, var, max_scope_lev, MUTATE);
         fprintf(stderr, "[timing] varassign lhs semcheck_stmt_expr_tag: %.2f ms (line=%d)\n",
                 semstmt_now_ms() - t0, stmt->line_num);
+        if (getenv("KGPC_DEBUG_ERRORS") != NULL && return_val > before_lhs && var != NULL)
+        {
+            fprintf(stderr,
+                "[KGPC_DEBUG_ERRORS] varassign_lhs_error line=%d expr_type=%d\n",
+                stmt->line_num, var->type);
+            if (var->type == EXPR_RECORD_ACCESS && var->expr_data.record_access_data.field_id != NULL)
+                fprintf(stderr, "[KGPC_DEBUG_ERRORS]   lhs record field=%s\n",
+                    var->expr_data.record_access_data.field_id);
+        }
     } else {
+        int before_lhs = return_val;
         return_val += semcheck_stmt_expr_tag(&type_first, symtab, var, max_scope_lev, MUTATE);
+        if (getenv("KGPC_DEBUG_ERRORS") != NULL && return_val > before_lhs && var != NULL)
+        {
+            fprintf(stderr,
+                "[KGPC_DEBUG_ERRORS] varassign_lhs_error line=%d expr_type=%d\n",
+                stmt->line_num, var->type);
+            if (var->type == EXPR_RECORD_ACCESS && var->expr_data.record_access_data.field_id != NULL)
+                fprintf(stderr, "[KGPC_DEBUG_ERRORS]   lhs record field=%s\n",
+                    var->expr_data.record_access_data.field_id);
+        }
+    }
+
+    if (var != NULL && var->type == EXPR_TYPECAST)
+    {
+        struct Expression *inner = var->expr_data.typecast_data.expr;
+        if (inner != NULL)
+        {
+            int compatible = 0;
+            KgpcType *lhs_type = var->resolved_kgpc_type;
+            KgpcType *inner_type = inner->resolved_kgpc_type;
+            if (lhs_type != NULL && inner_type != NULL)
+                compatible = are_types_compatible_for_assignment(lhs_type, inner_type, symtab);
+            else if (lhs_type == NULL && inner_type == NULL)
+                compatible = 1;
+            if (!compatible)
+            {
+                TypeRef *target_ref = var->expr_data.typecast_data.target_type_ref;
+                if (target_ref != NULL && target_ref->num_generic_args > 0)
+                    compatible = 1;
+            }
+            if (compatible)
+            {
+                stmt->stmt_data.var_assign_data.var = inner;
+                var->expr_data.typecast_data.expr = NULL;
+                destroy_expr(var);
+                var = inner;
+            }
+        }
     }
 
     /* Check for record property assignment early, before RHS type checking.
@@ -3453,11 +3840,37 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
     }
     if (SEMSTMT_TIMINGS_ENABLED()) {
         double t0 = semstmt_now_ms();
+        int before_rhs = return_val;
         return_val += semcheck_stmt_expr_tag(&type_second, symtab, expr, INT_MAX, NO_MUTATE);
         fprintf(stderr, "[timing] varassign rhs semcheck_stmt_expr_tag: %.2f ms (line=%d)\n",
                 semstmt_now_ms() - t0, stmt->line_num);
+        if (getenv("KGPC_DEBUG_ERRORS") != NULL && return_val > before_rhs && expr != NULL)
+        {
+            fprintf(stderr,
+                "[KGPC_DEBUG_ERRORS] varassign_rhs_error line=%d expr_type=%d\n",
+                stmt->line_num, expr->type);
+            if (expr->type == EXPR_FUNCTION_CALL && expr->expr_data.function_call_data.id != NULL)
+                fprintf(stderr, "[KGPC_DEBUG_ERRORS]   rhs func=%s\n",
+                    expr->expr_data.function_call_data.id);
+            if (expr->type == EXPR_RECORD_ACCESS && expr->expr_data.record_access_data.field_id != NULL)
+                fprintf(stderr, "[KGPC_DEBUG_ERRORS]   rhs record field=%s\n",
+                    expr->expr_data.record_access_data.field_id);
+        }
     } else {
+        int before_rhs = return_val;
         return_val += semcheck_stmt_expr_tag(&type_second, symtab, expr, INT_MAX, NO_MUTATE);
+        if (getenv("KGPC_DEBUG_ERRORS") != NULL && return_val > before_rhs && expr != NULL)
+        {
+            fprintf(stderr,
+                "[KGPC_DEBUG_ERRORS] varassign_rhs_error line=%d expr_type=%d\n",
+                stmt->line_num, expr->type);
+            if (expr->type == EXPR_FUNCTION_CALL && expr->expr_data.function_call_data.id != NULL)
+                fprintf(stderr, "[KGPC_DEBUG_ERRORS]   rhs func=%s\n",
+                    expr->expr_data.function_call_data.id);
+            if (expr->type == EXPR_RECORD_ACCESS && expr->expr_data.record_access_data.field_id != NULL)
+                fprintf(stderr, "[KGPC_DEBUG_ERRORS]   rhs record field=%s\n",
+                    expr->expr_data.record_access_data.field_id);
+        }
     }
 
     if (getenv("KGPC_DEBUG_SEMCHECK") != NULL && expr != NULL && expr->type == EXPR_FUNCTION_CALL &&
@@ -3498,78 +3911,45 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
 
         if (var != NULL && var->type == EXPR_VAR_ID && var->expr_data.id != NULL)
         {
-            if (semcheck_current_subprogram_is_function())
+            const char *cur_id = semcheck_get_current_subprogram_id();
+            if (cur_id != NULL)
             {
-                const char *cur_id = semcheck_get_current_subprogram_id();
-                if (cur_id != NULL)
+                /* Check if this is "Result" or the function's own name (Pascal-style
+                 * function result assignment: FuncName := value). Both should use the
+                 * current function's return type directly from the subprogram tree.
+                 * This is critical for case-insensitive overloads where FpFStat and
+                 * FPFStat both exist — FindIdent may resolve to the wrong overload's
+                 * return type entry in the symbol table.
+                 * Also check operator result variable name (e.g., "dest" in
+                 * operator :=(src) dest: variant). */
+                const char *result_var = semcheck_get_current_subprogram_result_var_name();
+                /* For methods, cur_id is mangled (e.g. "TEReader__ReadNext").
+                 * Also check against just the method name part after "__". */
+                const char *method_name = semcheck_get_current_subprogram_method_name();
+                int is_result_assign = pascal_identifier_equals(var->expr_data.id, "Result") ||
+                                       pascal_identifier_equals(var->expr_data.id, cur_id) ||
+                                       (method_name != NULL && pascal_identifier_equals(var->expr_data.id, method_name)) ||
+                                       (result_var != NULL && pascal_identifier_equals(var->expr_data.id, result_var));
+                if (is_result_assign)
                 {
-                    /* Check if this is "Result" or the function's own name (Pascal-style
-                     * function result assignment: FuncName := value). Both should use the
-                     * current function's return type directly from the subprogram tree.
-                     * This is critical for case-insensitive overloads where FpFStat and
-                     * FPFStat both exist — FindIdent may resolve to the wrong overload's
-                     * return type entry in the symbol table.
-                     * Also check operator result variable name (e.g., "dest" in
-                     * operator :=(src) dest: variant). */
-                    const char *result_var = semcheck_get_current_subprogram_result_var_name();
-                    const char *alias_suffix = NULL;
-                    const char *method_base = NULL;
-                    size_t method_base_len = 0;
-                    const char *sep = strstr(cur_id, "__");
-                    if (sep != NULL && sep[2] != '\0')
+                    int ret_owned = 0;
+                    KgpcType *ret_type = semcheck_get_current_subprogram_return_kgpc_type(symtab, &ret_owned);
+                    if (ret_type != NULL &&
+                        !(ret_type->kind == TYPE_KIND_PRIMITIVE && ret_type->info.primitive_type_tag < 0))
                     {
-                        alias_suffix = sep + 2;
-                        const char *name_start = sep + 2;
-                        const char *end = strstr(name_start, "_u_");
-                        if (end == NULL)
-                            end = strchr(name_start, '_');
-                        if (end != NULL && end > name_start)
-                        {
-                            method_base = name_start;
-                            method_base_len = (size_t)(end - name_start);
-                        }
-                        else if (end == NULL)
-                        {
-                            method_base = name_start;
-                            method_base_len = strlen(name_start);
-                        }
+                        /* Always use the function's declared return type for result
+                         * variable assignments, even if the current LHS type seems
+                         * compatible. This handles cases where FindIdent found a
+                         * different overload's return type entry (e.g., Variant vs
+                         * String for operator overloads with named result vars). */
+                        if (lhs_owned && lhs_kgpctype != NULL)
+                            destroy_kgpc_type(lhs_kgpctype);
+                        lhs_kgpctype = ret_type;
+                        lhs_owned = ret_owned;
                     }
-
-                    int is_result_assign = pascal_identifier_equals(var->expr_data.id, "Result") ||
-                                           pascal_identifier_equals(var->expr_data.id, cur_id) ||
-                                           (alias_suffix != NULL && pascal_identifier_equals(var->expr_data.id, alias_suffix)) ||
-                                           (result_var != NULL && pascal_identifier_equals(var->expr_data.id, result_var));
-                    if (!is_result_assign && method_base != NULL && method_base_len > 0)
+                    else if (ret_type != NULL && ret_owned)
                     {
-                        char *method_name = strndup(method_base, method_base_len);
-                        if (method_name != NULL)
-                        {
-                            if (pascal_identifier_equals(var->expr_data.id, method_name))
-                                is_result_assign = 1;
-                            free(method_name);
-                        }
-                    }
-                    if (is_result_assign)
-                    {
-                        int ret_owned = 0;
-                        KgpcType *ret_type = semcheck_get_current_subprogram_return_kgpc_type(symtab, &ret_owned);
-                        if (ret_type != NULL &&
-                            !(ret_type->kind == TYPE_KIND_PRIMITIVE && ret_type->info.primitive_type_tag < 0))
-                        {
-                            /* Always use the function's declared return type for result
-                             * variable assignments, even if the current LHS type seems
-                             * compatible. This handles cases where FindIdent found a
-                             * different overload's return type entry (e.g., Variant vs
-                             * String for operator overloads with named result vars). */
-                            if (lhs_owned && lhs_kgpctype != NULL)
-                                destroy_kgpc_type(lhs_kgpctype);
-                            lhs_kgpctype = ret_type;
-                            lhs_owned = ret_owned;
-                        }
-                        else if (ret_type != NULL && ret_owned)
-                        {
-                            destroy_kgpc_type(ret_type);
-                        }
+                        destroy_kgpc_type(ret_type);
                     }
                 }
             }
@@ -3671,6 +4051,14 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                 goto assignment_types_ok;
             }
         }
+        if (expr != NULL && expr->type == EXPR_SET &&
+            kgpc_type_is_array(lhs_kgpctype))
+        {
+            if (semcheck_convert_set_literal_to_array_literal(expr) != 0)
+                semcheck_error_with_context("Error on line %d, unable to convert set literal to array literal.\n\n",
+                    stmt->line_num);
+        }
+
         if (expr != NULL && expr->type == EXPR_ARRAY_LITERAL &&
             kgpc_type_is_array(lhs_kgpctype))
         {
@@ -3763,6 +4151,9 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                 }
             }
 
+            if (lhs_was_typecast)
+                goto assignment_types_ok;
+
             const char *lhs_name = "<expression>";
             if (var != NULL && var->type == EXPR_VAR_ID)
                 lhs_name = var->expr_data.id;
@@ -3791,7 +4182,18 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                 {
                     /* Transform the expression to EXPR_ADDR_OF_PROC */
                     expr->type = EXPR_ADDR_OF_PROC;
-                    expr->expr_data.addr_of_proc_data.procedure_symbol = rhs_symbol;
+                    expr->expr_data.addr_of_proc_data.proc_mangled_id = rhs_symbol->mangled_id ? strdup(rhs_symbol->mangled_id) : NULL;
+                    expr->expr_data.addr_of_proc_data.proc_id = rhs_symbol->id ? strdup(rhs_symbol->id) : NULL;
+                    /* Resolve the type NOW while the symbol is still alive. */
+                    if (rhs_symbol->type != NULL)
+                    {
+                        kgpc_type_retain(rhs_symbol->type);
+                        expr->resolved_kgpc_type = create_pointer_type(rhs_symbol->type);
+                    }
+                    else
+                    {
+                        expr->resolved_kgpc_type = create_pointer_type(NULL);
+                    }
                 }
             }
         }
@@ -3902,6 +4304,19 @@ assignment_types_ok:
                     types_compatible = 1;
                     /* Keep the type as STRING_TYPE to signal code generator to emit string-to-array copy */
                 }
+            }
+        }
+
+        if (lhs_was_typecast)
+            types_compatible = 1;
+
+        if (!types_compatible)
+        {
+            if (var != NULL && var->type == EXPR_TYPECAST)
+            {
+                const struct TypeRef *cast_ref = var->expr_data.typecast_data.target_type_ref;
+                if (cast_ref != NULL && cast_ref->num_generic_args > 0)
+                    types_compatible = 1;
             }
         }
 
@@ -4082,6 +4497,8 @@ static int semcheck_convert_property_assignment_to_setter(SymTab_t *symtab,
     stmt->stmt_data.procedure_call_data.is_procedural_var_call = 0;
     stmt->stmt_data.procedure_call_data.procedural_var_symbol = NULL;
     stmt->stmt_data.procedure_call_data.procedural_var_expr = NULL;
+    stmt->stmt_data.procedure_call_data.is_method_call_placeholder = 0;
+    stmt->stmt_data.procedure_call_data.placeholder_method_name = NULL;
     semcheck_stmt_set_call_kgpc_type(stmt, NULL, 0);
 
     return semcheck_proccall(symtab, stmt, max_scope_lev);
@@ -4159,6 +4576,7 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     char *mangled_name;
     int static_arg_already_removed = 0;
     int static_method_receiver = 0;
+    int was_unit_qualified = 0;
 
     assert(symtab != NULL);
     assert(stmt != NULL);
@@ -4171,7 +4589,7 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
 
     /* If this is a method call placeholder with a type identifier receiver,
      * resolve it to the class method immediately to avoid type-helper detours. */
-    if (proc_id != NULL && strncmp(proc_id, "__", 2) == 0 && args_given != NULL)
+    if (stmt->stmt_data.procedure_call_data.is_method_call_placeholder && args_given != NULL)
     {
         struct Expression *first_arg = (struct Expression *)args_given->cur;
         if (first_arg != NULL && first_arg->type == EXPR_VAR_ID && first_arg->expr_data.id != NULL)
@@ -4187,9 +4605,10 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                 type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
             {
                 struct RecordType *record_info = semcheck_stmt_get_record_type_from_node(type_node);
-                if (record_info != NULL && record_info->type_id != NULL)
+                if (record_info != NULL && record_info->type_id != NULL &&
+                    stmt->stmt_data.procedure_call_data.placeholder_method_name != NULL)
                 {
-                    const char *method_name = proc_id + 2;
+                    const char *method_name = stmt->stmt_data.procedure_call_data.placeholder_method_name;
                     size_t class_len = strlen(record_info->type_id);
                     size_t method_len = strlen(method_name);
                     char *new_proc_id = (char *)malloc(class_len + 2 + method_len + 1);
@@ -4223,7 +4642,7 @@ skip_type_receiver_rewrite:
      * (preferred) or is unresolved in the symbol table (fallback heuristic), and the procedure
      * name (without "__" prefix) exists in symbol table.
      */
-    if (proc_id != NULL && strncmp(proc_id, "__", 2) == 0 && args_given != NULL)
+    if (stmt->stmt_data.procedure_call_data.is_method_call_placeholder && args_given != NULL)
     {
         struct Expression *first_arg = (struct Expression *)args_given->cur;
         if (first_arg != NULL && first_arg->type == EXPR_VAR_ID && first_arg->expr_data.id != NULL)
@@ -4237,14 +4656,28 @@ skip_type_receiver_rewrite:
             if (!is_unit_qualifier &&
                 FindIdent(&unit_check, symtab, potential_unit_name) == -1)
             {
-                is_unit_qualifier = 1;
+                int looks_like_self_field = 0;
+                HashNode_t *self_node = NULL;
+                if (FindIdent(&self_node, symtab, "Self") != -1 && self_node != NULL)
+                {
+                    struct RecordType *self_record = semcheck_stmt_get_record_type_from_node(self_node);
+                    if (self_record != NULL &&
+                        semcheck_find_class_field_including_hidden(symtab, self_record,
+                            potential_unit_name, NULL) != NULL)
+                    {
+                        looks_like_self_field = 1;
+                    }
+                }
+
+                if (!looks_like_self_field)
+                    is_unit_qualifier = 1;
             }
 
             if (is_unit_qualifier)
             {
-                /* Unit-qualified call; try to resolve the real procedure name
-                 * without the "__" prefix. */
-                char *real_proc_name = strdup(proc_id + 2);  /* Skip the "__" prefix */
+                /* Unit-qualified call; resolve using the structured method name. */
+                char *real_proc_name = (stmt->stmt_data.procedure_call_data.placeholder_method_name != NULL)
+                    ? strdup(stmt->stmt_data.procedure_call_data.placeholder_method_name) : NULL;
                 if (real_proc_name == NULL)
                 {
                     /* strdup failed - skip transformation, will report error later */
@@ -4276,7 +4709,9 @@ skip_type_receiver_rewrite:
                         free(proc_id);
                         proc_id = real_proc_name;
                         stmt->stmt_data.procedure_call_data.id = proc_id;
+                        stmt->stmt_data.procedure_call_data.is_method_call_placeholder = 0;
                         args_given = remaining_args;
+                        was_unit_qualified = 1;
 
                         DestroyList(proc_candidates);
 
@@ -4284,17 +4719,90 @@ skip_type_receiver_rewrite:
                     }
                     else
                     {
-                        /* Procedure not found - free real_proc_name and fall through to report error */
-                        free(real_proc_name);
+                        /* Procedure not found - allow System.Exit without a symbol table entry. */
+                        if (pascal_identifier_equals(real_proc_name, "Exit"))
+                        {
+                            ListNode_t *remaining_args = args_given->next;
+
+                            destroy_expr(first_arg);
+                            args_given->cur = NULL;
+                            free(args_given);
+
+                            stmt->stmt_data.procedure_call_data.expr_args = remaining_args;
+
+                            free(proc_id);
+                            proc_id = real_proc_name;
+                            stmt->stmt_data.procedure_call_data.id = proc_id;
+                            stmt->stmt_data.procedure_call_data.is_method_call_placeholder = 0;
+                            args_given = remaining_args;
+                            was_unit_qualified = 1;
+                        }
+                        else
+                        {
+                            /* Procedure not found - free real_proc_name and fall through to report error */
+                            free(real_proc_name);
+                        }
                     }
                 }
             }
         }
     }
 
+    /* Treat System.Exit (or unqualified Exit) as a built-in procedure call.
+     * This avoids resolving Exit against class methods like TMonitor.Exit. */
+    if (proc_id != NULL &&
+        pascal_identifier_equals(proc_id, "Exit") &&
+        !stmt->stmt_data.procedure_call_data.is_method_call_placeholder)
+    {
+        int arg_count = 0;
+        for (ListNode_t *scan = args_given; scan != NULL; scan = scan->next)
+            ++arg_count;
+
+        if (arg_count > 1)
+        {
+            semcheck_error_with_context("Error on line %d, Exit() expects at most one argument.\n\n",
+                stmt->line_num);
+            return 1;
+        }
+
+        struct Expression *exit_expr = NULL;
+        if (arg_count == 1)
+        {
+            int expr_type = UNKNOWN_TYPE;
+            exit_expr = (struct Expression *)args_given->cur;
+            if (exit_expr != NULL)
+                return_val += semcheck_stmt_expr_tag(&expr_type, symtab, exit_expr, max_scope_lev, 0);
+        }
+
+        /* Transform the procedure call into an Exit statement for codegen. */
+        stmt->type = STMT_EXIT;
+        stmt->stmt_data.exit_data.return_expr = exit_expr;
+        stmt->stmt_data.procedure_call_data.expr_args = NULL;
+        if (stmt->stmt_data.procedure_call_data.id != NULL)
+        {
+            free(stmt->stmt_data.procedure_call_data.id);
+            stmt->stmt_data.procedure_call_data.id = NULL;
+        }
+        if (stmt->stmt_data.procedure_call_data.mangled_id != NULL)
+        {
+            free(stmt->stmt_data.procedure_call_data.mangled_id);
+            stmt->stmt_data.procedure_call_data.mangled_id = NULL;
+        }
+        while (args_given != NULL)
+        {
+            ListNode_t *next = args_given->next;
+            args_given->cur = NULL;
+            free(args_given);
+            args_given = next;
+        }
+
+        return return_val;
+    }
+
     /* If no explicit receiver was provided, but Self is in scope and defines this method,
      * prepend Self so unqualified method calls resolve correctly. */
-    if (proc_id != NULL && !stmt->stmt_data.procedure_call_data.is_method_call_placeholder)
+    if (!was_unit_qualified && proc_id != NULL &&
+        !stmt->stmt_data.procedure_call_data.is_method_call_placeholder)
     {
         HashNode_t *self_node = NULL;
         struct RecordType *self_record = NULL;
@@ -4334,6 +4842,9 @@ skip_type_receiver_rewrite:
                 (method_node->hash_type == HASHTYPE_PROCEDURE ||
                  method_node->hash_type == HASHTYPE_FUNCTION))
             {
+                /* Save bare method name before rewrite for virtual dispatch check */
+                char *bare_method_name = strdup(proc_id);
+
                 /* Prepend Self to arguments */
                 struct Expression *self_expr = mk_varid(stmt->line_num, strdup("Self"));
                 ListNode_t *self_arg = CreateListNode(self_expr, LIST_EXPR);
@@ -4341,20 +4852,60 @@ skip_type_receiver_rewrite:
                 stmt->stmt_data.procedure_call_data.expr_args = self_arg;
                 args_given = self_arg;
 
-                /* Update proc_id to mangled name */
-                size_t class_len = strlen(self_record->type_id);
-                size_t method_len = strlen(proc_id);
-                char *new_proc_id = (char *)malloc(class_len + 2 + method_len + 1);
-                if (new_proc_id != NULL)
+                /* Update proc_id to the resolved method's id (e.g. TBase__Bump, not TDerived__Bump
+                 * when the method is inherited from a parent class). */
+                if (method_node->id != NULL)
                 {
-                    sprintf(new_proc_id, "%s__%s", self_record->type_id, proc_id);
-                    free(proc_id);
-                    proc_id = new_proc_id;
-                    stmt->stmt_data.procedure_call_data.id = proc_id;
+                    char *new_proc_id = strdup(method_node->id);
+                    if (new_proc_id != NULL)
+                    {
+                        free(proc_id);
+                        proc_id = new_proc_id;
+                        stmt->stmt_data.procedure_call_data.id = proc_id;
+                    }
                 }
+
+                /* Check if this is a virtual/abstract method call that needs VMT dispatch.
+                 * Only for instance methods (not class/static methods), since class methods
+                 * use a different VMT dispatch convention (single indirection). */
+                if (self_record->type_id != NULL && bare_method_name != NULL &&
+                    from_cparser_is_method_virtual(self_record->type_id, bare_method_name) &&
+                    !from_cparser_is_method_static(self_record->type_id, bare_method_name))
+                {
+                    stmt->stmt_data.procedure_call_data.is_virtual_call = 1;
+                    int vmt_index = -1;
+                    if (self_record->methods != NULL)
+                    {
+                        ListNode_t *method_entry = self_record->methods;
+                        while (method_entry != NULL)
+                        {
+                            struct MethodInfo *info = (struct MethodInfo *)method_entry->cur;
+                            if (info != NULL && info->name != NULL &&
+                                (info->is_virtual || info->is_override) &&
+                                strcasecmp(info->name, bare_method_name) == 0)
+                            {
+                                vmt_index = info->vmt_index;
+                                break;
+                            }
+                            method_entry = method_entry->next;
+                        }
+                    }
+                    stmt->stmt_data.procedure_call_data.vmt_index = vmt_index;
+                    stmt->stmt_data.procedure_call_data.self_class_name =
+                        strdup(self_record->type_id);
+                }
+                free(bare_method_name);
             }
-            else if (strstr(proc_id, "__") == NULL && self_record != NULL && self_record->type_id != NULL)
+            else if (self_record != NULL && self_record->type_id != NULL)
             {
+                /* Check if proc_id is already a resolved method call (has owner_class in symbol table) */
+                HashNode_t *proc_check_node = NULL;
+                int is_already_method = 0;
+                if (FindIdent(&proc_check_node, symtab, proc_id) != -1 && proc_check_node != NULL &&
+                    proc_check_node->owner_class != NULL)
+                    is_already_method = 1;
+                if (!is_already_method)
+                {
                 /* Check if proc_id is a procedural-type field or property of Self's class.
                  * This handles patterns like FCallBack(Self,a,b,c) and OnQueryInterface(x,y,z)
                  * where FCallBack is a field of type TThunkCallBack (procedural type)
@@ -4383,6 +4934,8 @@ skip_type_receiver_rewrite:
                             }
                             else if (rf->type_id != NULL)
                             {
+                                /* proc_type is resolved during semcheck_qualify_nested_types_for_record
+                                 * so this path handles non-nested procedural types only. */
                                 HashNode_t *type_node = NULL;
                                 if (FindIdent(&type_node, symtab, rf->type_id) != -1 &&
                                     type_node != NULL && type_node->type != NULL &&
@@ -4444,12 +4997,14 @@ skip_type_receiver_rewrite:
                     stmt->stmt_data.procedure_call_data.is_procedural_var_call = 1;
                     stmt->stmt_data.procedure_call_data.procedural_var_expr = field_access;
                     stmt->stmt_data.procedure_call_data.call_hash_type = HASHTYPE_VAR;
+                    stmt->stmt_data.procedure_call_data.is_call_info_valid = 1;
 
                     /* Check the expression for type resolution */
                     int field_tag = UNKNOWN_TYPE;
                     return_val += semcheck_stmt_expr_tag(&field_tag, symtab, field_access, max_scope_lev, NO_MUTATE);
 
                     return return_val;
+                }
                 }
             }
         }
@@ -4890,9 +5445,8 @@ skip_type_receiver_rewrite:
         }
 
         if (record_info != NULL && record_info->type_id != NULL) {
-            const char *method_name = proc_id;
-            if (method_name != NULL && strncmp(method_name, "__", 2) == 0)
-                method_name += 2;
+            const char *method_name = (stmt->stmt_data.procedure_call_data.placeholder_method_name != NULL)
+                ? stmt->stmt_data.procedure_call_data.placeholder_method_name : proc_id;
 
             int is_static = from_cparser_is_method_static(record_info->type_id, method_name);
             if (static_method_receiver)
@@ -4969,6 +5523,23 @@ skip_type_receiver_rewrite:
                     args_given = stmt->stmt_data.procedure_call_data.expr_args;
                     static_arg_already_removed = 1;
                 }
+                else if (is_static && !receiver_is_type_ident && args_given != NULL)
+                {
+                    /* Static method called from within the class with implicit Self prepended.
+                     * Self must be stripped since static methods have no Self parameter.
+                     * Check if the first arg is "Self". */
+                    struct Expression *receiver_expr = (struct Expression *)args_given->cur;
+                    if (receiver_expr != NULL && receiver_expr->type == EXPR_VAR_ID &&
+                        receiver_expr->expr_data.id != NULL &&
+                        pascal_identifier_equals(receiver_expr->expr_data.id, "Self"))
+                    {
+                        ListNode_t *old_head = args_given;
+                        stmt->stmt_data.procedure_call_data.expr_args = old_head->next;
+                        old_head->next = NULL;
+                        args_given = stmt->stmt_data.procedure_call_data.expr_args;
+                        static_arg_already_removed = 1;
+                    }
+                }
             }
             else
             {
@@ -5040,13 +5611,29 @@ skip_type_receiver_rewrite:
      * 1. __MethodName(object, ...) - method call without class prefix
      * 2. ClassName__MethodName(object, ...) - method call with class prefix
      */
-    char *method_double_underscore = (proc_id != NULL) ? strstr(proc_id, "__") : NULL;
-    if (method_double_underscore != NULL && args_given != NULL && !static_arg_already_removed) {
-        const char *method_name = method_double_underscore + 2;
-        const char *class_name = NULL;
+    /* Check if proc_id represents a method call.
+     * Use symbol table lookup for structured identity instead of parsing "__". */
+    HashNode_t *proc_method_node = NULL;
+    int proc_is_method_placeholder = stmt->stmt_data.procedure_call_data.is_method_call_placeholder;
+    int proc_is_method = proc_is_method_placeholder;
+    const char *proc_method_name_resolved = NULL;
+    const char *proc_owner_class_resolved = NULL;
+    if (!proc_is_method && proc_id != NULL &&
+        FindIdent(&proc_method_node, symtab, proc_id) != -1 && proc_method_node != NULL &&
+        proc_method_node->owner_class != NULL)
+    {
+        proc_is_method = 1;
+        proc_method_name_resolved = proc_method_node->method_name;
+        proc_owner_class_resolved = proc_method_node->owner_class;
+    }
+    if (proc_is_method && args_given != NULL && !static_arg_already_removed) {
+        const char *method_name = proc_is_method_placeholder
+            ? stmt->stmt_data.procedure_call_data.placeholder_method_name
+            : proc_method_name_resolved;
+        const char *class_name = proc_owner_class_resolved;
         int need_free_class_name = 0;
-        
-        if (method_double_underscore == proc_id) {
+
+        if (proc_is_method_placeholder) {
             /* Case 1: __MethodName - need to get class from first argument */
             if (args_given != NULL && args_given->cur != NULL) {
                 struct Expression *first_arg = (struct Expression *)args_given->cur;
@@ -5164,16 +5751,8 @@ skip_type_receiver_rewrite:
                 }
             }
         } else {
-            /* Case 2: ClassName__MethodName - extract class from proc_id */
-            size_t class_len = method_double_underscore - proc_id;
-            char *extracted_class = (char *)malloc(class_len + 1);
-            if (extracted_class != NULL) {
-                memcpy(extracted_class, proc_id, class_len);
-                extracted_class[class_len] = '\0';
-                class_name = extracted_class;
-                need_free_class_name = 1;
-            }
-            /* If malloc failed, class_name remains NULL and we skip the rest */
+            /* Case 2: ClassName__MethodName - class_name already set from symbol table lookup */
+            /* class_name = proc_owner_class_resolved (set above) */
         }
         
         if (class_name != NULL && method_name != NULL) {
@@ -5188,7 +5767,7 @@ skip_type_receiver_rewrite:
             }
             
             /* If proc_id started with __, update it to include the class name */
-            if (method_double_underscore == proc_id) {
+            if (proc_is_method_placeholder) {
                 size_t class_len = strlen(class_name);
                 size_t method_len = strlen(method_name);
                 char *new_proc_id = (char *)malloc(class_len + 2 + method_len + 1);
@@ -5237,6 +5816,18 @@ skip_type_receiver_rewrite:
                 args_given = args_given->next;
                 stmt->stmt_data.procedure_call_data.expr_args = args_given;
             }
+            else if (is_static && !receiver_is_type_ident && args_given != NULL)
+            {
+                /* Static method called with implicit Self - strip it */
+                struct Expression *receiver_expr = (struct Expression *)args_given->cur;
+                if (receiver_expr != NULL && receiver_expr->type == EXPR_VAR_ID &&
+                    receiver_expr->expr_data.id != NULL &&
+                    pascal_identifier_equals(receiver_expr->expr_data.id, "Self"))
+                {
+                    args_given = args_given->next;
+                    stmt->stmt_data.procedure_call_data.expr_args = args_given;
+                }
+            }
         }
         
         if (need_free_class_name && class_name != NULL) {
@@ -5245,12 +5836,23 @@ skip_type_receiver_rewrite:
     }
 
     
-    char *type_resolution_double_underscore = (proc_id != NULL) ? strstr(proc_id, "__") : NULL;
-    if (type_resolution_double_underscore != NULL && args_given != NULL &&
+    /* Re-check if proc_id is a method (may have been updated by previous block) */
+    HashNode_t *type_res_method_node = NULL;
+    const char *type_res_method_name = NULL;
+    int proc_is_method_for_type_res = stmt->stmt_data.procedure_call_data.is_method_call_placeholder;
+    if (!proc_is_method_for_type_res && proc_id != NULL &&
+        FindIdent(&type_res_method_node, symtab, proc_id) != -1 && type_res_method_node != NULL &&
+        type_res_method_node->owner_class != NULL)
+    {
+        proc_is_method_for_type_res = 1;
+        type_res_method_name = type_res_method_node->method_name;
+    }
+    if (proc_is_method_for_type_res && type_res_method_name == NULL)
+        type_res_method_name = stmt->stmt_data.procedure_call_data.placeholder_method_name;
+    if (proc_is_method_for_type_res && args_given != NULL &&
         !static_arg_already_removed &&
         stmt->stmt_data.procedure_call_data.mangled_id == NULL) {
-        /* Extract the method name (part after __) */
-        char *method_name_part = type_resolution_double_underscore + 2;
+        const char *method_name_part = type_res_method_name;
         
         /* Get the first argument (should be the object/Self parameter) */
         struct Expression *first_arg = (struct Expression *)args_given->cur;
@@ -5493,18 +6095,14 @@ skip_type_receiver_rewrite:
     }
     
     /* If no match found and this is a method call, try parent classes */
-    if (resolved_proc == NULL && proc_id != NULL && strstr(proc_id, "__") != NULL) {
-        char *double_underscore = strstr(proc_id, "__");
-        if (double_underscore != NULL) {
-            /* Extract class name and method name */
-            size_t class_name_len = double_underscore - proc_id;
-            char *class_name = (char *)malloc(class_name_len + 1);
-            if (class_name != NULL) {
-                memcpy(class_name, proc_id, class_name_len);
-                class_name[class_name_len] = '\0';
-            }
-            char *method_name = strdup(double_underscore + 2);
-            
+    HashNode_t *parent_lookup_node = NULL;
+    if (resolved_proc == NULL && proc_id != NULL &&
+        FindIdent(&parent_lookup_node, symtab, proc_id) != -1 && parent_lookup_node != NULL &&
+        parent_lookup_node->owner_class != NULL) {
+        {
+            char *class_name = strdup(parent_lookup_node->owner_class);
+            char *method_name = strdup(parent_lookup_node->method_name);
+
             if (class_name != NULL && method_name != NULL) {
                 if (getenv("KGPC_DEBUG_INHERITED") != NULL)
                 {
@@ -5573,8 +6171,8 @@ skip_type_receiver_rewrite:
                         
                         /* Move to the next parent class */
                         if (parent_class_name != NULL) {
-                            HashNode_t *parent_class_node = NULL;
-                            if (FindIdent(&parent_class_node, symtab, parent_class_name) != -1 && parent_class_node != NULL) {
+                            HashNode_t *parent_class_node = semcheck_find_preferred_type_node(symtab, parent_class_name);
+                            if (parent_class_node != NULL) {
                                 record_info = semcheck_stmt_get_record_type_from_node(parent_class_node);
                                 if (record_info == NULL)
                                     break;
@@ -5723,14 +6321,58 @@ proccall_parent_resolve_done:
         }
         /* External name override for procedures handled during codegen to avoid side-effects here */
         stmt->stmt_data.procedure_call_data.resolved_proc = resolved_proc;
-        
+
         /* Populate call info to avoid use-after-free when HashNode is freed */
         stmt->stmt_data.procedure_call_data.call_hash_type = resolved_proc->hash_type;
         semcheck_stmt_set_call_kgpc_type(stmt, resolved_proc->type,
             stmt->stmt_data.procedure_call_data.is_call_info_valid == 1);
         stmt->stmt_data.procedure_call_data.is_call_info_valid = 1;
         semcheck_mark_call_requires_static_link(resolved_proc);
-        
+
+        /* Centralized virtual dispatch fallback — catches abstract virtual methods
+         * that weren't detected by the early Self-injection check. Only applies to
+         * methods without a body (abstract) and not class/static methods (which use
+         * single-indirection VMT dispatch that codegen doesn't support yet). */
+        if (resolved_proc->owner_class != NULL && resolved_proc->method_name != NULL &&
+            !stmt->stmt_data.procedure_call_data.is_virtual_call &&
+            !from_cparser_is_method_static(resolved_proc->owner_class,
+                resolved_proc->method_name) &&
+            from_cparser_is_method_virtual(resolved_proc->owner_class,
+                resolved_proc->method_name))
+        {
+            int has_body = 0;
+            if (resolved_proc->type != NULL && resolved_proc->type->kind == TYPE_KIND_PROCEDURE)
+            {
+                Tree_t *proc_def = resolved_proc->type->info.proc_info.definition;
+                if (proc_def != NULL &&
+                    proc_def->tree_data.subprogram_data.statement_list != NULL)
+                    has_body = 1;
+            }
+            if (!has_body)
+            {
+                struct RecordType *class_record = semcheck_lookup_record_type(symtab,
+                    resolved_proc->owner_class);
+                if (class_record != NULL && class_record->methods != NULL)
+                {
+                    for (ListNode_t *me = class_record->methods; me != NULL; me = me->next)
+                    {
+                        struct MethodInfo *mi = (struct MethodInfo *)me->cur;
+                        if (mi != NULL && mi->name != NULL &&
+                            (mi->is_virtual || mi->is_override) &&
+                            strcasecmp(mi->name, resolved_proc->method_name) == 0)
+                        {
+                            stmt->stmt_data.procedure_call_data.is_virtual_call = 1;
+                            stmt->stmt_data.procedure_call_data.vmt_index = mi->vmt_index;
+                            if (stmt->stmt_data.procedure_call_data.self_class_name == NULL)
+                                stmt->stmt_data.procedure_call_data.self_class_name =
+                                    strdup(resolved_proc->owner_class);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
         /* Fill in missing arguments with default values */
         if (resolved_proc->type != NULL && resolved_proc->type->kind == TYPE_KIND_PROCEDURE)
         {
@@ -5840,6 +6482,38 @@ proccall_parent_resolve_done:
             return return_val + semcheck_call_with_proc_var(symtab, stmt, proc_var, max_scope_lev);
         }
 
+        /* WITH context fallback: if the procedure call couldn't be resolved in
+         * normal scope, try resolving via active WITH contexts.  This handles
+         * patterns like:  with SomeList.LockList do Add(Self);
+         * where Add is a method of the WITH target's class. */
+        if (proc_id != NULL && with_context_count > 0)
+        {
+            struct Expression *with_expr = NULL;
+            int wm = semcheck_with_try_resolve_method(proc_id, symtab, &with_expr, stmt->line_num);
+            if (wm == 0 && with_expr != NULL)
+            {
+                /* Prepend the WITH context expression as Self argument */
+                ListNode_t *self_node = CreateListNode(with_expr, LIST_EXPR);
+                if (self_node != NULL)
+                {
+                    self_node->next = stmt->stmt_data.procedure_call_data.expr_args;
+                    stmt->stmt_data.procedure_call_data.expr_args = self_node;
+                    /* Mark as method call so the retry resolves via class method lookup */
+                    stmt->stmt_data.procedure_call_data.is_method_call_placeholder = 1;
+                    /* Free overload list before retry */
+                    DestroyList(overload_candidates);
+                    overload_candidates = NULL;
+                    free(mangled_name);
+                    mangled_name = NULL;
+                    /* Re-evaluate as a method call from scratch */
+                    return semcheck_proccall(symtab, stmt, max_scope_lev);
+                }
+                else
+                {
+                    destroy_expr(with_expr);
+                }
+            }
+        }
 
         /* Build detailed error message with argument types and available overloads */
         {
@@ -6011,6 +6685,19 @@ proccall_parent_resolve_done:
         }
 
         /***** VERIFY ARGUMENTS USING KGPCTYPE ARCHITECTURE *****/
+        const char *callee_owner_full = sym_return->owner_class_full;
+        const char *callee_owner_outer = sym_return->owner_class_outer;
+        if (callee_owner_full == NULL && callee_owner_outer == NULL)
+        {
+            Tree_t *proc_def = sym_return->type->info.proc_info.definition;
+            if (proc_def != NULL && proc_def->type == TREE_SUBPROGRAM)
+            {
+                callee_owner_full = proc_def->tree_data.subprogram_data.owner_class_full;
+                callee_owner_outer = proc_def->tree_data.subprogram_data.owner_class_outer;
+                if (callee_owner_full == NULL)
+                    callee_owner_full = proc_def->tree_data.subprogram_data.owner_class;
+            }
+        }
         cur_arg = 0;
         /* Get formal arguments from KgpcType instead of deprecated args field */
         true_args = kgpc_type_get_procedure_params(sym_return->type);
@@ -6052,7 +6739,8 @@ proccall_parent_resolve_done:
                 
                 /* ALWAYS resolve both sides to KgpcType for proper type checking */
                 int expected_type_owned = 0;
-                KgpcType *expected_kgpc_type = resolve_type_from_vardecl(arg_decl, symtab, &expected_type_owned);
+                KgpcType *expected_kgpc_type = resolve_param_type_with_owner(arg_decl, symtab,
+                    callee_owner_full, callee_owner_outer, &expected_type_owned);
                 if (getenv("KGPC_DEBUG_FMTSTR") != NULL && proc_id != NULL &&
                     strcasecmp(proc_id, "FmtStr") == 0)
                 {
@@ -6158,7 +6846,18 @@ proccall_parent_resolve_done:
                         {
                             /* Transform the expression to EXPR_ADDR_OF_PROC */
                             arg_expr->type = EXPR_ADDR_OF_PROC;
-                            arg_expr->expr_data.addr_of_proc_data.procedure_symbol = arg_node;
+                            arg_expr->expr_data.addr_of_proc_data.proc_mangled_id = arg_node->mangled_id ? strdup(arg_node->mangled_id) : NULL;
+                            arg_expr->expr_data.addr_of_proc_data.proc_id = arg_node->id ? strdup(arg_node->id) : NULL;
+                            /* Resolve the type NOW while the symbol is still alive. */
+                            if (arg_node->type != NULL)
+                            {
+                                kgpc_type_retain(arg_node->type);
+                                arg_expr->resolved_kgpc_type = create_pointer_type(arg_node->type);
+                            }
+                            else
+                            {
+                                arg_expr->resolved_kgpc_type = create_pointer_type(NULL);
+                            }
                         }
                     }
                 }
@@ -6220,7 +6919,7 @@ proccall_parent_resolve_done:
             if (allow_implicit_self_only)
                 args_given = NULL;
         }
-        if(true_args == NULL && args_given != NULL)
+        if(true_args == NULL && args_given != NULL && !(sym_return != NULL && sym_return->is_varargs))
         {
             semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index,
                 "Error on line %d, on procedure call %s, too many arguments given!\n\n",
@@ -6294,7 +6993,7 @@ int semcheck_compoundstmt(SymTab_t *symtab, struct Statement *stmt, int max_scop
 
         if (stmt_list->cur != NULL)
         {
-            return_val += semcheck_stmt_main(symtab,
+            return_val += semcheck_stmt(symtab,
                 (struct Statement *)stmt_list->cur, max_scope_lev);
         }
 
@@ -6336,8 +7035,13 @@ int semcheck_ifthen(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 
     if(if_type != BOOL)
     {
-        semcheck_error_with_context("Error on line %d, expected relational inside if statement!\n\n",
-                stmt->line_num);
+        int err_line = stmt->line_num;
+        int err_col = stmt->col_num;
+        int err_source_index = -1;
+        semcheck_expr_best_context(relop_expr, &err_line, &err_col, &err_source_index);
+        semcheck_error_with_context_at(err_line, err_col, err_source_index,
+                "Error on line %d, expected relational inside if statement!\n\n",
+                err_line);
         ++return_val;
     }
 
@@ -6367,8 +7071,13 @@ int semcheck_while(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
     return_val += semcheck_stmt_expr_tag(&while_type, symtab, relop_expr, INT_MAX, NO_MUTATE);
     if(while_type != BOOL)
     {
-        semcheck_error_with_context("Error on line %d, expected relational inside while statement!\n\n",
-                stmt->line_num);
+        int err_line = stmt->line_num;
+        int err_col = stmt->col_num;
+        int err_source_index = -1;
+        semcheck_expr_best_context(relop_expr, &err_line, &err_col, &err_source_index);
+        semcheck_error_with_context_at(err_line, err_col, err_source_index,
+                "Error on line %d, expected relational inside while statement!\n\n",
+                err_line);
         ++return_val;
     }
 
@@ -6404,8 +7113,14 @@ int semcheck_repeat(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
     return_val += semcheck_stmt_expr_tag(&until_type, symtab, stmt->stmt_data.repeat_data.until_expr, INT_MAX, NO_MUTATE);
     if (until_type != BOOL)
     {
-        semcheck_error_with_context("Error on line %d, expected relational inside repeat statement!\n\n",
-            stmt->line_num);
+        int err_line = stmt->line_num;
+        int err_col = stmt->col_num;
+        int err_source_index = -1;
+        semcheck_expr_best_context(stmt->stmt_data.repeat_data.until_expr,
+            &err_line, &err_col, &err_source_index);
+        semcheck_error_with_context_at(err_line, err_col, err_source_index,
+            "Error on line %d, expected relational inside repeat statement!\n\n",
+            err_line);
         ++return_val;
     }
 
@@ -6612,16 +7327,15 @@ int semcheck_for_in(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
                 if (record_candidate != NULL && kgpc_type_is_record(record_candidate)) {
                     struct RecordType *record_info = kgpc_type_get_record(record_candidate);
                     if (record_info != NULL) {
-                        /* Check for TFPGList$ pattern (generic list) - extracts element type from the mangled name.
-                         * This is kept separate from default_indexed_property because TFPGList$ encodes the 
-                         * element type in its class name (e.g., TFPGList$String for list of strings). */
-                        if (record_info->type_id != NULL) {
-                            const char *prefix = "TFPGList$";
-                            size_t prefix_len = strlen(prefix);
-                            if (strncasecmp(record_info->type_id, prefix, prefix_len) == 0) {
-                                collection_is_list = 1;
-                                list_element_id = record_info->type_id + prefix_len;
-                            }
+                        /* Prefer structured generic info over mangled-name parsing. */
+                        if (record_info->generic_decl != NULL &&
+                            record_info->generic_args != NULL &&
+                            record_info->num_generic_args > 0 &&
+                            record_info->generic_decl->name != NULL &&
+                            pascal_identifier_equals(record_info->generic_decl->name, "TFPGList"))
+                        {
+                            collection_is_list = 1;
+                            list_element_id = record_info->generic_args[0];
                         }
                         /* Check for default indexed property (handles TStringList and other classes with FItems) */
                         if (!collection_is_list && record_info->default_indexed_property != NULL) {

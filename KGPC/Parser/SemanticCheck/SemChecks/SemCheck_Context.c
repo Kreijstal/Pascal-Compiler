@@ -159,6 +159,29 @@ struct RecordType *resolve_record_type_for_with(SymTab_t *symtab,
     if (context_expr == NULL)
         return NULL;
 
+    if (context_expr->type == EXPR_FUNCTION_CALL)
+    {
+        int cast_type = UNKNOWN_TYPE;
+        semcheck_try_reinterpret_as_typecast(&cast_type, symtab, context_expr, INT_MAX);
+    }
+
+    if (context_expr->type == EXPR_TYPECAST)
+    {
+        const char *target_id = context_expr->expr_data.typecast_data.target_type_id;
+        const TypeRef *target_ref = context_expr->expr_data.typecast_data.target_type_ref;
+        if (target_id != NULL || target_ref != NULL)
+        {
+            HashNode_t *type_node = semcheck_find_preferred_type_node_with_ref(symtab,
+                target_ref, target_id);
+            if (type_node != NULL)
+            {
+                struct RecordType *record_info = get_record_type_from_node(type_node);
+                if (record_info != NULL)
+                    return record_info;
+            }
+        }
+    }
+
     if (expr_type == RECORD_TYPE)
     {
         if (context_expr->resolved_kgpc_type != NULL &&
@@ -183,6 +206,42 @@ struct RecordType *resolve_record_type_for_with(SymTab_t *symtab,
             if (FindIdent(&target_node, symtab, context_expr->pointer_subtype_id) != -1 &&
                 target_node != NULL)
                 record_info = get_record_type_from_node(target_node);
+        }
+        /* Fallback for function call results: when a method/function returns a
+         * class type (pointer to record), the resolved_kgpc_type may be a bare
+         * pointer without embedded record info. Look up the return type from the
+         * call's resolved function symbol to find the pointed-to record. */
+        if (record_info == NULL && context_expr->type == EXPR_FUNCTION_CALL)
+        {
+            HashNode_t *func_node = context_expr->expr_data.function_call_data.resolved_func;
+            if (func_node != NULL && func_node->type != NULL)
+            {
+                KgpcType *ret_type = kgpc_type_get_return_type(func_node->type);
+                if (ret_type != NULL && kgpc_type_is_pointer(ret_type) &&
+                    ret_type->info.points_to != NULL &&
+                    kgpc_type_is_record(ret_type->info.points_to))
+                {
+                    record_info = kgpc_type_get_record(ret_type->info.points_to);
+                }
+                else if (ret_type != NULL && kgpc_type_is_pointer(ret_type))
+                {
+                    /* pointer without embedded record - try type alias */
+                    struct TypeAlias *alias = kgpc_type_get_type_alias(ret_type);
+                    const char *alias_name = (alias != NULL) ? alias->alias_name : NULL;
+                    if (alias_name == NULL && ret_type->info.points_to != NULL)
+                    {
+                        alias = kgpc_type_get_type_alias(ret_type->info.points_to);
+                        alias_name = (alias != NULL) ? alias->alias_name : NULL;
+                    }
+                    if (alias_name != NULL)
+                    {
+                        HashNode_t *alias_node = NULL;
+                        if (FindIdent(&alias_node, symtab, alias_name) != -1 &&
+                            alias_node != NULL)
+                            record_info = get_record_type_from_node(alias_node);
+                    }
+                }
+            }
         }
         return record_info;
     }
@@ -218,6 +277,79 @@ int semcheck_with_try_resolve(const char *field_id, SymTab_t *symtab,
                 return -1;
             *out_record_expr = clone;
             return 0;
+        }
+
+        /* Also check class/record properties (e.g. Items, Count, ...) */
+        struct ClassProperty *prop = semcheck_find_class_property(symtab,
+            entry->record_type, field_id, NULL);
+        if (prop != NULL)
+        {
+            struct Expression *clone = clone_expression(entry->context_expr);
+            if (clone == NULL)
+                return -1;
+            *out_record_expr = clone;
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+/* Variant of semcheck_with_try_resolve that also checks class methods
+ * and record fields with procedural types.
+ * Returns: 0 = class method found, 2 = procedural field found,
+ *          1 = not found, -1 = error */
+int semcheck_with_try_resolve_method(const char *method_id, SymTab_t *symtab,
+    struct Expression **out_record_expr, int line_num)
+{
+    if (method_id == NULL || out_record_expr == NULL)
+        return 1;
+
+    for (size_t index = with_context_count; index > 0; --index)
+    {
+        WithContextEntry *entry = &with_context_stack[index - 1];
+        if (entry->record_type == NULL)
+            continue;
+
+        /* Check class methods first */
+        HashNode_t *method_node = semcheck_find_class_method(symtab,
+            entry->record_type, method_id, NULL);
+        if (method_node != NULL)
+        {
+            struct Expression *clone = clone_expression(entry->context_expr);
+            if (clone == NULL)
+                return -1;
+            *out_record_expr = clone;
+            return 0;
+        }
+
+        /* Also check record fields with procedural type (e.g. CompareFn: TCompareFunc) */
+        struct RecordField *field_desc = NULL;
+        long long offset = 0;
+        int rf_result = resolve_record_field(symtab, entry->record_type, method_id,
+                &field_desc, &offset, line_num, 1);
+        if (rf_result == 0 && field_desc != NULL)
+        {
+            /* Check if field has a procedural type, either directly or via type_id lookup */
+            int is_proc_field = (field_desc->proc_type != NULL);
+            if (!is_proc_field && field_desc->type_id != NULL)
+            {
+                HashNode_t *type_node = NULL;
+                if (FindIdent(&type_node, symtab, field_desc->type_id) != -1 &&
+                    type_node != NULL && type_node->type != NULL &&
+                    type_node->type->kind == TYPE_KIND_PROCEDURE)
+                {
+                    is_proc_field = 1;
+                }
+            }
+            if (is_proc_field)
+            {
+                struct Expression *clone = clone_expression(entry->context_expr);
+                if (clone == NULL)
+                    return -1;
+                *out_record_expr = clone;
+                return 2; /* procedural field, not a method */
+            }
         }
     }
 

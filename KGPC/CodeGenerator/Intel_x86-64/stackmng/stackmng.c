@@ -709,6 +709,7 @@ RegStack_t *init_reg_stack()
     /* %rax - return register, always safe to use for expressions */
     Register_t *rax = (Register_t *)malloc(sizeof(Register_t));
     assert(rax != NULL);
+    rax->reg_id = REG_RAX;
     rax->bit_64 = strdup("%rax");
     rax->bit_32 = strdup("%eax");
     rax->spill_location = NULL;
@@ -719,115 +720,95 @@ RegStack_t *init_reg_stack()
     rax->current_live_range = NULL;
 #endif
 
-    /* %r10, %r11 - caller-saved, never used for arguments */
-    Register_t *r10 = (Register_t *)malloc(sizeof(Register_t));
-    assert(r10 != NULL);
-    r10->bit_64 = strdup("%r10");
-    r10->bit_32 = strdup("%r10d");
-    r10->spill_location = NULL;
-    r10->last_use_seq = 0;
-    r10->spill_callback = NULL;
-    r10->spill_context = NULL;
+    /* %r10, %r11 are caller-saved scratch registers.
+       They are NOT in the allocatable pool — only used explicitly
+       (VMT dispatch, division, etc.) and never live across calls. */
+
+    /* %r8, %r9, %r10, %r11 are caller-saved — not added to the pool. */
+
+    /* %rbx, %r12 - callee-saved, survive across function calls.
+       Placed first in the list so get_free_reg prefers them for
+       intermediate values that may live across call instructions. */
+    Register_t *rbx = (Register_t *)malloc(sizeof(Register_t));
+    assert(rbx != NULL);
+    rbx->reg_id = REG_RBX;
+    rbx->bit_64 = strdup("%rbx");
+    rbx->bit_32 = strdup("%ebx");
+    rbx->spill_location = NULL;
+    rbx->last_use_seq = 0;
+    rbx->spill_callback = NULL;
+    rbx->spill_context = NULL;
 #if USE_GRAPH_COLORING_ALLOCATOR
-    r10->current_live_range = NULL;
+    rbx->current_live_range = NULL;
 #endif
 
-    Register_t *r11 = (Register_t *)malloc(sizeof(Register_t));
-    assert(r11 != NULL);
-    r11->bit_64 = strdup("%r11");
-    r11->bit_32 = strdup("%r11d");
-    r11->spill_location = NULL;
-    r11->last_use_seq = 0;
-    r11->spill_callback = NULL;
-    r11->spill_context = NULL;
+    Register_t *r12 = (Register_t *)malloc(sizeof(Register_t));
+    assert(r12 != NULL);
+    r12->reg_id = REG_R12;
+    r12->bit_64 = strdup("%r12");
+    r12->bit_32 = strdup("%r12d");
+    r12->spill_location = NULL;
+    r12->last_use_seq = 0;
+    r12->spill_callback = NULL;
+    r12->spill_context = NULL;
 #if USE_GRAPH_COLORING_ALLOCATOR
-    r11->current_live_range = NULL;
+    r12->current_live_range = NULL;
 #endif
 
-    /* %r8, %r9 - argument registers 3 and 4 (both ABIs), less commonly used */
-    Register_t *r8 = (Register_t *)malloc(sizeof(Register_t));
-    assert(r8 != NULL);
-    r8->bit_64 = strdup("%r8");
-    r8->bit_32 = strdup("%r8d");
-    r8->spill_location = NULL;
-    r8->last_use_seq = 0;
-    r8->spill_callback = NULL;
-    r8->spill_context = NULL;
+    Register_t *r13 = (Register_t *)malloc(sizeof(Register_t));
+    assert(r13 != NULL);
+    r13->reg_id = REG_R13;
+    r13->bit_64 = strdup("%r13");
+    r13->bit_32 = strdup("%r13d");
+    r13->spill_location = NULL;
+    r13->last_use_seq = 0;
+    r13->spill_callback = NULL;
+    r13->spill_context = NULL;
 #if USE_GRAPH_COLORING_ALLOCATOR
-    r8->current_live_range = NULL;
+    r13->current_live_range = NULL;
 #endif
 
-    Register_t *r9 = (Register_t *)malloc(sizeof(Register_t));
-    assert(r9 != NULL);
-    r9->bit_64 = strdup("%r9");
-    r9->bit_32 = strdup("%r9d");
-    r9->spill_location = NULL;
-    r9->last_use_seq = 0;
-    r9->spill_callback = NULL;
-    r9->spill_context = NULL;
+    Register_t *r14 = (Register_t *)malloc(sizeof(Register_t));
+    assert(r14 != NULL);
+    r14->reg_id = REG_R14;
+    r14->bit_64 = strdup("%r14");
+    r14->bit_32 = strdup("%r14d");
+    r14->spill_location = NULL;
+    r14->last_use_seq = 0;
+    r14->spill_callback = NULL;
+    r14->spill_context = NULL;
 #if USE_GRAPH_COLORING_ALLOCATOR
-    r9->current_live_range = NULL;
+    r14->current_live_range = NULL;
 #endif
 
-    /* Build base register list */
-    registers = CreateListNode(rax, LIST_UNSPECIFIED);
-    registers = PushListNodeBack(registers, CreateListNode(r10, LIST_UNSPECIFIED));
-    registers = PushListNodeBack(registers, CreateListNode(r11, LIST_UNSPECIFIED));
-    registers = PushListNodeBack(registers, CreateListNode(r8, LIST_UNSPECIFIED));
-    registers = PushListNodeBack(registers, CreateListNode(r9, LIST_UNSPECIFIED));
-
-    /* Add platform-specific registers */
-    if (g_current_codegen_abi == KGPC_TARGET_ABI_WINDOWS)
-    {
-        /* Windows: %rsi and %rdi are not argument registers */
-        Register_t *rsi = (Register_t *)malloc(sizeof(Register_t));
-        assert(rsi != NULL);
-        rsi->bit_64 = strdup("%rsi");
-        rsi->bit_32 = strdup("%esi");
-        rsi->spill_location = NULL;
-        rsi->last_use_seq = 0;
-        rsi->spill_callback = NULL;
-        rsi->spill_context = NULL;
+    Register_t *r15 = (Register_t *)malloc(sizeof(Register_t));
+    assert(r15 != NULL);
+    r15->reg_id = REG_R15;
+    r15->bit_64 = strdup("%r15");
+    r15->bit_32 = strdup("%r15d");
+    r15->spill_location = NULL;
+    r15->last_use_seq = 0;
+    r15->spill_callback = NULL;
+    r15->spill_context = NULL;
 #if USE_GRAPH_COLORING_ALLOCATOR
-        rsi->current_live_range = NULL;
+    r15->current_live_range = NULL;
 #endif
 
-        Register_t *rdi = (Register_t *)malloc(sizeof(Register_t));
-        assert(rdi != NULL);
-        rdi->bit_64 = strdup("%rdi");
-        rdi->bit_32 = strdup("%edi");
-        rdi->spill_location = NULL;
-        rdi->last_use_seq = 0;
-        rdi->spill_callback = NULL;
-        rdi->spill_context = NULL;
-#if USE_GRAPH_COLORING_ALLOCATOR
-        rdi->current_live_range = NULL;
-#endif
-
-        registers = PushListNodeBack(registers, CreateListNode(rsi, LIST_UNSPECIFIED));
-        registers = PushListNodeBack(registers, CreateListNode(rdi, LIST_UNSPECIFIED));
-    }
-    else
-    {
-        /* Linux/SysV: %rcx is argument register 4, less commonly used than rdi/rsi/rdx */
-        Register_t *rcx = (Register_t *)malloc(sizeof(Register_t));
-        assert(rcx != NULL);
-        rcx->bit_64 = strdup("%rcx");
-        rcx->bit_32 = strdup("%ecx");
-        rcx->spill_location = NULL;
-        rcx->last_use_seq = 0;
-        rcx->spill_callback = NULL;
-        rcx->spill_context = NULL;
-#if USE_GRAPH_COLORING_ALLOCATOR
-        rcx->current_live_range = NULL;
-#endif
-
-        registers = PushListNodeBack(registers, CreateListNode(rcx, LIST_UNSPECIFIED));
-    }
+    /* Build register list — only callee-saved registers are in the pool.
+       These survive across function calls, so values are never lost.
+       Caller-saved registers (%rax, %rcx, %rdx, %rsi, %rdi, %r8-%r11)
+       are NOT in the pool — they are clobbered by calls. */
+    registers = CreateListNode(rbx, LIST_UNSPECIFIED);
+    registers = PushListNodeBack(registers, CreateListNode(r12, LIST_UNSPECIFIED));
+    registers = PushListNodeBack(registers, CreateListNode(r13, LIST_UNSPECIFIED));
+    registers = PushListNodeBack(registers, CreateListNode(r14, LIST_UNSPECIFIED));
+    registers = PushListNodeBack(registers, CreateListNode(r15, LIST_UNSPECIFIED));
+    /* %rax is caller-saved but NOT in the pool — it's used as return value
+       and varargs indicator, and the spill mechanism cannot properly restore it. */
 
     reg_stack->registers_allocated = NULL;
     reg_stack->registers_free = registers;
-    reg_stack->num_registers = NUM_CALLER_SAVED_REGISTERS;
+    reg_stack->num_registers = 5; /* rbx, r12, r13, r14, r15 */
     reg_stack->use_sequence = 0;
 
 #if USE_GRAPH_COLORING_ALLOCATOR
@@ -843,59 +824,22 @@ RegStack_t *init_reg_stack()
 /* NOTE: Getters return number greater than 0 if it had to kick a value out to temp */
 /* The returned int is the temp offset to restore the value */
 /* TODO: Doesn't actually kick variable out to temp yet */
-int get_register_64bit(RegStack_t *regstack, char *reg_64, Register_t **return_reg)
+int get_register_by_id(RegStack_t *regstack, RegisterId_t reg_id, Register_t **return_reg)
 {
     assert(regstack != NULL);
-    assert(reg_64 != NULL);
+    assert(return_reg != NULL);
 
     ListNode_t *cur_reg, *prev_reg;
     Register_t *reg;
 
     cur_reg = regstack->registers_free;
     prev_reg = NULL;
-    while(cur_reg != NULL)
+    while (cur_reg != NULL)
     {
         reg = (Register_t *)cur_reg->cur;
-        if(strcmp(reg->bit_64, reg_64) == 0)
+        if (reg->reg_id == reg_id)
         {
-            if(prev_reg == NULL)
-                regstack->registers_free = cur_reg->next;
-            else
-                prev_reg->next = cur_reg->next;
-
-            cur_reg->next = regstack->registers_allocated;
-            regstack->registers_allocated = cur_reg;
-            *return_reg = reg;
-
-            return 0;
-        }
-
-        prev_reg = cur_reg;
-        cur_reg = cur_reg->next;
-    }
-
-    assert(0 && "Kicking out values in registers not currently supported!");
-}
-
-/* NOTE: Getters return number greater than 0 if it had to kick a value out to temp */
-/* The returned int is the temp offset to restore the value */
-/* TODO: Doesn't actually kick variable out to temp yet */
-int get_register_32bit(RegStack_t *regstack, char *reg_32, Register_t **return_reg)
-{
-    assert(regstack != NULL);
-    assert(reg_32 != NULL);
-
-    ListNode_t *cur_reg, *prev_reg;
-    Register_t *reg;
-
-    cur_reg = regstack->registers_free;
-    prev_reg = NULL;
-    while(cur_reg != NULL)
-    {
-        reg = (Register_t *)cur_reg->cur;
-        if(strcmp(reg->bit_32, reg_32) == 0)
-        {
-            if(prev_reg == NULL)
+            if (prev_reg == NULL)
                 regstack->registers_free = cur_reg->next;
             else
                 prev_reg->next = cur_reg->next;
@@ -946,7 +890,7 @@ void free_reg(RegStack_t *reg_stack, Register_t *reg)
 #endif
             
 #if KGPC_ENABLE_REG_DEBUG
-            if (strcmp(reg->bit_64, "%rcx") == 0 && g_reg_debug_context != NULL)
+            if (reg->reg_id == REG_RCX && g_reg_debug_context != NULL)
                 fprintf(stderr, "[reg-debug] free  %s (%s)\n", reg->bit_64, g_reg_debug_context);
 #endif
             return;
@@ -1039,7 +983,7 @@ Register_t *get_free_reg(RegStack_t *reg_stack, ListNode_t **inst_list)
 #endif
         
 #if KGPC_ENABLE_REG_DEBUG
-        if (strcmp(reg->bit_64, "%rcx") == 0 && g_reg_debug_context != NULL)
+        if (reg->reg_id == REG_RCX && g_reg_debug_context != NULL)
             fprintf(stderr, "[reg-debug] alloc %s (%s)\n", reg->bit_64, g_reg_debug_context);
 #endif
         return reg;
@@ -1192,6 +1136,99 @@ int get_num_registers_alloced(RegStack_t *reg_stack)
     return ListLength(reg_stack->registers_allocated);
 }
 
+void regstack_caller_save(RegStack_t *reg_stack, ListNode_t **inst_list,
+                          CallerSaveState *state)
+{
+    assert(reg_stack != NULL);
+    assert(inst_list != NULL);
+    assert(state != NULL);
+
+    memset(state, 0, sizeof(*state));
+
+    ListNode_t *cur = reg_stack->registers_allocated;
+    while (cur != NULL && state->count < MAX_SAVED_CALLER_REGS)
+    {
+        Register_t *reg = (Register_t *)cur->cur;
+        if (reg != NULL && reg->bit_64 != NULL)
+        {
+            /* Allocate a temp slot for this register's value */
+            char spill_label[64];
+            snprintf(spill_label, sizeof(spill_label), "__caller_save_%s_%llu",
+                reg->bit_64 + 1, (unsigned long long)(reg_stack->use_sequence + 1));
+            StackNode_t *slot = add_l_t_bytes(spill_label, 8);
+            if (slot != NULL)
+            {
+                state->entries[state->count].reg = reg;
+                state->entries[state->count].spill_offset = slot->offset;
+
+                char buf[128];
+                snprintf(buf, sizeof(buf), "\tmovq\t%s, -%d(%%rbp)\n",
+                    reg->bit_64, slot->offset);
+                *inst_list = add_inst(*inst_list, buf);
+
+                if (reg->reg_id == REG_RAX)
+                    state->rax_was_saved = 1;
+
+                state->count++;
+            }
+        }
+        cur = cur->next;
+    }
+
+    /* If %rax was among the saved registers, we need a slot to save
+       the call's return value before restoring the old %rax. */
+    if (state->rax_was_saved)
+    {
+        char ret_label[64];
+        snprintf(ret_label, sizeof(ret_label), "__call_retval_%llu",
+            (unsigned long long)(reg_stack->use_sequence + 1));
+        StackNode_t *ret_slot = add_l_t_bytes(ret_label, 8);
+        if (ret_slot != NULL)
+            state->return_spill_offset = ret_slot->offset;
+    }
+}
+
+void regstack_caller_restore(RegStack_t *reg_stack, ListNode_t **inst_list,
+                             CallerSaveState *state)
+{
+    assert(reg_stack != NULL);
+    assert(inst_list != NULL);
+    assert(state != NULL);
+
+    if (state->count == 0)
+        return;
+
+    char buf[128];
+
+    /* If %rax was saved, stash the return value first so restore doesn't lose it */
+    if (state->rax_was_saved && state->return_spill_offset > 0)
+    {
+        snprintf(buf, sizeof(buf), "\tmovq\t%%rax, -%d(%%rbp)\n",
+            state->return_spill_offset);
+        *inst_list = add_inst(*inst_list, buf);
+    }
+
+    /* Restore all saved registers */
+    for (int i = 0; i < state->count; i++)
+    {
+        Register_t *reg = state->entries[i].reg;
+        int offset = state->entries[i].spill_offset;
+        snprintf(buf, sizeof(buf), "\tmovq\t-%d(%%rbp), %s\n",
+            offset, reg->bit_64);
+        *inst_list = add_inst(*inst_list, buf);
+    }
+
+    /* Reload the return value into %rax (after restoring old %rax) */
+    if (state->rax_was_saved && state->return_spill_offset > 0)
+    {
+        snprintf(buf, sizeof(buf), "\tmovq\t-%d(%%rbp), %%rax\n",
+            state->return_spill_offset);
+        *inst_list = add_inst(*inst_list, buf);
+    }
+
+    (void)reg_stack; /* suppress unused warning */
+}
+
 void free_reg_stack(RegStack_t *reg_stack)
 {
     assert(reg_stack != NULL);
@@ -1289,10 +1326,13 @@ StackNode_t *stackscope_find_x(StackScope_t *cur_scope, char *label)
     assert(label != NULL);
 
     cur_li = cur_scope->x;
-    while(cur_li != NULL)
+    int safety = 0;
+    while(cur_li != NULL && safety < 100000)
     {
+        safety++;
         cur_node = (StackNode_t *)cur_li->cur;
-        if(pascal_identifier_equals(cur_node->label, label))
+        if(cur_node != NULL && cur_node->label != NULL &&
+           pascal_identifier_equals(cur_node->label, label))
         {
             if (!cur_node->is_alias)
                 return cur_node;

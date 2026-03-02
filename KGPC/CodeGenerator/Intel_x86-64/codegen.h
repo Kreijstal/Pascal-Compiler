@@ -135,6 +135,18 @@ void codegen_sanitize_identifier_for_label(const char *value, char *buffer, size
 #include "../../Parser/ParseTree/KgpcType.h"
 #include "../../Parser/SemanticCheck/SymTab/SymTab.h"
 
+static inline int codegen_align_to(int value, int alignment)
+{
+    if (alignment <= 0)
+        return value;
+    int remainder = value % alignment;
+    if (remainder == 0)
+        return value;
+    return value + (alignment - remainder);
+}
+
+ListNode_t *codegen_call_with_shadow_space(ListNode_t *inst_list, const char *target);
+
 /*
  * Compiler invariant policy:
  * For internal compiler assumptions, do not silently continue with fallbacks.
@@ -175,6 +187,11 @@ typedef struct {
 } CodeGenLoopFrame;
 
 typedef struct {
+    struct Expression *context_expr;
+    struct RecordType *record_type;
+} CodeGenWithContext;
+
+typedef struct {
     int label_counter;
     int write_label_counter;
     FILE *output_file;
@@ -200,6 +217,9 @@ typedef struct {
     int current_subprogram_lexical_depth;
     const char *current_subprogram_id;
     const char *current_subprogram_mangled;
+    const char *current_subprogram_method_name;   /* Bare method name (NULL for non-methods) */
+    const char *current_subprogram_owner_class;   /* Innermost owning class name (NULL for non-methods) */
+    const char *current_subprogram_owner_class_full; /* Full dotted class path (NULL if non-nested) */
     ListNode_t *static_link_procs;
 
     /* Flag indicating current function returns a dynamic array.
@@ -213,6 +233,26 @@ typedef struct {
     StackNode_t *static_link_spill_slot;
     int pending_stack_arg_bytes;
     ListNode_t *emitted_subprograms;
+    CodeGenWithContext *with_stack;
+    int with_depth;
+    int with_capacity;
+
+    /* Asm parameter substitution for nostackframe functions.
+       When is_nostackframe is set, asm blocks substitute param names with ABI registers. */
+    int is_nostackframe;
+    int asm_param_count;
+    struct {
+        const char *name;   /* Pascal parameter name */
+        int reg_index;      /* SysV ABI register index (0=%rdi,1=%rsi,...) */
+    } asm_params[16];
+
+    /* Callee-saved register save slot offsets (from %rbp).
+       Set to 0 when not used (e.g. nostackframe functions). */
+    int callee_save_rbx_offset;
+    int callee_save_r12_offset;
+    int callee_save_r13_offset;
+    int callee_save_r14_offset;
+    int callee_save_r15_offset;
 } CodeGenContext;
 
 /* Generates a label */
@@ -231,13 +271,14 @@ ListNode_t *add_inst(ListNode_t *, char *);
 ListNode_t *gencode_jmp(int type, int inverse, char *label, ListNode_t *inst_list);
 
 void codegen_program_header(const char *, CodeGenContext *ctx);
-void codegen_rodata(CodeGenContext *ctx);
+void codegen_rodata(CodeGenContext *ctx, SymTab_t *symtab);
 void codegen_program_footer(CodeGenContext *ctx);
 void codegen_main(char *prgm_name, CodeGenContext *ctx);
 void codegen_stack_space(CodeGenContext *ctx);
 void codegen_inst_list(ListNode_t *, CodeGenContext *ctx);
 
 void codegen_report_error(CodeGenContext *ctx, const char *fmt, ...);
+void codegen_report_warning(const CodeGenContext *ctx, const char *fmt, ...);
 int codegen_had_error(const CodeGenContext *ctx);
 
 /* Convert a KgpcType to a legacy type tag.

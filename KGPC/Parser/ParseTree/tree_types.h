@@ -6,6 +6,8 @@
 #ifndef TREE_TYPES_H
 #define TREE_TYPES_H
 
+#include <stdint.h>
+
 #include "../List/List.h"
 
 /* Forward declarations to avoid circular dependencies */
@@ -15,6 +17,8 @@ struct Tree;      /* Forward declare Tree so MethodTemplate can reference it */
 struct ast_t;     /* Forward-declare AST type without including parser headers */
 struct GenericTypeDecl;
 struct RecordType;
+struct QualifiedIdent;
+struct TypeRef;
 
 /* Enums for readability with types */
 enum StmtType{STMT_VAR_ASSIGN, STMT_PROCEDURE_CALL, STMT_EXPR, STMT_COMPOUND_STATEMENT,
@@ -30,21 +34,25 @@ struct TypeAlias
     int base_type;
     int is_char_alias;
     char *target_type_id;
+    struct TypeRef *target_type_ref;
     struct RecordType *inline_record_type;
     int is_array;
     int array_start;
     int array_end;
     int array_element_type;
     char *array_element_type_id;
+    struct TypeRef *array_element_type_ref;
     int is_shortstring;
     int is_open_array;
     ListNode_t *array_dimensions;
     int is_pointer;
     int pointer_type;
     char *pointer_type_id;
+    struct TypeRef *pointer_type_ref;
     int is_set;
     int set_element_type;
     char *set_element_type_id;
+    struct TypeRef *set_element_type_ref;
     int is_enum_set;           /* Set with inline anonymous enum as element type */
     ListNode_t *inline_enum_values; /* Enum values for inline enum in set type */
     int is_enum;
@@ -53,6 +61,7 @@ struct TypeAlias
     int is_file;
     int file_type;
     char *file_type_id;
+    struct TypeRef *file_type_ref;
     /* Range/size metadata for scalar aliases */
     int is_range;
     int range_known;
@@ -79,6 +88,7 @@ struct RecordField
     char *name;
     int type;
     char *type_id;
+    struct TypeRef *type_ref;
     struct RecordType *nested_record;
     struct KgpcType *proc_type;
     int is_array;
@@ -86,14 +96,16 @@ struct RecordField
     int array_end;
     int array_element_type;
     char *array_element_type_id;
+    struct TypeRef *array_element_type_ref;
     struct RecordType *array_element_record; /* Anonymous record as array element type */
-    struct KgpcType *array_element_kgpc_type; /* Array element type for nested arrays */
+    struct KgpcType *array_element_kgpc_type; /* Pre-built element type for nested arrays (array of array of ...) */
     int array_is_open;
     int is_hidden;
     int is_class_var;
     int is_pointer;
     int pointer_type;
     char *pointer_type_id;
+    struct TypeRef *pointer_type_ref;
     ListNode_t *enum_literals; /* Anonymous enum values for fields like `kind: (a, b, c)` */
 };
 
@@ -102,6 +114,7 @@ struct ClassProperty
     char *name;
     int type;
     char *type_id;
+    struct TypeRef *type_ref;
     char *read_accessor;
     char *write_accessor;
     int is_indexed;
@@ -164,12 +177,18 @@ struct RecordType
     struct GenericTypeDecl *generic_decl; /* Owning generic declaration, if any */
     char **generic_args;      /* Concrete type arguments for specialization */
     int num_generic_args;
+    int is_generic_specialization; /* 1 if this record is a generic specialization */
     int method_clones_emitted; /* 1 if generic method clones have been appended */
     char *default_indexed_property; /* Field name for default indexed access (e.g., "FItems" for array-like classes) */
     int default_indexed_element_type; /* Type tag for elements of the default indexed property */
     char *default_indexed_element_type_id; /* Type identifier for elements of the default indexed property */
     ListNode_t *record_properties; /* Properties on plain records (Delphi advanced records), not checked by record_type_is_class */
     char *guid_string;             /* GUID string for interfaces, e.g. "{12345678-1234-...}" */
+    int has_guid;                  /* 1 if parsed GUID fields are available */
+    uint32_t guid_d1;
+    uint16_t guid_d2;
+    uint16_t guid_d3;
+    uint8_t guid_d4[8];
     char **interface_names;        /* Names of interfaces this class implements */
     int num_interfaces;            /* Number of entries in interface_names */
 };
@@ -251,7 +270,11 @@ struct Statement
             struct HashNode *procedural_var_symbol; /* Symbol for procedural var (if any) */
             struct Expression *procedural_var_expr; /* Expression yielding procedure pointer */
             int is_method_call_placeholder;  /* 1 if created from member access and needs method resolution */
+            char *placeholder_method_name;   /* Bare method name when is_method_call_placeholder=1 (e.g. "Create") */
             int arg0_is_dynarray_descriptor; /* 1 if arg0 should be passed as dynarray descriptor */
+            int is_virtual_call;             /* 1 if this is a virtual method call (needs VMT dispatch) */
+            int vmt_index;                   /* VMT index for virtual calls (-1 if not set) */
+            char *self_class_name;           /* Class name for VMT lookup in virtual calls */
         } procedure_call_data;
 
         /* Expression statement */
@@ -410,6 +433,7 @@ struct Expression
     int col_num;
     int source_index;  /* Byte offset in preprocessed buffer for accurate error context (-1 if unknown) */
     struct RecordType *record_type; /* MOVED HERE */
+    struct QualifiedIdent *id_ref; /* Structured identifier for EXPR_VAR_ID (optional) */
     enum ExprType type;
     union expr_data
     {
@@ -486,10 +510,12 @@ struct Expression
             struct HashNode *procedural_var_symbol;  /* Symbol for the procedural variable */
             struct Expression *procedural_var_expr;  /* Expression yielding a function pointer (for record fields, etc.) */
             int is_method_call_placeholder;          /* 1 if created from member access and needs method resolution */
+            char *placeholder_method_name;           /* Bare method name when is_method_call_placeholder=1 (e.g. "Create") */
             int is_virtual_call;                     /* 1 if this is a virtual method call (needs VMT dispatch) */
             int vmt_index;                           /* VMT index for virtual calls (-1 if not set) */
             char *self_class_name;                   /* Class name for VMT lookup in virtual calls */
             int arg0_is_dynarray_descriptor;         /* 1 if arg0 should be passed as dynarray descriptor */
+            char *call_qualifier;  /* Unit/object prefix if call was qualified, e.g. "SysUtils" (NULL if unqualified) */
         } function_call_data;
 
         /* Integer number */
@@ -546,6 +572,8 @@ struct Expression
         {
             int target_type;
             char *target_type_id;
+            char *type_qualifier;  /* Unit prefix for qualified types, e.g. "SysUtils" (NULL if unqualified) */
+            struct TypeRef *target_type_ref;
             struct Expression *expr;
         } typecast_data;
 
@@ -555,6 +583,7 @@ struct Expression
             struct Expression *expr;
             int target_type;
             char *target_type_id;
+            struct TypeRef *target_type_ref;
             struct RecordType *target_record_type;
         } is_data;
 
@@ -564,6 +593,7 @@ struct Expression
             struct Expression *expr;
             int target_type;
             char *target_type_id;
+            struct TypeRef *target_type_ref;
             struct RecordType *target_record_type;
         } as_data;
 
@@ -571,12 +601,14 @@ struct Expression
         struct TypeInfo
         {
             char *type_id;
+            struct TypeRef *type_ref;
         } typeinfo_data;
 
         /* Address of procedure */
         struct AddrOfProc
         {
-            struct HashNode *procedure_symbol;
+            char *proc_mangled_id;  /* Owned copy, survives scope cleanup */
+            char *proc_id;          /* Owned copy, survives scope cleanup */
         } addr_of_proc_data;
 
         /* Anonymous function/procedure */
@@ -586,6 +618,7 @@ struct Expression
             ListNode_t *parameters;         /* Parameter list */
             int return_type;                /* Return type (for functions, -1 for procedures) */
             char *return_type_id;           /* Return type identifier */
+            struct TypeRef *return_type_ref;
             struct Statement *body;         /* Body statement */
             int is_function;                /* 1 for function, 0 for procedure */
         } anonymous_method_data;
@@ -597,11 +630,13 @@ struct Expression
     
     int pointer_subtype;
     char *pointer_subtype_id;
+    struct TypeRef *pointer_subtype_ref;
     /* struct RecordType *record_type; MOVED */
     int is_pointer_diff; /* Flag for pointer-pointer subtraction */
     int is_array_expr;
     int array_element_type;
     char *array_element_type_id;
+    struct TypeRef *array_element_type_ref;
     int array_lower_bound;
     int array_upper_bound;
     int array_element_size;

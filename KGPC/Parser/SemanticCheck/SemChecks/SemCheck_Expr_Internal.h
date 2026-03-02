@@ -35,12 +35,20 @@
 #include "../../List/List.h"
 #include "../../ParseTree/tree.h"
 #include "../../ParseTree/tree_types.h"
+#include "../../ParseTree/ident_ref.h"
 #include "../../ParseTree/type_tags.h"
 #include "../../ParseTree/KgpcType.h"
 #include "../../ParseTree/from_cparser.h"
 #include "../../pascal_frontend.h"
 #include "../../../identifier_utils.h"
 #include "../../../format_arg.h"
+
+HashNode_t *semcheck_find_preferred_type_node_with_ref(SymTab_t *symtab,
+    const struct TypeRef *type_ref, const char *type_id);
+HashNode_t *semcheck_find_type_node_with_kgpc_type_ref(SymTab_t *symtab,
+    const struct TypeRef *type_ref, const char *type_id);
+HashNode_t *semcheck_find_type_node_in_owner_chain(SymTab_t *symtab,
+    const char *type_id, const char *owner_full, const char *owner_outer);
 
 /*===========================================================================
  * Type Definitions (internal)
@@ -259,6 +267,8 @@ int semcheck_map_builtin_type_name(SymTab_t *symtab, const char *id);
 /* Resolve a type identifier to a type tag */
 int resolve_type_identifier(int *out_type, SymTab_t *symtab,
     const char *type_id, int line_num);
+int resolve_type_identifier_ref(int *out_type, SymTab_t *symtab,
+    const char *type_id, const struct TypeRef *type_ref, int line_num);
 
 /* Get type name from type tag */
 const char *semcheck_type_tag_name(int type_tag);
@@ -412,6 +422,8 @@ int semcheck_builtin_typeinfo(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev);
 int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev);
+int semcheck_builtin_bitsizeof(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev);
 int semcheck_builtin_ismanagedtype(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev);
 int semcheck_builtin_unary_real(int *type_return, SymTab_t *symtab,
@@ -454,8 +466,6 @@ int semcheck_reinterpret_typecast_as_call(int *type_return, SymTab_t *symtab,
 
 /* Try indexed property getter */
 int semcheck_try_indexed_property_getter(int *type_return,
-    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
-int semcheck_try_indexed_record_property_getter(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
 
 /* Mangle helper const ID */

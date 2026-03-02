@@ -6,19 +6,19 @@ program tdd_record_property_getter;
 type
   TRec = record
   private
-    function GetValue: Integer;
+    function GetProp(Index: Word): Longint;
   public
-    property Value: Integer read GetValue;
+    property Prop[Index: Word]: Longint read GetProp;
   end;
 
-function TRec.GetValue: Integer;
+function TRec.GetProp(Index: Word): Longint;
 begin
-  Result := 42;
+  Result := Index + 1;
 end;
 
 var
-  Rec: TRec;
+  R: TRec;
 
 begin
-  Writeln(Rec.Value);
+  writeln(R.Prop[2]);
 end.

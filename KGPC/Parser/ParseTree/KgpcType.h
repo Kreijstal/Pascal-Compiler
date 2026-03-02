@@ -40,6 +40,7 @@ typedef struct {
     // A list of Tree_t* nodes, where each node is a TREE_VAR_DECL representing a parameter.
     // This reuses the existing, well-understood structure for parameter declarations.
     ListNode_t *params;
+    int owns_params;
     
     // For functions, this points to the return type.
     // For procedures, this is NULL.
@@ -109,7 +110,8 @@ KgpcType* create_record_type(struct RecordType *record_info);
  * Returns NULL if conversion fails (e.g., unresolvable type reference)
  * symtab is used to resolve type references (target_type_id, element_type_id, etc.)
  */
-KgpcType* create_kgpc_type_from_type_alias(struct TypeAlias *alias, struct SymTab *symtab);
+KgpcType* create_kgpc_type_from_type_alias(struct TypeAlias *alias, struct SymTab *symtab,
+    int defined_in_unit);
 
 // Destructor function (CRITICAL for preventing memory leaks)
 void destroy_kgpc_type(KgpcType *type);

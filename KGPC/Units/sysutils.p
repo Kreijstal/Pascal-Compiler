@@ -46,9 +46,6 @@ type
     EConvertError = class(Exception)
     end;
 
-    EArgumentException = class(Exception)
-    end;
-
     TEncoding = class
     public
         class function UTF8: TEncoding; static;
@@ -106,8 +103,6 @@ function AnsiUpperCase(const S: AnsiString): AnsiString;
 function AnsiLowerCase(const S: AnsiString): AnsiString;
 function CompareText(const S1, S2: AnsiString): Integer;
 function SameText(const S1, S2: AnsiString): Boolean;
-function ShortCompareText(const S1, S2: ShortString): Integer;
-function ShortCompareText(const S1, S2: ShortString): Integer;
 function StringReplace(const S, OldPattern, NewPattern: AnsiString): AnsiString;
 function StringReplace(const S, OldPattern, NewPattern: AnsiString; Flags: TReplaceFlags): AnsiString;
 function BoolToStr(B: Boolean; UseBoolStrs: Boolean): AnsiString;
@@ -116,7 +111,8 @@ function PadRight(const S: AnsiString; ATotalWidth: SizeInt; PaddingChar: AnsiCh
 function QuotedString(const S: AnsiString; QuoteChar: AnsiChar): AnsiString;
 function StartsWith(const S, Prefix: AnsiString): Boolean;
 function EndsWith(const S, Suffix: AnsiString): Boolean;
-function StringOfChar(C: AnsiChar; Count: Integer): AnsiString;
+function StringOfChar(C: AnsiChar; Count: Integer): AnsiString; overload;
+function StringOfChar(C: WideChar; Count: SizeInt): WideString; overload;
 function IntToHex(Value: LongInt): AnsiString;
 function IntToHex(Value: LongInt; Digits: Integer): AnsiString;
 function IntToHex(Value: Int64): AnsiString;
@@ -695,11 +691,6 @@ begin
     SameText := CompareText(S1, S2) = 0;
 end;
 
-function ShortCompareText(const S1, S2: ShortString): Integer;
-begin
-    ShortCompareText := CompareText(AnsiString(S1), AnsiString(S2));
-end;
-
 function StringReplace(const S, OldPattern, NewPattern: AnsiString): AnsiString;
 var
     i: integer;
@@ -851,9 +842,23 @@ begin
     Result := True;
 end;
 
-function StringOfChar(C: AnsiChar; Count: Integer): AnsiString;
+function StringOfChar(C: AnsiChar; Count: Integer): AnsiString; overload;
 var
     i: Integer;
+begin
+    if Count <= 0 then
+    begin
+        Result := '';
+        exit;
+    end;
+    SetLength(Result, Count);
+    for i := 1 to Count do
+        Result[i] := C;
+end;
+
+function StringOfChar(C: WideChar; Count: SizeInt): WideString; overload;
+var
+    i: SizeInt;
 begin
     if Count <= 0 then
     begin

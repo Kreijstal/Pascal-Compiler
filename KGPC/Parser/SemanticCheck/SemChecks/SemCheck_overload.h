@@ -34,7 +34,7 @@ int semcheck_candidate_is_builtin(SymTab_t *symtab, HashNode_t *node);
 
 int semcheck_count_total_params(ListNode_t *params);
 int semcheck_count_required_params(ListNode_t *params);
-int semcheck_method_accepts_arg_count(ListNode_t *params, int arg_count, int *expects_self_out);
+int semcheck_method_accepts_arg_count(ListNode_t *params, int arg_count, int *expects_self_out, int is_varargs);
 int semcheck_append_default_args(ListNode_t **args_head, ListNode_t *formal_params, int line_num);
 
 int semcheck_resolve_overload(HashNode_t **best_match_out,
@@ -49,5 +49,8 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
 
 /* Check if two function candidates have equivalent signatures (same types for all params) */
 int semcheck_candidates_share_signature(SymTab_t *symtab, HashNode_t *a, HashNode_t *b);
+
+/* Check if two candidates differ in string subtypes (e.g. RawByteString vs UnicodeString) */
+int semcheck_candidates_string_subtypes_differ(SymTab_t *symtab, HashNode_t *a, HashNode_t *b);
 
 #endif

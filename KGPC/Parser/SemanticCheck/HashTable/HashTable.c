@@ -335,6 +335,19 @@ void DestroyHashTable(HashTable_t *table)
         while(cur != NULL)
         {
             hash_node = (HashNode_t *)cur->cur;
+            if (hash_node->type != NULL)
+            {
+                if (getenv("KGPC_DEBUG_TYPE_FREE") != NULL)
+                {
+                    fprintf(stderr,
+                        "[KgpcType] hashnode '%s' (type=%d) destroy type=%p ref=%d\n",
+                        hash_node->id ? hash_node->id : "<null>",
+                        hash_node->hash_type,
+                        (void *)hash_node->type,
+                        hash_node->type->ref_count);
+                }
+                destroy_kgpc_type(hash_node->type);
+            }
             if (hash_node->id != NULL)
                 free(hash_node->id);
             if (hash_node->canonical_id != NULL)
@@ -347,8 +360,8 @@ void DestroyHashTable(HashTable_t *table)
                 free(hash_node->const_set_label);
             if (hash_node->mangled_id != NULL)
                 free(hash_node->mangled_id);
-            if (hash_node->type != NULL)
-                destroy_kgpc_type(hash_node->type);
+            /* method_name, owner_class, owner_class_full, owner_class_outer
+             * are interned strings -- do not free individually. */
             /* Builtin procedures are handled separately - do not call DestroyBuiltin here */
             /* to avoid double-free issues */
 
@@ -466,10 +479,16 @@ static HashNode_t* create_hash_node(char* id, char* mangled_id,
     hash_node->const_set_size = 0;
     hash_node->const_set_label = NULL;
     hash_node->is_var_parameter = 0;
+    hash_node->is_varargs = 0;
     hash_node->requires_static_link = 0;
     hash_node->has_nested_requiring_link = 0;
     hash_node->defined_in_unit = 0;
     hash_node->unit_is_public = 0;
+    hash_node->source_unit_index = 0;
+    hash_node->method_name = NULL;
+    hash_node->owner_class = NULL;
+    hash_node->owner_class_full = NULL;
+    hash_node->owner_class_outer = NULL;
     
     /* Set identifier */
     hash_node->id = strdup(id);
