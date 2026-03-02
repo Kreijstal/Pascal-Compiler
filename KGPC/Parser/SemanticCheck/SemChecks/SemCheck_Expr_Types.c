@@ -2655,19 +2655,30 @@ int semcheck_recordaccess(int *type_return,
                         expr->expr_data.function_call_data.args_expr = arg_node;
                     }
 
-                    /* Preserve constructor return type for class Create calls before
-                     * semcheck_funccall short-circuits on resolved_func. */
+                    /* Check if this is a constructor call (Create) on a class type.
+                     * After semcheck_funccall resolves the inherited constructor,
+                     * we need to override the return type to be the calling class,
+                     * not the class where the constructor is declared. */
                     const char *method_name = NULL;
                     if (method_node->method_name != NULL)
                         method_name = method_node->method_name;
                     else if (field_id != NULL)
                         method_name = field_id;
-                    if (!is_static_method &&
+                    int is_constructor_call = (!is_static_method &&
                         record_info != NULL &&
                         record_type_is_class(record_info) &&
                         !record_info->is_type_helper &&
                         method_name != NULL &&
-                        strncasecmp(method_name, "Create", 6) == 0)
+                        strncasecmp(method_name, "Create", 6) == 0);
+
+                    /* Re-run semantic checking as a function call */
+                    semcheck_expr_set_resolved_type(expr, UNKNOWN_TYPE);
+                    int funccall_result = semcheck_funccall(type_return, symtab, expr, max_scope_lev, mutating);
+
+                    /* For constructor calls, override the return type to be the
+                     * calling class (e.g. TResolveReferenceVisitor.Create should
+                     * return TResolveReferenceVisitor, not TObject). */
+                    if (is_constructor_call)
                     {
                         KgpcType *record_kgpc = create_record_type(record_info);
                         if (record_kgpc != NULL)
@@ -2677,6 +2688,8 @@ int semcheck_recordaccess(int *type_return,
                             {
                                 semcheck_expr_set_resolved_kgpc_type_shared(expr, ptr_type);
                                 semcheck_expr_set_resolved_type(expr, POINTER_TYPE);
+                                if (type_return != NULL)
+                                    *type_return = POINTER_TYPE;
                                 destroy_kgpc_type(ptr_type);
                             }
                             else
@@ -2686,9 +2699,7 @@ int semcheck_recordaccess(int *type_return,
                         }
                     }
 
-                    /* Re-run semantic checking as a function call */
-                    semcheck_expr_set_resolved_type(expr, UNKNOWN_TYPE);
-                    return semcheck_funccall(type_return, symtab, expr, max_scope_lev, mutating);
+                    return funccall_result;
                 }
         }
 
