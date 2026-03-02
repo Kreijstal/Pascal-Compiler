@@ -3532,11 +3532,15 @@ void *sysreallocmem_p_i64(void *p, intptr_t size)
     return realloc(p, (size_t)size);
 }
 
-/* function SysMemSize(p: Pointer): PtrInt */
+/* function SysMemSize(p: Pointer): PtrInt
+ * Returns the usable size of the allocated block.  We cannot determine
+ * this portably from libc, so return -1 (unknown).  FPC code that
+ * relies on MemSize should not be affected since KGPC bypasses the
+ * MemoryManager indirection. */
 intptr_t sysmemsize_p(void *p)
 {
     (void)p;
-    return 0; /* Cannot determine malloc'd block size portably */
+    return -1;
 }
 
 char *kgpc_string_concat(const char *lhs, const char *rhs)
