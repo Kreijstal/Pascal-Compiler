@@ -3340,6 +3340,35 @@ int semcheck_funccall(int *type_return,
                     record_info = semcheck_lookup_record_type(symtab,
                         first_arg->pointer_subtype_id);
             }
+            /* Case 3: TYPE_KIND_POINTER -> TYPE_KIND_POINTER -> TYPE_KIND_RECORD
+             * This handles "class of T" resolved as pointer-to-(pointer-to-record).
+             * Also try TYPE_KIND_POINTER with type_alias fallback. */
+            if (record_info == NULL && owner_type->kind == TYPE_KIND_POINTER)
+            {
+                KgpcType *pointee = owner_type->info.points_to;
+                if (pointee != NULL && pointee->kind == TYPE_KIND_POINTER &&
+                    pointee->info.points_to != NULL &&
+                    pointee->info.points_to->kind == TYPE_KIND_RECORD)
+                {
+                    record_info = kgpc_type_get_record(pointee->info.points_to);
+                }
+                if (record_info == NULL && pointee != NULL &&
+                    pointee->kind == TYPE_KIND_RECORD)
+                {
+                    record_info = kgpc_type_get_record(pointee);
+                }
+                if (record_info == NULL && owner_type->type_alias != NULL &&
+                    owner_type->type_alias->pointer_type_id != NULL)
+                {
+                    record_info = semcheck_lookup_record_type(symtab,
+                        owner_type->type_alias->pointer_type_id);
+                }
+                if (record_info == NULL && first_arg->pointer_subtype_id != NULL)
+                {
+                    record_info = semcheck_lookup_record_type(symtab,
+                        first_arg->pointer_subtype_id);
+                }
+            }
         }
 
         if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
