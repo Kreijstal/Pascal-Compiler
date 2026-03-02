@@ -6093,9 +6093,83 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                     is_forward_class_completion = 1;
                             }
                         }
-                        if (!is_forward_class_completion)
+                        /* Allow a simple type alias from a unit to override an
+                         * existing alias when the target type differs AND both
+                         * are plain (non-array, non-pointer) aliases.  This is
+                         * required for objpas.pp which redefines
+                         *   Integer = LongInt   (overriding system's Integer = SmallInt)
+                         * when {$mode objfpc} or {$mode delphi} is active. */
+                        int is_alias_override = 0;
+                        if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS &&
+                            existing->hash_type == HASHTYPE_TYPE &&
+                            tree->tree_data.type_decl_data.defined_in_unit)
+                        {
+                            struct TypeAlias *new_alias = &tree->tree_data.type_decl_data.info.alias;
+                            struct TypeAlias *old_alias = get_type_alias_from_node(existing);
+                            if (new_alias != NULL && old_alias != NULL &&
+                                new_alias->target_type_id != NULL &&
+                                old_alias->target_type_id != NULL &&
+                                !new_alias->is_array && !new_alias->is_pointer &&
+                                !new_alias->is_set && !new_alias->is_file &&
+                                !new_alias->inline_record_type &&
+                                /* Also require the OLD alias to not be a pointer/array/set/file.
+                                 * This prevents objpas PString=PAnsiString from overriding
+                                 * system pstring=^shortstring (which has is_pointer=1). */
+                                !old_alias->is_array && !old_alias->is_pointer &&
+                                !old_alias->is_set && !old_alias->is_file &&
+                                !old_alias->inline_record_type &&
+                                !pascal_identifier_equals(new_alias->target_type_id, old_alias->target_type_id))
+                            {
+                                /* Only allow override for the specific case where
+                                 * objpas.pp redefines Integer=LongInt over system's
+                                 * Integer=SmallInt.  We also handle MaxInt redefinition.
+                                 * Other aliases must not be overridden to avoid breaking
+                                 * NativeInt, TDateTime, PString, etc. */
+                                if (pascal_identifier_equals(tree->tree_data.type_decl_data.id, "Integer") ||
+                                    pascal_identifier_equals(tree->tree_data.type_decl_data.id, "PInteger") ||
+                                    pascal_identifier_equals(tree->tree_data.type_decl_data.id, "SizeInt") ||
+                                    pascal_identifier_equals(tree->tree_data.type_decl_data.id, "PtrInt") ||
+                                    pascal_identifier_equals(tree->tree_data.type_decl_data.id, "CodePtrInt") ||
+                                    pascal_identifier_equals(tree->tree_data.type_decl_data.id, "ValSInt") ||
+                                    pascal_identifier_equals(tree->tree_data.type_decl_data.id, "ValUInt"))
+                                    is_alias_override = 1;
+                            }
+                        }
+                        if (!is_forward_class_completion && !is_alias_override)
                         {
                             /* Already declared, skip */
+                            cur = cur->next;
+                            continue;
+                        }
+                        if (is_alias_override)
+                        {
+                            /* Replace the existing type with the new alias */
+                            struct TypeAlias *alias = &tree->tree_data.type_decl_data.info.alias;
+                            if (alias->target_type_id != NULL)
+                                apply_builtin_integer_alias_metadata(alias, alias->target_type_id);
+                            int base_tag = alias->base_type != UNKNOWN_TYPE ? alias->base_type : INT_TYPE;
+                            KgpcType *kgpc_type = NULL;
+                            if (alias->storage_size > 0)
+                                kgpc_type = create_primitive_type_with_size(base_tag, (int)alias->storage_size);
+                            else
+                                kgpc_type = create_primitive_type(base_tag);
+                            if (kgpc_type != NULL)
+                            {
+                                kgpc_type_set_type_alias(kgpc_type, alias);
+                                if (tree->tree_data.type_decl_data.kgpc_type == NULL)
+                                {
+                                    tree->tree_data.type_decl_data.kgpc_type = kgpc_type;
+                                    kgpc_type_retain(kgpc_type);
+                                }
+                                if (existing->type != NULL)
+                                    destroy_kgpc_type(existing->type);
+                                kgpc_type_retain(kgpc_type);
+                                existing->type = kgpc_type;
+                                mark_hashnode_unit_info(symtab, existing,
+                                    tree->tree_data.type_decl_data.defined_in_unit,
+                                    tree->tree_data.type_decl_data.unit_is_public);
+                                mark_hashnode_source_unit(existing, tree->tree_data.type_decl_data.source_unit_index);
+                            }
                             cur = cur->next;
                             continue;
                         }
@@ -10358,9 +10432,10 @@ void semcheck_add_builtins(SymTab_t *symtab)
     
     /* Primitive core types required to semcheck system.p and user code.
      * Everything else should live in KGPC/Units/system.p (aliases, pointer helpers, etc.). */
-    /* Integer is NOT a builtin — it is defined in system.p as an alias
-     * (Integer = LongInt in objfpc mode, Integer = SmallInt in classic mode).
-     * This allows the FPC RTL to override it via objpas.pp. */
+    /* Integer is defined by system.p as "Integer = LongInt" (32-bit in objfpc mode).
+     * In FPC RTL mode, system.pp defines "Integer = SmallInt" (16-bit) and then
+     * objpas.pp overrides it to "Integer = LongInt" via the alias override logic.
+     * We do NOT register Integer as a builtin to avoid conflicting with system.p. */
     add_builtin_from_vartype(symtab, "LongInt", HASHVAR_LONGINT);
     add_builtin_type_owned(symtab, "Int64", create_primitive_type_with_size(INT64_TYPE, 8));
     if (!stdlib_loaded_flag())
