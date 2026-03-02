@@ -189,7 +189,7 @@ void test_sep_by1_combinator(void) {
     TEST_ASSERT(node->next == NULL);
     free_ast(success.value.ast);
     free(success_input->buffer);
-    free(success_input);
+    free_input(success_input);
 
     input_t* trailing_sep_input = new_input();
     trailing_sep_input->buffer = strdup("a,");
@@ -201,7 +201,7 @@ void test_sep_by1_combinator(void) {
     TEST_ASSERT(trailing.value.ast->next == NULL);
     free_ast(trailing.value.ast);
     free(trailing_sep_input->buffer);
-    free(trailing_sep_input);
+    free_input(trailing_sep_input);
 
     input_t* failure_input = new_input();
     failure_input->buffer = strdup(",");
@@ -210,7 +210,7 @@ void test_sep_by1_combinator(void) {
     TEST_ASSERT(!failure.is_success);
     free_error(failure.value.error);
     free(failure_input->buffer);
-    free(failure_input);
+    free_input(failure_input);
 
     free_combinator(parser);
 }

@@ -92,6 +92,7 @@ int PushConstOntoScope_Typed(SymTab_t *symtab, char *id, long long value, KgpcTy
     assert(type != NULL && "KgpcType must be provided for typed constant");
 
     HashTable_t *cur_hash = (HashTable_t *)symtab->stack_head->cur;
+    kgpc_type_retain(type);
     int result = AddIdentToTable(cur_hash, id, NULL, HASHTYPE_CONST, type);
     if (result == 0)
     {
@@ -101,6 +102,10 @@ int PushConstOntoScope_Typed(SymTab_t *symtab, char *id, long long value, KgpcTy
             node->is_constant = 1;
             node->const_int_value = value;
         }
+    }
+    else
+    {
+        kgpc_type_release(type);
     }
     return result;
 }
@@ -414,7 +419,7 @@ int PushTypeOntoScope(SymTab_t *symtab, char *id, enum VarType var_type,
     {
         /* Use the comprehensive TypeAlias → KgpcType converter
          * This handles ALL cases: arrays, pointers, sets, enums, files, primitives */
-        kgpc_type = create_kgpc_type_from_type_alias(type_alias, symtab);
+        kgpc_type = create_kgpc_type_from_type_alias(type_alias, symtab, 0);
         
         /* If conversion failed (e.g., forward reference), we'll handle it below */
     }
@@ -427,7 +432,10 @@ int PushTypeOntoScope(SymTab_t *symtab, char *id, enum VarType var_type,
     /* All cases should create a KgpcType now. If kgpc_type is NULL, it means:
      * - Truly UNTYPED (var_type == HASHVAR_UNTYPED)
      * - This is valid and we use NULL KgpcType */
-    return PushTypeOntoScope_Typed(symtab, id, kgpc_type);
+    int result = PushTypeOntoScope_Typed(symtab, id, kgpc_type);
+    if (kgpc_type != NULL)
+        destroy_kgpc_type(kgpc_type);
+    return result;
 }
 
 /* ===== NEW TYPE SYSTEM FUNCTIONS USING KgpcType ===== */
@@ -526,6 +534,10 @@ int AddBuiltinProc_Typed(SymTab_t *symtab, char *id, KgpcType *type)
     assert(type->kind == TYPE_KIND_PROCEDURE && "Builtin proc must have procedure type");
     assert(type->info.proc_info.return_type == NULL && "Procedure must not have return type");
 
+    /* Builtin procedures own their manually created parameter lists */
+    type->info.proc_info.owns_params = 1;
+
+    /* AddIdentToTable will perform internal retention */
     return AddIdentToTable(symtab->builtins, id, NULL, HASHTYPE_BUILTIN_PROCEDURE, type);
 }
 
@@ -538,6 +550,10 @@ int AddBuiltinFunction_Typed(SymTab_t *symtab, char *id, KgpcType *type)
     assert(type->kind == TYPE_KIND_PROCEDURE && "Builtin function must have procedure type");
     assert(type->info.proc_info.return_type != NULL && "Function must have return type");
 
+    /* Builtin functions own their manually created parameter lists */
+    type->info.proc_info.owns_params = 1;
+
+    /* AddIdentToTable will perform internal retention */
     return AddIdentToTable(symtab->builtins, id, NULL, HASHTYPE_FUNCTION, type);
 }
 

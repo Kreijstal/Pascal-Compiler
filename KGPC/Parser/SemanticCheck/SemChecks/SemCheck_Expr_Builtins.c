@@ -157,6 +157,18 @@ int semcheck_builtin_ord(int *type_return, SymTab_t *symtab,
         return error_count;
     }
 
+    int arg_type_tag = semcheck_tag_from_kgpc(arg_kgpc_type);
+    if (arg_type_tag == UNKNOWN_TYPE && arg_expr != NULL && arg_expr->resolved_kgpc_type != NULL)
+        arg_type_tag = semcheck_tag_from_kgpc(arg_expr->resolved_kgpc_type);
+
+    int is_arg_upcase_char_call = 0;
+    if (arg_expr != NULL && arg_expr->type == EXPR_FUNCTION_CALL)
+    {
+        char *mangled_function_name = arg_expr->expr_data.function_call_data.mangled_id;
+        if (mangled_function_name != NULL && strcmp(mangled_function_name, "kgpc_upcase_char") == 0)
+            is_arg_upcase_char_call = 1;
+    }
+
     const char *mangled_name = NULL;
     if (kgpc_type_is_string(arg_kgpc_type))
     {
@@ -237,7 +249,7 @@ int semcheck_builtin_ord(int *type_return, SymTab_t *symtab,
     {
         mangled_name = "kgpc_ord_longint";
     }
-    else if (kgpc_type_is_char(arg_kgpc_type))
+    else if (kgpc_type_is_char(arg_kgpc_type) || arg_type_tag == CHAR_TYPE || is_arg_upcase_char_call)
     {
         /* For char variables, Ord returns the character code */
         mangled_name = "kgpc_ord_longint";
@@ -765,6 +777,31 @@ int semcheck_builtin_strpas(int *type_return, SymTab_t *symtab,
     /* FPC accepts both PChar/PAnsiChar (string-like) pointers */
     int strpas_arg_ok = kgpc_type_is_string(arg_kgpc_type) ||
         kgpc_type_is_pointer(arg_kgpc_type) || kgpc_type_is_char(arg_kgpc_type);
+    if (!strpas_arg_ok && arg_kgpc_type != NULL && kgpc_type_is_array(arg_kgpc_type))
+    {
+        KgpcType *elem_type = kgpc_type_get_array_element_type_resolved(arg_kgpc_type, symtab);
+        if (elem_type != NULL && kgpc_type_is_char(elem_type))
+            strpas_arg_ok = 1;
+        else if (arg_kgpc_type->type_alias != NULL &&
+            arg_kgpc_type->type_alias->array_element_type == CHAR_TYPE)
+            strpas_arg_ok = 1;
+        else if (arg_kgpc_type->type_alias != NULL &&
+            arg_kgpc_type->type_alias->array_element_type_id != NULL &&
+            (pascal_identifier_equals(arg_kgpc_type->type_alias->array_element_type_id, "AnsiChar") ||
+             pascal_identifier_equals(arg_kgpc_type->type_alias->array_element_type_id, "Char") ||
+             pascal_identifier_equals(arg_kgpc_type->type_alias->array_element_type_id, "WideChar")))
+            strpas_arg_ok = 1;
+    }
+    if (!strpas_arg_ok && arg_expr != NULL && arg_expr->is_array_expr)
+    {
+        if (arg_expr->array_element_type == CHAR_TYPE)
+            strpas_arg_ok = 1;
+        else if (arg_expr->array_element_type_id != NULL &&
+            (pascal_identifier_equals(arg_expr->array_element_type_id, "AnsiChar") ||
+             pascal_identifier_equals(arg_expr->array_element_type_id, "Char") ||
+             pascal_identifier_equals(arg_expr->array_element_type_id, "WideChar")))
+            strpas_arg_ok = 1;
+    }
     /* Fallback: check resolved_kgpc_type tag (e.g. argv[l] indexing returns pointer) */
     if (!strpas_arg_ok && arg_expr != NULL && arg_expr->resolved_kgpc_type != NULL)
     {
@@ -1040,7 +1077,18 @@ int semcheck_prepare_dynarray_high_call(int *type_return, SymTab_t *symtab,
     semcheck_expr_set_resolved_type(expr, LONGINT_TYPE);
     expr->expr_data.function_call_data.is_call_info_valid = 1;
     expr->expr_data.function_call_data.call_hash_type = HASHTYPE_FUNCTION;
-    
+
+    /* Set call_kgpc_type so the cached type path works on re-evaluation
+     * (e.g., when High(arr)+1 is an argument to an overloaded function) */
+    if (expr->expr_data.function_call_data.call_kgpc_type == NULL)
+    {
+        KgpcType *ret_type = create_primitive_type(LONGINT_TYPE);
+        /* create_procedure_type takes ownership of ret_type */
+        KgpcType *func_type = create_procedure_type(NULL, ret_type);
+        if (func_type != NULL)
+            expr->expr_data.function_call_data.call_kgpc_type = func_type;
+    }
+
     if (type_return != NULL)
         *type_return = LONGINT_TYPE;
     return error_count;
@@ -1057,20 +1105,38 @@ int semcheck_builtin_assigned(int *type_return, SymTab_t *symtab,
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
     if (args == NULL || args->next != NULL)
     {
-        semcheck_error_with_context("Error on line %d, Assigned expects exactly one argument.\n", expr->line_num);
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index,
+            "Error on line %d, Assigned expects exactly one argument.\n", expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
     }
 
     KgpcType *arg_kgpc_type = NULL;
+    struct Expression *arg_expr = (struct Expression *)args->cur;
     int error_count = semcheck_expr_with_type(&arg_kgpc_type, symtab,
-        (struct Expression *)args->cur, max_scope_lev, NO_MUTATE);
+        arg_expr, max_scope_lev, NO_MUTATE);
+    int err_line = expr->line_num;
+    int err_col = expr->col_num;
+    int err_source_index = expr->source_index;
+    if (arg_expr != NULL)
+    {
+        if (arg_expr->line_num > 0)
+            err_line = arg_expr->line_num;
+        if (arg_expr->col_num > 0)
+            err_col = arg_expr->col_num;
+        if (arg_expr->source_index >= 0)
+            err_source_index = arg_expr->source_index;
+    }
     if (getenv("KGPC_DEBUG_ASSIGNED") != NULL)
     {
-        struct Expression *arg_expr = (struct Expression *)args->cur;
+        const char *arg_id = NULL;
+        if (arg_expr != NULL && arg_expr->type == EXPR_VAR_ID)
+            arg_id = arg_expr->expr_data.id;
         fprintf(stderr,
-            "[KGPC_DEBUG_ASSIGNED] expr_type=%d kgpc=%s kind=%d\n",
+            "[KGPC_DEBUG_ASSIGNED] line=%d expr_type=%d id=%s kgpc=%s kind=%d\n",
+            expr->line_num,
             arg_expr != NULL ? arg_expr->type : -1,
+            arg_id != NULL ? arg_id : "<null>",
             arg_kgpc_type != NULL ? kgpc_type_to_string(arg_kgpc_type) : "<null>",
             arg_kgpc_type != NULL ? arg_kgpc_type->kind : -1);
     }
@@ -1081,7 +1147,8 @@ int semcheck_builtin_assigned(int *type_return, SymTab_t *symtab,
                         kgpc_type_equals_tag(arg_kgpc_type, POINTER_TYPE);
     if (error_count == 0 && !is_valid_type)
     {
-        semcheck_error_with_context("Error on line %d, Assigned expects a pointer or procedure variable.\n", expr->line_num);
+        semcheck_error_with_context_at(err_line, err_col, err_source_index,
+            "Error on line %d, Assigned expects a pointer or procedure variable.\n", err_line);
         ++error_count;
     }
 
@@ -2024,6 +2091,144 @@ int semcheck_builtin_default(int *type_return, SymTab_t *symtab,
             return 1;
     }
 }
+
+int semcheck_builtin_typeinfo(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev)
+{
+    assert(type_return != NULL);
+    assert(symtab != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_FUNCTION_CALL);
+
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    if (args == NULL || args->next != NULL)
+    {
+        semcheck_error_with_context("Error on line %d, TypeInfo expects exactly one argument.\n",
+            expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    struct Expression *arg_expr = (struct Expression *)args->cur;
+    struct TypeAlias *alias = NULL;
+    const char *type_name = NULL;
+    char *qualified_name = NULL;
+    char *type_name_owned = NULL;
+
+    if (arg_expr != NULL && (arg_expr->type == EXPR_VAR_ID || arg_expr->type == EXPR_RECORD_ACCESS))
+    {
+        if (arg_expr->type == EXPR_VAR_ID)
+            type_name = arg_expr->expr_data.id;
+        else
+        {
+            qualified_name = build_qualified_identifier_from_expr_local(arg_expr);
+            type_name = qualified_name;
+        }
+
+        if (type_name != NULL)
+        {
+            const char *raw_name = type_name;
+            const char *base_name = semcheck_base_type_name(raw_name);
+            HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, raw_name);
+            if (type_node == NULL && base_name != NULL && base_name != raw_name)
+                type_node = semcheck_find_preferred_type_node(symtab, base_name);
+            if (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+            {
+                alias = get_type_alias_from_node(type_node);
+                if (alias == NULL && type_node->type != NULL)
+                    alias = kgpc_type_get_type_alias(type_node->type);
+                if (alias != NULL && alias->alias_name != NULL)
+                    type_name = alias->alias_name;
+                else if (type_node->id != NULL)
+                    type_name = type_node->id;
+            }
+        }
+    }
+
+    if (qualified_name != NULL)
+    {
+        if (type_name == qualified_name)
+        {
+            type_name_owned = strdup(qualified_name);
+            type_name = type_name_owned;
+        }
+        free(qualified_name);
+        qualified_name = NULL;
+    }
+
+    if (alias == NULL)
+    {
+        KgpcType *resolved_type = NULL;
+        int error_count = semcheck_expr_with_type(&resolved_type, symtab, arg_expr,
+            max_scope_lev, NO_MUTATE);
+        if (error_count != 0)
+        {
+            if (type_name_owned != NULL)
+                free(type_name_owned);
+            *type_return = UNKNOWN_TYPE;
+            return error_count;
+        }
+        if (resolved_type != NULL)
+            alias = kgpc_type_get_type_alias(resolved_type);
+        if (alias != NULL && alias->alias_name != NULL)
+            type_name = alias->alias_name;
+    }
+
+    if (alias == NULL || !alias->is_enum || alias->enum_literals == NULL)
+    {
+        semcheck_error_with_context("Error on line %d, TypeInfo currently supports enum types only.\n",
+            expr->line_num);
+        if (type_name_owned != NULL)
+            free(type_name_owned);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    semcheck_free_call_args(expr->expr_data.function_call_data.args_expr, NULL);
+    expr->expr_data.function_call_data.args_expr = NULL;
+    if (expr->expr_data.function_call_data.id != NULL)
+    {
+        free(expr->expr_data.function_call_data.id);
+        expr->expr_data.function_call_data.id = NULL;
+    }
+    if (expr->expr_data.function_call_data.mangled_id != NULL)
+    {
+        free(expr->expr_data.function_call_data.mangled_id);
+        expr->expr_data.function_call_data.mangled_id = NULL;
+    }
+    semcheck_reset_function_call_cache(expr);
+
+    expr->type = EXPR_TYPEINFO;
+    if (expr->expr_data.typeinfo_data.type_id != NULL)
+    {
+        free(expr->expr_data.typeinfo_data.type_id);
+        expr->expr_data.typeinfo_data.type_id = NULL;
+    }
+    if (type_name != NULL)
+        expr->expr_data.typeinfo_data.type_id = strdup(type_name);
+    else
+        expr->expr_data.typeinfo_data.type_id = strdup("unknown");
+    if (expr->expr_data.typeinfo_data.type_id == NULL)
+    {
+        fprintf(stderr, "Error: failed to allocate TypeInfo label string.\n");
+        if (type_name_owned != NULL)
+            free(type_name_owned);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    if (expr->resolved_kgpc_type != NULL)
+    {
+        destroy_kgpc_type(expr->resolved_kgpc_type);
+        expr->resolved_kgpc_type = NULL;
+    }
+    expr->resolved_kgpc_type = create_pointer_type(NULL);
+    semcheck_expr_set_resolved_type(expr, POINTER_TYPE);
+    *type_return = POINTER_TYPE;
+    if (type_name_owned != NULL)
+        free(type_name_owned);
+    return 0;
+}
 int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev, int is_high)
 {
@@ -2076,7 +2281,7 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
                     have_bounds = 1;
                 }
             }
-            if (!have_bounds && alias != NULL && alias->is_range && alias->range_known)
+            if (!have_bounds && alias != NULL && alias->range_known)
             {
                 low = alias->range_start;
                 high = alias->range_end;
@@ -2091,7 +2296,7 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
                 if (target_node != NULL && target_node->hash_type == HASHTYPE_TYPE)
                 {
                     struct TypeAlias *target_alias = get_type_alias_from_node(target_node);
-                    if (target_alias != NULL && target_alias->is_range && target_alias->range_known)
+                    if (target_alias != NULL && target_alias->range_known)
                     {
                         low = target_alias->range_start;
                         high = target_alias->range_end;
@@ -2414,12 +2619,34 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
     struct Expression *arg = (struct Expression *)args->cur;
     int error_count = 0;
     long long computed_size = 0;
+    int size_computed = 0;
 
     if (arg != NULL && arg->type == EXPR_VAR_ID)
     {
         char *arg_id = arg->expr_data.id;
         HashNode_t *node = NULL;
         int scope = FindIdent(&node, symtab, arg_id);
+        HashNode_t *preferred_type_node = NULL;
+        if (arg_id != NULL)
+        {
+            preferred_type_node = semcheck_find_preferred_type_node(symtab, arg_id);
+            if (preferred_type_node == NULL && arg->id_ref != NULL &&
+                arg->id_ref->count > 1)
+            {
+                char *qualified = qualified_ident_join(arg->id_ref, ".");
+                if (qualified != NULL)
+                {
+                    preferred_type_node = semcheck_find_preferred_type_node(symtab, qualified);
+                    free(qualified);
+                }
+            }
+            if (preferred_type_node != NULL &&
+                preferred_type_node->hash_type == HASHTYPE_TYPE)
+            {
+                node = preferred_type_node;
+                scope = 0;
+            }
+        }
         if (scope == -1 || node == NULL)
         {
             /* Check if this is a builtin type name that isn't in the symbol table */
@@ -2486,6 +2713,26 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
                     node->hash_type == HASHTYPE_CONST || node->hash_type == HASHTYPE_FUNCTION_RETURN)
                 {
                     set_hash_meta(node, NO_MUTATE);
+                }
+                else if (node->hash_type == HASHTYPE_FUNCTION)
+                {
+                    /* sizeof(FuncName) inside the function body refers to the
+                     * result variable's type, not the function itself. */
+                    const char *cur_sub_id = semcheck_get_current_subprogram_id();
+                    int is_own_result = 0;
+                    if (cur_sub_id != NULL && arg_id != NULL)
+                    {
+                        const char *bare = semcheck_get_current_subprogram_method_name();
+                        const char *fname = (bare != NULL) ? bare : cur_sub_id;
+                        if (pascal_identifier_equals(arg_id, fname))
+                            is_own_result = 1;
+                    }
+                    if (!is_own_result)
+                    {
+                        semcheck_error_with_context("Error on line %d, SizeOf argument %s is not a data object.\n",
+                            expr->line_num, arg_id);
+                        error_count++;
+                    }
                 }
                 else if (node->hash_type != HASHTYPE_TYPE)
                 {
@@ -2562,17 +2809,68 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
         if (arg != NULL && arg->resolved_kgpc_type != NULL)
         {
             long long size = kgpc_type_sizeof(arg->resolved_kgpc_type);
+            if (getenv("KGPC_DEBUG_ERRORS") != NULL)
+            {
+                fprintf(stderr,
+                    "[KGPC_DEBUG_ERRORS] sizeof kgpc_size=%lld\n",
+                    size);
+            }
             if (size >= 0)
             {
                 computed_size = size;
+                size_computed = 1;
             }
             else
             {
+                if (getenv("KGPC_DEBUG_ERRORS") != NULL)
+                    fprintf(stderr, "[KGPC_DEBUG_ERRORS] sizeof fallback path\n");
                 KgpcType *arg_kgpc_type = NULL;
                 error_count += semcheck_expr_with_type(&arg_kgpc_type, symtab, arg, max_scope_lev, NO_MUTATE);
                 if (error_count == 0)
-                    error_count += sizeof_from_type_ref(symtab, semcheck_tag_from_kgpc(arg_kgpc_type), NULL, &computed_size,
-                        0, expr->line_num);
+                {
+                    if (arg_kgpc_type != NULL)
+                    {
+                        long long fallback_size = kgpc_type_sizeof(arg_kgpc_type);
+                        if (fallback_size >= 0)
+                        {
+                            computed_size = fallback_size;
+                            size_computed = 1;
+                        }
+                    }
+                    if (!size_computed && arg != NULL && arg->type == EXPR_POINTER_DEREF &&
+                        arg->expr_data.pointer_deref_data.pointer_expr != NULL)
+                    {
+                        KgpcType *ptr_type = NULL;
+                        error_count += semcheck_expr_with_type(&ptr_type, symtab,
+                            arg->expr_data.pointer_deref_data.pointer_expr, max_scope_lev, NO_MUTATE);
+                        if (error_count == 0 && ptr_type != NULL &&
+                            ptr_type->kind == TYPE_KIND_POINTER &&
+                            ptr_type->info.points_to != NULL)
+                        {
+                            long long ptsize = kgpc_type_sizeof(ptr_type->info.points_to);
+                            if (ptsize >= 0)
+                            {
+                                computed_size = ptsize;
+                                size_computed = 1;
+                            }
+                            else
+                            {
+                                error_count += sizeof_from_type_ref(symtab,
+                                    semcheck_tag_from_kgpc(ptr_type->info.points_to), NULL, &computed_size,
+                                    0, expr->line_num);
+                                if (error_count == 0)
+                                    size_computed = 1;
+                            }
+                        }
+                    }
+                    else if (!size_computed && arg_kgpc_type != NULL)
+                    {
+                        error_count += sizeof_from_type_ref(symtab, semcheck_tag_from_kgpc(arg_kgpc_type), NULL, &computed_size,
+                            0, expr->line_num);
+                        if (error_count == 0)
+                            size_computed = 1;
+                    }
+                }
             }
         }
         else
@@ -2580,8 +2878,50 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
             KgpcType *arg_kgpc_type = NULL;
             error_count += semcheck_expr_with_type(&arg_kgpc_type, symtab, arg, max_scope_lev, NO_MUTATE);
             if (error_count == 0)
-                error_count += sizeof_from_type_ref(symtab, semcheck_tag_from_kgpc(arg_kgpc_type), NULL, &computed_size,
-                    0, expr->line_num);
+            {
+                if (arg_kgpc_type != NULL)
+                {
+                    long long fallback_size = kgpc_type_sizeof(arg_kgpc_type);
+                    if (fallback_size >= 0)
+                    {
+                        computed_size = fallback_size;
+                        size_computed = 1;
+                    }
+                }
+                if (!size_computed && arg != NULL && arg->type == EXPR_POINTER_DEREF &&
+                    arg->expr_data.pointer_deref_data.pointer_expr != NULL)
+                {
+                    KgpcType *ptr_type = NULL;
+                    error_count += semcheck_expr_with_type(&ptr_type, symtab,
+                        arg->expr_data.pointer_deref_data.pointer_expr, max_scope_lev, NO_MUTATE);
+                    if (error_count == 0 && ptr_type != NULL &&
+                        ptr_type->kind == TYPE_KIND_POINTER &&
+                        ptr_type->info.points_to != NULL)
+                    {
+                        long long ptsize = kgpc_type_sizeof(ptr_type->info.points_to);
+                        if (ptsize >= 0)
+                        {
+                            computed_size = ptsize;
+                            size_computed = 1;
+                        }
+                        else
+                        {
+                            error_count += sizeof_from_type_ref(symtab,
+                                semcheck_tag_from_kgpc(ptr_type->info.points_to), NULL, &computed_size,
+                                0, expr->line_num);
+                            if (error_count == 0)
+                                size_computed = 1;
+                        }
+                    }
+                }
+                else if (!size_computed && arg_kgpc_type != NULL)
+                {
+                    error_count += sizeof_from_type_ref(symtab, semcheck_tag_from_kgpc(arg_kgpc_type), NULL, &computed_size,
+                        0, expr->line_num);
+                    if (error_count == 0)
+                        size_computed = 1;
+                }
+            }
         }
     }
 
@@ -2619,8 +2959,111 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
         return 0;
     }
 
+    if (getenv("KGPC_DEBUG_ERRORS") != NULL)
+    {
+        const char *arg_type_str = "<null>";
+        if (arg != NULL && arg->resolved_kgpc_type != NULL)
+            arg_type_str = kgpc_type_to_string(arg->resolved_kgpc_type);
+        fprintf(stderr,
+            "[KGPC_DEBUG_ERRORS] sizeof_error line=%d arg_type=%d kgpc=%s\n",
+            expr->line_num, arg != NULL ? arg->type : -1, arg_type_str);
+        if (arg != NULL && arg->resolved_kgpc_type != NULL &&
+            arg->resolved_kgpc_type->kind == TYPE_KIND_ARRAY)
+        {
+            KgpcType *elem = arg->resolved_kgpc_type->info.array_info.element_type;
+            fprintf(stderr,
+                "[KGPC_DEBUG_ERRORS] sizeof_error array_bounds=%d..%d elem_kind=%d elem=%s\n",
+                arg->resolved_kgpc_type->info.array_info.start_index,
+                arg->resolved_kgpc_type->info.array_info.end_index,
+                elem != NULL ? elem->kind : -1,
+                elem != NULL ? kgpc_type_to_string(elem) : "<null>");
+        }
+        if (arg != NULL && arg->type == EXPR_RECORD_ACCESS &&
+            arg->expr_data.record_access_data.field_id != NULL)
+        {
+            fprintf(stderr, "[KGPC_DEBUG_ERRORS] sizeof_error field=%s\n",
+                arg->expr_data.record_access_data.field_id);
+        }
+    }
+
     *type_return = UNKNOWN_TYPE;
     return error_count;
+}
+
+int semcheck_builtin_bitsizeof(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev)
+{
+    /* BitSizeOf(T) = SizeOf(T) * 8.  Reuse the SizeOf logic which
+       transforms the expression to EXPR_INUM, then multiply by 8. */
+    int result = semcheck_builtin_sizeof(type_return, symtab, expr, max_scope_lev);
+    if (result == 0 && expr->type == EXPR_INUM)
+        expr->expr_data.i_num *= 8;
+    return result;
+}
+
+int semcheck_builtin_ismanagedtype(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev)
+{
+    assert(type_return != NULL);
+    assert(symtab != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_FUNCTION_CALL);
+
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    if (args == NULL || args->next != NULL)
+    {
+        semcheck_error_with_context("Error on line %d, IsManagedType expects exactly one argument.\n",
+            expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    struct Expression *arg_expr = (struct Expression *)args->cur;
+    KgpcType *arg_kgpc_type = NULL;
+    int error_count = 0;
+    int is_managed = 0;
+
+    if (arg_expr != NULL && arg_expr->type == EXPR_VAR_ID && arg_expr->expr_data.id != NULL)
+    {
+        HashNode_t *type_node = NULL;
+        if (FindIdent(&type_node, symtab, arg_expr->expr_data.id) != -1 &&
+            type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+        {
+            arg_kgpc_type = type_node->type;
+        }
+        else
+        {
+            int builtin_tag = semcheck_map_builtin_type_name(symtab, arg_expr->expr_data.id);
+            if (builtin_tag != UNKNOWN_TYPE)
+            {
+                arg_kgpc_type = create_primitive_type(builtin_tag);
+            }
+        }
+    }
+    else
+    {
+        error_count += semcheck_expr_with_type(&arg_kgpc_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
+    }
+
+    if (error_count != 0 || arg_kgpc_type == NULL)
+    {
+        *type_return = UNKNOWN_TYPE;
+        return (error_count == 0) ? 1 : error_count;
+    }
+
+    int arg_tag = semcheck_tag_from_kgpc(arg_kgpc_type);
+    if (arg_tag == STRING_TYPE || arg_tag == SHORTSTRING_TYPE || arg_tag == VARIANT_TYPE)
+        is_managed = 1;
+    if (kgpc_type_is_dynamic_array(arg_kgpc_type))
+        is_managed = 1;
+
+    semcheck_free_call_args(expr->expr_data.function_call_data.args_expr, NULL);
+    expr->expr_data.function_call_data.args_expr = NULL;
+    expr->type = EXPR_BOOL;
+    expr->expr_data.bool_value = is_managed ? 1 : 0;
+    semcheck_expr_set_resolved_type(expr, BOOL);
+    *type_return = BOOL;
+    return 0;
 }
 
 /*===========================================================================

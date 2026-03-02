@@ -67,6 +67,59 @@ static char *kgpc_apply_field_width(char *value, int64_t width);
 #endif
 #endif
 
+#ifdef __linux__
+#ifdef __x86_64__
+long FPC_SYSCALL0(long sysnr) {
+    long ret;
+    __asm__ volatile ("syscall" : "=a"(ret) : "a"(sysnr) : "rcx", "r11", "memory");
+    if (ret < 0 && ret >= -4095) { errno = -ret; return -1; }
+    return ret;
+}
+long FPC_SYSCALL1(long sysnr, long p1) {
+    long ret;
+    __asm__ volatile ("syscall" : "=a"(ret) : "a"(sysnr), "D"(p1) : "rcx", "r11", "memory");
+    if (ret < 0 && ret >= -4095) { errno = -ret; return -1; }
+    return ret;
+}
+long FPC_SYSCALL2(long sysnr, long p1, long p2) {
+    long ret;
+    __asm__ volatile ("syscall" : "=a"(ret) : "a"(sysnr), "D"(p1), "S"(p2) : "rcx", "r11", "memory");
+    if (ret < 0 && ret >= -4095) { errno = -ret; return -1; }
+    return ret;
+}
+long FPC_SYSCALL3(long sysnr, long p1, long p2, long p3) {
+    long ret;
+    __asm__ volatile ("syscall" : "=a"(ret) : "a"(sysnr), "D"(p1), "S"(p2), "d"(p3) : "rcx", "r11", "memory");
+    if (ret < 0 && ret >= -4095) { errno = -ret; return -1; }
+    return ret;
+}
+long FPC_SYSCALL4(long sysnr, long p1, long p2, long p3, long p4) {
+    long ret;
+    register long r10 __asm__("r10") = p4;
+    __asm__ volatile ("syscall" : "=a"(ret) : "a"(sysnr), "D"(p1), "S"(p2), "d"(p3), "r"(r10) : "rcx", "r11", "memory");
+    if (ret < 0 && ret >= -4095) { errno = -ret; return -1; }
+    return ret;
+}
+long FPC_SYSCALL5(long sysnr, long p1, long p2, long p3, long p4, long p5) {
+    long ret;
+    register long r10 __asm__("r10") = p4;
+    register long r8 __asm__("r8") = p5;
+    __asm__ volatile ("syscall" : "=a"(ret) : "a"(sysnr), "D"(p1), "S"(p2), "d"(p3), "r"(r10), "r"(r8) : "rcx", "r11", "memory");
+    if (ret < 0 && ret >= -4095) { errno = -ret; return -1; }
+    return ret;
+}
+long FPC_SYSCALL6(long sysnr, long p1, long p2, long p3, long p4, long p5, long p6) {
+    long ret;
+    register long r10 __asm__("r10") = p4;
+    register long r8 __asm__("r8") = p5;
+    register long r9 __asm__("r9") = p6;
+    __asm__ volatile ("syscall" : "=a"(ret) : "a"(sysnr), "D"(p1), "S"(p2), "d"(p3), "r"(r10), "r"(r8), "r"(r9) : "rcx", "r11", "memory");
+    if (ret < 0 && ret >= -4095) { errno = -ret; return -1; }
+    return ret;
+}
+#endif
+#endif
+
 int64_t kgpc_current_exception = 0;
 static __thread int kgpc_ioresult = 0;
 static int kgpc_threading_used = 0;
@@ -546,7 +599,7 @@ void kgpc_tfile_reset(KGPCFileRec *file)
         }
     }
 
-    priv.handle = fopen(file->name, "rb");
+    priv.handle = fopen(file->name, "r+b");
     if (priv.handle != NULL)
     {
         file->handle = fileno(priv.handle);
@@ -1014,21 +1067,6 @@ static void kgpc_real_cache_put(int64_t bits, long double ext_value)
     kgpc_real_cache[kgpc_real_cache_pos].bits = bits;
     kgpc_real_cache[kgpc_real_cache_pos].ext_value = ext_value;
     kgpc_real_cache_pos = (kgpc_real_cache_pos + 1) % KGPC_REAL_CACHE_SIZE;
-}
-
-static int kgpc_real_cache_get(int64_t bits, long double *out_value)
-{
-    if (out_value == NULL)
-        return 0;
-    for (int i = 0; i < KGPC_REAL_CACHE_SIZE; ++i)
-    {
-        if (kgpc_real_cache[i].valid && kgpc_real_cache[i].bits == bits)
-        {
-            *out_value = kgpc_real_cache[i].ext_value;
-            return 1;
-        }
-    }
-    return 0;
 }
 
 static const char *kgpc_rtti_type_name(const kgpc_class_typeinfo *info)
@@ -2144,10 +2182,15 @@ void *__kgpc_default_create(size_t class_size, const void *vmt_ptr)
     return instance;
 }
 
+/* FPC-compatible AnsiString header (TAnsiRec on x86-64).
+   Compiled FPC RTL code accesses these fields directly via
+   PAnsiRec(Pointer(S) - AnsiFirstOff), so the layout MUST match. */
 typedef struct KgpcStringHeader
 {
-    int32_t refcount;
-    int32_t length;
+    uint16_t codepage;     /* offset -16 from data: TSystemCodePage */
+    uint16_t elementsize;  /* offset -14 from data: element size (1 for AnsiChar) */
+    int32_t  refcount;     /* offset -12 from data: reference count */
+    int64_t  length;       /* offset  -8 from data: SizeInt length */
 } KgpcStringHeader;
 
 static void *const KGPC_STRING_TOMBSTONE = (void *)1;
@@ -2299,8 +2342,10 @@ static char *kgpc_string_alloc_with_length(size_t length)
     KgpcStringHeader *hdr = (KgpcStringHeader *)malloc(total);
     if (hdr == NULL)
         return NULL;
+    hdr->codepage = 0;      /* CP_ACP / default */
+    hdr->elementsize = 1;   /* AnsiChar = 1 byte */
     hdr->refcount = 1;
-    hdr->length = (int32_t)length;
+    hdr->length = (int64_t)length;
     char *data = (char *)(hdr + 1);
     data[length] = '\0';
     kgpc_string_set_insert(data);
@@ -2336,14 +2381,17 @@ char *kgpc_alloc_empty_string(void)
     static struct {
         KgpcStringHeader header;
         char data[1];
-    } empty = { { -1, 0 }, { '\0' } };
+    } empty = { { 0, 1, -1, 0 }, { '\0' } };
     return empty.data;
 }
+
+void kgpc_init_widestringmanager(void);
 
 void kgpc_init_args(int argc, char **argv)
 {
     kgpc_argc = (argc < 0) ? 0 : argc;
     kgpc_argv = argv;
+    kgpc_init_widestringmanager();
 }
 
 int kgpc_param_count(void)
@@ -5557,16 +5605,9 @@ int kgpc_default_FreeLibrary_li(uintptr_t handle)
     return kgpc_free_library(handle);
 }
 
-#if defined(_WIN32) || defined(__CYGWIN__)
-/* Provide strong definitions for Windows/Cygwin/MinGW builds. */
 uintptr_t LoadLibrary_s(const char *path) { return kgpc_default_LoadLibrary_s(path); }
 uintptr_t GetProcedureAddress_li_s(uintptr_t handle, const char *symbol) { return kgpc_default_GetProcedureAddress_li_s(handle, symbol); }
 int FreeLibrary_li(uintptr_t handle) { return kgpc_default_FreeLibrary_li(handle); }
-#else
-uintptr_t LoadLibrary_s(const char *path) __attribute__((weak, alias("kgpc_default_LoadLibrary_s")));
-uintptr_t GetProcedureAddress_li_s(uintptr_t handle, const char *symbol) __attribute__((weak, alias("kgpc_default_GetProcedureAddress_li_s")));
-int FreeLibrary_li(uintptr_t handle) __attribute__((weak, alias("kgpc_default_FreeLibrary_li")));
-#endif
 
 int kgpc_directory_create(const char *path)
 {
@@ -5670,9 +5711,16 @@ int kgpc_delete_file(const char *path)
     return (rc == 0) ? 1 : 0;
 }
 
-/* Wrapper for memcpy to be called from assembly code */
+/* Wrapper for memcpy to be called from assembly code.
+   NULL-safe: if src is NULL, zeroes dest (Pascal semantics for nil PChar to shortstring). */
 void *kgpc_memcpy_wrapper(void *dest, const void *src, size_t n)
 {
+    if (src == NULL)
+    {
+        if (dest != NULL && n > 0)
+            memset(dest, 0, n);
+        return dest;
+    }
     return memcpy(dest, src, n);
 }
 
@@ -6172,6 +6220,11 @@ ssize_t fpWrite(int fd, const void *buf, size_t count)
     return write(fd, buf, count);
 }
 
+char *fpGetCwd(char *path, size_t len)
+{
+    return getcwd(path, len);
+}
+
 off_t fplSeek(int fd, off_t offset, int whence)
 {
     return lseek(fd, offset, whence);
@@ -6252,6 +6305,13 @@ ssize_t fpWrite(int fd, const void *buf, size_t count)
     return (ssize_t)_write(fd, buf, safe_count);
 }
 
+char *fpGetCwd(char *path, size_t len)
+{
+    if (path == NULL || len == 0)
+        return NULL;
+    return _getcwd(path, (int)len);
+}
+
 off_t fplSeek(int fd, off_t offset, int whence)
 {
     return (off_t)_lseeki64(fd, (__int64)offset, whence);
@@ -6289,3 +6349,343 @@ void *kgpc_get_frame_p(void *frame)
     (void)frame;
     return __builtin_frame_address(0);
 }
+
+/* FPC atomic intrinsics — these are [internproc] builtins in FPC that have
+ * no Pascal body.  KGPC emits calls to the mangled names below. */
+long atomicincrement_i_i(long *target, long value)
+{
+    return __sync_add_and_fetch(target, value);
+}
+
+/* [internproc] AtomicIncrement(var Target): 1-param overload, increments by 1 */
+long atomicincrement_i(long *target)
+{
+    return __sync_add_and_fetch(target, 1);
+}
+
+long atomicdecrement_i(long *target)
+{
+    return __sync_sub_and_fetch(target, 1);
+}
+
+void *atomiccmpexchange_p_p_p(void **target, void *new_val, void *comparand)
+{
+    return __sync_val_compare_and_swap(target, comparand, new_val);
+}
+
+void *atomicexchange_p_p(void **target, void *new_val)
+{
+    return __atomic_exchange_n(target, new_val, __ATOMIC_SEQ_CST);
+}
+
+/* [internproc] AtomicExchange for integer types */
+long atomicexchange_i_i(long *target, long new_val)
+{
+    return __atomic_exchange_n(target, new_val, __ATOMIC_SEQ_CST);
+}
+
+long FPC_INTERLOCKEDEXCHANGEADD(long *target, long value)
+{
+    return __sync_fetch_and_add(target, value);
+}
+
+long long FPC_INTERLOCKEDCOMPAREEXCHANGE64(long long *target, long long new_val, long long comparand)
+{
+    return __sync_val_compare_and_swap(target, comparand, new_val);
+}
+
+/* interlockedexchangeadd_li_li and interlockedcompareexchange64_i64_i64_i64
+   are now emitted from Pascal source.  Only the FPC_* aliases above are needed. */
+
+/* lo_li: [internproc] Lo() function — returns low 32 bits of a 64-bit value */
+long lo_li(long value)
+{
+    return value & 0xFFFFFFFF;
+}
+
+/* _haltproc: asm-only startup procedure from si_prc.inc / si_c.inc.
+   There is no Pascal body — only hand-written assembly in FPC RTL.
+   Our runtime provides a C equivalent. */
+void _haltproc(void)
+{
+    exit(0);
+}
+
+/* atomiccmpexchange_i_i_i: [internproc] AtomicCmpExchange intrinsic.
+   No Pascal body exists — this is a compiler intrinsic. */
+int atomiccmpexchange_i_i_i(int *target, int new_val, int comparand)
+{
+    return __sync_val_compare_and_swap(target, comparand, new_val);
+}
+
+/* =====================================================================
+ * TUnicodeStringManager (widestringmanager) initialization.
+ *
+ * FPC's system unit normally calls initunicodestringmanager() to fill
+ * widestringmanager with default callbacks.  Since KGPC's --no-stdlib
+ * build may not compile that init code, we provide C stubs and call
+ * the init from kgpc_init_args (which runs before the program body).
+ *
+ * TUnicodeStringManager layout (25 function pointers, 200 bytes):
+ *   [0]  Wide2AnsiMoveProc
+ *   [1]  Ansi2WideMoveProc
+ *   [2]  UpperWideStringProc
+ *   [3]  LowerWideStringProc
+ *   [4]  CompareWideStringProc
+ *   [5]  CharLengthPCharProc
+ *   [6]  CodePointLengthProc
+ *   [7]  UpperAnsiStringProc
+ *   [8]  LowerAnsiStringProc
+ *   [9]  CompareStrAnsiStringProc
+ *   [10] CompareTextAnsiStringProc
+ *   [11] StrCompAnsiStringProc
+ *   [12] StrICompAnsiStringProc
+ *   [13] StrLCompAnsiStringProc
+ *   [14] StrLICompAnsiStringProc
+ *   [15] StrLowerAnsiStringProc
+ *   [16] StrUpperAnsiStringProc
+ *   [17] ThreadInitProc
+ *   [18] ThreadFiniProc
+ *   [19] Unicode2AnsiMoveProc
+ *   [20] Ansi2UnicodeMoveProc
+ *   [21] UpperUnicodeStringProc
+ *   [22] LowerUnicodeStringProc
+ *   [23] CompareUnicodeStringProc
+ *   [24] GetStandardCodePageProc
+ * ===================================================================== */
+
+/* The widestringmanager global — declared in the generated assembly as BSS.
+ * Weak definition (not extern) so it works on both Linux and MinGW:
+ * if codegen emits a widestringmanager symbol, the linker picks that one;
+ * otherwise this zero-initialized fallback is used. */
+void *widestringmanager[25] __attribute__((weak)) = {0};
+
+/* Default: convert wide/unicode chars to ansi by truncating to low byte.
+   Signature: procedure(source:punicodechar; var dest:RawByteString;
+                         cp:TSystemCodePage; len:SizeInt)
+   SysV ABI: rdi=source, rsi=&dest, rdx=cp, rcx=len */
+static void kgpc_default_unicode2ansi_move(const uint16_t *source,
+    char **dest, int32_t cp, int64_t len)
+{
+    kgpc_string_setlength(dest, len);
+    if (*dest == NULL || len <= 0)
+        return;
+    /* Set codepage in the header */
+    KgpcStringHeader *hdr = kgpc_string_header(*dest);
+    if (hdr != NULL)
+        hdr->codepage = (uint16_t)cp;
+    char *p = *dest;
+    for (int64_t i = 0; i < len; i++)
+        p[i] = (source[i] < 256) ? (char)source[i] : '?';
+}
+
+/* Default: convert ansi chars to unicode by zero-extending.
+   Signature: procedure(source:pansichar; cp:TSystemCodePage;
+                         var dest:unicodestring; len:SizeInt)
+   SysV ABI: rdi=source, rsi=cp, rdx=&dest, rcx=len
+
+   UnicodeString in FPC is a reference-counted array of uint16_t with the
+   same TAnsiRec header (but elementsize=2).  We allocate the header+data
+   manually since KGPC doesn't have full UnicodeString runtime support. */
+static void kgpc_default_ansi2unicode_move(const char *source,
+    int32_t cp, uint16_t **dest, int64_t len)
+{
+    /* Free existing value */
+    if (*dest != NULL) {
+        KgpcStringHeader *old = (KgpcStringHeader *)((char *)*dest - sizeof(KgpcStringHeader));
+        if (old->refcount > 0) {
+            old->refcount--;
+            if (old->refcount == 0)
+                free(old);
+        }
+    }
+
+    if (len <= 0) {
+        *dest = NULL;
+        return;
+    }
+
+    /* Allocate: header + len*2 bytes + 2 byte null terminator */
+    size_t data_bytes = (size_t)len * 2 + 2;
+    KgpcStringHeader *hdr = (KgpcStringHeader *)malloc(sizeof(KgpcStringHeader) + data_bytes);
+    if (hdr == NULL) {
+        *dest = NULL;
+        return;
+    }
+    hdr->codepage = 1200;       /* UTF-16LE */
+    hdr->elementsize = 2;       /* UnicodeChar = 2 bytes */
+    hdr->refcount = 1;
+    hdr->length = len;
+    uint16_t *data = (uint16_t *)(hdr + 1);
+    for (int64_t i = 0; i < len; i++)
+        data[i] = (uint16_t)(unsigned char)source[i];
+    data[len] = 0;  /* null terminator */
+    *dest = data;
+}
+
+/* Default Wide2Ansi — same as Unicode2Ansi for our purposes */
+static void kgpc_default_wide2ansi_move(const uint16_t *source,
+    char **dest, int32_t cp, int64_t len)
+{
+    kgpc_default_unicode2ansi_move(source, dest, cp, len);
+}
+
+/* Default Ansi2Wide — same as Ansi2Unicode */
+static void kgpc_default_ansi2wide_move(const char *source,
+    int32_t cp, uint16_t **dest, int64_t len)
+{
+    kgpc_default_ansi2unicode_move(source, cp, dest, len);
+}
+
+/* Upper/LowerAnsiString: return a new string with case changed */
+static char *kgpc_default_upper_ansistring(const char *s)
+{
+    size_t len = kgpc_string_known_length(s);
+    char *result = kgpc_string_alloc_with_length(len);
+    if (result == NULL) return kgpc_alloc_empty_string();
+    for (size_t i = 0; i < len; i++)
+        result[i] = (char)toupper((unsigned char)s[i]);
+    return result;
+}
+
+static char *kgpc_default_lower_ansistring(const char *s)
+{
+    size_t len = kgpc_string_known_length(s);
+    char *result = kgpc_string_alloc_with_length(len);
+    if (result == NULL) return kgpc_alloc_empty_string();
+    for (size_t i = 0; i < len; i++)
+        result[i] = (char)tolower((unsigned char)s[i]);
+    return result;
+}
+
+/* CompareStr: case-sensitive AnsiString comparison */
+static int64_t kgpc_default_comparestr_ansistring(const char *s1, const char *s2)
+{
+    size_t len1 = kgpc_string_known_length(s1);
+    size_t len2 = kgpc_string_known_length(s2);
+    size_t minlen = (len1 < len2) ? len1 : len2;
+    int r = memcmp(s1 ? s1 : "", s2 ? s2 : "", minlen);
+    if (r != 0) return (int64_t)r;
+    if (len1 < len2) return -1;
+    if (len1 > len2) return 1;
+    return 0;
+}
+
+/* CompareText: case-insensitive AnsiString comparison */
+static int64_t kgpc_default_comparetext_ansistring(const char *s1, const char *s2)
+{
+    if (s1 == NULL) s1 = "";
+    if (s2 == NULL) s2 = "";
+    return (int64_t)strcasecmp(s1, s2);
+}
+
+/* PAnsiChar comparisons */
+static int64_t kgpc_default_strcomp(const char *s1, const char *s2)
+{
+    return (int64_t)strcmp(s1 ? s1 : "", s2 ? s2 : "");
+}
+
+static int64_t kgpc_default_stricomp(const char *s1, const char *s2)
+{
+    return (int64_t)strcasecmp(s1 ? s1 : "", s2 ? s2 : "");
+}
+
+static int64_t kgpc_default_strlcomp(const char *s1, const char *s2, uint64_t maxlen)
+{
+    return (int64_t)strncmp(s1 ? s1 : "", s2 ? s2 : "", (size_t)maxlen);
+}
+
+static int64_t kgpc_default_strlicomp(const char *s1, const char *s2, uint64_t maxlen)
+{
+    return (int64_t)strncasecmp(s1 ? s1 : "", s2 ? s2 : "", (size_t)maxlen);
+}
+
+/* In-place PAnsiChar case conversion */
+static char *kgpc_default_strlower(char *str)
+{
+    if (str == NULL) return str;
+    for (char *p = str; *p; p++)
+        *p = (char)tolower((unsigned char)*p);
+    return str;
+}
+
+static char *kgpc_default_strupper(char *str)
+{
+    if (str == NULL) return str;
+    for (char *p = str; *p; p++)
+        *p = (char)toupper((unsigned char)*p);
+    return str;
+}
+
+/* Stub wide/unicode case: just return the input unchanged */
+static void *kgpc_stub_widecase(void *s) { return s; }
+
+/* Stub wide/unicode compare: byte comparison */
+static int64_t kgpc_stub_compare_wide(void *s1, void *s2, int64_t opts)
+{
+    (void)opts;
+    if (s1 == s2) return 0;
+    if (s1 == NULL) return -1;
+    if (s2 == NULL) return 1;
+    return 0;  /* stub: treat as equal */
+}
+
+/* CharLengthPChar: just strlen for single-byte encodings */
+static int64_t kgpc_default_charlength_pchar(const char *str)
+{
+    return str ? (int64_t)strlen(str) : 0;
+}
+
+/* CodePointLength: 1 if non-null char, 0 otherwise */
+static int64_t kgpc_default_codepoint_length(const char *str, int64_t maxlookahead)
+{
+    (void)maxlookahead;
+    return (str != NULL && str[0] != '\0') ? 1 : 0;
+}
+
+/* Stub thread init/fini: no-ops */
+static void kgpc_stub_thread_noop(void) {}
+
+/* GetStandardCodePage: return 0 (system default) */
+extern int32_t DefaultSystemCodePage __attribute__((weak));
+extern int32_t DefaultFileSystemCodePage __attribute__((weak));
+static int32_t kgpc_default_get_standard_codepage(int32_t stdcp)
+{
+    if (stdcp != 2)  /* scpFileSystemSingleByte = 2 */
+        return DefaultSystemCodePage;
+    return DefaultFileSystemCodePage;
+}
+
+/* Initialize widestringmanager with default C callbacks.
+   Called from kgpc_init_args before the program body runs. */
+void kgpc_init_widestringmanager(void)
+{
+    /* With a weak definition, the address is always valid — init unconditionally. */
+
+    widestringmanager[0]  = (void *)kgpc_default_wide2ansi_move;
+    widestringmanager[1]  = (void *)kgpc_default_ansi2wide_move;
+    widestringmanager[2]  = (void *)kgpc_stub_widecase;             /* UpperWide */
+    widestringmanager[3]  = (void *)kgpc_stub_widecase;             /* LowerWide */
+    widestringmanager[4]  = (void *)kgpc_stub_compare_wide;         /* CompareWide */
+    widestringmanager[5]  = (void *)kgpc_default_charlength_pchar;
+    widestringmanager[6]  = (void *)kgpc_default_codepoint_length;
+    widestringmanager[7]  = (void *)kgpc_default_upper_ansistring;
+    widestringmanager[8]  = (void *)kgpc_default_lower_ansistring;
+    widestringmanager[9]  = (void *)kgpc_default_comparestr_ansistring;
+    widestringmanager[10] = (void *)kgpc_default_comparetext_ansistring;
+    widestringmanager[11] = (void *)kgpc_default_strcomp;
+    widestringmanager[12] = (void *)kgpc_default_stricomp;
+    widestringmanager[13] = (void *)kgpc_default_strlcomp;
+    widestringmanager[14] = (void *)kgpc_default_strlicomp;
+    widestringmanager[15] = (void *)kgpc_default_strlower;
+    widestringmanager[16] = (void *)kgpc_default_strupper;
+    widestringmanager[17] = (void *)kgpc_stub_thread_noop;          /* ThreadInit */
+    widestringmanager[18] = (void *)kgpc_stub_thread_noop;          /* ThreadFini */
+    widestringmanager[19] = (void *)kgpc_default_unicode2ansi_move;
+    widestringmanager[20] = (void *)kgpc_default_ansi2unicode_move;
+    widestringmanager[21] = (void *)kgpc_stub_widecase;             /* UpperUnicode */
+    widestringmanager[22] = (void *)kgpc_stub_widecase;             /* LowerUnicode */
+    widestringmanager[23] = (void *)kgpc_stub_compare_wide;         /* CompareUnicode */
+    widestringmanager[24] = (void *)kgpc_default_get_standard_codepage;
+}
+

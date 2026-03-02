@@ -1,6 +1,6 @@
 # FPC Bootstrap Analysis
 
-## Status: sysutils.pp compiles with ~73 errors (target: 0)
+## Status: system.pp compiles with 0 errors (158 warnings); next blocker is sysutils.pp (syssb.inc record access)
 
 ## Prerequisites
 
@@ -10,6 +10,63 @@ git clone https://github.com/fpc/FPCSource
 ```
 
 ## Build Commands
+
+### Recommended (match make -n order)
+```bash
+make -n -B -C ./FPCSource/rtl/linux units
+```
+
+Then compile each unit in that order with KGPC using `--no-stdlib` and the include
+paths listed below. This matches the FPC RTL bootstrap sequence and avoids
+ordering issues.
+
+### system.pp (0 errors, 158 warnings)
+```bash
+./build/KGPC/kgpc ./FPCSource/rtl/linux/system.pp /tmp/system.s \
+  --no-stdlib \
+  -I./FPCSource/rtl/inc \
+  -I./FPCSource/rtl/x86_64 \
+  -I./FPCSource/rtl/unix \
+  -I./FPCSource/rtl/linux \
+  -I./FPCSource/rtl/linux/x86_64
+```
+
+### fpintres.pp (0 errors)
+```bash
+./build/KGPC/kgpc ./FPCSource/rtl/inc/fpintres.pp /tmp/fpintres.s \
+  --no-stdlib \
+  -I./FPCSource/rtl/inc \
+  -I./FPCSource/rtl/x86_64 \
+  -I./FPCSource/rtl/unix \
+  -I./FPCSource/rtl/objpas \
+  -I./FPCSource/rtl/objpas/classes \
+  -I./FPCSource/rtl/linux \
+  -I./FPCSource/rtl/linux/x86_64
+```
+
+### unixtype.pp (0 errors)
+```bash
+./build/KGPC/kgpc ./FPCSource/rtl/unix/unixtype.pp /tmp/unixtype.s \
+  --no-stdlib \
+  -I./FPCSource/rtl/unix \
+  -I./FPCSource/rtl/objpas \
+  -I./FPCSource/rtl/inc \
+  -I./FPCSource/rtl/linux \
+  -I./FPCSource/rtl/linux/x86_64 \
+  -I./FPCSource/rtl/x86_64
+```
+
+### ctypes.pp (0 errors)
+```bash
+./build/KGPC/kgpc ./FPCSource/rtl/inc/ctypes.pp /tmp/ctypes.s \
+  --no-stdlib \
+  -I./FPCSource/rtl/unix \
+  -I./FPCSource/rtl/objpas \
+  -I./FPCSource/rtl/inc \
+  -I./FPCSource/rtl/linux \
+  -I./FPCSource/rtl/linux/x86_64 \
+  -I./FPCSource/rtl/x86_64
+```
 
 ### baseunix.pp (0 errors)
 ```bash
@@ -23,7 +80,44 @@ git clone https://github.com/fpc/FPCSource
   -I./FPCSource/rtl/x86_64
 ```
 
-### sysutils.pp (0 errors)
+### objpas.pp (0 errors)
+```bash
+./build/KGPC/kgpc ./FPCSource/rtl/objpas/objpas.pp /tmp/objpas.s \
+  --no-stdlib \
+  -I./FPCSource/rtl/unix \
+  -I./FPCSource/rtl/objpas \
+  -I./FPCSource/rtl/inc \
+  -I./FPCSource/rtl/linux \
+  -I./FPCSource/rtl/linux/x86_64 \
+  -I./FPCSource/rtl/x86_64
+```
+
+### sysconst.pp (0 errors)
+```bash
+./build/KGPC/kgpc ./FPCSource/rtl/objpas/sysconst.pp /tmp/sysconst.s \
+  --no-stdlib \
+  -I./FPCSource/rtl/unix \
+  -I./FPCSource/rtl/objpas \
+  -I./FPCSource/rtl/objpas/sysutils \
+  -I./FPCSource/rtl/inc \
+  -I./FPCSource/rtl/linux \
+  -I./FPCSource/rtl/linux/x86_64 \
+  -I./FPCSource/rtl/x86_64
+```
+
+### unix.pp (0 errors)
+```bash
+./build/KGPC/kgpc ./FPCSource/rtl/unix/unix.pp /tmp/unix.s \
+  --no-stdlib \
+  -I./FPCSource/rtl/unix \
+  -I./FPCSource/rtl/objpas \
+  -I./FPCSource/rtl/inc \
+  -I./FPCSource/rtl/linux \
+  -I./FPCSource/rtl/linux/x86_64 \
+  -I./FPCSource/rtl/x86_64
+```
+
+### sysutils.pp (current blocker)
 ```bash
 ./build/KGPC/kgpc ./FPCSource/rtl/unix/sysutils.pp /tmp/sysutils.s \
   --no-stdlib \
@@ -81,15 +175,19 @@ git clone https://github.com/fpc/FPCSource
 
 ## Units with Compilation Errors
 
-- `baseunix.pp` - **0 errors**
-- `sysutils.pp` - **0 errors** (with `--no-stdlib`)
-- `classes.pp` - **0 errors**
-- `types.pp` - **0 errors**
-- `math.pp` - **0 errors**
-- `fgl.pp` - **0 errors**
-- `sysconst.pp` - **0 errors**
-- `rtlconsts.pp` - **0 errors**
-- `typinfo.pp` - **0 errors**
+- `sysutils.pp` - **record access/type mismatch** in `rtl/objpas/sysutils/syssb.inc`:
+  - `Result.FCurrentPosition := StartPosition;`
+  - `Result.FEndPosition := StartPosition + Length;`
+
+## Flags
+
+- `--no-stdlib` loads the minimal KGPC prelude and then compiles the FPC RTL
+  unit directly (required for `system.pp` and the bootstrap sequence so FPC’s
+  `system.pp` is used instead of the KGPC stdlib).
+  - When compiling RTL units, always include `-I./FPCSource/rtl/linux/x86_64`
+    so `stat.inc` and other arch-specific includes resolve.
+  - For `sysutils.pp`, include `-I./FPCSource/rtl/objpas/sysutils` to resolve
+    `sysutilh.inc` and other sysutils include files.
 
 ## Meson Test Suite
 
@@ -147,12 +245,22 @@ ppcx64 -Fi../inc -Fi../x86_64 -Fi../unix -Fix86_64 -FE. -FU../../rtl/units/x86_6
 
 Build order (relevant units):
 1. system.pp
-2. unixtype.pp
-3. ctypes.pp
-4. baseunix.pp
-5. objpas.pp
-6. sysconst.pp
-7. unix.pp
-8. sysutils.pp (with `-Fi../objpas/sysutils`)
-9. math.pp
-10. types.pp
+2. fpintres.pp
+3. si_prc.pp
+4. si_c.pp
+5. si_g.pp
+6. si_dll.pp
+7. uuchar.pp
+8. unixtype.pp
+9. ctypes.pp
+10. baseunix.pp
+11. strings.pp
+12. objpas.pp
+13. sysconst.pp
+14. unixutil.pp
+15. syscall.pp
+16. unix.pp
+17. errors.pp
+18. initc.pp
+19. linux.pp
+20. sysutils.pp (with `-I./FPCSource/rtl/objpas/sysutils`)

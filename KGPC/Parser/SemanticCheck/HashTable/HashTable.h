@@ -84,10 +84,17 @@ typedef struct HashNode
     char *const_set_label;          /* Optional emitted label for codegen reuse */
 
     int is_var_parameter;
+    int is_varargs;                /* 1 if declared with varargs directive (C-style variadic) */
     int requires_static_link;      /* 1 if this function needs to RECEIVE a static link from caller */
     int has_nested_requiring_link; /* 1 if this function has nested children that need static links */
     int defined_in_unit;
     int unit_is_public;
+    int source_unit_index; /* Unit registry index (0 = local/unknown) */
+
+    char *method_name;    /* Bare method name (NULL for non-methods) */
+    char *owner_class;    /* Owning class name (NULL for non-methods) */
+    char *owner_class_full;  /* Full dotted class path for nested classes (NULL if not nested) */
+    char *owner_class_outer; /* Outer class path for nested classes (NULL if not nested) */
 
 } HashNode_t;
 
@@ -136,6 +143,8 @@ static inline int hashnode_is_array(const HashNode_t *node)
 {
     if (node == NULL) return 0;
     if (node->type != NULL) {
+        if (node->type->type_alias != NULL && node->type->type_alias->is_array)
+            return 1;
         return kgpc_type_is_array(node->type);
     }
     /* UNTYPED nodes are not arrays */
@@ -159,8 +168,15 @@ static inline int hashnode_is_record(const HashNode_t *node)
 static inline int hashnode_is_dynamic_array(const HashNode_t *node)
 {
     if (node == NULL) return 0;
-    if (node->type != NULL && kgpc_type_is_array(node->type)) {
-        return kgpc_type_is_dynamic_array(node->type);
+    if (node->type != NULL) {
+        if (kgpc_type_is_array(node->type))
+            return kgpc_type_is_dynamic_array(node->type);
+        if (node->type->type_alias != NULL && node->type->type_alias->is_array) {
+            struct TypeAlias *alias = node->type->type_alias;
+            if (alias->is_open_array)
+                return 1;
+            return (alias->array_end < alias->array_start);
+        }
     }
     /* No fallback needed - is_dynamic_array field has been removed */
     /* Dynamic array info must come from KgpcType */
@@ -177,6 +193,11 @@ static inline void hashnode_get_array_bounds(const HashNode_t *node, int *start,
     }
     if (node->type != NULL && kgpc_type_is_array(node->type)) {
         kgpc_type_get_array_bounds(node->type, start, end);
+        return;
+    }
+    if (node->type != NULL && node->type->type_alias != NULL && node->type->type_alias->is_array) {
+        if (start) *start = node->type->type_alias->array_start;
+        if (end) *end = node->type->type_alias->array_end;
         return;
     }
     /* No fallback - array_start/end fields have been removed */

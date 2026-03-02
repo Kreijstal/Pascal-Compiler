@@ -43,6 +43,7 @@ KGPC_PATH = os.path.join(build_dir, "KGPC/kgpc.exe" if IS_WINDOWS_ABI else "KGPC
 TEST_CASES_DIR = "tests/test_cases"
 INPUT_DATA_DIR = TEST_CASES_DIR
 TEST_OUTPUT_DIR = "tests/output"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 GOLDEN_AST_DIR = "tests/golden_ast"
 # Default execution timeout per compiled test program (seconds).
 # Can be overridden via environment variable KGPC_TEST_TIMEOUT for slower machines.
@@ -70,10 +71,36 @@ except ValueError:
     TEST_CASE_TIMEOUT = 300
 
 # Number of parallel workers for test execution (0 = sequential).
+DEFAULT_PARALLEL_WORKERS = max(1, (os.cpu_count() or 1) * 5)
 try:
-    PARALLEL_WORKERS = int(os.environ.get("KGPC_PARALLEL_WORKERS", "0"))
+    PARALLEL_WORKERS = int(
+        os.environ.get("KGPC_PARALLEL_WORKERS", str(DEFAULT_PARALLEL_WORKERS))
+    )
 except ValueError:
-    PARALLEL_WORKERS = 0
+    PARALLEL_WORKERS = DEFAULT_PARALLEL_WORKERS
+
+# Cap concurrent compiler subprocesses in parallel test mode to avoid
+# non-deterministic codegen failures under extreme process pressure.
+DEFAULT_COMPILER_PARALLEL_LIMIT = 1
+try:
+    COMPILER_PARALLEL_LIMIT = int(
+        os.environ.get(
+            "KGPC_COMPILER_PARALLEL_LIMIT", str(DEFAULT_COMPILER_PARALLEL_LIMIT)
+        )
+    )
+except ValueError:
+    COMPILER_PARALLEL_LIMIT = DEFAULT_COMPILER_PARALLEL_LIMIT
+COMPILER_PARALLEL_LIMIT = max(1, COMPILER_PARALLEL_LIMIT)
+COMPILER_PARALLEL_SEMAPHORE = threading.BoundedSemaphore(COMPILER_PARALLEL_LIMIT)
+
+DEFAULT_TAP_MAX_WORKERS = 8
+try:
+    TAP_MAX_WORKERS = int(
+        os.environ.get("KGPC_TAP_MAX_WORKERS", str(DEFAULT_TAP_MAX_WORKERS))
+    )
+except ValueError:
+    TAP_MAX_WORKERS = DEFAULT_TAP_MAX_WORKERS
+TAP_MAX_WORKERS = max(1, TAP_MAX_WORKERS)
 
 # Meson exposes toggleable behaviour via environment variables so CI can
 # selectively disable particularly slow checks such as the valgrind leak test.
@@ -105,6 +132,8 @@ UNIT_ONLY_TESTS = {
     "fpc_interface_const_after_external",
     "fpc_qualified_const_import",
     "property_indexed_unit",
+    "tdd_external_unit_var",
+    "tdd_variant_shadow_record",
     "unit_cardinal_type",
     "unit_high_type_const",
     "unit_longword_type",
@@ -115,7 +144,9 @@ UNIT_ONLY_TESTS = {
     "unit_include_init_section",
 }
 
-UNIT_ONLY_FLAGS = {}
+UNIT_ONLY_FLAGS = {
+    "tdd_variant_shadow_record": ["--no-stdlib"],
+}
 
 
 def _sanitize_test_identifier(name):
@@ -451,7 +482,8 @@ def run_compiler(input_file, output_file, flags=None):
             "text": True,
             "timeout": COMPILER_TIMEOUT,
         }
-        result = subprocess.run(command, **run_kwargs)
+        with COMPILER_PARALLEL_SEMAPHORE:
+            result = subprocess.run(command, **run_kwargs)
         duration = time.perf_counter() - start
         for line in result.stderr.splitlines():
             if line.startswith("KGPC_LINK_ARGS:"):
@@ -658,12 +690,48 @@ def _flatten_tests(test):
         yield test
 
 
-def _run_single_test_with_timeout(test, timeout, log_stream):
+def _prepare_parallel_class_fixtures(tests, log_stream=None):
+    """Run setUpClass once per class; return (class_errors, setup_ok_classes)."""
+    class_order = []
+    seen = set()
+    for test in tests:
+        cls = test.__class__
+        if cls not in seen:
+            seen.add(cls)
+            class_order.append(cls)
+
+    class_errors = {}
+    setup_ok_classes = []
+    for cls in class_order:
+        try:
+            cls.setUpClass()
+            setup_ok_classes.append(cls)
+        except Exception:
+            class_errors[cls] = traceback.format_exc()
+            if log_stream is not None:
+                log_stream.write(f"[PARALLEL] setUpClass failed for {cls.__name__}\n")
+                log_stream.flush()
+    return class_errors, setup_ok_classes
+
+
+def _cleanup_parallel_class_fixtures(setup_ok_classes, log_stream=None):
+    """Run tearDownClass for classes whose setUpClass succeeded."""
+    for cls in reversed(setup_ok_classes):
+        try:
+            cls.tearDownClass()
+        except Exception:
+            if log_stream is not None:
+                log_stream.write(f"[PARALLEL] tearDownClass failed for {cls.__name__}\n")
+                log_stream.flush()
+
+
+def _run_single_test_with_timeout(test, timeout, log_stream=None):
     """Run a single test with a timeout. Returns (test, result_type, err_info)."""
     test_id = test.id()
     start_time = time.monotonic()
-    log_stream.write(f"[PARALLEL] Starting: {test_id}\n")
-    log_stream.flush()
+    if log_stream is not None:
+        log_stream.write(f"[PARALLEL] Starting: {test_id}\n")
+        log_stream.flush()
 
     result = unittest.TestResult()
     exception_info = None
@@ -696,14 +764,16 @@ def _run_single_test_with_timeout(test, timeout, log_stream):
         # Test timed out
         result_type = "timeout"
         exception_info = f"Test timed out after {timeout} seconds"
-        log_stream.write(f"[PARALLEL] TIMEOUT: {test_id} (after {elapsed:.1f}s)\n")
-        log_stream.flush()
+        if log_stream is not None:
+            log_stream.write(f"[PARALLEL] TIMEOUT: {test_id} (after {elapsed:.1f}s)\n")
+            log_stream.flush()
         # Note: We cannot forcibly kill the thread, but we can continue
         # The thread will be left as a daemon and cleaned up on exit
     else:
         status = result_type.upper()
-        log_stream.write(f"[PARALLEL] Finished: {test_id} [{status}] ({elapsed:.1f}s)\n")
-        log_stream.flush()
+        if log_stream is not None:
+            log_stream.write(f"[PARALLEL] Finished: {test_id} [{status}] ({elapsed:.1f}s)\n")
+            log_stream.flush()
 
     return test, result_type, exception_info, elapsed
 
@@ -749,11 +819,14 @@ class ParallelTestRunner:
         self.stream.flush()
 
         result.startTestRun()
+        setup_ok_classes = []
         try:
+            class_errors, setup_ok_classes = _prepare_parallel_class_fixtures(tests, self.stream)
             with concurrent.futures.ThreadPoolExecutor(max_workers=self.workers) as executor:
                 futures = {
                     executor.submit(_run_single_test_with_timeout, t, self.timeout, self.stream): t
                     for t in tests
+                    if t.__class__ not in class_errors
                 }
                 for future in concurrent.futures.as_completed(futures):
                     try:
@@ -764,7 +837,11 @@ class ParallelTestRunner:
                         test_case = futures[future]
                         result.errors.append((test_case, traceback.format_exc()))
                         result.testsRun += 1
+                for t in tests:
+                    if t.__class__ in class_errors:
+                        result.add_result(t, "error", class_errors[t.__class__], 0.0)
         finally:
+            _cleanup_parallel_class_fixtures(setup_ok_classes, self.stream)
             result.stopTestRun()
 
         # Print summary
@@ -772,6 +849,109 @@ class ParallelTestRunner:
         self.stream.write(f"[PARALLEL] Failures: {len(result.failures)}, Errors: {len(result.errors)}, Skipped: {len(result.skipped)}\n")
         self.stream.flush()
 
+        return result
+
+
+class TAPParallelTestResult(unittest.TestResult):
+    """TAP-compatible aggregate result for parallel execution."""
+
+    def __init__(self):
+        super().__init__()
+        self.test_timings = []
+
+    def add_result(self, test, result_type, err_info, elapsed):
+        self.testsRun += 1
+        self.test_timings.append((test.id(), elapsed, result_type.upper()))
+        if result_type == "success":
+            return
+        if result_type == "failure":
+            self.failures.append((test, err_info))
+            return
+        if result_type == "error" or result_type == "timeout":
+            self.errors.append((test, err_info))
+            return
+        if result_type == "skipped":
+            self.skipped.append((test, err_info))
+
+
+class TAPParallelTestRunner:
+    """Run tests in parallel and emit TAP output deterministically."""
+
+    def __init__(self, workers=4, timeout=300, stream=None):
+        self.workers = workers
+        self.timeout = timeout
+        self.stream = stream or sys.stdout
+
+    def _emit(self, line):
+        self.stream.write(f"{line}\n")
+        self.stream.flush()
+
+    def _emit_diagnostic(self, text):
+        for raw_line in str(text).rstrip().splitlines():
+            self._emit(f"# {raw_line}")
+
+    def run(self, test):
+        tests = list(_flatten_tests(test))
+        result = TAPParallelTestResult()
+        result.startTestRun()
+        self._emit(f"1..{len(tests)}")
+        effective_workers = max(1, min(self.workers, TAP_MAX_WORKERS))
+
+        completed = {}
+        setup_ok_classes = []
+        try:
+            class_errors, setup_ok_classes = _prepare_parallel_class_fixtures(tests)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=effective_workers) as executor:
+                future_to_index = {
+                    executor.submit(_run_single_test_with_timeout, t, self.timeout): idx
+                    for idx, t in enumerate(tests)
+                    if t.__class__ not in class_errors
+                }
+                for future in concurrent.futures.as_completed(future_to_index):
+                    idx = future_to_index[future]
+                    test_case = tests[idx]
+                    try:
+                        completed[idx] = future.result()
+                    except Exception:
+                        completed[idx] = (
+                            test_case,
+                            "error",
+                            traceback.format_exc(),
+                            0.0,
+                        )
+            for idx, t in enumerate(tests):
+                if t.__class__ in class_errors and idx not in completed:
+                    completed[idx] = (
+                        t,
+                        "error",
+                        class_errors[t.__class__],
+                        0.0,
+                    )
+
+            for idx, test_case in enumerate(tests):
+                if idx in completed:
+                    test_obj, result_type, err_info, elapsed = completed[idx]
+                else:
+                    test_obj = test_case
+                    result_type = "error"
+                    err_info = "Internal error: missing parallel test result"
+                    elapsed = 0.0
+                result.add_result(test_obj, result_type, err_info, elapsed)
+                test_name = test_obj.id()
+                tap_index = idx + 1
+                if result_type == "success":
+                    self._emit(f"ok {tap_index} - {test_name}")
+                elif result_type == "skipped":
+                    self._emit(f"ok {tap_index} - {test_name} # SKIP {err_info}")
+                else:
+                    self._emit(f"not ok {tap_index} - {test_name}")
+                    label = "Failure" if result_type == "failure" else "Error"
+                    self._emit_diagnostic(f"{label}:")
+                    if err_info is not None:
+                        self._emit_diagnostic(err_info)
+        finally:
+            _cleanup_parallel_class_fixtures(setup_ok_classes)
+            result.stopTestRun()
         return result
 
 
@@ -862,33 +1042,38 @@ class TestCompiler(unittest.TestCase):
         # points to Linux wrapper scripts that Wine/Windows Python cannot execute.
         # We need to find and use the Windows-native compiler from MSYS2 instead.
         if IS_WINE:
-            # Look for gcc.exe in the quasi-msys2 directory structure
+            # Look for clang.exe or gcc.exe in the quasi-msys2 directory structure
             # Use relative paths from build_dir to avoid absolute Windows paths
             msys2_search_paths = [
-                # Look in quasi-msys2/root/{ucrt64,mingw64}/bin/
+                # Look in quasi-msys2/root/{clang64,ucrt64,mingw64}/bin/
+                os.path.join(build_dir, "..", "quasi-msys2", "root", "clang64", "bin"),
                 os.path.join(build_dir, "..", "quasi-msys2", "root", "ucrt64", "bin"),
                 os.path.join(build_dir, "..", "quasi-msys2", "root", "mingw64", "bin"),
             ]
             
-            wine_gcc = None
+            wine_cc = None
             for search_dir in msys2_search_paths:
                 normalized_dir = os.path.normpath(search_dir)
-                gcc_path = os.path.join(normalized_dir, "gcc.exe")
-                if os.path.exists(gcc_path):
-                    wine_gcc = gcc_path
+                # Prefer clang.exe, fall back to gcc.exe
+                for cc_name in ["clang.exe", "gcc.exe"]:
+                    cc_path = os.path.join(normalized_dir, cc_name)
+                    if os.path.exists(cc_path):
+                        wine_cc = cc_path
+                        break
+                if wine_cc:
                     break
             
-            if wine_gcc:
-                # Use the Windows-native GCC
-                cls.c_compiler_cmd = [wine_gcc]
-                cls.c_compiler_display = f"{cc_raw} (using Wine-compatible {wine_gcc})"
-                print(f"Wine detected: Using Windows-native GCC at {wine_gcc}", file=sys.stderr)
+            if wine_cc:
+                # Use the Windows-native compiler
+                cls.c_compiler_cmd = [wine_cc]
+                cls.c_compiler_display = f"{cc_raw} (using Wine-compatible {wine_cc})"
+                print(f"Wine detected: Using Windows-native compiler at {wine_cc}", file=sys.stderr)
             else:
-                # Fallback: try to use gcc.exe directly from PATH
+                # Fallback: try to use clang.exe or gcc.exe directly from PATH
                 # The quasi-msys2 environment should have added the bin dir to PATH
-                cls.c_compiler_cmd = ["gcc.exe"]
-                cls.c_compiler_display = f"{cc_raw} (using Wine-compatible gcc.exe from PATH)"
-                print(f"Wine detected: Using gcc.exe from PATH (searched: {msys2_search_paths})", file=sys.stderr)
+                cls.c_compiler_cmd = ["clang.exe"]
+                cls.c_compiler_display = f"{cc_raw} (using Wine-compatible clang.exe from PATH)"
+                print(f"Wine detected: Using clang.exe from PATH (searched: {msys2_search_paths})", file=sys.stderr)
 
         cls.runtime_library = os.environ.get("KGPC_RUNTIME_LIB")
         if not cls.runtime_library:
@@ -1174,6 +1359,55 @@ class TestCompiler(unittest.TestCase):
         self.assertIn("movl\t$5", optimized_asm)
         # And we should not see the `add` instruction.
         self.assertNotIn("addl", optimized_asm)
+
+    def test_forward_class_constructor_assignment_no_duplicate_self_move(self):
+        """Verify that the constructor codegen emits exactly one Self-move into
+        the first argument register before the constructor call, and that no
+        duplicate consecutive movq instructions target the first arg register."""
+        input_file, asm_file, _ = self._get_test_paths("forward_class_ctor_assign")
+        run_compiler(input_file, asm_file)
+        asm_lines = read_file_content(asm_file).splitlines()
+
+        # The first argument register depends on the target ABI.
+        first_arg_reg = "%rcx" if IS_WINDOWS_ABI else "%rdi"
+
+        # 1. No duplicate consecutive movq into the first arg register anywhere in the file.
+        for i in range(len(asm_lines) - 1):
+            self.assertFalse(
+                asm_lines[i] == asm_lines[i + 1]
+                and asm_lines[i].startswith("\tmovq\t")
+                and asm_lines[i].endswith(f", {first_arg_reg}"),
+                f"duplicate constructor self move found at line {i + 1}: {asm_lines[i]}",
+            )
+
+        # 2. Verify the expected call sequence:
+        #    calloc → save instance → VMT init → Self move → call constructor.
+        #    There must be exactly ONE movq into the first arg register between
+        #    the VMT store and the constructor call.
+        call_idx = None
+        for i, line in enumerate(asm_lines):
+            if "\tcall\ttfoo__create_p" in line:
+                call_idx = i
+                break
+        self.assertIsNotNone(call_idx, "constructor call not found in assembly")
+
+        # Count movq ..., <first_arg_reg> instructions between calloc return and the call.
+        calloc_idx = None
+        for i in range(call_idx - 1, -1, -1):
+            if "\tcall\tcalloc" in asm_lines[i]:
+                calloc_idx = i
+                break
+        self.assertIsNotNone(calloc_idx, "calloc call not found before constructor")
+
+        self_moves = [
+            line for line in asm_lines[calloc_idx:call_idx]
+            if line.startswith("\tmovq\t") and line.endswith(f", {first_arg_reg}")
+        ]
+        self.assertEqual(
+            len(self_moves), 1,
+            f"Expected exactly 1 Self-move into {first_arg_reg} between calloc and constructor call, "
+            f"found {len(self_moves)}: {self_moves}",
+        )
 
     def test_dateutils_custom(self):
         """Tests DateUtils with custom regex verification."""
@@ -1797,6 +2031,9 @@ class TestCompiler(unittest.TestCase):
         executable_file = os.path.join(TEST_OUTPUT_DIR, "real_arithmetic")
 
         run_compiler(input_file, asm_file)
+        self.record_failure_context(
+            input_file=input_file, asm_file=asm_file,
+            executable_file=executable_file)
         self.compile_executable(asm_file, executable_file)
 
         result = subprocess.run(
@@ -2413,6 +2650,33 @@ sys.exit(3)
         self.assertEqual(lines, expected_lines)
         self.assertEqual(process.returncode, 0)
 
+    def test_inline_asm_uses_pascal_const_equ(self):
+        """Ensures inline asm constants are emitted from Pascal const declarations."""
+        input_file = os.path.join(TEST_CASES_DIR, "asm_const_equ.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "asm_const_equ.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "asm_const_equ")
+
+        run_compiler(input_file, asm_file)
+
+        with open(asm_file, "r", encoding="utf-8") as f:
+            asm_source = f.read()
+
+        self.assertIn(".equ MagicValue, 1234", asm_source)
+        self.assertNotIn(".equ ErmsThreshold, 1536", asm_source)
+        self.assertNotIn(".equ NtThreshold, 262144", asm_source)
+        self.assertNotIn(".equ PrefetchDistance, 512", asm_source)
+
+        self.compile_executable(asm_file, executable_file)
+
+        process = subprocess.run(
+            [executable_file],
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+        self.assertEqual(process.returncode, 0)
+        self.assertEqual(process.stdout, "OK\n")
+
     def test_unix_gethostname(self):
         """Ensures the Unix unit exposes GetHostName with actual hostname output."""
         input_file = os.path.join(TEST_CASES_DIR, "unix_gethostname_demo.p")
@@ -2757,8 +3021,8 @@ def _discover_and_add_auto_tests():
                         self.skipTest("Unix fork() test not supported on MinGW (requires Cygwin/MSYS for fork)")
                 
                 input_file = os.path.join(TEST_CASES_DIR, f"{test_base_name}.p")
-                asm_file = os.path.join(TEST_OUTPUT_DIR, f"{test_base_name}.s")
-                executable_file = os.path.join(TEST_OUTPUT_DIR, test_base_name)
+                asm_file = os.path.join(TEST_OUTPUT_DIR, f"{test_base_name}_auto.s")
+                executable_file = os.path.join(TEST_OUTPUT_DIR, f"{test_base_name}_auto")
                 expected_output_file = os.path.join(TEST_CASES_DIR, f"{test_base_name}.expected")
                 input_data_file = os.path.join(INPUT_DATA_DIR, f"{test_base_name}.input")
 
@@ -2919,8 +3183,16 @@ def main():
         sys.exit(2)
 
     if args.tap or os.environ.get("KGPC_TEST_PROTOCOL", "").lower() == "tap":
-        suite = _load_suite()
-        runner = TAPTestRunner()
+        if remaining:
+            suite = unittest.defaultTestLoader.loadTestsFromNames(
+                remaining, sys.modules[__name__]
+            )
+        else:
+            suite = _load_suite()
+        if parallel_workers > 0:
+            runner = TAPParallelTestRunner(workers=parallel_workers, timeout=test_timeout)
+        else:
+            runner = TAPTestRunner()
         result = runner.run(suite)
         sys.exit(0 if result.wasSuccessful() else 1)
 

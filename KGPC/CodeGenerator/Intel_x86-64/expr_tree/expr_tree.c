@@ -11,6 +11,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <limits.h>
+#include <ctype.h>
 #include "../codegen.h"
 #include "expr_tree.h"
 #include "../register_types.h"
@@ -22,6 +23,7 @@
 #include "../../../Parser/ParseTree/tree.h"
 #include "../../../Parser/ParseTree/tree_types.h"
 #include "../../../Parser/ParseTree/KgpcType.h"
+#include "../../../Parser/ParseTree/from_cparser.h"
 
 static int expr_tree_tag_from_kgpc(const KgpcType *type)
 {
@@ -42,6 +44,15 @@ static int expr_tree_tag_from_kgpc(const KgpcType *type)
     if (kgpc_type_is_procedure((KgpcType *)type))
         return PROCEDURE;
     return UNKNOWN_TYPE;
+}
+
+static void codegen_enum_typeinfo_label(const char *type_id, char *buffer, size_t size)
+{
+    if (buffer == NULL || size == 0)
+        return;
+    char sanitized[CODEGEN_MAX_INST_BUF];
+    codegen_sanitize_identifier_for_label(type_id, sanitized, sizeof(sanitized));
+    snprintf(buffer, size, "__kgpc_enum_typeinfo_%s", sanitized);
 }
 #include "../../../Parser/ParseTree/type_tags.h"
 #include "../../../Parser/SemanticCheck/HashTable/HashTable.h"
@@ -109,14 +120,16 @@ static char *escape_string_for_assembly(const char *input)
     if (input == NULL)
         return NULL;
 
-    /* Calculate maximum possible escaped length */
+    /* Worst case: every char becomes \\xHH */
     size_t len = strlen(input);
-    char *escaped = (char *)malloc(len * 2 + 1); /* Worst case: every char needs escaping */
+    size_t max_len = len * 4 + 1;
+    char *escaped = (char *)malloc(max_len);
     if (escaped == NULL)
         return NULL;
 
     char *dest = escaped;
-    const char *src = input;
+    const unsigned char *src = (const unsigned char *)input;
+    size_t remaining = max_len;
 
     while (*src != '\0')
     {
@@ -125,25 +138,45 @@ static char *escape_string_for_assembly(const char *input)
             case '"':
                 *dest++ = '\\';
                 *dest++ = '"';
+                remaining -= 2;
                 break;
             case '\\':
                 *dest++ = '\\';
                 *dest++ = '\\';
+                remaining -= 2;
                 break;
             case '\n':
                 *dest++ = '\\';
                 *dest++ = 'n';
+                remaining -= 2;
                 break;
             case '\t':
                 *dest++ = '\\';
                 *dest++ = 't';
+                remaining -= 2;
                 break;
             case '\r':
                 *dest++ = '\\';
                 *dest++ = 'r';
+                remaining -= 2;
                 break;
             default:
-                *dest++ = *src;
+                if (isprint(*src))
+                {
+                    *dest++ = (char)*src;
+                    --remaining;
+                }
+                else
+                {
+                    int written = snprintf(dest, remaining, "\\x%02X", *src);
+                    if (written < 0 || (size_t)written >= remaining)
+                    {
+                        *dest = '\0';
+                        return escaped;
+                    }
+                    dest += written;
+                    remaining -= (size_t)written;
+                }
                 break;
         }
         src++;
@@ -171,14 +204,60 @@ static inline const char *select_register_name(const Register_t *reg,
     return select_register_name_tag(reg, fallback_tag);
 }
 
-static inline const char *select_divisor_temp_reg(const char *avoid_reg, int use_qword)
+static inline const char *reg_id_to_8bit_name(RegisterId_t reg_id)
+{
+    switch (reg_id)
+    {
+        case REG_RAX: return "%al";
+        case REG_RBX: return "%bl";
+        case REG_RCX: return "%cl";
+        case REG_RDX: return "%dl";
+        case REG_RSI: return "%sil";
+        case REG_RDI: return "%dil";
+        case REG_RBP: return "%bpl";
+        case REG_RSP: return "%spl";
+        case REG_R8: return "%r8b";
+        case REG_R9: return "%r9b";
+        case REG_R10: return "%r10b";
+        case REG_R11: return "%r11b";
+        case REG_R12: return "%r12b";
+        case REG_R13: return "%r13b";
+        case REG_R14: return "%r14b";
+        case REG_R15: return "%r15b";
+        default: return NULL;
+    }
+}
+
+static inline int operand_is_reg32(const char *operand, const Register_t *reg)
+{
+    return (reg != NULL && operand == reg->bit_32);
+}
+
+static inline const char *operand_as_reg32(const char *operand, const Register_t *reg)
+{
+    return reg != NULL ? reg->bit_32 : operand;
+}
+
+static inline const char *operand_as_reg64(const char *operand, const Register_t *reg)
+{
+    return reg != NULL ? reg->bit_64 : operand;
+}
+
+static inline const char *operand_as_reg8(const Register_t *reg)
+{
+    if (reg == NULL)
+        return NULL;
+    return reg_id_to_8bit_name(reg->reg_id);
+}
+
+static inline const char *select_divisor_temp_reg(const Register_t *avoid_reg, int use_qword)
 {
     /* NOTE: We currently reserve %r10/%r11 as scratch temporaries for div/mod sequences.
      * This assumes the surrounding code does not rely on these registers holding live values.
      * If this changes, integrate with the register allocator to avoid clobbering. */
     const char *primary = use_qword ? "%r10" : "%r10d";
     const char *fallback = use_qword ? "%r11" : "%r11d";
-    if (avoid_reg != NULL && strcmp(avoid_reg, primary) == 0)
+    if (avoid_reg != NULL && avoid_reg->reg_id == REG_R10)
         return fallback;
     return primary;
 }
@@ -266,6 +345,18 @@ static int expr_requires_qword(const struct Expression *expr)
     
     /* Check type tag first */
     int type_tag = expr_get_type_tag(expr);
+    if (type_tag == REAL_TYPE)
+    {
+        /* Single-precision reals use 32-bit payloads in GP registers. */
+        if (expr->resolved_kgpc_type != NULL &&
+            kgpc_type_sizeof(expr->resolved_kgpc_type) == 4)
+        {
+            return 0;
+        }
+        if (expr_effective_size_bytes(expr) == 4)
+            return 0;
+        return 1;
+    }
     if (codegen_type_uses_qword(type_tag))
         return 1;
     
@@ -289,20 +380,118 @@ static int expr_requires_qword(const struct Expression *expr)
 }
 
 /* Forward declarations */
-static const char *reg32_to_reg64(const char *reg_name, char *buffer, size_t buf_size);
-static const char *reg64_to_reg32(const char *reg_name, char *buffer, size_t buf_size);
+static const char *reg32_to_reg64(const char *reg_name, const Register_t *reg);
+static const char *reg64_to_reg32(const char *reg_name, const Register_t *reg);
 static int expr_is_single_real_local(const struct Expression *expr);
+static int expr_is_single_real_with_symtab(const struct Expression *expr, SymTab_t *symtab);
 
 static int expr_is_single_real_local(const struct Expression *expr)
 {
     if (expr == NULL || !expr_has_type_tag(expr, REAL_TYPE))
         return 0;
 
+    if (expr->type == EXPR_RECORD_ACCESS &&
+        expr->expr_data.record_access_data.record_expr != NULL &&
+        expr->expr_data.record_access_data.field_id != NULL)
+    {
+        struct Expression *record_expr = expr->expr_data.record_access_data.record_expr;
+        struct RecordType *record = record_expr->record_type;
+        if (record == NULL && record_expr->resolved_kgpc_type != NULL &&
+            kgpc_type_is_record(record_expr->resolved_kgpc_type))
+        {
+            record = kgpc_type_get_record(record_expr->resolved_kgpc_type);
+        }
+        if (record == NULL && record_expr->resolved_kgpc_type != NULL &&
+            kgpc_type_is_pointer(record_expr->resolved_kgpc_type) &&
+            record_expr->resolved_kgpc_type->info.points_to != NULL &&
+            kgpc_type_is_record(record_expr->resolved_kgpc_type->info.points_to))
+        {
+            record = kgpc_type_get_record(record_expr->resolved_kgpc_type->info.points_to);
+        }
+        if (record != NULL)
+        {
+            for (ListNode_t *cur = record->fields; cur != NULL; cur = cur->next)
+            {
+                if (cur->type != LIST_RECORD_FIELD || cur->cur == NULL)
+                    continue;
+                struct RecordField *field = (struct RecordField *)cur->cur;
+                if (field->name == NULL ||
+                    !pascal_identifier_equals(field->name, expr->expr_data.record_access_data.field_id))
+                {
+                    continue;
+                }
+                if (field->type_id != NULL && pascal_identifier_equals(field->type_id, "Single"))
+                    return 1;
+                break;
+            }
+        }
+    }
+
     KgpcType *type = expr_get_kgpc_type(expr);
-    if (type == NULL)
+    if (type != NULL && kgpc_type_sizeof(type) == 4)
+        return 1;
+
+    /* Record-field real expressions may be tagged as REAL while physically
+     * stored as Single. Use effective expression size as fallback. */
+    return expr_effective_size_bytes(expr) == 4;
+}
+
+static int expr_is_single_real_with_symtab(const struct Expression *expr, SymTab_t *symtab)
+{
+    if (expr_is_single_real_local(expr))
+        return 1;
+    if (expr == NULL || symtab == NULL || !expr_has_type_tag(expr, REAL_TYPE))
+        return 0;
+    if (expr->type != EXPR_RECORD_ACCESS ||
+        expr->expr_data.record_access_data.record_expr == NULL ||
+        expr->expr_data.record_access_data.field_id == NULL)
+    {
+        return 0;
+    }
+
+    struct Expression *record_expr = expr->expr_data.record_access_data.record_expr;
+    struct RecordType *record = record_expr->record_type;
+    if (record == NULL && record_expr->resolved_kgpc_type != NULL &&
+        kgpc_type_is_record(record_expr->resolved_kgpc_type))
+    {
+        record = kgpc_type_get_record(record_expr->resolved_kgpc_type);
+    }
+    if (record == NULL && record_expr->resolved_kgpc_type != NULL &&
+        kgpc_type_is_pointer(record_expr->resolved_kgpc_type) &&
+        record_expr->resolved_kgpc_type->info.points_to != NULL &&
+        kgpc_type_is_record(record_expr->resolved_kgpc_type->info.points_to))
+    {
+        record = kgpc_type_get_record(record_expr->resolved_kgpc_type->info.points_to);
+    }
+    if (record == NULL)
         return 0;
 
-    return (kgpc_type_sizeof(type) == 4);
+    for (ListNode_t *cur = record->fields; cur != NULL; cur = cur->next)
+    {
+        if (cur->type != LIST_RECORD_FIELD || cur->cur == NULL)
+            continue;
+        struct RecordField *field = (struct RecordField *)cur->cur;
+        if (field->name == NULL ||
+            !pascal_identifier_equals(field->name, expr->expr_data.record_access_data.field_id))
+        {
+            continue;
+        }
+        if (field->type_id != NULL)
+        {
+            if (pascal_identifier_equals(field->type_id, "Single"))
+                return 1;
+            HashNode_t *type_node = NULL;
+            if (FindIdent(&type_node, symtab, field->type_id) == 0 &&
+                type_node != NULL && type_node->type != NULL &&
+                kgpc_type_equals_tag(type_node->type, REAL_TYPE) &&
+                kgpc_type_sizeof(type_node->type) == 4)
+            {
+                return 1;
+            }
+        }
+        return 0;
+    }
+    return 0;
 }
 
 static ListNode_t *emit_store_to_stack(ListNode_t *inst_list, const Register_t *reg,
@@ -427,8 +616,8 @@ static ListNode_t *emit_alu_op_with_large_imm(
 }
 
 static ListNode_t *load_real_operand_into_xmm(CodeGenContext *ctx,
-    struct Expression *operand_expr, const char *operand, const char *xmm_reg,
-    ListNode_t *inst_list)
+    struct Expression *operand_expr, const char *operand, const Register_t *operand_reg,
+    const char *xmm_reg, ListNode_t *inst_list)
 {
     if (ctx == NULL || operand == NULL || xmm_reg == NULL)
         return inst_list;
@@ -443,6 +632,25 @@ static ListNode_t *load_real_operand_into_xmm(CodeGenContext *ctx,
           expr_has_type_tag(operand_expr, INT_TYPE) ||
           expr_has_type_tag(operand_expr, BOOL) ||
           expr_has_type_tag(operand_expr, CHAR_TYPE)));
+    struct Expression *raw_operand_expr = operand_expr;
+    while (raw_operand_expr != NULL &&
+        raw_operand_expr->type == EXPR_TYPECAST &&
+        raw_operand_expr->expr_data.typecast_data.target_type == REAL_TYPE &&
+        raw_operand_expr->expr_data.typecast_data.expr != NULL)
+    {
+        raw_operand_expr = raw_operand_expr->expr_data.typecast_data.expr;
+    }
+    if (operand_is_real && raw_operand_expr != NULL &&
+        (expr_has_type_tag(raw_operand_expr, LONGINT_TYPE) ||
+         expr_has_type_tag(raw_operand_expr, INT_TYPE) ||
+         expr_has_type_tag(raw_operand_expr, BOOL) ||
+         expr_has_type_tag(raw_operand_expr, CHAR_TYPE)))
+    {
+        operand_is_real = 0;
+        operand_is_integer_like = 1;
+        operand_is_longint = expr_uses_qword_kgpctype(raw_operand_expr) ||
+            expr_has_type_tag(raw_operand_expr, LONGINT_TYPE);
+    }
 
     char buffer[192];
     int is_single_real = 0;
@@ -503,16 +711,35 @@ static ListNode_t *load_real_operand_into_xmm(CodeGenContext *ctx,
         }
 
         const char *source_operand = operand;
-        char source_buf[16];
-        if (operand[0] == '%')
+        if (operand_reg != NULL)
         {
-            const char *converted = reg32_to_reg64(operand, source_buf, sizeof(source_buf));
+            const char *converted = reg32_to_reg64(operand, operand_reg);
             if (converted != NULL)
                 source_operand = converted;
         }
 
-        if (operand[0] == '%')
+        if (operand_reg != NULL)
         {
+            int reg_holds_raw_single = 0;
+            if (is_single_real && operand_expr != NULL)
+            {
+                int et = operand_expr->type;
+                if (et == EXPR_RECORD_ACCESS || et == EXPR_ARRAY_ACCESS ||
+                    et == EXPR_POINTER_DEREF)
+                {
+                    reg_holds_raw_single = 1;
+                }
+            }
+            if (reg_holds_raw_single)
+            {
+                const char *reg32 = reg64_to_reg32(operand, operand_reg);
+                if (reg32 == NULL)
+                    reg32 = operand;
+                snprintf(buffer, sizeof(buffer), "\tmovd\t%s, %s\n", reg32, xmm_reg);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tcvtss2sd\t%s, %s\n", xmm_reg, xmm_reg);
+                return add_inst(inst_list, buffer);
+            }
             snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", source_operand, xmm_reg);
             return add_inst(inst_list, buffer);
         }
@@ -563,25 +790,30 @@ static ListNode_t *load_real_operand_into_xmm(CodeGenContext *ctx,
      * cvtsi2sdl uses 32-bit register, cvtsi2sdq uses 64-bit register */
     const char *convert_instr;
     const char *convert_reg;
-    char reg_buf[16];
     if (operand_is_longint)
     {
         convert_instr = "cvtsi2sdq";
-        convert_reg = reg32_to_reg64(operand, reg_buf, sizeof(reg_buf));
+        if (operand_reg != NULL)
+            convert_reg = reg32_to_reg64(operand, operand_reg);
+        else
+            convert_reg = operand;
     }
     else
     {
         convert_instr = "cvtsi2sdl";
-        convert_reg = reg64_to_reg32(operand, reg_buf, sizeof(reg_buf));
+        if (operand_reg != NULL)
+            convert_reg = reg64_to_reg32(operand, operand_reg);
+        else
+            convert_reg = operand;
     }
     snprintf(buffer, sizeof(buffer), "\t%s\t%s, %s\n", convert_instr, convert_reg, xmm_reg);
     return add_inst(inst_list, buffer);
 }
 
 static ListNode_t *gencode_real_binary_op(CodeGenContext *ctx,
-    struct Expression *left_expr, const char *left_operand,
-    struct Expression *right_expr, const char *right_operand,
-    const char *dest, ListNode_t *inst_list, const char *sse_mnemonic)
+    struct Expression *left_expr, const char *left_operand, const Register_t *left_reg,
+    struct Expression *right_expr, const char *right_operand, const Register_t *right_reg,
+    const char *dest, const Register_t *dest_reg, ListNode_t *inst_list, const char *sse_mnemonic)
 {
     if (ctx == NULL || left_operand == NULL || right_operand == NULL ||
         dest == NULL || sse_mnemonic == NULL)
@@ -589,36 +821,33 @@ static ListNode_t *gencode_real_binary_op(CodeGenContext *ctx,
         return inst_list;
     }
 
-    inst_list = load_real_operand_into_xmm(ctx, left_expr, left_operand, "%xmm0", inst_list);
-    inst_list = load_real_operand_into_xmm(ctx, right_expr, right_operand, "%xmm1", inst_list);
+    inst_list = load_real_operand_into_xmm(ctx, left_expr, left_operand, left_reg, "%xmm0", inst_list);
+    inst_list = load_real_operand_into_xmm(ctx, right_expr, right_operand, right_reg, "%xmm1", inst_list);
 
     char buffer[80];
     snprintf(buffer, sizeof(buffer), "\t%s\t%%xmm1, %%xmm0\n", sse_mnemonic);
     inst_list = add_inst(inst_list, buffer);
 
     /* movq requires a 64-bit register, so convert 32-bit register to 64-bit */
-    char dest64_buf[16];
-    const char *dest64 = reg32_to_reg64(dest, dest64_buf, sizeof(dest64_buf));
+    const char *dest64 = reg32_to_reg64(dest, dest_reg);
     snprintf(buffer, sizeof(buffer), "\tmovq\t%%xmm0, %s\n", dest64);
     return add_inst(inst_list, buffer);
 }
 
-static ListNode_t *gencode_real_negate(const char *value_operand,
-    const char *dest, ListNode_t *inst_list)
+static ListNode_t *gencode_real_negate(const char *value_operand, const Register_t *value_reg,
+    const char *dest, const Register_t *dest_reg, ListNode_t *inst_list)
 {
     if (value_operand == NULL || dest == NULL)
         return inst_list;
 
     char buffer[96];
     /* movq requires a 64-bit register, so convert 32-bit operand/dest to 64-bit */
-    char value64_buf[16];
-    const char *value64 = reg32_to_reg64(value_operand, value64_buf, sizeof(value64_buf));
+    const char *value64 = reg32_to_reg64(value_operand, value_reg);
     snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm0\n", value64);
     inst_list = add_inst(inst_list, buffer);
     inst_list = add_inst(inst_list, "\tpxor\t%xmm1, %xmm1\n");
     inst_list = add_inst(inst_list, "\tsubsd\t%xmm0, %xmm1\n");
-    char dest64_buf[16];
-    const char *dest64 = reg32_to_reg64(dest, dest64_buf, sizeof(dest64_buf));
+    const char *dest64 = reg32_to_reg64(dest, dest_reg);
     snprintf(buffer, sizeof(buffer), "\tmovq\t%%xmm1, %s\n", dest64);
     return add_inst(inst_list, buffer);
 }
@@ -631,89 +860,23 @@ static ListNode_t *gencode_real_negate(const char *value_operand,
  *   %r8  -> %r8d
  *   %r8d -> %r8d (already 32-bit, returns unchanged)
  */
-static const char *reg64_to_reg32(const char *reg_name, char *buffer, size_t buf_size)
+static const char *reg64_to_reg32(const char *reg_name, const Register_t *reg)
 {
-    if (reg_name == NULL)
-        return NULL;
-    if (reg_name[0] != '%' || reg_name[1] != 'r')
-        return reg_name;
-
-    if (strcmp(reg_name, "%rax") == 0) {
-        snprintf(buffer, buf_size, "%%eax");
-        return buffer;
-    }
-    if (strcmp(reg_name, "%rbx") == 0) {
-        snprintf(buffer, buf_size, "%%ebx");
-        return buffer;
-    }
-    if (strcmp(reg_name, "%rcx") == 0) {
-        snprintf(buffer, buf_size, "%%ecx");
-        return buffer;
-    }
-    if (strcmp(reg_name, "%rdx") == 0) {
-        snprintf(buffer, buf_size, "%%edx");
-        return buffer;
-    }
-    if (strcmp(reg_name, "%rsi") == 0) {
-        snprintf(buffer, buf_size, "%%esi");
-        return buffer;
-    }
-    if (strcmp(reg_name, "%rdi") == 0) {
-        snprintf(buffer, buf_size, "%%edi");
-        return buffer;
-    }
-    if (strcmp(reg_name, "%rbp") == 0) {
-        snprintf(buffer, buf_size, "%%ebp");
-        return buffer;
-    }
-    if (strcmp(reg_name, "%rsp") == 0) {
-        snprintf(buffer, buf_size, "%%esp");
-        return buffer;
-    }
-
-    if (reg_name[2] >= '0' && reg_name[2] <= '9')
-    {
-        /* Check if it's already a 32-bit register (ends with 'd') */
-        size_t len = strlen(reg_name);
-        if (len > 0 && reg_name[len - 1] == 'd')
-        {
-            /* Already a 32-bit register, return as-is */
-            return reg_name;
-        }
-        snprintf(buffer, buf_size, "%%r%sd", reg_name + 2);
-        return buffer;
-    }
-
-    return reg_name;
+    return operand_as_reg32(reg_name, reg);
 }
 
 /*
  * Convert any register to its 32-bit equivalent if it's a 64-bit register.
  * Returns the register unchanged if it's already 32-bit or not a register that needs conversion.
  */
-static const char *reg_to_reg32(const char *reg_name, char *buffer, size_t buf_size)
+static const char *reg_to_reg32(const char *reg_name, const Register_t *reg)
 {
-    if (reg_name == NULL)
-        return NULL;
-    if (reg_name[0] == '%' && reg_name[1] == 'r' && strchr(reg_name, 'd') == NULL)
-        return reg64_to_reg32(reg_name, buffer, buf_size);
-    return reg_name;
+    return operand_as_reg32(reg_name, reg);
 }
 
-static const char *reg_to_reg64(const char *reg_name, char *buffer, size_t buf_size)
+static const char *reg_to_reg64(const char *reg_name, const Register_t *reg)
 {
-    if (reg_name == NULL)
-        return NULL;
-    /* Check for 32-bit registers:
-     * - %e* registers (e.g., %eax, %ebx)
-     * - %r*d registers (e.g., %r8d, %r9d) - must END with 'd', not just contain it
-     *   Note: %rdx is already 64-bit, not a 32-bit register ending with 'd' */
-    size_t len = strlen(reg_name);
-    if (reg_name[0] == '%' && 
-        (reg_name[1] == 'e' || 
-         (reg_name[1] == 'r' && len > 2 && reg_name[len - 1] == 'd' && reg_name[2] >= '0' && reg_name[2] <= '9')))
-        return reg32_to_reg64(reg_name, buffer, buf_size);
-    return reg_name;
+    return operand_as_reg64(reg_name, reg);
 }
 
 /*
@@ -722,42 +885,10 @@ static const char *reg_to_reg64(const char *reg_name, char *buffer, size_t buf_s
  *   %eax -> %al
  *   %r8d -> %r8b
  */
-static const char *reg32_to_reg8(const char *reg_name, char *buffer, size_t buf_size)
+static const char *reg32_to_reg8(const char *reg_name, const Register_t *reg)
 {
-    if (reg_name == NULL)
-        return NULL;
-
-    if (strcmp(reg_name, "%eax") == 0)
-        return "%al";
-    if (strcmp(reg_name, "%ebx") == 0)
-        return "%bl";
-    if (strcmp(reg_name, "%ecx") == 0)
-        return "%cl";
-    if (strcmp(reg_name, "%edx") == 0)
-        return "%dl";
-    if (strcmp(reg_name, "%esi") == 0)
-        return "%sil";
-    if (strcmp(reg_name, "%edi") == 0)
-        return "%dil";
-    if (strcmp(reg_name, "%ebp") == 0)
-        return "%bpl";
-    if (strcmp(reg_name, "%esp") == 0)
-        return "%spl";
-
-    size_t len = strlen(reg_name);
-    if (len > 0 && reg_name[0] == '%' && reg_name[len - 1] == 'd')
-    {
-        if (buf_size > len)
-        {
-            memcpy(buffer, reg_name, len + 1);
-            buffer[len - 1] = 'b';
-            buffer[len] = '\0';
-            return buffer;
-        }
-        return NULL;
-    }
-
-    return NULL;
+    (void)reg_name;
+    return operand_as_reg8(reg);
 }
 
 /*
@@ -768,57 +899,15 @@ static const char *reg32_to_reg8(const char *reg_name, char *buffer, size_t buf_
  *   %r8d -> %r8
  *   %r8  -> %r8 (already 64-bit, returns unchanged)
  */
-static const char *reg32_to_reg64(const char *reg_name, char *buffer, size_t buf_size)
+static const char *reg32_to_reg64(const char *reg_name, const Register_t *reg)
 {
-    if (reg_name == NULL)
-        return NULL;
-
-    if (strcmp(reg_name, "%eax") == 0)
-        return "%rax";
-    if (strcmp(reg_name, "%ebx") == 0)
-        return "%rbx";
-    if (strcmp(reg_name, "%ecx") == 0)
-        return "%rcx";
-    if (strcmp(reg_name, "%edx") == 0)
-        return "%rdx";
-    if (strcmp(reg_name, "%esi") == 0)
-        return "%rsi";
-    if (strcmp(reg_name, "%edi") == 0)
-        return "%rdi";
-    if (strcmp(reg_name, "%ebp") == 0)
-        return "%rbp";
-    if (strcmp(reg_name, "%esp") == 0)
-        return "%rsp";
-
-    size_t len = strlen(reg_name);
-    if (len > 0 && reg_name[0] == '%' && reg_name[len - 1] == 'd')
-    {
-        if (buf_size > len)
-        {
-            memcpy(buffer, reg_name, len + 1);
-            buffer[len - 1] = '\0';
-            return buffer;
-        }
-        return NULL;
-    }
-
-    return reg_name;
+    return operand_as_reg64(reg_name, reg);
 }
 
-static int operand_is_32bit_register(const char *operand)
+static int operand_is_32bit_register(const char *operand, const Register_t *reg)
 {
-    if (operand == NULL)
-        return 0;
-    if (strcmp(operand, "%eax") == 0 ||
-        strcmp(operand, "%ebx") == 0 ||
-        strcmp(operand, "%ecx") == 0 ||
-        strcmp(operand, "%edx") == 0 ||
-        strcmp(operand, "%esi") == 0 ||
-        strcmp(operand, "%edi") == 0)
-        return 1;
-
-    size_t len = strlen(operand);
-    return (len > 0 && operand[0] == '%' && operand[len - 1] == 'd');
+    (void)operand;
+    return operand_is_reg32(operand, reg);
 }
 
 /* Helper functions */
@@ -832,7 +921,8 @@ static ListNode_t *promote_char_operand_to_string(expr_node_t *node, ListNode_t 
 static ListNode_t *gencode_string_concat(expr_node_t *node, ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t *target_reg);
 ListNode_t *gencode_leaf_var(struct Expression *, ListNode_t *, CodeGenContext *, char *, int );
-ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *right,
+ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register_t *left_reg,
+    const char *right, const Register_t *right_reg,
     ListNode_t *inst_list, CodeGenContext *ctx);
 ListNode_t *gencode_op_deprecated(struct Expression *expr, ListNode_t *inst_list,
     char *buffer, int buf_len, CodeGenContext *ctx);
@@ -889,6 +979,7 @@ expr_node_t *build_expr_tree(struct Expression *expr)
         case EXPR_POINTER_DEREF:
         case EXPR_ADDR:
         case EXPR_ADDR_OF_PROC:
+        case EXPR_TYPEINFO:
         case EXPR_ANONYMOUS_FUNCTION:
         case EXPR_ANONYMOUS_PROCEDURE:
             new_node->left_expr = NULL;
@@ -966,6 +1057,7 @@ static int leaf_expr_is_simple(const struct Expression *expr)
         case EXPR_CHAR_CODE:
         case EXPR_BOOL:
         case EXPR_NIL:
+        case EXPR_TYPEINFO:
             return 1;
         default:
             return 0;
@@ -977,37 +1069,26 @@ static const char *expr_tree_register_name8(const Register_t *reg)
     if (reg == NULL || reg->bit_64 == NULL)
         return NULL;
 
-    static const struct
+    switch (reg->reg_id)
     {
-        const char *wide;
-        const char *byte;
-    } register_map[] = {
-        { "%rax", "%al" },
-        { "%rbx", "%bl" },
-        { "%rcx", "%cl" },
-        { "%rdx", "%dl" },
-        { "%rsi", "%sil" },
-        { "%rdi", "%dil" },
-        { "%rbp", "%bpl" },
-        { "%rsp", "%spl" },
-        { "%r8", "%r8b" },
-        { "%r9", "%r9b" },
-        { "%r10", "%r10b" },
-        { "%r11", "%r11b" },
-        { "%r12", "%r12b" },
-        { "%r13", "%r13b" },
-        { "%r14", "%r14b" },
-        { "%r15", "%r15b" },
-    };
-
-    size_t count = sizeof(register_map) / sizeof(register_map[0]);
-    for (size_t i = 0; i < count; ++i)
-    {
-        if (strcmp(reg->bit_64, register_map[i].wide) == 0)
-            return register_map[i].byte;
+        case REG_RAX: return "%al";
+        case REG_RBX: return "%bl";
+        case REG_RCX: return "%cl";
+        case REG_RDX: return "%dl";
+        case REG_RSI: return "%sil";
+        case REG_RDI: return "%dil";
+        case REG_RBP: return "%bpl";
+        case REG_RSP: return "%spl";
+        case REG_R8: return "%r8b";
+        case REG_R9: return "%r9b";
+        case REG_R10: return "%r10b";
+        case REG_R11: return "%r11b";
+        case REG_R12: return "%r12b";
+        case REG_R13: return "%r13b";
+        case REG_R14: return "%r14b";
+        case REG_R15: return "%r15b";
+        default: return NULL;
     }
-
-    return NULL;
 }
 
 static ListNode_t *gencode_shortcircuit_bool(expr_node_t *node, ListNode_t *inst_list,
@@ -1151,7 +1232,7 @@ ListNode_t *gencode_expr_tree(expr_node_t *node, ListNode_t *inst_list, CodeGenC
         inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
         const char *target_name = select_register_name(target_reg, node->expr, expr_get_type_tag(node->expr));
         if (target_name != NULL)
-            inst_list = gencode_op(node->expr, target_name, target_name, inst_list, ctx);
+            inst_list = gencode_op(node->expr, target_name, target_reg, target_name, target_reg, inst_list, ctx);
     }
     else if(node->right_expr != NULL && expr_tree_is_leaf(node->right_expr))
     {
@@ -1200,7 +1281,7 @@ static ListNode_t *promote_char_operand_to_string(expr_node_t *node, ListNode_t 
     inst_list = add_inst(inst_list, buffer);
 
     inst_list = codegen_vect_reg(inst_list, 0);
-    inst_list = add_inst(inst_list, "\tcall\tkgpc_char_to_string\n");
+    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_char_to_string");
     snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", RETURN_REG_64, value_reg->bit_64);
     inst_list = add_inst(inst_list, buffer);
     free_arg_regs();
@@ -1319,7 +1400,7 @@ static ListNode_t *promote_shortstring_operand_to_string(expr_node_t *node, List
     inst_list = add_inst(inst_list, buffer);
 
     inst_list = codegen_vect_reg(inst_list, 0);
-    inst_list = add_inst(inst_list, "\tcall\tkgpc_shortstring_to_string\n");
+    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_shortstring_to_string");
     snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", RETURN_REG_64, value_reg->bit_64);
     inst_list = add_inst(inst_list, buffer);
     free_arg_regs();
@@ -1327,34 +1408,86 @@ static ListNode_t *promote_shortstring_operand_to_string(expr_node_t *node, List
 }
 
 static ListNode_t *promote_shortstring_reg_operand(ListNode_t *inst_list, CodeGenContext *ctx,
-    const char *value_reg)
+    const char *value_operand, const Register_t *value_reg)
 {
     if (inst_list == NULL || ctx == NULL || value_reg == NULL)
         return inst_list;
-    if (value_reg[0] != '%')
-        return inst_list;
+    (void)value_operand;
 
     const char *arg_reg64 = current_arg_reg64(0);
     if (arg_reg64 == NULL)
         return inst_list;
 
     char buffer[128];
-    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", value_reg, arg_reg64);
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", value_reg->bit_64, arg_reg64);
     inst_list = add_inst(inst_list, buffer);
     inst_list = codegen_vect_reg(inst_list, 0);
-    inst_list = add_inst(inst_list, "\tcall\tkgpc_shortstring_to_string\n");
-    snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", value_reg);
+    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_shortstring_to_string");
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", value_reg->bit_64);
     inst_list = add_inst(inst_list, buffer);
     free_arg_regs();
     return inst_list;
 }
 
-static ListNode_t *emit_move_ptr_operand(ListNode_t *inst_list, const char *src, const char *dst)
+static ListNode_t *spill_reg64_operand(ListNode_t *inst_list, const char *reg_operand,
+    StackNode_t **spill_slot, const char *temp_name)
+{
+    if (spill_slot != NULL)
+        *spill_slot = NULL;
+    if (spill_slot == NULL || reg_operand == NULL || temp_name == NULL)
+        return inst_list;
+
+    StackNode_t *slot = add_l_t((char *)temp_name);
+    if (slot == NULL)
+        return inst_list;
+
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", reg_operand, slot->offset);
+    inst_list = add_inst(inst_list, buffer);
+    *spill_slot = slot;
+    return inst_list;
+}
+
+static ListNode_t *restore_spilled_reg64_operand(ListNode_t *inst_list, const char *reg_operand,
+    StackNode_t *spill_slot)
+{
+    if (reg_operand == NULL || spill_slot == NULL)
+        return inst_list;
+
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", spill_slot->offset, reg_operand);
+    return add_inst(inst_list, buffer);
+}
+
+static ListNode_t *promote_char_reg_operand_to_string(ListNode_t *inst_list,
+    const char *reg_operand, const Register_t *reg)
+{
+    if (reg_operand == NULL || reg == NULL)
+        return inst_list;
+
+    const char *arg_reg32 = current_arg_reg32(0);
+    const char *value_reg32 = reg_to_reg32(reg_operand, reg);
+    if (arg_reg32 == NULL || value_reg32 == NULL)
+        return inst_list;
+
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", value_reg32, arg_reg32);
+    inst_list = add_inst(inst_list, buffer);
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_char_to_string");
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", RETURN_REG_64, reg_operand);
+    inst_list = add_inst(inst_list, buffer);
+    free_arg_regs();
+    return inst_list;
+}
+
+static ListNode_t *emit_move_ptr_operand(ListNode_t *inst_list, const char *src,
+    const Register_t *src_reg, const char *dst)
 {
     if (inst_list == NULL || src == NULL || dst == NULL)
         return inst_list;
     char buffer[128];
-    if (src[0] == '%' || src[0] == '$')
+    if (src_reg != NULL || src[0] == '$')
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", src, dst);
     else if (strstr(src, "(%rbp)") != NULL)
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", src, dst);
@@ -1441,7 +1574,7 @@ static ListNode_t *gencode_string_concat(expr_node_t *node, ListNode_t *inst_lis
     }
 
     inst_list = codegen_vect_reg(inst_list, 0);
-    inst_list = add_inst(inst_list, "\tcall\tkgpc_string_concat\n");
+    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_string_concat");
     snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", target_reg->bit_64);
     inst_list = add_inst(inst_list, buffer);
 
@@ -1480,7 +1613,7 @@ ListNode_t *gencode_modulus(const char *left, const char *right, ListNode_t *ins
     }
     else // Divisor is a register
     {
-        const char *tmp_div = select_divisor_temp_reg(right, 0);
+        const char *tmp_div = select_divisor_temp_reg(NULL, 0);
         snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", left, tmp_div);
         inst_list = add_inst(inst_list, buffer);
         div_operand = tmp_div;
@@ -1550,6 +1683,12 @@ void free_expr_tree(expr_node_t *node)
 {
     if(node != NULL)
     {
+        if (node->reg != NULL &&
+            node->reg->spill_callback == expr_tree_register_spill_handler &&
+            node->reg->spill_context == node)
+        {
+            register_clear_spill_callback(node->reg);
+        }
         free_expr_tree(node->left_expr);
         free_expr_tree(node->right_expr);
         free(node);
@@ -1575,7 +1714,7 @@ ListNode_t *gencode_sign_term(expr_node_t *node, ListNode_t *inst_list, CodeGenC
     const char *dest = select_register_name(target_reg, node->expr, type_tag);
     if (type_tag == REAL_TYPE)
     {
-        inst_list = gencode_real_negate(dest, dest, inst_list);
+        inst_list = gencode_real_negate(dest, target_reg, dest, target_reg, inst_list);
     }
     else
     {
@@ -1841,33 +1980,22 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 }
             }
 
-            /* Fallback: derive owner class from mangled method name prefix. */
-            if (!ctor_type_receiver && func_mangled_name != NULL && ctx != NULL && ctx->symtab != NULL)
+            /* Fallback: derive owner class from the codegen context. */
+            if (!ctor_type_receiver && ctx != NULL && ctx->current_subprogram_owner_class != NULL && ctx->symtab != NULL)
             {
-                const char *sep = strstr(func_mangled_name, "__");
-                if (sep != NULL && sep > func_mangled_name)
-                {
-                    size_t owner_len = (size_t)(sep - func_mangled_name);
-                    char *owner_id = (char *)malloc(owner_len + 1);
-                    if (owner_id != NULL)
-                    {
-                        memcpy(owner_id, func_mangled_name, owner_len);
-                        owner_id[owner_len] = '\0';
+                const char *owner_id = ctx->current_subprogram_owner_class;
 
-                        HashNode_t *owner_node = NULL;
-                        if (FindIdent(&owner_node, ctx->symtab, owner_id) >= 0 &&
-                            owner_node != NULL && owner_node->type != NULL)
-                        {
-                            if (owner_node->type->kind == TYPE_KIND_RECORD)
-                                class_record = owner_node->type->info.record_info;
-                            else if (owner_node->type->kind == TYPE_KIND_POINTER &&
-                                     owner_node->type->info.points_to != NULL &&
-                                     owner_node->type->info.points_to->kind == TYPE_KIND_RECORD)
-                                class_record = owner_node->type->info.points_to->info.record_info;
-                            ctor_type_receiver = (class_record != NULL);
-                        }
-                        free(owner_id);
-                    }
+                HashNode_t *owner_node = NULL;
+                if (FindIdent(&owner_node, ctx->symtab, owner_id) >= 0 &&
+                    owner_node != NULL && owner_node->type != NULL)
+                {
+                    if (owner_node->type->kind == TYPE_KIND_RECORD)
+                        class_record = owner_node->type->info.record_info;
+                    else if (owner_node->type->kind == TYPE_KIND_POINTER &&
+                             owner_node->type->info.points_to != NULL &&
+                             owner_node->type->info.points_to->kind == TYPE_KIND_RECORD)
+                        class_record = owner_node->type->info.points_to->info.record_info;
+                    ctor_type_receiver = (class_record != NULL);
                 }
             }
             
@@ -1883,7 +2011,8 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 }
             }
             
-            if (ctor_type_receiver && class_record != NULL)
+            if (ctor_type_receiver && class_record != NULL &&
+                record_type_is_class(class_record))
             {
                 /* Get the size of the class instance */
                 long long instance_size = 0;
@@ -1902,7 +2031,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                     inst_list = add_inst(inst_list, buffer);
                     
                     inst_list = codegen_vect_reg(inst_list, 0);
-                    inst_list = add_inst(inst_list, "\tcall\tcalloc\n");
+                    inst_list = codegen_call_with_shadow_space(inst_list, "calloc");
                     free_arg_regs();
                     
                     /* Save the allocated instance pointer */
@@ -1978,29 +2107,11 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 }
             }
 
-            /* Move the newly allocated instance pointer into the correct argument register slot
-             * for the implicit Self parameter, accounting for a possible static-link argument. */
+            /* Record the Self parameter slot so it can be emitted AFTER argument
+             * evaluation (which may clobber caller-saved registers including the
+             * Self register).  The actual movq is deferred to the block below
+             * codegen_pass_arguments. */
             self_index = arg_start_index;
-            const char *sysv_int_args[] = { "%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9" };
-            const char *win_int_args[]  = { "%rcx", "%rdx", "%r8", "%r9" };
-            const char *self_reg = NULL;
-            if (codegen_target_is_windows()) {
-                if (self_index < (int)(sizeof(win_int_args) / sizeof(win_int_args[0])))
-                    self_reg = win_int_args[self_index];
-            } else {
-                if (self_index < (int)(sizeof(sysv_int_args) / sizeof(sysv_int_args[0])))
-                    self_reg = sysv_int_args[self_index];
-            }
-            if (self_reg != NULL) {
-                if (constructor_instance_slot != NULL) {
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-                        constructor_instance_slot->offset, self_reg);
-                } else {
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
-                        constructor_instance_reg->bit_64, self_reg);
-                }
-                inst_list = add_inst(inst_list, buffer);
-            }
 
             /* Skip the first argument (class type) in the argument list */
             if (args_to_pass != NULL)
@@ -2087,7 +2198,8 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             }
         }
         
-        /* For constructors, pass the allocated instance as the first argument (Self) */
+        /* For constructors, emit the Self argument into the correct register
+         * AFTER argument evaluation so that argument-passing code cannot clobber it. */
         if (is_constructor && constructor_instance_reg != NULL && self_index >= 0)
         {
             const char *self_arg_reg = current_arg_reg64(self_index);
@@ -2107,6 +2219,22 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 
         if (static_link_expr_active)
             codegen_end_expression(ctx);
+
+        /* Set %al for the SysV varargs ABI.
+         * For varargs functions, %al must be an upper bound on the number of XMM
+         * registers used.  Use 8 (the maximum) as a conservative upper bound.
+         * For non-varargs functions, %al is ignored by the callee but we set it
+         * to 0 to avoid stale values from previous operations. */
+        {
+            int is_varargs_call = 0;
+            if (func_type != NULL && func_type->kind == TYPE_KIND_PROCEDURE &&
+                func_type->info.proc_info.definition != NULL)
+            {
+                Tree_t *def = func_type->info.proc_info.definition;
+                is_varargs_call = def->tree_data.subprogram_data.is_varargs;
+            }
+            inst_list = codegen_vect_reg(inst_list, is_varargs_call ? 8 : 0);
+        }
 
         /* Check if this is a call through a procedural variable */
         if (expr->expr_data.function_call_data.is_procedural_var_call)
@@ -2384,6 +2512,15 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             {
                 /* For procedural var calls, check call_kgpc_type's return type */
                 int use_qword = expr_uses_qword_kgpctype(expr);
+                if (!use_qword && expr_has_type_tag(expr, RECORD_TYPE))
+                {
+                    long long record_ret_size = 0;
+                    if (codegen_get_record_size(ctx, expr, &record_ret_size) == 0 &&
+                        record_ret_size > 4)
+                    {
+                        use_qword = 1;
+                    }
+                }
                 if (!use_qword && expr->expr_data.function_call_data.is_procedural_var_call &&
                     expr->expr_data.function_call_data.call_kgpc_type != NULL)
                 {
@@ -2436,14 +2573,13 @@ cleanup_constructor:
     }
     else if (expr->type == EXPR_ADDR_OF_PROC)
     {
-        HashNode_t *proc_symbol = expr->expr_data.addr_of_proc_data.procedure_symbol;
-        if (proc_symbol == NULL || proc_symbol->mangled_id == NULL)
-        {
-            codegen_report_error(ctx, "ERROR: Missing symbol information for procedure address.");
-            return inst_list;
-        }
+        /* Use owned string copies for the procedure label */
+        const char *proc_label = expr->expr_data.addr_of_proc_data.proc_mangled_id;
+        if (proc_label == NULL)
+            proc_label = expr->expr_data.addr_of_proc_data.proc_id;
+        assert(proc_label != NULL && "EXPR_ADDR_OF_PROC must have proc_mangled_id or proc_id set");
         /* Use leaq (Load Effective Address) with RIP-relative addressing to get the address of the procedure's label */
-        snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", proc_symbol->mangled_id, target_reg->bit_64);
+        snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", proc_label, target_reg->bit_64);
         return add_inst(inst_list, buffer);
     }
     else if (expr->type == EXPR_ANONYMOUS_FUNCTION || expr->type == EXPR_ANONYMOUS_PROCEDURE)
@@ -2574,8 +2710,41 @@ cleanup_constructor:
         }
         
         inst_list = add_inst(inst_list, add_rodata);
-        snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", label, target_reg->bit_64);
-        return add_inst(inst_list, buffer);
+        int buf_len = snprintf(NULL, 0, "\tleaq\t%s(%%rip), %s\n", label, target_reg->bit_64);
+        if (buf_len > 0)
+        {
+            char *tmp_buf = (char *)malloc((size_t)buf_len + 1);
+            if (tmp_buf != NULL)
+            {
+                snprintf(tmp_buf, (size_t)buf_len + 1, "\tleaq\t%s(%%rip), %s\n", label, target_reg->bit_64);
+                inst_list = add_inst(inst_list, tmp_buf);
+                free(tmp_buf);
+            }
+        }
+        return inst_list;
+    }
+    else if (expr->type == EXPR_TYPEINFO)
+    {
+        const char *type_id = expr->expr_data.typeinfo_data.type_id;
+        if (type_id == NULL || type_id[0] == '\0')
+        {
+            codegen_report_error(ctx, "ERROR: TypeInfo missing type identifier.");
+            return inst_list;
+        }
+        char label[CODEGEN_MAX_INST_BUF];
+        codegen_enum_typeinfo_label(type_id, label, sizeof(label));
+        int buf_len = snprintf(NULL, 0, "\tleaq\t%s(%%rip), %s\n", label, target_reg->bit_64);
+        if (buf_len > 0)
+        {
+            char *tmp_buf = (char *)malloc((size_t)buf_len + 1);
+            if (tmp_buf != NULL)
+            {
+                snprintf(tmp_buf, (size_t)buf_len + 1, "\tleaq\t%s(%%rip), %s\n", label, target_reg->bit_64);
+                inst_list = add_inst(inst_list, tmp_buf);
+                free(tmp_buf);
+            }
+        }
+        return inst_list;
     }
 
     inst_list = gencode_leaf_var(expr, inst_list, ctx, buf_leaf, sizeof(buf_leaf));
@@ -2642,6 +2811,25 @@ cleanup_constructor:
             treat_as_reference = 1;
         else if (symbol_node != NULL && symbol_node->is_var_parameter)
             treat_as_reference = 1;
+        if (treat_as_reference && symbol_node != NULL &&
+            expr->expr_data.id != NULL &&
+            pascal_identifier_equals(expr->expr_data.id, "Self") &&
+            symbol_node->type != NULL)
+        {
+            struct RecordType *self_record = NULL;
+            if (kgpc_type_is_pointer(symbol_node->type) &&
+                symbol_node->type->info.points_to != NULL &&
+                symbol_node->type->info.points_to->kind == TYPE_KIND_RECORD)
+            {
+                self_record = symbol_node->type->info.points_to->info.record_info;
+            }
+            else if (symbol_node->type->kind == TYPE_KIND_RECORD)
+            {
+                self_record = symbol_node->type->info.record_info;
+            }
+            if (self_record != NULL && record_type_is_class(self_record))
+                treat_as_reference = 0;
+        }
 
         if (treat_as_reference)
         {
@@ -2678,11 +2866,11 @@ cleanup_constructor:
             if (!should_deref)
                 return inst_list;
 
-            if (expr_type == REAL_TYPE && expr_is_single_real_local(expr))
+            if (expr_type == REAL_TYPE && expr_is_single_real_with_symtab(expr, ctx != NULL ? ctx->symtab : NULL))
             {
                 char mem_operand[64];
                 snprintf(mem_operand, sizeof(mem_operand), "(%s)", target_reg->bit_64);
-                inst_list = load_real_operand_into_xmm(ctx, expr, mem_operand, "%xmm0", inst_list);
+                inst_list = load_real_operand_into_xmm(ctx, expr, mem_operand, NULL, "%xmm0", inst_list);
                 snprintf(buffer, sizeof(buffer), "\tmovq\t%%xmm0, %s\n", target_reg->bit_64);
                 inst_list = add_inst(inst_list, buffer);
                 return inst_list;
@@ -2724,10 +2912,11 @@ cleanup_constructor:
         }
     }
 
-    if (expr_has_type_tag(expr, REAL_TYPE) && expr_is_single_real_local(expr) &&
+    if (expr_has_type_tag(expr, REAL_TYPE) &&
+        expr_is_single_real_with_symtab(expr, ctx != NULL ? ctx->symtab : NULL) &&
         buf_leaf[0] != '$')
     {
-        inst_list = load_real_operand_into_xmm(ctx, expr, buf_leaf, "%xmm0", inst_list);
+        inst_list = load_real_operand_into_xmm(ctx, expr, buf_leaf, NULL, "%xmm0", inst_list);
         snprintf(buffer, sizeof(buffer), "\tmovq\t%%xmm0, %s\n", target_reg->bit_64);
         return add_inst(inst_list, buffer);
     }
@@ -2886,7 +3075,7 @@ ListNode_t *gencode_case1(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             }
             inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
             const char *target_name = select_register_name(target_reg, left_expr, left_expr != NULL ? expr_get_type_tag(left_expr) : expr_get_type_tag(expr));
-            inst_list = gencode_op(expr, target_name, name_buf, inst_list, ctx);
+            inst_list = gencode_op(expr, target_name, target_reg, name_buf, NULL, inst_list, ctx);
         }
         else
         {
@@ -2898,7 +3087,7 @@ ListNode_t *gencode_case1(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             inst_list = emit_load_from_stack(inst_list, target_reg, left_expr, expr_get_type_tag(left_expr), lhs_spill->offset);
             const char *target_name = select_register_name(target_reg, left_expr, expr_get_type_tag(left_expr));
             const char *rhs_name = select_register_name(rhs_reg, right_expr, expr_get_type_tag(right_expr));
-            inst_list = gencode_op(expr, target_name, rhs_name, inst_list, ctx);
+            inst_list = gencode_op(expr, target_name, target_reg, rhs_name, rhs_reg, inst_list, ctx);
             free_reg(get_reg_stack(), rhs_reg);
         }
         return inst_list;
@@ -2909,7 +3098,7 @@ ListNode_t *gencode_case1(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     inst_list = gencode_leaf_var(right_expr, inst_list, ctx, name_buf, sizeof(name_buf));
 
     const char *target_name = select_register_name(target_reg, left_expr, left_expr != NULL ? expr_get_type_tag(left_expr) : expr_get_type_tag(expr));
-    inst_list = gencode_op(expr, target_name, name_buf, inst_list, ctx);
+    inst_list = gencode_op(expr, target_name, target_reg, name_buf, NULL, inst_list, ctx);
 
     return inst_list;
 }
@@ -2953,7 +3142,7 @@ ListNode_t *gencode_case2(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         char spill_mem[30];
         snprintf(spill_mem, 30, "-%d(%%rbp)", spill_loc->offset);
         const char *target_name = select_register_name(target_reg, left_expr, expr_get_type_tag(left_expr));
-        inst_list = gencode_op(node->expr, target_name, spill_mem, inst_list, ctx);
+        inst_list = gencode_op(node->expr, target_name, target_reg, spill_mem, NULL, inst_list, ctx);
     }
     else
     {
@@ -2965,7 +3154,7 @@ ListNode_t *gencode_case2(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         inst_list = emit_load_from_stack(inst_list, temp_reg, right_expr, expr_get_type_tag(right_expr), rhs_spill->offset);
         const char *target_name = select_register_name(target_reg, left_expr, expr_get_type_tag(left_expr));
         const char *temp_name = select_register_name(temp_reg, right_expr, expr_get_type_tag(right_expr));
-        inst_list = gencode_op(node->expr, target_name, temp_name, inst_list, ctx);
+        inst_list = gencode_op(node->expr, target_name, target_reg, temp_name, temp_reg, inst_list, ctx);
         free_reg(get_reg_stack(), temp_reg);
     }
 
@@ -3010,7 +3199,7 @@ ListNode_t *gencode_case3(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         char spill_mem[30];
         snprintf(spill_mem, 30, "-%d(%%rbp)", spill_loc->offset);
         const char *target_name = select_register_name(target_reg, right_expr, expr_get_type_tag(right_expr));
-        inst_list = gencode_op(node->expr, target_name, spill_mem, inst_list, ctx);
+        inst_list = gencode_op(node->expr, target_name, target_reg, spill_mem, NULL, inst_list, ctx);
     }
     else
     {
@@ -3021,7 +3210,7 @@ ListNode_t *gencode_case3(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         inst_list = emit_load_from_stack(inst_list, target_reg, left_expr, expr_get_type_tag(left_expr), lhs_spill->offset);
         const char *target_name = select_register_name(target_reg, left_expr, expr_get_type_tag(left_expr));
         const char *temp_name = select_register_name(temp_reg, right_expr, expr_get_type_tag(right_expr));
-        inst_list = gencode_op(node->expr, target_name, temp_name, inst_list, ctx);
+        inst_list = gencode_op(node->expr, target_name, target_reg, temp_name, temp_reg, inst_list, ctx);
         free_reg(get_reg_stack(), temp_reg);
     }
 
@@ -3076,13 +3265,28 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                     /* Check if this is a real constant */
                     else if (node->type != NULL && kgpc_type_equals_tag(node->type, REAL_TYPE))
                     {
-                        /* Real constant - encode as bit pattern using union for safe type punning */
-                        union {
-                            double d;
-                            int64_t i;
-                        } converter;
-                        converter.d = node->const_real_value;
-                        snprintf(buffer, buf_len, "$%lld", (long long)converter.i);
+                        long long real_size = kgpc_type_sizeof(node->type);
+                        if (real_size == 4)
+                        {
+                            /* Single constant: keep 32-bit IEEE payload so later marshalling
+                             * can move it with movd without losing value bits. */
+                            union {
+                                float f;
+                                uint32_t i;
+                            } converter;
+                            converter.f = (float)node->const_real_value;
+                            snprintf(buffer, buf_len, "$%u", (unsigned)converter.i);
+                        }
+                        else
+                        {
+                            /* Double/Real/Extended constants are materialized as 64-bit payload. */
+                            union {
+                                double d;
+                                int64_t i;
+                            } converter;
+                            converter.d = node->const_real_value;
+                            snprintf(buffer, buf_len, "$%lld", (long long)converter.i);
+                        }
                     }
                     /* Check if this is a set constant that fits in 8 bytes */
                     else if (node->const_set_value != NULL && node->const_set_size > 0 &&
@@ -3263,13 +3467,25 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
 
         case EXPR_RNUM:
         {
-            /* Use union for safe type punning */
-            union {
-                double d;
-                int64_t i;
-            } converter;
-            converter.d = expr->expr_data.r_num;
-            snprintf(buffer, buf_len, "$%lld", (long long)converter.i);
+            if (expr_is_single_real_with_symtab(expr, ctx != NULL ? ctx->symtab : NULL))
+            {
+                union {
+                    float f;
+                    uint32_t i;
+                } converter;
+                converter.f = (float)expr->expr_data.r_num;
+                snprintf(buffer, buf_len, "$%u", (unsigned)converter.i);
+            }
+            else
+            {
+                /* Use union for safe type punning */
+                union {
+                    double d;
+                    int64_t i;
+                } converter;
+                converter.d = expr->expr_data.r_num;
+                snprintf(buffer, buf_len, "$%lld", (long long)converter.i);
+            }
             break;
         }
 
@@ -3294,7 +3510,8 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
 }
 
 /* TODO: Assumes eax and edx registers are free for division */
-ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *right,
+ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register_t *left_reg,
+    const char *right, const Register_t *right_reg,
     ListNode_t *inst_list, CodeGenContext *ctx)
 {
     assert(expr != NULL);
@@ -3310,10 +3527,13 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
             type = expr->expr_data.addop_data.addop_type;
             if (expr_get_type_tag(expr) == SET_TYPE)
             {
+                /* Set operations use 32-bit instructions; ensure register names are 32-bit */
+                const char *left32 = (left_reg != NULL) ? left_reg->bit_32 : left;
+                const char *right32 = (right_reg != NULL) ? right_reg->bit_32 : right;
                 switch(type)
                 {
                     case PLUS:
-                        snprintf(buffer, sizeof(buffer), "\torl\t%s, %s\n", right, left);
+                        snprintf(buffer, sizeof(buffer), "\torl\t%s, %s\n", right32, left32);
                         inst_list = add_inst(inst_list, buffer);
                         break;
                     case MINUS:
@@ -3321,22 +3541,22 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                         {
                             unsigned long mask = strtoul(right + 1, NULL, 0);
                             unsigned int complement = ~((unsigned int)mask);
-                            snprintf(buffer, sizeof(buffer), "\tandl\t$%u, %s\n", complement, left);
+                            snprintf(buffer, sizeof(buffer), "\tandl\t$%u, %s\n", complement, left32);
                             inst_list = add_inst(inst_list, buffer);
                         }
                         else
                         {
                             const char *scratch_reg = "%r10d";
-                            if (left != NULL && strcmp(left, "%r10d") == 0)
+                            if (left_reg != NULL && left_reg->reg_id == REG_R10)
                                 scratch_reg = "%r11d";
-                            else if (left != NULL && strcmp(left, "%r11d") == 0)
+                            else if (left_reg != NULL && left_reg->reg_id == REG_R11)
                                 scratch_reg = "%r10d";
 
-                            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", right, scratch_reg);
+                            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", right32, scratch_reg);
                             inst_list = add_inst(inst_list, buffer);
                             snprintf(buffer, sizeof(buffer), "\tnotl\t%s\n", scratch_reg);
                             inst_list = add_inst(inst_list, buffer);
-                            snprintf(buffer, sizeof(buffer), "\tandl\t%s, %s\n", scratch_reg, left);
+                            snprintf(buffer, sizeof(buffer), "\tandl\t%s, %s\n", scratch_reg, left32);
                             inst_list = add_inst(inst_list, buffer);
                         }
                         break;
@@ -3363,9 +3583,9 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                 }
                 if (sse_op != NULL)
                     inst_list = gencode_real_binary_op(ctx,
-                        expr->expr_data.mulop_data.left_term, left,
-                        expr->expr_data.mulop_data.right_factor, right,
-                        left, inst_list, sse_op);
+                        expr->expr_data.mulop_data.left_term, left, left_reg,
+                        expr->expr_data.mulop_data.right_factor, right, right_reg,
+                        left, left_reg, inst_list, sse_op);
                 break;
             }
             /* Handle pointer-pointer subtraction: result is element difference */
@@ -3374,9 +3594,8 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                 struct Expression *left_expr = expr->expr_data.addop_data.left_expr;
                 
                 /* Convert operands to 64-bit for pointer operations */
-                char left64_buf[16], right64_buf[16];
-                const char *left64 = reg32_to_reg64(left, left64_buf, sizeof(left64_buf));
-                const char *right64 = reg32_to_reg64(right, right64_buf, sizeof(right64_buf));
+                const char *left64 = reg32_to_reg64(left, left_reg);
+                const char *right64 = reg32_to_reg64(right, right_reg);
                 
                 /* Get element size from the pointer type.
                  * For typed pointers like PByte (^Byte), use pointer_subtype_id to get correct size.
@@ -3454,19 +3673,18 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                 int right_is_pointer = (right_expr != NULL && expr_get_type_tag(right_expr) == POINTER_TYPE);
                 
                 /* Promote operands to 64-bit registers for pointer operations */
-                char left64_buf[16], right64_buf[16];
-                const char *left64 = reg32_to_reg64(left, left64_buf, sizeof(left64_buf));
-                const char *right64 = reg32_to_reg64(right, right64_buf, sizeof(right64_buf));
+                const char *left64 = reg32_to_reg64(left, left_reg);
+                const char *right64 = reg32_to_reg64(right, right_reg);
                 if (left64 == NULL) left64 = left;
                 if (right64 == NULL) right64 = right;
 
                 /* Sign-extend 32-bit operands to 64-bit if needed */
-                if (operand_is_32bit_register(left) && left64 != left)
+                if (operand_is_32bit_register(left, left_reg) && left64 != left)
                 {
                     snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", left, left64);
                     inst_list = add_inst(inst_list, buffer);
                 }
-                if (operand_is_32bit_register(right) && right64 != right)
+                if (operand_is_32bit_register(right, right_reg) && right64 != right)
                 {
                     snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", right, right64);
                     inst_list = add_inst(inst_list, buffer);
@@ -3475,6 +3693,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                 /* Determine which operand is the pointer and which is the integer */
                 const char *ptr_reg = left_is_pointer ? left64 : right64;
                 const char *int_reg = left_is_pointer ? right64 : left64;
+                const Register_t *ptr_reg_reg = left_is_pointer ? left_reg : right_reg;
                 struct Expression *ptr_expr = left_is_pointer ? left_expr : right_expr;
                 
                 /* Get element size */
@@ -3499,7 +3718,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                          * Use a scratch register that doesn't conflict with ptr_reg. */
                         long long int_val = strtoll(int_reg + 1, NULL, 0);
                         long long scaled_val = int_val * element_size;
-                        const char *scratch = (ptr_reg != NULL && strcmp(ptr_reg, "%r11") == 0) ? "%r10" : "%r11";
+                        const char *scratch = (ptr_reg_reg != NULL && ptr_reg_reg->reg_id == REG_R11) ? "%r10" : "%r11";
                         snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n", scaled_val, scratch);
                         inst_list = add_inst(inst_list, buffer);
                         int_reg = scratch;
@@ -3538,25 +3757,23 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
             {
                 const int use_qword_op = codegen_type_uses_qword(expr_get_type_tag(expr));
                 const char arith_suffix = use_qword_op ? 'q' : 'l';
-                char left32_buf[16];
-                char right32_buf[16];
                 const char *left_op = left;
                 const char *right_op = right;
                 if (arith_suffix == 'l')
                 {
-                    left_op = reg_to_reg32(left, left32_buf, sizeof(left32_buf));
+                    left_op = reg_to_reg32(left, left_reg);
                     if (right != NULL && right[0] == '$')
                         right_op = right;
                     else
-                        right_op = reg_to_reg32(right, right32_buf, sizeof(right32_buf));
+                        right_op = reg_to_reg32(right, right_reg);
                 }
                 else if (arith_suffix == 'q')
                 {
-                    left_op = reg_to_reg64(left, left32_buf, sizeof(left32_buf));
+                    left_op = reg_to_reg64(left, left_reg);
                     if (right != NULL && right[0] == '$')
                         right_op = right;
                     else
-                        right_op = reg_to_reg64(right, right32_buf, sizeof(right32_buf));
+                        right_op = reg_to_reg64(right, right_reg);
                 }
                 if (type == OR)
                 {
@@ -3607,14 +3824,17 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
             }
             if (expr_get_type_tag(expr) == SET_TYPE)
             {
+                /* Set operations use 32-bit instructions; ensure register names are 32-bit */
+                const char *left32 = (left_reg != NULL) ? left_reg->bit_32 : left;
+                const char *right32 = (right_reg != NULL) ? right_reg->bit_32 : right;
                 switch(type)
                 {
                     case STAR:
-                        snprintf(buffer, sizeof(buffer), "\tandl\t%s, %s\n", right, left);
+                        snprintf(buffer, sizeof(buffer), "\tandl\t%s, %s\n", right32, left32);
                         inst_list = add_inst(inst_list, buffer);
                         break;
                     case XOR:
-                        snprintf(buffer, sizeof(buffer), "\txorl\t%s, %s\n", right, left);
+                        snprintf(buffer, sizeof(buffer), "\txorl\t%s, %s\n", right32, left32);
                         inst_list = add_inst(inst_list, buffer);
                         break;
                     default:
@@ -3643,9 +3863,9 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                 }
                 if (sse_op != NULL)
                     inst_list = gencode_real_binary_op(ctx,
-                        expr->expr_data.mulop_data.left_term, left,
-                        expr->expr_data.mulop_data.right_factor, right,
-                        left, inst_list, sse_op);
+                        expr->expr_data.mulop_data.left_term, left, left_reg,
+                        expr->expr_data.mulop_data.right_factor, right, right_reg,
+                        left, left_reg, inst_list, sse_op);
                 break;
             }
             {
@@ -3653,19 +3873,18 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                 const char arith_suffix = use_qword_op ? 'q' : 'l';
                 const char *op_left = left;
                 const char *op_right = right;
-                char left64_buf[16], right64_buf[16];
 
                 if (use_qword_op)
                 {
-                    const char *left64 = reg32_to_reg64(left, left64_buf, sizeof(left64_buf));
-                    const char *right64 = reg32_to_reg64(right, right64_buf, sizeof(right64_buf));
+                    const char *left64 = reg32_to_reg64(left, left_reg);
+                    const char *right64 = reg32_to_reg64(right, right_reg);
 
-                    if (operand_is_32bit_register(left) && left64 != NULL)
+                    if (operand_is_32bit_register(left, left_reg) && left64 != NULL)
                     {
                         snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", left, left64);
                         inst_list = add_inst(inst_list, buffer);
                     }
-                    if (operand_is_32bit_register(right) && right64 != NULL)
+                    if (operand_is_32bit_register(right, right_reg) && right64 != NULL)
                     {
                         snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", right, right64);
                         inst_list = add_inst(inst_list, buffer);
@@ -3679,8 +3898,8 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                 else
                 {
                     /* 32-bit operation: ensure 64-bit registers are narrowed to 32-bit form */
-                    const char *left32 = reg64_to_reg32(left, left64_buf, sizeof(left64_buf));
-                    const char *right32 = reg64_to_reg32(right, right64_buf, sizeof(right64_buf));
+                    const char *left32 = reg64_to_reg32(left, left_reg);
+                    const char *right32 = reg64_to_reg32(right, right_reg);
                     if (left32 != NULL)
                         op_left = left32;
                     if (right32 != NULL)
@@ -3710,7 +3929,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                     else
                         inst_list = add_inst(inst_list, "\tcqo\n");
 
-                    const char *tmp_div = select_divisor_temp_reg(op_left, 1);
+                    const char *tmp_div = select_divisor_temp_reg(left_reg, 1);
                     snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", op_right, tmp_div);
                     inst_list = add_inst(inst_list, buffer);
                     snprintf(buffer, sizeof(buffer), "\t%s\t%s\n", is_unsigned ? "divq" : "idivq", tmp_div);
@@ -3721,10 +3940,8 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                 }
                 else
                 {
-                    char left32[16];
-                    char right32[16];
-                    const char *mod_left = reg64_to_reg32(left, left32, sizeof(left32));
-                    const char *mod_right = reg64_to_reg32(right, right32, sizeof(right32));
+                    const char *mod_left = reg64_to_reg32(left, left_reg);
+                    const char *mod_right = reg64_to_reg32(right, right_reg);
                     snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%eax\n", mod_left);
                     inst_list = add_inst(inst_list, buffer);
                     if (is_unsigned)
@@ -3732,7 +3949,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                     else
                         inst_list = add_inst(inst_list, "\tcdq\n");
 
-                    const char *tmp_div = select_divisor_temp_reg(mod_left, 0);
+                    const char *tmp_div = select_divisor_temp_reg(left_reg, 0);
                     snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", mod_right, tmp_div);
                     inst_list = add_inst(inst_list, buffer);
                     snprintf(buffer, sizeof(buffer), "\t%s\t%s\n", is_unsigned ? "divl" : "idivl", tmp_div);
@@ -3756,7 +3973,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
 
                 if (use_qword_op)
                 {
-                    const char *tmp_div = select_divisor_temp_reg(op_left, 1);
+                    const char *tmp_div = select_divisor_temp_reg(left_reg, 1);
 
                     snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", op_right, tmp_div);
                     inst_list = add_inst(inst_list, buffer);
@@ -3776,12 +3993,10 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                 }
                 else
                 {
-                    char left32[16];
-                    char right32[16];
-                    const char *div_left = reg64_to_reg32(left, left32, sizeof(left32));
-                    const char *div_right = reg64_to_reg32(right, right32, sizeof(right32));
+                    const char *div_left = reg64_to_reg32(left, left_reg);
+                    const char *div_right = reg64_to_reg32(right, right_reg);
 
-                    const char *tmp_div = select_divisor_temp_reg(div_left, 0);
+                    const char *tmp_div = select_divisor_temp_reg(left_reg, 0);
 
                     snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", div_right, tmp_div);
                     inst_list = add_inst(inst_list, buffer);
@@ -3811,8 +4026,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
             }
             else if(type == SHL)
             {
-                char right32[16];
-                const char *count = use_qword_op ? reg64_to_reg32(op_right, right32, sizeof(right32)) : op_right;
+                const char *count = use_qword_op ? reg64_to_reg32(op_right, right_reg) : op_right;
                 snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%ecx\n", count);
                 inst_list = add_inst(inst_list, buffer);
                 /* Use SAL to match FPC's emitted mnemonics for left shifts */
@@ -3821,8 +4035,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
             }
             else if(type == SHR)
             {
-                char right32[16];
-                const char *count = use_qword_op ? reg64_to_reg32(op_right, right32, sizeof(right32)) : op_right;
+                const char *count = use_qword_op ? reg64_to_reg32(op_right, right_reg) : op_right;
                 snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%ecx\n", count);
                 inst_list = add_inst(inst_list, buffer);
                 snprintf(buffer, sizeof(buffer), "\tshr%c\t%%cl, %s\n", arith_suffix, op_left);
@@ -3830,8 +4043,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
             }
             else if(type == ROL)
             {
-                char right32[16];
-                const char *count = use_qword_op ? reg64_to_reg32(op_right, right32, sizeof(right32)) : op_right;
+                const char *count = use_qword_op ? reg64_to_reg32(op_right, right_reg) : op_right;
                 snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%ecx\n", count);
                 inst_list = add_inst(inst_list, buffer);
                 snprintf(buffer, sizeof(buffer), "\trol%c\t%%cl, %s\n", arith_suffix, op_left);
@@ -3839,8 +4051,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
             }
             else if(type == ROR)
             {
-                char right32[16];
-                const char *count = use_qword_op ? reg64_to_reg32(op_right, right32, sizeof(right32)) : op_right;
+                const char *count = use_qword_op ? reg64_to_reg32(op_right, right_reg) : op_right;
                 snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%ecx\n", count);
                 inst_list = add_inst(inst_list, buffer);
                 snprintf(buffer, sizeof(buffer), "\tror%c\t%%cl, %s\n", arith_suffix, op_left);
@@ -3863,10 +4074,8 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
 
             if (relop_kind == NOT)
             {
-                char left32_buf[16];
-                char left8_buf[16];
-                const char *left32 = reg_to_reg32(left, left32_buf, sizeof(left32_buf));
-                const char *left8 = reg32_to_reg8(left32, left8_buf, sizeof(left8_buf));
+                const char *left32 = reg_to_reg32(left, left_reg);
+                const char *left8 = reg32_to_reg8(left32, left_reg);
                 if (left32 != NULL && left8 != NULL)
                 {
                     snprintf(buffer, sizeof(buffer), "\ttestl\t%s, %s\n", left32, left32);
@@ -3881,12 +4090,9 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
 
             if (relop_kind == IN)
             {
-                char left32_buf[16];
-                char right32_buf[16];
-                char left8_buf[16];
-                const char *left32 = reg_to_reg32(left, left32_buf, sizeof(left32_buf));
-                const char *right32 = reg_to_reg32(right, right32_buf, sizeof(right32_buf));
-                const char *left8 = reg32_to_reg8(left32, left8_buf, sizeof(left8_buf));
+                const char *left32 = reg_to_reg32(left, left_reg);
+                const char *right32 = reg_to_reg32(right, right_reg);
+                const char *left8 = reg32_to_reg8(left32, left_reg);
 
                 const char *bit_index = left32;
                 const char *bit_base = right32;
@@ -3897,7 +4103,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                      * Use %r11d if left is in %r10d, otherwise use %r10d. */
                     const char *temp_reg = "%r10d";
                     /* Check if left operand is in r10 (any size: r10, r10d, r10b, r10w) */
-                    if (left32 != NULL && strstr(left32, "%r10") == left32)
+                    if (left_reg != NULL && left_reg->reg_id == REG_R10)
                         temp_reg = "%r11d";
                     snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", right, temp_reg);
                     inst_list = add_inst(inst_list, buffer);
@@ -3959,8 +4165,12 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                         invert_cmp = 1;
                     }
 
+                    /* Spill the other operand before shortstring promotion calls,
+                     * since function calls clobber caller-saved registers. */
+                    int ca_right_needs_spill = (right_reg != NULL) || (right != NULL && right[0] == '%');
+                    int ca_left_needs_spill = (left_reg != NULL) || (left != NULL && left[0] == '%');
                     StackNode_t *spill_other = NULL;
-                    if (left_is_shortstring && right != NULL && right[0] == '%')
+                    if (left_is_shortstring && ca_right_needs_spill)
                     {
                         spill_other = add_l_t("relop_rhs_preserve");
                         if (spill_other != NULL)
@@ -3971,7 +4181,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                         }
                     }
                     if (left_is_shortstring)
-                        inst_list = promote_shortstring_reg_operand(inst_list, ctx, left);
+                        inst_list = promote_shortstring_reg_operand(inst_list, ctx, left, left_reg);
                     if (spill_other != NULL)
                     {
                         snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
@@ -3980,7 +4190,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                     }
 
                     spill_other = NULL;
-                    if (right_is_shortstring && left != NULL && left[0] == '%')
+                    if (right_is_shortstring && ca_left_needs_spill)
                     {
                         spill_other = add_l_t("relop_lhs_preserve");
                         if (spill_other != NULL)
@@ -3991,7 +4201,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                         }
                     }
                     if (right_is_shortstring)
-                        inst_list = promote_shortstring_reg_operand(inst_list, ctx, right);
+                        inst_list = promote_shortstring_reg_operand(inst_list, ctx, right, right_reg);
                     if (spill_other != NULL)
                     {
                         snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
@@ -4010,10 +4220,10 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
 
                     if (strcmp(cmp_func, "kgpc_char_array_compare_array") == 0)
                     {
-                        inst_list = emit_move_ptr_operand(inst_list, left, arg0);
+                        inst_list = emit_move_ptr_operand(inst_list, left, left_reg, arg0);
                         snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n", array_len, arg1);
                         inst_list = add_inst(inst_list, buffer);
-                        inst_list = emit_move_ptr_operand(inst_list, right, arg2);
+                        inst_list = emit_move_ptr_operand(inst_list, right, right_reg, arg2);
                         snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n", rhs_array_len, arg3);
                         inst_list = add_inst(inst_list, buffer);
                     }
@@ -4021,19 +4231,19 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                     {
                         if (compare_full)
                             cmp_func = "kgpc_char_array_compare_full";
-                        inst_list = emit_move_ptr_operand(inst_list, left, arg0);
+                        inst_list = emit_move_ptr_operand(inst_list, left, left_reg, arg0);
                         snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n", array_len, arg1);
                         inst_list = add_inst(inst_list, buffer);
-                        inst_list = emit_move_ptr_operand(inst_list, right, arg2);
+                        inst_list = emit_move_ptr_operand(inst_list, right, right_reg, arg2);
                     }
                     else
                     {
                         if (compare_full)
                             cmp_func = "kgpc_char_array_compare_full";
-                        inst_list = emit_move_ptr_operand(inst_list, right, arg0);
+                        inst_list = emit_move_ptr_operand(inst_list, right, right_reg, arg0);
                         snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n", array_len, arg1);
                         inst_list = add_inst(inst_list, buffer);
-                        inst_list = emit_move_ptr_operand(inst_list, left, arg2);
+                        inst_list = emit_move_ptr_operand(inst_list, left, left_reg, arg2);
                     }
 
                     inst_list = codegen_vect_reg(inst_list, 0);
@@ -4044,10 +4254,8 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                     inst_list = add_inst(inst_list, "\tcmpl\t$0, %eax\n");
                     free_arg_regs();
 
-                    char left32_buf[16];
-                    char left8_buf[16];
-                    const char *left32 = reg_to_reg32(left, left32_buf, sizeof(left32_buf));
-                    const char *left8 = reg32_to_reg8(left32, left8_buf, sizeof(left8_buf));
+                    const char *left32 = reg_to_reg32(left, left_reg);
+                    const char *left8 = reg32_to_reg8(left32, left_reg);
                     const char *set_instr = NULL;
                     switch (relop_kind)
                     {
@@ -4070,45 +4278,30 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                 }
                 if (left_is_string && right_is_string)
                 {
+                    /* Spill the other operand before shortstring promotion calls,
+                     * since function calls clobber caller-saved registers (r10, r11, etc.).
+                     * Check both right_reg and whether the operand is a volatile register. */
+                    int right_needs_spill = (right_reg != NULL) || (right != NULL && right[0] == '%');
+                    int left_needs_spill = (left_reg != NULL) || (left != NULL && left[0] == '%');
                     StackNode_t *spill_other = NULL;
-                    if (left_is_shortstring && right != NULL && right[0] == '%')
+                    if (left_is_shortstring && right_needs_spill)
                     {
-                        spill_other = add_l_t("relop_rhs_preserve");
-                        if (spill_other != NULL)
-                        {
-                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
-                                right, spill_other->offset);
-                            inst_list = add_inst(inst_list, buffer);
-                        }
+                        inst_list = spill_reg64_operand(inst_list, right, &spill_other,
+                            "relop_rhs_preserve");
                     }
                     if (left_is_shortstring)
-                        inst_list = promote_shortstring_reg_operand(inst_list, ctx, left);
-                    if (spill_other != NULL)
-                    {
-                        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-                            spill_other->offset, right);
-                        inst_list = add_inst(inst_list, buffer);
-                    }
+                        inst_list = promote_shortstring_reg_operand(inst_list, ctx, left, left_reg);
+                    inst_list = restore_spilled_reg64_operand(inst_list, right, spill_other);
 
                     spill_other = NULL;
-                    if (right_is_shortstring && left != NULL && left[0] == '%')
+                    if (right_is_shortstring && left_needs_spill)
                     {
-                        spill_other = add_l_t("relop_lhs_preserve");
-                        if (spill_other != NULL)
-                        {
-                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
-                                left, spill_other->offset);
-                            inst_list = add_inst(inst_list, buffer);
-                        }
+                        inst_list = spill_reg64_operand(inst_list, left, &spill_other,
+                            "relop_lhs_preserve");
                     }
                     if (right_is_shortstring)
-                        inst_list = promote_shortstring_reg_operand(inst_list, ctx, right);
-                    if (spill_other != NULL)
-                    {
-                        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-                            spill_other->offset, left);
-                        inst_list = add_inst(inst_list, buffer);
-                    }
+                        inst_list = promote_shortstring_reg_operand(inst_list, ctx, right, right_reg);
+                    inst_list = restore_spilled_reg64_operand(inst_list, left, spill_other);
 
                     /* Promote char-typed operands (EXPR_CHAR_CODE or single-char
                      * EXPR_STRING resolved to CHAR_TYPE) to string pointers.
@@ -4117,91 +4310,45 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                     if (left_expr != NULL &&
                         (left_expr->type == EXPR_CHAR_CODE ||
                          (left_expr->type == EXPR_STRING && expr_get_type_tag(left_expr) == CHAR_TYPE)) &&
-                        left != NULL && left[0] == '%')
+                        left_reg != NULL)
                     {
                         StackNode_t *rhs_save = NULL;
-                        if (right != NULL && right[0] == '%')
+                        if (right_reg != NULL)
                         {
-                            rhs_save = add_l_t("relop_rhs_charpromo");
-                            if (rhs_save != NULL)
-                            {
-                                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
-                                    right, rhs_save->offset);
-                                inst_list = add_inst(inst_list, buffer);
-                            }
+                            inst_list = spill_reg64_operand(inst_list, right, &rhs_save,
+                                "relop_rhs_charpromo");
                         }
-                        const char *arg_reg32 = codegen_target_is_windows() ? "%ecx" : "%edi";
-                        char left32_conv[16];
-                        const char *left32c = reg_to_reg32(left, left32_conv, sizeof(left32_conv));
-                        if (left32c != NULL)
-                        {
-                            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", left32c, arg_reg32);
-                            inst_list = add_inst(inst_list, buffer);
-                        }
-                        inst_list = codegen_vect_reg(inst_list, 0);
-                        inst_list = add_inst(inst_list, "\tcall\tkgpc_char_to_string\n");
-                        snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", left);
-                        inst_list = add_inst(inst_list, buffer);
-                        free_arg_regs();
-                        if (rhs_save != NULL)
-                        {
-                            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-                                rhs_save->offset, right);
-                            inst_list = add_inst(inst_list, buffer);
-                        }
+                        inst_list = promote_char_reg_operand_to_string(inst_list, left, left_reg);
+                        inst_list = restore_spilled_reg64_operand(inst_list, right, rhs_save);
                     }
                     if (right_expr != NULL &&
                         (right_expr->type == EXPR_CHAR_CODE ||
                          (right_expr->type == EXPR_STRING && expr_get_type_tag(right_expr) == CHAR_TYPE)) &&
-                        right != NULL && right[0] == '%')
+                        right_reg != NULL)
                     {
                         StackNode_t *lhs_save = NULL;
-                        if (left != NULL && left[0] == '%')
+                        if (left_reg != NULL)
                         {
-                            lhs_save = add_l_t("relop_lhs_charpromo");
-                            if (lhs_save != NULL)
-                            {
-                                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
-                                    left, lhs_save->offset);
-                                inst_list = add_inst(inst_list, buffer);
-                            }
+                            inst_list = spill_reg64_operand(inst_list, left, &lhs_save,
+                                "relop_lhs_charpromo");
                         }
-                        const char *arg_reg32 = codegen_target_is_windows() ? "%ecx" : "%edi";
-                        char right32_conv[16];
-                        const char *right32c = reg_to_reg32(right, right32_conv, sizeof(right32_conv));
-                        if (right32c != NULL)
-                        {
-                            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", right32c, arg_reg32);
-                            inst_list = add_inst(inst_list, buffer);
-                        }
-                        inst_list = codegen_vect_reg(inst_list, 0);
-                        inst_list = add_inst(inst_list, "\tcall\tkgpc_char_to_string\n");
-                        snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", right);
-                        inst_list = add_inst(inst_list, buffer);
-                        free_arg_regs();
-                        if (lhs_save != NULL)
-                        {
-                            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-                                lhs_save->offset, left);
-                            inst_list = add_inst(inst_list, buffer);
-                        }
+                        inst_list = promote_char_reg_operand_to_string(inst_list, right, right_reg);
+                        inst_list = restore_spilled_reg64_operand(inst_list, left, lhs_save);
                     }
 
                     const char *arg0 = current_arg_reg64(0);
                     const char *arg1 = current_arg_reg64(1);
                     if (arg0 == NULL || arg1 == NULL)
                         break;
-                    inst_list = emit_move_ptr_operand(inst_list, left, arg0);
-                    inst_list = emit_move_ptr_operand(inst_list, right, arg1);
+                    inst_list = emit_move_ptr_operand(inst_list, left, left_reg, arg0);
+                    inst_list = emit_move_ptr_operand(inst_list, right, right_reg, arg1);
                     inst_list = codegen_vect_reg(inst_list, 0);
-                    inst_list = add_inst(inst_list, "\tcall\tkgpc_string_compare\n");
+                    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_string_compare");
                     inst_list = add_inst(inst_list, "\tcmpl\t$0, %eax\n");
                     free_arg_regs();
 
-                    char left32_buf[16];
-                    char left8_buf[16];
-                    const char *left32 = reg_to_reg32(left, left32_buf, sizeof(left32_buf));
-                    const char *left8 = reg32_to_reg8(left32, left8_buf, sizeof(left8_buf));
+                    const char *left32 = reg_to_reg32(left, left_reg);
+                    const char *left8 = reg32_to_reg8(left32, left_reg);
                     const char *set_instr = NULL;
                     switch (relop_kind)
                     {
@@ -4226,10 +4373,8 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
 
             if (left_expr != NULL && expr_get_type_tag(left_expr) == REAL_TYPE)
             {
-                char left32_buf[16];
-                char right32_buf[16];
-                const char *left32 = reg_to_reg32(left, left32_buf, sizeof(left32_buf));
-                const char *right32 = reg_to_reg32(right, right32_buf, sizeof(right32_buf));
+                const char *left32 = reg_to_reg32(left, left_reg);
+                const char *right32 = reg_to_reg32(right, right_reg);
                 if (left32 != NULL)
                 {
                     char true_label[32];
@@ -4237,18 +4382,17 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                     gen_label(true_label, sizeof(true_label), ctx);
                     gen_label(done_label, sizeof(done_label), ctx);
 
-                    char left64_buf[16];
                     const char *left_candidate = (left32 != NULL) ? left32 : left;
                     const char *left64 = left_candidate;
-                    if (left_candidate != NULL && left_candidate[0] == '%')
+                    if (left_reg != NULL)
                     {
-                        const char *converted = reg32_to_reg64(left_candidate, left64_buf, sizeof(left64_buf));
+                        const char *converted = reg32_to_reg64(left_candidate, left_reg);
                         if (converted != NULL)
                             left64 = converted;
                     }
 
                     StackNode_t *lhs_spill = NULL;
-                    if (left64 != NULL && left64[0] == '%')
+                    if (left_reg != NULL)
                     {
                         lhs_spill = add_l_t("relop_real_lhs");
                         if (lhs_spill == NULL)
@@ -4271,49 +4415,112 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
 
                     int rhs_loaded = 0;
                     StackNode_t *rhs_spill = NULL;
+                    struct Expression *raw_rhs_expr = right_expr;
+                    while (raw_rhs_expr != NULL &&
+                        raw_rhs_expr->type == EXPR_TYPECAST &&
+                        raw_rhs_expr->expr_data.typecast_data.target_type == REAL_TYPE &&
+                        raw_rhs_expr->expr_data.typecast_data.expr != NULL)
+                    {
+                        raw_rhs_expr = raw_rhs_expr->expr_data.typecast_data.expr;
+                    }
+                    int rhs_tag = (raw_rhs_expr != NULL) ? expr_get_type_tag(raw_rhs_expr) :
+                        ((right_expr != NULL) ? expr_get_type_tag(right_expr) : UNKNOWN_TYPE);
+                    int rhs_is_integer_like = is_integer_type(rhs_tag) || rhs_tag == BOOL ||
+                        rhs_tag == CHAR_TYPE || rhs_tag == ENUM_TYPE;
                     if (right != NULL && right[0] == '$')
                     {
-                        char label[32];
-                        snprintf(label, sizeof(label), ".LC%d", ctx->write_label_counter++);
+                        if (rhs_is_integer_like)
+                        {
+                            Register_t *imm_reg = get_free_reg(get_reg_stack(), &inst_list);
+                            if (imm_reg == NULL)
+                            {
+                                codegen_report_error(ctx, "ERROR: Unable to allocate register for real comparison immediate.");
+                                break;
+                            }
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", right, imm_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tcvtsi2sdq\t%s, %%xmm0\n", imm_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                            free_reg(get_reg_stack(), imm_reg);
+                        }
+                        else
+                        {
+                            char label[32];
+                            snprintf(label, sizeof(label), ".LC%d", ctx->write_label_counter++);
 
-                        const char *readonly_section = codegen_readonly_section_directive();
-                        char rodata_buffer[192];
-                        snprintf(rodata_buffer, sizeof(rodata_buffer), "%s\n%s:\n\t.quad %s\n\t.text\n",
-                            readonly_section, label, right + 1);
-                        inst_list = add_inst(inst_list, rodata_buffer);
+                            const char *readonly_section = codegen_readonly_section_directive();
+                            char rodata_buffer[192];
+                            snprintf(rodata_buffer, sizeof(rodata_buffer), "%s\n%s:\n\t.quad %s\n\t.text\n",
+                                readonly_section, label, right + 1);
+                            inst_list = add_inst(inst_list, rodata_buffer);
 
-                        snprintf(buffer, sizeof(buffer), "\tmovsd\t%s(%%rip), %%xmm0\n", label);
-                        inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tmovsd\t%s(%%rip), %%xmm0\n", label);
+                            inst_list = add_inst(inst_list, buffer);
+                        }
                         rhs_loaded = 1;
                     }
 
                     if (!rhs_loaded)
                     {
-                        if (right != NULL && right[0] == '%')
+                        if (rhs_is_integer_like && right != NULL)
                         {
-                            char right64_buf[16];
-                            const char *right_candidate = right;
-                            if (right32 != NULL)
-                                right_candidate = right32;
-                            const char *right64 = right_candidate;
-                            const char *converted = reg32_to_reg64(right_candidate, right64_buf, sizeof(right64_buf));
-                            if (converted != NULL)
-                                right64 = converted;
-                            if (right64 != NULL && right64[0] == '%')
+                            if (codegen_type_uses_qword(rhs_tag))
                             {
-                                if (rhs_spill == NULL)
-                                    rhs_spill = add_l_t("relop_real_rhs_reg");
-                                if (rhs_spill == NULL)
+                                snprintf(buffer, sizeof(buffer), "\tcvtsi2sdq\t%s, %%xmm0\n", right);
+                                inst_list = add_inst(inst_list, buffer);
+                            }
+                            else
+                            {
+                                snprintf(buffer, sizeof(buffer), "\tcvtsi2sdl\t%s, %%xmm0\n", right);
+                                inst_list = add_inst(inst_list, buffer);
+                            }
+                            rhs_loaded = 1;
+                        }
+                        if (!rhs_loaded && right_reg != NULL)
+                        {
+                            if (rhs_is_integer_like)
+                            {
+                                const char *rhs32 = right32 != NULL ? right32 : right;
+                                const char *rhs64 = reg32_to_reg64(rhs32, right_reg);
+                                if (rhs64 == NULL)
+                                    rhs64 = rhs32;
+                                if (codegen_type_uses_qword(rhs_tag))
                                 {
-                                    codegen_report_error(ctx, "ERROR: Unable to allocate temporary for real comparison.");
-                                    break;
+                                    snprintf(buffer, sizeof(buffer), "\tcvtsi2sdq\t%s, %%xmm0\n", rhs64);
+                                    inst_list = add_inst(inst_list, buffer);
                                 }
-
-                                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", right64, rhs_spill->offset);
-                                inst_list = add_inst(inst_list, buffer);
-                                snprintf(buffer, sizeof(buffer), "\tmovsd\t-%d(%%rbp), %%xmm0\n", rhs_spill->offset);
-                                inst_list = add_inst(inst_list, buffer);
+                                else
+                                {
+                                    snprintf(buffer, sizeof(buffer), "\tcvtsi2sdl\t%s, %%xmm0\n", rhs32);
+                                    inst_list = add_inst(inst_list, buffer);
+                                }
                                 rhs_loaded = 1;
+                            }
+                            else
+                            {
+                                const char *right_candidate = right;
+                                if (right32 != NULL)
+                                    right_candidate = right32;
+                                const char *right64 = right_candidate;
+                                const char *converted = reg32_to_reg64(right_candidate, right_reg);
+                                if (converted != NULL)
+                                    right64 = converted;
+                                if (right_reg != NULL)
+                                {
+                                    if (rhs_spill == NULL)
+                                        rhs_spill = add_l_t("relop_real_rhs_reg");
+                                    if (rhs_spill == NULL)
+                                    {
+                                        codegen_report_error(ctx, "ERROR: Unable to allocate temporary for real comparison.");
+                                        break;
+                                    }
+
+                                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", right64, rhs_spill->offset);
+                                    inst_list = add_inst(inst_list, buffer);
+                                    snprintf(buffer, sizeof(buffer), "\tmovsd\t-%d(%%rbp), %%xmm0\n", rhs_spill->offset);
+                                    inst_list = add_inst(inst_list, buffer);
+                                    rhs_loaded = 1;
+                                }
                             }
                         }
                         if (!rhs_loaded && right != NULL)
@@ -4390,35 +4597,30 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                 const char *cmp_left = left;
                 const char *cmp_right = right;
                 Register_t *imm_reg = NULL;
-                char left32_buf[16];
-                char right32_buf[16];
-                char left64_buf[16];
-                char right64_buf[16];
-
                 if (use_qword)
                 {
                     const char *left_candidate = left;
-                    const char *left32 = reg_to_reg32(left, left32_buf, sizeof(left32_buf));
+                    const char *left32 = reg_to_reg32(left, left_reg);
                     if (left32 != NULL)
                         left_candidate = left32;
-                    const char *left64 = reg32_to_reg64(left_candidate, left64_buf, sizeof(left64_buf));
+                    const char *left64 = reg32_to_reg64(left_candidate, left_reg);
                     if (left64 != NULL)
                         cmp_left = left64;
 
                     const char *right_candidate = right;
-                    const char *right32 = reg_to_reg32(right, right32_buf, sizeof(right32_buf));
+                    const char *right32 = reg_to_reg32(right, right_reg);
                     if (right32 != NULL)
                         right_candidate = right32;
-                    const char *right64 = reg32_to_reg64(right_candidate, right64_buf, sizeof(right64_buf));
+                    const char *right64 = reg32_to_reg64(right_candidate, right_reg);
                     if (right64 != NULL)
                         cmp_right = right64;
                 }
                 else
                 {
-                    const char *left32 = reg_to_reg32(left, left32_buf, sizeof(left32_buf));
+                    const char *left32 = reg_to_reg32(left, left_reg);
                     if (left32 != NULL)
                         cmp_left = left32;
-                    const char *right32 = reg_to_reg32(right, right32_buf, sizeof(right32_buf));
+                    const char *right32 = reg_to_reg32(right, right_reg);
                     if (right32 != NULL)
                         cmp_right = right32;
                 }
@@ -4476,10 +4678,8 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
 
                 if (set_instr != NULL)
                 {
-                    char left32_buf[16];
-                    char left8_buf[16];
-                    const char *left32 = reg_to_reg32(left, left32_buf, sizeof(left32_buf));
-                    const char *left8 = reg32_to_reg8(left32, left8_buf, sizeof(left8_buf));
+                    const char *left32 = reg_to_reg32(left, left_reg);
+                    const char *left8 = reg32_to_reg8(left32, left_reg);
                     if (left32 != NULL && left8 != NULL)
                     {
                         snprintf(buffer, sizeof(buffer), "\t%s\t%s\n", set_instr, left8);

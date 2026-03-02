@@ -60,16 +60,29 @@ type
   TObject = class
   public
     _MonitorData: Pointer;
+    constructor Create;
     destructor Destroy; virtual;
     class function ClassName: ShortString; virtual;
     class function ClassParent: TClass; virtual;
+    class function ClassInfo: Pointer; virtual;
+    class function ClassType: TClass; virtual;
+    class function InheritsFrom(aClass: TClass): Boolean; virtual;
     class procedure GetLastCastErrorInfo(out aFrom, aTo: ShortString); static;
     procedure Free;
     procedure FreeInstance; virtual;
     function GetInterface(const IID: TGUID; out Obj): Boolean;
+    function ClassInfo: Pointer; virtual;
+    function ClassType: TClass; virtual;
+    function InheritsFrom(aClass: TClass): Boolean; virtual;
     function ToString: String; virtual;
   end;
   TClass = class of TObject;
+  PVmt = ^TVmt;
+  TVmt = record
+    vParent: PVmt;
+    vMethodTable: Pointer;
+    vFieldTable: Pointer;
+  end;
   TypedFile = file;
   TRTLCriticalSection = array[0..39] of Byte;
   
@@ -88,16 +101,55 @@ type
     scpFileSystemSingleByte
   );
 
+  { RTTI kind enum (TypInfo bootstrap compatibility) }
+  TTypeKind = (
+    tkUnknown,
+    tkInteger,
+    tkChar,
+    tkEnumeration,
+    tkFloat,
+    tkSet,
+    tkMethod,
+    tkSString,
+    tkLString,
+    tkAString,
+    tkWString,
+    tkVariant,
+    tkArray,
+    tkRecord,
+    tkInterface,
+    tkClass,
+    tkObject,
+    tkWChar,
+    tkBool,
+    tkInt64,
+    tkQWord,
+    tkDynArray,
+    tkInterfaceRaw,
+    tkProcVar,
+    tkUString,
+    tkUChar,
+    tkHelper,
+    tkFile,
+    tkClassRef,
+    tkPointer
+  );
+
+  TVisibilityClass = (vcPrivate, vcProtected, vcPublic, vcPublished);
+  TVisibilityClasses = set of TVisibilityClass;
+
   { String types - for FPC bootstrap compatibility }
   AnsiString = String;
   UnicodeString = String;
   WideString = String;
   RawByteString = String;   { Alias for String type - KGPC doesn't distinguish encoding }
+  RTLString = AnsiString;
   PAnsiString = ^AnsiString;
-  PString = ^String;
+  PUnicodeString = ^UnicodeString;
   { ShortString: length-prefixed string[255] compatible layout.
     Note: most bootstrap-compatible aliases live in KGPC/stdlib.p (the implicit prelude). }
   ShortString = array[0..255] of Char;
+  PString = ^ShortString;
   PWideString = ^WideString;
 
   TLineEndStr = string[3];
@@ -165,6 +217,13 @@ type
   THandle = LongInt;
   HRESULT = LongInt;  { Windows COM result type }
   CodePointer = Pointer;
+  PCodePointer = ^CodePointer;
+
+  TMethod = record
+    Code: CodePointer;
+    Data: Pointer;
+  end;
+  PMethod = ^TMethod;
   
   TInterfacedObject = class(TObject)
   protected
@@ -181,13 +240,31 @@ type
     D4: array[0..7] of Byte;
   end;
 
+  TDoubleRec = packed record
+    case integer of
+      0: (Value: Double);
+      1: (Frac: QWord; Exp: Word; Sign: Word);
+  end;
+
   { IInterface / IUnknown - root interface type }
   IInterface = interface
     function QueryInterface(const IID: TGUID; out Obj): HRESULT;
     function _AddRef: LongInt;
     function _Release: LongInt;
   end;
+  PInterface = ^IInterface;
   IUnknown = IInterface;
+
+  TCustomAttribute = class
+  end;
+
+  TResourceStringRecord = record
+    Name: AnsiString;
+    DefaultValue: RTLString;
+    CurrentValue: RTLString;
+    HashValue: LongWord;
+  end;
+  PResourceStringRecord = ^TResourceStringRecord;
 
   TextRec = record
     Handle: THandle;
@@ -248,6 +325,15 @@ type
   PVariant = ^Variant;
 
 const
+  CP_ACP     = 0;     { default to ANSI code page }
+  CP_OEMCP   = 1;     { default to OEM (console) code page }
+  CP_UTF16   = 1200;  { utf-16 }
+  CP_UTF16BE = 1201;  { unicodeFFFE }
+  CP_UTF7    = 65000; { utf-7 }
+  CP_UTF8    = 65001; { utf-8 }
+  CP_ASCII   = 20127; { us-ascii }
+  CP_NONE    = $FFFF; { rawbytestring encoding }
+
   vtInteger = 0;
   vtBoolean = 1;
   vtChar = 2;
@@ -552,6 +638,7 @@ end;
 
 function kgpc_get_current_dir: AnsiString; cdecl; external name 'kgpc_get_current_dir';
 function kgpc_set_current_dir(path: PChar): Integer; cdecl; external name 'kgpc_set_current_dir';
+function kgpc_ioresult_get_and_clear: Integer; cdecl; external name 'kgpc_ioresult_get_and_clear';
 function kgpc_ioresult_peek: Integer; cdecl; external name 'kgpc_ioresult_peek';
 function kgpc_class_name(self: Pointer): PAnsiChar; cdecl; external name 'kgpc_class_name';
 function kgpc_class_parent(self: Pointer): Pointer; cdecl; external name 'kgpc_class_parent';
@@ -980,6 +1067,11 @@ begin
     move_impl(source, dest, count);
 end;
 
+procedure CopyArray(source, dest: Pointer; typeinfo: Pointer; count: SizeInt);
+begin
+    { Placeholder implementation for bootstrap compatibility. }
+end;
+
 procedure fillchar_impl(var dest; count: longint; value: integer);
 begin
     assembler;
@@ -1110,10 +1202,7 @@ end;
 
 function IOResult: integer;
 begin
-    assembler;
-    asm
-        call kgpc_ioresult_get_and_clear
-    end
+    IOResult := kgpc_ioresult_get_and_clear();
 end;
 
 procedure BlockWrite(var f: file; var buffer; count: longint); overload;
@@ -1181,6 +1270,10 @@ end;
 
 { TObject methods }
 
+constructor TObject.Create;
+begin
+end;
+
 class function TObject.ClassName: ShortString;
 var
     name_ptr: PAnsiChar;
@@ -1193,11 +1286,35 @@ begin
 end;
 
 class function TObject.ClassParent: TClass;
-var
-    parent_ptr: Pointer;
 begin
-    parent_ptr := kgpc_class_parent(Self);
-    ClassParent := TClass(parent_ptr);
+    ClassParent := kgpc_class_parent(Self);
+end;
+
+class function TObject.ClassInfo: Pointer;
+begin
+    ClassInfo := nil;
+end;
+
+class function TObject.ClassType: TClass;
+begin
+    ClassType := Self;
+end;
+
+class function TObject.InheritsFrom(aClass: TClass): Boolean;
+var
+    current: TClass;
+begin
+    current := Self;
+    while current <> nil do
+    begin
+        if current = aClass then
+        begin
+            InheritsFrom := True;
+            exit;
+        end;
+        current := current.ClassParent;
+    end;
+    InheritsFrom := False;
 end;
 
 class procedure TObject.GetLastCastErrorInfo(out aFrom, aTo: ShortString);
@@ -1222,14 +1339,35 @@ begin
     GetInterface := kgpc_get_interface(Pointer(Self), @IID, Obj) <> 0;
 end;
 
+function TObject.ClassInfo: Pointer;
+begin
+    ClassInfo := Self.ClassType.ClassInfo;
+end;
+
+function TObject.ClassType: TClass;
+begin
+    ClassType := TClass(PPointer(Self)^);
+end;
+
+function TObject.InheritsFrom(aClass: TClass): Boolean;
+begin
+    InheritsFrom := Self.ClassType.InheritsFrom(aClass);
+end;
+
 procedure TObject.FreeInstance;
 begin
     { Base implementation - runtime handles actual deallocation }
 end;
 
 function TObject.ToString: String;
+var
+    name_ptr: PAnsiChar;
 begin
-    ToString := ClassName;
+    name_ptr := kgpc_class_name(Self);
+    if name_ptr = nil then
+        ToString := ''
+    else
+        ToString := name_ptr;
 end;
 
 begin

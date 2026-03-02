@@ -19,6 +19,28 @@ The test will:
 - Execute the program
 - Compare the output to `my_new_test.expected`
 
+## TDD + FPC Parity (Manual)
+
+`fpc` compilation/runs are **not** part of the Meson test suite.
+
+For TDD repros that should validate codegen parity with FPC, run this manual check:
+
+```bash
+scripts/manual_fpc_parity.sh <test_base_name>
+```
+
+Example:
+
+```bash
+scripts/manual_fpc_parity.sh tdd_guidhelper_create_overload
+```
+
+This script:
+- Compiles + runs with `kgpc`
+- Compiles + runs with `fpc`
+- Diffs normalized output (`kgpc` vs `fpc`)
+- Optionally diffs `kgpc` output against `.expected` if present
+
 ## Providing Input (stdin)
 
 If your test program reads from stdin (using `read`, `readln`, etc.), you can provide input data by creating a `.input` file:

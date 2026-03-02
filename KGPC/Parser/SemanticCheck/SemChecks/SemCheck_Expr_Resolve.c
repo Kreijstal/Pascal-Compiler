@@ -11,10 +11,7 @@
 
 const char *semcheck_base_type_name(const char *id)
 {
-    if (id == NULL)
-        return NULL;
-    const char *dot = strrchr(id, '.');
-    return (dot != NULL && dot[1] != '\0') ? (dot + 1) : id;
+    return id;
 }
 
 const char *semcheck_type_tag_name(int type_tag)
@@ -41,6 +38,42 @@ const char *semcheck_type_tag_name(int type_tag)
         case QWORD_TYPE: return "qword";
         default: return "unknown";
     }
+}
+
+HashNode_t *semcheck_find_type_node_in_owner_chain(SymTab_t *symtab,
+    const char *type_id, const char *owner_full, const char *owner_outer)
+{
+    if (symtab == NULL || type_id == NULL)
+        return NULL;
+
+    size_t type_len = strlen(type_id);
+    HashNode_t *type_node = NULL;
+
+    if (owner_full != NULL)
+    {
+        size_t owner_len = strlen(owner_full);
+        char *qualified_name = (char *)malloc(owner_len + 1 + type_len + 1);
+        if (qualified_name != NULL)
+        {
+            snprintf(qualified_name, owner_len + 1 + type_len + 1, "%s.%s", owner_full, type_id);
+            type_node = semcheck_find_preferred_type_node(symtab, qualified_name);
+            free(qualified_name);
+        }
+    }
+
+    if (type_node == NULL && owner_outer != NULL)
+    {
+        size_t owner_len = strlen(owner_outer);
+        char *qualified_name = (char *)malloc(owner_len + 1 + type_len + 1);
+        if (qualified_name != NULL)
+        {
+            snprintf(qualified_name, owner_len + 1 + type_len + 1, "%s.%s", owner_outer, type_id);
+            type_node = semcheck_find_preferred_type_node(symtab, qualified_name);
+            free(qualified_name);
+        }
+    }
+
+    return type_node;
 }
 
 int semcheck_map_builtin_type_name(SymTab_t *symtab, const char *id)
@@ -117,17 +150,26 @@ const char *semcheck_normalize_char_type_id(const char *id)
     return id;
 }
 
-int resolve_type_identifier(int *out_type, SymTab_t *symtab,
-    const char *type_id, int line_num)
+int resolve_type_identifier_ref(int *out_type, SymTab_t *symtab,
+    const char *type_id, const TypeRef *type_ref, int line_num)
 {
-    if (type_id == NULL)
+    if (type_id == NULL && type_ref == NULL)
         return 0;
 
-    HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, type_id);
+    HashNode_t *type_node = semcheck_find_preferred_type_node_with_ref(symtab, type_ref, type_id);
+    
     if (type_node == NULL)
     {
-        /* Unresolved generic type (e.g., TArray$T) — treat as identity cast */
-        if (strchr(type_id, '$') != NULL)
+        const char *owner_full = semcheck_get_current_subprogram_owner_class_full();
+        const char *owner_outer = semcheck_get_current_subprogram_owner_class_outer();
+        if (owner_full == NULL)
+            owner_full = semcheck_get_current_method_owner();
+        type_node = semcheck_find_type_node_in_owner_chain(symtab, type_id, owner_full, owner_outer);
+    }
+    
+    if (type_node == NULL)
+    {
+        if (type_ref != NULL && type_ref->num_generic_args > 0)
         {
             *out_type = POINTER_TYPE;
             return 0;
@@ -181,6 +223,12 @@ int resolve_type_identifier(int *out_type, SymTab_t *symtab,
     }
 
     return 0;
+}
+
+int resolve_type_identifier(int *out_type, SymTab_t *symtab,
+    const char *type_id, int line_num)
+{
+    return resolve_type_identifier_ref(out_type, symtab, type_id, NULL, line_num);
 }
 
 int set_type_from_hashtype(int *type, HashNode_t *hash_node)

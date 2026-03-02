@@ -26,6 +26,7 @@ enum TreeType{TREE_PROGRAM_TYPE, TREE_SUBPROGRAM, TREE_VAR_DECL, TREE_ARR_DECL,
 typedef struct Tree
 {
     int line_num;
+    int source_index;
     int type;
     union tree_data
     {
@@ -70,6 +71,7 @@ typedef struct Tree
             struct KgpcType *kgpc_type;
             int defined_in_unit;
             int unit_is_public;
+            int source_unit_index; /* Unit registry index (0 = local/unknown) */
             union
             {
                 struct
@@ -96,15 +98,18 @@ typedef struct Tree
             ListNode_t *type_declarations;
             int return_type; /* Should be -1 for PROCEDURE */
             char *return_type_id;
+            struct TypeRef *return_type_ref;
             struct TypeAlias *inline_return_type;  /* For inline complex return types like array of string */
             int cname_flag;
             char *cname_override;
             int overload_flag;
             int nesting_level; /* Lexical nesting depth: 0 = top-level, 1 = nested in program, etc. */
+            int is_nested; /* 1 if this subprogram is nested (non-method) */
             int requires_static_link;  /* 1 if this function needs to RECEIVE a static link from caller */
             int has_nested_requiring_link;  /* 1 if this function has nested children that need static links */
             int defined_in_unit;
             int unit_is_public; /* 1 if declared in interface section, 0 if implementation only */
+            int source_unit_index; /* Unit registry index (0 = local/unknown) */
 
             ListNode_t *declarations;
             ListNode_t *subprograms;
@@ -114,6 +119,12 @@ typedef struct Tree
             int num_generic_type_params;  /* Number of generic type parameters */
             struct ast_t *generic_template_ast; /* AST template for generic subprogram cloning */
             char *result_var_name;        /* Named result variable (e.g., "dest" in operator :=(src) dest: Type) */
+            char *method_name;            /* Bare method name (NULL for non-methods) */
+            char *owner_class;            /* Innermost owning class name (NULL for non-methods) */
+            char *owner_class_full;       /* Full dotted class path for nested classes, e.g. "TOuter.TInner" (NULL for non-methods or non-nested) */
+            char *owner_class_outer;      /* Outer class path for nested classes, e.g. "TOuter" for "TOuter.TInner" (NULL if not nested) */
+            int nostackframe;             /* 1 if declared with nostackframe directive (skip prologue/epilogue) */
+            int is_varargs;               /* 1 if declared with varargs directive (C-style variadic) */
         } subprogram_data;
 
         /* A variable declaration */
@@ -123,6 +134,7 @@ typedef struct Tree
             ListNode_t *ids;
             int type; /* Int, or real */
             char *type_id;
+            struct TypeRef *type_ref;
             int is_var_param;
             int is_untyped_param;
             int inferred_type;
@@ -137,6 +149,8 @@ typedef struct Tree
             char *cname_override;    /* External/public name alias (FPC bootstrap) */
             int is_external;         /* True if declared with 'external name' */
             char *absolute_target;   /* Absolute alias target name, if any */
+            char *absolute_base_id;  /* Base identifier for absolute targets */
+            char *absolute_field_id; /* Field identifier for absolute targets */
         } var_decl_data;
 
         /* An array declaration */
@@ -146,6 +160,9 @@ typedef struct Tree
             ListNode_t *ids;
             int type; /* Int, or real */
             char *type_id;
+            struct TypeRef *type_ref;
+            struct RecordType *inline_record_type;  /* Inline record element type */
+            struct KgpcType *element_kgpc_type;    /* Pre-built element type for nested arrays */
 
             int s_range;
             int e_range;
@@ -166,6 +183,7 @@ typedef struct Tree
         {
             char *id;
             char *type_id;
+            struct TypeRef *type_ref;
             struct Expression *value;
             int defined_in_unit;
             int unit_is_public;
@@ -233,7 +251,7 @@ Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type, char *type_id,
     char *absolute_target);
 
 Tree_t *mk_arraydecl(int line_num, ListNode_t *ids, int type, char *type_id, int start, int end,
-    char *range_str, struct Statement *initializer);
+    char *range_str, struct Statement *initializer, struct RecordType *inline_record_type);
 
 Tree_t *mk_constdecl(int line_num, char *id, char *type_id, struct Expression *value);
 

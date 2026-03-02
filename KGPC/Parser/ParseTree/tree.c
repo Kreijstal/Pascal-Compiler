@@ -7,6 +7,7 @@
 #include "tree_types.h"
 #include "type_tags.h"
 #include "KgpcType.h"
+#include "ident_ref.h"
 #include "../SemanticCheck/HashTable/HashTable.h"  /* For HashType enum */
 #include <stdlib.h>
 #include <stdio.h>
@@ -193,6 +194,8 @@ static void destroy_class_property(struct ClassProperty *property)
         return;
     free(property->name);
     free(property->type_id);
+    if (property->type_ref != NULL)
+        type_ref_free(property->type_ref);
     free(property->read_accessor);
     free(property->write_accessor);
     free(property);
@@ -273,6 +276,7 @@ static struct ClassProperty *clone_class_property(const struct ClassProperty *pr
     clone->name = property->name != NULL ? strdup(property->name) : NULL;
     clone->type = property->type;
     clone->type_id = property->type_id != NULL ? strdup(property->type_id) : NULL;
+    clone->type_ref = property->type_ref != NULL ? type_ref_clone(property->type_ref) : NULL;
     clone->read_accessor = property->read_accessor != NULL ? strdup(property->read_accessor) : NULL;
     clone->write_accessor = property->write_accessor != NULL ? strdup(property->write_accessor) : NULL;
     clone->is_indexed = property->is_indexed;
@@ -356,16 +360,24 @@ static void destroy_record_field(struct RecordField *field)
         free(field->name);
     if (field->type_id != NULL)
         free(field->type_id);
+    if (field->type_ref != NULL)
+        type_ref_free(field->type_ref);
     if (field->array_element_type_id != NULL)
         free(field->array_element_type_id);
+    if (field->array_element_type_ref != NULL)
+        type_ref_free(field->array_element_type_ref);
     if (field->pointer_type_id != NULL)
         free(field->pointer_type_id);
+    if (field->pointer_type_ref != NULL)
+        type_ref_free(field->pointer_type_ref);
     if (field->enum_literals != NULL)
         destroy_list(field->enum_literals);
     if (field->proc_type != NULL)
         kgpc_type_release(field->proc_type);
     destroy_record_type(field->nested_record);
     destroy_record_type(field->array_element_record);
+    if (field->array_element_kgpc_type != NULL)
+        kgpc_type_release(field->array_element_kgpc_type);
     free(field);
 }
 
@@ -1117,6 +1129,11 @@ void expr_print(struct Expression *expr, FILE *f, int num_indent)
           expr_print(expr->expr_data.as_data.expr, f, num_indent + 1);
           --num_indent;
           break;
+        case EXPR_TYPEINFO:
+          fprintf(f, "[TYPEINFO:%s]\n",
+              expr->expr_data.typeinfo_data.type_id != NULL ?
+              expr->expr_data.typeinfo_data.type_id : "<unknown>");
+          break;
 
         default:
           fprintf(stderr, "BAD TYPE IN expr_print! type=%d\n", expr->type);
@@ -1238,6 +1255,8 @@ void destroy_tree(Tree_t *tree)
             free(tree->tree_data.subprogram_data.cname_override);
           if (tree->tree_data.subprogram_data.return_type_id != NULL)
             free(tree->tree_data.subprogram_data.return_type_id);
+          if (tree->tree_data.subprogram_data.return_type_ref != NULL)
+            type_ref_free(tree->tree_data.subprogram_data.return_type_ref);
 
           destroy_list(tree->tree_data.subprogram_data.args_var);
 
@@ -1258,12 +1277,16 @@ void destroy_tree(Tree_t *tree)
               free_ast(tree->tree_data.subprogram_data.generic_template_ast);
           if (tree->tree_data.subprogram_data.result_var_name != NULL)
               free(tree->tree_data.subprogram_data.result_var_name);
+          /* method_name, owner_class, owner_class_full, owner_class_outer
+           * are interned strings -- do not free individually. */
           break;
 
         case TREE_VAR_DECL:
           destroy_list(tree->tree_data.var_decl_data.ids);
           if (tree->tree_data.var_decl_data.type_id != NULL)
               free(tree->tree_data.var_decl_data.type_id);
+          if (tree->tree_data.var_decl_data.type_ref != NULL)
+              type_ref_free(tree->tree_data.var_decl_data.type_ref);
           if (tree->tree_data.var_decl_data.initializer != NULL)
               destroy_stmt(tree->tree_data.var_decl_data.initializer);
           if (tree->tree_data.var_decl_data.inline_record_type != NULL)
@@ -1280,12 +1303,20 @@ void destroy_tree(Tree_t *tree)
           }
           if (tree->tree_data.var_decl_data.absolute_target != NULL)
               free(tree->tree_data.var_decl_data.absolute_target);
+          if (tree->tree_data.var_decl_data.absolute_base_id != NULL)
+              free(tree->tree_data.var_decl_data.absolute_base_id);
+          if (tree->tree_data.var_decl_data.absolute_field_id != NULL)
+              free(tree->tree_data.var_decl_data.absolute_field_id);
           break;
 
         case TREE_ARR_DECL:
           destroy_list(tree->tree_data.arr_decl_data.ids);
           if (tree->tree_data.arr_decl_data.type_id != NULL)
             free(tree->tree_data.arr_decl_data.type_id);
+          if (tree->tree_data.arr_decl_data.type_ref != NULL)
+            type_ref_free(tree->tree_data.arr_decl_data.type_ref);
+          if (tree->tree_data.arr_decl_data.inline_record_type != NULL)
+              destroy_record_type(tree->tree_data.arr_decl_data.inline_record_type);
           if (tree->tree_data.arr_decl_data.range_str != NULL)
             free(tree->tree_data.arr_decl_data.range_str);
           if (tree->tree_data.arr_decl_data.initializer != NULL)
@@ -1300,6 +1331,8 @@ void destroy_tree(Tree_t *tree)
           free(tree->tree_data.const_decl_data.id);
           if (tree->tree_data.const_decl_data.type_id != NULL)
             free(tree->tree_data.const_decl_data.type_id);
+          if (tree->tree_data.const_decl_data.type_ref != NULL)
+            type_ref_free(tree->tree_data.const_decl_data.type_ref);
           destroy_expr(tree->tree_data.const_decl_data.value);
           break;
 
@@ -1377,6 +1410,8 @@ void destroy_stmt(struct Statement *stmt)
               destroy_kgpc_type(stmt->stmt_data.procedure_call_data.call_kgpc_type);
               stmt->stmt_data.procedure_call_data.call_kgpc_type = NULL;
           }
+          if (stmt->stmt_data.procedure_call_data.placeholder_method_name != NULL)
+              free(stmt->stmt_data.procedure_call_data.placeholder_method_name);
           break;
 
         case STMT_EXPR:
@@ -1604,6 +1639,10 @@ void destroy_expr(struct Expression *expr)
               destroy_kgpc_type(expr->expr_data.function_call_data.call_kgpc_type);
               expr->expr_data.function_call_data.call_kgpc_type = NULL;
           }
+          if (expr->expr_data.function_call_data.placeholder_method_name != NULL)
+              free(expr->expr_data.function_call_data.placeholder_method_name);
+          if (expr->expr_data.function_call_data.call_qualifier != NULL)
+              free(expr->expr_data.function_call_data.call_qualifier);
           break;
 
         case EXPR_INUM:
@@ -1688,6 +1727,16 @@ void destroy_expr(struct Expression *expr)
               free(expr->expr_data.typecast_data.target_type_id);
               expr->expr_data.typecast_data.target_type_id = NULL;
           }
+          if (expr->expr_data.typecast_data.type_qualifier != NULL)
+          {
+              free(expr->expr_data.typecast_data.type_qualifier);
+              expr->expr_data.typecast_data.type_qualifier = NULL;
+          }
+          if (expr->expr_data.typecast_data.target_type_ref != NULL)
+          {
+              type_ref_free(expr->expr_data.typecast_data.target_type_ref);
+              expr->expr_data.typecast_data.target_type_ref = NULL;
+          }
           if (expr->expr_data.typecast_data.expr != NULL)
           {
               destroy_expr(expr->expr_data.typecast_data.expr);
@@ -1705,6 +1754,11 @@ void destroy_expr(struct Expression *expr)
               free(expr->expr_data.is_data.target_type_id);
               expr->expr_data.is_data.target_type_id = NULL;
           }
+          if (expr->expr_data.is_data.target_type_ref != NULL)
+          {
+              type_ref_free(expr->expr_data.is_data.target_type_ref);
+              expr->expr_data.is_data.target_type_ref = NULL;
+          }
           break;
         case EXPR_AS:
           if (expr->expr_data.as_data.expr != NULL)
@@ -1717,10 +1771,31 @@ void destroy_expr(struct Expression *expr)
               free(expr->expr_data.as_data.target_type_id);
               expr->expr_data.as_data.target_type_id = NULL;
           }
+          if (expr->expr_data.as_data.target_type_ref != NULL)
+          {
+              type_ref_free(expr->expr_data.as_data.target_type_ref);
+              expr->expr_data.as_data.target_type_ref = NULL;
+          }
+          break;
+        case EXPR_TYPEINFO:
+          if (expr->expr_data.typeinfo_data.type_id != NULL)
+          {
+              free(expr->expr_data.typeinfo_data.type_id);
+              expr->expr_data.typeinfo_data.type_id = NULL;
+          }
+          if (expr->expr_data.typeinfo_data.type_ref != NULL)
+          {
+              type_ref_free(expr->expr_data.typeinfo_data.type_ref);
+              expr->expr_data.typeinfo_data.type_ref = NULL;
+          }
           break;
 
         case EXPR_ADDR_OF_PROC:
-          /* Nothing to free - procedure_symbol is a reference, not owned */
+          /* Owned string copies */
+          if (expr->expr_data.addr_of_proc_data.proc_mangled_id != NULL)
+              free(expr->expr_data.addr_of_proc_data.proc_mangled_id);
+          if (expr->expr_data.addr_of_proc_data.proc_id != NULL)
+              free(expr->expr_data.addr_of_proc_data.proc_id);
           break;
 
         case EXPR_ANONYMOUS_FUNCTION:
@@ -1740,6 +1815,11 @@ void destroy_expr(struct Expression *expr)
               free(expr->expr_data.anonymous_method_data.return_type_id);
               expr->expr_data.anonymous_method_data.return_type_id = NULL;
           }
+          if (expr->expr_data.anonymous_method_data.return_type_ref != NULL)
+          {
+              type_ref_free(expr->expr_data.anonymous_method_data.return_type_ref);
+              expr->expr_data.anonymous_method_data.return_type_ref = NULL;
+          }
           if (expr->expr_data.anonymous_method_data.body != NULL)
           {
               destroy_stmt(expr->expr_data.anonymous_method_data.body);
@@ -1756,15 +1836,30 @@ void destroy_expr(struct Expression *expr)
         free(expr->pointer_subtype_id);
         expr->pointer_subtype_id = NULL;
     }
+    if (expr->pointer_subtype_ref != NULL)
+    {
+        type_ref_free(expr->pointer_subtype_ref);
+        expr->pointer_subtype_ref = NULL;
+    }
     if (expr->array_element_type_id != NULL)
     {
         free(expr->array_element_type_id);
         expr->array_element_type_id = NULL;
     }
+    if (expr->array_element_type_ref != NULL)
+    {
+        type_ref_free(expr->array_element_type_ref);
+        expr->array_element_type_ref = NULL;
+    }
     if (expr->resolved_kgpc_type != NULL)
     {
         destroy_kgpc_type(expr->resolved_kgpc_type);
         expr->resolved_kgpc_type = NULL;
+    }
+    if (expr->id_ref != NULL)
+    {
+        qualified_ident_free(expr->id_ref);
+        expr->id_ref = NULL;
     }
     free(expr);
 }
@@ -1859,6 +1954,7 @@ struct RecordType *clone_record_type(const struct RecordType *record_type)
     clone->cached_size = record_type->cached_size;
     clone->generic_decl = record_type->generic_decl;
     clone->num_generic_args = record_type->num_generic_args;
+    clone->is_generic_specialization = record_type->is_generic_specialization;
     clone->method_clones_emitted = 0;
     clone->generic_args = NULL;
     if (record_type->generic_args != NULL && record_type->num_generic_args > 0)
@@ -1883,6 +1979,11 @@ struct RecordType *clone_record_type(const struct RecordType *record_type)
     clone->record_properties = clone_property_list(record_type->record_properties);
 
     clone->guid_string = record_type->guid_string ? strdup(record_type->guid_string) : NULL;
+    clone->has_guid = record_type->has_guid;
+    clone->guid_d1 = record_type->guid_d1;
+    clone->guid_d2 = record_type->guid_d2;
+    clone->guid_d3 = record_type->guid_d3;
+    memcpy(clone->guid_d4, record_type->guid_d4, sizeof(clone->guid_d4));
     clone->num_interfaces = record_type->num_interfaces;
     clone->interface_names = NULL;
     if (record_type->interface_names != NULL && record_type->num_interfaces > 0) {
@@ -1907,6 +2008,7 @@ static struct RecordField *clone_record_field(const struct RecordField *field)
     clone->name = field->name != NULL ? strdup(field->name) : NULL;
     clone->type = field->type;
     clone->type_id = field->type_id != NULL ? strdup(field->type_id) : NULL;
+    clone->type_ref = field->type_ref != NULL ? type_ref_clone(field->type_ref) : NULL;
     clone->nested_record = clone_record_type(field->nested_record);
     clone->proc_type = field->proc_type;
     if (clone->proc_type != NULL)
@@ -1917,7 +2019,12 @@ static struct RecordField *clone_record_field(const struct RecordField *field)
     clone->array_element_type = field->array_element_type;
     clone->array_element_type_id = field->array_element_type_id != NULL ?
         strdup(field->array_element_type_id) : NULL;
+    clone->array_element_type_ref = field->array_element_type_ref != NULL ?
+        type_ref_clone(field->array_element_type_ref) : NULL;
     clone->array_element_record = clone_record_type(field->array_element_record);
+    clone->array_element_kgpc_type = field->array_element_kgpc_type;
+    if (clone->array_element_kgpc_type != NULL)
+        kgpc_type_retain(clone->array_element_kgpc_type);
     clone->array_is_open = field->array_is_open;
     clone->is_hidden = field->is_hidden;
     clone->is_class_var = field->is_class_var;
@@ -1925,6 +2032,8 @@ static struct RecordField *clone_record_field(const struct RecordField *field)
     clone->pointer_type = field->pointer_type;
     clone->pointer_type_id = field->pointer_type_id != NULL ?
         strdup(field->pointer_type_id) : NULL;
+    clone->pointer_type_ref = field->pointer_type_ref != NULL ?
+        type_ref_clone(field->pointer_type_ref) : NULL;
     clone->enum_literals = NULL; /* enum_literals are not cloned - they're registered at declaration */
     return clone;
 }
@@ -2038,6 +2147,7 @@ Tree_t *mk_program(int line_num, char *id, ListNode_t *args, ListNode_t *uses,
     assert(new_tree != NULL);
 
     new_tree->line_num = line_num;
+    new_tree->source_index = -1;
     new_tree->type = TREE_PROGRAM_TYPE;
     new_tree->tree_data.program_data.program_id = id;
     new_tree->tree_data.program_data.args_char = args;
@@ -2069,6 +2179,7 @@ Tree_t *mk_unit(int line_num, char *id, ListNode_t *interface_uses,
     assert(new_tree != NULL);
 
     new_tree->line_num = line_num;
+    new_tree->source_index = -1;
     new_tree->type = TREE_UNIT;
     new_tree->tree_data.unit_data.unit_id = id;
     new_tree->tree_data.unit_data.interface_uses = interface_uses;
@@ -2093,6 +2204,7 @@ Tree_t *mk_typedecl(int line_num, char *id, int start, int end)
     assert(new_tree != NULL);
 
     new_tree->line_num = line_num;
+    new_tree->source_index = -1;
     new_tree->type = TREE_TYPE_DECL;
     new_tree->tree_data.type_decl_data.id = id;
     new_tree->tree_data.type_decl_data.kind = TYPE_DECL_RANGE;
@@ -2113,6 +2225,7 @@ Tree_t *mk_record_type(int line_num, char *id, struct RecordType *record_type)
     assert(new_tree != NULL);
 
     new_tree->line_num = line_num;
+    new_tree->source_index = -1;
     new_tree->type = TREE_TYPE_DECL;
     new_tree->tree_data.type_decl_data.id = id;
     new_tree->tree_data.type_decl_data.kind = TYPE_DECL_RECORD;
@@ -2135,6 +2248,7 @@ Tree_t *mk_procedure(int line_num, char *id, ListNode_t *args, ListNode_t *const
     assert(new_tree != NULL);
 
     new_tree->line_num = line_num;
+    new_tree->source_index = -1;
     new_tree->type = TREE_SUBPROGRAM;
     new_tree->tree_data.subprogram_data.sub_type = TREE_SUBPROGRAM_PROC;
     new_tree->tree_data.subprogram_data.id = id;
@@ -2150,6 +2264,7 @@ Tree_t *mk_procedure(int line_num, char *id, ListNode_t *args, ListNode_t *const
     new_tree->tree_data.subprogram_data.cname_override = NULL;
     new_tree->tree_data.subprogram_data.overload_flag = overload_flag;
     new_tree->tree_data.subprogram_data.nesting_level = 0;
+    new_tree->tree_data.subprogram_data.is_nested = 0;
     new_tree->tree_data.subprogram_data.requires_static_link = 0;
     new_tree->tree_data.subprogram_data.defined_in_unit = 0;
     new_tree->tree_data.subprogram_data.has_nested_requiring_link = 0;
@@ -2172,6 +2287,7 @@ Tree_t *mk_function(int line_num, char *id, ListNode_t *args, ListNode_t *const_
     assert(new_tree != NULL);
 
     new_tree->line_num = line_num;
+    new_tree->source_index = -1;
     new_tree->type = TREE_SUBPROGRAM;
     new_tree->tree_data.subprogram_data.sub_type = TREE_SUBPROGRAM_FUNC;
     new_tree->tree_data.subprogram_data.id = id;
@@ -2182,11 +2298,13 @@ Tree_t *mk_function(int line_num, char *id, ListNode_t *args, ListNode_t *const_
     new_tree->tree_data.subprogram_data.type_declarations = type_decl;
     new_tree->tree_data.subprogram_data.return_type = return_type;
     new_tree->tree_data.subprogram_data.return_type_id = return_type_id;
+    new_tree->tree_data.subprogram_data.return_type_ref = NULL;
     new_tree->tree_data.subprogram_data.inline_return_type = inline_return_type;
     new_tree->tree_data.subprogram_data.cname_flag = cname_flag;
     new_tree->tree_data.subprogram_data.cname_override = NULL;
     new_tree->tree_data.subprogram_data.overload_flag = overload_flag;
     new_tree->tree_data.subprogram_data.nesting_level = 0;
+    new_tree->tree_data.subprogram_data.is_nested = 0;
     new_tree->tree_data.subprogram_data.requires_static_link = 0;
     new_tree->tree_data.subprogram_data.has_nested_requiring_link = 0;
     new_tree->tree_data.subprogram_data.defined_in_unit = 0;
@@ -2211,10 +2329,12 @@ Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type, char *type_id,
     assert(new_tree != NULL);
 
     new_tree->line_num = line_num;
+    new_tree->source_index = -1;
     new_tree->type = TREE_VAR_DECL;
     new_tree->tree_data.var_decl_data.ids = ids;
     new_tree->tree_data.var_decl_data.type = type;
     new_tree->tree_data.var_decl_data.type_id = type_id;
+    new_tree->tree_data.var_decl_data.type_ref = NULL;
     new_tree->tree_data.var_decl_data.is_var_param = is_var_param;
     new_tree->tree_data.var_decl_data.is_untyped_param = 0;
     new_tree->tree_data.var_decl_data.inferred_type = inferred_type;
@@ -2229,6 +2349,8 @@ Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type, char *type_id,
     new_tree->tree_data.var_decl_data.cname_override = NULL;
     new_tree->tree_data.var_decl_data.is_external = 0;
     new_tree->tree_data.var_decl_data.absolute_target = absolute_target;
+    new_tree->tree_data.var_decl_data.absolute_base_id = NULL;
+    new_tree->tree_data.var_decl_data.absolute_field_id = NULL;
 
     return new_tree;
 }
@@ -2239,6 +2361,7 @@ Tree_t *mk_typealiasdecl(int line_num, char *id, int is_array, int actual_type, 
     assert(new_tree != NULL);
 
     new_tree->line_num = line_num;
+    new_tree->source_index = -1;
     new_tree->type = TREE_TYPE_DECL;
     new_tree->tree_data.type_decl_data.id = id;
     new_tree->tree_data.type_decl_data.kind = TYPE_DECL_ALIAS;
@@ -2248,29 +2371,35 @@ Tree_t *mk_typealiasdecl(int line_num, char *id, int is_array, int actual_type, 
     alias->base_type = is_array ? UNKNOWN_TYPE : actual_type;
     alias->is_char_alias = 0;
     alias->target_type_id = NULL;
+    alias->target_type_ref = NULL;
     alias->inline_record_type = NULL;
     alias->is_array = is_array;
     alias->array_start = start;
     alias->array_end = end;
     alias->array_element_type = UNKNOWN_TYPE;
     alias->array_element_type_id = NULL;
+    alias->array_element_type_ref = NULL;
     alias->is_shortstring = 0;
     alias->is_open_array = (alias->is_array && end < start);
     alias->array_dimensions = NULL;
     alias->is_pointer = 0;
     alias->pointer_type = UNKNOWN_TYPE;
     alias->pointer_type_id = NULL;
+    alias->pointer_type_ref = NULL;
     alias->is_set = 0;
     alias->set_element_type = UNKNOWN_TYPE;
     alias->set_element_type_id = NULL;
+    alias->set_element_type_ref = NULL;
     alias->is_enum_set = 0;
     alias->inline_enum_values = NULL;
     alias->is_enum = 0;
+    alias->enum_is_scoped = 0;
     alias->enum_literals = NULL;
     alias->is_file = 0;
     alias->file_type = UNKNOWN_TYPE;
     alias->kgpc_type = NULL;  /* Initialize shared KgpcType for enums/sets */
     alias->file_type_id = NULL;
+    alias->file_type_ref = NULL;
     alias->is_range = 0;
     alias->range_known = 0;
     alias->range_start = 0;
@@ -2288,6 +2417,14 @@ Tree_t *mk_typealiasdecl(int line_num, char *id, int is_array, int actual_type, 
             free(type_id);
         else
             alias->array_element_type_id = NULL;
+        if (alias->array_element_type_id != NULL)
+        {
+            QualifiedIdent *qid = qualified_ident_from_dotted(alias->array_element_type_id);
+            if (qid == NULL)
+                qid = qualified_ident_from_single(alias->array_element_type_id);
+            if (qid != NULL)
+                alias->array_element_type_ref = type_ref_create(qid, NULL, 0);
+        }
     }
     else
     {
@@ -2296,23 +2433,34 @@ Tree_t *mk_typealiasdecl(int line_num, char *id, int is_array, int actual_type, 
             alias->target_type_id = type_id;
         else
             alias->target_type_id = NULL;
+        if (alias->target_type_id != NULL)
+        {
+            QualifiedIdent *qid = qualified_ident_from_dotted(alias->target_type_id);
+            if (qid == NULL)
+                qid = qualified_ident_from_single(alias->target_type_id);
+            if (qid != NULL)
+                alias->target_type_ref = type_ref_create(qid, NULL, 0);
+        }
     }
 
     return new_tree;
 }
 
 Tree_t *mk_arraydecl(int line_num, ListNode_t *ids, int type, char *type_id, int start, int end,
-    char *range_str, struct Statement *initializer)
+    char *range_str, struct Statement *initializer, struct RecordType *inline_record_type)
 {
     Tree_t *new_tree;
     new_tree = (Tree_t *)calloc(1, sizeof(Tree_t));
     assert(new_tree != NULL);
 
     new_tree->line_num = line_num;
+    new_tree->source_index = -1;
     new_tree->type = TREE_ARR_DECL;
     new_tree->tree_data.arr_decl_data.ids = ids;
     new_tree->tree_data.arr_decl_data.type = type;
     new_tree->tree_data.arr_decl_data.type_id = type_id;
+    new_tree->tree_data.arr_decl_data.type_ref = NULL;
+    new_tree->tree_data.arr_decl_data.inline_record_type = inline_record_type;
     new_tree->tree_data.arr_decl_data.s_range = start;
     new_tree->tree_data.arr_decl_data.e_range = end;
     new_tree->tree_data.arr_decl_data.range_str = range_str;
@@ -2335,9 +2483,11 @@ Tree_t *mk_constdecl(int line_num, char *id, char *type_id, struct Expression *v
     assert(new_tree != NULL);
 
     new_tree->line_num = line_num;
+    new_tree->source_index = -1;
     new_tree->type = TREE_CONST_DECL;
     new_tree->tree_data.const_decl_data.id = id;
     new_tree->tree_data.const_decl_data.type_id = type_id;
+    new_tree->tree_data.const_decl_data.type_ref = NULL;
     new_tree->tree_data.const_decl_data.value = value;
     new_tree->tree_data.const_decl_data.defined_in_unit = 0;
     new_tree->tree_data.const_decl_data.unit_is_public = 0;
@@ -2350,7 +2500,7 @@ Tree_t *mk_constdecl(int line_num, char *id, char *type_id, struct Expression *v
 struct Statement *mk_varassign(int line_num, int col_num, struct Expression *var, struct Expression *expr)
 {
     struct Statement *new_stmt;
-    new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    new_stmt = (struct Statement *)calloc(1, sizeof(struct Statement));
     assert(new_stmt != NULL);
 
     new_stmt->line_num = line_num;
@@ -2365,7 +2515,7 @@ struct Statement *mk_varassign(int line_num, int col_num, struct Expression *var
 
 struct Statement *mk_label(int line_num, char *label, struct Statement *stmt)
 {
-    struct Statement *new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    struct Statement *new_stmt = (struct Statement *)calloc(1, sizeof(struct Statement));
     assert(new_stmt != NULL);
 
     new_stmt->line_num = line_num;
@@ -2380,7 +2530,7 @@ struct Statement *mk_label(int line_num, char *label, struct Statement *stmt)
 
 struct Statement *mk_goto(int line_num, char *label)
 {
-    struct Statement *new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    struct Statement *new_stmt = (struct Statement *)calloc(1, sizeof(struct Statement));
     assert(new_stmt != NULL);
 
     new_stmt->line_num = line_num;
@@ -2394,7 +2544,7 @@ struct Statement *mk_goto(int line_num, char *label)
 
 struct Statement *mk_break(int line_num)
 {
-    struct Statement *new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    struct Statement *new_stmt = (struct Statement *)calloc(1, sizeof(struct Statement));
     assert(new_stmt != NULL);
 
     new_stmt->line_num = line_num;
@@ -2408,7 +2558,7 @@ struct Statement *mk_break(int line_num)
 
 struct Statement *mk_continue(int line_num)
 {
-    struct Statement *new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    struct Statement *new_stmt = (struct Statement *)calloc(1, sizeof(struct Statement));
     assert(new_stmt != NULL);
 
     new_stmt->line_num = line_num;
@@ -2428,7 +2578,7 @@ struct Statement *mk_exit(int line_num)
 
 struct Statement *mk_exit_with_value(int line_num, struct Expression *return_expr)
 {
-    struct Statement *new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    struct Statement *new_stmt = (struct Statement *)calloc(1, sizeof(struct Statement));
     assert(new_stmt != NULL);
 
     new_stmt->line_num = line_num;
@@ -2444,7 +2594,7 @@ struct Statement *mk_exit_with_value(int line_num, struct Expression *return_exp
 struct Statement *mk_procedurecall(int line_num, char *id, ListNode_t *expr_args)
 {
     struct Statement *new_stmt;
-    new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    new_stmt = (struct Statement *)calloc(1, sizeof(struct Statement));
     assert(new_stmt != NULL);
 
     new_stmt->line_num = line_num;
@@ -2462,13 +2612,14 @@ struct Statement *mk_procedurecall(int line_num, char *id, ListNode_t *expr_args
     new_stmt->stmt_data.procedure_call_data.procedural_var_symbol = NULL;
     new_stmt->stmt_data.procedure_call_data.procedural_var_expr = NULL;
     new_stmt->stmt_data.procedure_call_data.is_method_call_placeholder = 0;
+    new_stmt->stmt_data.procedure_call_data.placeholder_method_name = NULL;
 
     return new_stmt;
 }
 
 struct Statement *mk_exprstmt(int line_num, int col_num, struct Expression *expr)
 {
-    struct Statement *new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    struct Statement *new_stmt = (struct Statement *)calloc(1, sizeof(struct Statement));
     assert(new_stmt != NULL);
 
     new_stmt->line_num = line_num;
@@ -2483,7 +2634,7 @@ struct Statement *mk_exprstmt(int line_num, int col_num, struct Expression *expr
 struct Statement *mk_compoundstatement(int line_num, ListNode_t *compound_statement)
 {
     struct Statement *new_stmt;
-    new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    new_stmt = (struct Statement *)calloc(1, sizeof(struct Statement));
     assert(new_stmt != NULL);
 
     new_stmt->line_num = line_num;
@@ -2499,7 +2650,7 @@ struct Statement *mk_ifthen(int line_num, struct Expression *eval_relop, struct 
                             struct Statement *else_stmt)
 {
     struct Statement *new_stmt;
-    new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    new_stmt = (struct Statement *)calloc(1, sizeof(struct Statement));
     assert(new_stmt != NULL);
 
     new_stmt->line_num = line_num;
@@ -2517,7 +2668,7 @@ struct Statement *mk_while(int line_num, struct Expression *eval_relop,
                             struct Statement *while_stmt)
 {
     struct Statement *new_stmt;
-    new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    new_stmt = (struct Statement *)calloc(1, sizeof(struct Statement));
     assert(new_stmt != NULL);
 
     new_stmt->line_num = line_num;
@@ -2533,7 +2684,7 @@ struct Statement *mk_while(int line_num, struct Expression *eval_relop,
 struct Statement *mk_repeat(int line_num, ListNode_t *body_list,
                             struct Expression *until_expr)
 {
-    struct Statement *new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    struct Statement *new_stmt = (struct Statement *)calloc(1, sizeof(struct Statement));
     assert(new_stmt != NULL);
 
     new_stmt->line_num = line_num;
@@ -2550,7 +2701,7 @@ struct Statement *mk_forassign(int line_num, struct Statement *for_assign, struc
                                struct Statement *do_for, int is_downto)
 {
    struct Statement *new_stmt;
-   new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+   new_stmt = (struct Statement *)calloc(1, sizeof(struct Statement));
     assert(new_stmt != NULL);
 
    new_stmt->line_num = line_num;
@@ -2572,7 +2723,7 @@ struct Statement *mk_forvar(int line_num, struct Expression *for_var, struct Exp
                               struct Statement *do_for, int is_downto)
 {
   struct Statement *new_stmt;
-  new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+  new_stmt = (struct Statement *)calloc(1, sizeof(struct Statement));
     assert(new_stmt != NULL);
 
   new_stmt->line_num = line_num;
@@ -2594,7 +2745,7 @@ struct Statement *mk_for_in(int line_num, struct Expression *loop_var, struct Ex
                              struct Statement *do_stmt)
 {
     struct Statement *new_stmt;
-    new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    new_stmt = (struct Statement *)calloc(1, sizeof(struct Statement));
     assert(new_stmt != NULL);
 
     new_stmt->line_num = line_num;
@@ -2611,7 +2762,7 @@ struct Statement *mk_for_in(int line_num, struct Expression *loop_var, struct Ex
 struct Statement *mk_asmblock(int line_num, char *code)
 {
     struct Statement *new_stmt;
-    new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    new_stmt = (struct Statement *)calloc(1, sizeof(struct Statement));
     assert(new_stmt != NULL);
 
     new_stmt->line_num = line_num;
@@ -2626,7 +2777,7 @@ struct Statement *mk_asmblock(int line_num, char *code)
 struct Statement *mk_case(int line_num, struct Expression *selector, ListNode_t *branches, struct Statement *else_stmt)
 {
     struct Statement *new_stmt;
-    new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    new_stmt = (struct Statement *)calloc(1, sizeof(struct Statement));
     assert(new_stmt != NULL);
 
     new_stmt->line_num = line_num;
@@ -2642,7 +2793,7 @@ struct Statement *mk_case(int line_num, struct Expression *selector, ListNode_t 
 
 struct Statement *mk_with(int line_num, struct Expression *context, struct Statement *body)
 {
-    struct Statement *new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    struct Statement *new_stmt = (struct Statement *)calloc(1, sizeof(struct Statement));
     assert(new_stmt != NULL);
 
     new_stmt->line_num = line_num;
@@ -2657,7 +2808,7 @@ struct Statement *mk_with(int line_num, struct Expression *context, struct State
 
 struct Statement *mk_tryfinally(int line_num, ListNode_t *try_stmts, ListNode_t *finally_stmts)
 {
-    struct Statement *new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    struct Statement *new_stmt = (struct Statement *)calloc(1, sizeof(struct Statement));
     assert(new_stmt != NULL);
 
     new_stmt->line_num = line_num;
@@ -2673,7 +2824,7 @@ struct Statement *mk_tryfinally(int line_num, ListNode_t *try_stmts, ListNode_t 
 struct Statement *mk_tryexcept(int line_num, ListNode_t *try_stmts, ListNode_t *except_stmts,
                                char *exception_var_name, char *exception_type_name)
 {
-    struct Statement *new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    struct Statement *new_stmt = (struct Statement *)calloc(1, sizeof(struct Statement));
     assert(new_stmt != NULL);
 
     new_stmt->line_num = line_num;
@@ -2691,7 +2842,7 @@ struct Statement *mk_tryexcept(int line_num, ListNode_t *try_stmts, ListNode_t *
 
 struct Statement *mk_raise(int line_num, struct Expression *expr)
 {
-    struct Statement *new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    struct Statement *new_stmt = (struct Statement *)calloc(1, sizeof(struct Statement));
     assert(new_stmt != NULL);
 
     new_stmt->line_num = line_num;
@@ -2705,7 +2856,7 @@ struct Statement *mk_raise(int line_num, struct Expression *expr)
 
 struct Statement *mk_inherited(int line_num, struct Expression *expr)
 {
-    struct Statement *new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    struct Statement *new_stmt = (struct Statement *)calloc(1, sizeof(struct Statement));
     assert(new_stmt != NULL);
 
     new_stmt->line_num = line_num;
@@ -2725,17 +2876,20 @@ static void init_expression(struct Expression *expr, int line_num, enum ExprType
     expr->col_num = 0;  /* Initialize to 0 - not tracked for expressions yet */
     expr->source_index = -1;  /* -1 indicates unknown byte offset */
     expr->type = type;
+    expr->id_ref = NULL;
     expr->field_width = NULL;
     expr->field_precision = NULL;
     expr->resolved_kgpc_type = NULL;
     expr->is_default_initializer = 0;
     expr->pointer_subtype = UNKNOWN_TYPE;
     expr->pointer_subtype_id = NULL;
+    expr->pointer_subtype_ref = NULL;
     expr->record_type = NULL;
     expr->is_pointer_diff = 0;
     expr->is_array_expr = 0;
     expr->array_element_type = UNKNOWN_TYPE;
     expr->array_element_type_id = NULL;
+    expr->array_element_type_ref = NULL;
     expr->array_lower_bound = 0;
     expr->array_upper_bound = -1;
     expr->array_element_size = 0;
@@ -2755,10 +2909,17 @@ static void init_expression(struct Expression *expr, int line_num, enum ExprType
     expr->expr_data.function_call_data.procedural_var_symbol = NULL;
     expr->expr_data.function_call_data.procedural_var_expr = NULL;
     expr->expr_data.function_call_data.is_method_call_placeholder = 0;
+    expr->expr_data.function_call_data.placeholder_method_name = NULL;
     expr->expr_data.function_call_data.is_virtual_call = 0;
     expr->expr_data.function_call_data.vmt_index = -1;
     expr->expr_data.function_call_data.self_class_name = NULL;
     expr->expr_data.function_call_data.arg0_is_dynarray_descriptor = 0;
+    expr->expr_data.function_call_data.call_qualifier = NULL;
+    expr->expr_data.typecast_data.target_type_ref = NULL;
+    expr->expr_data.is_data.target_type_ref = NULL;
+    expr->expr_data.as_data.target_type_ref = NULL;
+    expr->expr_data.typeinfo_data.type_ref = NULL;
+    expr->expr_data.anonymous_method_data.return_type_ref = NULL;
     expr->expr_data.array_access_data.linear_index_count = 0;
     expr->expr_data.array_access_data.linear_strides = NULL;
     expr->expr_data.array_access_data.linear_lowers = NULL;
@@ -2830,6 +2991,8 @@ struct Expression *mk_varid(int line_num, char *id)
 
     init_expression(new_expr, line_num, EXPR_VAR_ID);
     new_expr->expr_data.id = id;
+    if (id != NULL)
+        new_expr->id_ref = qualified_ident_from_single(id);
 
     return new_expr;
 }
@@ -2859,6 +3022,20 @@ struct Expression *mk_recordaccess(int line_num, struct Expression *record_expr,
         struct Expression *inner = record_expr->expr_data.addr_data.expr;
         free(record_expr);
         return mk_addressof(line_num, mk_recordaccess(line_num, inner, field_id));
+    }
+
+    if (record_expr != NULL && record_expr->type == EXPR_POINTER_DEREF)
+    {
+        struct Expression *pointer_expr = record_expr->expr_data.pointer_deref_data.pointer_expr;
+        if (pointer_expr != NULL && pointer_expr->type == EXPR_ADDR)
+        {
+            struct Expression *inner = pointer_expr->expr_data.addr_data.expr;
+            free(pointer_expr);
+            free(record_expr);
+            struct Expression *deref = mk_pointer_deref(line_num, inner);
+            struct Expression *access = mk_recordaccess(line_num, deref, field_id);
+            return mk_addressof(line_num, access);
+        }
     }
 
     struct Expression *new_expr = (struct Expression *)malloc(sizeof(struct Expression));
@@ -2932,6 +3109,8 @@ struct Expression *mk_functioncall(int line_num, char *id, ListNode_t *args)
     new_expr->expr_data.function_call_data.procedural_var_symbol = NULL;
     new_expr->expr_data.function_call_data.procedural_var_expr = NULL;
     new_expr->expr_data.function_call_data.is_method_call_placeholder = 0;
+    new_expr->expr_data.function_call_data.placeholder_method_name = NULL;
+    new_expr->expr_data.function_call_data.call_qualifier = NULL;
 
     return new_expr;
 }
@@ -3061,6 +3240,8 @@ struct Expression *mk_typecast(int line_num, int target_type, char *target_type_
     init_expression(new_expr, line_num, EXPR_TYPECAST);
     new_expr->expr_data.typecast_data.target_type = target_type;
     new_expr->expr_data.typecast_data.target_type_id = target_type_id;
+    new_expr->expr_data.typecast_data.type_qualifier = NULL;
+    new_expr->expr_data.typecast_data.target_type_ref = NULL;
     new_expr->expr_data.typecast_data.expr = expr;
 
     return new_expr;
@@ -3076,6 +3257,7 @@ struct Expression *mk_is(int line_num, struct Expression *expr,
     new_expr->expr_data.is_data.expr = expr;
     new_expr->expr_data.is_data.target_type = target_type;
     new_expr->expr_data.is_data.target_type_id = target_type_id;
+    new_expr->expr_data.is_data.target_type_ref = NULL;
     new_expr->expr_data.is_data.target_record_type = NULL;
     return new_expr;
 }
@@ -3090,6 +3272,7 @@ struct Expression *mk_as(int line_num, struct Expression *expr,
     new_expr->expr_data.as_data.expr = expr;
     new_expr->expr_data.as_data.target_type = target_type;
     new_expr->expr_data.as_data.target_type_id = target_type_id;
+    new_expr->expr_data.as_data.target_type_ref = NULL;
     new_expr->expr_data.as_data.target_record_type = NULL;
     return new_expr;
 }
@@ -3105,6 +3288,7 @@ struct Expression *mk_anonymous_function(int line_num, char *generated_name,
     new_expr->expr_data.anonymous_method_data.parameters = parameters;
     new_expr->expr_data.anonymous_method_data.return_type = return_type;
     new_expr->expr_data.anonymous_method_data.return_type_id = return_type_id;
+    new_expr->expr_data.anonymous_method_data.return_type_ref = NULL;
     new_expr->expr_data.anonymous_method_data.body = body;
     new_expr->expr_data.anonymous_method_data.is_function = 1;
 
@@ -3142,10 +3326,20 @@ static void clear_type_alias_fields(struct TypeAlias *alias)
         free(alias->target_type_id);
         alias->target_type_id = NULL;
     }
+    if (alias->target_type_ref != NULL)
+    {
+        type_ref_free(alias->target_type_ref);
+        alias->target_type_ref = NULL;
+    }
     if (alias->array_element_type_id != NULL)
     {
         free(alias->array_element_type_id);
         alias->array_element_type_id = NULL;
+    }
+    if (alias->array_element_type_ref != NULL)
+    {
+        type_ref_free(alias->array_element_type_ref);
+        alias->array_element_type_ref = NULL;
     }
     if (alias->array_dimensions != NULL)
     {
@@ -3157,10 +3351,20 @@ static void clear_type_alias_fields(struct TypeAlias *alias)
         free(alias->pointer_type_id);
         alias->pointer_type_id = NULL;
     }
+    if (alias->pointer_type_ref != NULL)
+    {
+        type_ref_free(alias->pointer_type_ref);
+        alias->pointer_type_ref = NULL;
+    }
     if (alias->set_element_type_id != NULL)
     {
         free(alias->set_element_type_id);
         alias->set_element_type_id = NULL;
+    }
+    if (alias->set_element_type_ref != NULL)
+    {
+        type_ref_free(alias->set_element_type_ref);
+        alias->set_element_type_ref = NULL;
     }
     if (alias->inline_enum_values != NULL)
     {
@@ -3177,6 +3381,11 @@ static void clear_type_alias_fields(struct TypeAlias *alias)
         free(alias->file_type_id);
         alias->file_type_id = NULL;
     }
+    if (alias->file_type_ref != NULL)
+    {
+        type_ref_free(alias->file_type_ref);
+        alias->file_type_ref = NULL;
+    }
     if (alias->kgpc_type != NULL)
     {
         kgpc_type_release(alias->kgpc_type);
@@ -3189,6 +3398,7 @@ static void clear_type_alias_fields(struct TypeAlias *alias)
     }
     alias->is_char_alias = 0;
     alias->is_shortstring = 0;
+    alias->enum_is_scoped = 0;
     alias->is_range = 0;
     alias->range_known = 0;
     alias->range_start = 0;

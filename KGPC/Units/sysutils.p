@@ -111,7 +111,8 @@ function PadRight(const S: AnsiString; ATotalWidth: SizeInt; PaddingChar: AnsiCh
 function QuotedString(const S: AnsiString; QuoteChar: AnsiChar): AnsiString;
 function StartsWith(const S, Prefix: AnsiString): Boolean;
 function EndsWith(const S, Suffix: AnsiString): Boolean;
-function StringOfChar(C: AnsiChar; Count: Integer): AnsiString;
+function StringOfChar(C: AnsiChar; Count: Integer): AnsiString; overload;
+function StringOfChar(C: WideChar; Count: SizeInt): WideString; overload;
 function IntToHex(Value: LongInt): AnsiString;
 function IntToHex(Value: LongInt; Digits: Integer): AnsiString;
 function IntToHex(Value: Int64): AnsiString;
@@ -841,9 +842,23 @@ begin
     Result := True;
 end;
 
-function StringOfChar(C: AnsiChar; Count: Integer): AnsiString;
+function StringOfChar(C: AnsiChar; Count: Integer): AnsiString; overload;
 var
     i: Integer;
+begin
+    if Count <= 0 then
+    begin
+        Result := '';
+        exit;
+    end;
+    SetLength(Result, Count);
+    for i := 1 to Count do
+        Result[i] := C;
+end;
+
+function StringOfChar(C: WideChar; Count: SizeInt): WideString; overload;
+var
+    i: SizeInt;
 begin
     if Count <= 0 then
     begin
@@ -1243,37 +1258,75 @@ end;
 
 function TStringHelper.PadLeft(ATotalWidth: SizeInt): AnsiString;
 begin
-    Result := SysUtils.PadLeft(Self, ATotalWidth, ' ');
+    Result := Self.PadLeft(ATotalWidth, ' ');
 end;
 
 function TStringHelper.PadLeft(ATotalWidth: SizeInt; PaddingChar: AnsiChar): AnsiString;
+var
+    pad_len: SizeInt;
 begin
-    Result := SysUtils.PadLeft(Self, ATotalWidth, PaddingChar);
+    Result := Self;
+    pad_len := ATotalWidth - Length(Self);
+    if pad_len > 0 then
+        Result := StringOfChar(PaddingChar, pad_len) + Result;
 end;
 
 function TStringHelper.PadRight(ATotalWidth: SizeInt): AnsiString;
 begin
-    Result := SysUtils.PadRight(Self, ATotalWidth, ' ');
+    Result := Self.PadRight(ATotalWidth, ' ');
 end;
 
 function TStringHelper.PadRight(ATotalWidth: SizeInt; PaddingChar: AnsiChar): AnsiString;
+var
+    pad_len: SizeInt;
 begin
-    Result := SysUtils.PadRight(Self, ATotalWidth, PaddingChar);
+    Result := Self;
+    pad_len := ATotalWidth - Length(Self);
+    if pad_len > 0 then
+        Result := Result + StringOfChar(PaddingChar, pad_len);
 end;
 
 function TStringHelper.QuotedString(QuoteChar: AnsiChar): AnsiString;
 begin
-    Result := SysUtils.QuotedString(Self, QuoteChar);
+    Result := StringOfChar(QuoteChar, 1) + Self + StringOfChar(QuoteChar, 1);
 end;
 
 function TStringHelper.StartsWith(const AValue: AnsiString): Boolean;
+var
+    i: Integer;
 begin
-    Result := SysUtils.StartsWith(Self, AValue);
+    if Length(AValue) > Length(Self) then
+    begin
+        Result := False;
+        Exit;
+    end;
+    for i := 1 to Length(AValue) do
+        if Self[i] <> AValue[i] then
+        begin
+            Result := False;
+            Exit;
+        end;
+    Result := True;
 end;
 
 function TStringHelper.EndsWith(const AValue: AnsiString): Boolean;
+var
+    i: Integer;
+    offset: Integer;
 begin
-    Result := SysUtils.EndsWith(Self, AValue);
+    if Length(AValue) > Length(Self) then
+    begin
+        Result := False;
+        Exit;
+    end;
+    offset := Length(Self) - Length(AValue);
+    for i := 1 to Length(AValue) do
+        if Self[offset + i] <> AValue[i] then
+        begin
+            Result := False;
+            Exit;
+        end;
+    Result := True;
 end;
 
 function TStringHelper.Replace(const OldValue, NewValue: AnsiString; Flags: TReplaceFlags): AnsiString;

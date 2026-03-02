@@ -47,7 +47,6 @@ type
   PText = ^text;
   TClass = class of TObject;
   TypedFile = file;
-  TRTLCriticalSection = array[0..39] of Byte;
   TSystemCodePage = Word;
 
   THandle = LongInt;
@@ -60,8 +59,8 @@ type
   WideString = String;
   RawByteString = String;
   PAnsiString = ^AnsiString;
-  PString = ^String;
   ShortString = array[0..255] of Char;
+  PString = ^ShortString;
   PWideString = ^WideString;
 
   TLineEndStr = string[3];
@@ -92,7 +91,6 @@ type
   Currency = Int64;
   PCurrency = ^Currency;
 
-  Variant = String;
   PVariant = ^Variant;
 
 const

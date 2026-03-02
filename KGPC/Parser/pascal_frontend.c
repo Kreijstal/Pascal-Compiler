@@ -10,6 +10,7 @@
 #endif
 
 #include "ErrVars.h"
+#include "SemanticCheck/SemCheck.h"
 
 /* Global storage for user-defined preprocessor configuration */
 #define MAX_USER_INCLUDE_PATHS 64
@@ -271,6 +272,13 @@ static void set_preprocessed_context(const char *buffer, size_t length, const ch
     if (buffer == NULL || length == 0)
         return;
 
+    const unsigned char *ubytes = (const unsigned char *)buffer;
+    if (length >= 3 && ubytes[0] == 0xEF && ubytes[1] == 0xBB && ubytes[2] == 0xBF)
+    {
+        buffer += 3;
+        length -= 3;
+    }
+
     preprocessed_source = (char *)malloc(length + 1);
     if (preprocessed_source == NULL)
         return;
@@ -385,6 +393,7 @@ static combinator_t *get_or_create_unit_parser(void)
     {
         cached_unit_parser = new_combinator();
         init_pascal_unit_parser(&cached_unit_parser);
+        parser_set_ephemeral_threshold();
     }
     return cached_unit_parser;
 }
@@ -395,6 +404,7 @@ static combinator_t *get_or_create_program_parser(void)
     {
         cached_program_parser = new_combinator();
         init_pascal_complete_program_parser(&cached_program_parser);
+        parser_set_ephemeral_threshold();
     }
     return cached_program_parser;
 }
@@ -514,6 +524,14 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
     if (error_out != NULL)
         *error_out = NULL;
 
+    /* Disable memoization — with ephemeral combinators getting unique IDs,
+     * memo table operations (lookup/insert/clone) cost more than they save. */
+    static bool memo_mode_set = false;
+    if (!memo_mode_set) {
+        parser_set_memo_mode(PARSER_MEMO_DISABLED);
+        memo_mode_set = true;
+    }
+
     ensure_generic_registry();
 
     if (g_last_parse_path != NULL)
@@ -577,7 +595,9 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
         "FPC_HAS_FEATURE_EXITCODE", "FPC_HAS_FEATURE_RESOURCES",
         "FPC_HAS_FEATURE_COMMANDARGS", "FPC_HAS_FEATURE_PROCESSES",
         "FPC_HAS_FEATURE_THREADING", "FPC_HAS_FEATURE_DYNLIBS",
-        "FPC_HAS_FEATURE_OBJECTIVEC1", "FPC_HAS_FEATURE_STACKCHECK"
+        "FPC_HAS_FEATURE_OBJECTIVEC1", "FPC_HAS_FEATURE_STACKCHECK",
+        // FPC floating-point type availability (x86_64 supports all three)
+        "FPC_HAS_TYPE_SINGLE", "FPC_HAS_TYPE_DOUBLE", "FPC_HAS_TYPE_EXTENDED"
     };
     for (size_t i = 0; i < sizeof(default_symbols) / sizeof(default_symbols[0]); ++i)
     {
@@ -722,6 +742,13 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
         free(buffer);
         return false;
     }
+    if (!pascal_preprocessor_define(preprocessor, "FPC_USE_LIBC"))
+    {
+        report_preprocessor_error(error_out, path, "unable to define FPC_USE_LIBC symbol");
+        pascal_preprocessor_free(preprocessor);
+        free(buffer);
+        return false;
+    }
 #endif
 
     /* Define MSWINDOWS when targeting Windows (but not for Cygwin/MSYS which expose a POSIX API) */
@@ -751,6 +778,16 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
                                                          &preprocess_error);
     pascal_preprocessor_free(preprocessor);
 
+    /* Temp debug: dump preprocessed output for system.pp */
+    if (getenv("KGPC_DUMP_PP") != NULL && path != NULL && strstr(path, "system.pp") != NULL) {
+        FILE *dump = fopen("/tmp/system_pp_preprocessed.txt", "w");
+        if (dump != NULL) {
+            fwrite(preprocessed_buffer, 1, preprocessed_length, dump);
+            fclose(dump);
+            fprintf(stderr, "[PP] Dumped preprocessed system.pp to /tmp/system_pp_preprocessed.txt (%zu bytes)\n", preprocessed_length);
+        }
+    }
+
     if (preprocessed_buffer == NULL)
     {
         report_preprocessor_error(error_out, path, preprocess_error);
@@ -763,7 +800,32 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
     free(buffer);
     buffer = preprocessed_buffer;
     length = preprocessed_length;
+
+    if (length >= 3)
+    {
+        unsigned char *ubytes = (unsigned char *)buffer;
+        if (ubytes[0] == 0xEF && ubytes[1] == 0xBB && ubytes[2] == 0xBF)
+        {
+            memmove(buffer, buffer + 3, length - 3);
+            length -= 3;
+            buffer[length] = '\0';
+        }
+    }
     set_preprocessed_context(buffer, length, path);
+    semcheck_register_source_buffer(path, buffer, length);
+
+    /* Debug: dump full preprocessed buffer */
+    if (getenv("KGPC_DUMP_PREPROC")) {
+        char dumppath[256];
+        const char *base = strrchr(path, '/');
+        base = base ? base + 1 : path;
+        snprintf(dumppath, sizeof(dumppath), "/tmp/preproc_%s.txt", base);
+        FILE *dumpf = fopen(dumppath, "w");
+        if (dumpf) {
+            fwrite(buffer, 1, length, dumpf);
+            fclose(dumpf);
+        }
+    }
 
     /* Detect {$MODE objfpc} in the preprocessed source.
      * If found, set flag so ObjPas unit can be auto-imported.
@@ -804,6 +866,7 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
     file_to_parse = (char *)path;
 
     ParseResult result = parse(input, parser);
+
     if (getenv("KGPC_DEBUG_TFPG_AST") != NULL && result.is_success && result.value.ast != NULL)
     {
         fprintf(stderr, "==== Raw cparser AST for %s ====\n", path);
@@ -903,7 +966,8 @@ void pascal_print_parse_error(const char *path, const ParseError *err)
     if (err == NULL)
         return;
 
-    fprintf(stderr, "Parse error in %s:\n", path);
+    const char *display_path = (err->source_filename != NULL) ? err->source_filename : path;
+    fprintf(stderr, "Parse error in %s:\n", display_path);
     fprintf(stderr, "  Line %d, Column %d: %s\n",
             err->line, err->col,
             err->message ? err->message : "unknown error");

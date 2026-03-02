@@ -35,6 +35,7 @@ typedef struct StackScope StackScope_t;
 typedef struct StackNode StackNode_t;
 typedef struct RegStack RegStack_t;
 typedef struct Register Register_t;
+typedef enum RegisterId RegisterId_t;
 
 typedef void (*RegisterSpillCallback)(Register_t *reg, StackNode_t *spill_slot, void *context);
 
@@ -101,8 +102,7 @@ RegStack_t *init_reg_stack();
 
 /* NOTE: Getters return number greater than 1 if it had to kick a value out to temp */
 /* The returned int is the temp offset to restore the value */
-int get_register_64bit(RegStack_t *, char *reg_64, Register_t **);
-int get_register_32bit(RegStack_t *, char *reg_32, Register_t **);
+int get_register_by_id(RegStack_t *, RegisterId_t reg_id, Register_t **);
 void restore_register_64bit(RegStack_t *, Register_t *, int temp_offset);
 void restore_register_32bit(RegStack_t *, Register_t *, int temp_offset);
 void free_reg(RegStack_t *, Register_t *);
@@ -116,6 +116,29 @@ void register_clear_spill_callback(Register_t *reg);
 int get_num_registers_free(RegStack_t *);
 int get_num_registers_alloced(RegStack_t *);
 
+/* Caller-save/restore around function calls.
+ * All caller-saved registers are clobbered by `call` per the SysV ABI.
+ * These helpers save allocated GP registers before a call and restore after. */
+#define MAX_SAVED_CALLER_REGS 16
+typedef struct {
+    int count;
+    struct {
+        Register_t *reg;
+        int spill_offset;
+    } entries[MAX_SAVED_CALLER_REGS];
+    int rax_was_saved;      /* was %rax among the saved regs? */
+    int return_spill_offset; /* temp slot for saving the call return value */
+} CallerSaveState;
+
+/* Save all currently-allocated registers. Call BEFORE the `call` instruction. */
+void regstack_caller_save(RegStack_t *reg_stack, ListNode_t **inst_list,
+                          CallerSaveState *state);
+
+/* Restore previously-saved registers. Call AFTER the `call` instruction.
+ * Preserves %rax (the call's return value) even if %rax was saved. */
+void regstack_caller_restore(RegStack_t *reg_stack, ListNode_t **inst_list,
+                             CallerSaveState *state);
+
 void free_reg_stack(RegStack_t *);
 
 #if KGPC_ENABLE_REG_DEBUG
@@ -123,8 +146,30 @@ extern const char *g_reg_debug_context;
 #endif
 
 /********* Register_t **********/
+enum RegisterId
+{
+    REG_INVALID = 0,
+    REG_RAX,
+    REG_RBX,
+    REG_RCX,
+    REG_RDX,
+    REG_RSI,
+    REG_RDI,
+    REG_RBP,
+    REG_RSP,
+    REG_R8,
+    REG_R9,
+    REG_R10,
+    REG_R11,
+    REG_R12,
+    REG_R13,
+    REG_R14,
+    REG_R15
+};
+
 typedef struct Register
 {
+    RegisterId_t reg_id;
     char *bit_64;
     char *bit_32;
     /* Spill tracking - if spilled, this points to the stack location */

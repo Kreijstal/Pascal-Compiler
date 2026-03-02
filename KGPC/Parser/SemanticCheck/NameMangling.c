@@ -11,6 +11,9 @@
 #include "SemCheck.h"
 #include "SymTab/SymTab.h"
 #include "../ParseTree/KgpcType.h"
+#include "../ParseTree/ident_ref.h"
+
+static const char *g_mangle_caller_name = NULL; /* debug only */
 
 // Helper to create a lowercase copy of a string (for case-insensitive mangling)
 static char* str_tolower_dup(const char* src) {
@@ -61,6 +64,55 @@ static char *sanitize_type_id(const char *type_id)
             out[i] = '_';
     }
     out[len] = '\0';
+    return out;
+}
+
+static const char *type_ref_base_name_or_id(const TypeRef *ref, const char *fallback)
+{
+    const char *base = type_ref_base_name(ref);
+    return base != NULL ? base : fallback;
+}
+
+static char *type_ref_render_mangled_unqualified(const TypeRef *ref)
+{
+    if (ref == NULL)
+        return NULL;
+    const char *base = type_ref_base_name(ref);
+    if (base == NULL)
+        return NULL;
+    if (ref->num_generic_args <= 0)
+        return strdup(base);
+
+    size_t total = strlen(base) + 1;
+    for (int i = 0; i < ref->num_generic_args; ++i)
+    {
+        char *arg = type_ref_render_mangled(ref->generic_args[i]);
+        if (arg != NULL)
+        {
+            total += strlen(arg);
+            free(arg);
+        }
+        if (i + 1 < ref->num_generic_args)
+            total += 1;
+    }
+
+    char *out = (char *)malloc(total + 1);
+    if (out == NULL)
+        return NULL;
+    out[0] = '\0';
+    strcat(out, base);
+    strcat(out, "$");
+    for (int i = 0; i < ref->num_generic_args; ++i)
+    {
+        char *arg = type_ref_render_mangled(ref->generic_args[i]);
+        if (arg != NULL)
+        {
+            strcat(out, arg);
+            free(arg);
+        }
+        if (i + 1 < ref->num_generic_args)
+            strcat(out, "$");
+    }
     return out;
 }
 
@@ -217,19 +269,37 @@ static enum VarType MapBuiltinTypeNameToVarType(const char *type_name) {
     return HASHVAR_UNTYPED;
 }
 
-static HashNode_t *find_type_node_for_mangling(SymTab_t *symtab, const char *type_id)
+static HashNode_t *find_type_node_for_mangling(SymTab_t *symtab,
+    const TypeRef *type_ref,
+    const char *type_id)
 {
-    if (symtab == NULL || type_id == NULL)
+    if (symtab == NULL || (type_id == NULL && type_ref == NULL))
         return NULL;
 
     HashNode_t *type_node = NULL;
-    if (FindIdent(&type_node, symtab, type_id) >= 0 && type_node != NULL)
+    char *qualified = NULL;
+    const char *lookup_name = type_id;
+    if (type_ref != NULL)
     {
+        qualified = type_ref_render_mangled(type_ref);
+        if (qualified != NULL)
+            lookup_name = qualified;
+    }
+    if (lookup_name != NULL &&
+        FindIdent(&type_node, symtab, lookup_name) >= 0 && type_node != NULL)
+    {
+        free(qualified);
         if (type_node->hash_type == HASHTYPE_TYPE)
             return type_node;
     }
 
-    ListNode_t *matches = FindAllIdents(symtab, type_id);
+    if (lookup_name == NULL)
+    {
+        free(qualified);
+        return NULL;
+    }
+
+    ListNode_t *matches = FindAllIdents(symtab, lookup_name);
     ListNode_t *cur = matches;
     while (cur != NULL)
     {
@@ -237,16 +307,46 @@ static HashNode_t *find_type_node_for_mangling(SymTab_t *symtab, const char *typ
         if (candidate != NULL && candidate->hash_type == HASHTYPE_TYPE)
         {
             DestroyList(matches);
+            free(qualified);
             return candidate;
         }
         cur = cur->next;
     }
     DestroyList(matches);
 
-    const char *dot = strrchr(type_id, '.');
-    if (dot != NULL && dot[1] != '\0')
-        return find_type_node_for_mangling(symtab, dot + 1);
+    if (type_ref != NULL && type_ref->name != NULL && type_ref->name->count > 1)
+    {
+        char *unqualified = type_ref_render_mangled_unqualified(type_ref);
+        if (unqualified != NULL)
+        {
+            HashNode_t *unqualified_node = NULL;
+            if (FindIdent(&unqualified_node, symtab, unqualified) >= 0 &&
+                unqualified_node != NULL && unqualified_node->hash_type == HASHTYPE_TYPE)
+            {
+                free(unqualified);
+                free(qualified);
+                return unqualified_node;
+            }
+            ListNode_t *matches_unqualified = FindAllIdents(symtab, unqualified);
+            ListNode_t *cur_unqualified = matches_unqualified;
+            while (cur_unqualified != NULL)
+            {
+                HashNode_t *candidate = (HashNode_t *)cur_unqualified->cur;
+                if (candidate != NULL && candidate->hash_type == HASHTYPE_TYPE)
+                {
+                    DestroyList(matches_unqualified);
+                    free(unqualified);
+                    free(qualified);
+                    return candidate;
+                }
+                cur_unqualified = cur_unqualified->next;
+            }
+            DestroyList(matches_unqualified);
+            free(unqualified);
+        }
+    }
 
+    free(qualified);
     return NULL;
 }
 
@@ -281,10 +381,13 @@ static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab
                 }
                 else if (element_type == UNKNOWN_TYPE && element_type_id != NULL)
                 {
-                    resolved_type = MapBuiltinTypeNameToVarType(element_type_id);
+                    resolved_type = MapBuiltinTypeNameToVarType(
+                        type_ref_base_name_or_id(inline_alias->array_element_type_ref,
+                            element_type_id));
                     if (resolved_type == HASHVAR_UNTYPED)
                     {
-                        HashNode_t *type_node = find_type_node_for_mangling(symtab, element_type_id);
+                        HashNode_t *type_node = find_type_node_for_mangling(symtab,
+                            inline_alias->array_element_type_ref, element_type_id);
                         if (type_node != NULL)
                             resolved_type = GetVarTypeFromTypeNode(type_node);
                     }
@@ -308,15 +411,18 @@ static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab
             }
 
             if (resolved_type == HASHVAR_UNTYPED &&
-                decl_tree->tree_data.var_decl_data.type_id != NULL) {
+                (decl_tree->tree_data.var_decl_data.type_ref != NULL ||
+                 decl_tree->tree_data.var_decl_data.type_id != NULL)) {
+                const TypeRef *type_ref = decl_tree->tree_data.var_decl_data.type_ref;
                 const char *type_id = decl_tree->tree_data.var_decl_data.type_id;
                 
                 // First try to map built-in type names directly
-                resolved_type = MapBuiltinTypeNameToVarType(type_id);
+                resolved_type = MapBuiltinTypeNameToVarType(
+                    type_ref_base_name_or_id(type_ref, type_id));
                 
                 // If not a built-in type, look it up in the symbol table
                 if (resolved_type == HASHVAR_UNTYPED) {
-                    HashNode_t* type_node = find_type_node_for_mangling(symtab, type_id);
+                    HashNode_t* type_node = find_type_node_for_mangling(symtab, type_ref, type_id);
                     if (type_node != NULL) {
                         resolved_type = GetVarTypeFromTypeNode(type_node);
                         if (resolved_type == HASHVAR_RECORD &&
@@ -371,6 +477,7 @@ static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab
              * But array of const uses generic HASHVAR_ARRAY. */
             int element_type = decl_tree->tree_data.arr_decl_data.type;
             const char *element_type_id = decl_tree->tree_data.arr_decl_data.type_id;
+            const TypeRef *element_type_ref = decl_tree->tree_data.arr_decl_data.type_ref;
             
             /* Special case: array of const uses generic array mangling */
             if (element_type == ARRAY_OF_CONST_TYPE || 
@@ -378,14 +485,17 @@ static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab
             {
                 resolved_type = HASHVAR_ARRAY;
             }
-            else if (element_type == UNKNOWN_TYPE && element_type_id != NULL)
+            else if (element_type == UNKNOWN_TYPE &&
+                (element_type_ref != NULL || element_type_id != NULL))
             {
                 /* Try to map element type from type_id */
-                resolved_type = MapBuiltinTypeNameToVarType(element_type_id);
+                resolved_type = MapBuiltinTypeNameToVarType(
+                    type_ref_base_name_or_id(element_type_ref, element_type_id));
                 if (resolved_type == HASHVAR_UNTYPED)
                 {
                     /* Look up in symbol table */
-                    HashNode_t *type_node = find_type_node_for_mangling(symtab, element_type_id);
+                    HashNode_t *type_node = find_type_node_for_mangling(symtab,
+                        element_type_ref, element_type_id);
                     if (type_node != NULL)
                         resolved_type = GetVarTypeFromTypeNode(type_node);
                 }
@@ -639,7 +749,29 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
                 /* Check type_alias for STRING_TYPE to distinguish between
                  * RawByteString and UnicodeString. With the fix in commit 868406b,
                  * type_alias is now owned by KgpcType and should be valid. */
-                else if (type_tag == STRING_TYPE && kgpc_type->type_alias != NULL)
+                if (type_tag == STRING_TYPE && getenv("KGPC_DEBUG_MANGLE"))
+                {
+                    fprintf(stderr, "[MANGLE] STRING_TYPE arg for %s: type_alias=%s, kind=%d, expr_type=%d, line=%d",
+                        g_mangle_caller_name ? g_mangle_caller_name : "?",
+                        kgpc_type->type_alias ? (kgpc_type->type_alias->alias_name ? kgpc_type->type_alias->alias_name : "<null_name>") : "<null>",
+                        kgpc_type->kind,
+                        arg_expr ? arg_expr->type : -1,
+                        arg_expr ? arg_expr->line_num : -1);
+                    if (arg_expr != NULL && arg_expr->type == 7 /* EXPR_FUNCTION_CALL */)
+                    {
+                        const char *call_id = arg_expr->expr_data.function_call_data.id;
+                        KgpcType *call_type = arg_expr->expr_data.function_call_data.call_kgpc_type;
+                        const char *ret_id = NULL;
+                        if (call_type != NULL && call_type->kind == TYPE_KIND_PROCEDURE)
+                            ret_id = call_type->info.proc_info.return_type_id;
+                        fprintf(stderr, ", call_id=%s, call_kgpc_type=%p, ret_id=%s",
+                            call_id ? call_id : "<null>",
+                            (void*)call_type,
+                            ret_id ? ret_id : "<null>");
+                    }
+                    fprintf(stderr, "\n");
+                }
+                if (type_tag == STRING_TYPE && kgpc_type->type_alias != NULL)
                 {
                     struct TypeAlias *alias = kgpc_type->type_alias;
                     if (alias->alias_name != NULL)
@@ -647,6 +779,44 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
                         if (strcasecmp(alias->alias_name, "RawByteString") == 0)
                             resolved_type = HASHVAR_RAWBYTESTRING;
                         else if (strcasecmp(alias->alias_name, "UnicodeString") == 0)
+                            resolved_type = HASHVAR_UNICODESTRING;
+                    }
+                }
+                /* Fallback: if type_alias is missing on a function call result,
+                 * look up the called function's return_type_id to distinguish
+                 * RawByteString from UnicodeString. */
+                if (type_tag == STRING_TYPE && resolved_type == HASHVAR_PCHAR &&
+                    arg_expr != NULL && arg_expr->type == EXPR_FUNCTION_CALL)
+                {
+                    const char *ret_id = NULL;
+                    /* Try call_kgpc_type first */
+                    KgpcType *call_type = arg_expr->expr_data.function_call_data.call_kgpc_type;
+                    if (call_type != NULL && call_type->kind == TYPE_KIND_PROCEDURE)
+                        ret_id = call_type->info.proc_info.return_type_id;
+                    /* If call_kgpc_type wasn't set, look up function in symbol table */
+                    if (ret_id == NULL && arg_expr->expr_data.function_call_data.id != NULL)
+                    {
+                        HashNode_t *func_node = NULL;
+                        int find_result = FindIdent(&func_node, symtab, arg_expr->expr_data.function_call_data.id);
+                        if (getenv("KGPC_DEBUG_MANGLE"))
+                            fprintf(stderr, "[MANGLE] fallback lookup '%s': find=%d node=%p hash_type=%d type=%p kind=%d ret_id=%s\n",
+                                arg_expr->expr_data.function_call_data.id,
+                                find_result,
+                                (void*)func_node,
+                                func_node ? func_node->hash_type : -1,
+                                func_node ? (void*)func_node->type : NULL,
+                                (func_node && func_node->type) ? func_node->type->kind : -1,
+                                (func_node && func_node->type && func_node->type->kind == TYPE_KIND_PROCEDURE && func_node->type->info.proc_info.return_type_id) ? func_node->type->info.proc_info.return_type_id : "<null>");
+                        if (find_result != -1 &&
+                            func_node != NULL && func_node->type != NULL &&
+                            func_node->type->kind == TYPE_KIND_PROCEDURE)
+                            ret_id = func_node->type->info.proc_info.return_type_id;
+                    }
+                    if (ret_id != NULL)
+                    {
+                        if (strcasecmp(ret_id, "RawByteString") == 0)
+                            resolved_type = HASHVAR_RAWBYTESTRING;
+                        else if (strcasecmp(ret_id, "UnicodeString") == 0)
                             resolved_type = HASHVAR_UNICODESTRING;
                     }
                 }
@@ -705,6 +875,14 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
 char* MangleFunctionNameFromCallSite(const char* original_name, ListNode_t* args_expr, SymTab_t *symtab, int max_scope_lev) {
     assert(original_name != NULL);
     assert(symtab != NULL);
+    g_mangle_caller_name = original_name;
     ListNode_t* type_list = GetFlatTypeListFromCallSite(args_expr, symtab, max_scope_lev);
-    return MangleNameFromTypeList(original_name, type_list);
+    g_mangle_caller_name = NULL;
+    char *result = MangleNameFromTypeList(original_name, type_list);
+    if (getenv("KGPC_DEBUG_MANGLE") &&
+        (strcasecmp(original_name, "FileExists") == 0 ||
+         strcasecmp(original_name, "DirectoryExists") == 0))
+        fprintf(stderr, "[MANGLE] MangleFunctionNameFromCallSite('%s') => '%s'\n",
+            original_name, result ? result : "<null>");
+    return result;
 }

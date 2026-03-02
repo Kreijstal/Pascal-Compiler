@@ -26,6 +26,11 @@ void semcheck_clear_pointer_info(struct Expression *expr)
         free(expr->pointer_subtype_id);
         expr->pointer_subtype_id = NULL;
     }
+    if (expr->pointer_subtype_ref != NULL)
+    {
+        type_ref_free(expr->pointer_subtype_ref);
+        expr->pointer_subtype_ref = NULL;
+    }
 }
 
 void semcheck_set_pointer_info(struct Expression *expr, int subtype, const char *type_id)
@@ -58,6 +63,11 @@ void semcheck_clear_array_info(struct Expression *expr)
     {
         free(expr->array_element_type_id);
         expr->array_element_type_id = NULL;
+    }
+    if (expr->array_element_type_ref != NULL)
+    {
+        type_ref_free(expr->array_element_type_ref);
+        expr->array_element_type_ref = NULL;
     }
     expr->array_lower_bound = 0;
     expr->array_upper_bound = -1;
@@ -277,9 +287,16 @@ void semcheck_set_array_info_from_hashnode(struct Expression *expr, SymTab_t *sy
         return;
 
     semcheck_clear_array_info(expr);
-    if (node == NULL || node->type == NULL ||
-        !(kgpc_type_is_array(node->type) || kgpc_type_is_array_of_const(node->type)))
+    if (node == NULL)
         return;
+    struct TypeAlias *alias = get_type_alias_from_node(node);
+    if (node->type == NULL ||
+        !(kgpc_type_is_array(node->type) || kgpc_type_is_array_of_const(node->type)))
+    {
+        if (alias != NULL && alias->is_array)
+            semcheck_set_array_info_from_alias(expr, symtab, alias, line_num);
+        return;
+    }
 
     expr->is_array_expr = 1;
 
@@ -353,23 +370,22 @@ void semcheck_set_array_info_from_hashnode(struct Expression *expr, SymTab_t *sy
         }
     }
 
-    struct TypeAlias *type_alias = get_type_alias_from_node(node);
-    if (type_alias != NULL && type_alias->is_array)
+    if (alias != NULL && alias->is_array)
     {
-        semcheck_set_array_info_from_alias(expr, symtab, type_alias, line_num);
+        semcheck_set_array_info_from_alias(expr, symtab, alias, line_num);
 
         if (expr->array_element_size <= 0 && node_element_size > 0)
             expr->array_element_size = node_element_size;
         else if (expr->array_element_size <= 0 &&
-            type_alias->array_end >= type_alias->array_start)
+            alias->array_end >= alias->array_start)
         {
-            long long count = (long long)type_alias->array_end -
-                (long long)type_alias->array_start + 1;
-            if (count > 0 && type_alias->array_element_type != UNKNOWN_TYPE)
+            long long count = (long long)alias->array_end -
+                (long long)alias->array_start + 1;
+            if (count > 0 && alias->array_element_type != UNKNOWN_TYPE)
             {
                 long long element_size = 0;
-                if (sizeof_from_type_ref(symtab, type_alias->array_element_type,
-                        type_alias->array_element_type_id, &element_size,
+                if (sizeof_from_type_ref(symtab, alias->array_element_type,
+                        alias->array_element_type_id, &element_size,
                         0, line_num) == 0)
                 {
                     expr->array_element_size = (int)element_size;

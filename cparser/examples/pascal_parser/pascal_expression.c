@@ -1343,6 +1343,7 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
     ), build_array_or_pointer_chain);
 
     // Type cast parser for identifier types with required suffixes (e.g. PAnsiChar(x)^, PByte(x)[0])
+    // Use pascal_qualified_identifier to support qualified type names like THeap.PMyHeader
     combinator_t* typecast_any = seq(new_combinator(), PASCAL_T_TYPECAST,
         token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
         between(token(match("(")), token(match(")")), lazy(p)),
@@ -1358,7 +1359,7 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
     combinator_t* boolean_true = map(token(keyword_ci("true")), wrap_true_literal);
     combinator_t* boolean_false = map(token(keyword_ci("false")), wrap_false_literal);
 
-    // Inherited expression: inherited MethodName [ (args) ]
+    // Inherited expression: inherited [MethodName [ (args) ]]
     combinator_t* inherited_arg_list = between(
         token(match("(")),
         token(match(")")),
@@ -1366,7 +1367,7 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
     );
     combinator_t* inherited_expr = seq(new_combinator(), PASCAL_T_FUNC_CALL,
         token(keyword_ci("inherited")),
-        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
+        optional(token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER))),
         optional(inherited_arg_list),
         NULL
     );
@@ -1521,10 +1522,12 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
     expr_insert(*p, 4, PASCAL_T_NOT, EXPR_PREFIX, ASSOC_NONE, token(keyword_ci("not")));
     expr_insert(*p, 4, PASCAL_T_ADDR, EXPR_PREFIX, ASSOC_NONE, token(match("@")));
 
-    // Field width operator for formatted output: expression:width (same precedence as unary)
-    expr_insert(*p, 4, PASCAL_T_FIELD_WIDTH, EXPR_INFIX, ASSOC_LEFT, token(match(":")));
+    // Field width operator for formatted output: expression:width
+    // Precedence 0 (same as relational) so that `x:Width-2` parses as `x:(Width-2)`
+    // rather than `(x:Width) - 2`. Multiple colons like `x:10:2` work via left-assoc.
+    expr_altern(*p, 0, PASCAL_T_FIELD_WIDTH, token(match(":")));
 
-    // Precedence 5: Member access (highest precedence)
+    // Precedence 5: Member access (highest precedence for infix)
     combinator_t* member_access_op = seq(new_combinator(), PASCAL_T_NONE,
         match("."),
         pnot(match(".")),  // not followed by another dot
@@ -1534,6 +1537,26 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
     
     // Precedence 6: Pointer dereference operator (postfix): expression^ (higher than member access)
     expr_insert(*p, 6, PASCAL_T_DEREF, EXPR_POSTFIX, ASSOC_LEFT, token(match("^")));
+    
+    // Precedence 7: Postfix call and array access (highest precedence)
+    // These allow expr.field(args)[index] syntax for calling function pointer fields
+    {
+        combinator_t* postfix_call_args = between(
+            token(match("(")),
+            token(match(")")),
+            optional(sep_by(lazy(p), token(match(","))))
+        );
+        combinator_t* postfix_call = map(postfix_call_args, wrap_call_suffix);
+        expr_insert(*p, 7, PASCAL_T_FUNC_CALL, EXPR_POSTFIX, ASSOC_LEFT, postfix_call);
+        
+        combinator_t* postfix_index = between(
+            token(match("[")),
+            token(match("]")),
+            sep_by(lazy(p), token(match(",")))
+        );
+        combinator_t* postfix_array = map(postfix_index, wrap_array_suffix);
+        expr_insert(*p, 7, PASCAL_T_ARRAY_ACCESS, EXPR_POSTFIX, ASSOC_LEFT, postfix_array);
+    }
 }
 
 // --- Utility Functions ---
