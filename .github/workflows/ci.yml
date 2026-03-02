@@ -26,7 +26,7 @@ jobs:
         pip install meson ninja
 
     - name: Configure build
-      run: meson setup builddir --buildtype=release -Db_debug=true -Dwith_gmp=enabled
+      run: meson setup builddir --buildtype=debugoptimized -Dwith_gmp=enabled
 
     - name: Build
       run: meson compile -C builddir
