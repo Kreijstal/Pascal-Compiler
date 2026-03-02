@@ -1799,6 +1799,21 @@ int semcheck_recordaccess(int *type_return,
                     expr->expr_data.id = field_copy;
                     return semcheck_varid(type_return, symtab, expr, max_scope_lev, mutating);
                 }
+                else if (field_node->hash_type == HASHTYPE_FUNCTION ||
+                         field_node->hash_type == HASHTYPE_PROCEDURE)
+                {
+                    /* Unit.FuncName - transform to simple identifier and let
+                     * semcheck_varid handle the conversion to a zero-arg call */
+                    char *field_copy = strdup(field_id);
+                    if (field_copy == NULL)
+                    {
+                        *type_return = UNKNOWN_TYPE;
+                        return 1;
+                    }
+                    expr->type = EXPR_VAR_ID;
+                    expr->expr_data.id = field_copy;
+                    return semcheck_varid(type_return, symtab, expr, max_scope_lev, mutating);
+                }
             }
             else
             {
