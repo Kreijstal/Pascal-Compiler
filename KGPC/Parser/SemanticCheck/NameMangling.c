@@ -13,6 +13,8 @@
 #include "../ParseTree/KgpcType.h"
 #include "../ParseTree/ident_ref.h"
 
+static const char *g_mangle_caller_name = NULL; /* debug only */
+
 // Helper to create a lowercase copy of a string (for case-insensitive mangling)
 static char* str_tolower_dup(const char* src) {
     if (src == NULL)
@@ -747,7 +749,29 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
                 /* Check type_alias for STRING_TYPE to distinguish between
                  * RawByteString and UnicodeString. With the fix in commit 868406b,
                  * type_alias is now owned by KgpcType and should be valid. */
-                else if (type_tag == STRING_TYPE && kgpc_type->type_alias != NULL)
+                if (type_tag == STRING_TYPE && getenv("KGPC_DEBUG_MANGLE"))
+                {
+                    fprintf(stderr, "[MANGLE] STRING_TYPE arg for %s: type_alias=%s, kind=%d, expr_type=%d, line=%d",
+                        g_mangle_caller_name ? g_mangle_caller_name : "?",
+                        kgpc_type->type_alias ? (kgpc_type->type_alias->alias_name ? kgpc_type->type_alias->alias_name : "<null_name>") : "<null>",
+                        kgpc_type->kind,
+                        arg_expr ? arg_expr->type : -1,
+                        arg_expr ? arg_expr->line_num : -1);
+                    if (arg_expr != NULL && arg_expr->type == 7 /* EXPR_FUNCTION_CALL */)
+                    {
+                        const char *call_id = arg_expr->expr_data.function_call_data.id;
+                        KgpcType *call_type = arg_expr->expr_data.function_call_data.call_kgpc_type;
+                        const char *ret_id = NULL;
+                        if (call_type != NULL && call_type->kind == TYPE_KIND_PROCEDURE)
+                            ret_id = call_type->info.proc_info.return_type_id;
+                        fprintf(stderr, ", call_id=%s, call_kgpc_type=%p, ret_id=%s",
+                            call_id ? call_id : "<null>",
+                            (void*)call_type,
+                            ret_id ? ret_id : "<null>");
+                    }
+                    fprintf(stderr, "\n");
+                }
+                if (type_tag == STRING_TYPE && kgpc_type->type_alias != NULL)
                 {
                     struct TypeAlias *alias = kgpc_type->type_alias;
                     if (alias->alias_name != NULL)
@@ -755,6 +779,44 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
                         if (strcasecmp(alias->alias_name, "RawByteString") == 0)
                             resolved_type = HASHVAR_RAWBYTESTRING;
                         else if (strcasecmp(alias->alias_name, "UnicodeString") == 0)
+                            resolved_type = HASHVAR_UNICODESTRING;
+                    }
+                }
+                /* Fallback: if type_alias is missing on a function call result,
+                 * look up the called function's return_type_id to distinguish
+                 * RawByteString from UnicodeString. */
+                if (type_tag == STRING_TYPE && resolved_type == HASHVAR_PCHAR &&
+                    arg_expr != NULL && arg_expr->type == EXPR_FUNCTION_CALL)
+                {
+                    const char *ret_id = NULL;
+                    /* Try call_kgpc_type first */
+                    KgpcType *call_type = arg_expr->expr_data.function_call_data.call_kgpc_type;
+                    if (call_type != NULL && call_type->kind == TYPE_KIND_PROCEDURE)
+                        ret_id = call_type->info.proc_info.return_type_id;
+                    /* If call_kgpc_type wasn't set, look up function in symbol table */
+                    if (ret_id == NULL && arg_expr->expr_data.function_call_data.id != NULL)
+                    {
+                        HashNode_t *func_node = NULL;
+                        int find_result = FindIdent(&func_node, symtab, arg_expr->expr_data.function_call_data.id);
+                        if (getenv("KGPC_DEBUG_MANGLE"))
+                            fprintf(stderr, "[MANGLE] fallback lookup '%s': find=%d node=%p hash_type=%d type=%p kind=%d ret_id=%s\n",
+                                arg_expr->expr_data.function_call_data.id,
+                                find_result,
+                                (void*)func_node,
+                                func_node ? func_node->hash_type : -1,
+                                func_node ? (void*)func_node->type : NULL,
+                                (func_node && func_node->type) ? func_node->type->kind : -1,
+                                (func_node && func_node->type && func_node->type->kind == TYPE_KIND_PROCEDURE && func_node->type->info.proc_info.return_type_id) ? func_node->type->info.proc_info.return_type_id : "<null>");
+                        if (find_result != -1 &&
+                            func_node != NULL && func_node->type != NULL &&
+                            func_node->type->kind == TYPE_KIND_PROCEDURE)
+                            ret_id = func_node->type->info.proc_info.return_type_id;
+                    }
+                    if (ret_id != NULL)
+                    {
+                        if (strcasecmp(ret_id, "RawByteString") == 0)
+                            resolved_type = HASHVAR_RAWBYTESTRING;
+                        else if (strcasecmp(ret_id, "UnicodeString") == 0)
                             resolved_type = HASHVAR_UNICODESTRING;
                     }
                 }
@@ -813,6 +875,14 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
 char* MangleFunctionNameFromCallSite(const char* original_name, ListNode_t* args_expr, SymTab_t *symtab, int max_scope_lev) {
     assert(original_name != NULL);
     assert(symtab != NULL);
+    g_mangle_caller_name = original_name;
     ListNode_t* type_list = GetFlatTypeListFromCallSite(args_expr, symtab, max_scope_lev);
-    return MangleNameFromTypeList(original_name, type_list);
+    g_mangle_caller_name = NULL;
+    char *result = MangleNameFromTypeList(original_name, type_list);
+    if (getenv("KGPC_DEBUG_MANGLE") &&
+        (strcasecmp(original_name, "FileExists") == 0 ||
+         strcasecmp(original_name, "DirectoryExists") == 0))
+        fprintf(stderr, "[MANGLE] MangleFunctionNameFromCallSite('%s') => '%s'\n",
+            original_name, result ? result : "<null>");
+    return result;
 }

@@ -20,6 +20,7 @@
 #include "../../Parser/SemanticCheck/SymTab/SymTab.h"
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
 #include "../../Parser/SemanticCheck/SemChecks/SemCheck_sizeof.h"
+#include "../../Parser/ParseTree/from_cparser.h"
 
 #ifndef CODEGEN_POINTER_SIZE_BYTES
 #define CODEGEN_POINTER_SIZE_BYTES 8
@@ -1063,7 +1064,19 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
     {
         int scope_depth = 0;
         StackNode_t *var_node = find_label_with_depth(expr->expr_data.id, &scope_depth);
-        
+
+        /* Fallback: resolve via symbol table mangled_id (e.g. class constants
+           registered as "TSingleHelper__Epsilon" but referenced as "Epsilon") */
+        if (var_node == NULL && ctx->symtab != NULL)
+        {
+            HashNode_t *sym_node = NULL;
+            if (FindIdent(&sym_node, ctx->symtab, expr->expr_data.id) >= 0 &&
+                sym_node != NULL && sym_node->mangled_id != NULL)
+            {
+                var_node = find_label_with_depth(sym_node->mangled_id, &scope_depth);
+            }
+        }
+
         if (var_node == NULL)
         {
             /* Procedures/functions used as values (e.g. @Proc, typed proc constants) */
@@ -3322,25 +3335,13 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
             return inst_list;
         }
 
-        if (src_expr->type == EXPR_FUNCTION_CALL)
         {
             Register_t *src_addr_reg = NULL;
             inst_list = codegen_address_for_expr(src_expr, inst_list, ctx, &src_addr_reg);
             if (!codegen_had_error(ctx) && src_addr_reg != NULL)
             {
-                Register_t *count_reg = get_free_reg(get_reg_stack(), &inst_list);
-                if (count_reg == NULL)
-                {
-                    free_reg(get_reg_stack(), src_addr_reg);
-                    free_reg(get_reg_stack(), dest_reg);
-                    return codegen_fail_register(ctx, inst_list, NULL,
-                        "ERROR: Unable to allocate register for function-call record copy size.");
-                }
-
                 char copy_buf[128];
-                snprintf(copy_buf, sizeof(copy_buf), "\tmovq\t$%lld, %s\n",
-                    record_size > 0 ? record_size : 1, count_reg->bit_64);
-                inst_list = add_inst(inst_list, copy_buf);
+                long long size_val = record_size > 0 ? record_size : 1;
 
                 if (codegen_target_is_windows())
                 {
@@ -3348,7 +3349,7 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                     inst_list = add_inst(inst_list, copy_buf);
                     snprintf(copy_buf, sizeof(copy_buf), "\tmovq\t%s, %%rdx\n", src_addr_reg->bit_64);
                     inst_list = add_inst(inst_list, copy_buf);
-                    snprintf(copy_buf, sizeof(copy_buf), "\tmovq\t%s, %%r8\n", count_reg->bit_64);
+                    snprintf(copy_buf, sizeof(copy_buf), "\tmovq\t$%lld, %%r8\n", size_val);
                     inst_list = add_inst(inst_list, copy_buf);
                 }
                 else
@@ -3357,7 +3358,7 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                     inst_list = add_inst(inst_list, copy_buf);
                     snprintf(copy_buf, sizeof(copy_buf), "\tmovq\t%s, %%rsi\n", src_addr_reg->bit_64);
                     inst_list = add_inst(inst_list, copy_buf);
-                    snprintf(copy_buf, sizeof(copy_buf), "\tmovq\t%s, %%rdx\n", count_reg->bit_64);
+                    snprintf(copy_buf, sizeof(copy_buf), "\tmovq\t$%lld, %%rdx\n", size_val);
                     inst_list = add_inst(inst_list, copy_buf);
                 }
 
@@ -3365,7 +3366,6 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                 inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_memcpy_wrapper");
                 free_arg_regs();
 
-                free_reg(get_reg_stack(), count_reg);
                 free_reg(get_reg_stack(), src_addr_reg);
                 free_reg(get_reg_stack(), dest_reg);
                 return inst_list;
@@ -4096,7 +4096,77 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                         cleaned[j++] = src[i];
                     }
                     cleaned[j] = '\0';
-                    inst_list = add_inst(inst_list, cleaned);
+
+                    /* Resolve identifiers in asm blocks:
+                       1. For nostackframe: substitute parameter names → ABI registers
+                       2. For all asm: resolve Pascal global variables → static labels
+                       Pascal is case-insensitive, but ELF symbols are case-sensitive,
+                       so we must resolve identifiers to their canonical label names. */
+                    {
+                        size_t clen = strlen(cleaned);
+                        size_t sub_alloc = clen * 3 + 4096;
+                        char *substituted = malloc(sub_alloc);
+                        if (substituted != NULL) {
+                            size_t si = 0, sj = 0;
+                            while (si < clen && sj < sub_alloc - 64) {
+                                if ((isalpha((unsigned char)cleaned[si]) || cleaned[si] == '_') &&
+                                    (si == 0 || (!isalnum((unsigned char)cleaned[si-1]) &&
+                                                 cleaned[si-1] != '_' && cleaned[si-1] != '%' &&
+                                                 cleaned[si-1] != '.')))
+                                {
+                                    size_t id_start = si;
+                                    while (si < clen && (isalnum((unsigned char)cleaned[si]) || cleaned[si] == '_'))
+                                        si++;
+                                    size_t id_len = si - id_start;
+                                    char id_buf[256];
+                                    int did_substitute = 0;
+                                    if (id_len < sizeof(id_buf)) {
+                                        memcpy(id_buf, cleaned + id_start, id_len);
+                                        id_buf[id_len] = '\0';
+                                        /* Try nostackframe parameter substitution first */
+                                        if (ctx->is_nostackframe && ctx->asm_param_count > 0) {
+                                            for (int pi = 0; pi < ctx->asm_param_count; pi++) {
+                                                if (ctx->asm_params[pi].name != NULL &&
+                                                    strcasecmp(id_buf, ctx->asm_params[pi].name) == 0) {
+                                                    const char *reg = get_arg_reg64_num(ctx->asm_params[pi].reg_index);
+                                                    if (reg != NULL) {
+                                                        int n = snprintf(substituted + sj, sub_alloc - sj, "%s", reg);
+                                                        sj += (n > 0 ? (size_t)n : 0);
+                                                        did_substitute = 1;
+                                                    }
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                        /* Try resolving as a global variable (case-insensitive) */
+                                        if (!did_substitute) {
+                                            StackNode_t *var = find_label(id_buf);
+                                            if (var != NULL && var->is_static && var->static_label != NULL) {
+                                                const char *label = var->static_label;
+                                                size_t llen = strlen(label);
+                                                if (sj + llen < sub_alloc - 64) {
+                                                    memcpy(substituted + sj, label, llen);
+                                                    sj += llen;
+                                                    did_substitute = 1;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if (!did_substitute) {
+                                        memcpy(substituted + sj, cleaned + id_start, id_len);
+                                        sj += id_len;
+                                    }
+                                } else {
+                                    substituted[sj++] = cleaned[si++];
+                                }
+                            }
+                            substituted[sj] = '\0';
+                            inst_list = add_inst(inst_list, substituted);
+                            free(substituted);
+                        } else {
+                            inst_list = add_inst(inst_list, cleaned);
+                        }
+                    }
                     free(cleaned);
                 }
                 else
@@ -4214,6 +4284,32 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                 char buffer[32];
                 snprintf(buffer, sizeof(buffer), "%s:\n", exit_label);
                 inst_list = add_inst(inst_list, buffer);
+            }
+            /* Restore callee-saved registers before leaving the frame */
+            if (ctx->callee_save_rbx_offset > 0) {
+                char buf[64];
+                snprintf(buf, sizeof(buf), "\tmovq\t-%d(%%rbp), %%rbx\n", ctx->callee_save_rbx_offset);
+                inst_list = add_inst(inst_list, buf);
+            }
+            if (ctx->callee_save_r12_offset > 0) {
+                char buf[64];
+                snprintf(buf, sizeof(buf), "\tmovq\t-%d(%%rbp), %%r12\n", ctx->callee_save_r12_offset);
+                inst_list = add_inst(inst_list, buf);
+            }
+            if (ctx->callee_save_r13_offset > 0) {
+                char buf[64];
+                snprintf(buf, sizeof(buf), "\tmovq\t-%d(%%rbp), %%r13\n", ctx->callee_save_r13_offset);
+                inst_list = add_inst(inst_list, buf);
+            }
+            if (ctx->callee_save_r14_offset > 0) {
+                char buf[64];
+                snprintf(buf, sizeof(buf), "\tmovq\t-%d(%%rbp), %%r14\n", ctx->callee_save_r14_offset);
+                inst_list = add_inst(inst_list, buf);
+            }
+            if (ctx->callee_save_r15_offset > 0) {
+                char buf[64];
+                snprintf(buf, sizeof(buf), "\tmovq\t-%d(%%rbp), %%r15\n", ctx->callee_save_r15_offset);
+                inst_list = add_inst(inst_list, buf);
             }
             inst_list = add_inst(inst_list, "\tleave\n");
             inst_list = add_inst(inst_list, "\tret\n");
@@ -5836,69 +5932,24 @@ static ListNode_t *codegen_builtin_include_exclude(struct Statement *stmt,
         return inst_list;
     }
 
-    Register_t *bit_reg = get_free_reg(get_reg_stack(), &inst_list);
-    Register_t *dword_reg = get_free_reg(get_reg_stack(), &inst_list);
-    Register_t *current_reg = get_free_reg(get_reg_stack(), &inst_list);
-    if (bit_reg == NULL || dword_reg == NULL || current_reg == NULL)
-    {
-        if (bit_reg != NULL)
-            free_reg(get_reg_stack(), bit_reg);
-        if (dword_reg != NULL)
-            free_reg(get_reg_stack(), dword_reg);
-        if (current_reg != NULL)
-            free_reg(get_reg_stack(), current_reg);
-        free_reg(get_reg_stack(), value_reg);
-        free_reg(get_reg_stack(), addr_reg);
-        return inst_list;
-    }
-
     char buffer[128];
+
+    /* btsl/btrl can operate directly on memory, so we only need the
+       bit position in value_reg.  No extra registers needed. */
     snprintf(buffer, sizeof(buffer), "\tandl\t$255, %s\n", value_reg->bit_32);
-    inst_list = add_inst(inst_list, buffer);
-
-    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", value_reg->bit_32, bit_reg->bit_32);
-    inst_list = add_inst(inst_list, buffer);
-    snprintf(buffer, sizeof(buffer), "\tandl\t$31, %s\n", bit_reg->bit_32);
-    inst_list = add_inst(inst_list, buffer);
-
-    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", value_reg->bit_32, dword_reg->bit_32);
-    inst_list = add_inst(inst_list, buffer);
-    snprintf(buffer, sizeof(buffer), "\tshrl\t$5, %s\n", dword_reg->bit_32);
-    inst_list = add_inst(inst_list, buffer);
-    snprintf(buffer, sizeof(buffer), "\tshll\t$2, %s\n", dword_reg->bit_32);
-    inst_list = add_inst(inst_list, buffer);
-
-    snprintf(buffer, sizeof(buffer), "\tmovl\t(%s,%s,1), %s\n",
-        addr_reg->bit_64, dword_reg->bit_64, current_reg->bit_32);
-    inst_list = add_inst(inst_list, buffer);
-
-    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%ecx\n", bit_reg->bit_32);
-    inst_list = add_inst(inst_list, buffer);
-    snprintf(buffer, sizeof(buffer), "\tmovl\t$1, %s\n", bit_reg->bit_32);
-    inst_list = add_inst(inst_list, buffer);
-    snprintf(buffer, sizeof(buffer), "\tshll\t%%cl, %s\n", bit_reg->bit_32);
     inst_list = add_inst(inst_list, buffer);
 
     if (is_exclude)
     {
-        snprintf(buffer, sizeof(buffer), "\tnotl\t%s\n", bit_reg->bit_32);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tandl\t%s, %s\n", bit_reg->bit_32, current_reg->bit_32);
+        snprintf(buffer, sizeof(buffer), "\tbtrl\t%s, (%s)\n", value_reg->bit_32, addr_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
     }
     else
     {
-        snprintf(buffer, sizeof(buffer), "\torl\t%s, %s\n", bit_reg->bit_32, current_reg->bit_32);
+        snprintf(buffer, sizeof(buffer), "\tbtsl\t%s, (%s)\n", value_reg->bit_32, addr_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
     }
 
-    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, (%s,%s,1)\n",
-        current_reg->bit_32, addr_reg->bit_64, dword_reg->bit_64);
-    inst_list = add_inst(inst_list, buffer);
-
-    free_reg(get_reg_stack(), current_reg);
-    free_reg(get_reg_stack(), dword_reg);
-    free_reg(get_reg_stack(), bit_reg);
     free_reg(get_reg_stack(), value_reg);
     free_reg(get_reg_stack(), addr_reg);
     return inst_list;
@@ -8275,6 +8326,13 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
             stmt->stmt_data.procedure_call_data.call_kgpc_type;
         call_expr->expr_data.function_call_data.is_call_info_valid =
             stmt->stmt_data.procedure_call_data.is_call_info_valid;
+        call_expr->expr_data.function_call_data.is_virtual_call =
+            stmt->stmt_data.procedure_call_data.is_virtual_call;
+        call_expr->expr_data.function_call_data.vmt_index =
+            stmt->stmt_data.procedure_call_data.vmt_index;
+        if (stmt->stmt_data.procedure_call_data.self_class_name != NULL)
+            call_expr->expr_data.function_call_data.self_class_name =
+                strdup(stmt->stmt_data.procedure_call_data.self_class_name);
 
         Register_t *discard_reg = NULL;
         inst_list = codegen_evaluate_expr(call_expr, inst_list, ctx, &discard_reg);

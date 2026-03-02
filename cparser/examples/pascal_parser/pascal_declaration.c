@@ -2064,7 +2064,7 @@ void init_pascal_unit_parser(combinator_t** p) {
         NULL
     ));
     // Support FPC [external name 'foo'] syntax as a single directive item.
-    combinator_t* bracket_external_name_item = seq(new_combinator(), PASCAL_T_NONE,
+    combinator_t* bracket_external_name_item = seq(new_combinator(), PASCAL_T_EXTERNAL_NAME_EXPR,
         token(keyword_ci("external")),
         token(keyword_ci("name")),
         token(pascal_string(PASCAL_T_STRING)),
@@ -2189,7 +2189,7 @@ void init_pascal_unit_parser(combinator_t** p) {
         token(create_keyword_parser("weakexternal", PASCAL_T_IDENTIFIER)),
         NULL
     );
-    combinator_t* headeronly_bracket_external = seq(new_combinator(), PASCAL_T_NONE,
+    combinator_t* headeronly_bracket_external = seq(new_combinator(), PASCAL_T_EXTERNAL_NAME_EXPR,
         token(match("[")),
         token(keyword_ci("external")),
         token(keyword_ci("name")),

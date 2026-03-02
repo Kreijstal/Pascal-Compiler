@@ -567,7 +567,7 @@ static combinator_t* create_property_decl_parser(void) {
         )),
         token(match(";")),
         // Optional trailing "default;" directive used in FGL-like properties
-        optional(seq(new_combinator(), PASCAL_T_NONE,
+        optional(seq(new_combinator(), PASCAL_T_DEFAULT_PROPERTY,
             token(keyword_ci("default")),
             optional(token(integer(PASCAL_T_INTEGER))),
             token(match(";")),
@@ -795,7 +795,7 @@ combinator_t* class_type(tag_t tag) {
         )),
         token(match(";")),
         // Optional trailing "default;" directive used in FGL-like properties
-        optional(seq(new_combinator(), PASCAL_T_NONE,
+        optional(seq(new_combinator(), PASCAL_T_DEFAULT_PROPERTY,
             token(keyword_ci("default")),
             optional(token(integer(PASCAL_T_INTEGER))),
             token(match(";")),
@@ -1211,7 +1211,7 @@ combinator_t* interface_type(tag_t tag) {
             NULL
         )),
         token(match(";")),
-        optional(seq(new_combinator(), PASCAL_T_NONE,
+        optional(seq(new_combinator(), PASCAL_T_DEFAULT_PROPERTY,
             token(keyword_ci("default")),
             optional(token(integer(PASCAL_T_INTEGER))),
             token(match(";")),
@@ -1244,7 +1244,7 @@ combinator_t* interface_type(tag_t tag) {
         token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
         NULL
     );
-    combinator_t* interface_guid = optional(seq(new_combinator(), PASCAL_T_NONE,
+    combinator_t* interface_guid = optional(seq(new_combinator(), PASCAL_T_INTERFACE_GUID,
         token(match("[")),
         sep_by(interface_guid_item, token(match(","))),
         token(match("]")),
@@ -2517,14 +2517,18 @@ static ParseResult object_type_fn(input_t* in, void* args, char* parser_name) {
         NULL
     );
 
-    combinator_t* class_var_section = seq(new_combinator(), PASCAL_T_VAR_SECTION,
+    /* Use PASCAL_T_CLASS_MEMBER to distinguish "class var" from "var"
+       so from_cparser.c can detect it and set is_class_var = 1.
+       (token() consumes keywords without creating AST children,
+       so a plain PASCAL_T_VAR_SECTION would be indistinguishable.) */
+    combinator_t* class_var_section = seq(new_combinator(), PASCAL_T_CLASS_MEMBER,
         token(keyword_ci("class")),
         token(keyword_ci("var")),
         many(field_decl),
         NULL
     );
 
-    combinator_t* class_threadvar_section = seq(new_combinator(), PASCAL_T_VAR_SECTION,
+    combinator_t* class_threadvar_section = seq(new_combinator(), PASCAL_T_CLASS_MEMBER,
         token(keyword_ci("class")),
         token(keyword_ci("threadvar")),
         many(field_decl),

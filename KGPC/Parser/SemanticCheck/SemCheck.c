@@ -404,6 +404,21 @@ static void semcheck_qualify_nested_types_for_record(SymTab_t *symtab, struct Re
                 &field->array_element_type_id, &field->array_element_type_ref);
             semcheck_maybe_qualify_nested_type(symtab, record_info->type_id, NULL,
                 &field->pointer_type_id, &field->pointer_type_ref);
+            /* Resolve proc_type for fields with named procedural types.
+             * This avoids string parsing hacks later when detecting procedural
+             * field calls (e.g., FCallBack(args) where FCallBack's type_id is a
+             * dot-qualified nested type like TInterfaceThunk.TThunkCallback). */
+            if (field->proc_type == NULL && field->type_id != NULL)
+            {
+                HashNode_t *type_node = semcheck_find_preferred_type_node(symtab,
+                    field->type_id);
+                if (type_node != NULL && type_node->type != NULL &&
+                    type_node->type->kind == TYPE_KIND_PROCEDURE)
+                {
+                    field->proc_type = type_node->type;
+                    kgpc_type_retain(field->proc_type);
+                }
+            }
         }
         fnode = fnode->next;
     }
@@ -1151,8 +1166,7 @@ static void semcheck_file_from_source_index(int source_index, char *file_out, si
                                                             directive_file, sizeof(directive_file));
         if (directive_line >= 0) {
             if (directive_file[0] != '\0') {
-                strncpy(file_out, directive_file, file_out_size - 1);
-                file_out[file_out_size - 1] = '\0';
+                snprintf(file_out, file_out_size, "%s", directive_file);
             }
             return;
         }
@@ -5108,6 +5122,106 @@ low_cleanup:
                 return 1;
             }
             
+            /* Handle BitSizeOf() function for constant expressions - returns SizeOf(T) * 8 */
+            if (id != NULL && pascal_identifier_equals(id, "BitSizeOf"))
+            {
+                struct Expression *arg = extract_single_const_arg(args, "BitSizeOf");
+                if (arg == NULL)
+                    return 1;
+                
+                /* BitSizeOf expects a type identifier, same as SizeOf */
+                if (arg->type == EXPR_VAR_ID)
+                {
+                    QualifiedIdent *type_id_ref = NULL;
+                    const char *type_name = arg->expr_data.id;
+                    const char *base_name = type_name;
+                    if (arg->id_ref != NULL)
+                    {
+                        type_id_ref = qualified_ident_clone(arg->id_ref);
+                        base_name = qualified_ident_last(type_id_ref);
+                    }
+                    /* Resolve type aliases to base type */
+                    const char *resolved = resolve_type_to_base_name(symtab, type_id_ref, type_name);
+                    if (resolved != NULL)
+                        base_name = resolved;
+
+                    /* Prefer computing from an actual type node (handles nested/local types). */
+                    HashNode_t *size_type_node = NULL;
+                    if (symtab != NULL)
+                    {
+                        if (type_id_ref != NULL && type_id_ref->count > 1)
+                        {
+                            char *qualified_name = qualified_ident_join(type_id_ref, ".");
+                            if (qualified_name != NULL)
+                            {
+                                size_type_node = semcheck_find_preferred_type_node(symtab, qualified_name);
+                                free(qualified_name);
+                            }
+                        }
+                        if (size_type_node == NULL && type_name != NULL)
+                            size_type_node = semcheck_find_preferred_type_node(symtab, type_name);
+                    }
+                    if (size_type_node != NULL && size_type_node->hash_type == HASHTYPE_TYPE)
+                    {
+                        long long computed_size = 0;
+                        if (sizeof_from_hashnode(symtab, size_type_node, &computed_size, 0, expr->line_num) == 0)
+                        {
+                            *out_value = computed_size * 8;
+                            qualified_ident_free(type_id_ref);
+                            return 0;
+                        }
+                    }
+                        
+                    /* Map common type names to their sizes in bits */
+                    /* 64-bit types */
+                    if (pascal_identifier_equals(base_name, "Int64") ||
+                        pascal_identifier_equals(base_name, "QWord") ||
+                        pascal_identifier_equals(base_name, "UInt64") ||
+                        pascal_identifier_equals(base_name, "Pointer") ||
+                        pascal_identifier_equals(base_name, "PChar") ||
+                        pascal_identifier_equals(base_name, "Double") ||
+                        pascal_identifier_equals(base_name, "Real")) {
+                        *out_value = 64LL;
+                        qualified_ident_free(type_id_ref);
+                        return 0;
+                    }
+                    /* 32-bit types */
+                    if (pascal_identifier_equals(base_name, "LongInt") ||
+                        pascal_identifier_equals(base_name, "LongWord") ||
+                        pascal_identifier_equals(base_name, "Cardinal") ||
+                        pascal_identifier_equals(base_name, "DWord") ||
+                        pascal_identifier_equals(base_name, "Integer") ||
+                        pascal_identifier_equals(base_name, "Single")) {
+                        *out_value = 32LL;
+                        qualified_ident_free(type_id_ref);
+                        return 0;
+                    }
+                    /* 16-bit types */
+                    if (pascal_identifier_equals(base_name, "SmallInt") ||
+                        pascal_identifier_equals(base_name, "Word") ||
+                        pascal_identifier_equals(base_name, "WideChar")) {
+                        *out_value = 16LL;
+                        qualified_ident_free(type_id_ref);
+                        return 0;
+                    }
+                    /* 8-bit types */
+                    if (pascal_identifier_equals(base_name, "ShortInt") ||
+                        pascal_identifier_equals(base_name, "Byte") ||
+                        pascal_identifier_equals(base_name, "Char") ||
+                        pascal_identifier_equals(base_name, "AnsiChar") ||
+                        pascal_identifier_equals(base_name, "Boolean")) {
+                        *out_value = 8LL;
+                        qualified_ident_free(type_id_ref);
+                        return 0;
+                    }
+                    fprintf(stderr, "Error: BitSizeOf(%s) - unsupported type in const expression.\n", arg->expr_data.id);
+                    qualified_ident_free(type_id_ref);
+                    return 1;
+                }
+                fprintf(stderr, "Error: BitSizeOf expects a type identifier as argument.\n");
+                return 1;
+            }
+
             /* Handle Chr() function for constant expressions */
             if (id != NULL && pascal_identifier_equals(id, "Chr"))
             {
@@ -5291,7 +5405,7 @@ low_cleanup:
 
             if (id != NULL)
                 fprintf(stderr, "Error: const expression uses unsupported function %s on line %d.\n", id, expr->line_num);
-            fprintf(stderr, "Error: only Ord(), High(), Low(), SizeOf(), Chr(), Trunc(), and integer typecasts are supported in const expressions.\n");
+            fprintf(stderr, "Error: only Ord(), High(), Low(), SizeOf(), BitSizeOf(), Chr(), Trunc(), and integer typecasts are supported in const expressions.\n");
             return 1;
         }
         case EXPR_RELOP:
@@ -5941,6 +6055,21 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                 if (!has_non_hidden && new_has_body)
                                     is_forward_class_completion = 1;
                             }
+                            /* Also handle forward interface declarations:
+                             * "IMyIntf = interface;" followed by the full definition. */
+                            if (new_record != NULL && new_record->is_interface &&
+                                existing_record != NULL && existing_record->is_interface)
+                            {
+                                int existing_has_body = (existing_record->fields != NULL ||
+                                    existing_record->properties != NULL ||
+                                    existing_record->method_templates != NULL);
+                                int new_has_body = (new_record->fields != NULL ||
+                                    new_record->properties != NULL ||
+                                    new_record->method_templates != NULL ||
+                                    new_record->parent_class_name != NULL);
+                                if (!existing_has_body && new_has_body)
+                                    is_forward_class_completion = 1;
+                            }
                         }
                         if (!is_forward_class_completion)
                         {
@@ -6175,6 +6304,45 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                         alias->target_type_id) &&
                         !alias->is_pointer && !alias->is_array && !alias->is_set &&
                         !alias->is_enum && !alias->is_file;
+
+                    /* WideChar/UnicodeChar must be predeclared as CHAR_TYPE before
+                     * apply_builtin_integer_alias_metadata converts them to WORD_TYPE. */
+                    if (alias->is_char_alias && type_id != NULL &&
+                        (pascal_identifier_equals(type_id, "WideChar") ||
+                         pascal_identifier_equals(type_id, "UnicodeChar")))
+                    {
+                        if (alias->alias_name == NULL)
+                            alias->alias_name = strdup(type_id);
+                        alias->storage_size = 2;
+                        KgpcType *kgpc_type = create_primitive_type_with_size(CHAR_TYPE, 2);
+                        if (kgpc_type != NULL)
+                        {
+                            kgpc_type_set_type_alias(kgpc_type, alias);
+                            if (tree->tree_data.type_decl_data.kgpc_type == NULL)
+                            {
+                                tree->tree_data.type_decl_data.kgpc_type = kgpc_type;
+                                kgpc_type_retain(kgpc_type);
+                            }
+                            int result = PushTypeOntoScope_Typed(symtab, (char *)type_id, kgpc_type);
+                            if (result > 0)
+                                errors += result;
+                            else
+                            {
+                                HashNode_t *type_node = semcheck_find_type_node_with_unit_flag(symtab,
+                                    type_id, tree->tree_data.type_decl_data.defined_in_unit);
+                                if (type_node != NULL)
+                                {
+                                    mark_hashnode_unit_info(symtab, type_node,
+                                        tree->tree_data.type_decl_data.defined_in_unit,
+                                        tree->tree_data.type_decl_data.unit_is_public);
+                                    mark_hashnode_source_unit(type_node, tree->tree_data.type_decl_data.source_unit_index);
+                                }
+                            }
+                        }
+                        cur = cur->next;
+                        continue;
+                    }
+
                     if (alias->target_type_id != NULL)
                         apply_builtin_integer_alias_metadata(alias, alias->target_type_id);
                     else if (type_id != NULL)

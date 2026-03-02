@@ -379,6 +379,82 @@ struct Expression *clone_expression(const struct Expression *expr)
             clone->expr_data.set_data.elements = elem_head;
             break;
         }
+        case EXPR_FUNCTION_CALL:
+        {
+            clone->expr_data.function_call_data.id =
+                expr->expr_data.function_call_data.id != NULL ?
+                    strdup(expr->expr_data.function_call_data.id) : NULL;
+            if (expr->expr_data.function_call_data.id != NULL &&
+                clone->expr_data.function_call_data.id == NULL)
+            {
+                destroy_expr(clone);
+                return NULL;
+            }
+            clone->expr_data.function_call_data.mangled_id =
+                expr->expr_data.function_call_data.mangled_id != NULL ?
+                    strdup(expr->expr_data.function_call_data.mangled_id) : NULL;
+            if (expr->expr_data.function_call_data.mangled_id != NULL &&
+                clone->expr_data.function_call_data.mangled_id == NULL)
+            {
+                destroy_expr(clone);
+                return NULL;
+            }
+            clone->expr_data.function_call_data.args_expr =
+                clone_expr_list(expr->expr_data.function_call_data.args_expr);
+            clone->expr_data.function_call_data.resolved_func =
+                expr->expr_data.function_call_data.resolved_func;
+            clone->expr_data.function_call_data.call_hash_type =
+                expr->expr_data.function_call_data.call_hash_type;
+            clone->expr_data.function_call_data.call_kgpc_type =
+                expr->expr_data.function_call_data.call_kgpc_type;
+            if (clone->expr_data.function_call_data.call_kgpc_type != NULL)
+                kgpc_type_retain(clone->expr_data.function_call_data.call_kgpc_type);
+            clone->expr_data.function_call_data.is_call_info_valid =
+                expr->expr_data.function_call_data.is_call_info_valid;
+            clone->expr_data.function_call_data.is_procedural_var_call =
+                expr->expr_data.function_call_data.is_procedural_var_call;
+            clone->expr_data.function_call_data.procedural_var_symbol =
+                expr->expr_data.function_call_data.procedural_var_symbol;
+            clone->expr_data.function_call_data.procedural_var_expr =
+                expr->expr_data.function_call_data.procedural_var_expr != NULL ?
+                    clone_expression(expr->expr_data.function_call_data.procedural_var_expr) : NULL;
+            clone->expr_data.function_call_data.is_method_call_placeholder =
+                expr->expr_data.function_call_data.is_method_call_placeholder;
+            clone->expr_data.function_call_data.placeholder_method_name =
+                expr->expr_data.function_call_data.placeholder_method_name != NULL ?
+                    strdup(expr->expr_data.function_call_data.placeholder_method_name) : NULL;
+            if (expr->expr_data.function_call_data.placeholder_method_name != NULL &&
+                clone->expr_data.function_call_data.placeholder_method_name == NULL)
+            {
+                destroy_expr(clone);
+                return NULL;
+            }
+            clone->expr_data.function_call_data.is_virtual_call =
+                expr->expr_data.function_call_data.is_virtual_call;
+            clone->expr_data.function_call_data.vmt_index =
+                expr->expr_data.function_call_data.vmt_index;
+            clone->expr_data.function_call_data.self_class_name =
+                expr->expr_data.function_call_data.self_class_name != NULL ?
+                    strdup(expr->expr_data.function_call_data.self_class_name) : NULL;
+            if (expr->expr_data.function_call_data.self_class_name != NULL &&
+                clone->expr_data.function_call_data.self_class_name == NULL)
+            {
+                destroy_expr(clone);
+                return NULL;
+            }
+            clone->expr_data.function_call_data.arg0_is_dynarray_descriptor =
+                expr->expr_data.function_call_data.arg0_is_dynarray_descriptor;
+            clone->expr_data.function_call_data.call_qualifier =
+                expr->expr_data.function_call_data.call_qualifier != NULL ?
+                    strdup(expr->expr_data.function_call_data.call_qualifier) : NULL;
+            if (expr->expr_data.function_call_data.call_qualifier != NULL &&
+                clone->expr_data.function_call_data.call_qualifier == NULL)
+            {
+                destroy_expr(clone);
+                return NULL;
+            }
+            break;
+        }
         default:
             destroy_expr(clone);
             return NULL;

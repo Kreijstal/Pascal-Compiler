@@ -580,6 +580,7 @@ ParseResult make_failure_v2(input_t* in, char* parser_name, char* message, char*
     // Don't create context here - it's expensive and most errors are discarded during backtracking
     // Context will be created on-demand when error is displayed
     err->context = NULL;
+    err->source_filename = (in && in->source_filename) ? strdup(in->source_filename) : NULL;
     err->cause = NULL;
     err->partial_ast = NULL;
     err->committed = false;
@@ -599,6 +600,7 @@ ParseResult make_failure_with_ast(input_t* in, char* message, ast_t* partial_ast
     err->message = message;
     err->cause = NULL;
     err->context = NULL;  // Don't create context - expensive and usually discarded
+    err->source_filename = (in && in->source_filename) ? strdup(in->source_filename) : NULL;
     err->partial_ast = partial_ast;
     err->parser_name = NULL;
     err->unexpected = NULL;
@@ -636,6 +638,7 @@ ParseResult wrap_failure_with_ast(input_t* in, char* message, ParseResult origin
     new_err->parser_name = NULL;
     new_err->unexpected = NULL;
     new_err->context = original_error->context ? strdup(original_error->context) : NULL;
+    new_err->source_filename = original_error->source_filename ? strdup(original_error->source_filename) : NULL;
     new_err->committed = original_error->committed;  // Preserve commit status
 
     return (ParseResult){ .is_success = false, .value.error = new_err };
@@ -649,6 +652,7 @@ ParseResult wrap_failure(input_t* in, char* message, char* parser_name, ParseRes
         err->col = cause_error->col;
         err->index = cause_error->index;
         err->context = cause_error->context ? strdup(cause_error->context) : NULL;
+        err->source_filename = cause_error->source_filename ? strdup(cause_error->source_filename) : NULL;
         err->committed = cause_error->committed;  // Preserve commit status
     } else {
         /* Store raw line for now - source line is computed on-demand when error is displayed */
@@ -656,6 +660,7 @@ ParseResult wrap_failure(input_t* in, char* message, char* parser_name, ParseRes
         err->col = in ? in->col : 0;
         err->index = in ? in->start : -1;
         err->context = NULL;  // Don't create context - expensive
+        err->source_filename = (in && in->source_filename) ? strdup(in->source_filename) : NULL;
         err->committed = false;
     }
     err->message = message;
@@ -782,6 +787,7 @@ static ParseError* clone_parse_error(const ParseError* original) {
     copy->parser_name = original->parser_name ? strdup(original->parser_name) : NULL;
     copy->unexpected = original->unexpected ? strdup(original->unexpected) : NULL;
     copy->context = original->context ? strdup(original->context) : NULL;
+    copy->source_filename = original->source_filename ? strdup(original->source_filename) : NULL;
     copy->committed = original->committed;
     copy->partial_ast = copy_ast(original->partial_ast);
     copy->cause = clone_parse_error(original->cause);
@@ -961,6 +967,7 @@ input_t * new_input() {
     input_t * in = (input_t *) safe_malloc(sizeof(input_t));
     in->buffer = NULL; in->alloc = 0; in->length = 0; in->start = 0; in->line = 1; in->col = 1;
     in->source_line = 1; in->source_line_base = 1; in->source_line_base_pos = 0;
+    in->source_filename = NULL;
     in->memo = NULL;
     return in;
 }
@@ -972,6 +979,7 @@ void free_input(input_t *in) {
         memo_table_destroy(in->memo);
         in->memo = NULL;
     }
+    free(in->source_filename);
     free(in);
 }
 
@@ -990,6 +998,8 @@ void init_input_buffer(input_t *in, char *buffer, int length) {
     in->source_line = 1;
     in->source_line_base = 1;
     in->source_line_base_pos = 0;
+    free(in->source_filename);
+    in->source_filename = NULL;
 }
 
 char read1(input_t * in) {
@@ -1004,6 +1014,7 @@ char read1(input_t * in) {
         strcpy(in->buffer, linebuf);
         in->start = 0; in->line = 1; in->col = 1;
         in->source_line = 1; in->source_line_base = 1; in->source_line_base_pos = 0;
+        free(in->source_filename); in->source_filename = NULL;
     }
     if (in->start < in->length) {
         char c = in->buffer[in->start++];
@@ -1762,11 +1773,13 @@ void free_error(ParseError* err) {
     if (err->parser_name) free(err->parser_name);
     if (err->unexpected) free(err->unexpected);
     if (err->context) free(err->context);
+    if (err->source_filename) free(err->source_filename);
     free(err->message);
     ParseError* nested = err->cause;
     err->parser_name = NULL;
     err->unexpected = NULL;
     err->context = NULL;
+    err->source_filename = NULL;
     err->message = NULL;
     err->cause = NULL;
     if (nested) {

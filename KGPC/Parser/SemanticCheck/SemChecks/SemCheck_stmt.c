@@ -1591,7 +1591,9 @@ static int try_resolve_builtin_procedure(SymTab_t *symtab,
 
     /* Prefer user-defined/prologue procedures over builtins when available. */
     HashNode_t *existing = NULL;
-    int force_builtin = pascal_identifier_equals(expected_name, "Assign");
+    int force_builtin = pascal_identifier_equals(expected_name, "Assign") ||
+                        pascal_identifier_equals(expected_name, "Val") ||
+                        pascal_identifier_equals(expected_name, "Str");
     if (!force_builtin &&
         FindIdent(&existing, symtab, proc_id) != -1 && existing != NULL &&
         existing->hash_type != HASHTYPE_BUILTIN_PROCEDURE)
@@ -3482,6 +3484,18 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                                         free(call_mangled);
                                     }
 
+                                    /* Fallback: use semcheck_resolve_overload when exact mangling
+                                     * doesn't match (e.g., dynamic array types with different alias names) */
+                                    if (parent_method_node == NULL)
+                                    {
+                                        HashNode_t *best_match = NULL;
+                                        int best_rank = 0, num_best = 0;
+                                        semcheck_resolve_overload(&best_match, &best_rank, &num_best,
+                                            parent_candidates, self_arg, symtab, call_expr, INT_MAX, 0);
+                                        if (best_match != NULL && num_best == 1)
+                                            parent_method_node = best_match;
+                                    }
+
                                     self_arg->next = NULL;
                                     destroy_expr(self_expr);
                                     free(self_arg);
@@ -4828,6 +4842,9 @@ skip_type_receiver_rewrite:
                 (method_node->hash_type == HASHTYPE_PROCEDURE ||
                  method_node->hash_type == HASHTYPE_FUNCTION))
             {
+                /* Save bare method name before rewrite for virtual dispatch check */
+                char *bare_method_name = strdup(proc_id);
+
                 /* Prepend Self to arguments */
                 struct Expression *self_expr = mk_varid(stmt->line_num, strdup("Self"));
                 ListNode_t *self_arg = CreateListNode(self_expr, LIST_EXPR);
@@ -4847,6 +4864,37 @@ skip_type_receiver_rewrite:
                         stmt->stmt_data.procedure_call_data.id = proc_id;
                     }
                 }
+
+                /* Check if this is a virtual/abstract method call that needs VMT dispatch.
+                 * Only for instance methods (not class/static methods), since class methods
+                 * use a different VMT dispatch convention (single indirection). */
+                if (self_record->type_id != NULL && bare_method_name != NULL &&
+                    from_cparser_is_method_virtual(self_record->type_id, bare_method_name) &&
+                    !from_cparser_is_method_static(self_record->type_id, bare_method_name))
+                {
+                    stmt->stmt_data.procedure_call_data.is_virtual_call = 1;
+                    int vmt_index = -1;
+                    if (self_record->methods != NULL)
+                    {
+                        ListNode_t *method_entry = self_record->methods;
+                        while (method_entry != NULL)
+                        {
+                            struct MethodInfo *info = (struct MethodInfo *)method_entry->cur;
+                            if (info != NULL && info->name != NULL &&
+                                (info->is_virtual || info->is_override) &&
+                                strcasecmp(info->name, bare_method_name) == 0)
+                            {
+                                vmt_index = info->vmt_index;
+                                break;
+                            }
+                            method_entry = method_entry->next;
+                        }
+                    }
+                    stmt->stmt_data.procedure_call_data.vmt_index = vmt_index;
+                    stmt->stmt_data.procedure_call_data.self_class_name =
+                        strdup(self_record->type_id);
+                }
+                free(bare_method_name);
             }
             else if (self_record != NULL && self_record->type_id != NULL)
             {
@@ -4886,6 +4934,8 @@ skip_type_receiver_rewrite:
                             }
                             else if (rf->type_id != NULL)
                             {
+                                /* proc_type is resolved during semcheck_qualify_nested_types_for_record
+                                 * so this path handles non-nested procedural types only. */
                                 HashNode_t *type_node = NULL;
                                 if (FindIdent(&type_node, symtab, rf->type_id) != -1 &&
                                     type_node != NULL && type_node->type != NULL &&
@@ -4947,6 +4997,7 @@ skip_type_receiver_rewrite:
                     stmt->stmt_data.procedure_call_data.is_procedural_var_call = 1;
                     stmt->stmt_data.procedure_call_data.procedural_var_expr = field_access;
                     stmt->stmt_data.procedure_call_data.call_hash_type = HASHTYPE_VAR;
+                    stmt->stmt_data.procedure_call_data.is_call_info_valid = 1;
 
                     /* Check the expression for type resolution */
                     int field_tag = UNKNOWN_TYPE;
@@ -5472,6 +5523,23 @@ skip_type_receiver_rewrite:
                     args_given = stmt->stmt_data.procedure_call_data.expr_args;
                     static_arg_already_removed = 1;
                 }
+                else if (is_static && !receiver_is_type_ident && args_given != NULL)
+                {
+                    /* Static method called from within the class with implicit Self prepended.
+                     * Self must be stripped since static methods have no Self parameter.
+                     * Check if the first arg is "Self". */
+                    struct Expression *receiver_expr = (struct Expression *)args_given->cur;
+                    if (receiver_expr != NULL && receiver_expr->type == EXPR_VAR_ID &&
+                        receiver_expr->expr_data.id != NULL &&
+                        pascal_identifier_equals(receiver_expr->expr_data.id, "Self"))
+                    {
+                        ListNode_t *old_head = args_given;
+                        stmt->stmt_data.procedure_call_data.expr_args = old_head->next;
+                        old_head->next = NULL;
+                        args_given = stmt->stmt_data.procedure_call_data.expr_args;
+                        static_arg_already_removed = 1;
+                    }
+                }
             }
             else
             {
@@ -5747,6 +5815,18 @@ skip_type_receiver_rewrite:
                 /* For static methods, remove the first argument (the type identifier) */
                 args_given = args_given->next;
                 stmt->stmt_data.procedure_call_data.expr_args = args_given;
+            }
+            else if (is_static && !receiver_is_type_ident && args_given != NULL)
+            {
+                /* Static method called with implicit Self - strip it */
+                struct Expression *receiver_expr = (struct Expression *)args_given->cur;
+                if (receiver_expr != NULL && receiver_expr->type == EXPR_VAR_ID &&
+                    receiver_expr->expr_data.id != NULL &&
+                    pascal_identifier_equals(receiver_expr->expr_data.id, "Self"))
+                {
+                    args_given = args_given->next;
+                    stmt->stmt_data.procedure_call_data.expr_args = args_given;
+                }
             }
         }
         
@@ -6241,14 +6321,58 @@ proccall_parent_resolve_done:
         }
         /* External name override for procedures handled during codegen to avoid side-effects here */
         stmt->stmt_data.procedure_call_data.resolved_proc = resolved_proc;
-        
+
         /* Populate call info to avoid use-after-free when HashNode is freed */
         stmt->stmt_data.procedure_call_data.call_hash_type = resolved_proc->hash_type;
         semcheck_stmt_set_call_kgpc_type(stmt, resolved_proc->type,
             stmt->stmt_data.procedure_call_data.is_call_info_valid == 1);
         stmt->stmt_data.procedure_call_data.is_call_info_valid = 1;
         semcheck_mark_call_requires_static_link(resolved_proc);
-        
+
+        /* Centralized virtual dispatch fallback — catches abstract virtual methods
+         * that weren't detected by the early Self-injection check. Only applies to
+         * methods without a body (abstract) and not class/static methods (which use
+         * single-indirection VMT dispatch that codegen doesn't support yet). */
+        if (resolved_proc->owner_class != NULL && resolved_proc->method_name != NULL &&
+            !stmt->stmt_data.procedure_call_data.is_virtual_call &&
+            !from_cparser_is_method_static(resolved_proc->owner_class,
+                resolved_proc->method_name) &&
+            from_cparser_is_method_virtual(resolved_proc->owner_class,
+                resolved_proc->method_name))
+        {
+            int has_body = 0;
+            if (resolved_proc->type != NULL && resolved_proc->type->kind == TYPE_KIND_PROCEDURE)
+            {
+                Tree_t *proc_def = resolved_proc->type->info.proc_info.definition;
+                if (proc_def != NULL &&
+                    proc_def->tree_data.subprogram_data.statement_list != NULL)
+                    has_body = 1;
+            }
+            if (!has_body)
+            {
+                struct RecordType *class_record = semcheck_lookup_record_type(symtab,
+                    resolved_proc->owner_class);
+                if (class_record != NULL && class_record->methods != NULL)
+                {
+                    for (ListNode_t *me = class_record->methods; me != NULL; me = me->next)
+                    {
+                        struct MethodInfo *mi = (struct MethodInfo *)me->cur;
+                        if (mi != NULL && mi->name != NULL &&
+                            (mi->is_virtual || mi->is_override) &&
+                            strcasecmp(mi->name, resolved_proc->method_name) == 0)
+                        {
+                            stmt->stmt_data.procedure_call_data.is_virtual_call = 1;
+                            stmt->stmt_data.procedure_call_data.vmt_index = mi->vmt_index;
+                            if (stmt->stmt_data.procedure_call_data.self_class_name == NULL)
+                                stmt->stmt_data.procedure_call_data.self_class_name =
+                                    strdup(resolved_proc->owner_class);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
         /* Fill in missing arguments with default values */
         if (resolved_proc->type != NULL && resolved_proc->type->kind == TYPE_KIND_PROCEDURE)
         {
@@ -6358,6 +6482,38 @@ proccall_parent_resolve_done:
             return return_val + semcheck_call_with_proc_var(symtab, stmt, proc_var, max_scope_lev);
         }
 
+        /* WITH context fallback: if the procedure call couldn't be resolved in
+         * normal scope, try resolving via active WITH contexts.  This handles
+         * patterns like:  with SomeList.LockList do Add(Self);
+         * where Add is a method of the WITH target's class. */
+        if (proc_id != NULL && with_context_count > 0)
+        {
+            struct Expression *with_expr = NULL;
+            int wm = semcheck_with_try_resolve_method(proc_id, symtab, &with_expr, stmt->line_num);
+            if (wm == 0 && with_expr != NULL)
+            {
+                /* Prepend the WITH context expression as Self argument */
+                ListNode_t *self_node = CreateListNode(with_expr, LIST_EXPR);
+                if (self_node != NULL)
+                {
+                    self_node->next = stmt->stmt_data.procedure_call_data.expr_args;
+                    stmt->stmt_data.procedure_call_data.expr_args = self_node;
+                    /* Mark as method call so the retry resolves via class method lookup */
+                    stmt->stmt_data.procedure_call_data.is_method_call_placeholder = 1;
+                    /* Free overload list before retry */
+                    DestroyList(overload_candidates);
+                    overload_candidates = NULL;
+                    free(mangled_name);
+                    mangled_name = NULL;
+                    /* Re-evaluate as a method call from scratch */
+                    return semcheck_proccall(symtab, stmt, max_scope_lev);
+                }
+                else
+                {
+                    destroy_expr(with_expr);
+                }
+            }
+        }
 
         /* Build detailed error message with argument types and available overloads */
         {

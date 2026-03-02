@@ -182,7 +182,11 @@ typedef enum {
     PASCAL_T_INITIALIZATION_SECTION,
     PASCAL_T_FINALIZATION_SECTION,
     // Field width specifier for formatted output
-    PASCAL_T_FIELD_WIDTH
+    PASCAL_T_FIELD_WIDTH,
+    // Interface GUID attribute: ['{...}'] or [SGUIDConst]
+    PASCAL_T_INTERFACE_GUID,
+    // Default property marker (trailing "default;" on indexed property)
+    PASCAL_T_DEFAULT_PROPERTY
 } pascal_tag_t;
 
 // --- Function Declarations ---

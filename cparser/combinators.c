@@ -37,6 +37,7 @@ static ParseResult errmap_fn(input_t * in, void * args, char* parser_name);
 static ParseResult commit_fn(input_t * in, void * args, char* parser_name);
 static ParseResult many_fn(input_t * in, void * args, char* parser_name);
 static ParseResult optional_fn(input_t * in, void * args, char* parser_name);
+static ast_t* find_tail_node(ast_t* node);
 
 typedef struct {
     int index;
@@ -176,7 +177,7 @@ static ast_t *append_remaining(input_t *in, sep_by_args *sargs, ast_t *tail) {
         }
 
         tail->next = next_res.value.ast;
-        tail = tail->next;
+        tail = find_tail_node(tail->next);
     }
 
     return tail;
@@ -196,7 +197,7 @@ static ParseResult sep_by_common(input_t *in, sep_by_args *sargs, bool require_f
     }
 
     ast_t *head = first.value.ast;
-    ast_t *tail = head;
+    ast_t *tail = find_tail_node(head);
 
     tail = append_remaining(in, sargs, tail);
 
@@ -379,10 +380,11 @@ static ParseResult many_fn(input_t * in, void * args, char* parser_name) {
         // Skip ast_nil results - they represent "matched but no output"
         if (res.value.ast != NULL && res.value.ast != ast_nil) {
             if (head == NULL) {
-                head = tail = res.value.ast;
+                head = res.value.ast;
+                tail = find_tail_node(head);
             } else {
                 tail->next = res.value.ast;
-                tail = tail->next;
+                tail = find_tail_node(tail->next);
             }
         }
         iter++;

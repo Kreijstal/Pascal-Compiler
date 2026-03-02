@@ -1281,13 +1281,19 @@ int from_cparser_is_method_virtual(const char *class_name, const char *method_na
     if (class_name == NULL || method_name == NULL)
         return 0;
 
+    /* Check ALL overloads — return 1 if ANY overload with this name is virtual.
+     * Overloaded methods may have both virtual and non-virtual variants
+     * (e.g. TEncoding.GetAnsiBytes has virtual abstract + non-virtual overloads). */
     ListNode_t *cur = class_method_bindings;
     while (cur != NULL) {
         ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
         if (binding != NULL && binding->class_name != NULL && binding->method_name != NULL &&
             strcasecmp(binding->class_name, class_name) == 0 &&
             strcasecmp(binding->method_name, method_name) == 0)
-            return binding->is_virtual || binding->is_override;
+        {
+            if (binding->is_virtual || binding->is_override)
+                return 1;
+        }
         cur = cur->next;
     }
     return 0;
@@ -6134,6 +6140,12 @@ static struct ClassProperty *convert_property_decl(ast_t *property_node)
             cursor = cursor->next;
             continue;
         }
+        if (cursor->typ == PASCAL_T_DEFAULT_PROPERTY)
+        {
+            is_default = 1;
+            cursor = cursor->next;
+            continue;
+        }
         ast_t *unwrapped = unwrap_pascal_node(cursor);
         if (unwrapped == NULL)
         {
@@ -6974,17 +6986,51 @@ static struct RecordType *convert_interface_type_ex(const char *interface_name, 
     uint16_t guid_d3 = 0;
     uint8_t guid_d4[8] = {0};
     ast_t *body_start = interface_node->child;
+    /* Skip optional GUID attribute: ['{...}'] or [SGUIDConst].
+     * With PASCAL_T_INTERFACE_GUID, the GUID is now wrapped in its own node. */
+    if (body_start != NULL && body_start->typ == PASCAL_T_INTERFACE_GUID) {
+        /* Extract GUID string from inside the GUID node if available */
+        ast_t *guid_child = body_start->child;
+        while (guid_child != NULL) {
+            if (guid_child->typ == PASCAL_T_STRING && guid_child->sym != NULL &&
+                guid_child->sym->name != NULL) {
+                guid_string = strdup(guid_child->sym->name);
+                has_guid = parse_guid_literal(guid_child->sym->name, &guid_d1, &guid_d2, &guid_d3, guid_d4);
+                break;
+            }
+            guid_child = guid_child->next;
+        }
+        body_start = body_start->next;
+    }
+
     if (body_start != NULL && body_start->typ == PASCAL_T_IDENTIFIER) {
         if (body_start->sym != NULL && body_start->sym->name != NULL)
             parent_interface_name = strdup(body_start->sym->name);
         body_start = body_start->next;
     }
 
-    /* Optional GUID string follows parent identifier, e.g. ['{...}'] */
+    /* Optional GUID string follows parent identifier (when GUID is a string literal) */
     if (body_start != NULL && body_start->typ == PASCAL_T_STRING) {
         if (body_start->sym != NULL && body_start->sym->name != NULL) {
+            free(guid_string);
             guid_string = strdup(body_start->sym->name);
             has_guid = parse_guid_literal(body_start->sym->name, &guid_d1, &guid_d2, &guid_d3, guid_d4);
+        }
+        body_start = body_start->next;
+    }
+
+    /* Skip GUID attribute if it follows the parent identifier */
+    if (body_start != NULL && body_start->typ == PASCAL_T_INTERFACE_GUID) {
+        ast_t *guid_child = body_start->child;
+        while (guid_child != NULL && !has_guid) {
+            if (guid_child->typ == PASCAL_T_STRING && guid_child->sym != NULL &&
+                guid_child->sym->name != NULL) {
+                free(guid_string);
+                guid_string = strdup(guid_child->sym->name);
+                has_guid = parse_guid_literal(guid_child->sym->name, &guid_d1, &guid_d2, &guid_d3, guid_d4);
+                break;
+            }
+            guid_child = guid_child->next;
         }
         body_start = body_start->next;
     }
@@ -7010,6 +7056,16 @@ static struct RecordType *convert_interface_type_ex(const char *interface_name, 
     record->properties = list_builder_finish(&property_builder);
     record->method_templates = list_builder_finish(&method_template_builder);
     record->parent_class_name = parent_interface_name;
+    /* In FPC, interfaces without an explicit parent implicitly inherit from
+     * IInterface (a.k.a. IUnknown).  Set the default parent so that methods
+     * like _AddRef, _Release, QueryInterface are found by the class-method
+     * walker when resolving field access on derived interfaces. */
+    if (record->parent_class_name == NULL && interface_name != NULL &&
+        !pascal_identifier_equals(interface_name, "IInterface") &&
+        !pascal_identifier_equals(interface_name, "IUnknown"))
+    {
+        record->parent_class_name = strdup("IInterface");
+    }
     record->methods = NULL;
     record->is_class = 0;
     record->is_interface = 1;
@@ -7448,8 +7504,32 @@ static void convert_record_members(ast_t *node, ListBuilder *builder,
                 }
             }
         } else if (cur->typ == PASCAL_T_CLASS_MEMBER) {
-            /* Recurse into CLASS_MEMBER wrappers (e.g. from visibility sections) */
-            convert_record_members(cur->child, builder, property_builder, method_template_builder);
+            /* CLASS_MEMBER may wrap either:
+             * 1. Visibility sections (e.g. public/private) — recurse
+             * 2. "class var" fields from object types — set is_class_var on each */
+            int has_field_decls = 0;
+            for (ast_t *chk = cur->child; chk != NULL; chk = chk->next) {
+                if (chk->typ == PASCAL_T_FIELD_DECL) { has_field_decls = 1; break; }
+            }
+            if (has_field_decls) {
+                /* This is a "class var" section — convert fields and mark is_class_var */
+                for (ast_t *child = cur->child; child != NULL; child = child->next) {
+                    if (child->typ == PASCAL_T_FIELD_DECL) {
+                        ListNode_t *fields = convert_field_decl(child);
+                        if (fields != NULL) {
+                            for (ListNode_t *fnode = fields; fnode != NULL; fnode = fnode->next) {
+                                if (fnode->type == LIST_RECORD_FIELD && fnode->cur != NULL) {
+                                    struct RecordField *field = (struct RecordField *)fnode->cur;
+                                    field->is_class_var = 1;
+                                }
+                            }
+                            list_builder_extend(builder, fields);
+                        }
+                    }
+                }
+            } else {
+                convert_record_members(cur->child, builder, property_builder, method_template_builder);
+            }
         }
     }
 }
@@ -11142,6 +11222,9 @@ static void append_helper_const_decls_from_type_decl(ast_t *type_decl_node,
 
         /* Also rename any typed var decls that were appended to var_builder
          * from this const section (e.g., MaxValue : Single = ...) */
+        ListBuilder helper_map_builder;
+        list_builder_init(&helper_map_builder);
+
         for (ListNode_t *iter = new_var_nodes; iter != NULL; iter = iter->next)
         {
             Tree_t *decl = (Tree_t *)iter->cur;
@@ -11158,8 +11241,10 @@ static void append_helper_const_decls_from_type_decl(ast_t *type_decl_node,
                         char *mangled = mangle_helper_const_name(helper_id, old_id);
                         if (mangled != NULL)
                         {
+                            add_class_const_map_entry(&helper_map_builder, old_id, mangled);
                             free(id_node->cur);
-                            id_node->cur = mangled;
+                            id_node->cur = strdup(mangled);
+                            free(mangled);
                         }
                     }
                 }
@@ -11175,12 +11260,41 @@ static void append_helper_const_decls_from_type_decl(ast_t *type_decl_node,
                         char *mangled = mangle_helper_const_name(helper_id, old_id);
                         if (mangled != NULL)
                         {
+                            add_class_const_map_entry(&helper_map_builder, old_id, mangled);
                             free(id_node->cur);
-                            id_node->cur = mangled;
+                            id_node->cur = strdup(mangled);
+                            free(mangled);
                         }
                     }
                 }
             }
+        }
+
+        /* Rewrite initializer statements so LHS uses mangled names too */
+        ListNode_t *helper_map = list_builder_finish(&helper_map_builder);
+        if (helper_map != NULL)
+        {
+            for (ListNode_t *iter = new_var_nodes; iter != NULL; iter = iter->next)
+            {
+                Tree_t *decl = (Tree_t *)iter->cur;
+                if (decl == NULL)
+                    continue;
+                if (decl->type == TREE_VAR_DECL)
+                    rewrite_class_const_statement(decl->tree_data.var_decl_data.initializer, helper_map);
+                else if (decl->type == TREE_ARR_DECL)
+                    rewrite_class_const_statement(decl->tree_data.arr_decl_data.initializer, helper_map);
+            }
+            for (ListNode_t *cur_map = helper_map; cur_map != NULL; cur_map = cur_map->next)
+            {
+                ClassConstMap *entry = (ClassConstMap *)cur_map->cur;
+                if (entry != NULL)
+                {
+                    free(entry->original);
+                    free(entry->mangled);
+                    free(entry);
+                }
+            }
+            destroy_list(helper_map);
         }
     }
 
@@ -13837,15 +13951,28 @@ static struct Statement *convert_block(ast_t *block_node) {
 
 /* Recursively search an AST subtree for a keyword (case-insensitive).
  * Returns 1 if found, 0 otherwise. Limits depth to avoid runaway recursion. */
+/* Search an AST node list (linked via ->next) and their children for a keyword. */
+static int ast_has_keyword_in_list(ast_t *node, const char *keyword, int max_depth) {
+    if (node == NULL || max_depth <= 0)
+        return 0;
+    if (node->sym != NULL && node->sym->name != NULL &&
+        strcasecmp(node->sym->name, keyword) == 0)
+        return 1;
+    if (ast_has_keyword_in_list(node->child, keyword, max_depth - 1))
+        return 1;
+    return ast_has_keyword_in_list(node->next, keyword, max_depth);
+}
+
+/* Search a single AST node and its children (NOT siblings) for a keyword.
+   This avoids contamination from sibling procedure declarations that may
+   have different directives (e.g. nostackframe). */
 static int ast_has_keyword(ast_t *node, const char *keyword, int max_depth) {
     if (node == NULL || max_depth <= 0)
         return 0;
     if (node->sym != NULL && node->sym->name != NULL &&
         strcasecmp(node->sym->name, keyword) == 0)
         return 1;
-    if (ast_has_keyword(node->child, keyword, max_depth - 1))
-        return 1;
-    return ast_has_keyword(node->next, keyword, max_depth);
+    return ast_has_keyword_in_list(node->child, keyword, max_depth - 1);
 }
 
 static Tree_t *convert_method_impl(ast_t *method_node) {
@@ -14589,6 +14716,12 @@ static char *extract_external_name_from_node(ast_t *node)
         node->child->child->typ == PASCAL_T_STRING)
         return dup_symbol(node->child->child);
 
+    /* Handle bracket form: [external name 'X'] — children are keyword, keyword, string */
+    for (ast_t *c = node->child; c != NULL; c = c->next) {
+        if (c->typ == PASCAL_T_STRING)
+            return dup_symbol(c);
+    }
+
     return NULL;
 }
 
@@ -14649,6 +14782,12 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
     ListNode_t *type_decls = NULL;
 
     while (cur != NULL) {
+        if (getenv("KGPC_DEBUG_PROC_DIRECTIVE") != NULL) {
+            fprintf(stderr, "[KGPC] convert_procedure directive node: typ=%d sym=%s child_typ=%d\n",
+                cur->typ,
+                (cur->sym != NULL && cur->sym->name != NULL) ? cur->sym->name : "<null>",
+                (cur->child != NULL) ? cur->child->typ : -1);
+        }
         switch (cur->typ) {
         case PASCAL_T_TYPE_SECTION:
             append_type_decls_from_section(cur, &type_decls, &nested_subs,
@@ -14700,6 +14839,24 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
                     is_nostackframe = 1;
                 } else if (strcasecmp(self_sym, "varargs") == 0) {
                     is_varargs = 1;
+                } else if (strcasecmp(self_sym, "alias") == 0) {
+                    /* [Alias:'NAME'] bracket directive — the string value is
+                       either a child node or the next sibling (depending on
+                       how the PEG grammar flattened the seq). */
+                    ast_t *val = cur->child;
+                    if (val == NULL || val->typ != PASCAL_T_STRING)
+                        val = cur->next;  /* sibling layout */
+                    if (val != NULL && val->typ == PASCAL_T_STRING) {
+                        char *name = dup_symbol(val);
+                        if (name != NULL) {
+                            if (external_alias != NULL)
+                                free(external_alias);
+                            external_alias = name;
+                        }
+                        /* Skip the string node so the outer loop doesn't revisit it */
+                        if (val == cur->next)
+                            cur = cur->next;
+                    }
                 }
                 free(self_sym);
             }
@@ -14727,6 +14884,7 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
                         free(external_alias);
                     external_alias = name;
                 }
+                is_external = 1;
             }
             break;
         default:
@@ -15016,6 +15174,25 @@ static Tree_t *convert_function(ast_t *func_node) {
                     is_nostackframe = 1;
                 else if (strcasecmp(self_sym, "varargs") == 0)
                     is_varargs = 1;
+                else if (strcasecmp(self_sym, "alias") == 0) {
+                    /* [Alias:'NAME'] bracket directive — the string value is
+                       either a child node or the next sibling (depending on
+                       how the PEG grammar flattened the seq). */
+                    ast_t *val = cur->child;
+                    if (val == NULL || val->typ != PASCAL_T_STRING)
+                        val = cur->next;  /* sibling layout */
+                    if (val != NULL && val->typ == PASCAL_T_STRING) {
+                        char *name = dup_symbol(val);
+                        if (name != NULL) {
+                            if (external_alias != NULL)
+                                free(external_alias);
+                            external_alias = name;
+                        }
+                        /* Skip the string node so the outer loop doesn't revisit it */
+                        if (val == cur->next)
+                            cur = cur->next;
+                    }
+                }
                 free(self_sym);
             }
 
@@ -15042,6 +15219,7 @@ static Tree_t *convert_function(ast_t *func_node) {
                         free(external_alias);
                     external_alias = name;
                 }
+                is_external = 1;
             }
             break;
         default:

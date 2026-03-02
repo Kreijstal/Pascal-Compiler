@@ -53,6 +53,7 @@ struct input_t {
    int source_line;  // Original source line (survives backtracking, updated by #line directives)
    int source_line_base;  // Line number from last #line directive
    int source_line_base_pos;  // Buffer position after last #line directive
+   char *source_filename;  // Current source filename from {#line N "file"} directive
    memo_table_t* memo;
 };
 
@@ -65,6 +66,7 @@ typedef struct ParseError {
     char* parser_name;
     char* unexpected;
     char* context;
+    char* source_filename;  // Source filename from {#line} directive (or NULL)
     struct ParseError* cause;
     ast_t* partial_ast;
     bool committed;  // If true, prevents backtracking in multi combinator

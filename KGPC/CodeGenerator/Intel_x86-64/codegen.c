@@ -54,6 +54,82 @@ int codegen_tag_from_kgpc(const KgpcType *type)
 #define CODEGEN_POINTER_SIZE_BYTES 8
 #define CODEGEN_LABEL_BUFFER_SIZE 256
 
+/* ---- Simple string hash set for O(1) label/name lookups ---- */
+#define CODEGEN_HASHSET_SIZE 211
+
+typedef struct CodeGenHashEntry {
+    const char *key;
+    struct CodeGenHashEntry *next;
+} CodeGenHashEntry;
+
+typedef struct {
+    CodeGenHashEntry *buckets[CODEGEN_HASHSET_SIZE];
+} CodeGenStringSet;
+
+static unsigned codegen_hash(const char *s)
+{
+    unsigned h = 0;
+    for (; *s; s++)
+        h = h * 31 + (unsigned char)*s;
+    return h % CODEGEN_HASHSET_SIZE;
+}
+
+static int codegen_set_contains(const CodeGenStringSet *set, const char *key)
+{
+    unsigned idx = codegen_hash(key);
+    for (CodeGenHashEntry *e = set->buckets[idx]; e != NULL; e = e->next)
+        if (strcmp(e->key, key) == 0)
+            return 1;
+    return 0;
+}
+
+static int codegen_set_contains_ci(const CodeGenStringSet *set, const char *key)
+{
+    unsigned h = 0;
+    for (const char *s = key; *s; s++)
+        h = h * 31 + (unsigned char)tolower((unsigned char)*s);
+    unsigned idx = h % CODEGEN_HASHSET_SIZE;
+    for (CodeGenHashEntry *e = set->buckets[idx]; e != NULL; e = e->next)
+        if (strcasecmp(e->key, key) == 0)
+            return 1;
+    return 0;
+}
+
+static void codegen_set_insert(CodeGenStringSet *set, const char *key)
+{
+    unsigned idx = codegen_hash(key);
+    CodeGenHashEntry *entry = malloc(sizeof(CodeGenHashEntry));
+    entry->key = key;
+    entry->next = set->buckets[idx];
+    set->buckets[idx] = entry;
+}
+
+static void codegen_set_insert_ci(CodeGenStringSet *set, const char *key)
+{
+    unsigned h = 0;
+    for (const char *s = key; *s; s++)
+        h = h * 31 + (unsigned char)tolower((unsigned char)*s);
+    unsigned idx = h % CODEGEN_HASHSET_SIZE;
+    CodeGenHashEntry *entry = malloc(sizeof(CodeGenHashEntry));
+    entry->key = key;
+    entry->next = set->buckets[idx];
+    set->buckets[idx] = entry;
+}
+
+static void codegen_set_destroy(CodeGenStringSet *set)
+{
+    for (int i = 0; i < CODEGEN_HASHSET_SIZE; i++) {
+        CodeGenHashEntry *e = set->buckets[i];
+        while (e != NULL) {
+            CodeGenHashEntry *next = e->next;
+            free(e);
+            e = next;
+        }
+        set->buckets[i] = NULL;
+    }
+}
+/* ---- End string hash set ---- */
+
 static int codegen_self_param_is_class(Tree_t *arg_decl, SymTab_t *symtab)
 {
     if (arg_decl == NULL || arg_decl->type != TREE_VAR_DECL)
@@ -926,6 +1002,34 @@ static void codegen_register_local_types(ListNode_t *type_decls, SymTab_t *symta
     }
 }
 
+static int codegen_eval_const_expr(struct Expression *expr, long long *out_value);
+
+/* Register local const declarations in the symbol table so that nested functions
+ * (and the function itself) can find them via FindIdent as HASHTYPE_CONST.
+ * Without this, constants emitted as .equ are treated as memory references. */
+static void codegen_register_const_decls(ListNode_t *const_decls, SymTab_t *symtab)
+{
+    if (const_decls == NULL || symtab == NULL)
+        return;
+
+    for (ListNode_t *cur = const_decls; cur != NULL; cur = cur->next)
+    {
+        Tree_t *decl = (Tree_t *)cur->cur;
+        if (decl == NULL || decl->type != TREE_CONST_DECL)
+            continue;
+
+        const char *id = decl->tree_data.const_decl_data.id;
+        struct Expression *value = decl->tree_data.const_decl_data.value;
+
+        if (id == NULL || value == NULL)
+            continue;
+
+        long long const_value = 0;
+        if (codegen_eval_const_expr(value, &const_value))
+            PushConstOntoScope(symtab, (char *)id, const_value);
+    }
+}
+
 static void codegen_register_decl_list(ListNode_t *decls, SymTab_t *symtab, int is_param)
 {
     if (decls == NULL || symtab == NULL)
@@ -1751,8 +1855,9 @@ ListNode_t *gencode_jmp(int type, int inverse, char *label, ListNode_t *inst_lis
 }
 
 /* Generates a function header.
- * If nostackframe is set, only emits the label without prologue (push %rbp / mov %rsp, %rbp). */
-void codegen_function_header_ex(char *func_name, CodeGenContext *ctx, int nostackframe)
+ * If nostackframe is set, only emits the label without prologue (push %rbp / mov %rsp, %rbp).
+ * If cname_override is set and differs from func_name, emits an additional .globl + label alias. */
+void codegen_function_header_ex_alias(char *func_name, CodeGenContext *ctx, int nostackframe, const char *cname_override)
 {
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
@@ -1760,6 +1865,11 @@ void codegen_function_header_ex(char *func_name, CodeGenContext *ctx, int nostac
     assert(func_name != NULL);
     assert(ctx != NULL);
     codegen_emit_function_debug_comments(func_name, ctx);
+    /* Emit alias label from cname_override (e.g. [Public,Alias:'FPC_DO_EXIT']) */
+    if (cname_override != NULL && strcmp(cname_override, func_name) != 0) {
+        fprintf(ctx->output_file, ".globl\t%s\n", cname_override);
+        fprintf(ctx->output_file, "%s:\n", cname_override);
+    }
     fprintf(ctx->output_file, ".globl\t%s\n", func_name);
     if (codegen_target_is_windows())
         fprintf(ctx->output_file, "\t.seh_proc\t%s\n", func_name);
@@ -1780,6 +1890,11 @@ void codegen_function_header_ex(char *func_name, CodeGenContext *ctx, int nostac
     return;
 }
 
+void codegen_function_header_ex(char *func_name, CodeGenContext *ctx, int nostackframe)
+{
+    codegen_function_header_ex_alias(func_name, ctx, nostackframe, NULL);
+}
+
 void codegen_function_header(char *func_name, CodeGenContext *ctx)
 {
     codegen_function_header_ex(func_name, ctx, 0);
@@ -1794,10 +1909,22 @@ void codegen_function_footer_ex(char *func_name, CodeGenContext *ctx, int nostac
     #endif
     assert(func_name != NULL);
     assert(ctx != NULL);
-    if (nostackframe)
+    if (nostackframe) {
         fprintf(ctx->output_file, "\tret\n");
-    else
+    } else {
+        /* Restore callee-saved GP registers before leaving the frame */
+        if (ctx->callee_save_rbx_offset > 0)
+            fprintf(ctx->output_file, "\tmovq\t-%d(%%rbp), %%rbx\n", ctx->callee_save_rbx_offset);
+        if (ctx->callee_save_r12_offset > 0)
+            fprintf(ctx->output_file, "\tmovq\t-%d(%%rbp), %%r12\n", ctx->callee_save_r12_offset);
+        if (ctx->callee_save_r13_offset > 0)
+            fprintf(ctx->output_file, "\tmovq\t-%d(%%rbp), %%r13\n", ctx->callee_save_r13_offset);
+        if (ctx->callee_save_r14_offset > 0)
+            fprintf(ctx->output_file, "\tmovq\t-%d(%%rbp), %%r14\n", ctx->callee_save_r14_offset);
+        if (ctx->callee_save_r15_offset > 0)
+            fprintf(ctx->output_file, "\tmovq\t-%d(%%rbp), %%r15\n", ctx->callee_save_r15_offset);
         fprintf(ctx->output_file, "\tnop\n\tleave\n\tret\n");
+    }
     if (codegen_target_is_windows())
         fprintf(ctx->output_file, "\t.seh_endproc\n");
 
@@ -1908,22 +2035,54 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
         char *unit_id = tree->tree_data.unit_data.unit_id;
         char init_label[CODEGEN_LABEL_BUFFER_SIZE];
         snprintf(init_label, sizeof(init_label), "_UNIT_%s_INIT", unit_id ? unit_id : "UNKNOWN");
-        
+
+        int prev_callee_rbx = ctx->callee_save_rbx_offset;
+        int prev_callee_r12 = ctx->callee_save_r12_offset;
+        int prev_callee_r13 = ctx->callee_save_r13_offset;
+        int prev_callee_r14 = ctx->callee_save_r14_offset;
+        int prev_callee_r15 = ctx->callee_save_r15_offset;
         push_stackscope();
+        {
+            StackNode_t *rbx_slot = add_l_t_bytes("__callee_rbx", 8);
+            StackNode_t *r12_slot = add_l_t_bytes("__callee_r12", 8);
+            StackNode_t *r13_slot = add_l_t_bytes("__callee_r13", 8);
+            StackNode_t *r14_slot = add_l_t_bytes("__callee_r14", 8);
+            StackNode_t *r15_slot = add_l_t_bytes("__callee_r15", 8);
+            ctx->callee_save_rbx_offset = rbx_slot->offset;
+            ctx->callee_save_r12_offset = r12_slot->offset;
+            ctx->callee_save_r13_offset = r13_slot->offset;
+            ctx->callee_save_r14_offset = r14_slot->offset;
+            ctx->callee_save_r15_offset = r15_slot->offset;
+        }
         ListNode_t *inst_list = NULL;
         inst_list = codegen_stmt(tree->tree_data.unit_data.initialization, inst_list, ctx, symtab);
-        
+
         fprintf(ctx->output_file, "\t.globl\t%s\n", init_label);
         fprintf(ctx->output_file, "%s:\n", init_label);
         fprintf(ctx->output_file, "\tpushq\t%%rbp\n");
         fprintf(ctx->output_file, "\tmovq\t%%rsp, %%rbp\n");
         codegen_stack_space(ctx);
         codegen_inst_list(inst_list, ctx);
+        if (ctx->callee_save_rbx_offset > 0)
+            fprintf(ctx->output_file, "\tmovq\t-%d(%%rbp), %%rbx\n", ctx->callee_save_rbx_offset);
+        if (ctx->callee_save_r12_offset > 0)
+            fprintf(ctx->output_file, "\tmovq\t-%d(%%rbp), %%r12\n", ctx->callee_save_r12_offset);
+        if (ctx->callee_save_r13_offset > 0)
+            fprintf(ctx->output_file, "\tmovq\t-%d(%%rbp), %%r13\n", ctx->callee_save_r13_offset);
+        if (ctx->callee_save_r14_offset > 0)
+            fprintf(ctx->output_file, "\tmovq\t-%d(%%rbp), %%r14\n", ctx->callee_save_r14_offset);
+        if (ctx->callee_save_r15_offset > 0)
+            fprintf(ctx->output_file, "\tmovq\t-%d(%%rbp), %%r15\n", ctx->callee_save_r15_offset);
         fprintf(ctx->output_file, "\tleave\n");
         fprintf(ctx->output_file, "\tret\n");
-        
+
         free_inst_list(inst_list);
         pop_stackscope();
+        ctx->callee_save_rbx_offset = prev_callee_rbx;
+        ctx->callee_save_r12_offset = prev_callee_r12;
+        ctx->callee_save_r13_offset = prev_callee_r13;
+        ctx->callee_save_r14_offset = prev_callee_r14;
+        ctx->callee_save_r15_offset = prev_callee_r15;
     }
 
     /* Generate finalization section if present */
@@ -1932,22 +2091,54 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
         char *unit_id = tree->tree_data.unit_data.unit_id;
         char final_label[CODEGEN_LABEL_BUFFER_SIZE];
         snprintf(final_label, sizeof(final_label), "_UNIT_%s_FINAL", unit_id ? unit_id : "UNKNOWN");
-        
+
+        int prev_callee_rbx = ctx->callee_save_rbx_offset;
+        int prev_callee_r12 = ctx->callee_save_r12_offset;
+        int prev_callee_r13 = ctx->callee_save_r13_offset;
+        int prev_callee_r14 = ctx->callee_save_r14_offset;
+        int prev_callee_r15 = ctx->callee_save_r15_offset;
         push_stackscope();
+        {
+            StackNode_t *rbx_slot = add_l_t_bytes("__callee_rbx", 8);
+            StackNode_t *r12_slot = add_l_t_bytes("__callee_r12", 8);
+            StackNode_t *r13_slot = add_l_t_bytes("__callee_r13", 8);
+            StackNode_t *r14_slot = add_l_t_bytes("__callee_r14", 8);
+            StackNode_t *r15_slot = add_l_t_bytes("__callee_r15", 8);
+            ctx->callee_save_rbx_offset = rbx_slot->offset;
+            ctx->callee_save_r12_offset = r12_slot->offset;
+            ctx->callee_save_r13_offset = r13_slot->offset;
+            ctx->callee_save_r14_offset = r14_slot->offset;
+            ctx->callee_save_r15_offset = r15_slot->offset;
+        }
         ListNode_t *inst_list = NULL;
         inst_list = codegen_stmt(tree->tree_data.unit_data.finalization, inst_list, ctx, symtab);
-        
+
         fprintf(ctx->output_file, "\t.globl\t%s\n", final_label);
         fprintf(ctx->output_file, "%s:\n", final_label);
         fprintf(ctx->output_file, "\tpushq\t%%rbp\n");
         fprintf(ctx->output_file, "\tmovq\t%%rsp, %%rbp\n");
         codegen_stack_space(ctx);
         codegen_inst_list(inst_list, ctx);
+        if (ctx->callee_save_rbx_offset > 0)
+            fprintf(ctx->output_file, "\tmovq\t-%d(%%rbp), %%rbx\n", ctx->callee_save_rbx_offset);
+        if (ctx->callee_save_r12_offset > 0)
+            fprintf(ctx->output_file, "\tmovq\t-%d(%%rbp), %%r12\n", ctx->callee_save_r12_offset);
+        if (ctx->callee_save_r13_offset > 0)
+            fprintf(ctx->output_file, "\tmovq\t-%d(%%rbp), %%r13\n", ctx->callee_save_r13_offset);
+        if (ctx->callee_save_r14_offset > 0)
+            fprintf(ctx->output_file, "\tmovq\t-%d(%%rbp), %%r14\n", ctx->callee_save_r14_offset);
+        if (ctx->callee_save_r15_offset > 0)
+            fprintf(ctx->output_file, "\tmovq\t-%d(%%rbp), %%r15\n", ctx->callee_save_r15_offset);
         fprintf(ctx->output_file, "\tleave\n");
         fprintf(ctx->output_file, "\tret\n");
-        
+
         free_inst_list(inst_list);
         pop_stackscope();
+        ctx->callee_save_rbx_offset = prev_callee_rbx;
+        ctx->callee_save_r12_offset = prev_callee_r12;
+        ctx->callee_save_r13_offset = prev_callee_r13;
+        ctx->callee_save_r14_offset = prev_callee_r14;
+        ctx->callee_save_r15_offset = prev_callee_r15;
     }
 
     codegen_program_footer(ctx);
@@ -2476,7 +2667,35 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
         fprintf(ctx->output_file, "\t.align 8\n");
         fprintf(ctx->output_file, ".globl %s_CLASSVAR\n", class_label);
         fprintf(ctx->output_file, "%s_CLASSVAR:\n", class_label);
-        fprintf(ctx->output_file, "\t.zero %lld\n", class_var_size);
+
+        /* Emit per-field labels for class var fields */
+        {
+            long long offset = 0;
+            ListNode_t *fn = record_info->fields;
+            while (fn != NULL) {
+                if (fn->type == LIST_RECORD_FIELD && fn->cur != NULL) {
+                    struct RecordField *f = (struct RecordField *)fn->cur;
+                    if (f != NULL && (include_all_fields || f->is_class_var == 1)) {
+                        int fsz = codegen_class_var_field_size(symtab, f);
+                        int align = (fsz >= 8) ? 8 : ((fsz >= 4) ? 4 : 1);
+                        long long aligned_off = (offset + align - 1) & ~(align - 1);
+                        long long pad = aligned_off - offset;
+                        if (pad > 0)
+                            fprintf(ctx->output_file, "\t.zero\t%lld\n", pad);
+                        if (f->name != NULL && f->is_class_var == 1) {
+                            fprintf(ctx->output_file, ".weak\t%s\n", f->name);
+                            fprintf(ctx->output_file, "%s:\n", f->name);
+                        }
+                        fprintf(ctx->output_file, "\t.zero\t%d\n", fsz);
+                        offset = aligned_off + fsz;
+                    }
+                }
+                fn = fn->next;
+            }
+            if (offset < class_var_size)
+                fprintf(ctx->output_file, "\t.zero\t%lld\n", class_var_size - offset);
+        }
+
         fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());
     }
 }
@@ -2518,9 +2737,58 @@ static void codegen_emit_record_classvar_storage(CodeGenContext *ctx, SymTab_t *
     fprintf(ctx->output_file, "\t.data\n");
     fprintf(ctx->output_file, "\t.align 8\n");
     fprintf(ctx->output_file, ".globl %s_CLASSVAR\n", class_label);
+    /* Emit a weak alias from the bare type name to the _CLASSVAR label
+       so that codegen references like "leaq HeapInc(%rip)" resolve. */
+    fprintf(ctx->output_file, ".weak\t%s\n", class_label);
+    fprintf(ctx->output_file, "%s:\n", class_label);
     fprintf(ctx->output_file, "%s_CLASSVAR:\n", class_label);
-    fprintf(ctx->output_file, "\t.zero\t%lld\n", class_var_size);
+
+    /* Emit per-field labels so inline asm can reference class vars by bare name.
+       Walk fields and emit .globl + label at each class var's offset. */
+    {
+        int include_all = has_class_vars ? 0 : 1;
+        long long offset = 0;
+        ListNode_t *fn = record_info->fields;
+        while (fn != NULL) {
+            if (fn->type == LIST_RECORD_FIELD && fn->cur != NULL) {
+                struct RecordField *f = (struct RecordField *)fn->cur;
+                if (f != NULL && (include_all || f->is_class_var == 1)) {
+                    int fsz = codegen_class_var_field_size(symtab, f);
+                    int align = (fsz >= 8) ? 8 : ((fsz >= 4) ? 4 : 1);
+                    long long aligned_off = (offset + align - 1) & ~(align - 1);
+                    long long pad = aligned_off - offset;
+                    if (pad > 0)
+                        fprintf(ctx->output_file, "\t.zero\t%lld\n", pad);
+                    /* Emit a weak label with the bare field name, but only for
+                       actual class vars (not regular fields that happen to be included). */
+                    if (f->name != NULL && f->is_class_var == 1) {
+                        fprintf(ctx->output_file, ".weak\t%s\n", f->name);
+                        fprintf(ctx->output_file, "%s:\n", f->name);
+                    }
+                    fprintf(ctx->output_file, "\t.zero\t%d\n", fsz);
+                    offset = aligned_off + fsz;
+                }
+            }
+            fn = fn->next;
+        }
+        /* Emit remaining padding if offset < class_var_size */
+        if (offset < class_var_size)
+            fprintf(ctx->output_file, "\t.zero\t%lld\n", class_var_size - offset);
+    }
+
+    /* Emit stub TYPEINFO/VMT symbols for advanced records.
+     * This record was added to emitted_classes[], so the alias loop will
+     * generate .set directives referencing these symbols (e.g., for pointer
+     * type aliases like PPropInfo = ^TPropInfo).  Without these stubs,
+     * strict linkers like ld.lld report undefined symbol errors. */
     fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());
+    fprintf(ctx->output_file, "\t.align 8\n");
+    fprintf(ctx->output_file, ".globl %s_TYPEINFO\n", class_label);
+    fprintf(ctx->output_file, "%s_TYPEINFO:\n", class_label);
+    fprintf(ctx->output_file, "\t.quad\t0\n");  /* No parent class */
+    fprintf(ctx->output_file, ".globl %s_VMT\n", class_label);
+    fprintf(ctx->output_file, "%s_VMT:\n", class_label);
+    fprintf(ctx->output_file, "\t.quad\t%s_TYPEINFO\n", class_label);
 }
 
 /* Generate Virtual Method Tables (VMT) for classes with virtual methods */
@@ -2623,6 +2891,36 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
                 node = node->next;
             }
         }
+    }
+
+    /* Emit TYPEINFO/VMT aliases for type aliases that point to class/interface types.
+     * e.g., IInterface = IUnknown  →  .set IInterface_TYPEINFO, IUnknown_TYPEINFO */
+    cur = type_decls;
+    while (cur != NULL) {
+        Tree_t *type_tree = (Tree_t *)cur->cur;
+        if (type_tree != NULL && type_tree->type == TREE_TYPE_DECL &&
+            type_tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS) {
+            const char *alias_name = type_tree->tree_data.type_decl_data.id;
+            const char *target_name = type_tree->tree_data.type_decl_data.info.alias.target_type_id;
+            if (alias_name != NULL && target_name != NULL) {
+                /* Check if the target type has been emitted as a class/interface */
+                int target_emitted = 0;
+                for (int i = 0; i < emitted_count; i++) {
+                    if (strcasecmp(emitted_classes[i], target_name) == 0) {
+                        target_emitted = 1;
+                        break;
+                    }
+                }
+                if (target_emitted) {
+                    fprintf(ctx->output_file, "\n# TYPEINFO alias: %s = %s\n", alias_name, target_name);
+                    fprintf(ctx->output_file, ".weak\t%s_TYPEINFO\n", alias_name);
+                    fprintf(ctx->output_file, "\t.set\t%s_TYPEINFO, %s_TYPEINFO\n", alias_name, target_name);
+                    fprintf(ctx->output_file, ".weak\t%s_VMT\n", alias_name);
+                    fprintf(ctx->output_file, "\t.set\t%s_VMT, %s_VMT\n", alias_name, target_name);
+                }
+            }
+        }
+        cur = cur->next;
     }
 
     fprintf(ctx->output_file, ".text\n");
@@ -2789,6 +3087,19 @@ void codegen_stack_space(CodeGenContext *ctx)
     }
     if (codegen_target_is_windows())
         fprintf(ctx->output_file, "\t.seh_endprologue\n");
+
+    /* Save callee-saved registers after the stack frame is set up */
+    if (ctx->callee_save_rbx_offset > 0)
+        fprintf(ctx->output_file, "\tmovq\t%%rbx, -%d(%%rbp)\n", ctx->callee_save_rbx_offset);
+    if (ctx->callee_save_r12_offset > 0)
+        fprintf(ctx->output_file, "\tmovq\t%%r12, -%d(%%rbp)\n", ctx->callee_save_r12_offset);
+    if (ctx->callee_save_r13_offset > 0)
+        fprintf(ctx->output_file, "\tmovq\t%%r13, -%d(%%rbp)\n", ctx->callee_save_r13_offset);
+    if (ctx->callee_save_r14_offset > 0)
+        fprintf(ctx->output_file, "\tmovq\t%%r14, -%d(%%rbp)\n", ctx->callee_save_r14_offset);
+    if (ctx->callee_save_r15_offset > 0)
+        fprintf(ctx->output_file, "\tmovq\t%%r15, -%d(%%rbp)\n", ctx->callee_save_r15_offset);
+
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
@@ -2850,6 +3161,11 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
     const char *prev_id = ctx->current_subprogram_id;
     const char *prev_mangled = ctx->current_subprogram_mangled;
     int prev_depth = ctx->current_subprogram_lexical_depth;
+    int prev_callee_rbx = ctx->callee_save_rbx_offset;
+    int prev_callee_r12 = ctx->callee_save_r12_offset;
+    int prev_callee_r13 = ctx->callee_save_r13_offset;
+    int prev_callee_r14 = ctx->callee_save_r14_offset;
+    int prev_callee_r15 = ctx->callee_save_r15_offset;
     ctx->current_subprogram_id = prgm_name;
     ctx->current_subprogram_mangled = prgm_name;
     ctx->current_subprogram_lexical_depth = 0;
@@ -2857,7 +3173,236 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
     push_stackscope();
 
     codegen_function_locals(data->var_declaration, ctx, symtab);
+
+    /* Allocate callee-save slots AFTER locals so t-section offsets don't collide */
+    {
+        StackNode_t *rbx_slot = add_l_t_bytes("__callee_rbx", 8);
+        StackNode_t *r12_slot = add_l_t_bytes("__callee_r12", 8);
+        StackNode_t *r13_slot = add_l_t_bytes("__callee_r13", 8);
+        StackNode_t *r14_slot = add_l_t_bytes("__callee_r14", 8);
+        StackNode_t *r15_slot = add_l_t_bytes("__callee_r15", 8);
+        ctx->callee_save_rbx_offset = rbx_slot->offset;
+        ctx->callee_save_r12_offset = r12_slot->offset;
+        ctx->callee_save_r13_offset = r13_slot->offset;
+        ctx->callee_save_r14_offset = r14_slot->offset;
+        ctx->callee_save_r15_offset = r15_slot->offset;
+    }
+
     codegen_subprograms(data->subprograms, ctx, symtab);
+
+    /* Build hash set of emitted subprogram labels for O(1) lookups */
+    CodeGenStringSet emitted_labels;
+    memset(&emitted_labels, 0, sizeof(emitted_labels));
+    {
+        ListNode_t *_s = ctx->emitted_subprograms;
+        while (_s != NULL) {
+            if (_s->type == LIST_STRING && _s->cur != NULL)
+                codegen_set_insert(&emitted_labels, (const char *)_s->cur);
+            _s = _s->next;
+        }
+    }
+
+    /* Post-pass: emit .set aliases for cname_override values.
+       Forward declarations with [Alias:'FPC_DO_EXIT'] have cname_override set
+       but no body; the matching implementation has a body but no cname_override.
+       Scan for forward decls with aliases and match them to implementations by id. */
+    CodeGenStringSet emitted_cname_aliases;
+    memset(&emitted_cname_aliases, 0, sizeof(emitted_cname_aliases));
+    if (ctx->output_file != NULL) {
+        int debug_alias = (getenv("KGPC_DEBUG_ALIAS") != NULL);
+        ListNode_t *alias_scan = data->subprograms;
+        while (alias_scan != NULL) {
+            if (alias_scan->type == LIST_TREE && alias_scan->cur != NULL) {
+                Tree_t *sub = (Tree_t *)alias_scan->cur;
+                if (sub->type == TREE_SUBPROGRAM) {
+                    const char *alias = sub->tree_data.subprogram_data.cname_override;
+                    if (debug_alias && alias != NULL) {
+                        fprintf(stderr, "[ALIAS] id=%s mangled=%s alias=%s has_body=%d\n",
+                            sub->tree_data.subprogram_data.id ? sub->tree_data.subprogram_data.id : "<null>",
+                            sub->tree_data.subprogram_data.mangled_id ? sub->tree_data.subprogram_data.mangled_id : "<null>",
+                            alias, sub->tree_data.subprogram_data.statement_list != NULL);
+                    }
+                    if (alias != NULL) {
+                        const char *mangled = sub->tree_data.subprogram_data.mangled_id;
+                        const char *id = sub->tree_data.subprogram_data.id;
+                        const char *label = (mangled != NULL) ? mangled : id;
+
+                        /* Skip aliases that don't start with FPC_ or KGPC_ —
+                           these are `external name` imports (getenv, read, time, etc.)
+                           and emitting .set for them would override C library symbols. */
+                        int is_internal_alias = (strncmp(alias, "FPC_", 4) == 0 ||
+                                                 strncmp(alias, "KGPC_", 5) == 0);
+
+                        /* If this node has a body AND was emitted, emit alias directly.
+                           Use .weak so we don't override C library symbols. */
+                        if (is_internal_alias &&
+                            sub->tree_data.subprogram_data.statement_list != NULL &&
+                            label != NULL && strcmp(alias, label) != 0 &&
+                            codegen_set_contains(&emitted_labels, label) &&
+                            !codegen_set_contains(&emitted_cname_aliases, alias)) {
+                            codegen_set_insert(&emitted_cname_aliases, alias);
+                            fprintf(ctx->output_file, ".weak\t%s\n", alias);
+                            fprintf(ctx->output_file, "\t.set\t%s, %s\n", alias, label);
+                        }
+                        /* If this is a forward decl (no body), find the implementation.
+                           Match by id, or by cname_override (e.g. `external name 'FPC_DO_EXIT'`
+                           referencing a function that has [Alias:'FPC_DO_EXIT']). */
+                        else if (is_internal_alias &&
+                                 sub->tree_data.subprogram_data.statement_list == NULL) {
+                            ListNode_t *impl_scan = data->subprograms;
+                            while (impl_scan != NULL) {
+                                if (impl_scan->type == LIST_TREE && impl_scan->cur != NULL) {
+                                    Tree_t *impl = (Tree_t *)impl_scan->cur;
+                                    if (impl != sub && impl->type == TREE_SUBPROGRAM &&
+                                        impl->tree_data.subprogram_data.statement_list != NULL) {
+                                        /* Match by id */
+                                        int matched = 0;
+                                        if (id != NULL && impl->tree_data.subprogram_data.id != NULL &&
+                                            strcasecmp(impl->tree_data.subprogram_data.id, id) == 0)
+                                            matched = 1;
+                                        /* Match by alias matching impl's cname_override */
+                                        if (!matched && impl->tree_data.subprogram_data.cname_override != NULL &&
+                                            strcasecmp(impl->tree_data.subprogram_data.cname_override, alias) == 0)
+                                            matched = 1;
+                                        if (matched) {
+                                            const char *impl_mangled = impl->tree_data.subprogram_data.mangled_id;
+                                            const char *impl_label = (impl_mangled != NULL) ? impl_mangled : impl->tree_data.subprogram_data.id;
+                                            if (impl_label != NULL && strcmp(alias, impl_label) != 0 &&
+                                                codegen_set_contains(&emitted_labels, impl_label) &&
+                                                !codegen_set_contains(&emitted_cname_aliases, alias)) {
+                                                codegen_set_insert(&emitted_cname_aliases, alias);
+                                                fprintf(ctx->output_file, ".weak\t%s\n", alias);
+                                                fprintf(ctx->output_file, "\t.set\t%s, %s\n", alias, impl_label);
+                                            }
+                                            /* Also emit alias from the forward decl's mangled_id to the impl.
+                                               e.g., `int_finalize_p_p` → `fpc_finalize_p_p` so that
+                                               `leaq int_finalize_p_p(%rip)` resolves correctly. */
+                                            if (label != NULL && impl_label != NULL &&
+                                                strcmp(label, impl_label) != 0 &&
+                                                strcmp(label, alias) != 0 &&
+                                                codegen_set_contains(&emitted_labels, impl_label) &&
+                                                !codegen_set_contains(&emitted_cname_aliases, label)) {
+                                                codegen_set_insert(&emitted_cname_aliases, label);
+                                                fprintf(ctx->output_file, ".weak\t%s\n", label);
+                                                fprintf(ctx->output_file, "\t.set\t%s, %s\n", label, impl_label);
+                                            }
+                                            break;
+                                        }
+                                    }
+                                }
+                                impl_scan = impl_scan->next;
+                            }
+                        }
+                    }
+                }
+            }
+            alias_scan = alias_scan->next;
+        }
+    }
+
+    /* Post-pass: emit .set aliases for forward declarations whose implementation
+       has a different mangled_id (e.g. forward "runerror_i" → impl "FPC_RUNERROR").
+       Call sites reference the forward's mangled_id, so we need an alias. */
+    if (ctx->output_file != NULL) {
+        ListNode_t *fwd_scan = data->subprograms;
+        while (fwd_scan != NULL) {
+            if (fwd_scan->type == LIST_TREE && fwd_scan->cur != NULL) {
+                Tree_t *fwd = (Tree_t *)fwd_scan->cur;
+                if (fwd->type == TREE_SUBPROGRAM &&
+                    fwd->tree_data.subprogram_data.statement_list == NULL) {
+                    const char *fwd_mangled = fwd->tree_data.subprogram_data.mangled_id;
+                    const char *fwd_id = fwd->tree_data.subprogram_data.id;
+                    /* Skip external imports (`external name 'getenv'` etc.) — their
+                       mangled_id IS the external C symbol name.  Aliasing it to an
+                       internal Pascal implementation would shadow the C library symbol
+                       and cause infinite recursion when the Pascal implementation
+                       tries to call the C function. */
+                    const char *fwd_cname = fwd->tree_data.subprogram_data.cname_override;
+                    int is_external_import = (fwd_cname != NULL &&
+                        strncmp(fwd_cname, "FPC_", 4) != 0 &&
+                        strncmp(fwd_cname, "KGPC_", 5) != 0);
+                    if (fwd_mangled != NULL && fwd_id != NULL &&
+                        !is_external_import &&
+                        !codegen_set_contains(&emitted_labels, fwd_mangled) &&
+                        !codegen_set_contains(&emitted_cname_aliases, fwd_mangled)) {
+                        /* Find matching implementation by id.
+                         * Skip overloaded functions — aliasing one overload to
+                         * another (e.g. fileexists_rbs_b → fileexists_us_b)
+                         * causes infinite recursion when the target calls the
+                         * aliased overload. */
+                        ListNode_t *impl_scan = data->subprograms;
+                        while (impl_scan != NULL) {
+                            if (impl_scan->type == LIST_TREE && impl_scan->cur != NULL) {
+                                Tree_t *impl = (Tree_t *)impl_scan->cur;
+                                if (impl != fwd && impl->type == TREE_SUBPROGRAM &&
+                                    impl->tree_data.subprogram_data.statement_list != NULL &&
+                                    impl->tree_data.subprogram_data.id != NULL &&
+                                    strcasecmp(impl->tree_data.subprogram_data.id, fwd_id) == 0) {
+                                    const char *impl_mangled = impl->tree_data.subprogram_data.mangled_id;
+                                    if (impl_mangled != NULL &&
+                                        strcasecmp(fwd_mangled, impl_mangled) != 0 &&
+                                        codegen_set_contains(&emitted_labels, impl_mangled)) {
+                                        /* Only alias when the impl used a cname_override
+                                         * (e.g. [Alias:'FPC_ANSISTR_DECR_REF']) so the
+                                         * label name differs from the mangled name purely
+                                         * due to aliasing, NOT different overload signatures.
+                                         * If neither has cname_override, the different
+                                         * mangled names mean different parameter types
+                                         * (e.g. fileexists_rbs_b vs fileexists_us_b). */
+                                        if (fwd_cname == NULL &&
+                                            impl->tree_data.subprogram_data.cname_override == NULL)
+                                            goto next_fwd;
+                                        codegen_set_insert(&emitted_cname_aliases, fwd_mangled);
+                                        fprintf(ctx->output_file, ".weak\t%s\n", fwd_mangled);
+                                        fprintf(ctx->output_file, "\t.set\t%s, %s\n", fwd_mangled, impl_mangled);
+                                        break;
+                                    }
+                                }
+                            }
+                            impl_scan = impl_scan->next;
+                        }
+                    }
+                }
+            }
+            next_fwd:
+            fwd_scan = fwd_scan->next;
+        }
+    }
+
+    /* Emit .set aliases from unmangled Pascal id to mangled label for
+       subprograms that have bodies (so inline asm cross-references like
+       `jmp FillXxxx_MoreThanTwoXmms` resolve to the mangled label).
+       Only emit the first alias for each unmangled name to avoid
+       "redefined symbol" assembler errors from overloaded functions. */
+    if (ctx->output_file != NULL) {
+        CodeGenStringSet emitted_names;
+        memset(&emitted_names, 0, sizeof(emitted_names));
+
+        ListNode_t *id_alias_scan = data->subprograms;
+        while (id_alias_scan != NULL) {
+            if (id_alias_scan->type == LIST_TREE && id_alias_scan->cur != NULL) {
+                Tree_t *sub = (Tree_t *)id_alias_scan->cur;
+                if (sub->type == TREE_SUBPROGRAM &&
+                    sub->tree_data.subprogram_data.statement_list != NULL) {
+                    const char *id = sub->tree_data.subprogram_data.id;
+                    const char *mangled = sub->tree_data.subprogram_data.mangled_id;
+                    if (id != NULL && mangled != NULL && strcasecmp(id, mangled) != 0 &&
+                        codegen_set_contains(&emitted_labels, mangled)) {
+                        if (!codegen_set_contains_ci(&emitted_names, id)) {
+                            fprintf(ctx->output_file, ".weak\t%s\n", id);
+                            fprintf(ctx->output_file, "\t.set\t%s, %s\n", id, mangled);
+                            codegen_set_insert_ci(&emitted_names, id);
+                        }
+                    }
+                }
+            }
+            id_alias_scan = id_alias_scan->next;
+        }
+        codegen_set_destroy(&emitted_names);
+    }
+
+    codegen_set_destroy(&emitted_labels);
+    codegen_set_destroy(&emitted_cname_aliases);
 
     inst_list = NULL;
     inst_list = codegen_var_initializers(data->var_declaration, inst_list, ctx, symtab);
@@ -2884,11 +3429,33 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
     codegen_function_footer(prgm_name, ctx);
     free_inst_list(inst_list);
 
+    /* Emit INITFINAL table — FPC system unit references this to run unit
+       init/finalization.  KGPC inlines that code into main, so emit a
+       minimal table with TableCount = 0. */
+    if (ctx->output_file != NULL) {
+        fprintf(ctx->output_file, "\n.data\n");
+        fprintf(ctx->output_file, ".globl\tINITFINAL\n");
+        fprintf(ctx->output_file, "INITFINAL:\n");
+        fprintf(ctx->output_file, "\t.long\t0\n");  /* TableCount = 0 */
+    }
+
+    /* Emit FPC_RESOURCESTRINGTABLES as a zero-length table (no resource strings). */
+    if (ctx->output_file != NULL) {
+        fprintf(ctx->output_file, ".globl\tFPC_RESOURCESTRINGTABLES\n");
+        fprintf(ctx->output_file, "FPC_RESOURCESTRINGTABLES:\n");
+        fprintf(ctx->output_file, "\t.quad\t0\n");
+    }
+
     pop_stackscope();
 
     ctx->current_subprogram_id = prev_id;
     ctx->current_subprogram_mangled = prev_mangled;
     ctx->current_subprogram_lexical_depth = prev_depth;
+    ctx->callee_save_rbx_offset = prev_callee_rbx;
+    ctx->callee_save_r12_offset = prev_callee_r12;
+    ctx->callee_save_r13_offset = prev_callee_r13;
+    ctx->callee_save_r14_offset = prev_callee_r14;
+    ctx->callee_save_r15_offset = prev_callee_r15;
 
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
@@ -3249,13 +3816,42 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                                 /* External variable: don't allocate storage, just reference the symbol */
                                 /* No .comm directive needed - the symbol is defined elsewhere */
                             } else {
-                                int alignment = alloc_size >= 8 ? 8 : DOUBLEWORD;
-                                if (cname_override != NULL) {
-                                    /* Public name: make it globally visible */
-                                    fprintf(ctx->output_file, "\t.globl\t%s\n", static_label);
+                                int alignment = alloc_size >= 16 ? 16 : (alloc_size >= 8 ? 8 : DOUBLEWORD);
+                                /* Check whether we need a bare-name alias for inline asm references.
+                                   .set cannot target .comm symbols, so use .bss allocation instead. */
+                                int need_bare_alias = (cname_override == NULL && id_list->cur != NULL &&
+                                                       tree->tree_data.var_decl_data.defined_in_unit &&
+                                                       strcmp((const char *)id_list->cur, static_label) != 0);
+                                if (need_bare_alias) {
+                                    /* Use .bss section with explicit label so .set can reference it.
+                                       .comm symbols can't be the target of .set, so we allocate
+                                       explicitly and switch to .bss then back to .text. */
+                                    if (codegen_target_is_windows()) {
+                                        /* PE/COFF: .pushsection is not supported; use explicit section switches */
+                                        fprintf(ctx->output_file, "\t.section .bss\n");
+                                    } else {
+                                        fprintf(ctx->output_file, "\t.pushsection .bss\n");
+                                    }
+                                    fprintf(ctx->output_file, "\t.align\t%d\n", alignment);
+                                    fprintf(ctx->output_file, ".globl\t%s\n", static_label);
+                                    fprintf(ctx->output_file, "%s:\n", static_label);
+                                    fprintf(ctx->output_file, "\t.zero\t%d\n", alloc_size);
+                                    fprintf(ctx->output_file, ".globl\t%s\n", (const char *)id_list->cur);
+                                    fprintf(ctx->output_file, "\t.set\t%s, %s\n",
+                                        (const char *)id_list->cur, static_label);
+                                    if (codegen_target_is_windows()) {
+                                        fprintf(ctx->output_file, "\t.section .text\n");
+                                    } else {
+                                        fprintf(ctx->output_file, "\t.popsection\n");
+                                    }
+                                } else {
+                                    if (cname_override != NULL) {
+                                        /* Public name: make it globally visible */
+                                        fprintf(ctx->output_file, "\t.globl\t%s\n", static_label);
+                                    }
+                                    fprintf(ctx->output_file, "\t.comm\t%s,%d,%d\n",
+                                        static_label, alloc_size, alignment);
                                 }
-                                fprintf(ctx->output_file, "\t.comm\t%s,%d,%d\n",
-                                    static_label, alloc_size, alignment);
                             }
                         }
                         add_static_var((char *)id_list->cur, alloc_size, static_label);
@@ -3573,6 +4169,42 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
             continue;
         }
 
+        /* If a LATER subprogram from the SAME UNIT has the same mangled_id and
+         * a body, skip this one.  This handles platform-specific overrides:
+         * e.g. Unix sysutils.pp defines FileExists(RawByteString) after the
+         * generic filutil.inc version.  The later definition wins.
+         * We restrict to same-unit to avoid cross-unit mangling collisions
+         * (e.g. FpClosedir(var TDirRec) vs FpClosedir(PDirRec) from different
+         * units may collide in mangled name but are distinct functions). */
+        if (mangled_id != NULL)
+        {
+            int this_unit = sub->tree_data.subprogram_data.source_unit_index;
+            int has_later_override = 0;
+            ListNode_t *later = sub_list->next;
+            while (later != NULL)
+            {
+                if (later->type == LIST_TREE && later->cur != NULL)
+                {
+                    Tree_t *later_sub = (Tree_t *)later->cur;
+                    if (later_sub->type == TREE_SUBPROGRAM &&
+                        later_sub->tree_data.subprogram_data.statement_list != NULL &&
+                        later_sub->tree_data.subprogram_data.mangled_id != NULL &&
+                        later_sub->tree_data.subprogram_data.source_unit_index == this_unit &&
+                        strcmp(later_sub->tree_data.subprogram_data.mangled_id, mangled_id) == 0)
+                    {
+                        has_later_override = 1;
+                        break;
+                    }
+                }
+                later = later->next;
+            }
+            if (has_later_override)
+            {
+                sub_list = sub_list->next;
+                continue;
+            }
+        }
+
         /* Skip unused functions (dead code elimination / reachability pass). */
         if (!disable_dce_flag() && !sub->tree_data.subprogram_data.is_used)
         {
@@ -3631,9 +4263,24 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     const char *prev_sub_method_name = ctx->current_subprogram_method_name;
     const char *prev_sub_owner_class = ctx->current_subprogram_owner_class;
     const char *prev_sub_owner_class_full = ctx->current_subprogram_owner_class_full;
+    int prev_callee_rbx = ctx->callee_save_rbx_offset;
+    int prev_callee_r12 = ctx->callee_save_r12_offset;
+    int prev_callee_r13 = ctx->callee_save_r13_offset;
+    int prev_callee_r14 = ctx->callee_save_r14_offset;
+    int prev_callee_r15 = ctx->callee_save_r15_offset;
 
     push_stackscope();
     inst_list = NULL;
+
+    /* Callee-save slots are allocated AFTER arguments and locals (below)
+     * so that the t-section offsets account for the z and x section sizes. */
+    if (proc_tree->tree_data.subprogram_data.nostackframe) {
+        ctx->callee_save_rbx_offset = 0;
+        ctx->callee_save_r12_offset = 0;
+        ctx->callee_save_r13_offset = 0;
+        ctx->callee_save_r14_offset = 0;
+        ctx->callee_save_r15_offset = 0;
+    }
 
     /* Static links are supported for nested procedures/functions (depth >= 1), but NOT for:
      * - Top-level procedures (depth 0)
@@ -3652,6 +4299,7 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     codegen_register_local_types(proc->type_declarations, symtab);
     codegen_register_decl_list(proc->args_var, symtab, 1);
     codegen_register_decl_list(proc->declarations, symtab, 0);
+    codegen_register_const_decls(proc->const_declarations, symtab);
     int lexical_depth = proc->nesting_level;
     if (lexical_depth < 0)
         lexical_depth = codegen_get_lexical_depth(ctx) + 1;
@@ -3705,19 +4353,64 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     
     codegen_function_locals(proc->declarations, ctx, symtab);
 
+    /* Allocate callee-save slots AFTER args (z) and locals (x) so that
+     * the t-section offset = z_offset + x_offset + t_offset doesn't collide. */
+    if (!proc_tree->tree_data.subprogram_data.nostackframe) {
+        StackNode_t *rbx_slot = add_l_t_bytes("__callee_rbx", 8);
+        StackNode_t *r12_slot = add_l_t_bytes("__callee_r12", 8);
+        StackNode_t *r13_slot = add_l_t_bytes("__callee_r13", 8);
+        StackNode_t *r14_slot = add_l_t_bytes("__callee_r14", 8);
+        StackNode_t *r15_slot = add_l_t_bytes("__callee_r15", 8);
+        ctx->callee_save_rbx_offset = rbx_slot->offset;
+        ctx->callee_save_r12_offset = r12_slot->offset;
+        ctx->callee_save_r13_offset = r13_slot->offset;
+        ctx->callee_save_r14_offset = r14_slot->offset;
+        ctx->callee_save_r15_offset = r15_slot->offset;
+    }
+
     /* Recursively generate nested subprograms */
     codegen_subprograms(proc->subprograms, ctx, symtab);
-    
+
+    /* Set up asm parameter mapping for nostackframe functions.
+       These functions skip the frame prologue, so inline asm should use
+       ABI registers directly instead of stack offsets. */
+    int prev_is_nostackframe = ctx->is_nostackframe;
+    int prev_asm_param_count = ctx->asm_param_count;
+    ctx->is_nostackframe = proc->nostackframe;
+    ctx->asm_param_count = 0;
+    if (proc->nostackframe && proc->args_var != NULL) {
+        int pi = arg_start_index;
+        ListNode_t *a = proc->args_var;
+        while (a != NULL && pi < 16) {
+            if (a->type == LIST_TREE && a->cur != NULL) {
+                Tree_t *param = (Tree_t *)a->cur;
+                if (param->type == TREE_VAR_DECL && param->tree_data.var_decl_data.ids != NULL) {
+                    ListNode_t *id_node = param->tree_data.var_decl_data.ids;
+                    while (id_node != NULL && pi < 16) {
+                        if (id_node->cur != NULL) {
+                            ctx->asm_params[ctx->asm_param_count].name = (const char *)id_node->cur;
+                            ctx->asm_params[ctx->asm_param_count].reg_index = pi;
+                            ctx->asm_param_count++;
+                            pi++;
+                        }
+                        id_node = id_node->next;
+                    }
+                }
+            }
+            a = a->next;
+        }
+    }
+
     inst_list = codegen_var_initializers(proc->declarations, inst_list, ctx, symtab);
     inst_list = codegen_stmt(proc->statement_list, inst_list, ctx, symtab);
-    
+
     /* For constructors (methods with __Create in name), return Self in %rax.
      * Constructors receive Self in the first parameter and should return it
      * to allow constructor chaining and assignment. */
     int is_constructor = 0;
     if (sub_id != NULL && pascal_strcasestr(sub_id, "__create") != NULL)
         is_constructor = 1;
-    
+
     if (is_constructor && num_args > 0)
     {
         /* Self is the first parameter. For class methods, it's in %rdi (or first stack slot).
@@ -3747,7 +4440,7 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     
     codegen_emit_local_const_equivs(ctx, symtab);
     codegen_emit_const_decl_equivs_from_list(ctx, proc->const_declarations);
-    codegen_function_header_ex(sub_id, ctx, proc->nostackframe);
+    codegen_function_header_ex_alias(sub_id, ctx, proc->nostackframe, proc->cname_override);
     if (!proc->nostackframe)
         codegen_stack_space(ctx);
     codegen_inst_list(inst_list, ctx);
@@ -3756,12 +4449,19 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     pop_stackscope();
     PopScope(symtab);
 
+    ctx->is_nostackframe = prev_is_nostackframe;
+    ctx->asm_param_count = prev_asm_param_count;
     ctx->current_subprogram_id = prev_sub_id;
     ctx->current_subprogram_mangled = prev_sub_mangled;
     ctx->current_subprogram_method_name = prev_sub_method_name;
     ctx->current_subprogram_owner_class = prev_sub_owner_class;
     ctx->current_subprogram_owner_class_full = prev_sub_owner_class_full;
     ctx->current_subprogram_lexical_depth = prev_depth;
+    ctx->callee_save_rbx_offset = prev_callee_rbx;
+    ctx->callee_save_r12_offset = prev_callee_r12;
+    ctx->callee_save_r13_offset = prev_callee_r13;
+    ctx->callee_save_r14_offset = prev_callee_r14;
+    ctx->callee_save_r15_offset = prev_callee_r15;
 
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
@@ -3803,9 +4503,24 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     const char *prev_sub_method_name = ctx->current_subprogram_method_name;
     const char *prev_sub_owner_class = ctx->current_subprogram_owner_class;
     const char *prev_sub_owner_class_full = ctx->current_subprogram_owner_class_full;
+    int prev_callee_rbx = ctx->callee_save_rbx_offset;
+    int prev_callee_r12 = ctx->callee_save_r12_offset;
+    int prev_callee_r13 = ctx->callee_save_r13_offset;
+    int prev_callee_r14 = ctx->callee_save_r14_offset;
+    int prev_callee_r15 = ctx->callee_save_r15_offset;
 
     push_stackscope();
     inst_list = NULL;
+
+    /* Callee-save slots are allocated AFTER arguments and locals (below)
+     * so that the t-section offsets account for the z and x section sizes. */
+    if (func_tree->tree_data.subprogram_data.nostackframe) {
+        ctx->callee_save_rbx_offset = 0;
+        ctx->callee_save_r12_offset = 0;
+        ctx->callee_save_r13_offset = 0;
+        ctx->callee_save_r14_offset = 0;
+        ctx->callee_save_r15_offset = 0;
+    }
 
     /* Static links are supported for nested functions (depth >= 1), but NOT for:
      * - Top-level functions (depth 0)
@@ -3824,6 +4539,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     codegen_register_local_types(func->type_declarations, symtab);
     codegen_register_decl_list(func->args_var, symtab, 1);
     codegen_register_decl_list(func->declarations, symtab, 0);
+    codegen_register_const_decls(func->const_declarations, symtab);
     int lexical_depth = func->nesting_level;
     if (lexical_depth < 0)
         lexical_depth = codegen_get_lexical_depth(ctx) + 1;
@@ -4212,6 +4928,21 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
 
     codegen_function_locals(func->declarations, ctx, symtab);
 
+    /* Allocate callee-save slots AFTER args (z) and locals (x) so that
+     * the t-section offset = z_offset + x_offset + t_offset doesn't collide. */
+    if (!func_tree->tree_data.subprogram_data.nostackframe) {
+        StackNode_t *rbx_slot = add_l_t_bytes("__callee_rbx", 8);
+        StackNode_t *r12_slot = add_l_t_bytes("__callee_r12", 8);
+        StackNode_t *r13_slot = add_l_t_bytes("__callee_r13", 8);
+        StackNode_t *r14_slot = add_l_t_bytes("__callee_r14", 8);
+        StackNode_t *r15_slot = add_l_t_bytes("__callee_r15", 8);
+        ctx->callee_save_rbx_offset = rbx_slot->offset;
+        ctx->callee_save_r12_offset = r12_slot->offset;
+        ctx->callee_save_r13_offset = r13_slot->offset;
+        ctx->callee_save_r14_offset = r14_slot->offset;
+        ctx->callee_save_r15_offset = r15_slot->offset;
+    }
+
     /* Recursively generate nested subprograms */
     {
         int saved_returns_dynamic_array = ctx->returns_dynamic_array;
@@ -4220,7 +4951,35 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
         ctx->returns_dynamic_array = saved_returns_dynamic_array;
         ctx->dynamic_array_descriptor_size = saved_dynamic_array_descriptor_size;
     }
-    
+
+    /* Set up asm parameter mapping for nostackframe functions. */
+    int prev_is_nostackframe = ctx->is_nostackframe;
+    int prev_asm_param_count = ctx->asm_param_count;
+    ctx->is_nostackframe = func->nostackframe;
+    ctx->asm_param_count = 0;
+    if (func->nostackframe && func->args_var != NULL) {
+        int pi = arg_start_index;
+        ListNode_t *a = func->args_var;
+        while (a != NULL && pi < 16) {
+            if (a->type == LIST_TREE && a->cur != NULL) {
+                Tree_t *param = (Tree_t *)a->cur;
+                if (param->type == TREE_VAR_DECL && param->tree_data.var_decl_data.ids != NULL) {
+                    ListNode_t *id_node = param->tree_data.var_decl_data.ids;
+                    while (id_node != NULL && pi < 16) {
+                        if (id_node->cur != NULL) {
+                            ctx->asm_params[ctx->asm_param_count].name = (const char *)id_node->cur;
+                            ctx->asm_params[ctx->asm_param_count].reg_index = pi;
+                            ctx->asm_param_count++;
+                            pi++;
+                        }
+                        id_node = id_node->next;
+                    }
+                }
+            }
+            a = a->next;
+        }
+    }
+
     inst_list = codegen_var_initializers(func->declarations, inst_list, ctx, symtab);
     inst_list = codegen_stmt(func->statement_list, inst_list, ctx, symtab);
     
@@ -4377,7 +5136,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     
     codegen_emit_local_const_equivs(ctx, symtab);
     codegen_emit_const_decl_equivs_from_list(ctx, func->const_declarations);
-    codegen_function_header_ex(sub_id, ctx, func->nostackframe);
+    codegen_function_header_ex_alias(sub_id, ctx, func->nostackframe, func->cname_override);
     if (!func->nostackframe)
         codegen_stack_space(ctx);
     codegen_inst_list(inst_list, ctx);
@@ -4386,12 +5145,19 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     pop_stackscope();
     PopScope(symtab);
 
+    ctx->is_nostackframe = prev_is_nostackframe;
+    ctx->asm_param_count = prev_asm_param_count;
     ctx->current_subprogram_id = prev_sub_id;
     ctx->current_subprogram_mangled = prev_sub_mangled;
     ctx->current_subprogram_method_name = prev_sub_method_name;
     ctx->current_subprogram_owner_class = prev_sub_owner_class;
     ctx->current_subprogram_owner_class_full = prev_sub_owner_class_full;
     ctx->current_subprogram_lexical_depth = prev_depth;
+    ctx->callee_save_rbx_offset = prev_callee_rbx;
+    ctx->callee_save_r12_offset = prev_callee_r12;
+    ctx->callee_save_r13_offset = prev_callee_r13;
+    ctx->callee_save_r14_offset = prev_callee_r14;
+    ctx->callee_save_r15_offset = prev_callee_r15;
     ctx->returns_dynamic_array = prev_returns_dynamic_array;
     ctx->dynamic_array_descriptor_size = prev_dynamic_array_descriptor_size;
 
@@ -4650,19 +5416,25 @@ void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx, SymT
     
     const char *prev_sub_id = ctx->current_subprogram_id;
     const char *prev_sub_mangled = ctx->current_subprogram_mangled;
-    
+    int prev_callee_rbx = ctx->callee_save_rbx_offset;
+    int prev_callee_r12 = ctx->callee_save_r12_offset;
+    int prev_callee_r13 = ctx->callee_save_r13_offset;
+    int prev_callee_r14 = ctx->callee_save_r14_offset;
+    int prev_callee_r15 = ctx->callee_save_r15_offset;
+
     push_stackscope();
-    
+
+    /* Allocate stack slots for callee-saved registers */
     ListNode_t *inst_list = NULL;
     int num_args = (anon->parameters == NULL) ? 0 : ListLength(anon->parameters);
     int lexical_depth = codegen_get_lexical_depth(ctx) + 1;
     int prev_depth = ctx->current_subprogram_lexical_depth;
     ctx->current_subprogram_lexical_depth = lexical_depth;
     int is_nested = (lexical_depth >= 1);
-    
+
     ctx->current_subprogram_id = anon->generated_name;
     ctx->current_subprogram_mangled = anon->generated_name;
-    
+
     /* Anonymous methods are always nested (they're defined inside some other context).
      * They always need a static link to access variables from their parent scope (closure).
      * The static link is passed in %rdi (first register) and parameters are shifted by 1.
@@ -4670,10 +5442,10 @@ void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx, SymT
     StackNode_t *static_link = NULL;
     int will_need_static_link = is_nested;
     int arg_start_index = (will_need_static_link && num_args > 0) ? 1 : 0;
-    
+
     /* Process parameters (convert from TREE_VAR_DECL to stack allocations) */
     inst_list = codegen_subprogram_arguments(anon->parameters, inst_list, ctx, symtab, arg_start_index);
-    
+
     /* Add static link after parameters */
     if (will_need_static_link)
     {
@@ -4702,7 +5474,22 @@ void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx, SymT
     
     /* No local variable declarations in anonymous methods (they're inline) */
     /* No nested subprograms in anonymous methods */
-    
+
+    /* Allocate callee-save slots AFTER args (z) and locals (x) so that
+     * the t-section offset = z_offset + x_offset + t_offset doesn't collide. */
+    {
+        StackNode_t *rbx_slot = add_l_t_bytes("__callee_rbx", 8);
+        StackNode_t *r12_slot = add_l_t_bytes("__callee_r12", 8);
+        StackNode_t *r13_slot = add_l_t_bytes("__callee_r13", 8);
+        StackNode_t *r14_slot = add_l_t_bytes("__callee_r14", 8);
+        StackNode_t *r15_slot = add_l_t_bytes("__callee_r15", 8);
+        ctx->callee_save_rbx_offset = rbx_slot->offset;
+        ctx->callee_save_r12_offset = r12_slot->offset;
+        ctx->callee_save_r13_offset = r13_slot->offset;
+        ctx->callee_save_r14_offset = r14_slot->offset;
+        ctx->callee_save_r15_offset = r15_slot->offset;
+    }
+
     /* Generate the body */
     if (anon->body != NULL)
     {
@@ -4746,7 +5533,12 @@ void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx, SymT
     ctx->current_subprogram_id = prev_sub_id;
     ctx->current_subprogram_mangled = prev_sub_mangled;
     ctx->current_subprogram_lexical_depth = prev_depth;
-    
+    ctx->callee_save_rbx_offset = prev_callee_rbx;
+    ctx->callee_save_r12_offset = prev_callee_r12;
+    ctx->callee_save_r13_offset = prev_callee_r13;
+    ctx->callee_save_r14_offset = prev_callee_r14;
+    ctx->callee_save_r15_offset = prev_callee_r15;
+
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif

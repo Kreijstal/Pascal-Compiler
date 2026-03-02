@@ -1,0 +1,11 @@
+BitsOfInt = 32
+BitsOfByte = 8
+BitsOfWord = 16
+BitsOfInt64 = 64
+BitsOfBase = 64
+MaxBitFlags = 9223372036854775744
+HalfBitsOfInt = 16
+DoubleBitsOfByte = 16
+TBITS_MASK = 63
+bitsizeof(Byte) = 8
+bitsizeof(Integer) = 32

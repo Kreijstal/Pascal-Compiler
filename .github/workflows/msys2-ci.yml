@@ -31,6 +31,19 @@ jobs:
           python:p
           gmp:p
 
+    - name: Enable Windows crash dumps
+      shell: pwsh
+      run: |
+        # Configure WER to save full dumps on crash
+        $dumpDir = "${{ github.workspace }}\crashdumps"
+        New-Item -Path $dumpDir -ItemType Directory -Force
+        $regPath = "HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps"
+        New-Item -Path $regPath -Force
+        Set-ItemProperty -Path $regPath -Name "DumpFolder" -Value $dumpDir
+        Set-ItemProperty -Path $regPath -Name "DumpType" -Value 2  # Full dump
+        Set-ItemProperty -Path $regPath -Name "DumpCount" -Value 10
+        Write-Output "Crash dumps will be saved to $dumpDir"
+
     - name: Configure build
       shell: msys2 {0}
       run: meson setup builddir --buildtype=release -Dwith_gmp=enabled
@@ -59,4 +72,12 @@ jobs:
           builddir/meson-logs/
           builddir/failing-tests/
           builddir/debug/clang64/logs/
+        if-no-files-found: ignore
+
+    - name: Upload crash dumps
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: crash-dumps-${{ matrix.sys }}
+        path: ${{ github.workspace }}/crashdumps/
         if-no-files-found: ignore

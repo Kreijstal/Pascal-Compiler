@@ -14,6 +14,14 @@
 #ifndef strncasecmp
 #define strncasecmp _strnicmp
 #endif
+static char* strndup(const char* s, size_t n)
+{
+    size_t len = strlen(s);
+    if (n < len) len = n;
+    char* result = (char*)malloc(len + 1);
+    if (result) { memcpy(result, s, len); result[len] = '\0'; }
+    return result;
+}
 #endif
 
 // --- Forward Declarations ---
@@ -56,7 +64,19 @@ static bool try_parse_line_directive(input_t *in) {
         pos++;
     }
 
-    /* Optional: parse filename (skip for now, just use line number) */
+    /* Parse optional filename in quotes */
+    if (pos < length && buffer[pos] == '"') {
+        pos++;  /* Skip opening quote */
+        int fname_start = pos;
+        while (pos < length && buffer[pos] != '"') pos++;
+        int fname_len = pos - fname_start;
+        if (fname_len > 0) {
+            free(in->source_filename);
+            in->source_filename = strndup(&buffer[fname_start], fname_len);
+        }
+        if (pos < length && buffer[pos] == '"') pos++;  /* Skip closing quote */
+    }
+
     /* Find closing } */
     while (pos < length && buffer[pos] != '}') {
         pos++;

@@ -1533,6 +1533,11 @@ static int codegen_format_arg_kind_for_expr(struct Expression *expr)
     {
         case INT_TYPE:
         case LONGINT_TYPE:
+        case BYTE_TYPE:
+        case WORD_TYPE:
+        case LONGWORD_TYPE:
+        case INT64_TYPE:
+        case QWORD_TYPE:
         case ENUM_TYPE:
             return KGPC_TVAR_KIND_INT;
         case BOOL:
@@ -1584,7 +1589,8 @@ static ListNode_t *codegen_materialize_array_of_const(struct Expression *expr,
         if (kind < 0)
         {
             codegen_report_error(ctx,
-                "ERROR: Unsupported argument type in array of const literal.");
+                "ERROR: Unsupported argument type %d in array of const literal.",
+                expr_get_type_tag(element_expr));
             free_reg(get_reg_stack(), value_reg);
             return inst_list;
         }
@@ -4030,13 +4036,8 @@ static ListNode_t *codegen_set_emit_single(ListNode_t *inst_list, CodeGenContext
     snprintf(buffer, sizeof(buffer), "\tjg\t%s\n", skip_label);
     inst_list = add_inst(inst_list, buffer);
 
-    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%ecx\n", value_reg->bit_32);
-    inst_list = add_inst(inst_list, buffer);
-    snprintf(buffer, sizeof(buffer), "\tmovl\t$1, %s\n", value_reg->bit_32);
-    inst_list = add_inst(inst_list, buffer);
-    snprintf(buffer, sizeof(buffer), "\tshll\t%%cl, %s\n", value_reg->bit_32);
-    inst_list = add_inst(inst_list, buffer);
-    snprintf(buffer, sizeof(buffer), "\torl\t%s, %s\n", value_reg->bit_32, dest_reg->bit_32);
+    /* Use btsl to set the bit (avoids %ecx shift register conflict) */
+    snprintf(buffer, sizeof(buffer), "\tbtsl\t%s, %s\n", value_reg->bit_32, dest_reg->bit_32);
     inst_list = add_inst(inst_list, buffer);
     snprintf(buffer, sizeof(buffer), "%s:\n", skip_label);
     inst_list = add_inst(inst_list, buffer);
@@ -4111,13 +4112,8 @@ static ListNode_t *codegen_set_emit_range(ListNode_t *inst_list, CodeGenContext 
     inst_list = add_inst(inst_list, buffer);
     snprintf(buffer, sizeof(buffer), "\tjg\t%s\n", done_label);
     inst_list = add_inst(inst_list, buffer);
-    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%ecx\n", start_reg->bit_32);
-    inst_list = add_inst(inst_list, buffer);
-    snprintf(buffer, sizeof(buffer), "\tmovl\t$1, %s\n", temp_reg->bit_32);
-    inst_list = add_inst(inst_list, buffer);
-    snprintf(buffer, sizeof(buffer), "\tshll\t%%cl, %s\n", temp_reg->bit_32);
-    inst_list = add_inst(inst_list, buffer);
-    snprintf(buffer, sizeof(buffer), "\torl\t%s, %s\n", temp_reg->bit_32, dest_reg->bit_32);
+    /* Use btsl to set the bit (avoids %ecx shift register conflict) */
+    snprintf(buffer, sizeof(buffer), "\tbtsl\t%s, %s\n", start_reg->bit_32, dest_reg->bit_32);
     inst_list = add_inst(inst_list, buffer);
     snprintf(buffer, sizeof(buffer), "\tcmpl\t%s, %s\n", end_reg->bit_32, start_reg->bit_32);
     inst_list = add_inst(inst_list, buffer);
@@ -4212,44 +4208,11 @@ ListNode_t *codegen_set_literal(struct Expression *expr, ListNode_t *inst_list,
                 return inst_list;
             }
             
-            /* Save value for bit calculation */
-            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", value_reg->bit_32, bit_reg->bit_32);
+            /* btsl with memory operand auto-computes byte offset for any bit position.
+               Only need value_reg and addr_reg — no separate bit_reg/dword_reg. */
+            snprintf(buffer, sizeof(buffer), "\tbtsl\t%s, (%s)\n", value_reg->bit_32, addr_reg->bit_64);
             inst_list = add_inst(inst_list, buffer);
-            
-            /* Calculate bit index: value & 31 */
-            snprintf(buffer, sizeof(buffer), "\tandl\t$31, %s\n", bit_reg->bit_32);
-            inst_list = add_inst(inst_list, buffer);
-            
-            /* Calculate dword offset: (value >> 5) * 4 */
-            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", value_reg->bit_32, dword_reg->bit_32);
-            inst_list = add_inst(inst_list, buffer);
-            snprintf(buffer, sizeof(buffer), "\tshrl\t$5, %s\n", dword_reg->bit_32);
-            inst_list = add_inst(inst_list, buffer);
-            snprintf(buffer, sizeof(buffer), "\tshll\t$2, %s\n", dword_reg->bit_32);
-            inst_list = add_inst(inst_list, buffer);
-            
-            /* Load current dword value */
-            snprintf(buffer, sizeof(buffer), "\tmovl\t(%s,%s,1), %s\n", 
-                addr_reg->bit_64, dword_reg->bit_64, value_reg->bit_32);
-            inst_list = add_inst(inst_list, buffer);
-            
-            /* Create bit mask: 1 << bit_index */
-            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%ecx\n", bit_reg->bit_32);
-            inst_list = add_inst(inst_list, buffer);
-            snprintf(buffer, sizeof(buffer), "\tmovl\t$1, %s\n", bit_reg->bit_32);
-            inst_list = add_inst(inst_list, buffer);
-            snprintf(buffer, sizeof(buffer), "\tshll\t%%cl, %s\n", bit_reg->bit_32);
-            inst_list = add_inst(inst_list, buffer);
-            
-            /* OR the bit into the dword */
-            snprintf(buffer, sizeof(buffer), "\torl\t%s, %s\n", bit_reg->bit_32, value_reg->bit_32);
-            inst_list = add_inst(inst_list, buffer);
-            
-            /* Store back to memory */
-            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, (%s,%s,1)\n", 
-                value_reg->bit_32, addr_reg->bit_64, dword_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-            
+
             free_reg(get_reg_stack(), dword_reg);
             free_reg(get_reg_stack(), bit_reg);
             free_reg(get_reg_stack(), value_reg);
@@ -5710,42 +5673,36 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
             return inst_list;
         }
 
-        Register_t *dword_reg = codegen_try_get_reg(&inst_list, ctx, "char set dword");
-        Register_t *bit_mask_reg = codegen_try_get_reg(&inst_list, ctx, "char set bit mask");
-        if (dword_reg == NULL || bit_mask_reg == NULL)
-        {
-            if (dword_reg != NULL) free_reg(get_reg_stack(), dword_reg);
-            if (bit_mask_reg != NULL) free_reg(get_reg_stack(), bit_mask_reg);
-            free_reg(get_reg_stack(), set_addr_reg);
-            free_reg(get_reg_stack(), left_reg);
-            return inst_list;
-        }
-
-        snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", left_reg->bit_32, bit_mask_reg->bit_32);
+        /* btl with memory operand auto-computes byte offset for bit positions
+           beyond 31, so we can test any bit 0..255 directly. Only 2 regs needed. */
+        snprintf(buffer, sizeof(buffer), "\tbtl\t%s, (%s)\n", left_reg->bit_32, set_addr_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tshrl\t$5, %s\n", left_reg->bit_32);
+        /* Convert CF to ZF: sbb sets reg to -1 if CF (bit set), 0 if not */
+        snprintf(buffer, sizeof(buffer), "\tsbbl\t%s, %s\n", left_reg->bit_32, left_reg->bit_32);
         inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tshll\t$2, %s\n", left_reg->bit_32);
-        inst_list = add_inst(inst_list, buffer);
-        inst_list = codegen_sign_extend32_to64(inst_list, left_reg->bit_32, left_reg->bit_64);
-        snprintf(buffer, sizeof(buffer), "\tmovl\t(%s,%s,1), %s\n",
-            set_addr_reg->bit_64, left_reg->bit_64, dword_reg->bit_32);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tandl\t$31, %s\n", bit_mask_reg->bit_32);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%ecx\n", bit_mask_reg->bit_32);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovl\t$1, %s\n", bit_mask_reg->bit_32);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tshll\t%%cl, %s\n", bit_mask_reg->bit_32);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\ttestl\t%s, %s\n", bit_mask_reg->bit_32, dword_reg->bit_32);
+        snprintf(buffer, sizeof(buffer), "\ttestl\t%s, %s\n", left_reg->bit_32, left_reg->bit_32);
         inst_list = add_inst(inst_list, buffer);
 
-        free_reg(get_reg_stack(), bit_mask_reg);
-        free_reg(get_reg_stack(), dword_reg);
         free_reg(get_reg_stack(), set_addr_reg);
         free_reg(get_reg_stack(), left_reg);
+        return inst_list;
+    }
+
+    /* Non-char-set IN: evaluate the full relop expression as a boolean value */
+    if (relop_kind == IN)
+    {
+        if (relop_type != NULL)
+            *relop_type = NE;
+
+        Register_t *result_reg = NULL;
+        inst_list = codegen_expr_with_result(expr, inst_list, ctx, &result_reg);
+        if (result_reg != NULL)
+        {
+            snprintf(buffer, sizeof(buffer), "\ttestl\t%s, %s\n",
+                result_reg->bit_32, result_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+            free_reg(get_reg_stack(), result_reg);
+        }
         return inst_list;
     }
 
@@ -6250,79 +6207,28 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
                 }
             }
 
-            /* Calculate dword index: value / 32 (shift right by 5) */
-            /* Calculate bit index: value % 32 (mask with 31) */
-            Register_t *bit_mask_reg = codegen_try_get_reg(&inst_list, ctx, "char set bit mask");
-            if (bit_mask_reg == NULL)
-            {
-                free_reg(get_reg_stack(), set_addr_reg);
-                free_reg(get_reg_stack(), left_reg);
-                free_reg(get_reg_stack(), right_reg);
-                return inst_list;
-            }
-
-            /* Save the value for bit index calculation */
-            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", left_reg->bit_32, bit_mask_reg->bit_32);
+            /* btl with memory operand auto-computes byte offset for any bit position */
+            snprintf(buffer, sizeof(buffer), "\tbtl\t%s, (%s)\n", left_reg->bit_32, set_addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            /* Convert CF to ZF: sbb sets reg to -1 if CF (bit set), 0 if not */
+            snprintf(buffer, sizeof(buffer), "\tsbbl\t%s, %s\n", left_reg->bit_32, left_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\ttestl\t%s, %s\n", left_reg->bit_32, left_reg->bit_32);
             inst_list = add_inst(inst_list, buffer);
 
-            /* Calculate dword index in left_reg: value >> 5 */
-            snprintf(buffer, sizeof(buffer), "\tshrl\t$5, %s\n", left_reg->bit_32);
-            inst_list = add_inst(inst_list, buffer);
-
-            /* Multiply by 4 to get byte offset */
-            snprintf(buffer, sizeof(buffer), "\tshll\t$2, %s\n", left_reg->bit_32);
-            inst_list = add_inst(inst_list, buffer);
-
-            /* Load the appropriate dword: right_reg = [set_addr + offset] */
-            snprintf(buffer, sizeof(buffer), "\tmovl\t(%s,%s,1), %s\n",
-                set_addr_reg->bit_64, left_reg->bit_64, right_reg->bit_32);
-            inst_list = add_inst(inst_list, buffer);
-
-            /* Calculate bit index: value & 31 */
-            snprintf(buffer, sizeof(buffer), "\tandl\t$31, %s\n", bit_mask_reg->bit_32);
-            inst_list = add_inst(inst_list, buffer);
-
-            /* Create bit mask: 1 << bit_index */
-            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%ecx\n", bit_mask_reg->bit_32);
-            inst_list = add_inst(inst_list, buffer);
-            snprintf(buffer, sizeof(buffer), "\tmovl\t$1, %s\n", bit_mask_reg->bit_32);
-            inst_list = add_inst(inst_list, buffer);
-            snprintf(buffer, sizeof(buffer), "\tshll\t%%cl, %s\n", bit_mask_reg->bit_32);
-            inst_list = add_inst(inst_list, buffer);
-
-            /* Test the bit */
-            snprintf(buffer, sizeof(buffer), "\ttestl\t%s, %s\n", bit_mask_reg->bit_32, right_reg->bit_32);
-            inst_list = add_inst(inst_list, buffer);
-
-            free_reg(get_reg_stack(), bit_mask_reg);
             free_reg(get_reg_stack(), set_addr_reg);
             free_reg(get_reg_stack(), left_reg);
             free_reg(get_reg_stack(), right_reg);
             return inst_list;
         }
 
-        /* Regular 32-bit sets */
-        StackNode_t *set_spill = add_l_t("set_relop");
-        if (set_spill != NULL)
-        {
-            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, -%d(%%rbp)\n", right_reg->bit_32, set_spill->offset);
-            inst_list = add_inst(inst_list, buffer);
-        }
-
-        snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%ecx\n", left_reg->bit_32);
+        /* Regular 32-bit sets — use btl (avoids %ecx conflict) */
+        snprintf(buffer, sizeof(buffer), "\tbtl\t%s, %s\n", left_reg->bit_32, right_reg->bit_32);
         inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovl\t$1, %s\n", left_reg->bit_32);
+        /* Convert CF to ZF: sbb sets reg to -1 if CF (bit set), 0 if not */
+        snprintf(buffer, sizeof(buffer), "\tsbbl\t%s, %s\n", left_reg->bit_32, left_reg->bit_32);
         inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tshll\t%%cl, %s\n", left_reg->bit_32);
-        inst_list = add_inst(inst_list, buffer);
-
-        if (set_spill != NULL)
-        {
-            snprintf(buffer, sizeof(buffer), "\tmovl\t-%d(%%rbp), %s\n", set_spill->offset, right_reg->bit_32);
-            inst_list = add_inst(inst_list, buffer);
-        }
-
-        snprintf(buffer, sizeof(buffer), "\ttestl\t%s, %s\n", left_reg->bit_32, right_reg->bit_32);
+        snprintf(buffer, sizeof(buffer), "\ttestl\t%s, %s\n", left_reg->bit_32, left_reg->bit_32);
         inst_list = add_inst(inst_list, buffer);
 
         free_reg(get_reg_stack(), left_reg);
@@ -7707,18 +7613,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                     }
                 }
 
-                Register_t *size_reg = get_free_reg(get_reg_stack(), &inst_list);
-                if (size_reg == NULL)
-                {
-                    free_reg(get_reg_stack(), src_reg);
-                    codegen_report_error(ctx,
-                        "ERROR: Unable to allocate register for record copy size.");
-                    return inst_list;
-                }
-
                 char copy_buffer[128];
-                snprintf(copy_buffer, sizeof(copy_buffer), "\tmovq\t$%lld, %s\n", record_size, size_reg->bit_64);
-                inst_list = add_inst(inst_list, copy_buffer);
 
                 if (codegen_target_is_windows())
                 {
@@ -7726,7 +7621,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                     inst_list = add_inst(inst_list, copy_buffer);
                     snprintf(copy_buffer, sizeof(copy_buffer), "\tleaq\t-%d(%%rbp), %%rcx\n", temp_slot->offset);
                     inst_list = add_inst(inst_list, copy_buffer);
-                    snprintf(copy_buffer, sizeof(copy_buffer), "\tmovq\t%s, %%r8\n", size_reg->bit_64);
+                    snprintf(copy_buffer, sizeof(copy_buffer), "\tmovq\t$%lld, %%r8\n", record_size);
                     inst_list = add_inst(inst_list, copy_buffer);
                 }
                 else
@@ -7735,7 +7630,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                     inst_list = add_inst(inst_list, copy_buffer);
                     snprintf(copy_buffer, sizeof(copy_buffer), "\tleaq\t-%d(%%rbp), %%rdi\n", temp_slot->offset);
                     inst_list = add_inst(inst_list, copy_buffer);
-                    snprintf(copy_buffer, sizeof(copy_buffer), "\tmovq\t%s, %%rdx\n", size_reg->bit_64);
+                    snprintf(copy_buffer, sizeof(copy_buffer), "\tmovq\t$%lld, %%rdx\n", record_size);
                     inst_list = add_inst(inst_list, copy_buffer);
                 }
 
@@ -7744,7 +7639,6 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 free_arg_regs();
 
                 free_reg(get_reg_stack(), src_reg);
-                free_reg(get_reg_stack(), size_reg);
 
                 Register_t *result_reg = get_free_reg(get_reg_stack(), &inst_list);
                 if (result_reg == NULL)
