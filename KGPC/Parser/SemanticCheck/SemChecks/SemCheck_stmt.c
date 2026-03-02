@@ -4861,6 +4861,13 @@ skip_type_receiver_rewrite:
                     stmt->stmt_data.procedure_call_data.expr_args = self_arg;
                     args_given = self_arg;
                 }
+                else
+                {
+                    /* Mark that static method Self handling is already done, so the
+                     * downstream placeholder-removal code doesn't strip an explicit
+                     * Self argument that was part of the original call site. */
+                    static_arg_already_removed = 1;
+                }
 
                 /* Update proc_id to the resolved method's id (e.g. TBase__Bump, not TDerived__Bump
                  * when the method is inherited from a parent class). */
