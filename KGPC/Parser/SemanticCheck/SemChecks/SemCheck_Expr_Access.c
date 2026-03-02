@@ -939,6 +939,8 @@ int semcheck_funccall(int *type_return,
      * call-shape/argument expression preprocessing. */
     if (id != NULL && pascal_identifier_equals(id, "SizeOf"))
         return semcheck_builtin_sizeof(type_return, symtab, expr, max_scope_lev);
+    if (id != NULL && pascal_identifier_equals(id, "BitSizeOf"))
+        return semcheck_builtin_bitsizeof(type_return, symtab, expr, max_scope_lev);
     if (id != NULL && pascal_identifier_equals(id, "IsManagedType"))
         return semcheck_builtin_ismanagedtype(type_return, symtab, expr, max_scope_lev);
     if (id != NULL && pascal_identifier_equals(id, "TypeInfo"))
@@ -1809,6 +1811,8 @@ int semcheck_funccall(int *type_return,
 
     if (id != NULL && pascal_identifier_equals(id, "SizeOf"))
         return semcheck_builtin_sizeof(type_return, symtab, expr, max_scope_lev);
+    if (id != NULL && pascal_identifier_equals(id, "BitSizeOf"))
+        return semcheck_builtin_bitsizeof(type_return, symtab, expr, max_scope_lev);
     if (id != NULL && pascal_identifier_equals(id, "IsManagedType"))
         return semcheck_builtin_ismanagedtype(type_return, symtab, expr, max_scope_lev);
     if (id != NULL && pascal_identifier_equals(id, "TypeInfo"))

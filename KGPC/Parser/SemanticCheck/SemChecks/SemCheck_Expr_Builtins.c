@@ -2990,6 +2990,17 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
     return error_count;
 }
 
+int semcheck_builtin_bitsizeof(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev)
+{
+    /* BitSizeOf(T) = SizeOf(T) * 8.  Reuse the SizeOf logic which
+       transforms the expression to EXPR_INUM, then multiply by 8. */
+    int result = semcheck_builtin_sizeof(type_return, symtab, expr, max_scope_lev);
+    if (result == 0 && expr->type == EXPR_INUM)
+        expr->expr_data.i_num *= 8;
+    return result;
+}
+
 int semcheck_builtin_ismanagedtype(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev)
 {

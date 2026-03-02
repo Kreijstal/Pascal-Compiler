@@ -422,6 +422,8 @@ int semcheck_builtin_typeinfo(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev);
 int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev);
+int semcheck_builtin_bitsizeof(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev);
 int semcheck_builtin_ismanagedtype(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev);
 int semcheck_builtin_unary_real(int *type_return, SymTab_t *symtab,
