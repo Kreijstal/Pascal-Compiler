@@ -2109,12 +2109,10 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
         discard_failure(adv_res);
     }
     // variant_part is shared between *record_item_ref and adv_member.
-    // Mark it cached so adv_members free skips it, then free *record_item_ref
-    // which owns the entire field parser sub-tree (including variant_part).
+    // Mark it cached so adv_members free skips it; *record_item_ref owns it.
     variant_part->cached = true;
     free_combinator(adv_members);
     variant_part->cached = false;
-    free_combinator(*record_item_ref);
 
     /* Add advanced member declarations to fields list */
     if (adv_members_ast != NULL) {
@@ -2230,6 +2228,7 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
         }
 
         free_combinator(tail_record_items);
+        free_combinator(*tail_record_item_ref);
         free(tail_record_item_ref);
 
         if (tail_fields_ast != NULL) {
@@ -2243,7 +2242,9 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
             }
         }
     }
-    free(record_item_ref);
+    // Free the record_item_ref combinator tree (field_decl, variant_part, etc.)
+    // extra_to_free on *record_item_ref also frees record_item_ref pointer
+    free_combinator(*record_item_ref);
 
     combinator_t* end_keyword = token(keyword_ci("end"));
     ParseResult end_res = parse(in, end_keyword);

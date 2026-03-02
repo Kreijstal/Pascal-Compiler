@@ -1469,7 +1469,33 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
                 }
                 else if (field->field_type != UNKNOWN_TYPE)
                 {
-                    field_access->resolved_kgpc_type = create_primitive_type(field->field_type);
+                    /* Compute the field's actual storage size from record layout.
+                     * create_primitive_type(INT_TYPE) defaults to 4 bytes, but in
+                     * FPC mode Integer=SmallInt is only 2 bytes.  Derive the real
+                     * size from consecutive field offsets and the record's cached
+                     * total size. */
+                    long long field_storage = 0;
+                    if (expr->record_type != NULL && expr->record_type->has_cached_size)
+                    {
+                        long long next_off = expr->record_type->cached_size;
+                        ListNode_t *scan = expr->expr_data.record_constructor_data.fields;
+                        while (scan != NULL)
+                        {
+                            struct RecordConstructorField *other =
+                                (struct RecordConstructorField *)scan->cur;
+                            if (other != NULL &&
+                                other->field_offset > field->field_offset &&
+                                other->field_offset < next_off)
+                                next_off = other->field_offset;
+                            scan = scan->next;
+                        }
+                        field_storage = next_off - field->field_offset;
+                    }
+                    if (field_storage > 0 && field_storage < 4)
+                        field_access->resolved_kgpc_type =
+                            create_primitive_type_with_size(field->field_type, (int)field_storage);
+                    else
+                        field_access->resolved_kgpc_type = create_primitive_type(field->field_type);
                 }
 
                 if (field->field_is_array)
@@ -7528,6 +7554,16 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             long long target_size = (var_expr->type == EXPR_RECORD_ACCESS) ?
                 codegen_record_field_effective_size(var_expr, ctx) :
                 expr_effective_size_bytes(var_expr);
+            /* Cross-check with resolved_kgpc_type for sub-dword fields
+             * (e.g. Integer=SmallInt in FPC mode where type tag says 4
+             * but actual storage is 2 bytes). */
+            if (target_size == 4 && var_expr != NULL &&
+                var_expr->resolved_kgpc_type != NULL)
+            {
+                long long resolved_size = kgpc_type_sizeof(var_expr->resolved_kgpc_type);
+                if (resolved_size > 0 && resolved_size < 4)
+                    target_size = resolved_size;
+            }
             if (!use_qword && var_type == CHAR_TYPE)
             {
                 value_reg8 = register_name8(reg);
@@ -7540,6 +7576,15 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                     codegen_report_error(ctx,
                         "ERROR: Unable to select 8-bit register for character assignment.");
                 }
+            }
+            else if (!use_qword && target_size == 1)
+            {
+                value_reg8 = register_name8(reg);
+                if (value_reg8 != NULL)
+                    use_byte = 1;
+                else
+                    codegen_report_error(ctx,
+                        "ERROR: Unable to select 8-bit register for byte-sized assignment.");
             }
             else if (!use_qword && target_size == 2)
             {
