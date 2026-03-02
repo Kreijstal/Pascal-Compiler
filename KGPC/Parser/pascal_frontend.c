@@ -10,6 +10,7 @@
 #endif
 
 #include "ErrVars.h"
+#include "ParseTree/from_cparser.h"
 #include "SemanticCheck/SemCheck.h"
 #include "ast_cache.h"
 
@@ -534,6 +535,7 @@ void pascal_frontend_cleanup(void)
         free(g_ast_cache_dir);
         g_ast_cache_dir = NULL;
     }
+    from_cparser_cleanup();
 }
 
 /* Compute the cache file path for a given source path.

@@ -3645,6 +3645,11 @@ static ListNode_t *codegen_expr_tree_value(struct Expression *expr, ListNode_t *
     }
 
 
+    if (expr != NULL && expr->type == EXPR_ARRAY_ACCESS) {
+        struct Expression *ab = expr->expr_data.array_access_data.array_expr;
+        fprintf(stderr, "DEBUG expr_tree_value: calling gencode_expr_tree for ARRAY_ACCESS, base_type=%d id=%s\n",
+            ab ? ab->type : -1, (ab && ab->type == EXPR_VAR_ID && ab->expr_data.id) ? ab->expr_data.id : "?");
+    }
     inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, target_reg);
 
     free_expr_tree(expr_tree);
@@ -5588,17 +5593,36 @@ ListNode_t *codegen_array_access(struct Expression *expr, ListNode_t *inst_list,
     }
     int element_size = (int)element_size_ll;
 
-    if (element_size > CODEGEN_POINTER_SIZE_BYTES ||
-        expr_has_type_tag(expr, RECORD_TYPE) ||
-        codegen_expr_is_shortstring_value(expr) ||
-        codegen_array_access_targets_shortstring(expr, ctx))
+    /* For large elements, records (passed by address), and shortstrings,
+     * return the address itself rather than loading a value.
+     * Exception: class-typed elements are reference types (pointers), so
+     * the array stores an 8-byte pointer that must be loaded as a value. */
     {
-        char buffer[100];
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
-            addr_reg->bit_64, target_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-        free_reg(get_reg_stack(), addr_reg);
-        return inst_list;
+        int is_record_element = expr_has_type_tag(expr, RECORD_TYPE);
+        int is_class_element = 0;
+        if (is_record_element)
+        {
+            struct RecordType *elem_rec = codegen_expr_record_type(expr,
+                ctx != NULL ? ctx->symtab : NULL);
+            if (elem_rec != NULL && record_type_is_class(elem_rec))
+                is_class_element = 1;
+        }
+        int is_big = (element_size > CODEGEN_POINTER_SIZE_BYTES);
+        int is_shortstr = codegen_expr_is_shortstring_value(expr);
+        int is_shortstr2 = codegen_array_access_targets_shortstring(expr, ctx);
+        fprintf(stderr, "DEBUG codegen_array_access: elem_size=%d is_record=%d is_class=%d is_big=%d tag=%d\n",
+            element_size, is_record_element, is_class_element, is_big, expr_get_type_tag(expr));
+        if (is_big ||
+            (is_record_element && !is_class_element) ||
+            is_shortstr || is_shortstr2)
+        {
+            char buffer[100];
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
+                addr_reg->bit_64, target_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            free_reg(get_reg_stack(), addr_reg);
+            return inst_list;
+        }
     }
 
     char buffer[100];
@@ -5606,6 +5630,12 @@ ListNode_t *codegen_array_access(struct Expression *expr, ListNode_t *inst_list,
     {
         /* 8-byte elements (including pointers, int64, etc.) need 64-bit load */
         snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_64);
+        {
+            struct Expression *abase = expr->expr_data.array_access_data.array_expr;
+            fprintf(stderr, "DEBUG codegen_array_access 8byte: base_type=%d tag=%d id=%s\n",
+                abase ? abase->type : -1, expr_get_type_tag(expr),
+                (abase && abase->type == EXPR_VAR_ID && abase->expr_data.id) ? abase->expr_data.id : "?");
+        }
         inst_list = add_inst(inst_list, buffer);
     }
     else

@@ -7113,6 +7113,18 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
     var_expr = stmt->stmt_data.var_assign_data.var;
     assign_expr = stmt->stmt_data.var_assign_data.expr;
 
+    if (assign_expr != NULL && assign_expr->type == EXPR_ARRAY_ACCESS)
+    {
+        struct Expression *abase = assign_expr->expr_data.array_access_data.array_expr;
+        fprintf(stderr, "DEBUG var_assign: RHS is ARRAY_ACCESS, base_type=%d tag=%d",
+            abase ? abase->type : -1, expr_get_type_tag(assign_expr));
+        if (abase && abase->type == EXPR_RECORD_ACCESS)
+            fprintf(stderr, " field=%s", abase->expr_data.record_access_data.field_id ? abase->expr_data.record_access_data.field_id : "?");
+        if (abase && abase->type == EXPR_VAR_ID)
+            fprintf(stderr, " id=%s", abase->expr_data.id ? abase->expr_data.id : "?");
+        fprintf(stderr, "\n");
+    }
+
     if (var_expr != NULL && var_expr->type == EXPR_TYPECAST &&
         var_expr->expr_data.typecast_data.expr != NULL)
     {
@@ -7166,6 +7178,13 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
     int dest_is_static_array = (var_expr->is_array_expr && !expr_is_dynamic_array(var_expr)) ||
         expr_is_static_array_like(var_expr, ctx);
     int src_is_static_array = expr_is_static_array_like(assign_expr, ctx);
+
+    if (assign_expr != NULL && assign_expr->type == EXPR_ARRAY_ACCESS) {
+        struct Expression *ab = assign_expr->expr_data.array_access_data.array_expr;
+        const char *bid = (ab && ab->type == EXPR_VAR_ID && ab->expr_data.id) ? ab->expr_data.id : "?";
+        fprintf(stderr, "DEBUG var_assign PATHS: id=%s dest_static=%d src_static=%d lhs_tag=%d\n",
+            bid, dest_is_static_array, src_is_static_array, expr_get_type_tag(var_expr));
+    }
 
     if (dest_is_static_array && src_is_static_array)
     {
@@ -7254,8 +7273,13 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
 
         
         Register_t *value_reg = NULL;
+        if (assign_expr != NULL && assign_expr->type == EXPR_ARRAY_ACCESS) {
+            struct Expression *ab = assign_expr->expr_data.array_access_data.array_expr;
+            fprintf(stderr, "DEBUG var_assign EXPR_VAR_ID path: RHS array_access base=%d id=%s\n",
+                ab ? ab->type : -1, (ab && ab->type == EXPR_VAR_ID && ab->expr_data.id) ? ab->expr_data.id : "?");
+        }
         inst_list = codegen_expr_with_result(assign_expr, inst_list, ctx, &value_reg);
-        
+
         if (codegen_had_error(ctx) || value_reg == NULL)
         {
             if (value_reg != NULL)

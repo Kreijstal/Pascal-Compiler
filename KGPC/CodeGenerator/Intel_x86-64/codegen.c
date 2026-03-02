@@ -942,17 +942,20 @@ static void codegen_register_local_types(ListNode_t *type_decls, SymTab_t *symta
             continue;
 
         KgpcType *kgpc = decl->tree_data.type_decl_data.kgpc_type;
+        int created_kgpc = 0;
         if (kgpc == NULL && decl->tree_data.type_decl_data.info.record != NULL)
         {
             kgpc = create_record_type(decl->tree_data.type_decl_data.info.record);
             if (decl->tree_data.type_decl_data.info.record->is_class && kgpc != NULL)
                 kgpc = create_pointer_type(kgpc);
+            created_kgpc = 1;
         }
 
         if (kgpc != NULL)
         {
-            kgpc_type_retain(kgpc);
             PushTypeOntoScope_Typed(symtab, strdup(decl->tree_data.type_decl_data.id), kgpc);
+            if (created_kgpc)
+                destroy_kgpc_type(kgpc);
         }
     }
 
@@ -970,10 +973,12 @@ static void codegen_register_local_types(ListNode_t *type_decls, SymTab_t *symta
 
         struct TypeAlias *alias = &decl->tree_data.type_decl_data.info.alias;
         KgpcType *kgpc = decl->tree_data.type_decl_data.kgpc_type;
+        int created_kgpc = 0;
         if (kgpc == NULL)
         {
             kgpc = create_kgpc_type_from_type_alias(alias, symtab,
                 decl->tree_data.type_decl_data.defined_in_unit);
+            created_kgpc = 1;
         }
 
         if (kgpc != NULL && kgpc_type_is_pointer(kgpc) &&
@@ -996,8 +1001,9 @@ static void codegen_register_local_types(ListNode_t *type_decls, SymTab_t *symta
 
         if (kgpc != NULL)
         {
-            kgpc_type_retain(kgpc);
             PushTypeOntoScope_Typed(symtab, strdup(decl->tree_data.type_decl_data.id), kgpc);
+            if (created_kgpc)
+                destroy_kgpc_type(kgpc);
         }
     }
 }
@@ -4342,8 +4348,11 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     
     /* If there are arguments and we'll need a static link, shift argument registers by 1 */
     int arg_start_index = (will_need_static_link && num_args > 0) ? 1 : 0;
-    inst_list = codegen_subprogram_arguments(proc->args_var, inst_list, ctx, symtab, arg_start_index);
-    
+    /* For nostackframe functions, skip parameter saves — there is no frame,
+     * so stores relative to %rbp would corrupt the caller's stack. */
+    if (!proc_tree->tree_data.subprogram_data.nostackframe)
+        inst_list = codegen_subprogram_arguments(proc->args_var, inst_list, ctx, symtab, arg_start_index);
+
     /* Now add static link after arguments to avoid overlap */
     if (will_need_static_link)
     {
@@ -4804,9 +4813,12 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     if (will_need_static_link && num_args > 0)
         arg_start_index++;
     
-    inst_list = codegen_subprogram_arguments(func->args_var, inst_list, ctx, symtab,
-        arg_start_index);
-    
+    /* For nostackframe functions, skip parameter saves — there is no frame,
+     * so stores relative to %rbp would corrupt the caller's stack. */
+    if (!func_tree->tree_data.subprogram_data.nostackframe)
+        inst_list = codegen_subprogram_arguments(func->args_var, inst_list, ctx, symtab,
+            arg_start_index);
+
     /* Add static link after arguments to avoid stack overlap */
     if (will_need_static_link)
     {

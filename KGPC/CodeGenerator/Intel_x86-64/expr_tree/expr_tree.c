@@ -2571,6 +2571,7 @@ cleanup_constructor:
     }
     else if (expr->type == EXPR_ARRAY_ACCESS)
     {
+        fprintf(stderr, "DEBUG gencode_expr_tree: EXPR_ARRAY_ACCESS dispatch\n");
         return codegen_array_access(expr, inst_list, ctx, target_reg);
     }
     else if (expr->type == EXPR_RECORD_ACCESS)

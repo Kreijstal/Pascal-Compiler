@@ -7,6 +7,7 @@
 #include "KgpcType.h"
 
 Tree_t *tree_from_pascal_ast(ast_t *program_ast);
+void from_cparser_cleanup(void);
 
 /* Frontend error tracking */
 void from_cparser_reset_error_count(void);

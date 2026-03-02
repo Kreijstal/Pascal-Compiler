@@ -2635,6 +2635,8 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symt
                     if (kgpc_type != NULL)
                     {
                         PushTypeOntoScope_Typed(symtab, (char *)lookup_id, kgpc_type);
+                        /* Release creator's reference */
+                        destroy_kgpc_type(kgpc_type);
                     }
                 }
             }
@@ -5965,6 +5967,8 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                 tree->tree_data.type_decl_data.defined_in_unit,
                                 tree->tree_data.type_decl_data.unit_is_public);
                             mark_hashnode_source_unit(existing, tree->tree_data.type_decl_data.source_unit_index);
+                            /* Release creator's reference */
+                            destroy_kgpc_type(kgpc_type);
                         }
                         cur = cur->next;
                         continue;
@@ -6018,6 +6022,8 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                     tree->tree_data.type_decl_data.defined_in_unit,
                                     tree->tree_data.type_decl_data.unit_is_public);
                                 mark_hashnode_source_unit(existing, tree->tree_data.type_decl_data.source_unit_index);
+                                /* Release creator's reference */
+                                destroy_kgpc_type(kgpc_type);
                             }
                             cur = cur->next;
                             continue;
@@ -6169,6 +6175,8 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                     tree->tree_data.type_decl_data.defined_in_unit,
                                     tree->tree_data.type_decl_data.unit_is_public);
                                 mark_hashnode_source_unit(existing, tree->tree_data.type_decl_data.source_unit_index);
+                                /* Release creator's reference */
+                                destroy_kgpc_type(kgpc_type);
                             }
                             cur = cur->next;
                             continue;
@@ -6390,6 +6398,8 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                 mark_hashnode_source_unit(type_node, tree->tree_data.type_decl_data.source_unit_index);
                             }
                         }
+                        /* Release creator's reference - tree and hash table have their own */
+                        destroy_kgpc_type(kgpc_type);
                     }
                 }
                 /* Only handle TYPE_DECL_ALIAS cases we can resolve early */
@@ -6434,6 +6444,8 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                     mark_hashnode_source_unit(type_node, tree->tree_data.type_decl_data.source_unit_index);
                                 }
                             }
+                            /* Release creator's reference */
+                            destroy_kgpc_type(kgpc_type);
                         }
                         cur = cur->next;
                         continue;
@@ -6476,6 +6488,8 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                     mark_hashnode_source_unit(type_node, tree->tree_data.type_decl_data.source_unit_index);
                                 }
                             }
+                            /* Release creator's reference */
+                            destroy_kgpc_type(kgpc_type);
                         }
                         cur = cur->next;
                         continue;
@@ -6516,6 +6530,8 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                     mark_hashnode_source_unit(type_node, tree->tree_data.type_decl_data.source_unit_index);
                                 }
                             }
+                            /* Release creator's reference */
+                            destroy_kgpc_type(inline_kgpc);
                         }
 
                         /* Also register the alias name itself */
@@ -6538,6 +6554,8 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                 mark_hashnode_source_unit(type_node, tree->tree_data.type_decl_data.source_unit_index);
                             }
                         }
+                        /* Release creator's reference */
+                        destroy_kgpc_type(alias_kgpc);
 
                         cur = cur->next;
                         continue;
@@ -6553,8 +6571,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                         if (alias->kgpc_type != NULL)
                         {
                             kgpc_type = alias->kgpc_type;
-                            /* Don't retain here - we'll pass it to PushTypeOntoScope_Typed which
-                             * will retain if needed. The alias already owns a reference. */
+                            kgpc_type_retain(kgpc_type);  /* Own a reference so we can release uniformly */
                         }
                         else
                         {
@@ -6594,6 +6611,8 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                     mark_hashnode_source_unit(type_node, tree->tree_data.type_decl_data.source_unit_index);
                                 }
                             }
+                            /* Release creator's reference */
+                            destroy_kgpc_type(kgpc_type);
                         }
                         cur = cur->next;
                         continue;
@@ -6626,6 +6645,8 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                     mark_hashnode_source_unit(type_node, tree->tree_data.type_decl_data.source_unit_index);
                                 }
                             }
+                            /* Release creator's reference */
+                            destroy_kgpc_type(kgpc_type);
                             cur = cur->next;
                             continue;
                         }
@@ -6657,6 +6678,8 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             int result = PushTypeOntoScope_Typed(symtab, (char *)type_id, kgpc_type);
                             if (result > 0)
                                 errors += result;
+                            /* Release creator's reference */
+                            destroy_kgpc_type(kgpc_type);
 
                             cur = cur->next;
                             continue;
@@ -6686,6 +6709,8 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             int result = PushTypeOntoScope_Typed(symtab, (char *)type_id, kgpc_type);
                             if (result > 0)
                                 errors += result;
+                            /* Release creator's reference */
+                            destroy_kgpc_type(kgpc_type);
                             cur = cur->next;
                             continue;
                         }
@@ -6943,6 +6968,8 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                 mark_hashnode_source_unit(type_node, tree->tree_data.type_decl_data.source_unit_index);
                             }
                         }
+                        /* Release creator's reference */
+                        destroy_kgpc_type(kgpc_type);
                     }
                     else if (getenv("KGPC_DEBUG_PREDECLARE") != NULL)
                     {
@@ -9297,10 +9324,11 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
             func_return = PushTypeOntoScope_Typed(symtab, tree->tree_data.type_decl_data.id, kgpc_type);
             if (func_return == 0)
             {
-                /* KgpcType ownership transferred to symbol table */
+                /* Hash table retained its own reference. Release the tree/creator reference. */
+                if (tree->tree_data.type_decl_data.kgpc_type != NULL)
+                    destroy_kgpc_type(tree->tree_data.type_decl_data.kgpc_type);
                 tree->tree_data.type_decl_data.kgpc_type = NULL;
                 /* Note: var_type is automatically set from KgpcType in HashTable.c via set_var_type_from_kgpctype() */
-                
             }
         } else {
         /* Fall back to legacy API for types we can't convert yet */
@@ -9369,10 +9397,9 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                 fprintf(stderr, "[KGPC] Registered inline record type %s for alias %s\n",
                                         mangled_name, tree->tree_data.type_decl_data.id);
                             }
-                            /* Ownership transferred to symbol table */
                         }
-                        /* Note: On failure, we leak the KgpcType, but this should not happen
-                         * in practice since we checked that the name doesn't exist */
+                        /* Release creator's reference - hash table retained on success */
+                        destroy_kgpc_type(inline_kgpc_type);
                     }
                 }
             }
@@ -14461,6 +14488,8 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
             if (FindIdent(&node, symtab, id_to_use_for_lookup) == 0 && node != NULL)
                 node->is_varargs = 1;
         }
+        /* Release creator's reference - hash table retained its own */
+        destroy_kgpc_type(proc_type);
     }
     else // Function
     {
@@ -14468,7 +14497,7 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
 #ifdef DEBUG
         if (return_val > 0) fprintf(stderr, "DEBUG: predeclare_subprogram %s error after build_function_return_type: %d\n", subprogram->tree_data.subprogram_data.id, return_val);
 #endif
-        
+
         /* Create function KgpcType */
         KgpcType *func_type = create_procedure_type(
             subprogram->tree_data.subprogram_data.args_var,
@@ -14480,7 +14509,7 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
                 func_type->info.proc_info.return_type_id =
                     strdup(subprogram->tree_data.subprogram_data.return_type_id);
         }
-        
+
         // Add to current scope
         func_return = PushFunctionOntoScope_Typed(symtab, id_to_use_for_lookup,
                         subprogram->tree_data.subprogram_data.mangled_id,
@@ -14499,6 +14528,8 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
             if (FindIdent(&node, symtab, id_to_use_for_lookup) == 0 && node != NULL)
                 node->is_varargs = 1;
         }
+        /* Release creator's reference - hash table retained its own */
+        destroy_kgpc_type(func_type);
     }
     
 #ifdef DEBUG

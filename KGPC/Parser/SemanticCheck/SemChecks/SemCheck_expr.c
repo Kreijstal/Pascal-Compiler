@@ -1586,10 +1586,6 @@ int semcheck_expr_main(SymTab_t *symtab, struct Expression *expr,
     if (expr->resolved_kgpc_type == NULL && *type_return != UNKNOWN_TYPE)
     {
         semcheck_expr_set_resolved_type(expr, *type_return);
-        if (*type_return != RECORD_TYPE && *type_return != ARRAY_OF_CONST_TYPE)
-        {
-            expr->resolved_kgpc_type = create_primitive_type(*type_return);
-        }
     }
     if (out_type != NULL)
         *out_type = expr->resolved_kgpc_type;

@@ -2903,8 +2903,11 @@ void resolve_pending_generic_aliases(Tree_t *program_tree)
             alias->base_type = RECORD_TYPE;
             if (cur->decl->tree_data.type_decl_data.kgpc_type == NULL) {
                 KgpcType *inline_type = create_record_type(record);
-                if (record->is_class)
-                    inline_type = create_pointer_type(inline_type);
+                if (record->is_class) {
+                    KgpcType *ptr = create_pointer_type(inline_type);
+                    kgpc_type_release(inline_type);
+                    inline_type = ptr;
+                }
                 cur->decl->tree_data.type_decl_data.kgpc_type = inline_type;
             }
             if (clone_dest != NULL)
@@ -5715,7 +5718,9 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
                 }
             }
 
-            return create_pointer_type(points_to);
+            KgpcType *ptr = create_pointer_type(points_to);
+            if (points_to != NULL) kgpc_type_release(points_to);
+            return ptr;
         }
         return create_pointer_type(NULL);
     }
@@ -5873,10 +5878,19 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
         }
         
         KgpcType *proc_type = create_procedure_type(params, return_type);
-        if (proc_type != NULL && return_type_id != NULL)
-            proc_type->info.proc_info.return_type_id = return_type_id;
-        else if (return_type_id != NULL)
-            free(return_type_id);
+        if (proc_type != NULL) {
+            /* create_procedure_type makes a shallow copy of params; tell the
+             * type to own (deeply free) its copy so the TREE_VAR_DECL param
+             * nodes are eventually freed.  Then free the original list nodes. */
+            proc_type->info.proc_info.owns_params = 1;
+            DestroyList(params);
+            if (return_type_id != NULL)
+                proc_type->info.proc_info.return_type_id = return_type_id;
+        } else {
+            destroy_list(params);
+            if (return_type_id != NULL)
+                free(return_type_id);
+        }
         return proc_type;
     }
 
@@ -5905,7 +5919,9 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
         if (record != NULL) {
             KgpcType *rec_type = create_record_type(record);
             if (rec_type != NULL) {
-                return create_pointer_type(rec_type);
+                KgpcType *ptr = create_pointer_type(rec_type);
+                kgpc_type_release(rec_type);
+                return ptr;
             }
         }
         return NULL;
@@ -8081,10 +8097,16 @@ KgpcType *from_cparser_method_template_to_proctype(struct MethodTemplate *method
     }
 
     KgpcType *proc_type = create_procedure_type(params, return_type);
-    if (proc_type != NULL && return_type_id != NULL)
-        proc_type->info.proc_info.return_type_id = return_type_id;
-    else if (return_type_id != NULL)
-        free(return_type_id);
+    if (proc_type != NULL) {
+        proc_type->info.proc_info.owns_params = 1;
+        DestroyList(params);
+        if (return_type_id != NULL)
+            proc_type->info.proc_info.return_type_id = return_type_id;
+    } else {
+        destroy_list(params);
+        if (return_type_id != NULL)
+            free(return_type_id);
+    }
 
     return proc_type;
 }
@@ -9792,6 +9814,7 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
         if (record_type->is_class || record_type->is_interface) {
             /* Classes and interfaces are pointers to records */
             kgpc_type = create_pointer_type(rec_type);
+            kgpc_type_release(rec_type);
         } else {
             kgpc_type = rec_type;
         }
@@ -9975,8 +9998,9 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
             alias->inline_record_type = type_info.record_type;
             type_info.record_type = NULL;
             if (alias->inline_record_type->is_class) {
-                KgpcType *inline_type = create_record_type(alias->inline_record_type);
-                inline_type = create_pointer_type(inline_type);
+                KgpcType *rec = create_record_type(alias->inline_record_type);
+                KgpcType *inline_type = create_pointer_type(rec);
+                kgpc_type_release(rec);
                 if (decl->tree_data.type_decl_data.kgpc_type != NULL)
                     destroy_kgpc_type(decl->tree_data.type_decl_data.kgpc_type);
                 decl->tree_data.type_decl_data.kgpc_type = inline_type;
@@ -13975,6 +13999,60 @@ static int ast_has_keyword(ast_t *node, const char *keyword, int max_depth) {
     return ast_has_keyword_in_list(node->child, keyword, max_depth - 1);
 }
 
+/* Build a TypeAlias capturing a complex return type from TypeInfo, transferring
+ * ownership of heap-allocated fields.  Cleans up remaining TypeInfo contents. */
+static struct TypeAlias *build_inline_return_alias(TypeInfo *type_info, int return_type,
+                                                   char *return_type_id)
+{
+    struct TypeAlias *alias = NULL;
+    if (type_info->is_array || type_info->is_pointer || type_info->is_set ||
+        type_info->is_enum || type_info->is_file || type_info->is_record) {
+        alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
+        if (alias != NULL) {
+            alias->base_type = return_type;
+            alias->target_type_id = return_type_id;
+            if (type_info->is_array) {
+                alias->is_array = 1;
+                alias->array_start = type_info->start;
+                alias->array_end = type_info->end;
+                alias->array_element_type = type_info->element_type;
+                alias->array_element_type_id = type_info->element_type_id;
+                alias->is_shortstring = type_info->is_shortstring;
+                alias->is_open_array = type_info->is_open_array;
+            }
+            if (type_info->is_pointer) {
+                alias->is_pointer = 1;
+                alias->pointer_type = type_info->pointer_type;
+                alias->pointer_type_id = type_info->pointer_type_id;
+            }
+            if (type_info->is_set) {
+                alias->is_set = 1;
+                alias->set_element_type = type_info->set_element_type;
+                alias->set_element_type_id = type_info->set_element_type_id;
+            }
+            if (type_info->is_enum) {
+                alias->is_enum = 1;
+                alias->enum_is_scoped = type_info->enum_is_scoped;
+                alias->enum_literals = type_info->enum_literals;
+            }
+            if (type_info->is_file) {
+                alias->is_file = 1;
+                alias->file_type = type_info->file_type;
+                alias->file_type_id = type_info->file_type_id;
+            }
+            /* NULL out transferred pointers so destroy_type_info_contents
+             * won't double-free them. */
+            type_info->element_type_id = NULL;
+            type_info->pointer_type_id = NULL;
+            type_info->set_element_type_id = NULL;
+            type_info->enum_literals = NULL;
+            type_info->file_type_id = NULL;
+        }
+    }
+    destroy_type_info_contents(type_info);
+    return alias;
+}
+
 static Tree_t *convert_method_impl(ast_t *method_node) {
     if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
         fprintf(stderr, "[KGPC] convert_method_impl entry (method_node=%p)\n", (void*)method_node);
@@ -14416,60 +14494,13 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         case PASCAL_T_RETURN_TYPE: {
             /* Method has a return type - it's a function, not a procedure */
             has_return_type = 1;
-            TypeInfo type_info;
+            TypeInfo type_info = {0};
             return_type = convert_type_spec(node->child, &return_type_id, NULL, &type_info);
             if (return_type_ref == NULL)
                 return_type_ref = type_ref_from_info_or_id(&type_info, return_type_id);
-
             if (return_type_id == NULL && node->sym != NULL && node->sym->name != NULL)
-            {
                 return_type_id = strdup(node->sym->name);
-            }
-            
-            /* If it's a complex type (array, pointer, etc.), create a TypeAlias to store the info */
-            if (type_info.is_array || type_info.is_pointer || type_info.is_set || 
-                type_info.is_enum || type_info.is_file || type_info.is_record) {
-                inline_return_type = (struct TypeAlias *)malloc(sizeof(struct TypeAlias));
-                if (inline_return_type != NULL) {
-                    memset(inline_return_type, 0, sizeof(struct TypeAlias));
-                    inline_return_type->base_type = return_type;
-                    inline_return_type->target_type_id = return_type_id;
-                    
-                    if (type_info.is_array) {
-                        inline_return_type->is_array = 1;
-                        inline_return_type->array_start = type_info.start;
-                        inline_return_type->array_end = type_info.end;
-                        inline_return_type->array_element_type = type_info.element_type;
-                        inline_return_type->array_element_type_id = type_info.element_type_id;
-                        inline_return_type->is_shortstring = type_info.is_shortstring;
-                        inline_return_type->is_open_array = type_info.is_open_array;
-                    }
-                    
-                    if (type_info.is_pointer) {
-                        inline_return_type->is_pointer = 1;
-                        inline_return_type->pointer_type = type_info.pointer_type;
-                        inline_return_type->pointer_type_id = type_info.pointer_type_id;
-                    }
-                    
-                    if (type_info.is_set) {
-                        inline_return_type->is_set = 1;
-                        inline_return_type->set_element_type = type_info.set_element_type;
-                        inline_return_type->set_element_type_id = type_info.set_element_type_id;
-                    }
-                    
-                    if (type_info.is_enum) {
-                        inline_return_type->is_enum = 1;
-                        inline_return_type->enum_is_scoped = type_info.enum_is_scoped;
-                        inline_return_type->enum_literals = type_info.enum_literals;
-                    }
-                    
-                    if (type_info.is_file) {
-                        inline_return_type->is_file = 1;
-                        inline_return_type->file_type = type_info.file_type;
-                        inline_return_type->file_type_id = type_info.file_type_id;
-                    }
-                }
-            }
+            inline_return_type = build_inline_return_alias(&type_info, return_type, return_type_id);
             break;
         }
         case PASCAL_T_TYPE_SECTION:
@@ -15018,61 +15049,13 @@ static Tree_t *convert_function(ast_t *func_node) {
     }
 
     if (cur != NULL && cur->typ == PASCAL_T_RETURN_TYPE) {
-        TypeInfo type_info;
+        TypeInfo type_info = {0};
         return_type = convert_type_spec(cur->child, &return_type_id, NULL, &type_info);
         if (return_type_ref == NULL)
             return_type_ref = type_ref_from_info_or_id(&type_info, return_type_id);
-
         if (return_type_id == NULL && cur->sym != NULL && cur->sym->name != NULL)
-        {
             return_type_id = strdup(cur->sym->name);
-        }
-        
-        /* If it's a complex type (array, pointer, etc.), create a TypeAlias to store the info */
-        if (type_info.is_array || type_info.is_pointer || type_info.is_set || 
-            type_info.is_enum || type_info.is_file || type_info.is_record) {
-            inline_return_type = (struct TypeAlias *)malloc(sizeof(struct TypeAlias));
-            if (inline_return_type != NULL) {
-                memset(inline_return_type, 0, sizeof(struct TypeAlias));
-                inline_return_type->base_type = return_type;
-                inline_return_type->target_type_id = return_type_id;
-                
-                if (type_info.is_array) {
-                    inline_return_type->is_array = 1;
-                    inline_return_type->array_start = type_info.start;
-                    inline_return_type->array_end = type_info.end;
-                    inline_return_type->array_element_type = type_info.element_type;
-                    inline_return_type->array_element_type_id = type_info.element_type_id;
-                    inline_return_type->is_shortstring = type_info.is_shortstring;
-                    inline_return_type->is_open_array = type_info.is_open_array;
-                }
-                
-                if (type_info.is_pointer) {
-                    inline_return_type->is_pointer = 1;
-                    inline_return_type->pointer_type = type_info.pointer_type;
-                    inline_return_type->pointer_type_id = type_info.pointer_type_id;
-                }
-                
-                if (type_info.is_set) {
-                    inline_return_type->is_set = 1;
-                    inline_return_type->set_element_type = type_info.set_element_type;
-                    inline_return_type->set_element_type_id = type_info.set_element_type_id;
-                }
-                
-                if (type_info.is_enum) {
-                    inline_return_type->is_enum = 1;
-                    inline_return_type->enum_is_scoped = type_info.enum_is_scoped;
-                    inline_return_type->enum_literals = type_info.enum_literals;
-                }
-                
-                if (type_info.is_file) {
-                    inline_return_type->is_file = 1;
-                    inline_return_type->file_type = type_info.file_type;
-                    inline_return_type->file_type_id = type_info.file_type_id;
-                }
-            }
-        }
-        
+        inline_return_type = build_inline_return_alias(&type_info, return_type, return_type_id);
         cur = cur->next;
     }
 
@@ -15329,6 +15312,63 @@ static ast_t *find_last_node_by_type(ast_t *node, int target_type) {
         node = node->next;
     }
     return last;
+}
+
+void from_cparser_cleanup(void)
+{
+    /* Free type helper mappings (strdup'd strings + struct + list nodes) */
+    while (type_helper_mappings != NULL) {
+        ListNode_t *next = type_helper_mappings->next;
+        struct TypeHelperMapping *entry = (struct TypeHelperMapping *)type_helper_mappings->cur;
+        if (entry != NULL) {
+            free(entry->helper_id);
+            free(entry->base_type_id);
+            free(entry);
+        }
+        free(type_helper_mappings);
+        type_helper_mappings = next;
+    }
+
+    /* Free class method bindings (interned strings - do NOT free, just free structs + list nodes) */
+    while (class_method_bindings != NULL) {
+        ListNode_t *next = class_method_bindings->next;
+        free(class_method_bindings->cur); /* ClassMethodBinding struct */
+        free(class_method_bindings);
+        class_method_bindings = next;
+    }
+
+    /* Free pending generic aliases */
+    while (g_pending_generic_aliases != NULL) {
+        PendingGenericAlias *next = g_pending_generic_aliases->next;
+        free(g_pending_generic_aliases->base_name);
+        if (g_pending_generic_aliases->type_args != NULL)
+            destroy_list(g_pending_generic_aliases->type_args);
+        free(g_pending_generic_aliases);
+        g_pending_generic_aliases = next;
+    }
+
+    /* Free scoped enum source cache */
+    free(g_scoped_enum_source_path);
+    g_scoped_enum_source_path = NULL;
+    free(g_scoped_enum_source_buffer);
+    g_scoped_enum_source_buffer = NULL;
+    g_scoped_enum_source_length = 0;
+
+    /* Reset const sections */
+    reset_const_sections();
+
+    /* Clear borrowed AST pointers */
+    g_interface_type_section_ast = NULL;
+    g_implementation_type_section_ast = NULL;
+    g_interface_section_ast = NULL;
+    g_implementation_section_ast = NULL;
+    g_current_method_name = NULL;
+
+    /* Reset counters */
+    anonymous_method_counter = 0;
+    typed_const_counter = 0;
+    g_allow_pending_specializations = 0;
+    g_frontend_error_count = 0;
 }
 
 Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
