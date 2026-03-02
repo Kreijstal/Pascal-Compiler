@@ -13,6 +13,8 @@
 #include "../ParseTree/KgpcType.h"
 #include "../ParseTree/ident_ref.h"
 
+static const char *g_mangle_caller_name = NULL; /* debug only */
+
 // Helper to create a lowercase copy of a string (for case-insensitive mangling)
 static char* str_tolower_dup(const char* src) {
     if (src == NULL)
@@ -747,7 +749,12 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
                 /* Check type_alias for STRING_TYPE to distinguish between
                  * RawByteString and UnicodeString. With the fix in commit 868406b,
                  * type_alias is now owned by KgpcType and should be valid. */
-                else if (type_tag == STRING_TYPE && kgpc_type->type_alias != NULL)
+                if (type_tag == STRING_TYPE && getenv("KGPC_DEBUG_MANGLE"))
+                    fprintf(stderr, "[MANGLE] STRING_TYPE arg for %s: type_alias=%s, kind=%d\n",
+                        g_mangle_caller_name ? g_mangle_caller_name : "?",
+                        kgpc_type->type_alias ? (kgpc_type->type_alias->alias_name ? kgpc_type->type_alias->alias_name : "<null_name>") : "<null>",
+                        kgpc_type->kind);
+                if (type_tag == STRING_TYPE && kgpc_type->type_alias != NULL)
                 {
                     struct TypeAlias *alias = kgpc_type->type_alias;
                     if (alias->alias_name != NULL)
@@ -813,6 +820,8 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
 char* MangleFunctionNameFromCallSite(const char* original_name, ListNode_t* args_expr, SymTab_t *symtab, int max_scope_lev) {
     assert(original_name != NULL);
     assert(symtab != NULL);
+    g_mangle_caller_name = original_name;
     ListNode_t* type_list = GetFlatTypeListFromCallSite(args_expr, symtab, max_scope_lev);
+    g_mangle_caller_name = NULL;
     return MangleNameFromTypeList(original_name, type_list);
 }

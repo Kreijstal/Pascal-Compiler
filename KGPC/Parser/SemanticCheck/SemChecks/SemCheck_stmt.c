@@ -1591,7 +1591,9 @@ static int try_resolve_builtin_procedure(SymTab_t *symtab,
 
     /* Prefer user-defined/prologue procedures over builtins when available. */
     HashNode_t *existing = NULL;
-    int force_builtin = pascal_identifier_equals(expected_name, "Assign");
+    int force_builtin = pascal_identifier_equals(expected_name, "Assign") ||
+                        pascal_identifier_equals(expected_name, "Val") ||
+                        pascal_identifier_equals(expected_name, "Str");
     if (!force_builtin &&
         FindIdent(&existing, symtab, proc_id) != -1 && existing != NULL &&
         existing->hash_type != HASHTYPE_BUILTIN_PROCEDURE)

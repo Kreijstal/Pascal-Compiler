@@ -720,59 +720,11 @@ RegStack_t *init_reg_stack()
     rax->current_live_range = NULL;
 #endif
 
-    /* %r10, %r11 - caller-saved, never used for arguments */
-    Register_t *r10 = (Register_t *)malloc(sizeof(Register_t));
-    assert(r10 != NULL);
-    r10->reg_id = REG_R10;
-    r10->bit_64 = strdup("%r10");
-    r10->bit_32 = strdup("%r10d");
-    r10->spill_location = NULL;
-    r10->last_use_seq = 0;
-    r10->spill_callback = NULL;
-    r10->spill_context = NULL;
-#if USE_GRAPH_COLORING_ALLOCATOR
-    r10->current_live_range = NULL;
-#endif
+    /* %r10, %r11 are caller-saved scratch registers.
+       They are NOT in the allocatable pool — only used explicitly
+       (VMT dispatch, division, etc.) and never live across calls. */
 
-    Register_t *r11 = (Register_t *)malloc(sizeof(Register_t));
-    assert(r11 != NULL);
-    r11->reg_id = REG_R11;
-    r11->bit_64 = strdup("%r11");
-    r11->bit_32 = strdup("%r11d");
-    r11->spill_location = NULL;
-    r11->last_use_seq = 0;
-    r11->spill_callback = NULL;
-    r11->spill_context = NULL;
-#if USE_GRAPH_COLORING_ALLOCATOR
-    r11->current_live_range = NULL;
-#endif
-
-    /* %r8, %r9 - argument registers 3 and 4 (both ABIs), less commonly used */
-    Register_t *r8 = (Register_t *)malloc(sizeof(Register_t));
-    assert(r8 != NULL);
-    r8->reg_id = REG_R8;
-    r8->bit_64 = strdup("%r8");
-    r8->bit_32 = strdup("%r8d");
-    r8->spill_location = NULL;
-    r8->last_use_seq = 0;
-    r8->spill_callback = NULL;
-    r8->spill_context = NULL;
-#if USE_GRAPH_COLORING_ALLOCATOR
-    r8->current_live_range = NULL;
-#endif
-
-    Register_t *r9 = (Register_t *)malloc(sizeof(Register_t));
-    assert(r9 != NULL);
-    r9->reg_id = REG_R9;
-    r9->bit_64 = strdup("%r9");
-    r9->bit_32 = strdup("%r9d");
-    r9->spill_location = NULL;
-    r9->last_use_seq = 0;
-    r9->spill_callback = NULL;
-    r9->spill_context = NULL;
-#if USE_GRAPH_COLORING_ALLOCATOR
-    r9->current_live_range = NULL;
-#endif
+    /* %r8, %r9, %r10, %r11 are caller-saved — not added to the pool. */
 
     /* %rbx, %r12 - callee-saved, survive across function calls.
        Placed first in the list so get_free_reg prefers them for
@@ -803,72 +755,60 @@ RegStack_t *init_reg_stack()
     r12->current_live_range = NULL;
 #endif
 
-    /* Build base register list.
-       Callee-saved registers (%rbx, %r12) are listed first so they are
-       preferred for intermediate values — their values survive calls. */
+    Register_t *r13 = (Register_t *)malloc(sizeof(Register_t));
+    assert(r13 != NULL);
+    r13->reg_id = REG_R13;
+    r13->bit_64 = strdup("%r13");
+    r13->bit_32 = strdup("%r13d");
+    r13->spill_location = NULL;
+    r13->last_use_seq = 0;
+    r13->spill_callback = NULL;
+    r13->spill_context = NULL;
+#if USE_GRAPH_COLORING_ALLOCATOR
+    r13->current_live_range = NULL;
+#endif
+
+    Register_t *r14 = (Register_t *)malloc(sizeof(Register_t));
+    assert(r14 != NULL);
+    r14->reg_id = REG_R14;
+    r14->bit_64 = strdup("%r14");
+    r14->bit_32 = strdup("%r14d");
+    r14->spill_location = NULL;
+    r14->last_use_seq = 0;
+    r14->spill_callback = NULL;
+    r14->spill_context = NULL;
+#if USE_GRAPH_COLORING_ALLOCATOR
+    r14->current_live_range = NULL;
+#endif
+
+    Register_t *r15 = (Register_t *)malloc(sizeof(Register_t));
+    assert(r15 != NULL);
+    r15->reg_id = REG_R15;
+    r15->bit_64 = strdup("%r15");
+    r15->bit_32 = strdup("%r15d");
+    r15->spill_location = NULL;
+    r15->last_use_seq = 0;
+    r15->spill_callback = NULL;
+    r15->spill_context = NULL;
+#if USE_GRAPH_COLORING_ALLOCATOR
+    r15->current_live_range = NULL;
+#endif
+
+    /* Build register list — only callee-saved registers are in the pool.
+       These survive across function calls, so values are never lost.
+       Caller-saved registers (%rax, %rcx, %rdx, %rsi, %rdi, %r8-%r11)
+       are NOT in the pool — they are clobbered by calls. */
     registers = CreateListNode(rbx, LIST_UNSPECIFIED);
     registers = PushListNodeBack(registers, CreateListNode(r12, LIST_UNSPECIFIED));
-    registers = PushListNodeBack(registers, CreateListNode(rax, LIST_UNSPECIFIED));
-    registers = PushListNodeBack(registers, CreateListNode(r10, LIST_UNSPECIFIED));
-    registers = PushListNodeBack(registers, CreateListNode(r11, LIST_UNSPECIFIED));
-    registers = PushListNodeBack(registers, CreateListNode(r8, LIST_UNSPECIFIED));
-    registers = PushListNodeBack(registers, CreateListNode(r9, LIST_UNSPECIFIED));
-
-    /* Add platform-specific registers */
-    if (g_current_codegen_abi == KGPC_TARGET_ABI_WINDOWS)
-    {
-        /* Windows: %rsi and %rdi are not argument registers */
-        Register_t *rsi = (Register_t *)malloc(sizeof(Register_t));
-        assert(rsi != NULL);
-        rsi->reg_id = REG_RSI;
-        rsi->bit_64 = strdup("%rsi");
-        rsi->bit_32 = strdup("%esi");
-        rsi->spill_location = NULL;
-        rsi->last_use_seq = 0;
-        rsi->spill_callback = NULL;
-        rsi->spill_context = NULL;
-#if USE_GRAPH_COLORING_ALLOCATOR
-        rsi->current_live_range = NULL;
-#endif
-
-        Register_t *rdi = (Register_t *)malloc(sizeof(Register_t));
-        assert(rdi != NULL);
-        rdi->reg_id = REG_RDI;
-        rdi->bit_64 = strdup("%rdi");
-        rdi->bit_32 = strdup("%edi");
-        rdi->spill_location = NULL;
-        rdi->last_use_seq = 0;
-        rdi->spill_callback = NULL;
-        rdi->spill_context = NULL;
-#if USE_GRAPH_COLORING_ALLOCATOR
-        rdi->current_live_range = NULL;
-#endif
-
-        registers = PushListNodeBack(registers, CreateListNode(rsi, LIST_UNSPECIFIED));
-        registers = PushListNodeBack(registers, CreateListNode(rdi, LIST_UNSPECIFIED));
-    }
-    else
-    {
-        /* Linux/SysV: %rcx is argument register 4, less commonly used than rdi/rsi/rdx */
-        Register_t *rcx = (Register_t *)malloc(sizeof(Register_t));
-        assert(rcx != NULL);
-        rcx->reg_id = REG_RCX;
-        rcx->bit_64 = strdup("%rcx");
-        rcx->bit_32 = strdup("%ecx");
-        rcx->spill_location = NULL;
-        rcx->last_use_seq = 0;
-        rcx->spill_callback = NULL;
-        rcx->spill_context = NULL;
-#if USE_GRAPH_COLORING_ALLOCATOR
-        rcx->current_live_range = NULL;
-#endif
-
-        registers = PushListNodeBack(registers, CreateListNode(rcx, LIST_UNSPECIFIED));
-    }
+    registers = PushListNodeBack(registers, CreateListNode(r13, LIST_UNSPECIFIED));
+    registers = PushListNodeBack(registers, CreateListNode(r14, LIST_UNSPECIFIED));
+    registers = PushListNodeBack(registers, CreateListNode(r15, LIST_UNSPECIFIED));
+    /* %rax is caller-saved but NOT in the pool — it's used as return value
+       and varargs indicator, and the spill mechanism cannot properly restore it. */
 
     reg_stack->registers_allocated = NULL;
     reg_stack->registers_free = registers;
-    reg_stack->num_registers = NUM_CALLER_SAVED_REGISTERS;
+    reg_stack->num_registers = 5; /* rbx, r12, r13, r14, r15 */
     reg_stack->use_sequence = 0;
 
 #if USE_GRAPH_COLORING_ALLOCATOR

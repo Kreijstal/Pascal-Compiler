@@ -74,20 +74,58 @@ jobs:
           echo "Build directory not created"
         fi
 
+    - name: Enable core dumps
+      run: |
+        ulimit -c unlimited
+        # Put core dumps in a known location with the exe name
+        sudo sh -c 'echo "/tmp/cores/core.%e.%p" > /proc/sys/kernel/core_pattern'
+        mkdir -p /tmp/cores
+
     - name: Run tests with Wine
       if: success()
+      env:
+        KGPC_CI_FAILURE_DIR: builddir-cross/failing-tests
+        KGPC_TEST_VERBOSE: "1"
+        WINEDEBUG: warn+seh,warn+exception
       run: |
+        ulimit -c unlimited
         cd quasi-msys2
+        rm -rf ../builddir-cross/failing-tests
         # Run with verbose output to see progress
         bash -c 'source env/all.src && cd .. && meson test -C builddir-cross -v'
       timeout-minutes: 30
+
+    - name: Collect crash backtraces
+      if: failure()
+      run: |
+        echo "=== Checking for core dumps ==="
+        ls -la /tmp/cores/ 2>/dev/null || echo "No cores directory"
+        for core in /tmp/cores/core.*; do
+          [ -f "$core" ] || continue
+          echo "=== Backtrace from $core ==="
+          # Try gdb with the cross-compiled binary
+          gdb -batch -ex "thread apply all bt full" \
+            builddir-cross/KGPC/kgpc.exe "$core" 2>&1 || \
+          # Fallback: use x86_64-w64-mingw32-gdb or file info
+          file "$core"
+        done
 
     - name: Upload meson logs
       if: always()
       uses: actions/upload-artifact@v4
       with:
         name: meson-logs-cross-${{ matrix.msystem }}
-        path: builddir-cross/meson-logs/
+        path: |
+          builddir-cross/meson-logs/
+          builddir-cross/failing-tests/
+        if-no-files-found: ignore
+
+    - name: Upload core dumps
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: core-dumps-cross-${{ matrix.msystem }}
+        path: /tmp/cores/
         if-no-files-found: ignore
 
     - name: Upload cross-compiled binaries
