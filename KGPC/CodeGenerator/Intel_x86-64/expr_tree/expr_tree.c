@@ -3725,9 +3725,12 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                     }
                     else
                     {
-                        /* It's a register - multiply in place */
-                        snprintf(buffer, sizeof(buffer), "\timulq\t$%lld, %s\n", element_size, int_reg);
+                        /* It's a register or memory operand — use 3-operand imulq
+                         * to avoid the invalid 2-operand imulq $imm, mem form. */
+                        const char *scratch = (ptr_reg_reg != NULL && ptr_reg_reg->reg_id == REG_R11) ? "%r10" : "%r11";
+                        snprintf(buffer, sizeof(buffer), "\timulq\t$%lld, %s, %s\n", element_size, int_reg, scratch);
                         inst_list = add_inst(inst_list, buffer);
+                        int_reg = scratch;
                     }
                 }
                 

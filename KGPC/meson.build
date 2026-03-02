@@ -177,6 +177,10 @@ if get_option('run_fpc_rtl_tests')
   fpc_rtl_env.set('KGPC_HAVE_GMP', gmp_dep.found() ? '1' : '0')
   fpc_rtl_env.set('RUN_BUGGY_TEST', 'false')
   fpc_rtl_env.set('RUN_VALGRIND_TESTS', 'false')
+  # FPC RTL compilation is CPU-bound (~4s per test parsing system.pp).
+  # Allow parallel compilations to utilise available cores.
+  num_cpus = run_command('python3', '-c', 'import os; print(os.cpu_count() or 2)', check: false).stdout().strip()
+  fpc_rtl_env.set('KGPC_COMPILER_PARALLEL_LIMIT', num_cpus)
   test('FPC RTL tests', python,
     args: [
       meson.project_source_root() / 'tests/do_not_run_me_directly_but_through_meson.py',
