@@ -2631,6 +2631,7 @@ void init_pascal_unit_parser(combinator_t** p) {
         function_impl,
         NULL
     );
+    free(*nested_proc_ref);  // Free placeholder combinator allocated at init
     *nested_proc_ref = nested_proc_or_func;
 
     // Class operator implementation (with required body)
@@ -2766,6 +2767,7 @@ void init_pascal_unit_parser(combinator_t** p) {
 
     combinator_t** implementation_definition_ref = (combinator_t**)safe_malloc(sizeof(combinator_t*));
     *implementation_definition_ref = implementation_definition;
+    implementation_definition->extra_to_free = implementation_definition_ref;
     combinator_t* generic_prefixed_definition = seq(new_combinator(), PASCAL_T_NONE,
         token(keyword_ci("generic")),
         lazy(implementation_definition_ref),

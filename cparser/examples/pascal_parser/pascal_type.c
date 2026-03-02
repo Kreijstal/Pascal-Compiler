@@ -2108,8 +2108,14 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
     } else {
         discard_failure(adv_res);
     }
+    // variant_part is shared between *record_item_ref and adv_member.
+    // Mark it cached so adv_members free skips it, then free *record_item_ref
+    // which owns the entire field parser sub-tree (including variant_part).
+    variant_part->cached = true;
     free_combinator(adv_members);
-    
+    variant_part->cached = false;
+    free_combinator(*record_item_ref);
+
     /* Add advanced member declarations to fields list */
     if (adv_members_ast != NULL) {
         /* Keep meaningful AST nodes, discard access modifiers and ast_nil */

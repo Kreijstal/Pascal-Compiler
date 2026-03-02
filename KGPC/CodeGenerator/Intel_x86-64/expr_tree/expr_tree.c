@@ -533,6 +533,20 @@ static ListNode_t *emit_load_from_stack(ListNode_t *inst_list, const Register_t 
         snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", offset, reg_name);
     else if (type_tag == CHAR_TYPE)
         snprintf(buffer, sizeof(buffer), "\tmovzbl\t-%d(%%rbp), %s\n", offset, reg_name);
+    else if (expr != NULL && expr->resolved_kgpc_type != NULL && kgpc_type_sizeof(expr->resolved_kgpc_type) == 2)
+    {
+        if (codegen_type_is_signed(type_tag))
+            snprintf(buffer, sizeof(buffer), "\tmovswl\t-%d(%%rbp), %s\n", offset, reg_name);
+        else
+            snprintf(buffer, sizeof(buffer), "\tmovzwl\t-%d(%%rbp), %s\n", offset, reg_name);
+    }
+    else if (expr != NULL && expr->resolved_kgpc_type != NULL && kgpc_type_sizeof(expr->resolved_kgpc_type) == 1)
+    {
+        if (codegen_type_is_signed(type_tag))
+            snprintf(buffer, sizeof(buffer), "\tmovsbl\t-%d(%%rbp), %s\n", offset, reg_name);
+        else
+            snprintf(buffer, sizeof(buffer), "\tmovzbl\t-%d(%%rbp), %s\n", offset, reg_name);
+    }
     else
         snprintf(buffer, sizeof(buffer), "\tmovl\t-%d(%%rbp), %s\n", offset, reg_name);
     return add_inst(inst_list, buffer);
@@ -2890,6 +2904,24 @@ cleanup_constructor:
                 snprintf(load_value, sizeof(load_value), "\tmovzbl\t(%s), %s\n",
                     target_reg->bit_64, target_reg->bit_32);
             }
+            else if (expr->resolved_kgpc_type != NULL && kgpc_type_sizeof(expr->resolved_kgpc_type) == 2)
+            {
+                if (codegen_type_is_signed(expr_type))
+                    snprintf(load_value, sizeof(load_value), "\tmovswl\t(%s), %s\n",
+                        target_reg->bit_64, target_reg->bit_32);
+                else
+                    snprintf(load_value, sizeof(load_value), "\tmovzwl\t(%s), %s\n",
+                        target_reg->bit_64, target_reg->bit_32);
+            }
+            else if (expr->resolved_kgpc_type != NULL && kgpc_type_sizeof(expr->resolved_kgpc_type) == 1)
+            {
+                if (codegen_type_is_signed(expr_type))
+                    snprintf(load_value, sizeof(load_value), "\tmovsbl\t(%s), %s\n",
+                        target_reg->bit_64, target_reg->bit_32);
+                else
+                    snprintf(load_value, sizeof(load_value), "\tmovzbl\t(%s), %s\n",
+                        target_reg->bit_64, target_reg->bit_32);
+            }
             else
             {
                 snprintf(load_value, sizeof(load_value), "\tmovl\t(%s), %s\n",
@@ -3019,6 +3051,28 @@ cleanup_constructor:
         {
             /* Value doesn't fit in 32 bits - use 64-bit move */
             snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n", imm_value, target_reg->bit_64);
+            return add_inst(inst_list, buffer);
+        }
+    }
+
+    /* For sub-dword memory operands, use appropriately sized loads */
+    if (!is_immediate && expr != NULL && expr->resolved_kgpc_type != NULL)
+    {
+        long long sz = kgpc_type_sizeof(expr->resolved_kgpc_type);
+        if (sz == 2)
+        {
+            if (codegen_type_is_signed(storage_tag))
+                snprintf(buffer, sizeof(buffer), "\tmovswl\t%s, %s\n", buf_leaf, target_reg->bit_32);
+            else
+                snprintf(buffer, sizeof(buffer), "\tmovzwl\t%s, %s\n", buf_leaf, target_reg->bit_32);
+            return add_inst(inst_list, buffer);
+        }
+        else if (sz == 1 && storage_tag != CHAR_TYPE)
+        {
+            if (codegen_type_is_signed(storage_tag))
+                snprintf(buffer, sizeof(buffer), "\tmovsbl\t%s, %s\n", buf_leaf, target_reg->bit_32);
+            else
+                snprintf(buffer, sizeof(buffer), "\tmovzbl\t%s, %s\n", buf_leaf, target_reg->bit_32);
             return add_inst(inst_list, buffer);
         }
     }
