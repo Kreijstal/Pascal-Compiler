@@ -1876,7 +1876,7 @@ void codegen_function_header_ex_alias_vis(char *func_name, CodeGenContext *ctx, 
     assert(func_name != NULL);
     assert(ctx != NULL);
     codegen_emit_function_debug_comments(func_name, ctx);
-    const char *vis = emit_weak ? ".weak" : ".globl";
+    const char *vis = emit_weak ? codegen_weak_or_globl() : ".globl";
     /* Emit alias label from cname_override (e.g. [Public,Alias:'FPC_DO_EXIT']) */
     if (cname_override != NULL && strcmp(cname_override, func_name) != 0) {
         fprintf(ctx->output_file, "%s\t%s\n", vis, cname_override);
@@ -2695,7 +2695,7 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                         if (pad > 0)
                             fprintf(ctx->output_file, "\t.zero\t%lld\n", pad);
                         if (f->name != NULL && f->is_class_var == 1) {
-                            fprintf(ctx->output_file, ".weak\t%s\n", f->name);
+                            fprintf(ctx->output_file, "%s\t%s\n", codegen_weak_or_globl(), f->name);
                             fprintf(ctx->output_file, "%s:\n", f->name);
                         }
                         fprintf(ctx->output_file, "\t.zero\t%d\n", fsz);
@@ -2751,7 +2751,7 @@ static void codegen_emit_record_classvar_storage(CodeGenContext *ctx, SymTab_t *
     fprintf(ctx->output_file, ".globl %s_CLASSVAR\n", class_label);
     /* Emit a weak alias from the bare type name to the _CLASSVAR label
        so that codegen references like "leaq HeapInc(%rip)" resolve. */
-    fprintf(ctx->output_file, ".weak\t%s\n", class_label);
+    fprintf(ctx->output_file, "%s\t%s\n", codegen_weak_or_globl(), class_label);
     fprintf(ctx->output_file, "%s:\n", class_label);
     fprintf(ctx->output_file, "%s_CLASSVAR:\n", class_label);
 
@@ -2774,7 +2774,7 @@ static void codegen_emit_record_classvar_storage(CodeGenContext *ctx, SymTab_t *
                     /* Emit a weak label with the bare field name, but only for
                        actual class vars (not regular fields that happen to be included). */
                     if (f->name != NULL && f->is_class_var == 1) {
-                        fprintf(ctx->output_file, ".weak\t%s\n", f->name);
+                        fprintf(ctx->output_file, "%s\t%s\n", codegen_weak_or_globl(), f->name);
                         fprintf(ctx->output_file, "%s:\n", f->name);
                     }
                     fprintf(ctx->output_file, "\t.zero\t%d\n", fsz);
@@ -2925,9 +2925,9 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
                 }
                 if (target_emitted) {
                     fprintf(ctx->output_file, "\n# TYPEINFO alias: %s = %s\n", alias_name, target_name);
-                    fprintf(ctx->output_file, ".weak\t%s_TYPEINFO\n", alias_name);
+                    fprintf(ctx->output_file, "%s\t%s_TYPEINFO\n", codegen_weak_or_globl(), alias_name);
                     fprintf(ctx->output_file, "\t.set\t%s_TYPEINFO, %s_TYPEINFO\n", alias_name, target_name);
-                    fprintf(ctx->output_file, ".weak\t%s_VMT\n", alias_name);
+                    fprintf(ctx->output_file, "%s\t%s_VMT\n", codegen_weak_or_globl(), alias_name);
                     fprintf(ctx->output_file, "\t.set\t%s_VMT, %s_VMT\n", alias_name, target_name);
                 }
             }
@@ -3253,7 +3253,7 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
                             codegen_set_contains(&emitted_labels, label) &&
                             !codegen_set_contains(&emitted_cname_aliases, alias)) {
                             codegen_set_insert(&emitted_cname_aliases, alias);
-                            fprintf(ctx->output_file, ".weak\t%s\n", alias);
+                            fprintf(ctx->output_file, "%s\t%s\n", codegen_weak_or_globl(), alias);
                             fprintf(ctx->output_file, "\t.set\t%s, %s\n", alias, label);
                         }
                         /* If this is a forward decl (no body), find the implementation.
@@ -3283,7 +3283,7 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
                                                 codegen_set_contains(&emitted_labels, impl_label) &&
                                                 !codegen_set_contains(&emitted_cname_aliases, alias)) {
                                                 codegen_set_insert(&emitted_cname_aliases, alias);
-                                                fprintf(ctx->output_file, ".weak\t%s\n", alias);
+                                                fprintf(ctx->output_file, "%s\t%s\n", codegen_weak_or_globl(), alias);
                                                 fprintf(ctx->output_file, "\t.set\t%s, %s\n", alias, impl_label);
                                             }
                                             /* Also emit alias from the forward decl's mangled_id to the impl.
@@ -3295,7 +3295,7 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
                                                 codegen_set_contains(&emitted_labels, impl_label) &&
                                                 !codegen_set_contains(&emitted_cname_aliases, label)) {
                                                 codegen_set_insert(&emitted_cname_aliases, label);
-                                                fprintf(ctx->output_file, ".weak\t%s\n", label);
+                                                fprintf(ctx->output_file, "%s\t%s\n", codegen_weak_or_globl(), label);
                                                 fprintf(ctx->output_file, "\t.set\t%s, %s\n", label, impl_label);
                                             }
                                             break;
@@ -3365,7 +3365,7 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
                                             impl->tree_data.subprogram_data.cname_override == NULL)
                                             goto next_fwd;
                                         codegen_set_insert(&emitted_cname_aliases, fwd_mangled);
-                                        fprintf(ctx->output_file, ".weak\t%s\n", fwd_mangled);
+                                        fprintf(ctx->output_file, "%s\t%s\n", codegen_weak_or_globl(), fwd_mangled);
                                         fprintf(ctx->output_file, "\t.set\t%s, %s\n", fwd_mangled, impl_mangled);
                                         break;
                                     }
@@ -3401,7 +3401,7 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
                     if (id != NULL && mangled != NULL && strcasecmp(id, mangled) != 0 &&
                         codegen_set_contains(&emitted_labels, mangled)) {
                         if (!codegen_set_contains_ci(&emitted_names, id)) {
-                            fprintf(ctx->output_file, ".weak\t%s\n", id);
+                            fprintf(ctx->output_file, "%s\t%s\n", codegen_weak_or_globl(), id);
                             fprintf(ctx->output_file, "\t.set\t%s, %s\n", id, mangled);
                             codegen_set_insert_ci(&emitted_names, id);
                         }

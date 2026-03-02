@@ -117,6 +117,13 @@ static inline int codegen_target_is_windows(void)
     return g_current_codegen_abi == KGPC_TARGET_ABI_WINDOWS;
 }
 
+/* .weak is ELF-only; PE/COFF (Windows) resolves unmatched weak externs to
+ * NULL, causing crashes.  Always fall back to .globl on Windows targets. */
+static inline const char *codegen_weak_or_globl(void)
+{
+    return codegen_target_is_windows() ? ".globl" : ".weak";
+}
+
 static inline const char *codegen_readonly_section_directive(void)
 {
     return codegen_target_is_windows() ? "\t.section\t.rdata,\"dr\"" : "\t.section\t.rodata";
