@@ -245,6 +245,11 @@ typedef struct {
         const char *name;   /* Pascal parameter name */
         int reg_index;      /* SysV ABI register index (0=%rdi,1=%rsi,...) */
     } asm_params[16];
+
+    /* Callee-saved register save slot offsets (from %rbp).
+       Set to 0 when not used (e.g. nostackframe functions). */
+    int callee_save_rbx_offset;
+    int callee_save_r12_offset;
 } CodeGenContext;
 
 /* Generates a label */

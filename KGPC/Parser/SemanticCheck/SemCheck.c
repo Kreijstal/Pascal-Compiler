@@ -404,6 +404,21 @@ static void semcheck_qualify_nested_types_for_record(SymTab_t *symtab, struct Re
                 &field->array_element_type_id, &field->array_element_type_ref);
             semcheck_maybe_qualify_nested_type(symtab, record_info->type_id, NULL,
                 &field->pointer_type_id, &field->pointer_type_ref);
+            /* Resolve proc_type for fields with named procedural types.
+             * This avoids string parsing hacks later when detecting procedural
+             * field calls (e.g., FCallBack(args) where FCallBack's type_id is a
+             * dot-qualified nested type like TInterfaceThunk.TThunkCallback). */
+            if (field->proc_type == NULL && field->type_id != NULL)
+            {
+                HashNode_t *type_node = semcheck_find_preferred_type_node(symtab,
+                    field->type_id);
+                if (type_node != NULL && type_node->type != NULL &&
+                    type_node->type->kind == TYPE_KIND_PROCEDURE)
+                {
+                    field->proc_type = type_node->type;
+                    kgpc_type_retain(field->proc_type);
+                }
+            }
         }
         fnode = fnode->next;
     }

@@ -20,6 +20,7 @@
 #include "../../Parser/SemanticCheck/SymTab/SymTab.h"
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
 #include "../../Parser/SemanticCheck/SemChecks/SemCheck_sizeof.h"
+#include "../../Parser/ParseTree/from_cparser.h"
 
 #ifndef CODEGEN_POINTER_SIZE_BYTES
 #define CODEGEN_POINTER_SIZE_BYTES 8
@@ -1063,7 +1064,19 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
     {
         int scope_depth = 0;
         StackNode_t *var_node = find_label_with_depth(expr->expr_data.id, &scope_depth);
-        
+
+        /* Fallback: resolve via symbol table mangled_id (e.g. class constants
+           registered as "TSingleHelper__Epsilon" but referenced as "Epsilon") */
+        if (var_node == NULL && ctx->symtab != NULL)
+        {
+            HashNode_t *sym_node = NULL;
+            if (FindIdent(&sym_node, ctx->symtab, expr->expr_data.id) >= 0 &&
+                sym_node != NULL && sym_node->mangled_id != NULL)
+            {
+                var_node = find_label_with_depth(sym_node->mangled_id, &scope_depth);
+            }
+        }
+
         if (var_node == NULL)
         {
             /* Procedures/functions used as values (e.g. @Proc, typed proc constants) */
@@ -4097,11 +4110,11 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                     }
                     cleaned[j] = '\0';
 
-                    /* Substitute Pascal parameter/variable names with stack operands
-                       or ABI registers.  FPC's inline asm uses parameter names (e.g.
-                       'buf', 'len') that the compiler resolves.  For nostackframe
-                       functions, use the ABI registers (e.g. %rdi, %rsi, %rdx...).
-                       For regular functions, use the stack offset -N(%rbp). */
+                    /* Resolve identifiers in asm blocks:
+                       1. For nostackframe: substitute parameter names → ABI registers
+                       2. For all asm: resolve Pascal global variables → static labels
+                       Pascal is case-insensitive, but ELF symbols are case-sensitive,
+                       so we must resolve identifiers to their canonical label names. */
                     {
                         size_t clen = strlen(cleaned);
                         size_t sub_alloc = clen * 3 + 4096;
@@ -4109,7 +4122,6 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                         if (substituted != NULL) {
                             size_t si = 0, sj = 0;
                             while (si < clen && sj < sub_alloc - 64) {
-                                /* Identifier: starts with letter or _, not preceded by % or . */
                                 if ((isalpha((unsigned char)cleaned[si]) || cleaned[si] == '_') &&
                                     (si == 0 || (!isalnum((unsigned char)cleaned[si-1]) &&
                                                  cleaned[si-1] != '_' && cleaned[si-1] != '%' &&
@@ -4124,8 +4136,7 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                                     if (id_len < sizeof(id_buf)) {
                                         memcpy(id_buf, cleaned + id_start, id_len);
                                         id_buf[id_len] = '\0';
-
-                                        /* For nostackframe: check asm_params for ABI register mapping */
+                                        /* Try nostackframe parameter substitution first */
                                         if (ctx->is_nostackframe && ctx->asm_param_count > 0) {
                                             for (int pi = 0; pi < ctx->asm_param_count; pi++) {
                                                 if (ctx->asm_params[pi].name != NULL &&
@@ -4140,15 +4151,17 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                                                 }
                                             }
                                         }
-
-                                        /* For regular functions: look up in stack scope */
+                                        /* Try resolving as a global variable (case-insensitive) */
                                         if (!did_substitute) {
-                                            StackNode_t *snode = find_label(id_buf);
-                                            if (snode != NULL && !snode->is_static && snode->offset != 0) {
-                                                int n = snprintf(substituted + sj, sub_alloc - sj,
-                                                                 "-%d(%%rbp)", snode->offset);
-                                                sj += (n > 0 ? (size_t)n : 0);
-                                                did_substitute = 1;
+                                            StackNode_t *var = find_label(id_buf);
+                                            if (var != NULL && var->is_static && var->static_label != NULL) {
+                                                const char *label = var->static_label;
+                                                size_t llen = strlen(label);
+                                                if (sj + llen < sub_alloc - 64) {
+                                                    memcpy(substituted + sj, label, llen);
+                                                    sj += llen;
+                                                    did_substitute = 1;
+                                                }
                                             }
                                         }
                                     }
@@ -4284,6 +4297,17 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                 char buffer[32];
                 snprintf(buffer, sizeof(buffer), "%s:\n", exit_label);
                 inst_list = add_inst(inst_list, buffer);
+            }
+            /* Restore callee-saved registers before leaving the frame */
+            if (ctx->callee_save_rbx_offset > 0) {
+                char buf[64];
+                snprintf(buf, sizeof(buf), "\tmovq\t-%d(%%rbp), %%rbx\n", ctx->callee_save_rbx_offset);
+                inst_list = add_inst(inst_list, buf);
+            }
+            if (ctx->callee_save_r12_offset > 0) {
+                char buf[64];
+                snprintf(buf, sizeof(buf), "\tmovq\t-%d(%%rbp), %%r12\n", ctx->callee_save_r12_offset);
+                inst_list = add_inst(inst_list, buf);
             }
             inst_list = add_inst(inst_list, "\tleave\n");
             inst_list = add_inst(inst_list, "\tret\n");
@@ -8345,6 +8369,13 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
             stmt->stmt_data.procedure_call_data.call_kgpc_type;
         call_expr->expr_data.function_call_data.is_call_info_valid =
             stmt->stmt_data.procedure_call_data.is_call_info_valid;
+        call_expr->expr_data.function_call_data.is_virtual_call =
+            stmt->stmt_data.procedure_call_data.is_virtual_call;
+        call_expr->expr_data.function_call_data.vmt_index =
+            stmt->stmt_data.procedure_call_data.vmt_index;
+        if (stmt->stmt_data.procedure_call_data.self_class_name != NULL)
+            call_expr->expr_data.function_call_data.self_class_name =
+                strdup(stmt->stmt_data.procedure_call_data.self_class_name);
 
         Register_t *discard_reg = NULL;
         inst_list = codegen_evaluate_expr(call_expr, inst_list, ctx, &discard_reg);
