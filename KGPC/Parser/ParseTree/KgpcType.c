@@ -911,18 +911,32 @@ static struct RecordType* get_record_type_from_hashnode(HashNode_t *node) {
     return NULL;
 }
 
+static int records_same_type(struct RecordType *a, struct RecordType *b) {
+    if (a == b)
+        return 1;
+    if (a != NULL && b != NULL &&
+        a->type_id != NULL && b->type_id != NULL &&
+        strcasecmp(a->type_id, b->type_id) == 0)
+        return 1;
+    return 0;
+}
+
 static int is_record_subclass(struct RecordType *subclass, struct RecordType *superclass, struct SymTab *symtab) {
-    if (subclass == superclass)
-        return 1;  /* Same type */
+    if (records_same_type(subclass, superclass))
+        return 1;
 
     /* Follow inheritance chain */
     struct RecordType *current = subclass;
     while (current != NULL && current->parent_class_name != NULL) {
+        /* Check by name if parent_class_name matches superclass type_id */
+        if (superclass != NULL && superclass->type_id != NULL &&
+            strcasecmp(current->parent_class_name, superclass->type_id) == 0)
+            return 1;
         /* Look up parent class in symbol table */
         HashNode_t *parent_node = NULL;
         if (FindIdent(&parent_node, symtab, current->parent_class_name) != -1 && parent_node != NULL) {
             struct RecordType *parent_record = get_record_type_from_hashnode(parent_node);
-            if (parent_record == superclass)
+            if (records_same_type(parent_record, superclass))
                 return 1;
             current = parent_record;
         } else {
