@@ -5123,6 +5123,106 @@ low_cleanup:
                 return 1;
             }
             
+            /* Handle BitSizeOf() function for constant expressions - returns SizeOf(T) * 8 */
+            if (id != NULL && pascal_identifier_equals(id, "BitSizeOf"))
+            {
+                struct Expression *arg = extract_single_const_arg(args, "BitSizeOf");
+                if (arg == NULL)
+                    return 1;
+                
+                /* BitSizeOf expects a type identifier, same as SizeOf */
+                if (arg->type == EXPR_VAR_ID)
+                {
+                    QualifiedIdent *type_id_ref = NULL;
+                    const char *type_name = arg->expr_data.id;
+                    const char *base_name = type_name;
+                    if (arg->id_ref != NULL)
+                    {
+                        type_id_ref = qualified_ident_clone(arg->id_ref);
+                        base_name = qualified_ident_last(type_id_ref);
+                    }
+                    /* Resolve type aliases to base type */
+                    const char *resolved = resolve_type_to_base_name(symtab, type_id_ref, type_name);
+                    if (resolved != NULL)
+                        base_name = resolved;
+
+                    /* Prefer computing from an actual type node (handles nested/local types). */
+                    HashNode_t *size_type_node = NULL;
+                    if (symtab != NULL)
+                    {
+                        if (type_id_ref != NULL && type_id_ref->count > 1)
+                        {
+                            char *qualified_name = qualified_ident_join(type_id_ref, ".");
+                            if (qualified_name != NULL)
+                            {
+                                size_type_node = semcheck_find_preferred_type_node(symtab, qualified_name);
+                                free(qualified_name);
+                            }
+                        }
+                        if (size_type_node == NULL && type_name != NULL)
+                            size_type_node = semcheck_find_preferred_type_node(symtab, type_name);
+                    }
+                    if (size_type_node != NULL && size_type_node->hash_type == HASHTYPE_TYPE)
+                    {
+                        long long computed_size = 0;
+                        if (sizeof_from_hashnode(symtab, size_type_node, &computed_size, 0, expr->line_num) == 0)
+                        {
+                            *out_value = computed_size * 8;
+                            qualified_ident_free(type_id_ref);
+                            return 0;
+                        }
+                    }
+                        
+                    /* Map common type names to their sizes in bits */
+                    /* 64-bit types */
+                    if (pascal_identifier_equals(base_name, "Int64") ||
+                        pascal_identifier_equals(base_name, "QWord") ||
+                        pascal_identifier_equals(base_name, "UInt64") ||
+                        pascal_identifier_equals(base_name, "Pointer") ||
+                        pascal_identifier_equals(base_name, "PChar") ||
+                        pascal_identifier_equals(base_name, "Double") ||
+                        pascal_identifier_equals(base_name, "Real")) {
+                        *out_value = 64LL;
+                        qualified_ident_free(type_id_ref);
+                        return 0;
+                    }
+                    /* 32-bit types */
+                    if (pascal_identifier_equals(base_name, "LongInt") ||
+                        pascal_identifier_equals(base_name, "LongWord") ||
+                        pascal_identifier_equals(base_name, "Cardinal") ||
+                        pascal_identifier_equals(base_name, "DWord") ||
+                        pascal_identifier_equals(base_name, "Integer") ||
+                        pascal_identifier_equals(base_name, "Single")) {
+                        *out_value = 32LL;
+                        qualified_ident_free(type_id_ref);
+                        return 0;
+                    }
+                    /* 16-bit types */
+                    if (pascal_identifier_equals(base_name, "SmallInt") ||
+                        pascal_identifier_equals(base_name, "Word") ||
+                        pascal_identifier_equals(base_name, "WideChar")) {
+                        *out_value = 16LL;
+                        qualified_ident_free(type_id_ref);
+                        return 0;
+                    }
+                    /* 8-bit types */
+                    if (pascal_identifier_equals(base_name, "ShortInt") ||
+                        pascal_identifier_equals(base_name, "Byte") ||
+                        pascal_identifier_equals(base_name, "Char") ||
+                        pascal_identifier_equals(base_name, "AnsiChar") ||
+                        pascal_identifier_equals(base_name, "Boolean")) {
+                        *out_value = 8LL;
+                        qualified_ident_free(type_id_ref);
+                        return 0;
+                    }
+                    fprintf(stderr, "Error: BitSizeOf(%s) - unsupported type in const expression.\n", arg->expr_data.id);
+                    qualified_ident_free(type_id_ref);
+                    return 1;
+                }
+                fprintf(stderr, "Error: BitSizeOf expects a type identifier as argument.\n");
+                return 1;
+            }
+
             /* Handle Chr() function for constant expressions */
             if (id != NULL && pascal_identifier_equals(id, "Chr"))
             {
@@ -5306,7 +5406,7 @@ low_cleanup:
 
             if (id != NULL)
                 fprintf(stderr, "Error: const expression uses unsupported function %s on line %d.\n", id, expr->line_num);
-            fprintf(stderr, "Error: only Ord(), High(), Low(), SizeOf(), Chr(), Trunc(), and integer typecasts are supported in const expressions.\n");
+            fprintf(stderr, "Error: only Ord(), High(), Low(), SizeOf(), BitSizeOf(), Chr(), Trunc(), and integer typecasts are supported in const expressions.\n");
             return 1;
         }
         case EXPR_RELOP:
