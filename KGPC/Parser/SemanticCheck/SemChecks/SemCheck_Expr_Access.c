@@ -1507,14 +1507,17 @@ int semcheck_funccall(int *type_return,
                             expr->expr_data.function_call_data.call_hash_type = method_node->hash_type;
                             expr->expr_data.function_call_data.is_call_info_valid = 1;
                         }
-                        /* Check if this is a virtual method call that needs VMT dispatch */
+                        /* Check if this is a virtual method call that needs VMT dispatch.
+                         * Only set for instance method calls (expects_self) since class methods
+                         * use a different VMT dispatch convention (single indirection). */
                         if (expects_self)
                         {
                             const char *class_name = self_record->type_id;
-                            if (class_name != NULL && from_cparser_is_method_virtual(class_name, id))
+                            if (class_name != NULL &&
+                                from_cparser_is_method_virtual(class_name, id) &&
+                                !from_cparser_is_method_static(class_name, id))
                             {
                                 expr->expr_data.function_call_data.is_virtual_call = 1;
-                                /* Find VMT index by looking through the class methods */
                                 int vmt_index = -1;
                                 if (self_record->methods != NULL)
                                 {
@@ -1523,6 +1526,7 @@ int semcheck_funccall(int *type_return,
                                     {
                                         struct MethodInfo *info = (struct MethodInfo *)method_entry->cur;
                                         if (info != NULL && info->name != NULL &&
+                                            (info->is_virtual || info->is_override) &&
                                             strcasecmp(info->name, id) == 0)
                                         {
                                             vmt_index = info->vmt_index;
@@ -1532,11 +1536,9 @@ int semcheck_funccall(int *type_return,
                                     }
                                 }
                                 expr->expr_data.function_call_data.vmt_index = vmt_index;
-                                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
-                                {
-                                    fprintf(stderr, "[SemCheck] Virtual method call: %s.%s vmt_index=%d\n",
-                                        class_name, id, vmt_index);
-                                }
+                                if (expr->expr_data.function_call_data.self_class_name == NULL)
+                                    expr->expr_data.function_call_data.self_class_name =
+                                        strdup(class_name);
                             }
                         }
                     }
@@ -4263,6 +4265,48 @@ method_call_resolved:
                     free(expr->expr_data.function_call_data.mangled_id);
                     expr->expr_data.function_call_data.mangled_id =
                         strdup(proc_def->tree_data.subprogram_data.mangled_id);
+                }
+            }
+        }
+        /* Centralized virtual dispatch fallback — catches abstract virtual methods
+         * that weren't detected by the early Self-injection check. Only applies to
+         * methods without a body (abstract) and not class/static methods (which use
+         * single-indirection VMT dispatch that codegen doesn't support yet). */
+        if (best_match->owner_class != NULL && best_match->method_name != NULL &&
+            !expr->expr_data.function_call_data.is_virtual_call &&
+            !from_cparser_is_method_static(best_match->owner_class, best_match->method_name) &&
+            from_cparser_is_method_virtual(best_match->owner_class, best_match->method_name))
+        {
+            /* Check if the method has no body (abstract) */
+            int has_body = 0;
+            if (best_match->type != NULL && best_match->type->kind == TYPE_KIND_PROCEDURE)
+            {
+                Tree_t *proc_def = best_match->type->info.proc_info.definition;
+                if (proc_def != NULL &&
+                    proc_def->tree_data.subprogram_data.statement_list != NULL)
+                    has_body = 1;
+            }
+            if (!has_body)
+            {
+                struct RecordType *class_record = semcheck_lookup_record_type(symtab,
+                    best_match->owner_class);
+                if (class_record != NULL && class_record->methods != NULL)
+                {
+                    for (ListNode_t *me = class_record->methods; me != NULL; me = me->next)
+                    {
+                        struct MethodInfo *mi = (struct MethodInfo *)me->cur;
+                        if (mi != NULL && mi->name != NULL &&
+                            (mi->is_virtual || mi->is_override) &&
+                            strcasecmp(mi->name, best_match->method_name) == 0)
+                        {
+                            expr->expr_data.function_call_data.is_virtual_call = 1;
+                            expr->expr_data.function_call_data.vmt_index = mi->vmt_index;
+                            if (expr->expr_data.function_call_data.self_class_name == NULL)
+                                expr->expr_data.function_call_data.self_class_name =
+                                    strdup(best_match->owner_class);
+                            break;
+                        }
+                    }
                 }
             }
         }

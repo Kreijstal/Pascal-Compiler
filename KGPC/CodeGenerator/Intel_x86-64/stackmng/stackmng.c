@@ -774,8 +774,41 @@ RegStack_t *init_reg_stack()
     r9->current_live_range = NULL;
 #endif
 
-    /* Build base register list */
-    registers = CreateListNode(rax, LIST_UNSPECIFIED);
+    /* %rbx, %r12 - callee-saved, survive across function calls.
+       Placed first in the list so get_free_reg prefers them for
+       intermediate values that may live across call instructions. */
+    Register_t *rbx = (Register_t *)malloc(sizeof(Register_t));
+    assert(rbx != NULL);
+    rbx->reg_id = REG_RBX;
+    rbx->bit_64 = strdup("%rbx");
+    rbx->bit_32 = strdup("%ebx");
+    rbx->spill_location = NULL;
+    rbx->last_use_seq = 0;
+    rbx->spill_callback = NULL;
+    rbx->spill_context = NULL;
+#if USE_GRAPH_COLORING_ALLOCATOR
+    rbx->current_live_range = NULL;
+#endif
+
+    Register_t *r12 = (Register_t *)malloc(sizeof(Register_t));
+    assert(r12 != NULL);
+    r12->reg_id = REG_R12;
+    r12->bit_64 = strdup("%r12");
+    r12->bit_32 = strdup("%r12d");
+    r12->spill_location = NULL;
+    r12->last_use_seq = 0;
+    r12->spill_callback = NULL;
+    r12->spill_context = NULL;
+#if USE_GRAPH_COLORING_ALLOCATOR
+    r12->current_live_range = NULL;
+#endif
+
+    /* Build base register list.
+       Callee-saved registers (%rbx, %r12) are listed first so they are
+       preferred for intermediate values — their values survive calls. */
+    registers = CreateListNode(rbx, LIST_UNSPECIFIED);
+    registers = PushListNodeBack(registers, CreateListNode(r12, LIST_UNSPECIFIED));
+    registers = PushListNodeBack(registers, CreateListNode(rax, LIST_UNSPECIFIED));
     registers = PushListNodeBack(registers, CreateListNode(r10, LIST_UNSPECIFIED));
     registers = PushListNodeBack(registers, CreateListNode(r11, LIST_UNSPECIFIED));
     registers = PushListNodeBack(registers, CreateListNode(r8, LIST_UNSPECIFIED));
@@ -1161,6 +1194,99 @@ int get_num_registers_alloced(RegStack_t *reg_stack)
 {
     assert(reg_stack != NULL);
     return ListLength(reg_stack->registers_allocated);
+}
+
+void regstack_caller_save(RegStack_t *reg_stack, ListNode_t **inst_list,
+                          CallerSaveState *state)
+{
+    assert(reg_stack != NULL);
+    assert(inst_list != NULL);
+    assert(state != NULL);
+
+    memset(state, 0, sizeof(*state));
+
+    ListNode_t *cur = reg_stack->registers_allocated;
+    while (cur != NULL && state->count < MAX_SAVED_CALLER_REGS)
+    {
+        Register_t *reg = (Register_t *)cur->cur;
+        if (reg != NULL && reg->bit_64 != NULL)
+        {
+            /* Allocate a temp slot for this register's value */
+            char spill_label[64];
+            snprintf(spill_label, sizeof(spill_label), "__caller_save_%s_%llu",
+                reg->bit_64 + 1, (unsigned long long)(reg_stack->use_sequence + 1));
+            StackNode_t *slot = add_l_t_bytes(spill_label, 8);
+            if (slot != NULL)
+            {
+                state->entries[state->count].reg = reg;
+                state->entries[state->count].spill_offset = slot->offset;
+
+                char buf[128];
+                snprintf(buf, sizeof(buf), "\tmovq\t%s, -%d(%%rbp)\n",
+                    reg->bit_64, slot->offset);
+                *inst_list = add_inst(*inst_list, buf);
+
+                if (reg->reg_id == REG_RAX)
+                    state->rax_was_saved = 1;
+
+                state->count++;
+            }
+        }
+        cur = cur->next;
+    }
+
+    /* If %rax was among the saved registers, we need a slot to save
+       the call's return value before restoring the old %rax. */
+    if (state->rax_was_saved)
+    {
+        char ret_label[64];
+        snprintf(ret_label, sizeof(ret_label), "__call_retval_%llu",
+            (unsigned long long)(reg_stack->use_sequence + 1));
+        StackNode_t *ret_slot = add_l_t_bytes(ret_label, 8);
+        if (ret_slot != NULL)
+            state->return_spill_offset = ret_slot->offset;
+    }
+}
+
+void regstack_caller_restore(RegStack_t *reg_stack, ListNode_t **inst_list,
+                             CallerSaveState *state)
+{
+    assert(reg_stack != NULL);
+    assert(inst_list != NULL);
+    assert(state != NULL);
+
+    if (state->count == 0)
+        return;
+
+    char buf[128];
+
+    /* If %rax was saved, stash the return value first so restore doesn't lose it */
+    if (state->rax_was_saved && state->return_spill_offset > 0)
+    {
+        snprintf(buf, sizeof(buf), "\tmovq\t%%rax, -%d(%%rbp)\n",
+            state->return_spill_offset);
+        *inst_list = add_inst(*inst_list, buf);
+    }
+
+    /* Restore all saved registers */
+    for (int i = 0; i < state->count; i++)
+    {
+        Register_t *reg = state->entries[i].reg;
+        int offset = state->entries[i].spill_offset;
+        snprintf(buf, sizeof(buf), "\tmovq\t-%d(%%rbp), %s\n",
+            offset, reg->bit_64);
+        *inst_list = add_inst(*inst_list, buf);
+    }
+
+    /* Reload the return value into %rax (after restoring old %rax) */
+    if (state->rax_was_saved && state->return_spill_offset > 0)
+    {
+        snprintf(buf, sizeof(buf), "\tmovq\t-%d(%%rbp), %%rax\n",
+            state->return_spill_offset);
+        *inst_list = add_inst(*inst_list, buf);
+    }
+
+    (void)reg_stack; /* suppress unused warning */
 }
 
 void free_reg_stack(RegStack_t *reg_stack)

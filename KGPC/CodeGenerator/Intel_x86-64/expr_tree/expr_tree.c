@@ -23,6 +23,7 @@
 #include "../../../Parser/ParseTree/tree.h"
 #include "../../../Parser/ParseTree/tree_types.h"
 #include "../../../Parser/ParseTree/KgpcType.h"
+#include "../../../Parser/ParseTree/from_cparser.h"
 
 static int expr_tree_tag_from_kgpc(const KgpcType *type)
 {

@@ -116,6 +116,29 @@ void register_clear_spill_callback(Register_t *reg);
 int get_num_registers_free(RegStack_t *);
 int get_num_registers_alloced(RegStack_t *);
 
+/* Caller-save/restore around function calls.
+ * All caller-saved registers are clobbered by `call` per the SysV ABI.
+ * These helpers save allocated GP registers before a call and restore after. */
+#define MAX_SAVED_CALLER_REGS 16
+typedef struct {
+    int count;
+    struct {
+        Register_t *reg;
+        int spill_offset;
+    } entries[MAX_SAVED_CALLER_REGS];
+    int rax_was_saved;      /* was %rax among the saved regs? */
+    int return_spill_offset; /* temp slot for saving the call return value */
+} CallerSaveState;
+
+/* Save all currently-allocated registers. Call BEFORE the `call` instruction. */
+void regstack_caller_save(RegStack_t *reg_stack, ListNode_t **inst_list,
+                          CallerSaveState *state);
+
+/* Restore previously-saved registers. Call AFTER the `call` instruction.
+ * Preserves %rax (the call's return value) even if %rax was saved. */
+void regstack_caller_restore(RegStack_t *reg_stack, ListNode_t **inst_list,
+                             CallerSaveState *state);
+
 void free_reg_stack(RegStack_t *);
 
 #if KGPC_ENABLE_REG_DEBUG

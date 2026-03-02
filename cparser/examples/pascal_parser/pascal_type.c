@@ -2517,14 +2517,18 @@ static ParseResult object_type_fn(input_t* in, void* args, char* parser_name) {
         NULL
     );
 
-    combinator_t* class_var_section = seq(new_combinator(), PASCAL_T_VAR_SECTION,
+    /* Use PASCAL_T_CLASS_MEMBER to distinguish "class var" from "var"
+       so from_cparser.c can detect it and set is_class_var = 1.
+       (token() consumes keywords without creating AST children,
+       so a plain PASCAL_T_VAR_SECTION would be indistinguishable.) */
+    combinator_t* class_var_section = seq(new_combinator(), PASCAL_T_CLASS_MEMBER,
         token(keyword_ci("class")),
         token(keyword_ci("var")),
         many(field_decl),
         NULL
     );
 
-    combinator_t* class_threadvar_section = seq(new_combinator(), PASCAL_T_VAR_SECTION,
+    combinator_t* class_threadvar_section = seq(new_combinator(), PASCAL_T_CLASS_MEMBER,
         token(keyword_ci("class")),
         token(keyword_ci("threadvar")),
         many(field_decl),

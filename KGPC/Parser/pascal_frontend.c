@@ -966,7 +966,8 @@ void pascal_print_parse_error(const char *path, const ParseError *err)
     if (err == NULL)
         return;
 
-    fprintf(stderr, "Parse error in %s:\n", path);
+    const char *display_path = (err->source_filename != NULL) ? err->source_filename : path;
+    fprintf(stderr, "Parse error in %s:\n", display_path);
     fprintf(stderr, "  Line %d, Column %d: %s\n",
             err->line, err->col,
             err->message ? err->message : "unknown error");
