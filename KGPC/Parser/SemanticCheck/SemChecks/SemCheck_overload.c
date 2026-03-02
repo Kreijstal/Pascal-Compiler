@@ -288,8 +288,33 @@ int semcheck_candidates_share_signature(SymTab_t *symtab, HashNode_t *a, HashNod
                 }
             }
         }
-        /* Distinguish RawByteString from UnicodeString: both resolve to
-         * STRING_TYPE but they are different overload signatures. */
+        args_a = args_a->next;
+        args_b = args_b->next;
+    }
+
+    return 1;
+}
+
+/* Check if two candidates differ in string subtypes (e.g. RawByteString vs
+ * UnicodeString). Used in the override check to prevent the full overload
+ * resolution from overriding a correct mangled-name shortcut match. */
+int semcheck_candidates_string_subtypes_differ(SymTab_t *symtab, HashNode_t *a, HashNode_t *b)
+{
+    if (a == NULL || b == NULL || a->type == NULL || b->type == NULL)
+        return 0;
+    if (a->type->kind != TYPE_KIND_PROCEDURE || b->type->kind != TYPE_KIND_PROCEDURE)
+        return 0;
+
+    ListNode_t *args_a = a->type->info.proc_info.params;
+    ListNode_t *args_b = b->type->info.proc_info.params;
+
+    while (args_a != NULL && args_b != NULL)
+    {
+        Tree_t *decl_a = (Tree_t *)args_a->cur;
+        Tree_t *decl_b = (Tree_t *)args_b->cur;
+        int type_a = resolve_param_type(decl_a, symtab);
+        int type_b = resolve_param_type(decl_b, symtab);
+
         if (type_a == STRING_TYPE && type_b == STRING_TYPE)
         {
             const char *id_a = semcheck_get_param_type_id(decl_a);
@@ -299,16 +324,14 @@ int semcheck_candidates_share_signature(SymTab_t *symtab, HashNode_t *a, HashNod
             {
                 int kind_a = semcheck_string_kind_from_type_id(id_a);
                 int kind_b = semcheck_string_kind_from_type_id(id_b);
-                /* Different string subtypes → not equivalent */
                 if (kind_a != kind_b || (kind_a == 0 && kind_b == 0))
-                    return 0;
+                    return 1;
             }
         }
         args_a = args_a->next;
         args_b = args_b->next;
     }
-
-    return 1;
+    return 0;
 }
 
 /* Helper to check if a parameter has a default value */
