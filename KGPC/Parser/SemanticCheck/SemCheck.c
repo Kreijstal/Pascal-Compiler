@@ -2443,21 +2443,22 @@ static void copy_method_decl_defaults_to_impl(SymTab_t *symtab, Tree_t *subprogr
     free(class_name);
 }
 
-/* Copy method identity fields (interned strings) from a subprogram tree
- * node into a hash node, if the hash node doesn't already have them. */
+/* Copy method identity fields from a subprogram tree node into a hash node,
+ * if the hash node doesn't already have them.  We strdup so the hash node
+ * owns the memory and DestroyHashTable can free it uniformly. */
 static void copy_method_identity_to_node(HashNode_t *node, Tree_t *subprogram)
 {
     if (node == NULL || subprogram == NULL ||
         subprogram->tree_data.subprogram_data.method_name == NULL)
         return;
     if (node->method_name == NULL)
-        node->method_name = subprogram->tree_data.subprogram_data.method_name;
-    if (node->owner_class == NULL)
-        node->owner_class = subprogram->tree_data.subprogram_data.owner_class;
-    if (node->owner_class_full == NULL)
-        node->owner_class_full = subprogram->tree_data.subprogram_data.owner_class_full;
-    if (node->owner_class_outer == NULL)
-        node->owner_class_outer = subprogram->tree_data.subprogram_data.owner_class_outer;
+        node->method_name = strdup(subprogram->tree_data.subprogram_data.method_name);
+    if (node->owner_class == NULL && subprogram->tree_data.subprogram_data.owner_class != NULL)
+        node->owner_class = strdup(subprogram->tree_data.subprogram_data.owner_class);
+    if (node->owner_class_full == NULL && subprogram->tree_data.subprogram_data.owner_class_full != NULL)
+        node->owner_class_full = strdup(subprogram->tree_data.subprogram_data.owner_class_full);
+    if (node->owner_class_outer == NULL && subprogram->tree_data.subprogram_data.owner_class_outer != NULL)
+        node->owner_class_outer = strdup(subprogram->tree_data.subprogram_data.owner_class_outer);
 }
 
 static void semcheck_propagate_method_identity(SymTab_t *symtab, Tree_t *subprogram)
@@ -6264,7 +6265,9 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                     if (record_type_is_class(record_info))
                     {
                         /* Classes are reference types - register as pointers to the record */
-                        kgpc_type = create_pointer_type(kgpc_type);
+                        KgpcType *ptr = create_pointer_type(kgpc_type);
+                        kgpc_type_release(kgpc_type); /* create_pointer_type retained inner */
+                        kgpc_type = ptr;
                     }
                     if (kgpc_type != NULL)
                     {
@@ -8260,6 +8263,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                                 tree->tree_data.type_decl_data.id);
                                         }
                                     }
+                                    DestroyList(bindings);
 
                                     /* If not already registered, register it now */
                                     if (!already_registered)
@@ -8417,8 +8421,15 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                         }
 
                                         KgpcType *proc_type = create_procedure_type(params, return_type);
-                                        if (proc_type != NULL && return_type_id != NULL)
-                                            proc_type->info.proc_info.return_type_id = strdup(return_type_id);
+                                        /* create_procedure_type retains return_type; release our ref */
+                                        if (return_type != NULL)
+                                            kgpc_type_release(return_type);
+                                        if (proc_type != NULL) {
+                                            if (return_type_id != NULL)
+                                                proc_type->info.proc_info.return_type_id = strdup(return_type_id);
+                                            /* Transfer param ownership to proc_type's shallow copy */
+                                            proc_type->info.proc_info.owns_params = 1;
+                                        }
 
                                         if (return_type_id != NULL)
                                             free(return_type_id);
@@ -8426,6 +8437,9 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                         char *overload_mangled = MangleFunctionName(mangled, params, symtab);
                                         if (overload_mangled == NULL)
                                             overload_mangled = strdup(mangled);
+                                        /* Free original param list nodes (data owned by proc_type now) */
+                                        DestroyList(params);
+                                        params = NULL;
 
                                         if (is_function_template)
                                             PushFunctionOntoScope_Typed(symtab, mangled, overload_mangled, proc_type);
@@ -8446,6 +8460,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
 
                                         if (proc_type != NULL)
                                             destroy_kgpc_type(proc_type);
+                                        free(overload_mangled);
 
                                         if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                                             fprintf(stderr, "[SemCheck] Added method forward declaration: %s -> %s\n",
@@ -8535,6 +8550,10 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                             existing->type->info.proc_info.params == NULL)
                                         {
                                             existing->type->info.proc_info.params = CopyListShallow(params);
+                                            /* Transfer Tree_t ownership to existing type's shallow copy */
+                                            existing->type->info.proc_info.owns_params = 1;
+                                            DestroyList(params);
+                                            params = NULL;
                                         }
                                         else if (existing != NULL && existing->type != NULL &&
                                             existing->type->kind == TYPE_KIND_PROCEDURE &&
@@ -8547,7 +8566,13 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                             copy_default_values_to_impl_params(
                                                 params,
                                                 existing->type->info.proc_info.params);
+                                            /* params not stored; free everything */
+                                            destroy_list(params);
+                                            params = NULL;
                                         }
+                                        /* Free any remaining params not consumed above */
+                                        if (params != NULL)
+                                            destroy_list(params);
                                     }
 
                                     /* Set method identity on existing node */
@@ -9072,6 +9097,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
         {
             /* Classes are reference types - represent them as pointers to the class record */
             KgpcType *wrapped = create_pointer_type(kgpc_type);
+            kgpc_type_release(tree->tree_data.type_decl_data.kgpc_type); /* release old tree ref */
             kgpc_type = wrapped;
             tree->tree_data.type_decl_data.kgpc_type = wrapped;
         }
@@ -9188,7 +9214,11 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 kgpc_type_is_pointer(kgpc_type) &&
                 (existing_type->type == NULL || !kgpc_type_is_pointer(existing_type->type)))
             {
-                /* Replace predeclared non-pointer placeholder with proper pointer alias type. */
+                /* Replace predeclared non-pointer placeholder with proper pointer alias type.
+                 * Properly manage ref counts: retain new, release old. */
+                kgpc_type_retain(kgpc_type);
+                if (existing_type->type != NULL)
+                    kgpc_type_release(existing_type->type);
                 existing_type->type = kgpc_type;
             }
 
@@ -9251,18 +9281,11 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                     }
                 }
             }
-            /* Avoid double-free: ownership is in the symbol table for predeclared types. */
+            /* Release tree's retained reference (predeclare_types retained it). */
             if (tree->tree_data.type_decl_data.kgpc_type != NULL)
             {
-                if (existing_type != NULL && tree->tree_data.type_decl_data.kgpc_type == existing_type->type)
-                {
-                    tree->tree_data.type_decl_data.kgpc_type = NULL;
-                }
-                else
-                {
-                    destroy_kgpc_type(tree->tree_data.type_decl_data.kgpc_type);
-                    tree->tree_data.type_decl_data.kgpc_type = NULL;
-                }
+                destroy_kgpc_type(tree->tree_data.type_decl_data.kgpc_type);
+                tree->tree_data.type_decl_data.kgpc_type = NULL;
             }
             func_return = 0;  /* No error */
         }
@@ -9622,6 +9645,7 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                 }
                 int push_result = PushSetConstOntoScope(symtab, tree->tree_data.const_decl_data.id,
                     set_bytes, (int)set_size, const_type);
+                destroy_kgpc_type(const_type);  /* Release creator's ref */
                 if (push_result > 0)
                 {
                     semcheck_error_with_context("Error on line %d, redeclaration of const %s!\n",
@@ -9664,11 +9688,12 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                 {
                     /* Found the procedure - store as a procedure address constant */
                     KgpcType *const_type = create_procedure_type(NULL, NULL);
-                    
+
                     /* Use 0 as the value - actual address will be resolved at link time */
-                    int push_result = PushConstOntoScope_Typed(symtab, 
+                    int push_result = PushConstOntoScope_Typed(symtab,
                         tree->tree_data.const_decl_data.id, 0, const_type);
-                    
+                    destroy_kgpc_type(const_type);  /* Release creator's ref */
+
                     if (push_result > 0)
                     {
                         semcheck_error_with_context("Error on line %d, redeclaration of const %s!\n",
@@ -9694,10 +9719,11 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                     /* Not found - might be a forward-declared procedure.
                      * Create the constant anyway; codegen will resolve it. */
                     KgpcType *const_type = create_procedure_type(NULL, NULL);
-                    
-                    int push_result = PushConstOntoScope_Typed(symtab, 
+
+                    int push_result = PushConstOntoScope_Typed(symtab,
                         tree->tree_data.const_decl_data.id, 0, const_type);
-                    
+                    destroy_kgpc_type(const_type);  /* Release creator's ref */
+
                     if (push_result > 0)
                     {
                         semcheck_error_with_context("Error on line %d, redeclaration of const %s!\n",
@@ -9813,12 +9839,13 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                 if (const_type != NULL)
                 {
                     push_result = PushConstOntoScope_Typed(symtab, tree->tree_data.const_decl_data.id, value, const_type);
+                    destroy_kgpc_type(const_type);  /* Release creator's ref */
                 }
                 else
                 {
                     push_result = PushConstOntoScope(symtab, tree->tree_data.const_decl_data.id, value);
                 }
-                
+
                 if (push_result > 0)
                 {
                     semcheck_error_with_context("Error on line %d, redeclaration of const %s!\n",
@@ -10189,8 +10216,8 @@ static void add_builtin_type_owned(SymTab_t *symtab, const char *name, KgpcType 
         return;
     if (type->type_alias != NULL && type->type_alias->target_type_id == NULL)
         type->type_alias->target_type_id = strdup(name);
-    if (AddBuiltinType_Typed(symtab, (char *)name, type) != 0)
-        destroy_kgpc_type(type);
+    AddBuiltinType_Typed(symtab, (char *)name, type);
+    destroy_kgpc_type(type);  /* Release creator's ref; hash table retained its own */
 }
 
 static void add_builtin_alias_type(SymTab_t *symtab, const char *name, int base_type,
@@ -10665,7 +10692,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
             KgpcType *interlocked_type = create_procedure_type(params, return_type);
             if (interlocked_type != NULL)
             {
-                AddBuiltinFunction_Typed(symtab, strdup(interlocked_name), interlocked_type);
+                AddBuiltinFunction_Typed(symtab, (char *)interlocked_name, interlocked_type);
                 destroy_kgpc_type(interlocked_type);
             }
             if (params != NULL)
@@ -10728,7 +10755,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         KgpcType *func_type = create_procedure_type(params, return_type);
         if (func_type != NULL)
         {
-            AddBuiltinFunction_Typed(symtab, strdup(func_name), func_type);
+            AddBuiltinFunction_Typed(symtab, (char *)func_name, func_type);
             destroy_kgpc_type(func_type);
         }
         if (params != NULL)
@@ -10741,7 +10768,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         func_type = create_procedure_type(params, return_type);
         if (func_type != NULL)
         {
-            AddBuiltinFunction_Typed(symtab, strdup(func_name), func_type);
+            AddBuiltinFunction_Typed(symtab, (char *)func_name, func_type);
             destroy_kgpc_type(func_type);
         }
         if (params != NULL)
@@ -10754,7 +10781,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         func_type = create_procedure_type(params, return_type);
         if (func_type != NULL)
         {
-            AddBuiltinFunction_Typed(symtab, strdup(func_name), func_type);
+            AddBuiltinFunction_Typed(symtab, (char *)func_name, func_type);
             destroy_kgpc_type(func_type);
         }
         if (params != NULL)
@@ -10767,7 +10794,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         func_type = create_procedure_type(params, return_type);
         if (func_type != NULL)
         {
-            AddBuiltinFunction_Typed(symtab, strdup(func_name), func_type);
+            AddBuiltinFunction_Typed(symtab, (char *)func_name, func_type);
             destroy_kgpc_type(func_type);
         }
         if (params != NULL)
@@ -10786,7 +10813,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         KgpcType *func_type = create_procedure_type(params, return_type);
         if (func_type != NULL)
         {
-            AddBuiltinFunction_Typed(symtab, strdup(func_name), func_type);
+            AddBuiltinFunction_Typed(symtab, (char *)func_name, func_type);
             destroy_kgpc_type(func_type);
         }
         if (params != NULL)
@@ -10812,7 +10839,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         KgpcType *func_type = create_procedure_type(params, return_type);
         if (func_type != NULL)
         {
-            AddBuiltinFunction_Typed(symtab, strdup(func_name), func_type);
+            AddBuiltinFunction_Typed(symtab, (char *)func_name, func_type);
             destroy_kgpc_type(func_type);
         }
         if (params != NULL)
@@ -10831,7 +10858,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         KgpcType *func_type = create_procedure_type(params, return_type);
         if (func_type != NULL)
         {
-            AddBuiltinFunction_Typed(symtab, strdup(func_name), func_type);
+            AddBuiltinFunction_Typed(symtab, (char *)func_name, func_type);
             destroy_kgpc_type(func_type);
         }
         if (params != NULL)
@@ -10846,7 +10873,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         KgpcType *func_type = create_procedure_type(param_s, NULL);
         if (func_type != NULL)
         {
-            AddBuiltinProc_Typed(symtab, strdup(func_name), func_type);
+            AddBuiltinProc_Typed(symtab, (char *)func_name, func_type);
             destroy_kgpc_type(func_type);
         }
         if (param_s != NULL)
@@ -10872,7 +10899,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
             KgpcType *func_type = create_procedure_type(param, return_type);
             if (func_type != NULL)
             {
-                AddBuiltinFunction_Typed(symtab, strdup(bsr_bsf[i].name), func_type);
+                AddBuiltinFunction_Typed(symtab, (char *)bsr_bsf[i].name, func_type);
                 destroy_kgpc_type(func_type);
             }
             if (param != NULL)
@@ -10899,7 +10926,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
                 KgpcType *func_type = create_procedure_type(NULL, return_type);
                 if (func_type != NULL)
                 {
-                    AddBuiltinFunction_Typed(symtab, strdup(frame_intrinsics[i]), func_type);
+                    AddBuiltinFunction_Typed(symtab, (char *)frame_intrinsics[i], func_type);
                     destroy_kgpc_type(func_type);
                 }
                 destroy_kgpc_type(return_type);
@@ -10911,7 +10938,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
                 KgpcType *func_type = create_procedure_type(param, return_type);
                 if (func_type != NULL)
                 {
-                    AddBuiltinFunction_Typed(symtab, strdup(frame_intrinsics[i]), func_type);
+                    AddBuiltinFunction_Typed(symtab, (char *)frame_intrinsics[i], func_type);
                     destroy_kgpc_type(func_type);
                 }
                 if (param != NULL)
@@ -11037,7 +11064,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
             KgpcType *proc_type = create_procedure_type(p1, NULL);
             if (proc_type != NULL)
             {
-                AddBuiltinProc_Typed(symtab, strdup("Finalize"), proc_type);
+                AddBuiltinProc_Typed(symtab, "Finalize", proc_type);
                 destroy_kgpc_type(proc_type);
             }
             DestroyList(p1);
@@ -11050,7 +11077,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
             KgpcType *proc_type = create_procedure_type(p1, NULL);
             if (proc_type != NULL)
             {
-                AddBuiltinProc_Typed(symtab, strdup("Initialize"), proc_type);
+                AddBuiltinProc_Typed(symtab, "Initialize", proc_type);
                 destroy_kgpc_type(proc_type);
             }
             DestroyList(p1);
@@ -12075,6 +12102,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             {
                                 kgpc_type_retain(type_node->type);
                                 func_return = PushArrayOntoScope_Typed(symtab, (char *)ids->cur, type_node->type);
+                                kgpc_type_release(type_node->type);  /* Release caller's ref */
                                 if (func_return == 0)
                                 {
                                     HashNode_t *var_node = NULL;
@@ -12135,6 +12163,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             kgpc_type_set_type_alias(array_type, alias);
                             
                             func_return = PushArrayOntoScope_Typed(symtab, (char *)ids->cur, array_type);
+                            destroy_kgpc_type(array_type);  /* Release creator's ref */
                             if (func_return == 0)
                             {
                                 HashNode_t *var_node = NULL;
@@ -12238,6 +12267,8 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                                 pascal_identifier_equals((char*)ids->cur, "Self"))
                                 fprintf(stderr, "[KGPC] semcheck_decls: PushVarOntoScope_Typed for Self returned %d\n", func_return);
                         }
+                        /* Release caller's ref (either created or retained above) */
+                        destroy_kgpc_type(var_kgpc_type);
 
                         if (func_return == 0)
                         {
@@ -12489,7 +12520,9 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         kgpc_type_retain(var_kgpc_type);
                     func_return = PushVarOntoScope_Typed(symtab, (char *)ids->cur, var_kgpc_type);
                 }
-                
+                /* Release caller's ref (either created or retained above) */
+                destroy_kgpc_type(var_kgpc_type);
+
                 if (func_return == 0)
                 {
                     HashNode_t *var_node = NULL;
@@ -12774,6 +12807,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         (array_type && array_type->kind == TYPE_KIND_ARRAY && array_type->info.array_info.element_type) ?
                             array_type->info.array_info.element_type->kind : -1);
                 func_return = PushArrayOntoScope_Typed(symtab, (char *)ids->cur, array_type);
+                destroy_kgpc_type(array_type);  /* Release creator's ref */
                 if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
                     fprintf(stderr, "[SemCheck] PushArrayOntoScope_Typed returned: %d\n", func_return);
             }
@@ -14057,7 +14091,11 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             {
                 KgpcType *owner_kgpc = create_record_type(owner_record);
                 if (owner_kgpc != NULL && record_type_is_class(owner_record))
-                    owner_kgpc = create_pointer_type(owner_kgpc);
+                {
+                    KgpcType *ptr = create_pointer_type(owner_kgpc);
+                    kgpc_type_release(owner_kgpc);
+                    owner_kgpc = ptr;
+                }
                 self_type = owner_kgpc;
             }
 

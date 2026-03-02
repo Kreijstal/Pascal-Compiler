@@ -80,7 +80,8 @@ int PushConstOntoScope(SymTab_t *symtab, char *id, long long value)
     return result;
 }
 
-/* Pushes a constant with explicit KgpcType onto the current scope (head) */
+/* Pushes a constant with explicit KgpcType onto the current scope (head).
+ * NOTE: Does NOT release caller's reference — caller must release if owned. */
 int PushConstOntoScope_Typed(SymTab_t *symtab, char *id, long long value, KgpcType *type)
 {
     assert(symtab != NULL);
@@ -563,10 +564,7 @@ int AddBuiltinRealConst(SymTab_t *symtab, const char *id, double value)
             node->const_real_value = value;
         }
     }
-    else
-    {
-        destroy_kgpc_type(type);
-    }
+    destroy_kgpc_type(type);  /* Release creator's ref; hash table retained its own */
     return result;
 }
 
@@ -588,17 +586,9 @@ int AddBuiltinStringConst(SymTab_t *symtab, const char *id, const char *value)
         {
             node->is_constant = 1;
             node->const_string_value = strdup(value);
-            if (node->const_string_value == NULL)
-            {
-                destroy_kgpc_type(type);
-                return 1;
-            }
         }
     }
-    else
-    {
-        destroy_kgpc_type(type);
-    }
+    destroy_kgpc_type(type);  /* Release creator's ref; hash table retained its own */
     return result;
 }
 
@@ -625,10 +615,7 @@ int AddBuiltinIntConst(SymTab_t *symtab, const char *id, long long value)
             node->const_int_value = value;
         }
     }
-    else
-    {
-        destroy_kgpc_type(type);
-    }
+    destroy_kgpc_type(type);  /* Release creator's ref; hash table retained its own */
     return result;
 }
 
@@ -651,10 +638,7 @@ int AddBuiltinCharConst(SymTab_t *symtab, const char *id, unsigned char value)
             node->const_int_value = (long long)value;
         }
     }
-    else
-    {
-        destroy_kgpc_type(type);
-    }
+    destroy_kgpc_type(type);  /* Release creator's ref; hash table retained its own */
     return result;
 }
 

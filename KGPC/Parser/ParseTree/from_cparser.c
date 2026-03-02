@@ -924,6 +924,10 @@ static void destroy_type_info_contents(TypeInfo *info) {
     if (info == NULL)
         return;
 
+    if (info->type_ref != NULL) {
+        type_ref_free(info->type_ref);
+        info->type_ref = NULL;
+    }
     if (info->element_type_id != NULL) {
         free(info->element_type_id);
         info->element_type_id = NULL;
@@ -5220,7 +5224,7 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                         type_info->element_type = mapped;
                         if (mapped == UNKNOWN_TYPE && type_info->element_type_id == NULL)
                             type_info->element_type_id = dup;
-                        else if (mapped != UNKNOWN_TYPE)
+                        else
                             free(dup);
                     }
                 } else if (element_node->typ == PASCAL_T_TYPE_SPEC) {
@@ -5312,7 +5316,7 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                 type_info->pointer_type = mapped;
                 if (mapped == UNKNOWN_TYPE && type_info->pointer_type_id == NULL)
                     type_info->pointer_type_id = dup;
-                else if (mapped != UNKNOWN_TYPE)
+                else
                     free(dup);
                 if (type_id_out != NULL && *type_id_out == NULL && type_info->pointer_type_id != NULL)
                     *type_id_out = strdup(type_info->pointer_type_id);
@@ -5334,7 +5338,7 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                     type_info->set_element_type = mapped;
                     if (mapped == UNKNOWN_TYPE && type_info->set_element_type_id == NULL)
                         type_info->set_element_type_id = dup;
-                    else if (mapped != UNKNOWN_TYPE)
+                    else
                         free(dup);
                 }
                 /* Handle anonymous enum as set element type: set of (val1, val2, ...) */
@@ -5368,7 +5372,7 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                 type_info->file_type = mapped;
                 if (mapped == UNKNOWN_TYPE && type_info->file_type_id == NULL)
                     type_info->file_type_id = dup;
-                else if (mapped != UNKNOWN_TYPE)
+                else
                     free(dup);
             }
         }
@@ -5658,7 +5662,11 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
         if (element_type == NULL)
             return NULL;
 
-        return create_array_type(element_type, start, end);
+        {
+            KgpcType *arr = create_array_type(element_type, start, end);
+            kgpc_type_release(element_type);
+            return arr;
+        }
     }
 
     /* Handle file types */
@@ -5768,6 +5776,7 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
         /* For functions, get return type */
         KgpcType *return_type = NULL;
         char *return_type_id = NULL;
+        int owns_return_type = 0;
         if (is_function) {
             #ifdef DEBUG_KGPC_TYPE_CREATION
             fprintf(stderr, "DEBUG: Looking for return type, cursor=%p, cursor->typ=%d, cursor->sym=%s, cursor->child=%p\n",
@@ -5844,6 +5853,7 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
                 #endif
                 if (cursor->typ == PASCAL_T_TYPE_SPEC) {
                     return_type = convert_type_spec_to_kgpctype(cursor, symtab);
+                    owns_return_type = (return_type != NULL);
                     if (return_type_id == NULL && cursor->child != NULL &&
                         cursor->child->sym != NULL && cursor->child->sym->name != NULL)
                     {
@@ -5856,6 +5866,7 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
                         int ret_tag = map_type_name(ret_type_name, NULL);
                         if (ret_tag != UNKNOWN_TYPE) {
                             return_type = create_primitive_type(ret_tag);
+                            owns_return_type = 1;
                         } else {
                             // Check if it's a user-defined type in the symbol table
                             HashNode_t *type_node = NULL;
@@ -5878,6 +5889,9 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
         }
         
         KgpcType *proc_type = create_procedure_type(params, return_type);
+        /* create_procedure_type retains return_type; release our ref if we own it */
+        if (owns_return_type && return_type != NULL)
+            kgpc_type_release(return_type);
         if (proc_type != NULL) {
             /* create_procedure_type makes a shallow copy of params; tell the
              * type to own (deeply free) its copy so the TREE_VAR_DECL param
@@ -6043,6 +6057,7 @@ static ListNode_t *convert_class_field_decl(ast_t *field_decl_node) {
                 field_type_id = mapped_id;
                 free(candidate);
             } else {
+                free(mapped_id);
                 field_type_id = candidate;
             }
         }
@@ -7218,6 +7233,7 @@ static ListNode_t *convert_field_decl(ast_t *field_decl_node) {
                 field_type_id = mapped_id;
                 free(candidate);
             } else {
+                free(mapped_id);
                 field_type_id = candidate;
             }
         }
@@ -8188,6 +8204,9 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
                 free(type_id);
                 type_id = NULL;
             }
+            /* Free any type_info from the first convert_type_spec call,
+             * since convert_type_spec resets all fields to NULL without freeing */
+            destroy_type_info_contents(&type_info);
             var_type = convert_type_spec(search, &type_id, NULL, &type_info);
         } else if (search != NULL && search->typ == PASCAL_T_IDENTIFIER) {
             char *type_name = dup_symbol(search);

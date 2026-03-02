@@ -364,6 +364,8 @@ KgpcType* create_kgpc_type_from_type_alias(struct TypeAlias *alias, struct SymTa
 
         /* Create pointer type even if pointee is NULL (forward reference) */
         result = create_pointer_type(pointee_type);
+        /* create_pointer_type retains pointee_type; release our reference */
+        kgpc_type_release(pointee_type);
         if (result != NULL) {
             kgpc_type_set_type_alias(result, alias);
         }

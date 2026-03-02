@@ -4534,6 +4534,7 @@ int semcheck_addressof(int *type_return,
             destroy_kgpc_type(expr->resolved_kgpc_type);
         }
         expr->resolved_kgpc_type = create_pointer_type(pointed_to_type);
+        destroy_kgpc_type(pointed_to_type);  /* create_pointer_type retained it */
     }
     
     /* If we successfully converted to a procedure address, don't count inner expression errors.
