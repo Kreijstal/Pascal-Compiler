@@ -3,6 +3,7 @@ project('kgpc-project', 'c')
 cparser_core_sources = [
   'cparser/parser.c',
   'cparser/combinators.c',
+  'cparser/ast_cache.c',
   'common/arena.c',
 ]
 

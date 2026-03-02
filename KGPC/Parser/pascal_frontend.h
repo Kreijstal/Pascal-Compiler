@@ -17,6 +17,10 @@ void pascal_frontend_add_include_path(const char *path);
 void pascal_frontend_add_define(const char *define);
 void pascal_frontend_clear_user_config(void);
 
+/* AST cache: when set, parsed unit ASTs are cached to this directory
+ * to avoid re-preprocessing and re-parsing on subsequent compilations. */
+void pascal_frontend_set_ast_cache_dir(const char *dir);
+
 /* Get the list of user-defined include paths for unit search */
 const char * const *pascal_frontend_get_include_paths(int *count);
 const char *pascal_frontend_current_path(void);

@@ -11,6 +11,7 @@
 
 #include "ErrVars.h"
 #include "SemanticCheck/SemCheck.h"
+#include "ast_cache.h"
 
 /* Global storage for user-defined preprocessor configuration */
 #define MAX_USER_INCLUDE_PATHS 64
@@ -22,6 +23,10 @@ static int g_user_include_path_count = 0;
 static char *g_user_defines[MAX_USER_DEFINES];
 static int g_user_define_count = 0;
 static char *g_last_parse_path = NULL;
+
+/* AST cache directory (NULL = disabled). When set, parsed ASTs for units
+ * are cached to binary files in this directory. */
+static char *g_ast_cache_dir = NULL;
 
 /* Flag set when {$MODE objfpc} is detected in the current parse.
  * Used to automatically inject ObjPas unit dependency. */
@@ -176,6 +181,13 @@ void pascal_frontend_clear_user_config(void)
         g_user_defines[i] = NULL;
     }
     g_user_define_count = 0;
+}
+
+void pascal_frontend_set_ast_cache_dir(const char *dir)
+{
+    if (g_ast_cache_dir != NULL)
+        free(g_ast_cache_dir);
+    g_ast_cache_dir = (dir != NULL) ? strdup(dir) : NULL;
 }
 
 const char * const *pascal_frontend_get_include_paths(int *count)
@@ -517,6 +529,37 @@ void pascal_frontend_cleanup(void)
         preprocessed_path = NULL;
     }
     preprocessed_length = 0;
+    if (g_ast_cache_dir != NULL)
+    {
+        free(g_ast_cache_dir);
+        g_ast_cache_dir = NULL;
+    }
+}
+
+/* Compute the cache file path for a given source path.
+ * Returns a malloc'd string or NULL if caching is disabled. */
+static char *compute_ast_cache_path(const char *source_path)
+{
+    if (g_ast_cache_dir == NULL || source_path == NULL)
+        return NULL;
+
+    /* Use the file basename as the cache key */
+    const char *basename = strrchr(source_path, '/');
+#ifdef _WIN32
+    const char *basename_win = strrchr(source_path, '\\');
+    if (basename_win != NULL && (basename == NULL || basename_win > basename))
+        basename = basename_win;
+#endif
+    basename = basename ? basename + 1 : source_path;
+
+    size_t dir_len = strlen(g_ast_cache_dir);
+    size_t name_len = strlen(basename);
+    /* <dir>/<basename>.ast_cache */
+    char *cache_path = (char *)malloc(dir_len + 1 + name_len + 11);
+    if (cache_path == NULL)
+        return NULL;
+    sprintf(cache_path, "%s/%s.ast_cache", g_ast_cache_dir, basename);
+    return cache_path;
 }
 
 bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tree, ParseError **error_out)
@@ -541,6 +584,57 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
     }
     if (path != NULL)
         g_last_parse_path = strdup(path);
+
+    /* --- AST cache: try loading a cached binary AST to skip preprocessing+parsing --- */
+    {
+        char *cache_path = compute_ast_cache_path(path);
+        if (cache_path != NULL)
+        {
+            ast_t *cached_ast = NULL;
+            char *cached_pp_buf = NULL;
+            size_t cached_pp_len = 0;
+            if (ast_cache_load(cache_path, &cached_ast, &cached_pp_buf, &cached_pp_len))
+            {
+                free(cache_path);
+                fprintf(stderr, "[cache] Loaded cached AST for %s\n", path);
+                /* Set up preprocessed source context (needed for semcheck error reporting) */
+                set_preprocessed_context(cached_pp_buf, cached_pp_len, path);
+                semcheck_register_source_buffer(path, cached_pp_buf, cached_pp_len);
+
+                /* Detect objfpc mode from cached preprocessed source */
+                if (detect_objfpc_mode(cached_pp_buf, cached_pp_len))
+                    g_objfpc_mode_detected = true;
+
+                /* Convert the cached AST to Tree_t */
+                Tree_t *tree = NULL;
+                bool success = false;
+                if (convert_to_tree)
+                {
+                    file_to_parse = (char *)path;
+                    tree = tree_from_pascal_ast(cached_ast);
+                    if (tree != NULL)
+                        success = true;
+                    else
+                        fprintf(stderr, "Error: Failed to convert cached AST for '%s'.\n", path);
+                }
+                else
+                {
+                    success = true;
+                }
+                free_ast(cached_ast);
+                free(cached_pp_buf);
+
+                if (out_tree != NULL)
+                    *out_tree = success ? tree : NULL;
+                else if (tree != NULL)
+                    destroy_tree(tree);
+
+                return success;
+            }
+            free(cache_path);
+            /* Cache miss — proceed with normal parsing, save at the end */
+        }
+    }
 
     size_t length = 0;
     char *buffer = read_file(path, &length);
@@ -916,6 +1010,17 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
 
         if (convert_to_tree)
         {
+            /* Save to AST cache before converting (conversion doesn't need the raw AST after) */
+            {
+                char *save_cache_path = compute_ast_cache_path(path);
+                if (save_cache_path != NULL && result.value.ast != NULL)
+                {
+                    if (ast_cache_save(save_cache_path, result.value.ast, buffer, length))
+                        fprintf(stderr, "[cache] Saved AST cache for %s\n", path);
+                }
+                free(save_cache_path);
+            }
+
             tree = tree_from_pascal_ast(result.value.ast);
             if (tree == NULL)
             {
