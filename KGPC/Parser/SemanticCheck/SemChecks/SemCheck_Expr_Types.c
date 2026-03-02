@@ -754,6 +754,55 @@ int semcheck_is_expr(int *type_return,
         }
     }
 
+    /* When the RHS identifier is a class field like FItemClass: TClass,
+     * FindIdent won't find it directly - try resolving via implicit Self. */
+    if (!is_valid_target && expr->expr_data.is_data.target_type_id != NULL)
+    {
+        const char *rhs_id = expr->expr_data.is_data.target_type_id;
+        const char *owner_id = semcheck_get_current_method_owner();
+        if (owner_id != NULL)
+        {
+            HashNode_t *owner_node = NULL;
+            if (FindIdent(&owner_node, symtab, owner_id) >= 0 &&
+                owner_node != NULL && owner_node->type != NULL)
+            {
+                struct RecordType *owner_rec = NULL;
+                if (kgpc_type_is_record(owner_node->type))
+                    owner_rec = kgpc_type_get_record(owner_node->type);
+                else if (kgpc_type_is_pointer(owner_node->type) &&
+                         owner_node->type->info.points_to != NULL &&
+                         kgpc_type_is_record(owner_node->type->info.points_to))
+                    owner_rec = kgpc_type_get_record(owner_node->type->info.points_to);
+                if (owner_rec != NULL)
+                {
+                    struct RecordField *field = semcheck_find_class_field_including_hidden(
+                        symtab, owner_rec, rhs_id, NULL);
+                    if (field != NULL)
+                    {
+                        /* Field found - check if its type is a class reference (pointer) */
+                        int is_ptr = field->is_pointer ||
+                            field->type == POINTER_TYPE;
+                        /* Also check via the field's type_id lookup for class-of types */
+                        if (!is_ptr && field->type_id != NULL)
+                        {
+                            HashNode_t *ft_node = NULL;
+                            if (FindIdent(&ft_node, symtab, field->type_id) >= 0 &&
+                                ft_node != NULL && ft_node->type != NULL)
+                            {
+                                KgpcType *ft = ft_node->type;
+                                is_ptr = (ft->kind == TYPE_KIND_POINTER) ||
+                                    (ft->kind == TYPE_KIND_PRIMITIVE &&
+                                     ft->info.primitive_type_tag == POINTER_TYPE);
+                            }
+                        }
+                        if (is_ptr)
+                            is_valid_target = 1;
+                    }
+                }
+            }
+        }
+    }
+
     if (!is_valid_target)
     {
         semcheck_error_with_context("Error on line %d, \"is\" operator requires a class type on the right-hand side.\n\n",
