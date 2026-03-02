@@ -4002,32 +4002,13 @@ ListNode_t *codegen_record_access(struct Expression *expr, ListNode_t *inst_list
 
     char buffer[64];
     long long field_size = codegen_record_field_effective_size(expr, ctx);
-    /* Cross-check with resolved_kgpc_type for sub-dword types that
-       codegen_record_field_effective_size may miss (e.g. Integer=SmallInt in FPC mode) */
-    if (field_size == 4 && expr->resolved_kgpc_type != NULL)
-    {
-        long long resolved_size = kgpc_type_sizeof(expr->resolved_kgpc_type);
-        if (resolved_size > 0 && resolved_size < 4)
-            field_size = resolved_size;
-    }
-    int type_tag = expr_get_type_tag(expr);
     int is_single_real_field = (expr_has_type_tag(expr, REAL_TYPE) && field_size == 4);
     if (!is_single_real_field && (expr_uses_qword_kgpctype(expr) || field_size == 8))
         snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_64);
     else if (field_size == 1 || expr_has_type_tag(expr, CHAR_TYPE))
-    {
-        if (type_tag != CHAR_TYPE && codegen_type_is_signed(type_tag))
-            snprintf(buffer, sizeof(buffer), "\tmovsbl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
-        else
-            snprintf(buffer, sizeof(buffer), "\tmovzbl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
-    }
+        snprintf(buffer, sizeof(buffer), "\tmovzbl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
     else if (field_size == 2)
-    {
-        if (codegen_type_is_signed(type_tag))
-            snprintf(buffer, sizeof(buffer), "\tmovswl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
-        else
-            snprintf(buffer, sizeof(buffer), "\tmovzwl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
-    }
+        snprintf(buffer, sizeof(buffer), "\tmovzwl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
     else
         snprintf(buffer, sizeof(buffer), "\tmovl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
     inst_list = add_inst(inst_list, buffer);
@@ -5602,19 +5583,13 @@ ListNode_t *codegen_array_access(struct Expression *expr, ListNode_t *inst_list,
     {
         if (expr_has_type_tag(expr, CHAR_TYPE) || element_size == 1)
         {
-            int type_tag = expr_get_type_tag(expr);
-            if (type_tag == CHAR_TYPE || !codegen_type_is_signed(type_tag))
-                snprintf(buffer, sizeof(buffer), "\tmovzbl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
-            else
-                snprintf(buffer, sizeof(buffer), "\tmovsbl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
+            /* Byte-sized element - use zero-extend byte to long */
+            snprintf(buffer, sizeof(buffer), "\tmovzbl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
         }
         else if (element_size == 2)
         {
-            int type_tag = expr_get_type_tag(expr);
-            if (!codegen_type_is_signed(type_tag))
-                snprintf(buffer, sizeof(buffer), "\tmovzwl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
-            else
-                snprintf(buffer, sizeof(buffer), "\tmovswl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
+            /* Word-sized element - use zero-extend word to long */
+            snprintf(buffer, sizeof(buffer), "\tmovzwl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
         }
         else
         {
