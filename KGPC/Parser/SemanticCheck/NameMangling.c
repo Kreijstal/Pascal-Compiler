@@ -288,9 +288,11 @@ static HashNode_t *find_type_node_for_mangling(SymTab_t *symtab,
     if (lookup_name != NULL &&
         FindIdent(&type_node, symtab, lookup_name) >= 0 && type_node != NULL)
     {
-        free(qualified);
         if (type_node->hash_type == HASHTYPE_TYPE)
+        {
+            free(qualified);
             return type_node;
+        }
     }
 
     if (lookup_name == NULL)
