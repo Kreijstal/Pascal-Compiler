@@ -4849,12 +4849,18 @@ skip_type_receiver_rewrite:
                 /* Save bare method name before rewrite for virtual dispatch check */
                 char *bare_method_name = strdup(proc_id);
 
-                /* Prepend Self to arguments */
-                struct Expression *self_expr = mk_varid(stmt->line_num, strdup("Self"));
-                ListNode_t *self_arg = CreateListNode(self_expr, LIST_EXPR);
-                self_arg->next = args_given;
-                stmt->stmt_data.procedure_call_data.expr_args = self_arg;
-                args_given = self_arg;
+                /* Prepend Self to arguments only for non-static methods.
+                 * Static class methods have no Self parameter. */
+                int method_is_static = (self_record->type_id != NULL && bare_method_name != NULL) ?
+                    from_cparser_is_method_static(self_record->type_id, bare_method_name) : 0;
+                if (!method_is_static)
+                {
+                    struct Expression *self_expr = mk_varid(stmt->line_num, strdup("Self"));
+                    ListNode_t *self_arg = CreateListNode(self_expr, LIST_EXPR);
+                    self_arg->next = args_given;
+                    stmt->stmt_data.procedure_call_data.expr_args = self_arg;
+                    args_given = self_arg;
+                }
 
                 /* Update proc_id to the resolved method's id (e.g. TBase__Bump, not TDerived__Bump
                  * when the method is inherited from a parent class). */
