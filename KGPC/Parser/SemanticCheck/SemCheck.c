@@ -6071,9 +6071,65 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                     is_forward_class_completion = 1;
                             }
                         }
-                        if (!is_forward_class_completion)
+                        /* Allow a simple type alias from a unit to override an
+                         * existing alias when the target type differs AND both
+                         * are plain (non-array, non-pointer) aliases.  This is
+                         * required for objpas.pp which redefines
+                         *   Integer = LongInt   (overriding system's Integer = SmallInt)
+                         * when {$mode objfpc} or {$mode delphi} is active. */
+                        int is_alias_override = 0;
+                        if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS &&
+                            existing->hash_type == HASHTYPE_TYPE &&
+                            tree->tree_data.type_decl_data.defined_in_unit)
+                        {
+                            struct TypeAlias *new_alias = &tree->tree_data.type_decl_data.info.alias;
+                            struct TypeAlias *old_alias = get_type_alias_from_node(existing);
+                            if (new_alias != NULL && old_alias != NULL &&
+                                new_alias->target_type_id != NULL &&
+                                old_alias->target_type_id != NULL &&
+                                !new_alias->is_array && !new_alias->is_pointer &&
+                                !new_alias->is_set && !new_alias->is_file &&
+                                !new_alias->inline_record_type &&
+                                !pascal_identifier_equals(new_alias->target_type_id, old_alias->target_type_id))
+                            {
+                                is_alias_override = 1;
+                            }
+                        }
+                        if (!is_forward_class_completion && !is_alias_override)
                         {
                             /* Already declared, skip */
+                            cur = cur->next;
+                            continue;
+                        }
+                        if (is_alias_override)
+                        {
+                            /* Replace the existing type with the new alias */
+                            struct TypeAlias *alias = &tree->tree_data.type_decl_data.info.alias;
+                            if (alias->target_type_id != NULL)
+                                apply_builtin_integer_alias_metadata(alias, alias->target_type_id);
+                            int base_tag = alias->base_type != UNKNOWN_TYPE ? alias->base_type : INT_TYPE;
+                            KgpcType *kgpc_type = NULL;
+                            if (alias->storage_size > 0)
+                                kgpc_type = create_primitive_type_with_size(base_tag, (int)alias->storage_size);
+                            else
+                                kgpc_type = create_primitive_type(base_tag);
+                            if (kgpc_type != NULL)
+                            {
+                                kgpc_type_set_type_alias(kgpc_type, alias);
+                                if (tree->tree_data.type_decl_data.kgpc_type == NULL)
+                                {
+                                    tree->tree_data.type_decl_data.kgpc_type = kgpc_type;
+                                    kgpc_type_retain(kgpc_type);
+                                }
+                                if (existing->type != NULL)
+                                    destroy_kgpc_type(existing->type);
+                                kgpc_type_retain(kgpc_type);
+                                existing->type = kgpc_type;
+                                mark_hashnode_unit_info(symtab, existing,
+                                    tree->tree_data.type_decl_data.defined_in_unit,
+                                    tree->tree_data.type_decl_data.unit_is_public);
+                                mark_hashnode_source_unit(existing, tree->tree_data.type_decl_data.source_unit_index);
+                            }
                             cur = cur->next;
                             continue;
                         }
@@ -8971,6 +9027,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
         int scope_level = FindIdent(&existing_type, symtab, tree->tree_data.type_decl_data.id);
         int already_predeclared = (scope_level == 0 && existing_type != NULL &&
                                    existing_type->hash_type == HASHTYPE_TYPE);
+
         /* If existing type is from a different source than the current declaration,
          * find the correct predeclared entry from the same source. With cross-unit
          * coexistence, multiple entries with the same name may exist in the same scope.
@@ -9612,13 +9669,15 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                 /* Check if constant already exists with same value (for re-exports like ARG_MAX = UnixType.ARG_MAX) */
                 HashNode_t *existing = NULL;
                 int existing_scope = FindIdent(&existing, symtab, tree->tree_data.const_decl_data.id);
-                if (existing_scope >= 0 && existing != NULL && 
-                    existing->hash_type == HASHTYPE_CONST && 
+                if (existing_scope >= 0 && existing != NULL &&
+                    existing->hash_type == HASHTYPE_CONST &&
                     existing->const_int_value == value)
                 {
                     /* Same constant with same value - treat as re-export, skip silently */
                     return 0;
                 }
+
+
                 
                 /* Create KgpcType if this is a set constant or has an explicit type annotation */
                 KgpcType *const_type = NULL;
@@ -10258,8 +10317,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
     /* Integer boundary constants - required by FPC's objpas.pp and system.pp */
     {
         char *name;
-        /* MaxInt: Default for Integer (16-bit in classic Pascal, but FPC often maps to 32-bit) */
-        /* For FPC compatibility, MaxInt = MaxSmallInt = 32767 */
+        /* MaxInt: FPC defines Integer = SmallInt (16-bit), so MaxInt = 32767 */
         name = strdup("MaxInt");
         if (name != NULL) {
             PushConstOntoScope(symtab, name, 32767LL);
