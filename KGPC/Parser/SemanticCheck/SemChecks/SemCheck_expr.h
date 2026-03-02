@@ -50,6 +50,8 @@ int semcheck_with_push(struct Expression *context_expr, struct RecordType *recor
 void semcheck_with_pop(void);
 int semcheck_with_try_resolve(const char *field_id, SymTab_t *symtab,
     struct Expression **out_record_expr, int line_num);
+int semcheck_with_try_resolve_method(const char *method_id, SymTab_t *symtab,
+    struct Expression **out_record_expr, int line_num);
 struct RecordType *semcheck_with_resolve_record_type(SymTab_t *symtab,
     struct Expression *context_expr, int expr_type, int line_num);
 
