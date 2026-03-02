@@ -2077,9 +2077,13 @@ static int semcheck_builtin_delete(SymTab_t *symtab, struct Statement *stmt, int
     int target_type = UNKNOWN_TYPE;
     error_count += semcheck_stmt_expr_tag(&target_type, symtab, target_expr, max_scope_lev, MUTATE);
     
-    /* Check if target is a string type OR a shortstring (array of char) */
+    /* Check if target is a string type, shortstring (array of char), or dynamic array */
     int is_valid_target = is_string_type(target_type) ||
                           is_shortstring_array(target_type, target_expr->is_array_expr);
+    /* Also accept dynamic arrays (FPC supports Delete on dynamic arrays) */
+    if (!is_valid_target && target_expr->resolved_kgpc_type != NULL &&
+        kgpc_type_is_dynamic_array(target_expr->resolved_kgpc_type))
+        is_valid_target = 1;
     int target_is_shortstring = semcheck_expr_is_shortstring(target_expr);
     
     if (!is_valid_target)
