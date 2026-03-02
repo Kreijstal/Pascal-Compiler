@@ -706,6 +706,15 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                     struct RecordType *record_info = record_type->info.record_info;
                     if (record_info != NULL)
                     {
+                    /* Temporarily set unit context to the record's defining unit
+                     * so field type lookups prefer same-unit types (e.g., system's
+                     * pstring vs objpas's PString). */
+                    int saved_unit_ctx = 0;
+                    if (record_info->source_unit_index > 0)
+                    {
+                        saved_unit_ctx = semcheck_save_unit_context();
+                        semcheck_restore_unit_context(record_info->source_unit_index);
+                    }
                     ListNode_t *field_cursor = record_info->fields;
                     while (field_cursor != NULL)
                     {
@@ -818,10 +827,14 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                                         field_type = create_primitive_type(field->type);
                                     }
                                     
+                                    /* Restore unit context before returning */
+                                    if (record_info->source_unit_index > 0)
+                                        semcheck_restore_unit_context(saved_unit_ctx);
+
                                     /* Clean up record type if we owned it */
                                     if (record_type_owned)
                                         destroy_kgpc_type(record_type);
-                                    
+
                                     /* Return the field type */
                                     return field_type;
                                 }
@@ -829,6 +842,9 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                         }
                         field_cursor = field_cursor->next;
                     }
+                    /* Restore unit context after field lookup */
+                    if (record_info->source_unit_index > 0)
+                        semcheck_restore_unit_context(saved_unit_ctx);
                     }
                 }
                 

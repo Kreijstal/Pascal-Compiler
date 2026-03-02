@@ -191,6 +191,7 @@ struct RecordType
     uint8_t guid_d4[8];
     char **interface_names;        /* Names of interfaces this class implements */
     int num_interfaces;            /* Number of entries in interface_names */
+    int source_unit_index;         /* Unit registry index for the unit that defined this record (0 = none) */
 };
 
 static inline int record_type_is_class(const struct RecordType *record)

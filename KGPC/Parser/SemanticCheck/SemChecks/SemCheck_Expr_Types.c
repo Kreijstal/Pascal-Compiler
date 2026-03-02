@@ -3135,6 +3135,17 @@ FIELD_RESOLVED:
 
     expr->expr_data.record_access_data.field_offset = field_offset;
 
+    /* Temporarily set unit context to the record's defining unit so field
+     * type lookups prefer same-unit types (e.g., system's pstring vs
+     * objpas's PString). */
+    int saved_unit_ctx_ra = 0;
+    int has_unit_ctx_ra = (record_info != NULL && record_info->source_unit_index > 0);
+    if (has_unit_ctx_ra)
+    {
+        saved_unit_ctx_ra = semcheck_save_unit_context();
+        semcheck_restore_unit_context(record_info->source_unit_index);
+    }
+
     int field_type = field_desc->type;
     struct RecordType *field_record = field_desc->nested_record;
     if (field_record != NULL)
@@ -3384,6 +3395,8 @@ FIELD_RESOLVED:
         semcheck_error_with_context("Error on line %d, unable to resolve type for field %s.\n\n",
             expr->line_num, field_id);
         *type_return = UNKNOWN_TYPE;
+        if (has_unit_ctx_ra)
+            semcheck_restore_unit_context(saved_unit_ctx_ra);
         return error_count + 1;
     }
 
@@ -3392,6 +3405,8 @@ FIELD_RESOLVED:
         semcheck_error_with_context("Error on line %d, missing record definition for field %s.\n\n",
             expr->line_num, field_id);
         *type_return = UNKNOWN_TYPE;
+        if (has_unit_ctx_ra)
+            semcheck_restore_unit_context(saved_unit_ctx_ra);
         return error_count + 1;
     }
 
@@ -3505,6 +3520,8 @@ FIELD_RESOLVED:
                 }
                 expr->resolved_kgpc_type = create_primitive_type(POINTER_TYPE);
                 *type_return = POINTER_TYPE;
+                if (has_unit_ctx_ra)
+                    semcheck_restore_unit_context(saved_unit_ctx_ra);
                 return error_count;
             }
         }
@@ -3798,6 +3815,9 @@ FIELD_RESOLVED:
             "[KGPC_DEBUG_RECORD_FIELD] field=%s resolved_type=%d\n",
             field_id, field_type);
     }
+    /* Restore unit context */
+    if (has_unit_ctx_ra)
+        semcheck_restore_unit_context(saved_unit_ctx_ra);
     return error_count;
 }
 

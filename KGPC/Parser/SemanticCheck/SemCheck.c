@@ -208,6 +208,16 @@ static void semcheck_unit_names_reset(void)
     g_semcheck_current_unit_index = 0;
 }
 
+int semcheck_save_unit_context(void)
+{
+    return g_semcheck_current_unit_index;
+}
+
+void semcheck_restore_unit_context(int saved)
+{
+    g_semcheck_current_unit_index = saved;
+}
+
 static void semcheck_unit_name_add(const char *name)
 {
     if (name == NULL || name[0] == '\0')
@@ -2484,7 +2494,8 @@ static void semcheck_propagate_method_identity(SymTab_t *symtab, Tree_t *subprog
 }
 
 static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symtab,
-    const TypeRef *type_ref, const char *type_id, int skip_owner_qualify)
+    const TypeRef *type_ref, const char *type_id, int skip_owner_qualify,
+    int override_unit_index)
 {
     if (symtab == NULL)
         return NULL;
@@ -2668,7 +2679,7 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symt
                 char qualified_name[512];
                 snprintf(qualified_name, sizeof(qualified_name), "%s.%s", owner_id, lookup_id);
                 HashNode_t *qualified = semcheck_find_preferred_type_node_ref_internal(
-                    symtab, NULL, qualified_name, 1);
+                    symtab, NULL, qualified_name, 1, override_unit_index);
                 if (qualified != NULL)
                 {
                     if (rendered != NULL)
@@ -2699,9 +2710,11 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symt
             int scope_level = semcheck_scope_level_for_type_candidate(symtab, node);
 
             int same_unit = 0;
-            if (!prefer_unit_defined && g_semcheck_current_unit_index != 0 &&
+            int effective_unit_index = (override_unit_index != 0)
+                ? override_unit_index : g_semcheck_current_unit_index;
+            if (!prefer_unit_defined && effective_unit_index != 0 &&
                 node->source_unit_index != 0 &&
-                node->source_unit_index == g_semcheck_current_unit_index)
+                node->source_unit_index == effective_unit_index)
                 same_unit = 1;
 
             if (debug_tsize)
@@ -2787,13 +2800,19 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symt
 
 HashNode_t *semcheck_find_preferred_type_node(SymTab_t *symtab, const char *type_id)
 {
-    return semcheck_find_preferred_type_node_ref_internal(symtab, NULL, type_id, 0);
+    return semcheck_find_preferred_type_node_ref_internal(symtab, NULL, type_id, 0, 0);
+}
+
+HashNode_t *semcheck_find_preferred_type_node_for_unit(SymTab_t *symtab,
+    const char *type_id, int unit_index)
+{
+    return semcheck_find_preferred_type_node_ref_internal(symtab, NULL, type_id, 0, unit_index);
 }
 
 HashNode_t *semcheck_find_preferred_type_node_with_ref(SymTab_t *symtab,
     const TypeRef *type_ref, const char *type_id)
 {
-    return semcheck_find_preferred_type_node_ref_internal(symtab, type_ref, type_id, 0);
+    return semcheck_find_preferred_type_node_ref_internal(symtab, type_ref, type_id, 0, 0);
 }
 
 static HashNode_t *semcheck_find_type_node_with_unit_flag(SymTab_t *symtab,
@@ -6009,8 +6028,11 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                      * This handles cases like System.tsiginfo vs SysUtils.tsiginfo and
                      * UnixType.TSize (alias) vs Types.TSize (record).
                      * The ranking logic picks the right one based on same-unit preference. */
+                    int existing_is_record = (existing->type != NULL &&
+                        existing->type->kind == TYPE_KIND_RECORD);
                     int cross_unit_coexist = (
-                        tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD &&
+                        (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD ||
+                         (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS && existing_is_record)) &&
                         existing->source_unit_index != 0 &&
                         tree->tree_data.type_decl_data.source_unit_index != 0 &&
                         existing->source_unit_index != tree->tree_data.type_decl_data.source_unit_index);
@@ -9010,9 +9032,24 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
             else
             {
                 /* No predeclared entry from the same unit exists.
-                 * Skip this type tree entirely to avoid corrupting the
-                 * existing entry from a different source. */
-                skip_type_tree = 1;
+                 * For the specific case of an alias conflicting with an
+                 * existing record from a different unit (e.g. UnixType.TSize
+                 * alias vs Types.TSize record), treat as a fresh declaration
+                 * so it gets pushed as a new entry.  The hash table's
+                 * TYPE+TYPE collision allowance (HashTable.c) permits this
+                 * when the existing entry is from a unit.
+                 * Only do this when both have non-zero source_unit_index
+                 * (true cross-unit conflict).  When existing has index 0
+                 * it's a stale/builtin entry and should be skipped. */
+                int existing_is_record = (existing_type->type != NULL &&
+                    existing_type->type->kind == TYPE_KIND_RECORD);
+                if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS &&
+                    existing_is_record &&
+                    existing_type->source_unit_index != 0 &&
+                    tree->tree_data.type_decl_data.source_unit_index != 0)
+                    already_predeclared = 0;
+                else
+                    skip_type_tree = 1;
             }
         }
         if (skip_type_tree)

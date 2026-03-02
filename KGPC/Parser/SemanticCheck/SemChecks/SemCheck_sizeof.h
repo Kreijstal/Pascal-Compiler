@@ -52,6 +52,10 @@ int sizeof_from_alias(SymTab_t *symtab, struct TypeAlias *alias,
 /* Helper to find preferred type node for a type_id - needed by sizeof functions */
 HashNode_t *semcheck_find_preferred_type_node(SymTab_t *symtab, const char *type_id);
 
+/* Like semcheck_find_preferred_type_node but prefers types from the given unit */
+HashNode_t *semcheck_find_preferred_type_node_for_unit(SymTab_t *symtab,
+    const char *type_id, int unit_index);
+
 /* Recursion limit and pointer size constants */
 #define SIZEOF_RECURSION_LIMIT 64
 #define POINTER_SIZE_BYTES 8

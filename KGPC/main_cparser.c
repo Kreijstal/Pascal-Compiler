@@ -827,6 +827,13 @@ static void mark_unit_type_decls(ListNode_t *type_list, int is_public, int unit_
                 decl->tree_data.type_decl_data.unit_is_public = is_public ? 1 : 0;
                 if (unit_index > 0 && decl->tree_data.type_decl_data.source_unit_index == 0)
                     decl->tree_data.type_decl_data.source_unit_index = unit_index;
+                /* Propagate unit index to the RecordType so field type lookups
+                   can prefer the defining unit's types. */
+                if (unit_index > 0 &&
+                    decl->tree_data.type_decl_data.kind == TYPE_DECL_RECORD &&
+                    decl->tree_data.type_decl_data.info.record != NULL &&
+                    decl->tree_data.type_decl_data.info.record->source_unit_index == 0)
+                    decl->tree_data.type_decl_data.info.record->source_unit_index = unit_index;
             }
         }
         node = node->next;
