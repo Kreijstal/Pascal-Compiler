@@ -199,7 +199,7 @@ static inline int record_type_is_class(const struct RecordType *record)
         return 0;
     if (record->is_class || record->is_interface)
         return 1;
-    return (record->properties != NULL || record->record_properties != NULL);
+    return (record->properties != NULL);
 }
 
 static inline int record_field_is_hidden(const struct RecordField *field)
