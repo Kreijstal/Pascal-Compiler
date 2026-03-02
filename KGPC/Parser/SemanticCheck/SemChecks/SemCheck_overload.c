@@ -288,6 +288,22 @@ int semcheck_candidates_share_signature(SymTab_t *symtab, HashNode_t *a, HashNod
                 }
             }
         }
+        /* Distinguish RawByteString from UnicodeString: both resolve to
+         * STRING_TYPE but they are different overload signatures. */
+        if (type_a == STRING_TYPE && type_b == STRING_TYPE)
+        {
+            const char *id_a = semcheck_get_param_type_id(decl_a);
+            const char *id_b = semcheck_get_param_type_id(decl_b);
+            if (id_a != NULL && id_b != NULL &&
+                !pascal_identifier_equals(id_a, id_b))
+            {
+                int kind_a = semcheck_string_kind_from_type_id(id_a);
+                int kind_b = semcheck_string_kind_from_type_id(id_b);
+                /* Different string subtypes → not equivalent */
+                if (kind_a != kind_b || (kind_a == 0 && kind_b == 0))
+                    return 0;
+            }
+        }
         args_a = args_a->next;
         args_b = args_b->next;
     }

@@ -6454,8 +6454,11 @@ int atomiccmpexchange_i_i_i(int *target, int new_val, int comparand)
  *   [24] GetStandardCodePageProc
  * ===================================================================== */
 
-/* The widestringmanager global — declared in the generated assembly as BSS. */
-extern void *widestringmanager[25] __attribute__((weak));
+/* The widestringmanager global — declared in the generated assembly as BSS.
+ * Weak definition (not extern) so it works on both Linux and MinGW:
+ * if codegen emits a widestringmanager symbol, the linker picks that one;
+ * otherwise this zero-initialized fallback is used. */
+void *widestringmanager[25] __attribute__((weak)) = {0};
 
 /* Default: convert wide/unicode chars to ansi by truncating to low byte.
    Signature: procedure(source:punicodechar; var dest:RawByteString;
@@ -6657,8 +6660,7 @@ static int32_t kgpc_default_get_standard_codepage(int32_t stdcp)
    Called from kgpc_init_args before the program body runs. */
 void kgpc_init_widestringmanager(void)
 {
-    if (&widestringmanager == NULL)
-        return;  /* Symbol not present in linked binary */
+    /* With a weak definition, the address is always valid — init unconditionally. */
 
     widestringmanager[0]  = (void *)kgpc_default_wide2ansi_move;
     widestringmanager[1]  = (void *)kgpc_default_ansi2wide_move;
