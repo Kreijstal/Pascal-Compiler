@@ -313,9 +313,9 @@ int semcheck_is_unit_name(const char *name)
             return 1;
         cur = cur->next;
     }
-    /* Accept any loaded unit name so unit-qualified identifiers resolve even
-     * when the unit isn't listed directly in the current uses clause. */
-    if (unit_registry_contains(name))
+    /* Only treat arbitrary loaded unit names as unit qualifiers in program context.
+     * Inside a unit, prefer local identifiers over unrelated unit names. */
+    if (g_semcheck_current_unit_index == 0 && unit_registry_contains(name))
         return 1;
     return 0;
 }

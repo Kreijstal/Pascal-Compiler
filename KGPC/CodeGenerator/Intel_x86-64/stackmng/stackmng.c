@@ -1269,6 +1269,7 @@ void free_reg_stack(RegStack_t *reg_stack)
     }
 
     /* Free live ranges tracked by the graph coloring allocator */
+#if USE_GRAPH_COLORING_ALLOCATOR
     while(reg_stack->active_live_ranges != NULL)
     {
         cur = reg_stack->active_live_ranges;
@@ -1276,6 +1277,7 @@ void free_reg_stack(RegStack_t *reg_stack)
         free_live_range((LiveRange_t *)cur->cur);
         free(cur);
     }
+#endif
 
     free(reg_stack);
 }

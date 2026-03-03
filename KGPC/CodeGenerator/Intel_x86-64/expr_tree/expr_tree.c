@@ -2362,8 +2362,11 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             snprintf(buffer, sizeof(buffer), "\tmovq\t%d(%%r11), %%r11\n", vmt_offset);
             inst_list = add_inst(inst_list, buffer);
             /* Call through the VMT entry */
+            CallerSaveState caller_state;
+            regstack_caller_save(get_reg_stack(), &inst_list, &caller_state);
             snprintf(buffer, sizeof(buffer), "\tcall\t*%%r11\n");
             inst_list = add_inst(inst_list, buffer);
+            regstack_caller_restore(get_reg_stack(), &inst_list, &caller_state);
         }
         else
         {
@@ -2495,8 +2498,11 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                     snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", self_reg, self_reg);
                     inst_list = add_inst(inst_list, buffer);
                 }
+                CallerSaveState caller_state;
+                regstack_caller_save(get_reg_stack(), &inst_list, &caller_state);
                 snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", call_target);
                 inst_list = add_inst(inst_list, buffer);
+                regstack_caller_restore(get_reg_stack(), &inst_list, &caller_state);
             }
             else
             {

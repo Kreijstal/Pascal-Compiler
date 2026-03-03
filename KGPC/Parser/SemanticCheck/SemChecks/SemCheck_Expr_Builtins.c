@@ -34,6 +34,41 @@ static char *build_qualified_identifier_from_expr_local(struct Expression *expr)
     return qualified;
 }
 
+static QualifiedIdent *build_qualified_ident_from_expr_local(struct Expression *expr)
+{
+    if (expr == NULL)
+        return NULL;
+    if (expr->type == EXPR_VAR_ID && expr->expr_data.id != NULL)
+        return qualified_ident_from_single(expr->expr_data.id);
+    if (expr->type != EXPR_RECORD_ACCESS)
+        return NULL;
+
+    struct Expression *record_expr = expr->expr_data.record_access_data.record_expr;
+    char *field_id = expr->expr_data.record_access_data.field_id;
+    if (record_expr == NULL || field_id == NULL)
+        return NULL;
+
+    QualifiedIdent *base = build_qualified_ident_from_expr_local(record_expr);
+    if (base == NULL)
+        return NULL;
+
+    char **segments = (char **)calloc((size_t)base->count + 1, sizeof(char *));
+    if (segments == NULL)
+    {
+        qualified_ident_free(base);
+        return NULL;
+    }
+    for (int i = 0; i < base->count; ++i)
+    {
+        segments[i] = base->segments[i];
+        base->segments[i] = NULL;
+    }
+    segments[base->count] = strdup(field_id);
+    QualifiedIdent *out = qualified_ident_from_segments(segments, base->count + 1, 1);
+    qualified_ident_free(base);
+    return out;
+}
+
 /*===========================================================================
  * String/Character Builtins
  *===========================================================================*/
@@ -2251,6 +2286,8 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
     {
         char *qualified_name = NULL;
         const char *type_name = NULL;
+        QualifiedIdent *type_id_ref = NULL;
+        TypeRef *type_ref = NULL;
         if (arg_expr->type == EXPR_VAR_ID)
             type_name = arg_expr->expr_data.id;
         else
@@ -2258,9 +2295,22 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
             qualified_name = build_qualified_identifier_from_expr_local(arg_expr);
             type_name = qualified_name;
         }
+        if (arg_expr->id_ref != NULL)
+            type_id_ref = qualified_ident_clone(arg_expr->id_ref);
+        if (type_id_ref == NULL)
+            type_id_ref = build_qualified_ident_from_expr_local(arg_expr);
+        if (type_id_ref != NULL && qualified_name == NULL)
+            qualified_name = qualified_ident_join(type_id_ref, ".");
+        if (type_id_ref != NULL)
+            type_ref = type_ref_create(type_id_ref, NULL, 0);
         const char *raw_name = type_name;
-        const char *base_name = semcheck_base_type_name(raw_name);
-        HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, raw_name);
+        const char *base_name = (type_ref != NULL) ? type_ref_base_name(type_ref)
+                                                   : semcheck_base_type_name(raw_name);
+        HashNode_t *type_node = NULL;
+        if (type_ref != NULL)
+            type_node = semcheck_find_preferred_type_node_with_ref(symtab, type_ref, raw_name);
+        if (type_node == NULL)
+            type_node = semcheck_find_preferred_type_node(symtab, raw_name);
         if (type_node == NULL && base_name != NULL && base_name != raw_name)
             type_node = semcheck_find_preferred_type_node(symtab, base_name);
         if (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
@@ -2447,12 +2497,16 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
                 semcheck_expr_set_resolved_type(expr, result_type);
                 if (qualified_name != NULL)
                     free(qualified_name);
+                if (type_ref != NULL)
+                    type_ref_free(type_ref);
                 *type_return = result_type;
                 return 0;
             }
         }
         if (qualified_name != NULL)
             free(qualified_name);
+        if (type_ref != NULL)
+            type_ref_free(type_ref);
     }
 
     KgpcType *arg_kgpc_type = NULL;

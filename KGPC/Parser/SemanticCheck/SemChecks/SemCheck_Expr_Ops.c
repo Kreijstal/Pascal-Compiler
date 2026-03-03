@@ -1646,6 +1646,12 @@ int semcheck_varid(int *type_return,
     id = expr->expr_data.id;
     semcheck_clear_pointer_info(expr);
     semcheck_clear_array_info(expr);
+    if (getenv("KGPC_DEBUG_EOF") != NULL && id != NULL &&
+        pascal_identifier_equals(id, "EOF"))
+    {
+        fprintf(stderr, "[KGPC_DEBUG_EOF] varid EOF: mutating=%d scope=%d\n",
+            mutating, max_scope_lev);
+    }
 
     struct Expression *with_expr = NULL;
     if (getenv("KGPC_DEBUG_WITH") != NULL &&
@@ -1687,6 +1693,14 @@ int semcheck_varid(int *type_return,
     }
 
     scope_return = FindIdent(&hash_return, symtab, id);
+    if (getenv("KGPC_DEBUG_EOF") != NULL && id != NULL &&
+        pascal_identifier_equals(id, "EOF"))
+    {
+        fprintf(stderr,
+            "[KGPC_DEBUG_EOF] FindIdent scope=%d node=%p hash_type=%d\n",
+            scope_return, (void *)hash_return,
+            hash_return != NULL ? hash_return->hash_type : -1);
+    }
     if (getenv("KGPC_DEBUG_MONITOR") != NULL &&
         id != NULL && pascal_identifier_equals(id, "_MonitorData"))
     {
