@@ -1995,9 +1995,12 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                  * may spuriously promote a scalar argument (e.g. Boolean) to
                  * an integer match, hiding the correct untyped overload.
                  *
-                 * Exception: string/char arguments can match "array of Char"
-                 * parameters (FPC auto-converts the string to a char array). */
-                if (formal_is_array_decl && !arg_is_array)
+                 * Exception 1: string/char arguments can match "array of Char"
+                 * parameters (FPC auto-converts the string to a char array).
+                 * Exception 2: untyped arguments (from untyped const/var params)
+                 * can match any typed formal, including arrays. */
+                if (formal_is_array_decl && !arg_is_array &&
+                    !(arg_tag == UNKNOWN_TYPE && arg_kgpc == NULL))
                 {
                     int allow_string_to_char_array = 0;
                     if (is_string_type(arg_tag) || arg_tag == CHAR_TYPE)
@@ -2025,7 +2028,19 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
 
                 if (formal_kgpc == NULL)
                 {
-                    quality = semcheck_make_quality(MATCH_PROMOTION);
+                    if (formal_tag == UNKNOWN_TYPE)
+                    {
+                        /* Truly untyped formal: use classify_match which
+                         * scores untyped→untyped as MATCH_CONVERSION so the
+                         * tiebreaker can prefer typed overloads. */
+                        int is_integer_literal = (arg_expr != NULL && arg_expr->type == EXPR_INUM);
+                        quality = semcheck_classify_match(arg_tag, arg_kgpc,
+                            formal_tag, formal_kgpc, is_var_param, symtab, is_integer_literal);
+                    }
+                    else
+                    {
+                        quality = semcheck_make_quality(MATCH_PROMOTION);
+                    }
                 }
                 else
                 {

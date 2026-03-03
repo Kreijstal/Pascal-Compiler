@@ -5247,13 +5247,30 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
             snprintf(buffer, 50, "\tmovss\t-%d(%%rbp), %%xmm0\n", return_var->offset);
         else if (is_real_return)
             snprintf(buffer, 50, "\tmovsd\t-%d(%%rbp), %%xmm0\n", return_var->offset);
-        else if (return_var->size >= 8)
-            snprintf(buffer, 50, "\tmovq\t-%d(%%rbp), %s\n", return_var->offset, RETURN_REG_64);
         else
-            snprintf(buffer, 50, "\tmovl\t-%d(%%rbp), %s\n", return_var->offset, RETURN_REG_32);
+        {
+            /* Use actual return type size (not stack slot size which may be
+             * padded) to choose movl vs movq.  A 4-byte record allocated in
+             * an 8-byte slot would otherwise read 4 bytes of garbage. */
+            long long actual_return_size = return_var->size;
+            if (func_node != NULL && func_node->type != NULL)
+            {
+                KgpcType *ret_type = kgpc_type_get_return_type(func_node->type);
+                if (ret_type != NULL)
+                {
+                    long long type_size = kgpc_type_sizeof(ret_type);
+                    if (type_size > 0)
+                        actual_return_size = type_size;
+                }
+            }
+            if (actual_return_size >= 8)
+                snprintf(buffer, 50, "\tmovq\t-%d(%%rbp), %s\n", return_var->offset, RETURN_REG_64);
+            else
+                snprintf(buffer, 50, "\tmovl\t-%d(%%rbp), %s\n", return_var->offset, RETURN_REG_32);
+        }
         inst_list = add_inst(inst_list, buffer);
     }
-    
+
     codegen_emit_local_const_equivs(ctx, symtab);
     codegen_emit_const_decl_equivs_from_list(ctx, func->const_declarations);
     if (getenv("KGPC_DEBUG_NOSTACKFRAME") != NULL)

@@ -3797,6 +3797,16 @@ static void codegen_get_current_return_info(CodeGenContext *ctx, SymTab_t *symta
             if (out_size != NULL)
                 *out_size = 8;
         }
+        else if (return_type->kind == TYPE_KIND_RECORD)
+        {
+            /* Use actual record size for movl vs movq decision */
+            if (out_size != NULL)
+            {
+                long long type_size = kgpc_type_sizeof(return_type);
+                if (type_size > 0)
+                    *out_size = (int)type_size;
+            }
+        }
     }
 }
 

@@ -3567,36 +3567,12 @@ int semcheck_funccall(int *type_return,
             ListNode_t *method_candidates = NULL;
             char *mangled_method_name = NULL;
 
-            while (method_owner != NULL && method_owner->type_id != NULL)
-            {
-                size_t class_len = strlen(method_owner->type_id);
-                size_t method_len = strlen(id);
-                char *candidate_name = (char *)malloc(class_len + 2 + method_len + 1);
-                if (candidate_name == NULL)
-                    break;
-                snprintf(candidate_name, class_len + 2 + method_len + 1, "%s__%s",
-                         method_owner->type_id, id);
-
-                ListNode_t *candidates = FindAllIdents(symtab, candidate_name);
-                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
-                    fprintf(stderr, "[SemCheck] semcheck_funccall: Looking for '%s' found %d candidates\n",
-                        candidate_name, ListLength(candidates));
-                }
-
-                if (candidates != NULL)
-                {
-                    method_candidates = candidates;
-                    mangled_method_name = candidate_name;
-                    break;
-                }
-
-                free(candidate_name);
-                method_owner = semcheck_lookup_parent_record(symtab, method_owner);
-            }
-
-            /* If no candidates on the record, retry via any helper for this base type. */
-            if (method_candidates == NULL && record_info != NULL &&
-                !record_type_is_class(record_info) && record_info->type_id != NULL)
+            /* In FPC, the most recently declared type helper for a type
+             * shadows all earlier helpers.  Check the active helper FIRST
+             * so that a program-level helper overrides unit-level helpers
+             * whose methods were already merged into the record. */
+            if (record_info != NULL && record_info->type_id != NULL &&
+                !record_type_is_class(record_info))
             {
                 struct RecordType *helper_record = semcheck_lookup_type_helper(symtab,
                     UNKNOWN_TYPE, record_info->type_id);
@@ -3619,7 +3595,7 @@ int semcheck_funccall(int *type_return,
                                 "%s__%s", owner_for_mangle->type_id, id);
                             ListNode_t *candidates = FindAllIdents(symtab, candidate_name);
                             if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
-                                fprintf(stderr, "[SemCheck] semcheck_funccall: Looking for '%s' found %d candidates\n",
+                                fprintf(stderr, "[SemCheck] semcheck_funccall: helper '%s' found %d candidates\n",
                                     candidate_name, ListLength(candidates));
                             }
                             if (candidates != NULL)
@@ -3634,6 +3610,38 @@ int semcheck_funccall(int *type_return,
                             }
                         }
                     }
+                }
+            }
+
+            /* Fall back to methods on the record/class itself (including
+             * methods merged from earlier unit-level helpers). */
+            if (method_candidates == NULL)
+            {
+                while (method_owner != NULL && method_owner->type_id != NULL)
+                {
+                    size_t class_len = strlen(method_owner->type_id);
+                    size_t method_len = strlen(id);
+                    char *candidate_name = (char *)malloc(class_len + 2 + method_len + 1);
+                    if (candidate_name == NULL)
+                        break;
+                    snprintf(candidate_name, class_len + 2 + method_len + 1, "%s__%s",
+                             method_owner->type_id, id);
+
+                    ListNode_t *candidates = FindAllIdents(symtab, candidate_name);
+                    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                        fprintf(stderr, "[SemCheck] semcheck_funccall: Looking for '%s' found %d candidates\n",
+                            candidate_name, ListLength(candidates));
+                    }
+
+                    if (candidates != NULL)
+                    {
+                        method_candidates = candidates;
+                        mangled_method_name = candidate_name;
+                        break;
+                    }
+
+                    free(candidate_name);
+                    method_owner = semcheck_lookup_parent_record(symtab, method_owner);
                 }
             }
 
