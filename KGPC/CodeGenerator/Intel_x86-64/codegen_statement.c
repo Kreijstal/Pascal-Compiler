@@ -563,6 +563,13 @@ static StackNode_t *codegen_alloc_record_ctor_temp(long long size)
     return add_l_x(label, (int)size);
 }
 
+static StackNode_t *codegen_alloc_incdec_temp(int size)
+{
+    char label[32];
+    snprintf(label, sizeof(label), "incdec_%lu", codegen_next_temp_suffix());
+    return add_l_t_bytes(label, size);
+}
+
 static int expr_is_dynamic_array(const struct Expression *expr)
 {
     return (expr != NULL && expr->is_array_expr && expr->array_is_dynamic);
@@ -5855,6 +5862,44 @@ static ListNode_t *codegen_builtin_incdec(struct Statement *stmt, ListNode_t *in
         }
     }
 
+    int needs_addr = 0;
+    StackNode_t *inc_spill = NULL;
+    if (target_expr != NULL)
+    {
+        if (target_expr->type == EXPR_VAR_ID)
+        {
+            int scope_depth = 0;
+            StackNode_t *var_node = find_label_with_depth(target_expr->expr_data.id, &scope_depth);
+            if (var_node != NULL && var_node->is_reference)
+                needs_addr = 1;
+        }
+        else if (target_expr->type == EXPR_ARRAY_ACCESS || codegen_expr_is_addressable(target_expr))
+        {
+            needs_addr = 1;
+        }
+    }
+
+    if (needs_addr)
+    {
+        int spill_size = target_uses_qword ? 8 : 4;
+        inc_spill = codegen_alloc_incdec_temp(spill_size);
+        assert(inc_spill != NULL);
+        if (inc_spill == NULL)
+            return inst_list;
+
+        char spill_buf[96];
+        if (target_uses_qword)
+            snprintf(spill_buf, sizeof(spill_buf), "\tmovq\t%s, -%d(%%rbp)\n",
+                increment_reg->bit_64, inc_spill->offset);
+        else
+            snprintf(spill_buf, sizeof(spill_buf), "\tmovl\t%s, -%d(%%rbp)\n",
+                increment_reg->bit_32, inc_spill->offset);
+        inst_list = add_inst(inst_list, spill_buf);
+
+        free_reg(get_reg_stack(), increment_reg);
+        increment_reg = NULL;
+    }
+
     if (target_expr != NULL && target_expr->type == EXPR_VAR_ID)
     {
         int scope_depth = 0;
@@ -5877,10 +5922,23 @@ static ListNode_t *codegen_builtin_incdec(struct Statement *stmt, ListNode_t *in
                 inst_list = codegen_address_for_expr(target_expr, inst_list, ctx, &addr_reg);
                 if (!codegen_had_error(ctx) && addr_reg != NULL)
                 {
+                    const char *value_reg64 = increment_reg != NULL ? increment_reg->bit_64 : "%rax";
+                    const char *value_reg32 = increment_reg != NULL ? increment_reg->bit_32 : "%eax";
+                    if (inc_spill != NULL && increment_reg == NULL)
+                    {
+                        char reload_buf[96];
+                        if (target_uses_qword)
+                            snprintf(reload_buf, sizeof(reload_buf), "\tmovq\t-%d(%%rbp), %%rax\n",
+                                inc_spill->offset);
+                        else
+                            snprintf(reload_buf, sizeof(reload_buf), "\tmovl\t-%d(%%rbp), %%eax\n",
+                                inc_spill->offset);
+                        inst_list = add_inst(inst_list, reload_buf);
+                    }
                     if (target_uses_qword)
-                        snprintf(buffer, sizeof(buffer), "\taddq\t%s, (%s)\n", increment_reg->bit_64, addr_reg->bit_64);
+                        snprintf(buffer, sizeof(buffer), "\taddq\t%s, (%s)\n", value_reg64, addr_reg->bit_64);
                     else
-                        snprintf(buffer, sizeof(buffer), "\taddl\t%s, (%s)\n", increment_reg->bit_32, addr_reg->bit_64);
+                        snprintf(buffer, sizeof(buffer), "\taddl\t%s, (%s)\n", value_reg32, addr_reg->bit_64);
                     inst_list = add_inst(inst_list, buffer);
                     free_reg(get_reg_stack(), addr_reg);
                 }
@@ -5945,10 +6003,23 @@ static ListNode_t *codegen_builtin_incdec(struct Statement *stmt, ListNode_t *in
         if (!codegen_had_error(ctx) && addr_reg != NULL)
         {
             char buffer[128];
+            const char *value_reg64 = increment_reg != NULL ? increment_reg->bit_64 : "%rax";
+            const char *value_reg32 = increment_reg != NULL ? increment_reg->bit_32 : "%eax";
+            if (inc_spill != NULL && increment_reg == NULL)
+            {
+                char reload_buf[96];
+                if (target_uses_qword)
+                    snprintf(reload_buf, sizeof(reload_buf), "\tmovq\t-%d(%%rbp), %%rax\n",
+                        inc_spill->offset);
+                else
+                    snprintf(reload_buf, sizeof(reload_buf), "\tmovl\t-%d(%%rbp), %%eax\n",
+                        inc_spill->offset);
+                inst_list = add_inst(inst_list, reload_buf);
+            }
             if (target_uses_qword)
-                snprintf(buffer, sizeof(buffer), "\taddq\t%s, (%s)\n", increment_reg->bit_64, addr_reg->bit_64);
+                snprintf(buffer, sizeof(buffer), "\taddq\t%s, (%s)\n", value_reg64, addr_reg->bit_64);
             else
-                snprintf(buffer, sizeof(buffer), "\taddl\t%s, (%s)\n", increment_reg->bit_32, addr_reg->bit_64);
+                snprintf(buffer, sizeof(buffer), "\taddl\t%s, (%s)\n", value_reg32, addr_reg->bit_64);
             inst_list = add_inst(inst_list, buffer);
             free_reg(get_reg_stack(), addr_reg);
         }
@@ -5960,10 +6031,23 @@ static ListNode_t *codegen_builtin_incdec(struct Statement *stmt, ListNode_t *in
         if (!codegen_had_error(ctx) && addr_reg != NULL)
         {
             char buffer[128];
+            const char *value_reg64 = increment_reg != NULL ? increment_reg->bit_64 : "%rax";
+            const char *value_reg32 = increment_reg != NULL ? increment_reg->bit_32 : "%eax";
+            if (inc_spill != NULL && increment_reg == NULL)
+            {
+                char reload_buf[96];
+                if (target_uses_qword)
+                    snprintf(reload_buf, sizeof(reload_buf), "\tmovq\t-%d(%%rbp), %%rax\n",
+                        inc_spill->offset);
+                else
+                    snprintf(reload_buf, sizeof(reload_buf), "\tmovl\t-%d(%%rbp), %%eax\n",
+                        inc_spill->offset);
+                inst_list = add_inst(inst_list, reload_buf);
+            }
             if (target_uses_qword)
-                snprintf(buffer, sizeof(buffer), "\taddq\t%s, (%s)\n", increment_reg->bit_64, addr_reg->bit_64);
+                snprintf(buffer, sizeof(buffer), "\taddq\t%s, (%s)\n", value_reg64, addr_reg->bit_64);
             else
-                snprintf(buffer, sizeof(buffer), "\taddl\t%s, (%s)\n", increment_reg->bit_32, addr_reg->bit_64);
+                snprintf(buffer, sizeof(buffer), "\taddl\t%s, (%s)\n", value_reg32, addr_reg->bit_64);
             inst_list = add_inst(inst_list, buffer);
             free_reg(get_reg_stack(), addr_reg);
         }
@@ -5973,7 +6057,8 @@ static ListNode_t *codegen_builtin_incdec(struct Statement *stmt, ListNode_t *in
         codegen_report_error(ctx, "ERROR: Unsupported Inc target.");
     }
 
-    free_reg(get_reg_stack(), increment_reg);
+    if (increment_reg != NULL)
+        free_reg(get_reg_stack(), increment_reg);
     return inst_list;
 }
 
