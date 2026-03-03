@@ -668,23 +668,7 @@ static ListNode_t *load_real_operand_into_xmm(CodeGenContext *ctx,
     char buffer[192];
     int is_single_real = 0;
     if (operand_is_real && operand_expr != NULL)
-    {
-        KgpcType *real_type = expr_get_kgpc_type(operand_expr);
-        if (real_type == NULL && ctx != NULL && ctx->symtab != NULL &&
-            operand_expr->type == EXPR_VAR_ID && operand_expr->expr_data.id != NULL)
-        {
-            HashNode_t *node = NULL;
-            if (FindIdent(&node, ctx->symtab, operand_expr->expr_data.id) == 0 &&
-                node != NULL && node->type != NULL)
-                real_type = node->type;
-        }
-        if (real_type != NULL)
-        {
-            long long size = kgpc_type_sizeof(real_type);
-            if (size == 4)
-                is_single_real = 1;
-        }
-    }
+        is_single_real = expr_is_single_real_with_symtab(operand_expr, ctx != NULL ? ctx->symtab : NULL);
 
     if (operand_is_real)
     {

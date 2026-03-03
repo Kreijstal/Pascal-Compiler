@@ -13,6 +13,7 @@
 #include "../../flags.h"
 #include "../../Parser/List/List.h"
 #include "../../Parser/ParseTree/tree.h"
+#include "../../Parser/ParseTree/ident_ref.h"
 #include "../../Parser/ParseTree/tree_types.h"
 #include "../../Parser/ParseTree/KgpcType.h"
 #include "../../Parser/ParseTree/type_tags.h"
@@ -366,6 +367,19 @@ static long long codegen_record_field_effective_size(struct Expression *expr, Co
     long long field_size = 0;
     if (field != NULL && !field->is_array)
     {
+        const char *field_type_id = field->type_id;
+        if (field_type_id == NULL && field->type_ref != NULL)
+            field_type_id = type_ref_base_name(field->type_ref);
+
+        if (field->type == REAL_TYPE && field_type_id != NULL)
+        {
+            if (pascal_identifier_equals(field_type_id, "Single"))
+                return 4;
+            if (pascal_identifier_equals(field_type_id, "Double") ||
+                pascal_identifier_equals(field_type_id, "Real"))
+                return 8;
+        }
+
         struct RecordType *nested = field->nested_record;
         if (codegen_sizeof_type_reference(ctx, field->type, field->type_id, nested, &field_size) == 0 &&
             field_size > 0)

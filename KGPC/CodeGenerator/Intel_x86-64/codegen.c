@@ -5160,6 +5160,15 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     
     codegen_emit_local_const_equivs(ctx, symtab);
     codegen_emit_const_decl_equivs_from_list(ctx, func->const_declarations);
+    if (getenv("KGPC_DEBUG_NOSTACKFRAME") != NULL)
+    {
+        fprintf(stderr,
+            "[KGPC_DEBUG_NOSTACKFRAME] func=%s nostackframe=%d method=%s owner=%s\n",
+            sub_id ? sub_id : "<null>",
+            func->nostackframe,
+            func->method_name ? func->method_name : "<null>",
+            func->owner_class ? func->owner_class : "<null>");
+    }
     codegen_function_header_ex_alias_vis(sub_id, ctx, func->nostackframe, func->cname_override, func->defined_in_unit);
     if (!func->nostackframe)
         codegen_stack_space(ctx);

@@ -4,6 +4,7 @@ interface
 uses baseunix;
 
 type
+  TSize = size_t;
   TUTimBuf = record
     actime: time_t;
     modtime: time_t;

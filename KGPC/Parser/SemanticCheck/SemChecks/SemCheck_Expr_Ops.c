@@ -1560,6 +1560,9 @@ static int semcheck_try_self_field_access(int *type_return, SymTab_t *symtab,
         self_node == NULL || self_record == NULL)
         return -1;
 
+    if (semcheck_find_preferred_value_ident(symtab, id, NULL) != NULL)
+        return -1;
+
     struct RecordType *field_owner = NULL;
     struct RecordField *field = semcheck_find_class_field_including_hidden(symtab,
         self_record, id, &field_owner);
@@ -2038,6 +2041,11 @@ resolved:;
 
     if (scope_return > 0 && id != NULL && helper_self_node != NULL)
     {
+        int is_value_symbol = (hash_return != NULL &&
+            hash_return->hash_type != HASHTYPE_TYPE &&
+            hash_return->hash_type != HASHTYPE_FUNCTION &&
+            hash_return->hash_type != HASHTYPE_PROCEDURE &&
+            hash_return->hash_type != HASHTYPE_BUILTIN_PROCEDURE);
         /* Skip Self-member resolution if the identifier is the current function's
          * own name (Pascal-style function result assignment: FuncName := value).
          * Otherwise, a method like TEReader.Pos sees 'Pos' on the LHS and
@@ -2051,7 +2059,7 @@ resolved:;
             if (pascal_identifier_equals(id, func_name))
                 is_func_result_name = 1;
         }
-        if (!is_func_result_name)
+        if (!is_func_result_name && !is_value_symbol)
         {
             struct RecordType *self_record = helper_self_record;
             if (self_record == NULL)

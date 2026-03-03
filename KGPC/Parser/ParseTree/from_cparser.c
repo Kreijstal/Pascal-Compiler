@@ -1189,8 +1189,166 @@ static char *generate_anonymous_method_name(int is_function) {
     return name;
 }
 
+static int is_param_modifier(const char *name) {
+    if (name == NULL) return 0;
+    return (strcasecmp(name, "const") == 0 ||
+            strcasecmp(name, "var") == 0 ||
+            strcasecmp(name, "out") == 0 ||
+            strcasecmp(name, "constref") == 0 ||
+            strcasecmp(name, "ref") == 0);
+}
+
+static int count_param_names_in_param(ast_t *param) {
+    if (param == NULL || param->typ != PASCAL_T_PARAM)
+        return 0;
+    int count = 0;
+    for (ast_t *c = param->child; c != NULL; c = c->next) {
+        if (c->typ == PASCAL_T_TYPE_SPEC)
+            break;
+        if (c->typ != PASCAL_T_IDENTIFIER || c->sym == NULL || c->sym->name == NULL)
+            continue;
+        if (is_param_modifier(c->sym->name))
+            continue;
+        count++;
+    }
+    return count;
+}
+
+int from_cparser_count_params_ast(struct ast_t *params_ast) {
+    if (params_ast == NULL)
+        return 0;
+
+    ast_t *param = params_ast;
+    if (param->typ == PASCAL_T_PARAM_LIST)
+        param = param->child;
+
+    int count = 0;
+    for (; param != NULL; param = param->next) {
+        if (param->typ != PASCAL_T_PARAM)
+            continue;
+        count += count_param_names_in_param(param);
+    }
+    return count;
+}
+
+static ast_t *find_param_type_spec(ast_t *param) {
+    if (param == NULL)
+        return NULL;
+    for (ast_t *c = param->child; c != NULL; c = c->next) {
+        if (c->typ == PASCAL_T_TYPE_SPEC)
+            return c;
+    }
+    return NULL;
+}
+
+static char *append_sig(char *sig, const char *type_str) {
+    const char *part = (type_str != NULL) ? type_str : "<unknown>";
+    size_t part_len = strlen(part);
+    if (sig == NULL) {
+        char *out = (char *)malloc(part_len + 1);
+        if (out == NULL)
+            return NULL;
+        memcpy(out, part, part_len + 1);
+        return out;
+    }
+    size_t sig_len = strlen(sig);
+    char *out = (char *)realloc(sig, sig_len + 1 + part_len + 1);
+    if (out == NULL) {
+        free(sig);
+        return NULL;
+    }
+    out[sig_len] = ',';
+    memcpy(out + sig_len + 1, part, part_len + 1);
+    return out;
+}
+
+static char *param_type_string_from_type_node(ast_t *type_node) {
+    if (type_node == NULL)
+        return strdup("<unknown>");
+
+    char *type_id = NULL;
+    TypeInfo type_info;
+    memset(&type_info, 0, sizeof(TypeInfo));
+    convert_type_spec(type_node, &type_id, NULL, &type_info);
+    TypeRef *type_ref = type_ref_from_info_or_id(&type_info, type_id);
+    char *rendered = NULL;
+    if (type_ref != NULL)
+        rendered = type_ref_render_mangled(type_ref);
+    if (rendered == NULL && type_id != NULL)
+        rendered = strdup(type_id);
+    if (rendered == NULL)
+        rendered = strdup("<unknown>");
+    if (type_ref != NULL)
+        type_ref_free(type_ref);
+    destroy_type_info_contents(&type_info);
+    if (type_id != NULL)
+        free(type_id);
+    return rendered;
+}
+
+static char *param_type_signature_from_params_ast(ast_t *params_ast) {
+    if (params_ast == NULL)
+        return NULL;
+    ast_t *param = params_ast;
+    if (param->typ == PASCAL_T_PARAM_LIST)
+        param = param->child;
+
+    char *sig = NULL;
+    for (; param != NULL; param = param->next) {
+        if (param->typ != PASCAL_T_PARAM)
+            continue;
+        int name_count = count_param_names_in_param(param);
+        ast_t *type_node = find_param_type_spec(param);
+        char *type_str = param_type_string_from_type_node(type_node);
+        for (int i = 0; i < name_count; i++)
+            sig = append_sig(sig, type_str);
+        if (type_str != NULL)
+            free(type_str);
+    }
+    return sig;
+}
+
+static int count_params_in_method_impl(ast_t *method_node) {
+    if (method_node == NULL)
+        return -1;
+    int count = 0;
+    for (ast_t *cur = method_node->child; cur != NULL; cur = cur->next) {
+        ast_t *node = unwrap_pascal_node(cur);
+        if (node == NULL)
+            node = cur;
+        if (node->typ == PASCAL_T_PARAM_LIST || node->typ == PASCAL_T_PARAM)
+            count += from_cparser_count_params_ast(node);
+    }
+    return count;
+}
+
+static char *param_type_signature_from_method_impl(ast_t *method_node) {
+    if (method_node == NULL)
+        return NULL;
+    char *sig = NULL;
+    for (ast_t *cur = method_node->child; cur != NULL; cur = cur->next) {
+        ast_t *node = unwrap_pascal_node(cur);
+        if (node == NULL)
+            node = cur;
+        if (node->typ == PASCAL_T_PARAM_LIST || node->typ == PASCAL_T_PARAM) {
+            char *chunk = param_type_signature_from_params_ast(node);
+            if (chunk == NULL)
+                continue;
+            if (sig == NULL) {
+                sig = chunk;
+            } else {
+                char *combined = append_sig(sig, chunk);
+                free(chunk);
+                sig = combined;
+            }
+        }
+    }
+    return sig;
+}
+
 static void register_class_method_ex(const char *class_name, const char *method_name, 
-                                      int is_virtual, int is_override, int is_static) {
+                                      int is_virtual, int is_override, int is_static,
+                                      int param_count, char *param_sig) {
     if (class_name == NULL || method_name == NULL)
         return;
 
@@ -1203,6 +1361,8 @@ static void register_class_method_ex(const char *class_name, const char *method_
     binding->is_virtual = is_virtual;
     binding->is_override = is_override;
     binding->is_static = is_static;
+    binding->param_count = param_count;
+    binding->param_sig = param_sig;
 
     ListNode_t *node = NULL;
     if (binding->class_name != NULL && binding->method_name != NULL)
@@ -1210,6 +1370,8 @@ static void register_class_method_ex(const char *class_name, const char *method_
 
     if (node == NULL) {
         /* class_name and method_name are interned -- do not free */
+        if (binding->param_sig != NULL)
+            free(binding->param_sig);
         free(binding);
         return;
     }
@@ -1224,8 +1386,9 @@ static void register_class_method_ex(const char *class_name, const char *method_
 }
 
 void from_cparser_register_method_template(const char *class_name, const char *method_name,
-    int is_virtual, int is_override, int is_static) {
-    register_class_method_ex(class_name, method_name, is_virtual, is_override, is_static);
+    int is_virtual, int is_override, int is_static, int param_count) {
+    register_class_method_ex(class_name, method_name, is_virtual, is_override, is_static,
+        param_count, NULL);
 }
 
 
@@ -1269,6 +1432,48 @@ static int is_method_static(const char *class_name, const char *method_name) {
     if (has_instance)
         return 0;
     return has_static;
+}
+
+static int is_method_static_with_signature(const char *class_name, const char *method_name,
+                                           int param_count, const char *param_sig) {
+    if (class_name == NULL || method_name == NULL)
+        return 0;
+    if (param_sig == NULL && param_count < 0)
+        return is_method_static(class_name, method_name);
+
+    int has_static = 0;
+    int has_instance = 0;
+    int has_match = 0;
+    ListNode_t *cur = class_method_bindings;
+    while (cur != NULL) {
+        ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
+        if (binding != NULL && binding->class_name != NULL && binding->method_name != NULL &&
+            strcasecmp(binding->class_name, class_name) == 0 &&
+            strcasecmp(binding->method_name, method_name) == 0)
+        {
+            int matches = 0;
+            if (param_sig != NULL && binding->param_sig != NULL) {
+                if (strcmp(binding->param_sig, param_sig) == 0)
+                    matches = 1;
+            } else if (param_count >= 0 && binding->param_count == param_count) {
+                matches = 1;
+            }
+            if (matches) {
+                has_match = 1;
+                if (binding->is_static)
+                    has_static = 1;
+                else
+                    has_instance = 1;
+            }
+        }
+        cur = cur->next;
+    }
+    if (has_match) {
+        if (has_instance)
+            return 0;
+        return has_static;
+    }
+    return is_method_static(class_name, method_name);
 }
 
 /* Public wrapper for is_method_static */
@@ -6794,8 +6999,13 @@ static void collect_class_members(ast_t *node, const char *class_name,
                     fprintf(stderr, "[KGPC] captured template %s.%s\n",
                         class_name != NULL ? class_name : "<unknown>", template->name);
 
-                register_class_method_ex(class_name, template->name,
-                    template->is_virtual, template->is_override, template->is_static);
+                {
+                    int param_count = from_cparser_count_params_ast(template->params_ast);
+                    char *param_sig = param_type_signature_from_params_ast(template->params_ast);
+                    register_class_method_ex(class_name, template->name,
+                        template->is_virtual, template->is_override, template->is_static,
+                        param_count, param_sig);
+                }
 
                 if (method_builder != NULL)
                     list_builder_append(method_builder, template, LIST_METHOD_TEMPLATE);
@@ -9868,8 +10078,13 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
                     method_ast->typ == PASCAL_T_DESTRUCTOR_DECL)) {
                     struct MethodTemplate *template = create_method_template(method_ast);
                     if (template != NULL) {
-                        register_class_method_ex(id, template->name,
-                            template->is_virtual, template->is_override, template->is_static);
+                        {
+                            int param_count = from_cparser_count_params_ast(template->params_ast);
+                            char *param_sig = param_type_signature_from_params_ast(template->params_ast);
+                            register_class_method_ex(id, template->name,
+                                template->is_virtual, template->is_override, template->is_static,
+                                param_count, param_sig);
+                        }
                         if (getenv("KGPC_DEBUG_CLASS_METHODS") != NULL)
                             fprintf(stderr, "[KGPC] Registered record method %s.%s (static=%d)\n",
                                 id, template->name, template->is_static);
@@ -9890,8 +10105,13 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
                     struct MethodTemplate *template = (struct MethodTemplate *)tmpl_cur->cur;
                     if (template != NULL)
                     {
-                        register_class_method_ex(id, template->name,
-                            template->is_virtual, template->is_override, template->is_static);
+                        {
+                            int param_count = from_cparser_count_params_ast(template->params_ast);
+                            char *param_sig = param_type_signature_from_params_ast(template->params_ast);
+                            register_class_method_ex(id, template->name,
+                                template->is_virtual, template->is_override, template->is_static,
+                                param_count, param_sig);
+                        }
                         if (getenv("KGPC_DEBUG_CLASS_METHODS") != NULL)
                             fprintf(stderr, "[KGPC] Registered helper method %s.%s (static=%d)\n",
                                 id, template->name, template->is_static);
@@ -14378,16 +14598,22 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     
     /* Don't re-register the method here - it was already registered during class declaration */
     
-    /* Check if this method was declared as static in the record/class declaration */
-    int is_static_method = is_method_static(effective_class, method_name);
-    if (method_node != NULL && method_name != NULL)
+    /* Check if this method was declared as static. Prefer the implementation AST
+     * (class keyword / directives) when available to disambiguate overloads. */
+    int is_static_method = 0;
+    int method_param_count = count_params_in_method_impl(method_node);
+    char *method_param_sig = param_type_signature_from_method_impl(method_node);
+    if (method_node != NULL)
     {
-        struct MethodTemplate impl_template = {0};
-        impl_template.name = (char *)method_name;
-        annotate_method_template(&impl_template, method_node);
-        if (impl_template.is_static || impl_template.is_class_method)
+        if (ast_has_keyword(method_node, "class", 20) ||
+            ast_has_keyword(method_node, "static", 20))
+        {
             is_static_method = 1;
+        }
     }
+    if (!is_static_method)
+        is_static_method = is_method_static_with_signature(effective_class, method_name,
+            method_param_count, method_param_sig);
     if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
         fprintf(stderr, "[KGPC] convert_method_impl: class=%s method=%s is_static=%d\n",
                 effective_class ? effective_class : "<null>", 
@@ -14403,6 +14629,8 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         free(class_name);
         free(method_name);
         free(effective_class_last);
+        if (method_param_sig != NULL)
+            free(method_param_sig);
         return NULL;
     }
     
@@ -14456,6 +14684,11 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
             effective_class, helper_base ? helper_base : "(not found)");
 
     /* Add Self parameter only for instance methods, not for class operators or static methods */
+    if (getenv("KGPC_ASSERT_STATIC_SELF") != NULL && is_static_method) {
+        assert(!is_class_operator && "static method should not be class operator");
+        assert(method_param_sig != NULL || method_param_count >= 0);
+    }
+
     if (!is_class_operator && !is_static_method) {
         ListNode_t *self_ids = CreateListNode(strdup("Self"), LIST_STRING);
         char *self_type_id = NULL;
@@ -14642,6 +14875,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         }
         tree->tree_data.subprogram_data.method_name = (char *)string_intern(method_name);
         tree->tree_data.subprogram_data.owner_class = (char *)string_intern(effective_class);
+        tree->tree_data.subprogram_data.is_static_method = is_static_method;
         if (effective_class_full != NULL && effective_class_full != effective_class)
             tree->tree_data.subprogram_data.owner_class_full = (char *)string_intern(effective_class_full);
         if (tree->tree_data.subprogram_data.owner_class_full == NULL &&
@@ -14699,6 +14933,8 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         free(method_name);
         free(effective_class_last);
         free(effective_class_outer);
+        if (method_param_sig != NULL)
+            free(method_param_sig);
         g_current_method_name = prev_method_name_ctx;
         return NULL;
     }
@@ -14718,6 +14954,8 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     free(method_name);
     free(effective_class_last);
     free(effective_class_outer);
+    if (method_param_sig != NULL)
+        free(method_param_sig);
     g_current_method_name = prev_method_name_ctx;
     return tree;
 }
@@ -15351,7 +15589,10 @@ void from_cparser_cleanup(void)
     /* Free class method bindings (interned strings - do NOT free, just free structs + list nodes) */
     while (class_method_bindings != NULL) {
         ListNode_t *next = class_method_bindings->next;
-        free(class_method_bindings->cur); /* ClassMethodBinding struct */
+        ClassMethodBinding *binding = (ClassMethodBinding *)class_method_bindings->cur;
+        if (binding != NULL && binding->param_sig != NULL)
+            free(binding->param_sig);
+        free(binding); /* ClassMethodBinding struct */
         free(class_method_bindings);
         class_method_bindings = next;
     }

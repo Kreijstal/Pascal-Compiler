@@ -2275,6 +2275,9 @@ Tree_t *mk_procedure(int line_num, char *id, ListNode_t *args, ListNode_t *const
     new_tree->tree_data.subprogram_data.subprograms = subprograms;
     new_tree->tree_data.subprogram_data.statement_list = compound_statement;
     new_tree->tree_data.subprogram_data.is_used = 0; /* Mark_used will set reachable routines */
+    new_tree->tree_data.subprogram_data.nostackframe = 0;
+    new_tree->tree_data.subprogram_data.is_varargs = 0;
+    new_tree->tree_data.subprogram_data.is_static_method = 0;
 
     return new_tree;
 }
@@ -2315,6 +2318,9 @@ Tree_t *mk_function(int line_num, char *id, ListNode_t *args, ListNode_t *const_
     new_tree->tree_data.subprogram_data.subprograms = subprograms;
     new_tree->tree_data.subprogram_data.statement_list = compound_statement;
     new_tree->tree_data.subprogram_data.is_used = 0; /* Mark_used will set reachable routines */
+    new_tree->tree_data.subprogram_data.nostackframe = 0;
+    new_tree->tree_data.subprogram_data.is_varargs = 0;
+    new_tree->tree_data.subprogram_data.is_static_method = 0;
 
     return new_tree;
 }

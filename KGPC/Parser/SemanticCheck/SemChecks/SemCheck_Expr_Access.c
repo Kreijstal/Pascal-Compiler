@@ -5240,12 +5240,25 @@ skip_overload_resolution:
                     int type_compatible = 0;
                     int owns_expected_kgpc = 0;
                     KgpcType *expected_kgpc = resolve_type_from_vardecl(arg_decl, symtab, &owns_expected_kgpc);
+                    int owns_arg_kgpc = 0;
                     KgpcType *arg_kgpc = current_arg_expr != NULL ? current_arg_expr->resolved_kgpc_type : NULL;
+                    if (arg_kgpc == NULL && current_arg_expr != NULL &&
+                        current_arg_expr->type == EXPR_INUM)
+                    {
+                        arg_kgpc = create_primitive_type(arg_type);
+                        owns_arg_kgpc = 1;
+                    }
 
                     /* KgpcType is the primary compatibility mechanism.
                      * Do not reintroduce legacy type-tag fallback checks here. */
                     if (expected_kgpc != NULL && arg_kgpc != NULL &&
                         are_types_compatible_for_assignment(expected_kgpc, arg_kgpc, symtab))
+                    {
+                        type_compatible = 1;
+                    }
+                    /* Integer arguments are assignment-compatible across integer widths. */
+                    if (!type_compatible &&
+                        is_integer_type(expected_type) && is_integer_type(arg_type))
                     {
                         type_compatible = 1;
                     }
@@ -5365,6 +5378,8 @@ skip_overload_resolution:
                         }
                     }
 
+                    if (owns_arg_kgpc && arg_kgpc != NULL)
+                        destroy_kgpc_type(arg_kgpc);
                     if (owns_expected_kgpc && expected_kgpc != NULL)
                         destroy_kgpc_type(expected_kgpc);
                     

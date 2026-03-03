@@ -1330,7 +1330,31 @@ int semcheck_expr_main(SymTab_t *symtab, struct Expression *expr,
             break;
 
         case EXPR_RECORD_ACCESS:
+            if (getenv("KGPC_DEBUG_RECORD_ACCESS") != NULL)
+            {
+                struct Expression *ra = expr->expr_data.record_access_data.record_expr;
+                const char *rid = NULL;
+                if (ra != NULL && ra->type == EXPR_VAR_ID)
+                    rid = ra->expr_data.id;
+                fprintf(stderr,
+                    "[KGPC_DEBUG_RECORD_ACCESS] expr_main: before recordaccess expr=%p record_expr=%p type=%d field=%s rec_id=%s\n",
+                    (void *)expr,
+                    (void *)ra,
+                    ra != NULL ? ra->type : -1,
+                    expr->expr_data.record_access_data.field_id != NULL
+                        ? expr->expr_data.record_access_data.field_id : "(null)",
+                    rid != NULL ? rid : "(null)");
+            }
             return_val += semcheck_recordaccess(type_return, symtab, expr, max_scope_lev, mutating);
+            if (getenv("KGPC_DEBUG_RECORD_ACCESS") != NULL)
+            {
+                fprintf(stderr,
+                    "[KGPC_DEBUG_RECORD_ACCESS] expr_main: after recordaccess expr=%p type=%d return_val=%d type_return=%d\n",
+                    (void *)expr,
+                    expr->type,
+                    return_val,
+                    *type_return);
+            }
             break;
 
         case EXPR_FUNCTION_CALL:
@@ -1405,6 +1429,12 @@ int semcheck_expr_main(SymTab_t *symtab, struct Expression *expr,
             else {
                 *type_return = INT_TYPE;
                 semcheck_expr_set_resolved_type(expr, INT_TYPE);
+                if (expr->resolved_kgpc_type != NULL)
+                {
+                    destroy_kgpc_type(expr->resolved_kgpc_type);
+                    expr->resolved_kgpc_type = NULL;
+                }
+                expr->resolved_kgpc_type = create_primitive_type(INT_TYPE);
             }
             break;
 

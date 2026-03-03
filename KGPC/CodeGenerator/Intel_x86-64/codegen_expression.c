@@ -152,6 +152,41 @@ static struct RecordType *codegen_expr_record_type(const struct Expression *expr
             }
         }
     }
+    if (expr->type == EXPR_RECORD_ACCESS && symtab != NULL)
+    {
+        if (expr->resolved_kgpc_type != NULL && kgpc_type_is_record(expr->resolved_kgpc_type))
+            return kgpc_type_get_record(expr->resolved_kgpc_type);
+
+        struct Expression *base_expr = expr->expr_data.record_access_data.record_expr;
+        const char *field_id = expr->expr_data.record_access_data.field_id;
+        if (base_expr != NULL && field_id != NULL)
+        {
+            struct RecordType *base_record = codegen_expr_record_type(base_expr, symtab);
+            if (base_record != NULL)
+            {
+                struct RecordField *field = semcheck_find_class_field_including_hidden(
+                    symtab, base_record, field_id, NULL);
+                if (field != NULL)
+                {
+                    if (field->nested_record != NULL)
+                        return field->nested_record;
+                    if (field->type_id != NULL)
+                    {
+                        HashNode_t *type_node = NULL;
+                        if (FindIdent(&type_node, symtab, field->type_id) >= 0 &&
+                            type_node != NULL)
+                        {
+                            struct RecordType *rec = codegen_get_record_type_from_node(type_node);
+                            if (rec != NULL)
+                                return rec;
+                            if (type_node->type != NULL && kgpc_type_is_record(type_node->type))
+                                return kgpc_type_get_record(type_node->type);
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     KgpcType *expr_type = expr_get_kgpc_type((struct Expression *)expr);
     if (expr_type != NULL)
@@ -3553,6 +3588,10 @@ static long long codegen_record_field_effective_size(struct Expression *expr, Co
     long long field_size = 0;
     if (field != NULL && !field->is_array)
     {
+        const char *field_type_id = field->type_id;
+        if (field_type_id == NULL && field->type_ref != NULL)
+            field_type_id = type_ref_base_name(field->type_ref);
+
         if (expr->resolved_kgpc_type != NULL &&
             expr->resolved_kgpc_type->kind == TYPE_KIND_PRIMITIVE &&
             expr->resolved_kgpc_type->info.primitive_type_tag == REAL_TYPE)
@@ -3562,19 +3601,19 @@ static long long codegen_record_field_effective_size(struct Expression *expr, Co
                 return resolved_size;
         }
 
-        if (field->type == REAL_TYPE && field->type_id != NULL)
+        if (field->type == REAL_TYPE && field_type_id != NULL)
         {
-            if (pascal_identifier_equals(field->type_id, "Single"))
+            if (pascal_identifier_equals(field_type_id, "Single"))
                 return 4;
-            if (pascal_identifier_equals(field->type_id, "Double") ||
-                pascal_identifier_equals(field->type_id, "Real"))
+            if (pascal_identifier_equals(field_type_id, "Double") ||
+                pascal_identifier_equals(field_type_id, "Real"))
                 return 8;
         }
 
-        if (ctx->symtab != NULL && field->type_id != NULL)
+        if (ctx->symtab != NULL && field_type_id != NULL)
         {
             HashNode_t *type_node = NULL;
-            if (FindIdent(&type_node, ctx->symtab, field->type_id) == 0 &&
+            if (FindIdent(&type_node, ctx->symtab, field_type_id) == 0 &&
                 type_node != NULL && type_node->type != NULL)
             {
                 long long type_size = kgpc_type_sizeof(type_node->type);
@@ -4089,8 +4128,22 @@ ListNode_t *codegen_record_access(struct Expression *expr, ListNode_t *inst_list
 
     if (expr_has_type_tag(expr, RECORD_TYPE))
     {
-        codegen_report_error(ctx, "ERROR: Record-valued expressions are unsupported in this context.");
-        return inst_list;
+        struct RecordType *record_type = codegen_expr_record_type(expr,
+            ctx != NULL ? ctx->symtab : NULL);
+        if (record_type == NULL || !record_type_is_class(record_type))
+        {
+            Register_t *addr_reg = NULL;
+            inst_list = codegen_record_field_address(expr, inst_list, ctx, &addr_reg);
+            if (addr_reg == NULL)
+                return inst_list;
+
+            char buffer[64];
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
+                addr_reg->bit_64, target_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            free_reg(get_reg_stack(), addr_reg);
+            return inst_list;
+        }
     }
 
     Register_t *addr_reg = NULL;
@@ -4106,6 +4159,13 @@ ListNode_t *codegen_record_access(struct Expression *expr, ListNode_t *inst_list
     {
         long long resolved_size = kgpc_type_sizeof(expr->resolved_kgpc_type);
         if (resolved_size > 0 && resolved_size < 4)
+            field_size = resolved_size;
+    }
+    /* Ensure REAL fields honor resolved size (Single vs Double) */
+    if (expr_has_type_tag(expr, REAL_TYPE) && expr->resolved_kgpc_type != NULL)
+    {
+        long long resolved_size = kgpc_type_sizeof(expr->resolved_kgpc_type);
+        if (resolved_size == 4 || resolved_size == 8)
             field_size = resolved_size;
     }
     int type_tag = expr_get_type_tag(expr);
@@ -8263,22 +8323,26 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 }
                 if (raw_source_expr != NULL && raw_source_expr->type == EXPR_RECORD_ACCESS)
                 {
-                    snprintf(buffer, sizeof(buffer), "\tmovd\t%s, %%xmm0\n", stored_reg->bit_32);
-                    inst_list = add_inst(inst_list, buffer);
-                    inst_list = add_inst(inst_list, "\tcvtss2sd\t%xmm0, %xmm0\n");
-                    if (pass_on_stack)
+                    long long field_size = codegen_record_field_effective_size(raw_source_expr, ctx);
+                    if (field_size == 4)
                     {
-                        char stack_dest[64];
-                        snprintf(stack_dest, sizeof(stack_dest), "%d(%%rsp)", arg_infos[i].stack_offset);
-                        snprintf(buffer, sizeof(buffer), "\tmovsd\t%%xmm0, %s\n", stack_dest);
+                        snprintf(buffer, sizeof(buffer), "\tmovd\t%s, %%xmm0\n", stored_reg->bit_32);
+                        inst_list = add_inst(inst_list, buffer);
+                        inst_list = add_inst(inst_list, "\tcvtss2sd\t%xmm0, %xmm0\n");
+                        if (pass_on_stack)
+                        {
+                            char stack_dest[64];
+                            snprintf(stack_dest, sizeof(stack_dest), "%d(%%rsp)", arg_infos[i].stack_offset);
+                            snprintf(buffer, sizeof(buffer), "\tmovsd\t%%xmm0, %s\n", stack_dest);
+                        }
+                        else
+                        {
+                            snprintf(buffer, sizeof(buffer), "\tmovsd\t%%xmm0, %s\n", arg_reg_char);
+                        }
+                        inst_list = add_inst(inst_list, buffer);
+                        free_reg(get_reg_stack(), stored_reg);
+                        continue;
                     }
-                    else
-                    {
-                        snprintf(buffer, sizeof(buffer), "\tmovsd\t%%xmm0, %s\n", arg_reg_char);
-                    }
-                    inst_list = add_inst(inst_list, buffer);
-                    free_reg(get_reg_stack(), stored_reg);
-                    continue;
                 }
             }
             if (needs_int_to_long && arg_infos != NULL &&
@@ -8375,28 +8439,32 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 }
                 if (raw_source_expr != NULL && raw_source_expr->type == EXPR_RECORD_ACCESS)
                 {
-                    temp_reg = get_free_reg(get_reg_stack(), &inst_list);
-                    if (temp_reg == NULL)
-                        return inst_list;
-                    snprintf(buffer, sizeof(buffer), "\tmovl\t-%d(%%rbp), %s\n",
-                        arg_infos[i].spill->offset, temp_reg->bit_32);
-                    inst_list = add_inst(inst_list, buffer);
-                    snprintf(buffer, sizeof(buffer), "\tmovd\t%s, %%xmm0\n", temp_reg->bit_32);
-                    inst_list = add_inst(inst_list, buffer);
-                    inst_list = add_inst(inst_list, "\tcvtss2sd\t%xmm0, %xmm0\n");
-                    if (pass_on_stack)
+                    long long field_size = codegen_record_field_effective_size(raw_source_expr, ctx);
+                    if (field_size == 4)
                     {
-                        char stack_dest[64];
-                        snprintf(stack_dest, sizeof(stack_dest), "%d(%%rsp)", arg_infos[i].stack_offset);
-                        snprintf(buffer, sizeof(buffer), "\tmovsd\t%%xmm0, %s\n", stack_dest);
+                        temp_reg = get_free_reg(get_reg_stack(), &inst_list);
+                        if (temp_reg == NULL)
+                            return inst_list;
+                        snprintf(buffer, sizeof(buffer), "\tmovl\t-%d(%%rbp), %s\n",
+                            arg_infos[i].spill->offset, temp_reg->bit_32);
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\tmovd\t%s, %%xmm0\n", temp_reg->bit_32);
+                        inst_list = add_inst(inst_list, buffer);
+                        inst_list = add_inst(inst_list, "\tcvtss2sd\t%xmm0, %xmm0\n");
+                        if (pass_on_stack)
+                        {
+                            char stack_dest[64];
+                            snprintf(stack_dest, sizeof(stack_dest), "%d(%%rsp)", arg_infos[i].stack_offset);
+                            snprintf(buffer, sizeof(buffer), "\tmovsd\t%%xmm0, %s\n", stack_dest);
+                        }
+                        else
+                        {
+                            snprintf(buffer, sizeof(buffer), "\tmovsd\t%%xmm0, %s\n", arg_reg_char);
+                        }
+                        inst_list = add_inst(inst_list, buffer);
+                        free_reg(get_reg_stack(), temp_reg);
+                        continue;
                     }
-                    else
-                    {
-                        snprintf(buffer, sizeof(buffer), "\tmovsd\t%%xmm0, %s\n", arg_reg_char);
-                    }
-                    inst_list = add_inst(inst_list, buffer);
-                    free_reg(get_reg_stack(), temp_reg);
-                    continue;
                 }
             }
 

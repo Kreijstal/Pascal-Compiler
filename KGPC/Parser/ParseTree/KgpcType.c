@@ -1065,6 +1065,13 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
     {
         return 1;
     }
+    /* Allow integer-to-integer assignment (with implicit promotions). */
+    if (lhs_type->kind == TYPE_KIND_PRIMITIVE && rhs_type->kind == TYPE_KIND_PRIMITIVE &&
+        is_integer_type(lhs_type->info.primitive_type_tag) &&
+        is_integer_type(rhs_type->info.primitive_type_tag))
+    {
+        return 1;
+    }
     if (lhs_is_string && rhs_type->kind == TYPE_KIND_PRIMITIVE &&
         rhs_type->info.primitive_type_tag == PROCEDURE)
     {
@@ -1170,13 +1177,6 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
                 rhs_type->info.record_info != NULL &&
                 record_type_is_class(lhs_type->info.points_to->info.record_info) &&
                 record_type_is_class(rhs_type->info.record_info))
-                return 1;
-            /* Allow ^record := record when record types are both plain (non-class) records.
-             * This handles @operator precedence differences and var param patterns. */
-            if (lhs_type->info.points_to->info.record_info == NULL ||
-                rhs_type->info.record_info == NULL ||
-                (!record_type_is_class(lhs_type->info.points_to->info.record_info) &&
-                 !record_type_is_class(rhs_type->info.record_info)))
                 return 1;
         }
         /* Allow plain record to untyped pointer (points_to == NULL) for var param */
