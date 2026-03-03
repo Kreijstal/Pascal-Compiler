@@ -2363,6 +2363,9 @@ static void free_combinator_recursive(combinator_t* comb, visited_set* visited, 
                     if (args->distinct_type_parser) {
                         free_combinator_recursive(args->distinct_type_parser, visited, extras);
                     }
+                    if (args->distinct_type_range_parser) {
+                        free_combinator_recursive(args->distinct_type_range_parser, visited, extras);
+                    }
                     if (args->procedure_parser) {
                         free_combinator_recursive(args->procedure_parser, visited, extras);
                     }

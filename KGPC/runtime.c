@@ -1118,11 +1118,11 @@ int kgpc_get_interface(const void *self, const void *guid, void **out_intf)
     if (self == NULL || guid == NULL || out_intf == NULL)
         return 0;
 
-    /* Get typeinfo pointer from the object's first field (VMT pointer -> typeinfo at offset 0) */
+    /* Get typeinfo pointer from the object's VMT (vTypeInfo at offset 56) */
     const void *vmt = *(const void * const *)self;
     if (vmt == NULL)
         return 0;
-    const kgpc_class_typeinfo *typeinfo = *(const kgpc_class_typeinfo * const *)vmt;
+    const kgpc_class_typeinfo *typeinfo = *(const kgpc_class_typeinfo * const *)((const char *)vmt + 56);
 
     /* Walk the class hierarchy */
     while (typeinfo != NULL) {
@@ -1144,19 +1144,23 @@ const void *kgpc_class_parent(const void *self)
     if (self == NULL)
         return NULL;
 
+    /* self may be a VMT pointer or an instance pointer.
+     * TypeInfo is at VMT offset 56 (vTypeInfo slot in FPC VMT layout). */
     const kgpc_class_typeinfo *typeinfo = NULL;
 
-    const kgpc_class_typeinfo *candidate = *(const kgpc_class_typeinfo * const *)self;
+    /* Try treating self as VMT pointer: read TypeInfo at offset 56 */
+    const kgpc_class_typeinfo *candidate = *(const kgpc_class_typeinfo * const *)((const char *)self + 56);
     if (candidate != NULL && candidate->vmt == self)
     {
         typeinfo = candidate;
     }
     else
     {
+        /* Try treating self as instance pointer: instance[0] = VMT, then VMT[56] = TypeInfo */
         const void *vmt = *(const void *const *)self;
         if (vmt != NULL)
         {
-            const kgpc_class_typeinfo *candidate2 = *(const kgpc_class_typeinfo * const *)vmt;
+            const kgpc_class_typeinfo *candidate2 = *(const kgpc_class_typeinfo * const *)((const char *)vmt + 56);
             if (candidate2 != NULL && candidate2->vmt == vmt)
                 typeinfo = candidate2;
         }
@@ -1172,19 +1176,23 @@ const char *kgpc_class_name(const void *self)
     if (self == NULL)
         return "";
 
+    /* self may be a VMT pointer or an instance pointer.
+     * TypeInfo is at VMT offset 56 (vTypeInfo slot in FPC VMT layout). */
     const kgpc_class_typeinfo *typeinfo = NULL;
 
-    const kgpc_class_typeinfo *candidate = *(const kgpc_class_typeinfo * const *)self;
+    /* Try treating self as VMT pointer: read TypeInfo at offset 56 */
+    const kgpc_class_typeinfo *candidate = *(const kgpc_class_typeinfo * const *)((const char *)self + 56);
     if (candidate != NULL && candidate->vmt == self)
     {
         typeinfo = candidate;
     }
     else
     {
+        /* Try treating self as instance pointer: instance[0] = VMT, then VMT[56] = TypeInfo */
         const void *vmt = *(const void *const *)self;
         if (vmt != NULL)
         {
-            const kgpc_class_typeinfo *candidate2 = *(const kgpc_class_typeinfo * const *)vmt;
+            const kgpc_class_typeinfo *candidate2 = *(const kgpc_class_typeinfo * const *)((const char *)vmt + 56);
             if (candidate2 != NULL && candidate2->vmt == vmt)
                 typeinfo = candidate2;
         }
@@ -3416,6 +3424,148 @@ void kgpc_reallocmem(void **target, size_t new_size)
     }
 
     *target = resized;
+}
+
+/* =====================================================================
+ * FPC RTL heap-manager overrides.
+ *
+ * When compiling against the FPC RTL (--no-stdlib), the FPC system unit
+ * emits its own HeapInc allocator with weak SysGetMem/SysFreeMem/etc.
+ * symbols.  HeapInc requires InitHeap() to be called first, which KGPC
+ * does not do.  Instead we provide strong symbols that forward straight
+ * to libc, so the linker picks these over the weak HeapInc versions.
+ *
+ * FPC ABI: SysGetMem(size: PtrInt): Pointer
+ *          SysFreeMem(p: Pointer): PtrInt  (returns 0 on success)
+ *          SysReallocMem(p: Pointer; size: PtrInt): Pointer
+ *          SysFreeMemSize(p: Pointer; size: PtrInt): PtrInt
+ *          SysTryResizeMem(p: Pointer; size: PtrInt): Pointer
+ * ===================================================================== */
+
+void *SysGetMem(intptr_t size)
+{
+    if (size <= 0)
+        return NULL;
+    return malloc((size_t)size);
+}
+
+intptr_t SysFreeMem(void *p)
+{
+    free(p);
+    return 0;
+}
+
+void *SysReallocMem(void **pp, intptr_t size)
+{
+    if (pp == NULL)
+        return NULL;
+    void *original = *pp;
+    if (size <= 0)
+    {
+        free(original);
+        *pp = NULL;
+        return NULL;
+    }
+    void *result = realloc(original, (size_t)size);
+    if (result != NULL)
+        *pp = result;
+    return result;
+}
+
+intptr_t SysFreeMemSize(void *p, intptr_t size)
+{
+    (void)size;
+    free(p);
+    return 0;
+}
+
+void *SysTryResizeMem(void *p, intptr_t size)
+{
+    if (size <= 0)
+    {
+        free(p);
+        return NULL;
+    }
+    return realloc(p, (size_t)size);
+}
+
+/* Top-level FPC heap entry points (mangled names as emitted by KGPC).
+ * The FPC RTL's versions call through MemoryManager function pointers,
+ * which are all NULL (BSS) because KGPC doesn't emit typed const
+ * initializers yet.  Providing strong definitions here bypasses the
+ * MemoryManager indirection entirely. */
+
+/* function GetMem(size: PtrInt): Pointer */
+void *getmem_i64(intptr_t size)
+{
+    if (size <= 0)
+        return NULL;
+    return malloc((size_t)size);
+}
+
+/* function GetMem(out p: Pointer; size: PtrInt): Pointer */
+void *getmem_p_i64(void **p, intptr_t size)
+{
+    void *result = NULL;
+    if (size > 0)
+        result = malloc((size_t)size);
+    if (p != NULL)
+        *p = result;
+    return result;
+}
+
+/* procedure FreeMem(p: Pointer) */
+void freemem_p(void *p)
+{
+    free(p);
+}
+
+/* function FreeMem(p: Pointer; size: PtrInt): PtrInt */
+intptr_t freemem_p_i64(void *p, intptr_t size)
+{
+    (void)size;
+    free(p);
+    return 0;
+}
+
+/* function AllocMem(size: PtrInt): Pointer */
+void *sysallocmem_i64(intptr_t size)
+{
+    if (size <= 0)
+        return NULL;
+    return calloc(1, (size_t)size);
+}
+
+/* function ReallocMem(var p: Pointer; size: PtrInt): Pointer
+ * The 'var' parameter means the caller passes a pointer-to-pointer
+ * (the address of the pointer variable).  We must dereference to get
+ * the actual heap pointer, realloc it, and store the result back. */
+void *sysreallocmem_p_i64(void **pp, intptr_t size)
+{
+    if (pp == NULL)
+        return NULL;
+    void *original = *pp;
+    if (size <= 0)
+    {
+        free(original);
+        *pp = NULL;
+        return NULL;
+    }
+    void *result = realloc(original, (size_t)size);
+    if (result != NULL)
+        *pp = result;
+    return result;
+}
+
+/* function SysMemSize(p: Pointer): PtrInt
+ * Returns the usable size of the allocated block.  We cannot determine
+ * this portably from libc, so return -1 (unknown).  FPC code that
+ * relies on MemSize should not be affected since KGPC bypasses the
+ * MemoryManager indirection. */
+intptr_t sysmemsize_p(void *p)
+{
+    (void)p;
+    return -1;
 }
 
 char *kgpc_string_concat(const char *lhs, const char *rhs)
@@ -6397,18 +6547,41 @@ long long FPC_INTERLOCKEDCOMPAREEXCHANGE64(long long *target, long long new_val,
 /* interlockedexchangeadd_li_li and interlockedcompareexchange64_i64_i64_i64
    are now emitted from Pascal source.  Only the FPC_* aliases above are needed. */
 
-/* lo_li: [internproc] Lo() function — returns low 32 bits of a 64-bit value */
+/* lo_li: [internproc] Lo() function — returns low word of a LongInt */
 long lo_li(long value)
 {
     return value & 0xFFFFFFFF;
 }
 
+/* Lo/Hi for Int64/QWord — [internproc] fpc_in_lo_qword / fpc_in_hi_qword */
+uint32_t lo_i64(int64_t value)
+{
+    return (uint32_t)value;
+}
+
+uint32_t hi_i64(int64_t value)
+{
+    return (uint32_t)((uint64_t)value >> 32);
+}
+
+uint32_t lo_qw(uint64_t value)
+{
+    return (uint32_t)value;
+}
+
+uint32_t hi_qw(uint64_t value)
+{
+    return (uint32_t)(value >> 32);
+}
+
 /* _haltproc: asm-only startup procedure from si_prc.inc / si_c.inc.
    There is no Pascal body — only hand-written assembly in FPC RTL.
-   Our runtime provides a C equivalent. */
-void _haltproc(void)
+   Our runtime provides a C equivalent.
+   The FPC RTL's system_exit passes the exit code (from operatingsystem_result)
+   as the first argument, so we must accept and forward it. */
+void _haltproc(int exitcode)
 {
-    exit(0);
+    exit(exitcode);
 }
 
 /* atomiccmpexchange_i_i_i: [internproc] AtomicCmpExchange intrinsic.

@@ -117,6 +117,13 @@ static inline int codegen_target_is_windows(void)
     return g_current_codegen_abi == KGPC_TARGET_ABI_WINDOWS;
 }
 
+/* .weak is ELF-only; PE/COFF (Windows) resolves unmatched weak externs to
+ * NULL, causing crashes.  Always fall back to .globl on Windows targets. */
+static inline const char *codegen_weak_or_globl(void)
+{
+    return codegen_target_is_windows() ? ".globl" : ".weak";
+}
+
 static inline const char *codegen_readonly_section_directive(void)
 {
     return codegen_target_is_windows() ? "\t.section\t.rdata,\"dr\"" : "\t.section\t.rodata";
@@ -125,6 +132,12 @@ static inline const char *codegen_readonly_section_directive(void)
 void codegen_sanitize_identifier_for_label(const char *value, char *buffer, size_t size);
 
 #define NORMAL_JMP -1
+
+/* Unsigned relop variants for jb/jbe/ja/jae instead of jl/jle/jg/jge */
+#define LT_U  100
+#define LE_U  101
+#define GT_U  102
+#define GE_U  103
 
 #include <stdlib.h>
 #include <stdio.h>

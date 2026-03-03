@@ -131,6 +131,7 @@ static void print_usage(const char *prog_name)
     fprintf(stderr, "    -Fu<path>             Add unit search path (FPC compatible)\n");
     fprintf(stderr, "    --no-vendor-units     Disable built-in KGPC vendor units\n");
     fprintf(stderr, "    --no-stdlib           Disable KGPC stdlib; load minimal prelude instead\n");
+    fprintf(stderr, "    --pp-cache-dir=<dir>  Cache parsed unit ASTs to <dir> for faster re-compilation\n");
     fprintf(stderr, "    -D<symbol>[=<value>]  Define preprocessor symbol\n");
     fprintf(stderr, "    -Us                   Compile System unit (FPC compatible)\n");
     fprintf(stderr, "    -Sg                   Enable goto statements (FPC compatible)\n");
@@ -491,6 +492,10 @@ static void set_flags(char **optional_args, int count)
         {
             g_skip_stdlib = true;
         }
+        else if (strncmp(arg, "--pp-cache-dir=", 15) == 0)
+        {
+            pascal_frontend_set_ast_cache_dir(&arg[15]);
+        }
         else if (arg[0] == '-' && arg[1] == 'D' && arg[2] != '\0')
         {
             /* Define: -DSYMBOL or -DSYMBOL=VALUE */
@@ -827,6 +832,13 @@ static void mark_unit_type_decls(ListNode_t *type_list, int is_public, int unit_
                 decl->tree_data.type_decl_data.unit_is_public = is_public ? 1 : 0;
                 if (unit_index > 0 && decl->tree_data.type_decl_data.source_unit_index == 0)
                     decl->tree_data.type_decl_data.source_unit_index = unit_index;
+                /* Propagate unit index to the RecordType so field type lookups
+                   can prefer the defining unit's types. */
+                if (unit_index > 0 &&
+                    decl->tree_data.type_decl_data.kind == TYPE_DECL_RECORD &&
+                    decl->tree_data.type_decl_data.info.record != NULL &&
+                    decl->tree_data.type_decl_data.info.record->source_unit_index == 0)
+                    decl->tree_data.type_decl_data.info.record->source_unit_index = unit_index;
             }
         }
         node = node->next;

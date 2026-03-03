@@ -13,6 +13,9 @@ int unit_registry_add(const char *name);
 /* Look up a unit name by index. Returns NULL for index 0 or out-of-range. */
 const char *unit_registry_get(int index);
 
+/* Check if a unit name exists in the registry (case-insensitive). */
+int unit_registry_contains(const char *name);
+
 /* Reset the registry (call between compilations if needed). */
 void unit_registry_reset(void);
 

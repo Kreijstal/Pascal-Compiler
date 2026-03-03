@@ -11,6 +11,7 @@ type
   ShortInt = -128..127;          { 8-bit signed }
   Word = 0..65535;               { 16-bit unsigned }
   SmallInt = -32768..32767;      { 16-bit signed }
+  Integer = LongInt;             { 32-bit signed (FPC objfpc mode default) }
   Cardinal = 0..4294967295;      { 32-bit unsigned }
   LongWord = Cardinal;           { 32-bit unsigned }
   DWord = Cardinal;              { 32-bit unsigned }
@@ -502,11 +503,10 @@ var
   Example: UpCase('a') returns 'A'
 }
 
-{ Random - Returns a random number
-  Random: real - Returns a random real in [0, 1)
-  Random(upper: integer): integer - Returns random integer in [0, upper)
-  Random(upper: real): real - Returns random real in [0, upper)
-}
+function Random: Real; cdecl; external name 'kgpc_random_real';
+function Random(upper: LongInt): LongInt; cdecl; external name 'kgpc_random_int';
+function Random(upper: Int64): Int64; cdecl; external name 'kgpc_random_int64';
+function Random(upper: Real): Real; cdecl; external name 'kgpc_random_real_upper';
 
 { RandomRange(low, high) - Returns a random integer in [low, high)
   Overloaded for integer and longint types.

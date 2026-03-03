@@ -75,15 +75,13 @@ int PushConstOntoScope(SymTab_t *symtab, char *id, long long value)
             node->const_int_value = value;
         }
     }
-    else
-    {
-        /* Failed to add, clean up KgpcType */
-        destroy_kgpc_type(kgpc_type);
-    }
+    /* Release creator's reference - hash table retained its own on success */
+    destroy_kgpc_type(kgpc_type);
     return result;
 }
 
-/* Pushes a constant with explicit KgpcType onto the current scope (head) */
+/* Pushes a constant with explicit KgpcType onto the current scope (head).
+ * NOTE: Does NOT release caller's reference — caller must release if owned. */
 int PushConstOntoScope_Typed(SymTab_t *symtab, char *id, long long value, KgpcType *type)
 {
     assert(symtab != NULL);
@@ -92,7 +90,6 @@ int PushConstOntoScope_Typed(SymTab_t *symtab, char *id, long long value, KgpcTy
     assert(type != NULL && "KgpcType must be provided for typed constant");
 
     HashTable_t *cur_hash = (HashTable_t *)symtab->stack_head->cur;
-    kgpc_type_retain(type);
     int result = AddIdentToTable(cur_hash, id, NULL, HASHTYPE_CONST, type);
     if (result == 0)
     {
@@ -102,10 +99,6 @@ int PushConstOntoScope_Typed(SymTab_t *symtab, char *id, long long value, KgpcTy
             node->is_constant = 1;
             node->const_int_value = value;
         }
-    }
-    else
-    {
-        kgpc_type_release(type);
     }
     return result;
 }
@@ -133,11 +126,8 @@ int PushRealConstOntoScope(SymTab_t *symtab, char *id, double value)
             node->const_real_value = value;
         }
     }
-    else
-    {
-        /* Failed to add, clean up KgpcType */
-        destroy_kgpc_type(kgpc_type);
-    }
+    /* Release creator's reference - hash table retained its own on success */
+    destroy_kgpc_type(kgpc_type);
     return result;
 }
 
@@ -165,17 +155,15 @@ int PushStringConstOntoScope(SymTab_t *symtab, char *id, const char *value)
             node->const_string_value = strdup(value);
             if (node->const_string_value == NULL)
             {
-                /* Memory allocation failed, clean up */
+                /* Memory allocation failed - type is still in hash table,
+                 * release creator's reference only */
                 destroy_kgpc_type(kgpc_type);
                 return 1;
             }
         }
     }
-    else
-    {
-        /* Failed to add, clean up KgpcType */
-        destroy_kgpc_type(kgpc_type);
-    }
+    /* Release creator's reference - hash table retained its own on success */
+    destroy_kgpc_type(kgpc_type);
     return result;
 }
 
@@ -576,10 +564,7 @@ int AddBuiltinRealConst(SymTab_t *symtab, const char *id, double value)
             node->const_real_value = value;
         }
     }
-    else
-    {
-        destroy_kgpc_type(type);
-    }
+    destroy_kgpc_type(type);  /* Release creator's ref; hash table retained its own */
     return result;
 }
 
@@ -601,17 +586,9 @@ int AddBuiltinStringConst(SymTab_t *symtab, const char *id, const char *value)
         {
             node->is_constant = 1;
             node->const_string_value = strdup(value);
-            if (node->const_string_value == NULL)
-            {
-                destroy_kgpc_type(type);
-                return 1;
-            }
         }
     }
-    else
-    {
-        destroy_kgpc_type(type);
-    }
+    destroy_kgpc_type(type);  /* Release creator's ref; hash table retained its own */
     return result;
 }
 
@@ -638,10 +615,7 @@ int AddBuiltinIntConst(SymTab_t *symtab, const char *id, long long value)
             node->const_int_value = value;
         }
     }
-    else
-    {
-        destroy_kgpc_type(type);
-    }
+    destroy_kgpc_type(type);  /* Release creator's ref; hash table retained its own */
     return result;
 }
 
@@ -664,10 +638,7 @@ int AddBuiltinCharConst(SymTab_t *symtab, const char *id, unsigned char value)
             node->const_int_value = (long long)value;
         }
     }
-    else
-    {
-        destroy_kgpc_type(type);
-    }
+    destroy_kgpc_type(type);  /* Release creator's ref; hash table retained its own */
     return result;
 }
 

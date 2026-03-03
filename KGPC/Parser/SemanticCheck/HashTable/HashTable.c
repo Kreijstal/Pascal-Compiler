@@ -360,8 +360,14 @@ void DestroyHashTable(HashTable_t *table)
                 free(hash_node->const_set_label);
             if (hash_node->mangled_id != NULL)
                 free(hash_node->mangled_id);
-            /* method_name, owner_class, owner_class_full, owner_class_outer
-             * are interned strings -- do not free individually. */
+            if (hash_node->method_name != NULL)
+                free(hash_node->method_name);
+            if (hash_node->owner_class != NULL)
+                free(hash_node->owner_class);
+            if (hash_node->owner_class_full != NULL)
+                free(hash_node->owner_class_full);
+            if (hash_node->owner_class_outer != NULL)
+                free(hash_node->owner_class_outer);
             /* Builtin procedures are handled separately - do not call DestroyBuiltin here */
             /* to avoid double-free issues */
 

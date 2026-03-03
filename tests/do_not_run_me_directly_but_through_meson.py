@@ -127,6 +127,16 @@ FAILURE_ARTIFACT_DIR = Path(FAILURE_ARTIFACT_DIR_ENV) if FAILURE_ARTIFACT_DIR_EN
 # instead of KGPC's own runtime. Set KGPC_FPC_RTL=1 to enable.
 FPC_RTL_MODE = os.environ.get("KGPC_FPC_RTL", "").lower() in ("1", "true", "yes")
 FPC_RTL_DIR = os.path.join(os.environ.get("KGPC_FPC_RTL_DIR", "FPCSource"), "rtl")
+
+# AST cache directory for FPC RTL mode — avoids re-parsing system.pp + objpas.pp
+# for every test (saves ~3.5s per test).
+_FPC_RTL_AST_CACHE_DIR = None
+if FPC_RTL_MODE:
+    _FPC_RTL_AST_CACHE_DIR = os.path.join(
+        os.environ.get("MESON_BUILD_ROOT", "builddir"), "fpc_rtl_ast_cache"
+    )
+    os.makedirs(_FPC_RTL_AST_CACHE_DIR, exist_ok=True)
+
 FPC_RTL_FLAGS = [
     "--no-stdlib",
     "-I" + os.path.join(FPC_RTL_DIR, "linux"),
@@ -142,6 +152,8 @@ FPC_RTL_FLAGS = [
     "-Fu" + os.path.join(FPC_RTL_DIR, "x86_64"),
     "-Fu" + os.path.join(FPC_RTL_DIR, "unix"),
 ]
+if _FPC_RTL_AST_CACHE_DIR is not None:
+    FPC_RTL_FLAGS.append("--pp-cache-dir=" + _FPC_RTL_AST_CACHE_DIR)
 
 UNIT_ONLY_TESTS = {
     "directives_and_properties_unit",
@@ -1022,6 +1034,27 @@ class TestCompiler(unittest.TestCase):
         # Create output directories
         os.makedirs(TEST_OUTPUT_DIR, exist_ok=True)
         os.makedirs(TEST_CASES_DIR, exist_ok=True)
+
+        # Warm the AST cache for FPC RTL mode: compile a minimal dummy program
+        # so system.pp + objpas.pp are cached before individual tests run.
+        if FPC_RTL_MODE and _FPC_RTL_AST_CACHE_DIR is not None:
+            dummy_src = os.path.join(TEST_OUTPUT_DIR, "_fpc_rtl_warmup.p")
+            dummy_asm = os.path.join(TEST_OUTPUT_DIR, "_fpc_rtl_warmup.s")
+            try:
+                with open(dummy_src, "w") as f:
+                    f.write("program _warmup; begin end.\n")
+                print("--- Warming FPC RTL AST cache ---", file=sys.stderr)
+                sys.stderr.flush()
+                run_compiler(dummy_src, dummy_asm, flags=FPC_RTL_FLAGS)
+                print("--- FPC RTL AST cache warmed ---", file=sys.stderr)
+                sys.stderr.flush()
+            except Exception as e:
+                print(f"--- FPC RTL cache warm-up failed: {e} ---", file=sys.stderr)
+                sys.stderr.flush()
+            finally:
+                for tmp in (dummy_src, dummy_asm):
+                    if os.path.exists(tmp):
+                        os.unlink(tmp)
 
         cc_raw = os.environ.get("CC")
         if not cc_raw:
@@ -3144,11 +3177,19 @@ def _discover_and_add_auto_tests():
         setattr(TestCompiler, method_name, make_test_method(base_name))
 
 
+
+# Tests that use KGPC-only extensions not available in FPC RTL mode.
+KGPC_ONLY_TESTS = {
+    'random_real_function',  # Random(Real) overload is a KGPC extension
+}
+
+
 def _discover_and_add_fpc_rtl_tests():
     """
     When KGPC_FPC_RTL=1, replace auto-discovered tests with FPC RTL variants.
     Each test compiles with --no-stdlib and FPC RTL include/unit paths.
     Tests that fail to compile are skipped (not failed).
+    Tests in KGPC_ONLY_TESTS are skipped entirely.
     """
     if not FPC_RTL_MODE:
         return
@@ -3169,6 +3210,9 @@ def _discover_and_add_fpc_rtl_tests():
     expected_files.sort()
 
     for base_name in expected_files:
+        if base_name in KGPC_ONLY_TESTS:
+            continue
+
         method_name = 'test_fpcrtl_' + base_name.replace('-', '_').replace(' ', '_')
 
         if hasattr(TestCompiler, method_name):

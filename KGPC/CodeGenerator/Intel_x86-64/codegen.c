@@ -942,17 +942,20 @@ static void codegen_register_local_types(ListNode_t *type_decls, SymTab_t *symta
             continue;
 
         KgpcType *kgpc = decl->tree_data.type_decl_data.kgpc_type;
+        int created_kgpc = 0;
         if (kgpc == NULL && decl->tree_data.type_decl_data.info.record != NULL)
         {
             kgpc = create_record_type(decl->tree_data.type_decl_data.info.record);
             if (decl->tree_data.type_decl_data.info.record->is_class && kgpc != NULL)
                 kgpc = create_pointer_type(kgpc);
+            created_kgpc = 1;
         }
 
         if (kgpc != NULL)
         {
-            kgpc_type_retain(kgpc);
             PushTypeOntoScope_Typed(symtab, strdup(decl->tree_data.type_decl_data.id), kgpc);
+            if (created_kgpc)
+                destroy_kgpc_type(kgpc);
         }
     }
 
@@ -970,10 +973,12 @@ static void codegen_register_local_types(ListNode_t *type_decls, SymTab_t *symta
 
         struct TypeAlias *alias = &decl->tree_data.type_decl_data.info.alias;
         KgpcType *kgpc = decl->tree_data.type_decl_data.kgpc_type;
+        int created_kgpc = 0;
         if (kgpc == NULL)
         {
             kgpc = create_kgpc_type_from_type_alias(alias, symtab,
                 decl->tree_data.type_decl_data.defined_in_unit);
+            created_kgpc = 1;
         }
 
         if (kgpc != NULL && kgpc_type_is_pointer(kgpc) &&
@@ -996,8 +1001,9 @@ static void codegen_register_local_types(ListNode_t *type_decls, SymTab_t *symta
 
         if (kgpc != NULL)
         {
-            kgpc_type_retain(kgpc);
             PushTypeOntoScope_Typed(symtab, strdup(decl->tree_data.type_decl_data.id), kgpc);
+            if (created_kgpc)
+                destroy_kgpc_type(kgpc);
         }
     }
 }
@@ -1837,6 +1843,20 @@ ListNode_t *gencode_jmp(int type, int inverse, char *label, ListNode_t *inst_lis
                 snprintf(jmp_buf, 6, "jge");
             break;
 
+        /* Unsigned variants: use jb/jbe/ja/jae instead of jl/jle/jg/jge */
+        case LT_U:
+            snprintf(jmp_buf, 6, inverse > 0 ? "jae" : "jb");
+            break;
+        case LE_U:
+            snprintf(jmp_buf, 6, inverse > 0 ? "ja" : "jbe");
+            break;
+        case GT_U:
+            snprintf(jmp_buf, 6, inverse > 0 ? "jbe" : "ja");
+            break;
+        case GE_U:
+            snprintf(jmp_buf, 6, inverse > 0 ? "jb" : "jae");
+            break;
+
         case NORMAL_JMP:
             snprintf(jmp_buf, 6, "jmp");
             break;
@@ -1854,10 +1874,21 @@ ListNode_t *gencode_jmp(int type, int inverse, char *label, ListNode_t *inst_lis
     return add_inst(inst_list, buffer);
 }
 
+/* Forward declaration */
+void codegen_function_header_ex_alias_vis(char *func_name, CodeGenContext *ctx, int nostackframe, const char *cname_override, int emit_weak);
+
 /* Generates a function header.
  * If nostackframe is set, only emits the label without prologue (push %rbp / mov %rsp, %rbp).
  * If cname_override is set and differs from func_name, emits an additional .globl + label alias. */
 void codegen_function_header_ex_alias(char *func_name, CodeGenContext *ctx, int nostackframe, const char *cname_override)
+{
+    codegen_function_header_ex_alias_vis(func_name, ctx, nostackframe, cname_override, 0);
+}
+
+/* Emit the function header. When emit_weak is non-zero, emit .weak instead of
+ * .globl so that the runtime library can provide strong overrides (e.g. for
+ * FPC RTL heap functions that require uninitialised HeapInc). */
+void codegen_function_header_ex_alias_vis(char *func_name, CodeGenContext *ctx, int nostackframe, const char *cname_override, int emit_weak)
 {
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
@@ -1865,12 +1896,13 @@ void codegen_function_header_ex_alias(char *func_name, CodeGenContext *ctx, int 
     assert(func_name != NULL);
     assert(ctx != NULL);
     codegen_emit_function_debug_comments(func_name, ctx);
+    const char *vis = emit_weak ? codegen_weak_or_globl() : ".globl";
     /* Emit alias label from cname_override (e.g. [Public,Alias:'FPC_DO_EXIT']) */
     if (cname_override != NULL && strcmp(cname_override, func_name) != 0) {
-        fprintf(ctx->output_file, ".globl\t%s\n", cname_override);
+        fprintf(ctx->output_file, "%s\t%s\n", vis, cname_override);
         fprintf(ctx->output_file, "%s:\n", cname_override);
     }
-    fprintf(ctx->output_file, ".globl\t%s\n", func_name);
+    fprintf(ctx->output_file, "%s\t%s\n", vis, func_name);
     if (codegen_target_is_windows())
         fprintf(ctx->output_file, "\t.seh_proc\t%s\n", func_name);
     if (nostackframe) {
@@ -2538,14 +2570,96 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
         fprintf(ctx->output_file, "%s:\n\t.string \"%s\"\n", name_label, escaped_label);
     }
 
-    /* Always emit VMT for classes, even if no virtual methods */
+    /* Emit class name as a ShortString (length byte + characters) for vClassName.
+     * The compiled FPC ClassName body does PVmt(Self)^.vClassName^ which generates
+     * two dereferences: one to load the PShortString from the VMT field, and one
+     * to dereference the PShortString. Our codegen treats the second ^ as a pointer
+     * load, so vClassName must be a PPShortString (pointer to PShortString). We emit:
+     *   __kgpc_vmt_classname_ptr_X: .quad __kgpc_vmt_classname_X  (PPShortString)
+     *   __kgpc_vmt_classname_X:     .byte len, .ascii "X"         (ShortString data)
+     * The VMT's vClassName slot points to the _ptr_ label. */
+    {
+        char classname_ss_label[256];
+        char classname_ptr_label[256];
+        char escaped_classname[256];
+        snprintf(classname_ss_label, sizeof(classname_ss_label),
+            "__kgpc_vmt_classname_%s", class_label);
+        snprintf(classname_ptr_label, sizeof(classname_ptr_label),
+            "__kgpc_vmt_classname_ptr_%s", class_label);
+        escape_string(escaped_classname, class_label, sizeof(escaped_classname));
+        /* Emit PShortString pointer (the PPShortString level) */
+        fprintf(ctx->output_file, "\t.align 8\n");
+        fprintf(ctx->output_file, "%s:\n", classname_ptr_label);
+        fprintf(ctx->output_file, "\t.quad\t%s\n", classname_ss_label);
+        /* Emit ShortString data */
+        fprintf(ctx->output_file, "%s:\n", classname_ss_label);
+        fprintf(ctx->output_file, "\t.byte\t%d\n", (int)strlen(class_label));
+        fprintf(ctx->output_file, "\t.ascii\t\"%s\"\n", escaped_classname);
+    }
+
+    /* Emit parent VMT reference storage for vParentRef (PPVmt) */
+    if (record_info->parent_class_name != NULL) {
+        fprintf(ctx->output_file, "\t.align 8\n");
+        fprintf(ctx->output_file, "__kgpc_vmt_parentref_%s:\n", class_label);
+        fprintf(ctx->output_file, "\t.quad\t%s_VMT\n", record_info->parent_class_name);
+    }
+
+    /* Compute instance size for vInstanceSize */
+    long long instance_size = 0;
+    codegen_sizeof_record_type(ctx, record_info, &instance_size);
+
+    /* Always emit VMT for classes, even if no virtual methods.
+     * FPC VMT layout (TVmt record from objpash.inc):
+     *   offset 0:  vInstanceSize      (SizeInt)
+     *   offset 8:  vInstanceSize2     (SizeInt = -InstanceSize)
+     *   offset 16: vParentRef         (PPVmt)
+     *   offset 24: vClassName         (PShortString)
+     *   offset 32: vDynamicTable      (Pointer)
+     *   offset 40: vMethodTable       (Pointer)
+     *   offset 48: vFieldTable        (Pointer)
+     *   offset 56: vTypeInfo          (Pointer)
+     *   offset 64: vInitTable         (Pointer)
+     *   offset 72: vAutoTable         (Pointer)
+     *   offset 80: vIntfTable         (PInterfaceTable)
+     *   offset 88: vMsgStrPtr         (Pointer)
+     *   offset 96+: virtual methods   (vmt_index 12+)
+     */
     fprintf(ctx->output_file, "\n# VMT for class %s\n", class_label);
     fprintf(ctx->output_file, "\t.align 8\n");
     fprintf(ctx->output_file, ".globl %s_VMT\n", class_label);
     fprintf(ctx->output_file, "%s_VMT:\n", class_label);
-    /* Pointer to TypeInfo at offset 0 */
+    /* Slot 0: vInstanceSize */
+    fprintf(ctx->output_file, "\t.quad\t%lld\n", instance_size);
+    /* Slot 1: vInstanceSize2 = -InstanceSize */
+    fprintf(ctx->output_file, "\t.quad\t%lld\n", -instance_size);
+    /* Slot 2: vParentRef (PPVmt - pointer to location storing parent VMT pointer) */
+    if (record_info->parent_class_name != NULL)
+        fprintf(ctx->output_file, "\t.quad\t__kgpc_vmt_parentref_%s\n", class_label);
+    else
+        fprintf(ctx->output_file, "\t.quad\t0\n");
+    /* Slot 3: vClassName (PShortString — actually PPShortString for our codegen) */
+    fprintf(ctx->output_file, "\t.quad\t__kgpc_vmt_classname_ptr_%s\n", class_label);
+    /* Slot 4: vDynamicTable */
+    fprintf(ctx->output_file, "\t.quad\t0\n");
+    /* Slot 5: vMethodTable */
+    fprintf(ctx->output_file, "\t.quad\t0\n");
+    /* Slot 6: vFieldTable */
+    fprintf(ctx->output_file, "\t.quad\t0\n");
+    /* Slot 7: vTypeInfo - point to our RTTI */
     fprintf(ctx->output_file, "\t.quad\t%s_TYPEINFO\n", class_label);
+    /* Slot 8: vInitTable */
+    fprintf(ctx->output_file, "\t.quad\t0\n");
+    /* Slot 9: vAutoTable */
+    fprintf(ctx->output_file, "\t.quad\t0\n");
+    /* Slot 10: vIntfTable */
+    if (actual_iface_count > 0)
+        fprintf(ctx->output_file, "\t.quad\t%s_INTERFACES\n", class_label);
+    else
+        fprintf(ctx->output_file, "\t.quad\t0\n");
+    /* Slot 11: vMsgStrPtr */
+    fprintf(ctx->output_file, "\t.quad\t0\n");
 
+    /* Slots 12+: virtual methods (vmt_index * 8 gives correct offset) */
     if (record_info->methods != NULL) {
         ListNode_t *method_node = record_info->methods;
         while (method_node != NULL) {
@@ -2683,7 +2797,7 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                         if (pad > 0)
                             fprintf(ctx->output_file, "\t.zero\t%lld\n", pad);
                         if (f->name != NULL && f->is_class_var == 1) {
-                            fprintf(ctx->output_file, ".weak\t%s\n", f->name);
+                            fprintf(ctx->output_file, "%s\t%s\n", codegen_weak_or_globl(), f->name);
                             fprintf(ctx->output_file, "%s:\n", f->name);
                         }
                         fprintf(ctx->output_file, "\t.zero\t%d\n", fsz);
@@ -2739,7 +2853,7 @@ static void codegen_emit_record_classvar_storage(CodeGenContext *ctx, SymTab_t *
     fprintf(ctx->output_file, ".globl %s_CLASSVAR\n", class_label);
     /* Emit a weak alias from the bare type name to the _CLASSVAR label
        so that codegen references like "leaq HeapInc(%rip)" resolve. */
-    fprintf(ctx->output_file, ".weak\t%s\n", class_label);
+    fprintf(ctx->output_file, "%s\t%s\n", codegen_weak_or_globl(), class_label);
     fprintf(ctx->output_file, "%s:\n", class_label);
     fprintf(ctx->output_file, "%s_CLASSVAR:\n", class_label);
 
@@ -2762,7 +2876,7 @@ static void codegen_emit_record_classvar_storage(CodeGenContext *ctx, SymTab_t *
                     /* Emit a weak label with the bare field name, but only for
                        actual class vars (not regular fields that happen to be included). */
                     if (f->name != NULL && f->is_class_var == 1) {
-                        fprintf(ctx->output_file, ".weak\t%s\n", f->name);
+                        fprintf(ctx->output_file, "%s\t%s\n", codegen_weak_or_globl(), f->name);
                         fprintf(ctx->output_file, "%s:\n", f->name);
                     }
                     fprintf(ctx->output_file, "\t.zero\t%d\n", fsz);
@@ -2913,9 +3027,9 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
                 }
                 if (target_emitted) {
                     fprintf(ctx->output_file, "\n# TYPEINFO alias: %s = %s\n", alias_name, target_name);
-                    fprintf(ctx->output_file, ".weak\t%s_TYPEINFO\n", alias_name);
+                    fprintf(ctx->output_file, "%s\t%s_TYPEINFO\n", codegen_weak_or_globl(), alias_name);
                     fprintf(ctx->output_file, "\t.set\t%s_TYPEINFO, %s_TYPEINFO\n", alias_name, target_name);
-                    fprintf(ctx->output_file, ".weak\t%s_VMT\n", alias_name);
+                    fprintf(ctx->output_file, "%s\t%s_VMT\n", codegen_weak_or_globl(), alias_name);
                     fprintf(ctx->output_file, "\t.set\t%s_VMT, %s_VMT\n", alias_name, target_name);
                 }
             }
@@ -3241,7 +3355,7 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
                             codegen_set_contains(&emitted_labels, label) &&
                             !codegen_set_contains(&emitted_cname_aliases, alias)) {
                             codegen_set_insert(&emitted_cname_aliases, alias);
-                            fprintf(ctx->output_file, ".weak\t%s\n", alias);
+                            fprintf(ctx->output_file, "%s\t%s\n", codegen_weak_or_globl(), alias);
                             fprintf(ctx->output_file, "\t.set\t%s, %s\n", alias, label);
                         }
                         /* If this is a forward decl (no body), find the implementation.
@@ -3271,7 +3385,7 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
                                                 codegen_set_contains(&emitted_labels, impl_label) &&
                                                 !codegen_set_contains(&emitted_cname_aliases, alias)) {
                                                 codegen_set_insert(&emitted_cname_aliases, alias);
-                                                fprintf(ctx->output_file, ".weak\t%s\n", alias);
+                                                fprintf(ctx->output_file, "%s\t%s\n", codegen_weak_or_globl(), alias);
                                                 fprintf(ctx->output_file, "\t.set\t%s, %s\n", alias, impl_label);
                                             }
                                             /* Also emit alias from the forward decl's mangled_id to the impl.
@@ -3283,7 +3397,7 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
                                                 codegen_set_contains(&emitted_labels, impl_label) &&
                                                 !codegen_set_contains(&emitted_cname_aliases, label)) {
                                                 codegen_set_insert(&emitted_cname_aliases, label);
-                                                fprintf(ctx->output_file, ".weak\t%s\n", label);
+                                                fprintf(ctx->output_file, "%s\t%s\n", codegen_weak_or_globl(), label);
                                                 fprintf(ctx->output_file, "\t.set\t%s, %s\n", label, impl_label);
                                             }
                                             break;
@@ -3353,7 +3467,7 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
                                             impl->tree_data.subprogram_data.cname_override == NULL)
                                             goto next_fwd;
                                         codegen_set_insert(&emitted_cname_aliases, fwd_mangled);
-                                        fprintf(ctx->output_file, ".weak\t%s\n", fwd_mangled);
+                                        fprintf(ctx->output_file, "%s\t%s\n", codegen_weak_or_globl(), fwd_mangled);
                                         fprintf(ctx->output_file, "\t.set\t%s, %s\n", fwd_mangled, impl_mangled);
                                         break;
                                     }
@@ -3389,7 +3503,7 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
                     if (id != NULL && mangled != NULL && strcasecmp(id, mangled) != 0 &&
                         codegen_set_contains(&emitted_labels, mangled)) {
                         if (!codegen_set_contains_ci(&emitted_names, id)) {
-                            fprintf(ctx->output_file, ".weak\t%s\n", id);
+                            fprintf(ctx->output_file, "%s\t%s\n", codegen_weak_or_globl(), id);
                             fprintf(ctx->output_file, "\t.set\t%s, %s\n", id, mangled);
                             codegen_set_insert_ci(&emitted_names, id);
                         }
@@ -4330,8 +4444,11 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     
     /* If there are arguments and we'll need a static link, shift argument registers by 1 */
     int arg_start_index = (will_need_static_link && num_args > 0) ? 1 : 0;
-    inst_list = codegen_subprogram_arguments(proc->args_var, inst_list, ctx, symtab, arg_start_index);
-    
+    /* For nostackframe functions, skip parameter saves — there is no frame,
+     * so stores relative to %rbp would corrupt the caller's stack. */
+    if (!proc_tree->tree_data.subprogram_data.nostackframe)
+        inst_list = codegen_subprogram_arguments(proc->args_var, inst_list, ctx, symtab, arg_start_index);
+
     /* Now add static link after arguments to avoid overlap */
     if (will_need_static_link)
     {
@@ -4440,7 +4557,7 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     
     codegen_emit_local_const_equivs(ctx, symtab);
     codegen_emit_const_decl_equivs_from_list(ctx, proc->const_declarations);
-    codegen_function_header_ex_alias(sub_id, ctx, proc->nostackframe, proc->cname_override);
+    codegen_function_header_ex_alias_vis(sub_id, ctx, proc->nostackframe, proc->cname_override, proc->defined_in_unit);
     if (!proc->nostackframe)
         codegen_stack_space(ctx);
     codegen_inst_list(inst_list, ctx);
@@ -4792,9 +4909,12 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     if (will_need_static_link && num_args > 0)
         arg_start_index++;
     
-    inst_list = codegen_subprogram_arguments(func->args_var, inst_list, ctx, symtab,
-        arg_start_index);
-    
+    /* For nostackframe functions, skip parameter saves — there is no frame,
+     * so stores relative to %rbp would corrupt the caller's stack. */
+    if (!func_tree->tree_data.subprogram_data.nostackframe)
+        inst_list = codegen_subprogram_arguments(func->args_var, inst_list, ctx, symtab,
+            arg_start_index);
+
     /* Add static link after arguments to avoid stack overlap */
     if (will_need_static_link)
     {
@@ -5127,16 +5247,42 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
             snprintf(buffer, 50, "\tmovss\t-%d(%%rbp), %%xmm0\n", return_var->offset);
         else if (is_real_return)
             snprintf(buffer, 50, "\tmovsd\t-%d(%%rbp), %%xmm0\n", return_var->offset);
-        else if (return_var->size >= 8)
-            snprintf(buffer, 50, "\tmovq\t-%d(%%rbp), %s\n", return_var->offset, RETURN_REG_64);
         else
-            snprintf(buffer, 50, "\tmovl\t-%d(%%rbp), %s\n", return_var->offset, RETURN_REG_32);
+        {
+            /* Use actual return type size (not stack slot size which may be
+             * padded) to choose movl vs movq.  A 4-byte record allocated in
+             * an 8-byte slot would otherwise read 4 bytes of garbage. */
+            long long actual_return_size = return_var->size;
+            if (func_node != NULL && func_node->type != NULL)
+            {
+                KgpcType *ret_type = kgpc_type_get_return_type(func_node->type);
+                if (ret_type != NULL)
+                {
+                    long long type_size = kgpc_type_sizeof(ret_type);
+                    if (type_size > 0)
+                        actual_return_size = type_size;
+                }
+            }
+            if (actual_return_size >= 8)
+                snprintf(buffer, 50, "\tmovq\t-%d(%%rbp), %s\n", return_var->offset, RETURN_REG_64);
+            else
+                snprintf(buffer, 50, "\tmovl\t-%d(%%rbp), %s\n", return_var->offset, RETURN_REG_32);
+        }
         inst_list = add_inst(inst_list, buffer);
     }
-    
+
     codegen_emit_local_const_equivs(ctx, symtab);
     codegen_emit_const_decl_equivs_from_list(ctx, func->const_declarations);
-    codegen_function_header_ex_alias(sub_id, ctx, func->nostackframe, func->cname_override);
+    if (getenv("KGPC_DEBUG_NOSTACKFRAME") != NULL)
+    {
+        fprintf(stderr,
+            "[KGPC_DEBUG_NOSTACKFRAME] func=%s nostackframe=%d method=%s owner=%s\n",
+            sub_id ? sub_id : "<null>",
+            func->nostackframe,
+            func->method_name ? func->method_name : "<null>",
+            func->owner_class ? func->owner_class : "<null>");
+    }
+    codegen_function_header_ex_alias_vis(sub_id, ctx, func->nostackframe, func->cname_override, func->defined_in_unit);
     if (!func->nostackframe)
         codegen_stack_space(ctx);
     codegen_inst_list(inst_list, ctx);
@@ -5692,10 +5838,31 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     scan_ids = scan_ids->next;
                 }
             }
+            else if (scan_decl->type == TREE_ARR_DECL)
+            {
+                ListNode_t *scan_ids = scan_decl->tree_data.arr_decl_data.ids;
+                while(scan_ids != NULL)
+                {
+                    const char *param_reg = alloc_integer_arg_reg(1, &scan_gpr_index);
+                    if (param_reg != NULL)
+                    {
+                        char temp_name[64];
+                        snprintf(temp_name, sizeof(temp_name), "__presaved_%s__", (char *)scan_ids->cur);
+                        StackNode_t *presaved_slot = add_q_z(temp_name);
+                        if (presaved_slot != NULL)
+                        {
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                                param_reg, presaved_slot->offset);
+                            inst_list = add_inst(inst_list, buffer);
+                        }
+                    }
+                    scan_ids = scan_ids->next;
+                }
+            }
             args_scan = args_scan->next;
         }
     }
-    
+
     /* Reset for main processing pass */
     next_gpr_index = arg_start_index;
 
@@ -6096,7 +6263,32 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     if (arg_stack != NULL)
                         arg_stack->is_reference = 1;
                     Register_t *stack_value_reg = NULL;
-                    const char *value_source = arg_reg;
+                    const char *value_source = NULL;
+
+                    /* Check if we have a presaved slot from pre-pass */
+                    StackNode_t *presaved_slot = NULL;
+                    if (has_record_or_dynarray)
+                    {
+                        char presaved_name[64];
+                        snprintf(presaved_name, sizeof(presaved_name), "__presaved_%s__", (char *)arg_ids->cur);
+                        presaved_slot = find_label(presaved_name);
+                    }
+
+                    if (presaved_slot != NULL && arg_reg != NULL)
+                    {
+                        /* Load from presaved slot since register may be clobbered */
+                        stack_value_reg = get_free_reg(get_reg_stack(), &inst_list);
+                        if (stack_value_reg != NULL)
+                        {
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                                presaved_slot->offset, stack_value_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                            value_source = stack_value_reg->bit_64;
+                        }
+                    }
+
+                    if (value_source == NULL)
+                        value_source = arg_reg;
                     if (value_source == NULL)
                     {
                         stack_value_reg = get_free_reg(get_reg_stack(), &inst_list);
@@ -6300,7 +6492,7 @@ static ListNode_t *codegen_store_class_typeinfo(ListNode_t *inst_list,
         return inst_list;
 
     char typeinfo_label[512];
-    snprintf(typeinfo_label, sizeof(typeinfo_label), "%s_TYPEINFO", type_name);
+    snprintf(typeinfo_label, sizeof(typeinfo_label), "%s_VMT", type_name);
 
     /* Class variables are pointers to instances. We need to:
      * 1. Allocate memory for the instance (size determined from type)

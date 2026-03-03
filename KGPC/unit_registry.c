@@ -37,6 +37,18 @@ const char *unit_registry_get(int index)
     return registry[index];
 }
 
+int unit_registry_contains(const char *name)
+{
+    if (name == NULL || name[0] == '\0')
+        return 0;
+    for (int i = 1; i <= count; i++)
+    {
+        if (pascal_identifier_equals(registry[i], name))
+            return 1;
+    }
+    return 0;
+}
+
 void unit_registry_reset(void)
 {
     for (int i = 1; i <= count; i++)

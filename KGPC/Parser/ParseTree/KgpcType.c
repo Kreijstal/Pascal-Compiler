@@ -364,6 +364,8 @@ KgpcType* create_kgpc_type_from_type_alias(struct TypeAlias *alias, struct SymTa
 
         /* Create pointer type even if pointee is NULL (forward reference) */
         result = create_pointer_type(pointee_type);
+        /* create_pointer_type retains pointee_type; release our reference */
+        kgpc_type_release(pointee_type);
         if (result != NULL) {
             kgpc_type_set_type_alias(result, alias);
         }
@@ -911,18 +913,32 @@ static struct RecordType* get_record_type_from_hashnode(HashNode_t *node) {
     return NULL;
 }
 
+static int records_same_type(struct RecordType *a, struct RecordType *b) {
+    if (a == b)
+        return 1;
+    if (a != NULL && b != NULL &&
+        a->type_id != NULL && b->type_id != NULL &&
+        strcasecmp(a->type_id, b->type_id) == 0)
+        return 1;
+    return 0;
+}
+
 static int is_record_subclass(struct RecordType *subclass, struct RecordType *superclass, struct SymTab *symtab) {
-    if (subclass == superclass)
-        return 1;  /* Same type */
+    if (records_same_type(subclass, superclass))
+        return 1;
 
     /* Follow inheritance chain */
     struct RecordType *current = subclass;
     while (current != NULL && current->parent_class_name != NULL) {
+        /* Check by name if parent_class_name matches superclass type_id */
+        if (superclass != NULL && superclass->type_id != NULL &&
+            strcasecmp(current->parent_class_name, superclass->type_id) == 0)
+            return 1;
         /* Look up parent class in symbol table */
         HashNode_t *parent_node = NULL;
         if (FindIdent(&parent_node, symtab, current->parent_class_name) != -1 && parent_node != NULL) {
             struct RecordType *parent_record = get_record_type_from_hashnode(parent_node);
-            if (parent_record == superclass)
+            if (records_same_type(parent_record, superclass))
                 return 1;
             current = parent_record;
         } else {
@@ -1049,6 +1065,13 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
     {
         return 1;
     }
+    /* Allow integer-to-integer assignment (with implicit promotions). */
+    if (lhs_type->kind == TYPE_KIND_PRIMITIVE && rhs_type->kind == TYPE_KIND_PRIMITIVE &&
+        is_integer_type(lhs_type->info.primitive_type_tag) &&
+        is_integer_type(rhs_type->info.primitive_type_tag))
+    {
+        return 1;
+    }
     if (lhs_is_string && rhs_type->kind == TYPE_KIND_PRIMITIVE &&
         rhs_type->info.primitive_type_tag == PROCEDURE)
     {
@@ -1154,13 +1177,6 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
                 rhs_type->info.record_info != NULL &&
                 record_type_is_class(lhs_type->info.points_to->info.record_info) &&
                 record_type_is_class(rhs_type->info.record_info))
-                return 1;
-            /* Allow ^record := record when record types are both plain (non-class) records.
-             * This handles @operator precedence differences and var param patterns. */
-            if (lhs_type->info.points_to->info.record_info == NULL ||
-                rhs_type->info.record_info == NULL ||
-                (!record_type_is_class(lhs_type->info.points_to->info.record_info) &&
-                 !record_type_is_class(rhs_type->info.record_info)))
                 return 1;
         }
         /* Allow plain record to untyped pointer (points_to == NULL) for var param */
