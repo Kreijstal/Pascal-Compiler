@@ -75,3 +75,41 @@ jobs:
         name: core-dumps-linux
         path: /tmp/cores/
         if-no-files-found: ignore
+
+  fpc-rtl-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Check out repository
+      uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y flex bison libfl-dev libunwind-dev libgmp-dev
+        pip install meson ninja
+
+    - name: Clone FPC RTL source
+      run: git clone --depth 1 https://github.com/fpc/FPCSource.git FPCSource
+
+    - name: Configure FPC RTL build
+      run: meson setup build-fpc --buildtype=debugoptimized -Dwith_gmp=enabled -Drun_fpc_rtl_tests=true
+
+    - name: Build
+      run: meson compile -C build-fpc
+
+    - name: Run FPC RTL tests
+      run: meson test -v -C build-fpc "FPC RTL tests"
+
+    - name: Upload meson logs (on failure)
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: meson-logs-fpc-rtl
+        path: build-fpc/meson-logs/
+        if-no-files-found: ignore

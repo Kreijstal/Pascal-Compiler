@@ -2620,8 +2620,7 @@ int semcheck_funccall(int *type_return,
     if (id != NULL && pascal_identifier_equals(id, "Power"))
         return semcheck_builtin_power(type_return, symtab, expr, max_scope_lev);
 
-    if (id != NULL && pascal_identifier_equals(id, "Random"))
-        return semcheck_builtin_random(type_return, symtab, expr, max_scope_lev);
+    /* Random is resolved through normal function lookup (system.p or FPC RTL) */
     
     if (id != NULL && pascal_identifier_equals(id, "RandomRange"))
         return semcheck_builtin_randomrange(type_return, symtab, expr, max_scope_lev);

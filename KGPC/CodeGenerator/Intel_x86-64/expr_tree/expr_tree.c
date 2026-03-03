@@ -3969,12 +3969,20 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
 
                     if (operand_is_32bit_register(left, left_reg) && left64 != NULL)
                     {
-                        snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", left, left64);
+                        int left_tag = expr_get_type_tag(expr->expr_data.mulop_data.left_term);
+                        if (codegen_type_is_signed(left_tag))
+                            snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", left, left64);
+                        else
+                            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", left, left);
                         inst_list = add_inst(inst_list, buffer);
                     }
                     if (operand_is_32bit_register(right, right_reg) && right64 != NULL)
                     {
-                        snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", right, right64);
+                        int right_tag = expr_get_type_tag(expr->expr_data.mulop_data.right_factor);
+                        if (codegen_type_is_signed(right_tag))
+                            snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", right, right64);
+                        else
+                            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", right, right);
                         inst_list = add_inst(inst_list, buffer);
                     }
 
@@ -4013,7 +4021,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                     snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rax\n", op_left);
                     inst_list = add_inst(inst_list, buffer);
                     if (is_unsigned)
-                        inst_list = add_inst(inst_list, "\txorq\t%%rdx, %%rdx\n");
+                        inst_list = add_inst(inst_list, "\txorq\t%rdx, %rdx\n");
                     else
                         inst_list = add_inst(inst_list, "\tcqo\n");
 
@@ -4033,7 +4041,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                     snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%eax\n", mod_left);
                     inst_list = add_inst(inst_list, buffer);
                     if (is_unsigned)
-                        inst_list = add_inst(inst_list, "\txorl\t%%edx, %%edx\n");
+                        inst_list = add_inst(inst_list, "\txorl\t%edx, %edx\n");
                     else
                         inst_list = add_inst(inst_list, "\tcdq\n");
 
@@ -4069,7 +4077,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                     snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rax\n", op_left);
                     inst_list = add_inst(inst_list, buffer);
                     if (is_unsigned)
-                        inst_list = add_inst(inst_list, "\txorq\t%%rdx, %%rdx\n");
+                        inst_list = add_inst(inst_list, "\txorq\t%rdx, %rdx\n");
                     else
                         inst_list = add_inst(inst_list, "\tcqo\n");
 
@@ -4092,7 +4100,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                     snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%eax\n", div_left);
                     inst_list = add_inst(inst_list, buffer);
                     if (is_unsigned)
-                        inst_list = add_inst(inst_list, "\txorl\t%%edx, %%edx\n");
+                        inst_list = add_inst(inst_list, "\txorl\t%edx, %edx\n");
                     else
                         inst_list = add_inst(inst_list, "\tcdq\n");
 

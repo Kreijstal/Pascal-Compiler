@@ -3177,11 +3177,19 @@ def _discover_and_add_auto_tests():
         setattr(TestCompiler, method_name, make_test_method(base_name))
 
 
+
+# Tests that use KGPC-only extensions not available in FPC RTL mode.
+KGPC_ONLY_TESTS = {
+    'random_real_function',  # Random(Real) overload is a KGPC extension
+}
+
+
 def _discover_and_add_fpc_rtl_tests():
     """
     When KGPC_FPC_RTL=1, replace auto-discovered tests with FPC RTL variants.
     Each test compiles with --no-stdlib and FPC RTL include/unit paths.
     Tests that fail to compile are skipped (not failed).
+    Tests in KGPC_ONLY_TESTS are skipped entirely.
     """
     if not FPC_RTL_MODE:
         return
@@ -3202,6 +3210,9 @@ def _discover_and_add_fpc_rtl_tests():
     expected_files.sort()
 
     for base_name in expected_files:
+        if base_name in KGPC_ONLY_TESTS:
+            continue
+
         method_name = 'test_fpcrtl_' + base_name.replace('-', '_').replace(' ', '_')
 
         if hasattr(TestCompiler, method_name):

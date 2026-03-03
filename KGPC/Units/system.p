@@ -503,11 +503,10 @@ var
   Example: UpCase('a') returns 'A'
 }
 
-{ Random - Returns a random number
-  Random: real - Returns a random real in [0, 1)
-  Random(upper: integer): integer - Returns random integer in [0, upper)
-  Random(upper: real): real - Returns random real in [0, upper)
-}
+function Random: Real; cdecl; external name 'kgpc_random_real';
+function Random(upper: LongInt): LongInt; cdecl; external name 'kgpc_random_int';
+function Random(upper: Int64): Int64; cdecl; external name 'kgpc_random_int64';
+function Random(upper: Real): Real; cdecl; external name 'kgpc_random_real_upper';
 
 { RandomRange(low, high) - Returns a random integer in [low, high)
   Overloaded for integer and longint types.

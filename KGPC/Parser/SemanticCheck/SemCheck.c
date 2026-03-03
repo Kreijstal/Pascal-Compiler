@@ -10776,7 +10776,6 @@ void semcheck_add_builtins(SymTab_t *symtab)
             {"Sqr",          LONGINT_TYPE},
             {"Ln",           REAL_TYPE},
             {"Exp",          REAL_TYPE},
-            {"Random",       REAL_TYPE},
             {"RandomRange",  LONGINT_TYPE},
             {"High",         LONGINT_TYPE},
         };

@@ -6547,10 +6547,31 @@ long long FPC_INTERLOCKEDCOMPAREEXCHANGE64(long long *target, long long new_val,
 /* interlockedexchangeadd_li_li and interlockedcompareexchange64_i64_i64_i64
    are now emitted from Pascal source.  Only the FPC_* aliases above are needed. */
 
-/* lo_li: [internproc] Lo() function — returns low 32 bits of a 64-bit value */
+/* lo_li: [internproc] Lo() function — returns low word of a LongInt */
 long lo_li(long value)
 {
     return value & 0xFFFFFFFF;
+}
+
+/* Lo/Hi for Int64/QWord — [internproc] fpc_in_lo_qword / fpc_in_hi_qword */
+uint32_t lo_i64(int64_t value)
+{
+    return (uint32_t)value;
+}
+
+uint32_t hi_i64(int64_t value)
+{
+    return (uint32_t)((uint64_t)value >> 32);
+}
+
+uint32_t lo_qw(uint64_t value)
+{
+    return (uint32_t)value;
+}
+
+uint32_t hi_qw(uint64_t value)
+{
+    return (uint32_t)(value >> 32);
 }
 
 /* _haltproc: asm-only startup procedure from si_prc.inc / si_c.inc.

@@ -849,6 +849,8 @@ int semcheck_addop(int *type_return,
         {
             if (type_first == INT64_TYPE || type_second == INT64_TYPE)
                 *type_return = INT64_TYPE;
+            else if (type_first == QWORD_TYPE || type_second == QWORD_TYPE)
+                *type_return = QWORD_TYPE;
             else if (type_first == LONGINT_TYPE || type_second == LONGINT_TYPE)
                 *type_return = LONGINT_TYPE;
             else
@@ -1203,16 +1205,18 @@ int semcheck_mulop(int *type_return,
         if (is_integer_type(type_first) && is_integer_type(type_second))
         {
             /* Both operands are integers - bitwise operation */
-            /* INT64_TYPE takes precedence as the largest integer type */
+            /* INT64_TYPE/QWORD_TYPE take precedence as the largest integer types */
             if (type_first == INT64_TYPE || type_second == INT64_TYPE)
                 *type_return = INT64_TYPE;
+            else if (type_first == QWORD_TYPE || type_second == QWORD_TYPE)
+                *type_return = QWORD_TYPE;
             else if (type_first == LONGINT_TYPE || type_second == LONGINT_TYPE)
                 *type_return = LONGINT_TYPE;
             else
                 *type_return = INT_TYPE;
             return return_val;
         }
-        
+
         /* Invalid operand types for AND/XOR */
         semcheck_error_with_context("Error on line %d, expected boolean, integer, or set operands for %s expression!\n\n",
             expr->line_num, op_type == AND ? "AND" : "XOR");
@@ -1376,9 +1380,11 @@ int semcheck_mulop(int *type_return,
             ++return_val;
         }
         /* DIV and MOD produce integer results */
-        /* INT64_TYPE takes precedence as the largest integer type */
+        /* INT64_TYPE/QWORD_TYPE take precedence as the largest integer types */
         if (type_first == INT64_TYPE || type_second == INT64_TYPE)
             *type_return = INT64_TYPE;
+        else if (type_first == QWORD_TYPE || type_second == QWORD_TYPE)
+            *type_return = QWORD_TYPE;
         else if (type_first == LONGINT_TYPE || type_second == LONGINT_TYPE)
             *type_return = LONGINT_TYPE;
         else
