@@ -7599,7 +7599,12 @@ if (record_info->parent_class_name != NULL) {
                     new_method->mangled_name = mangled ? strdup(mangled) : NULL;
                     new_method->is_virtual = 1;
                     new_method->is_override = 0;
-                    new_method->vmt_index = vmt_size + 1;
+                    /* FPC VMT has 12 metadata slots (96 bytes) before virtual methods:
+                     * vInstanceSize, vInstanceSize2, vParentRef, vClassName,
+                     * vDynamicTable, vMethodTable, vFieldTable, vTypeInfo,
+                     * vInitTable, vAutoTable, vIntfTable, vMsgStrPtr.
+                     * Virtual methods start at offset 96 (slot 12). */
+                    new_method->vmt_index = vmt_size + 12;
                     
                     ListNode_t *node = (ListNode_t *)malloc(sizeof(ListNode_t));
                     if (node != NULL) {
@@ -9876,6 +9881,17 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                         /* Preserve the enum type for the constant */
                         const_type = value_expr->resolved_kgpc_type;
                         kgpc_type_retain(const_type);
+                    }
+                    else
+                    {
+                        /* Preserve unsigned integer types (e.g. QWORD_TYPE from High(QWord))
+                         * so that the codegen can use unsigned comparisons. */
+                        int tag = semcheck_tag_from_kgpc(value_expr->resolved_kgpc_type);
+                        if (is_unsigned_integer_type(tag))
+                        {
+                            const_type = value_expr->resolved_kgpc_type;
+                            kgpc_type_retain(const_type);
+                        }
                     }
                 }
                 else if (tree->tree_data.const_decl_data.type_id != NULL)

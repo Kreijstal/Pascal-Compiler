@@ -3119,6 +3119,11 @@ struct Expression *mk_functioncall(int line_num, char *id, ListNode_t *args)
     new_expr->expr_data.function_call_data.is_method_call_placeholder = 0;
     new_expr->expr_data.function_call_data.placeholder_method_name = NULL;
     new_expr->expr_data.function_call_data.call_qualifier = NULL;
+    new_expr->expr_data.function_call_data.is_virtual_call = 0;
+    new_expr->expr_data.function_call_data.vmt_index = -1;
+    new_expr->expr_data.function_call_data.self_class_name = NULL;
+    new_expr->expr_data.function_call_data.is_class_method_call = 0;
+    new_expr->expr_data.function_call_data.arg0_is_dynarray_descriptor = 0;
 
     return new_expr;
 }

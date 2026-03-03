@@ -1311,7 +1311,7 @@ static combinator_t* create_helper_body_parser(void) {
     );
 
     combinator_t* helper_procedure_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
-        optional(token(keyword_ci("class"))),
+        optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),
         token(keyword_ci("procedure")),
         token(cident(PASCAL_T_IDENTIFIER)),
         create_pascal_param_parser(),
@@ -1321,7 +1321,7 @@ static combinator_t* create_helper_body_parser(void) {
     );
 
     combinator_t* helper_function_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
-        optional(token(keyword_ci("class"))),
+        optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),
         token(keyword_ci("function")),
         token(cident(PASCAL_T_IDENTIFIER)),
         create_pascal_param_parser(),
@@ -1333,7 +1333,7 @@ static combinator_t* create_helper_body_parser(void) {
     );
 
     combinator_t* helper_constructor_decl = seq(new_combinator(), PASCAL_T_CONSTRUCTOR_DECL,
-        optional(token(keyword_ci("class"))),
+        optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),
         token(keyword_ci("constructor")),
         token(cident(PASCAL_T_IDENTIFIER)),
         create_pascal_param_parser(),
@@ -1343,7 +1343,7 @@ static combinator_t* create_helper_body_parser(void) {
     );
 
     combinator_t* helper_destructor_decl = seq(new_combinator(), PASCAL_T_DESTRUCTOR_DECL,
-        optional(token(keyword_ci("class"))),
+        optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),
         token(keyword_ci("destructor")),
         token(cident(PASCAL_T_IDENTIFIER)),
         create_pascal_param_parser(),
@@ -1366,7 +1366,7 @@ static combinator_t* create_helper_body_parser(void) {
         NULL
     ));
     combinator_t* helper_property_decl = seq(new_combinator(), PASCAL_T_PROPERTY_DECL,
-        optional(token(keyword_ci("class"))),
+        optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),
         token(keyword_ci("property")),
         token(cident(PASCAL_T_IDENTIFIER)), // property name
         helper_property_indexer,
@@ -2232,7 +2232,7 @@ void init_pascal_unit_parser(combinator_t** p) {
     // These match procedure/function headers with special directives and NO body
     // Supports both keyword directives (forward;) and bracket directives ([internproc:value];)
     combinator_t* headeronly_procedure_decl = seq(new_combinator(), PASCAL_T_PROCEDURE_DECL,
-        optional(token(keyword_ci("class"))),
+        optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),
         token(keyword_ci("procedure")),
         token(cident(PASCAL_T_IDENTIFIER)),
         optional(generic_type_params),              // generic procedure Foo<T>(...)
@@ -2246,7 +2246,7 @@ void init_pascal_unit_parser(combinator_t** p) {
     set_combinator_name(headeronly_procedure_decl, "headeronly_procedure_decl");
 
     combinator_t* headeronly_function_decl = seq(new_combinator(), PASCAL_T_FUNCTION_DECL,
-        optional(token(keyword_ci("class"))),
+        optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),
         token(keyword_ci("function")),
         token(cident(PASCAL_T_IDENTIFIER)),
         optional(generic_type_params),              // generic function Foo<T>(...): T
@@ -2433,7 +2433,7 @@ void init_pascal_unit_parser(combinator_t** p) {
 
     // Simple procedure implementation for unit (with required body)
     combinator_t* procedure_impl = seq(new_combinator(), PASCAL_T_PROCEDURE_DECL,
-        optional(token(keyword_ci("class"))),
+        optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),
         token(keyword_ci("procedure")), token(cident(PASCAL_T_IDENTIFIER)),
         optional(generic_type_params),              // generic procedure Foo<T>(...)
         optional(param_list), token(match(";")),
@@ -2520,7 +2520,7 @@ void init_pascal_unit_parser(combinator_t** p) {
 
     // Constructor implementation (with required body)
     combinator_t* constructor_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
-        optional(token(keyword_ci("class"))),        // optional class modifier
+        optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),        // optional class modifier
         token(keyword_ci("constructor")),            // constructor keyword
         method_name_with_class,                      // ClassName.MethodName
         optional(param_list),                        // optional parameter list
@@ -2534,7 +2534,7 @@ void init_pascal_unit_parser(combinator_t** p) {
 
     // Destructor implementation (with required body)
     combinator_t* destructor_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
-        optional(token(keyword_ci("class"))),        // optional class modifier
+        optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),        // optional class modifier
         token(keyword_ci("destructor")),             // destructor keyword
         method_name_with_class,                      // ClassName.MethodName
         optional(param_list),                        // optional parameter list
@@ -2577,7 +2577,7 @@ void init_pascal_unit_parser(combinator_t** p) {
     // Method procedure implementation (with required body)
     combinator_t* method_procedure_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
         optional(multi(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("class")),
+            token(create_keyword_parser("class", PASCAL_T_IDENTIFIER)),
             token(keyword_ci("generic")),
             NULL)),                                  // optional class/generic modifier
         token(keyword_ci("procedure")),              // procedure keyword
@@ -2595,7 +2595,7 @@ void init_pascal_unit_parser(combinator_t** p) {
     // Method function implementation (with required body)
     combinator_t* method_function_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
         optional(multi(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("class")),
+            token(create_keyword_parser("class", PASCAL_T_IDENTIFIER)),
             token(keyword_ci("generic")),
             NULL)),                                  // optional class/generic modifier
         token(keyword_ci("function")),               // function keyword
@@ -2613,7 +2613,7 @@ void init_pascal_unit_parser(combinator_t** p) {
 
     // Simple function implementation for unit (with required body)
     combinator_t* function_impl = seq(new_combinator(), PASCAL_T_FUNCTION_DECL,
-        optional(token(keyword_ci("class"))),
+        optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),
         token(keyword_ci("function")), token(cident(PASCAL_T_IDENTIFIER)),
         optional(generic_type_params),              // generic function Foo<T>(...): T
         optional(param_list),
@@ -2636,7 +2636,7 @@ void init_pascal_unit_parser(combinator_t** p) {
 
     // Class operator implementation (with required body)
     combinator_t* class_operator_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
-        optional(token(keyword_ci("class"))),
+        optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),
         token(keyword_ci("operator")),
         operator_name_with_class,
         optional(param_list),
@@ -2651,7 +2651,7 @@ void init_pascal_unit_parser(combinator_t** p) {
 
     // Standalone operator implementation (no class prefix): operator := (b: real48) d: double; ...
     combinator_t* standalone_operator_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
-        optional(token(keyword_ci("class"))),
+        optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),
         token(keyword_ci("operator")),
         token(operator_name(PASCAL_T_IDENTIFIER)),
         operator_param_list,
@@ -3057,7 +3057,7 @@ void init_pascal_method_implementation_parser(combinator_t** p) {
 
     // Constructor implementation (with required body)
     combinator_t* constructor_impl = seq(new_combinator(), PASCAL_T_CONSTRUCTOR_DECL,
-        optional(token(keyword_ci("class"))),    // optional class modifier
+        optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),    // optional class modifier
         token(keyword_ci("constructor")),        // constructor keyword
         method_name_with_class,                  // ClassName.MethodName
         create_simple_param_list(),              // optional parameter list
@@ -3071,7 +3071,7 @@ void init_pascal_method_implementation_parser(combinator_t** p) {
 
     // Destructor implementation (with required body)
     combinator_t* destructor_impl = seq(new_combinator(), PASCAL_T_DESTRUCTOR_DECL,
-        optional(token(keyword_ci("class"))),    // optional class modifier
+        optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),    // optional class modifier
         token(keyword_ci("destructor")),         // destructor keyword
         method_name_with_class,                  // ClassName.MethodName
         create_simple_param_list(),              // optional parameter list
@@ -3820,7 +3820,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
 
     // Header-only declaration parsers - these match procedure/function with forward/external/assembler directive and NO body
     combinator_t* headeronly_procedure = seq(new_combinator(), PASCAL_T_PROCEDURE_DECL,
-        optional(token(keyword_ci("class"))),        // optional class keyword
+        optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),        // optional class keyword
         token(keyword_ci("procedure")),               // procedure keyword
         token(cident(PASCAL_T_IDENTIFIER)),          // procedure name
         optional(create_simple_param_list()),         // optional parameter list
@@ -3831,7 +3831,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     );
 
     combinator_t* headeronly_function = seq(new_combinator(), PASCAL_T_FUNCTION_DECL,
-        optional(token(keyword_ci("class"))),        // optional class keyword
+        optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),        // optional class keyword
         token(keyword_ci("function")),               // function keyword
         token(cident(PASCAL_T_IDENTIFIER)),          // function name
         optional(create_simple_param_list()),         // optional parameter list
@@ -3977,7 +3977,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     combinator_t* method_procedure_param_list = create_simple_param_list();
     combinator_t* procedure_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
         optional(multi(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("class")),
+            token(create_keyword_parser("class", PASCAL_T_IDENTIFIER)),
             token(keyword_ci("generic")),
             NULL)),                                  // optional class/generic keyword
         token(keyword_ci("procedure")),              // procedure keyword (with word boundary check)
@@ -3993,7 +3993,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     combinator_t* method_function_param_list = create_simple_param_list();
     combinator_t* method_function_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
         optional(multi(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("class")),
+            token(create_keyword_parser("class", PASCAL_T_IDENTIFIER)),
             token(keyword_ci("generic")),
             NULL)),                                  // optional class/generic keyword
         token(keyword_ci("function")),               // function keyword (with word boundary check)
@@ -4020,7 +4020,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     // Standalone operator implementation (no class prefix): operator + (const a, b: TMyInt): TMyInt;
     // Used for FPC-style operator overloading at unit level
     combinator_t* standalone_operator_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
-        optional(token(keyword_ci("class"))),        // optional class keyword
+        optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),        // optional class keyword
         token(keyword_ci("operator")),               // operator keyword
         operator_name(PASCAL_T_IDENTIFIER),          // operator symbol or name (no class prefix)
         operator_param_list,                         // parameter list
@@ -4033,7 +4033,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     );
     
     combinator_t* operator_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
-        optional(token(keyword_ci("class"))),        // optional class keyword
+        optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),  // optional class keyword
         token(keyword_ci("operator")),               // operator keyword
         operator_name_with_class,                    // ClassName.OperatorName
         operator_param_list,                         // parameter list

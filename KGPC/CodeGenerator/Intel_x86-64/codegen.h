@@ -133,6 +133,12 @@ void codegen_sanitize_identifier_for_label(const char *value, char *buffer, size
 
 #define NORMAL_JMP -1
 
+/* Unsigned relop variants for jb/jbe/ja/jae instead of jl/jle/jg/jge */
+#define LT_U  100
+#define LE_U  101
+#define GT_U  102
+#define GE_U  103
+
 #include <stdlib.h>
 #include <stdio.h>
 #include "stackmng/stackmng.h"

@@ -4988,6 +4988,25 @@ skip_type_receiver_rewrite:
                     stmt->stmt_data.procedure_call_data.self_class_name =
                         strdup(self_record->type_id);
                 }
+                /* Mark class method calls so codegen passes VMT as Self.
+                 * Walk the parent class chain since the method may be inherited. */
+                if (self_record->type_id != NULL && bare_method_name != NULL)
+                {
+                    const char *check_class = self_record->type_id;
+                    struct RecordType *check_record = self_record;
+                    while (check_class != NULL)
+                    {
+                        if (from_cparser_is_method_nonstatic_class_method(check_class, bare_method_name))
+                        {
+                            stmt->stmt_data.procedure_call_data.is_class_method_call = 1;
+                            break;
+                        }
+                        const char *parent = (check_record != NULL) ? check_record->parent_class_name : NULL;
+                        if (parent == NULL) break;
+                        check_record = semcheck_lookup_record_type(symtab, parent);
+                        check_class = parent;
+                    }
+                }
                 free(bare_method_name);
             }
             else if (self_record != NULL && self_record->type_id != NULL)

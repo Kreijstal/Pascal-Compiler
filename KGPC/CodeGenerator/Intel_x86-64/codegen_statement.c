@@ -3101,11 +3101,11 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                             const char *class_type_id = class_record->type_id;
                             if (class_type_id != NULL)
                             {
-                                /* Load VMT (TYPEINFO) address */
+                                /* Load VMT address */
                                 Register_t *vmt_reg = get_free_reg(get_reg_stack(), &inst_list);
                                 if (vmt_reg != NULL)
                                 {
-                                    snprintf(buffer, sizeof(buffer), "\tleaq\t%s_TYPEINFO(%%rip), %s\n",
+                                    snprintf(buffer, sizeof(buffer), "\tleaq\t%s_VMT(%%rip), %s\n",
                                         class_type_id, vmt_reg->bit_64);
                                     inst_list = add_inst(inst_list, buffer);
                                     
@@ -3187,6 +3187,15 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                     snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
                         dest_save_slot->offset, ret_ptr_reg);
                     inst_list = add_inst(inst_list, buffer);
+
+                    /* For class method calls, dereference Self to get VMT pointer.
+                     * Self is at arg reg 1 (after SRET buffer at arg reg 0). */
+                    if (src_expr->expr_data.function_call_data.is_class_method_call)
+                    {
+                        const char *self_reg = current_arg_reg64(1);
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", self_reg, self_reg);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
 
                     snprintf(buffer, sizeof(buffer), "\tcall\t%s\n",
                         src_expr->expr_data.function_call_data.mangled_id);
@@ -7383,7 +7392,26 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             if (array_size < 0)
                 array_size = 0;
 
-            inst_list = codegen_call_shortstring_to_char_array(inst_list, ctx, addr_reg, value_reg, array_size);
+            if (array_is_shortstring)
+            {
+                /* Dest is ShortString — use shortstring-to-shortstring copy
+                 * which preserves the length byte.
+                 * kgpc_shortstring_to_shortstring(dest, dest_size, src) */
+                char buffer[128];
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%rsi\n", array_size);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                inst_list = add_inst(inst_list, "\tmovl\t$0, %eax\n");
+                inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_shortstring_to_shortstring");
+                free_arg_regs();
+            }
+            else
+            {
+                inst_list = codegen_call_shortstring_to_char_array(inst_list, ctx, addr_reg, value_reg, array_size);
+            }
             free_reg(get_reg_stack(), value_reg);
             free_reg(get_reg_stack(), addr_reg);
             return inst_list;
@@ -8425,6 +8453,8 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         if (stmt->stmt_data.procedure_call_data.self_class_name != NULL)
             call_expr->expr_data.function_call_data.self_class_name =
                 strdup(stmt->stmt_data.procedure_call_data.self_class_name);
+        call_expr->expr_data.function_call_data.is_class_method_call =
+            stmt->stmt_data.procedure_call_data.is_class_method_call;
 
         Register_t *discard_reg = NULL;
         inst_list = codegen_evaluate_expr(call_expr, inst_list, ctx, &discard_reg);

@@ -1843,6 +1843,20 @@ ListNode_t *gencode_jmp(int type, int inverse, char *label, ListNode_t *inst_lis
                 snprintf(jmp_buf, 6, "jge");
             break;
 
+        /* Unsigned variants: use jb/jbe/ja/jae instead of jl/jle/jg/jge */
+        case LT_U:
+            snprintf(jmp_buf, 6, inverse > 0 ? "jae" : "jb");
+            break;
+        case LE_U:
+            snprintf(jmp_buf, 6, inverse > 0 ? "ja" : "jbe");
+            break;
+        case GT_U:
+            snprintf(jmp_buf, 6, inverse > 0 ? "jbe" : "ja");
+            break;
+        case GE_U:
+            snprintf(jmp_buf, 6, inverse > 0 ? "jb" : "jae");
+            break;
+
         case NORMAL_JMP:
             snprintf(jmp_buf, 6, "jmp");
             break;
@@ -2556,14 +2570,96 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
         fprintf(ctx->output_file, "%s:\n\t.string \"%s\"\n", name_label, escaped_label);
     }
 
-    /* Always emit VMT for classes, even if no virtual methods */
+    /* Emit class name as a ShortString (length byte + characters) for vClassName.
+     * The compiled FPC ClassName body does PVmt(Self)^.vClassName^ which generates
+     * two dereferences: one to load the PShortString from the VMT field, and one
+     * to dereference the PShortString. Our codegen treats the second ^ as a pointer
+     * load, so vClassName must be a PPShortString (pointer to PShortString). We emit:
+     *   __kgpc_vmt_classname_ptr_X: .quad __kgpc_vmt_classname_X  (PPShortString)
+     *   __kgpc_vmt_classname_X:     .byte len, .ascii "X"         (ShortString data)
+     * The VMT's vClassName slot points to the _ptr_ label. */
+    {
+        char classname_ss_label[256];
+        char classname_ptr_label[256];
+        char escaped_classname[256];
+        snprintf(classname_ss_label, sizeof(classname_ss_label),
+            "__kgpc_vmt_classname_%s", class_label);
+        snprintf(classname_ptr_label, sizeof(classname_ptr_label),
+            "__kgpc_vmt_classname_ptr_%s", class_label);
+        escape_string(escaped_classname, class_label, sizeof(escaped_classname));
+        /* Emit PShortString pointer (the PPShortString level) */
+        fprintf(ctx->output_file, "\t.align 8\n");
+        fprintf(ctx->output_file, "%s:\n", classname_ptr_label);
+        fprintf(ctx->output_file, "\t.quad\t%s\n", classname_ss_label);
+        /* Emit ShortString data */
+        fprintf(ctx->output_file, "%s:\n", classname_ss_label);
+        fprintf(ctx->output_file, "\t.byte\t%d\n", (int)strlen(class_label));
+        fprintf(ctx->output_file, "\t.ascii\t\"%s\"\n", escaped_classname);
+    }
+
+    /* Emit parent VMT reference storage for vParentRef (PPVmt) */
+    if (record_info->parent_class_name != NULL) {
+        fprintf(ctx->output_file, "\t.align 8\n");
+        fprintf(ctx->output_file, "__kgpc_vmt_parentref_%s:\n", class_label);
+        fprintf(ctx->output_file, "\t.quad\t%s_VMT\n", record_info->parent_class_name);
+    }
+
+    /* Compute instance size for vInstanceSize */
+    long long instance_size = 0;
+    codegen_sizeof_record_type(ctx, record_info, &instance_size);
+
+    /* Always emit VMT for classes, even if no virtual methods.
+     * FPC VMT layout (TVmt record from objpash.inc):
+     *   offset 0:  vInstanceSize      (SizeInt)
+     *   offset 8:  vInstanceSize2     (SizeInt = -InstanceSize)
+     *   offset 16: vParentRef         (PPVmt)
+     *   offset 24: vClassName         (PShortString)
+     *   offset 32: vDynamicTable      (Pointer)
+     *   offset 40: vMethodTable       (Pointer)
+     *   offset 48: vFieldTable        (Pointer)
+     *   offset 56: vTypeInfo          (Pointer)
+     *   offset 64: vInitTable         (Pointer)
+     *   offset 72: vAutoTable         (Pointer)
+     *   offset 80: vIntfTable         (PInterfaceTable)
+     *   offset 88: vMsgStrPtr         (Pointer)
+     *   offset 96+: virtual methods   (vmt_index 12+)
+     */
     fprintf(ctx->output_file, "\n# VMT for class %s\n", class_label);
     fprintf(ctx->output_file, "\t.align 8\n");
     fprintf(ctx->output_file, ".globl %s_VMT\n", class_label);
     fprintf(ctx->output_file, "%s_VMT:\n", class_label);
-    /* Pointer to TypeInfo at offset 0 */
+    /* Slot 0: vInstanceSize */
+    fprintf(ctx->output_file, "\t.quad\t%lld\n", instance_size);
+    /* Slot 1: vInstanceSize2 = -InstanceSize */
+    fprintf(ctx->output_file, "\t.quad\t%lld\n", -instance_size);
+    /* Slot 2: vParentRef (PPVmt - pointer to location storing parent VMT pointer) */
+    if (record_info->parent_class_name != NULL)
+        fprintf(ctx->output_file, "\t.quad\t__kgpc_vmt_parentref_%s\n", class_label);
+    else
+        fprintf(ctx->output_file, "\t.quad\t0\n");
+    /* Slot 3: vClassName (PShortString — actually PPShortString for our codegen) */
+    fprintf(ctx->output_file, "\t.quad\t__kgpc_vmt_classname_ptr_%s\n", class_label);
+    /* Slot 4: vDynamicTable */
+    fprintf(ctx->output_file, "\t.quad\t0\n");
+    /* Slot 5: vMethodTable */
+    fprintf(ctx->output_file, "\t.quad\t0\n");
+    /* Slot 6: vFieldTable */
+    fprintf(ctx->output_file, "\t.quad\t0\n");
+    /* Slot 7: vTypeInfo - point to our RTTI */
     fprintf(ctx->output_file, "\t.quad\t%s_TYPEINFO\n", class_label);
+    /* Slot 8: vInitTable */
+    fprintf(ctx->output_file, "\t.quad\t0\n");
+    /* Slot 9: vAutoTable */
+    fprintf(ctx->output_file, "\t.quad\t0\n");
+    /* Slot 10: vIntfTable */
+    if (actual_iface_count > 0)
+        fprintf(ctx->output_file, "\t.quad\t%s_INTERFACES\n", class_label);
+    else
+        fprintf(ctx->output_file, "\t.quad\t0\n");
+    /* Slot 11: vMsgStrPtr */
+    fprintf(ctx->output_file, "\t.quad\t0\n");
 
+    /* Slots 12+: virtual methods (vmt_index * 8 gives correct offset) */
     if (record_info->methods != NULL) {
         ListNode_t *method_node = record_info->methods;
         while (method_node != NULL) {
@@ -6379,7 +6475,7 @@ static ListNode_t *codegen_store_class_typeinfo(ListNode_t *inst_list,
         return inst_list;
 
     char typeinfo_label[512];
-    snprintf(typeinfo_label, sizeof(typeinfo_label), "%s_TYPEINFO", type_name);
+    snprintf(typeinfo_label, sizeof(typeinfo_label), "%s_VMT", type_name);
 
     /* Class variables are pointers to instances. We need to:
      * 1. Allocate memory for the instance (size determined from type)

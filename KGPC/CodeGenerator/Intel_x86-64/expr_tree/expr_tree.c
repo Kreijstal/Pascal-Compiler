@@ -1891,8 +1891,31 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             else if (pascal_identifier_equals(func_mangled_name, "Create"))
                 is_constructor = 1;
             
-            CODEGEN_DEBUG("DEBUG Constructor Check: func_mangled_name=%s, is_constructor=%d\n", 
+            CODEGEN_DEBUG("DEBUG Constructor Check: func_mangled_name=%s, is_constructor=%d\n",
                 func_mangled_name, is_constructor);
+        }
+
+        /* Record static factories (e.g., TGUID.Create) can also be named Create
+         * but they are not class constructors and must not use constructor
+         * calling paths.  Without this guard the SRET buffer for large record
+         * returns is never set up, leaving %%rdi uninitialised. */
+        if (is_constructor && expr_has_type_tag(expr, RECORD_TYPE))
+            is_constructor = 0;
+        if (is_constructor && func_type != NULL && kgpc_type_is_procedure(func_type))
+        {
+            KgpcType *ret_type = kgpc_type_get_return_type(func_type);
+            /* If the return type is explicitly known and is NOT a class pointer,
+             * then this is a record static factory, not a real constructor.
+             * When ret_type is NULL (e.g., actual constructors), keep is_constructor
+             * since constructors don't declare an explicit return type. */
+            if (ret_type != NULL &&
+                (!kgpc_type_is_pointer(ret_type) ||
+                 ret_type->info.points_to == NULL ||
+                 !kgpc_type_is_record(ret_type->info.points_to) ||
+                 !record_type_is_class(ret_type->info.points_to->info.record_info)))
+            {
+                is_constructor = 0;
+            }
         }
 
         /* Avoid infinite recursion when a constructor ends up calling itself (e.g., inherited calls with
@@ -2309,23 +2332,32 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                  expr->expr_data.function_call_data.vmt_index >= 0)
         {
             /* Virtual method call - dispatch through VMT.
-             * The instance pointer (Self) lives in the first argument register:
-             *   - SysV:  %rdi
-             *   - Win64: %rcx
+             * Self is in the first argument register AFTER the SRET pointer (if any):
+             *   - No SRET: Self at arg reg 0 (%rdi / %rcx)
+             *   - With SRET: Self at arg reg 1 (%rsi / %rdx)
              * The instance has the VMT pointer at offset 0.
-             * We need to:
-             *   1. Get the VMT pointer from the instance
-             *   2. Index into the VMT to get the method pointer
-             *   3. Call through the method pointer */
+             * For class methods, Self already IS the VMT pointer (dereferenced earlier). */
             int vmt_index = expr->expr_data.function_call_data.vmt_index;
-            const char *self_reg = codegen_target_is_windows() ? "%rcx" : "%rdi";
-            /* Copy instance pointer to r11 */
+            int self_arg_index = has_record_return ? 1 : 0;
+            const char *self_reg = current_arg_reg64(self_arg_index);
+            /* For class method calls, Self is already the VMT pointer.
+             * Dereference instance to get VMT, then replace Self with VMT. */
+            if (expr->expr_data.function_call_data.is_class_method_call)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", self_reg, self_reg);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            /* Copy Self (or VMT for class methods) to r11 */
             snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r11\n", self_reg);
             inst_list = add_inst(inst_list, buffer);
-            /* Get VMT pointer (at offset 0 of instance) */
-            snprintf(buffer, sizeof(buffer), "\tmovq\t(%%r11), %%r11\n");
-            inst_list = add_inst(inst_list, buffer);
-            /* VMT layout: [typeinfo at 0, method1 at 8, method2 at 16, ...] */
+            /* Get VMT pointer (at offset 0 of instance).
+             * For class methods, Self IS the VMT, so this reads typeinfo (not VMT). */
+            if (!expr->expr_data.function_call_data.is_class_method_call)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t(%%r11), %%r11\n");
+                inst_list = add_inst(inst_list, buffer);
+            }
+            /* VMT layout: [12 metadata slots (0-88), method1 at 96, method2 at 104, ...] */
             int vmt_offset = vmt_index * 8;
             snprintf(buffer, sizeof(buffer), "\tmovq\t%d(%%r11), %%r11\n", vmt_offset);
             inst_list = add_inst(inst_list, buffer);
@@ -2454,6 +2486,15 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             
             if (call_target != NULL)
             {
+                /* For class method calls on instances (non-virtual path),
+                 * dereference Self to get VMT pointer before the call. */
+                if (expr->expr_data.function_call_data.is_class_method_call)
+                {
+                    int self_arg_index = has_record_return ? 1 : 0;
+                    const char *self_reg = current_arg_reg64(self_arg_index);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", self_reg, self_reg);
+                    inst_list = add_inst(inst_list, buffer);
+                }
                 snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", call_target);
                 inst_list = add_inst(inst_list, buffer);
             }

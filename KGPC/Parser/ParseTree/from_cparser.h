@@ -22,7 +22,8 @@ typedef struct {
     char *method_name;
     int is_virtual;
     int is_override;
-    int is_static;   /* 1 if method is static (no Self parameter) */
+    int is_static;         /* 1 if method is static (no Self parameter) */
+    int is_class_method;   /* 1 if declared with 'class' keyword (Self = VMT pointer) */
     int param_count; /* Number of explicit parameters (excludes implicit Self), -1 if unknown */
     char *param_sig; /* Mangled signature of parameter types, or NULL if unknown */
 } ClassMethodBinding;
@@ -48,6 +49,8 @@ void get_class_methods(const char *class_name, ListNode_t **methods_out, int *co
  * Returns 1 if static, 0 otherwise.
  */
 int from_cparser_is_method_static(const char *class_name, const char *method_name);
+int from_cparser_is_method_class_method(const char *class_name, const char *method_name);
+int from_cparser_is_method_nonstatic_class_method(const char *class_name, const char *method_name);
 int from_cparser_is_type_helper(const char *helper_id);
 
 /* Check if a method is virtual (needs VMT dispatch).

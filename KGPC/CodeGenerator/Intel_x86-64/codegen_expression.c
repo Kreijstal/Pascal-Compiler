@@ -681,8 +681,8 @@ static ListNode_t *codegen_load_class_typeinfo(struct Expression *expr,
         /* Now typeinfo_reg contains the pointer to the instance, dereference to get VMT */
         snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", typeinfo_reg->bit_64, typeinfo_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
-        /* Now typeinfo_reg contains the VMT pointer, dereference to get TypeInfo (offset 0) */
-        snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", typeinfo_reg->bit_64, typeinfo_reg->bit_64);
+        /* Now typeinfo_reg contains the VMT pointer, load TypeInfo at offset 56 (vTypeInfo slot) */
+        snprintf(buffer, sizeof(buffer), "\tmovq\t56(%s), %s\n", typeinfo_reg->bit_64, typeinfo_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
     }
     else
@@ -1292,8 +1292,12 @@ ListNode_t *codegen_emit_class_cast_check_from_address(struct Expression *expr,
     if (typeinfo_reg == NULL)
         return inst_list;
 
-    char buffer[64];
+    char buffer[128];
+    /* Load VMT pointer from instance[0] */
     snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", instance_ptr_reg->bit_64, typeinfo_reg->bit_64);
+    inst_list = add_inst(inst_list, buffer);
+    /* Load TypeInfo from VMT at offset 56 (vTypeInfo slot) */
+    snprintf(buffer, sizeof(buffer), "\tmovq\t56(%s), %s\n", typeinfo_reg->bit_64, typeinfo_reg->bit_64);
     inst_list = add_inst(inst_list, buffer);
 
     /* Preserve the instance pointer across the runtime call (caller-saved registers may be clobbered).
@@ -5817,6 +5821,14 @@ static int invert_relop_type(int relop_kind)
             return LE;
         case GE:
             return LT;
+        case LT_U:
+            return GE_U;
+        case LE_U:
+            return GT_U;
+        case GT_U:
+            return LE_U;
+        case GE_U:
+            return LT_U;
         default:
             return relop_kind;
     }
@@ -6594,6 +6606,33 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
     inst_list = add_inst(inst_list, buffer);
     free_reg(get_reg_stack(), right_reg);
     free_reg(get_reg_stack(), left_reg);
+
+    /* For unsigned integer types, convert relop to unsigned variant so
+     * gencode_jmp emits jb/jbe/ja/jae instead of jl/jle/jg/jge. */
+    if (relop_type != NULL)
+    {
+        int left_tag = (left_expr != NULL) ? expr_get_type_tag(left_expr) : UNKNOWN_TYPE;
+        int right_tag = (right_expr != NULL) ? expr_get_type_tag(right_expr) : UNKNOWN_TYPE;
+        int either_unsigned = (!codegen_type_is_signed(left_tag) && left_tag != UNKNOWN_TYPE &&
+                               left_tag != BOOL && left_tag != CHAR_TYPE && left_tag != ENUM_TYPE &&
+                               left_tag != REAL_TYPE && left_tag != STRING_TYPE &&
+                               left_tag != SHORTSTRING_TYPE && left_tag != POINTER_TYPE) ||
+                              (!codegen_type_is_signed(right_tag) && right_tag != UNKNOWN_TYPE &&
+                               right_tag != BOOL && right_tag != CHAR_TYPE && right_tag != ENUM_TYPE &&
+                               right_tag != REAL_TYPE && right_tag != STRING_TYPE &&
+                               right_tag != SHORTSTRING_TYPE && right_tag != POINTER_TYPE);
+        if (either_unsigned)
+        {
+            switch (*relop_type)
+            {
+                case LT: *relop_type = LT_U; break;
+                case LE: *relop_type = LE_U; break;
+                case GT: *relop_type = GT_U; break;
+                case GE: *relop_type = GE_U; break;
+                default: break; /* EQ/NE don't care about signedness */
+            }
+        }
+    }
 
     CODEGEN_DEBUG("DEBUG: Simple relop generated\n");
     #ifdef DEBUG_CODEGEN
@@ -7621,6 +7660,17 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                          * codegen_address_for_expr already loaded the value, don't dereference again */
 
                         if (should_dereference)
+                        {
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
+                                addr_reg->bit_64, addr_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                        }
+
+                        /* For class method calls on instances, Self must be the VMT pointer,
+                         * not the instance pointer. After the dereference above, addr_reg holds
+                         * the instance pointer. Dereference again to get VMT from offset 0. */
+                        if (should_dereference && arg_num == 0 && call_expr != NULL &&
+                            call_expr->expr_data.function_call_data.is_class_method_call)
                         {
                             snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
                                 addr_reg->bit_64, addr_reg->bit_64);

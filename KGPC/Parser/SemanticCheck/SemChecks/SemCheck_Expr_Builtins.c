@@ -2336,7 +2336,7 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
                         low = 0;
                         high = (long long)0xFFFFFFFFFFFFFFFFULL;
                         have_bounds = 1;
-                        result_type = INT64_TYPE;
+                        result_type = QWORD_TYPE;
                     }
                 }
             }
@@ -2354,7 +2354,7 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
                 low = 0;
                 high = (long long)0xFFFFFFFFFFFFFFFFULL;
                 have_bounds = 1;
-                result_type = INT64_TYPE;
+                result_type = QWORD_TYPE;
             }
             else if (base_name != NULL &&
                      (pascal_identifier_equals(base_name, "NativeUInt") ||

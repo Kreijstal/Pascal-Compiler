@@ -880,6 +880,13 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
         return semcheck_make_quality(MATCH_EXACT);
     }
 
+    /* When the actual is untyped (e.g. forwarding an untyped const parameter),
+     * allow it to match any typed formal as a conversion.  Both untyped→untyped
+     * and untyped→typed get MATCH_CONVERSION, but the tiebreaker prefers
+     * overloads with fewer untyped params. */
+    if (actual_tag == UNKNOWN_TYPE && actual_kgpc == NULL && !is_var_param)
+        return semcheck_make_quality(MATCH_CONVERSION);
+
     if (is_var_param)
     {
         if (actual_kgpc != NULL && formal_kgpc != NULL)

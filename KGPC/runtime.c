@@ -1118,11 +1118,11 @@ int kgpc_get_interface(const void *self, const void *guid, void **out_intf)
     if (self == NULL || guid == NULL || out_intf == NULL)
         return 0;
 
-    /* Get typeinfo pointer from the object's first field (VMT pointer -> typeinfo at offset 0) */
+    /* Get typeinfo pointer from the object's VMT (vTypeInfo at offset 56) */
     const void *vmt = *(const void * const *)self;
     if (vmt == NULL)
         return 0;
-    const kgpc_class_typeinfo *typeinfo = *(const kgpc_class_typeinfo * const *)vmt;
+    const kgpc_class_typeinfo *typeinfo = *(const kgpc_class_typeinfo * const *)((const char *)vmt + 56);
 
     /* Walk the class hierarchy */
     while (typeinfo != NULL) {
@@ -1144,19 +1144,23 @@ const void *kgpc_class_parent(const void *self)
     if (self == NULL)
         return NULL;
 
+    /* self may be a VMT pointer or an instance pointer.
+     * TypeInfo is at VMT offset 56 (vTypeInfo slot in FPC VMT layout). */
     const kgpc_class_typeinfo *typeinfo = NULL;
 
-    const kgpc_class_typeinfo *candidate = *(const kgpc_class_typeinfo * const *)self;
+    /* Try treating self as VMT pointer: read TypeInfo at offset 56 */
+    const kgpc_class_typeinfo *candidate = *(const kgpc_class_typeinfo * const *)((const char *)self + 56);
     if (candidate != NULL && candidate->vmt == self)
     {
         typeinfo = candidate;
     }
     else
     {
+        /* Try treating self as instance pointer: instance[0] = VMT, then VMT[56] = TypeInfo */
         const void *vmt = *(const void *const *)self;
         if (vmt != NULL)
         {
-            const kgpc_class_typeinfo *candidate2 = *(const kgpc_class_typeinfo * const *)vmt;
+            const kgpc_class_typeinfo *candidate2 = *(const kgpc_class_typeinfo * const *)((const char *)vmt + 56);
             if (candidate2 != NULL && candidate2->vmt == vmt)
                 typeinfo = candidate2;
         }
@@ -1172,19 +1176,23 @@ const char *kgpc_class_name(const void *self)
     if (self == NULL)
         return "";
 
+    /* self may be a VMT pointer or an instance pointer.
+     * TypeInfo is at VMT offset 56 (vTypeInfo slot in FPC VMT layout). */
     const kgpc_class_typeinfo *typeinfo = NULL;
 
-    const kgpc_class_typeinfo *candidate = *(const kgpc_class_typeinfo * const *)self;
+    /* Try treating self as VMT pointer: read TypeInfo at offset 56 */
+    const kgpc_class_typeinfo *candidate = *(const kgpc_class_typeinfo * const *)((const char *)self + 56);
     if (candidate != NULL && candidate->vmt == self)
     {
         typeinfo = candidate;
     }
     else
     {
+        /* Try treating self as instance pointer: instance[0] = VMT, then VMT[56] = TypeInfo */
         const void *vmt = *(const void *const *)self;
         if (vmt != NULL)
         {
-            const kgpc_class_typeinfo *candidate2 = *(const kgpc_class_typeinfo * const *)vmt;
+            const kgpc_class_typeinfo *candidate2 = *(const kgpc_class_typeinfo * const *)((const char *)vmt + 56);
             if (candidate2 != NULL && candidate2->vmt == vmt)
                 typeinfo = candidate2;
         }
@@ -3447,14 +3455,21 @@ intptr_t SysFreeMem(void *p)
     return 0;
 }
 
-void *SysReallocMem(void *p, intptr_t size)
+void *SysReallocMem(void **pp, intptr_t size)
 {
+    if (pp == NULL)
+        return NULL;
+    void *original = *pp;
     if (size <= 0)
     {
-        free(p);
+        free(original);
+        *pp = NULL;
         return NULL;
     }
-    return realloc(p, (size_t)size);
+    void *result = realloc(original, (size_t)size);
+    if (result != NULL)
+        *pp = result;
+    return result;
 }
 
 intptr_t SysFreeMemSize(void *p, intptr_t size)
@@ -3521,15 +3536,25 @@ void *sysallocmem_i64(intptr_t size)
     return calloc(1, (size_t)size);
 }
 
-/* function ReallocMem(var p: Pointer; size: PtrInt): Pointer */
-void *sysreallocmem_p_i64(void *p, intptr_t size)
+/* function ReallocMem(var p: Pointer; size: PtrInt): Pointer
+ * The 'var' parameter means the caller passes a pointer-to-pointer
+ * (the address of the pointer variable).  We must dereference to get
+ * the actual heap pointer, realloc it, and store the result back. */
+void *sysreallocmem_p_i64(void **pp, intptr_t size)
 {
+    if (pp == NULL)
+        return NULL;
+    void *original = *pp;
     if (size <= 0)
     {
-        free(p);
+        free(original);
+        *pp = NULL;
         return NULL;
     }
-    return realloc(p, (size_t)size);
+    void *result = realloc(original, (size_t)size);
+    if (result != NULL)
+        *pp = result;
+    return result;
 }
 
 /* function SysMemSize(p: Pointer): PtrInt
@@ -6530,10 +6555,12 @@ long lo_li(long value)
 
 /* _haltproc: asm-only startup procedure from si_prc.inc / si_c.inc.
    There is no Pascal body — only hand-written assembly in FPC RTL.
-   Our runtime provides a C equivalent. */
-void _haltproc(void)
+   Our runtime provides a C equivalent.
+   The FPC RTL's system_exit passes the exit code (from operatingsystem_result)
+   as the first argument, so we must accept and forward it. */
+void _haltproc(int exitcode)
 {
-    exit(0);
+    exit(exitcode);
 }
 
 /* atomiccmpexchange_i_i_i: [internproc] AtomicCmpExchange intrinsic.

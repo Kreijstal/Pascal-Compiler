@@ -1623,6 +1623,26 @@ int semcheck_funccall(int *type_return,
                                     expr->expr_data.function_call_data.self_class_name =
                                         strdup(class_name);
                             }
+                            /* Mark class method calls so codegen passes VMT as Self.
+                             * Walk the parent class chain since the method may be
+                             * inherited (e.g., TA.ClassName where ClassName is on TObject). */
+                            {
+                                const char *check_class = class_name;
+                                struct RecordType *check_record = self_record;
+                                while (check_class != NULL)
+                                {
+                                    if (from_cparser_is_method_nonstatic_class_method(check_class, id))
+                                    {
+                                        expr->expr_data.function_call_data.is_class_method_call = 1;
+                                        break;
+                                    }
+                                    /* Move to parent class */
+                                    const char *parent = (check_record != NULL) ? check_record->parent_class_name : NULL;
+                                    if (parent == NULL) break;
+                                    check_record = semcheck_lookup_record_type(symtab, parent);
+                                    check_class = parent;
+                                }
+                            }
                         }
                     }
             }
@@ -4424,6 +4444,73 @@ method_call_resolved:
                                     strdup(best_match->owner_class);
                             break;
                         }
+                    }
+                }
+            }
+        }
+        /* Centralized class method flag — mark calls to class functions/procedures
+         * so codegen passes VMT (not instance) as Self.  Walk the parent chain
+         * because the method may be inherited (e.g., TA.ClassName → TObject).
+         * We check whether the resolved function's first parameter is named Self;
+         * this distinguishes the class method overload from static/instance overloads
+         * when multiple overloads share the same name. */
+        if (!expr->expr_data.function_call_data.is_class_method_call)
+        {
+            /* Only check methods that have a Self parameter — this excludes static
+             * class methods (which have no Self) and non-class functions. */
+            int has_self_param = 0;
+            if (best_match->type != NULL &&
+                best_match->type->kind == TYPE_KIND_PROCEDURE)
+            {
+                ListNode_t *params = best_match->type->info.proc_info.params;
+                if (params != NULL)
+                {
+                    Tree_t *first_param = (Tree_t *)params->cur;
+                    if (first_param != NULL && first_param->type == TREE_VAR_DECL &&
+                        first_param->tree_data.var_decl_data.ids != NULL)
+                    {
+                        const char *first_id = (const char *)first_param->tree_data.var_decl_data.ids->cur;
+                        if (first_id != NULL && pascal_identifier_equals(first_id, "Self"))
+                            has_self_param = 1;
+                    }
+                }
+            }
+            if (has_self_param)
+            {
+                const char *cm_class = best_match->owner_class;
+                const char *cm_method = best_match->method_name;
+                /* Fallback: extract class/method from id (e.g. "TObject__ClassName") */
+                char cm_class_buf[128];
+                if (cm_class == NULL && best_match->id != NULL)
+                {
+                    const char *sep = strstr(best_match->id, "__");
+                    if (sep != NULL && sep > best_match->id)
+                    {
+                        size_t class_len = sep - best_match->id;
+                        if (class_len < sizeof(cm_class_buf))
+                        {
+                            memcpy(cm_class_buf, best_match->id, class_len);
+                            cm_class_buf[class_len] = '\0';
+                            cm_class = cm_class_buf;
+                            cm_method = sep + 2;
+                        }
+                    }
+                }
+                if (cm_class != NULL && cm_method != NULL)
+                {
+                    struct RecordType *check_record = semcheck_lookup_record_type(symtab, cm_class);
+                    const char *check_class = cm_class;
+                    while (check_class != NULL)
+                    {
+                        if (from_cparser_is_method_nonstatic_class_method(check_class, cm_method))
+                        {
+                            expr->expr_data.function_call_data.is_class_method_call = 1;
+                            break;
+                        }
+                        const char *parent = (check_record != NULL) ? check_record->parent_class_name : NULL;
+                        if (parent == NULL) break;
+                        check_record = semcheck_lookup_record_type(symtab, parent);
+                        check_class = parent;
                     }
                 }
             }

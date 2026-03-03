@@ -276,6 +276,7 @@ struct Statement
             int is_virtual_call;             /* 1 if this is a virtual method call (needs VMT dispatch) */
             int vmt_index;                   /* VMT index for virtual calls (-1 if not set) */
             char *self_class_name;           /* Class name for VMT lookup in virtual calls */
+            int is_class_method_call;        /* 1 if calling a class method (Self = VMT, not instance) */
         } procedure_call_data;
 
         /* Expression statement */
@@ -515,6 +516,7 @@ struct Expression
             int is_virtual_call;                     /* 1 if this is a virtual method call (needs VMT dispatch) */
             int vmt_index;                           /* VMT index for virtual calls (-1 if not set) */
             char *self_class_name;                   /* Class name for VMT lookup in virtual calls */
+            int is_class_method_call;                /* 1 if calling a class method (Self = VMT, not instance) */
             int arg0_is_dynarray_descriptor;         /* 1 if arg0 should be passed as dynarray descriptor */
             char *call_qualifier;  /* Unit/object prefix if call was qualified, e.g. "SysUtils" (NULL if unqualified) */
         } function_call_data;

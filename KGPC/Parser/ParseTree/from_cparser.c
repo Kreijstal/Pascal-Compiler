@@ -1346,8 +1346,9 @@ static char *param_type_signature_from_method_impl(ast_t *method_node) {
     return sig;
 }
 
-static void register_class_method_ex(const char *class_name, const char *method_name, 
+static void register_class_method_ex(const char *class_name, const char *method_name,
                                       int is_virtual, int is_override, int is_static,
+                                      int is_class_method,
                                       int param_count, char *param_sig) {
     if (class_name == NULL || method_name == NULL)
         return;
@@ -1361,6 +1362,7 @@ static void register_class_method_ex(const char *class_name, const char *method_
     binding->is_virtual = is_virtual;
     binding->is_override = is_override;
     binding->is_static = is_static;
+    binding->is_class_method = is_class_method;
     binding->param_count = param_count;
     binding->param_sig = param_sig;
 
@@ -1380,15 +1382,15 @@ static void register_class_method_ex(const char *class_name, const char *method_
     class_method_bindings = node;
     
     if (getenv("KGPC_DEBUG_CLASS_METHODS") != NULL) {
-        fprintf(stderr, "[KGPC] Registered method %s.%s (virtual=%d, override=%d, static=%d)\n",
-            class_name, method_name, is_virtual, is_override, is_static);
+        fprintf(stderr, "[KGPC] Registered method %s.%s (virtual=%d, override=%d, static=%d, class_method=%d)\n",
+            class_name, method_name, is_virtual, is_override, is_static, is_class_method);
     }
 }
 
 void from_cparser_register_method_template(const char *class_name, const char *method_name,
     int is_virtual, int is_override, int is_static, int param_count) {
     register_class_method_ex(class_name, method_name, is_virtual, is_override, is_static,
-        param_count, NULL);
+        0, param_count, NULL);
 }
 
 
@@ -1479,6 +1481,56 @@ static int is_method_static_with_signature(const char *class_name, const char *m
 /* Public wrapper for is_method_static */
 int from_cparser_is_method_static(const char *class_name, const char *method_name) {
     return is_method_static(class_name, method_name);
+}
+
+/* Check if a method is declared with 'class' keyword (Self = VMT pointer, not instance).
+ * Returns 1 if class method, 0 otherwise. */
+int from_cparser_is_method_class_method(const char *class_name, const char *method_name) {
+    if (class_name == NULL || method_name == NULL)
+        return 0;
+    ListNode_t *cur = class_method_bindings;
+    while (cur != NULL) {
+        ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
+        if (binding != NULL && binding->class_name != NULL && binding->method_name != NULL &&
+            strcasecmp(binding->class_name, class_name) == 0 &&
+            strcasecmp(binding->method_name, method_name) == 0)
+        {
+            if (binding->is_class_method)
+                return 1;
+        }
+        cur = cur->next;
+    }
+    return 0;
+}
+
+/* Check if a method is a non-static class method (Self = VMT pointer).
+ * Returns 1 only if ALL matching bindings with is_class_method=1 are also
+ * non-static. Returns 0 if no class method bindings exist, or if there are
+ * mixed overloads (some class, some instance) with conflicting staticness. */
+int from_cparser_is_method_nonstatic_class_method(const char *class_name, const char *method_name) {
+    if (class_name == NULL || method_name == NULL)
+        return 0;
+    int found_nonstatic_class = 0;
+    int found_instance = 0;
+    ListNode_t *cur = class_method_bindings;
+    while (cur != NULL) {
+        ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
+        if (binding != NULL && binding->class_name != NULL && binding->method_name != NULL &&
+            strcasecmp(binding->class_name, class_name) == 0 &&
+            strcasecmp(binding->method_name, method_name) == 0)
+        {
+            if (binding->is_class_method && !binding->is_static)
+                found_nonstatic_class = 1;
+            else if (!binding->is_class_method)
+                found_instance = 1;
+        }
+        cur = cur->next;
+    }
+    /* If there are mixed overloads (class + instance with same name),
+     * don't mark as class method — overload resolution should pick correctly. */
+    if (found_instance && found_nonstatic_class)
+        return 0;
+    return found_nonstatic_class;
 }
 
 int from_cparser_is_type_helper(const char *helper_id) {
@@ -6655,8 +6707,8 @@ static void annotate_method_template(struct MethodTemplate *method_template, ast
     method_template->kind = METHOD_TEMPLATE_UNKNOWN;
     
     /* First pass: check ALL children for "class" keyword before the method name.
-     * The parser places optional(token(keyword_ci("class"))) before the function keyword,
-     * so we need to scan all children to find it. */
+     * The parser produces an IDENTIFIER child with sym->name="class" when
+     * create_keyword_parser("class", PASCAL_T_IDENTIFIER) matches. */
     ast_t *cursor = method_ast->child;
     while (cursor != NULL)
     {
@@ -6664,11 +6716,12 @@ static void annotate_method_template(struct MethodTemplate *method_template, ast
         if (node == NULL)
             node = cursor;
         const char *sym_name = (node->sym != NULL) ? node->sym->name : NULL;
-        
-        /* Check for "class" keyword in any child node */
+
+        /* Check for "class" keyword in any child node.
+         * Note: "class function" has Self = VMT pointer; "class function ... static" has no Self.
+         * Only set is_class_method here; is_static is set by the "static" directive. */
         if (sym_name != NULL && strcasecmp(sym_name, "class") == 0) {
             method_template->is_class_method = 1;
-            method_template->is_static = 1;
         }
         cursor = cursor->next;
     }
@@ -6887,8 +6940,10 @@ static void collect_class_members(ast_t *node, const char *class_name,
         ast_t *unwrapped = unwrap_pascal_node(cursor);
         if (unwrapped != NULL) {
             if (getenv("KGPC_DEBUG_TYPE_SECTION") != NULL) {
-                fprintf(stderr, "[KGPC] collect_class_members: node typ=%d (%s) in %s\n",
+                fprintf(stderr, "[KGPC] collect_class_members: node typ=%d (%s) raw_typ=%d sym=%s in %s\n",
                     unwrapped->typ, pascal_tag_to_string(unwrapped->typ),
+                    cursor->typ,
+                    (cursor->sym && cursor->sym->name) ? cursor->sym->name : "(null)",
                     class_name ? class_name : "<unknown>");
             }
             switch (unwrapped->typ) {
@@ -6927,6 +6982,43 @@ static void collect_class_members(ast_t *node, const char *class_name,
                                 }
                             }
                             list_builder_extend(field_builder, fields);
+                        }
+                    }
+                }
+                else if (saw_class)
+                {
+                    /* "class function/procedure" member: propagate is_class_method to templates */
+                    for (ast_t *child = unwrapped->child; child != NULL; child = child->next)
+                    {
+                        ast_t *cn = unwrap_pascal_node(child);
+                        if (cn == NULL) cn = child;
+                        if (cn->typ == PASCAL_T_METHOD_DECL ||
+                            cn->typ == PASCAL_T_CONSTRUCTOR_DECL ||
+                            cn->typ == PASCAL_T_DESTRUCTOR_DECL)
+                        {
+                            struct MethodTemplate *template = create_method_template(cn);
+                            if (template != NULL)
+                            {
+                                template->is_class_method = 1;
+                                {
+                                    int param_count = from_cparser_count_params_ast(template->params_ast);
+                                    char *param_sig = param_type_signature_from_params_ast(template->params_ast);
+                                    register_class_method_ex(class_name, template->name,
+                                        template->is_virtual, template->is_override, template->is_static,
+                                        template->is_class_method,
+                                        param_count, param_sig);
+                                }
+                                if (method_builder != NULL)
+                                    list_builder_append(method_builder, template, LIST_METHOD_TEMPLATE);
+                                else
+                                    destroy_method_template_instance(template);
+                            }
+                        }
+                        else if (cn->typ == PASCAL_T_PROPERTY_DECL)
+                        {
+                            struct ClassProperty *property = convert_property_decl(cn);
+                            if (property != NULL && property_builder != NULL)
+                                list_builder_append(property_builder, property, LIST_CLASS_PROPERTY);
                         }
                     }
                 }
@@ -7004,6 +7096,7 @@ static void collect_class_members(ast_t *node, const char *class_name,
                     char *param_sig = param_type_signature_from_params_ast(template->params_ast);
                     register_class_method_ex(class_name, template->name,
                         template->is_virtual, template->is_override, template->is_static,
+                        template->is_class_method,
                         param_count, param_sig);
                 }
 
@@ -8255,8 +8348,10 @@ KgpcType *from_cparser_method_template_to_proctype(struct MethodTemplate *method
     ListBuilder params_builder;
     list_builder_init(&params_builder);
 
-    /* Add implicit Self parameter for instance methods */
-    if (!method_template->is_static && !method_template->is_class_method) {
+    /* Add implicit Self parameter for instance methods and non-static class methods.
+     * For instance methods, Self = instance pointer.
+     * For class methods (non-static), Self = VMT pointer (class reference). */
+    if (!method_template->is_static) {
         ListNode_t *self_ids = CreateListNode(strdup("Self"), LIST_STRING);
         char *self_type_id = NULL;
         int self_type_tag = UNKNOWN_TYPE;
@@ -10083,6 +10178,7 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
                             char *param_sig = param_type_signature_from_params_ast(template->params_ast);
                             register_class_method_ex(id, template->name,
                                 template->is_virtual, template->is_override, template->is_static,
+                                template->is_class_method,
                                 param_count, param_sig);
                         }
                         if (getenv("KGPC_DEBUG_CLASS_METHODS") != NULL)
@@ -10110,6 +10206,7 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
                             char *param_sig = param_type_signature_from_params_ast(template->params_ast);
                             register_class_method_ex(id, template->name,
                                 template->is_virtual, template->is_override, template->is_static,
+                                template->is_class_method,
                                 param_count, param_sig);
                         }
                         if (getenv("KGPC_DEBUG_CLASS_METHODS") != NULL)
@@ -14301,6 +14398,19 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         return NULL;
 
     ast_t *cur = method_node->child;
+    /* Skip optional keyword identifiers like "class" or "generic" that appear
+     * before the qualified identifier (e.g., "class function THost.SeedSum"). */
+    while (cur != NULL) {
+        ast_t *skip_node = unwrap_pascal_node(cur);
+        if (skip_node == NULL) skip_node = cur;
+        if (skip_node->typ == PASCAL_T_IDENTIFIER &&
+            skip_node->sym != NULL && skip_node->sym->name != NULL &&
+            is_method_decl_keyword(skip_node->sym->name)) {
+            cur = cur->next;
+            continue;
+        }
+        break;
+    }
     ast_t *qualified = unwrap_pascal_node(cur);
 
     if (getenv("KGPC_DEBUG_OPERATOR") != NULL) {
@@ -14598,22 +14708,32 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     
     /* Don't re-register the method here - it was already registered during class declaration */
     
-    /* Check if this method was declared as static. Prefer the implementation AST
-     * (class keyword / directives) when available to disambiguate overloads. */
+    /* Check if this method was declared as static. Use signature-aware lookup
+     * for overload disambiguation. Also detect class methods (Self = VMT). */
     int is_static_method = 0;
+    int is_class_method_impl = from_cparser_is_method_class_method(effective_class, method_name);
     int method_param_count = count_params_in_method_impl(method_node);
     char *method_param_sig = param_type_signature_from_method_impl(method_node);
-    if (method_node != NULL)
+    if (method_node != NULL && method_name != NULL)
     {
-        if (ast_has_keyword(method_node, "class", 20) ||
-            ast_has_keyword(method_node, "static", 20))
-        {
+        struct MethodTemplate impl_template = {0};
+        impl_template.name = (char *)method_name;
+        annotate_method_template(&impl_template, method_node);
+        /* Only truly static methods skip Self; class methods have Self = VMT pointer */
+        if (impl_template.is_static)
             is_static_method = 1;
-        }
+        if (impl_template.is_class_method)
+            is_class_method_impl = 1;
     }
     if (!is_static_method)
         is_static_method = is_method_static_with_signature(effective_class, method_name,
             method_param_count, method_param_sig);
+    /* A static class method (class function ... static) has no Self */
+    if (is_class_method_impl && is_static_method)
+        is_static_method = 1;
+    /* A non-static class method (class function) has Self = VMT, so don't skip it */
+    else if (is_class_method_impl && !is_static_method)
+        is_static_method = 0;
     if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
         fprintf(stderr, "[KGPC] convert_method_impl: class=%s method=%s is_static=%d\n",
                 effective_class ? effective_class : "<null>", 
