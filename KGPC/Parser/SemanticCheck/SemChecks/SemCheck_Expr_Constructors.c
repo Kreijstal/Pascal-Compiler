@@ -339,6 +339,8 @@ int semcheck_prepare_array_literal_argument(Tree_t *formal_decl, struct Expressi
     const char *expected_type_id = NULL;
     int expected_is_array_of_const = 0;
     int is_open_array_param = (formal_decl->type == TREE_ARR_DECL);
+    int expected_is_array = is_open_array_param;
+    struct TypeAlias *expected_alias = NULL;
     if (formal_decl->type == TREE_ARR_DECL)
     {
         expected_type = formal_decl->tree_data.arr_decl_data.type;
@@ -353,6 +355,12 @@ int semcheck_prepare_array_literal_argument(Tree_t *formal_decl, struct Expressi
     {
         return 0;
     }
+    if (expected_type_id != NULL && symtab != NULL)
+    {
+        HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, expected_type_id);
+        if (type_node != NULL)
+            expected_alias = hashnode_get_type_alias(type_node);
+    }
 
     if (expected_type == ARRAY_OF_CONST_TYPE)
         expected_is_array_of_const = 1;
@@ -362,6 +370,7 @@ int semcheck_prepare_array_literal_argument(Tree_t *formal_decl, struct Expressi
         KgpcType *expected_kgpc = resolve_type_from_vardecl(formal_decl, symtab, &owns_expected);
         if (expected_kgpc != NULL && expected_kgpc->kind == TYPE_KIND_ARRAY)
         {
+            expected_is_array = 1;
             KgpcType *elem = expected_kgpc->info.array_info.element_type;
             if (elem != NULL && elem->kind == TYPE_KIND_PRIMITIVE &&
                 elem->info.primitive_type_tag == ARRAY_OF_CONST_TYPE)
@@ -371,6 +380,25 @@ int semcheck_prepare_array_literal_argument(Tree_t *formal_decl, struct Expressi
         }
         if (owns_expected && expected_kgpc != NULL)
             destroy_kgpc_type(expected_kgpc);
+    }
+    if (!expected_is_array && expected_alias != NULL && expected_alias->is_array)
+        expected_is_array = 1;
+    if (expected_is_array_of_const)
+        expected_is_array = 1;
+
+    if (expected_alias != NULL && expected_alias->is_array)
+    {
+        if (expected_alias->array_element_type != UNKNOWN_TYPE &&
+            expected_alias->array_element_type != -1)
+        {
+            expected_type = expected_alias->array_element_type;
+            expected_type_id = expected_alias->array_element_type_id;
+        }
+        else if (expected_alias->array_element_type_id != NULL)
+        {
+            expected_type = UNKNOWN_TYPE;
+            expected_type_id = expected_alias->array_element_type_id;
+        }
     }
 
     if (getenv("KGPC_DEBUG_ARRAY_LITERAL") != NULL && arg_expr->type == EXPR_ARRAY_LITERAL)
@@ -387,7 +415,7 @@ int semcheck_prepare_array_literal_argument(Tree_t *formal_decl, struct Expressi
 
     if (arg_expr->type == EXPR_SET)
     {
-        if (!expected_is_array_of_const && !is_open_array_param)
+        if (!expected_is_array)
             return 0;
         if (semcheck_convert_set_literal_to_array_literal(arg_expr) != 0)
         {

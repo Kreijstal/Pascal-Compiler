@@ -313,9 +313,9 @@ int semcheck_is_unit_name(const char *name)
             return 1;
         cur = cur->next;
     }
-    /* In program context (no current unit), accept any loaded unit name
-     * so imported unit types remain visible after unit merge. */
-    if (g_semcheck_current_unit_index == 0 && unit_registry_contains(name))
+    /* Accept any loaded unit name so unit-qualified identifiers resolve even
+     * when the unit isn't listed directly in the current uses clause. */
+    if (unit_registry_contains(name))
         return 1;
     return 0;
 }
@@ -3981,6 +3981,7 @@ static int get_builtin_type_bounds(const char *base_name,
         { {"Int64",    NULL,       NULL},         (-9223372036854775807LL - 1), 9223372036854775807LL },
         { {"QWord",    "UInt64",   NULL},         0LL,                         9223372036854775807LL  },
         { {"LongInt",  "Integer",  NULL},         -2147483648LL,               2147483647LL           },
+        { {"ValSInt",  NULL,       NULL},         -2147483648LL,               2147483647LL           },
         { {"Cardinal", "LongWord", "DWord"},      0LL,                         4294967295LL           },
         { {"SmallInt", NULL,       NULL},         -32768LL,                    32767LL                },
         { {"Word",     NULL,       NULL},         0LL,                         65535LL                },
@@ -3989,6 +3990,38 @@ static int get_builtin_type_bounds(const char *base_name,
         { {"Boolean",  NULL,       NULL},         0LL,                         1LL                    },
         { {"Char",     "AnsiChar", NULL},         0LL,                         255LL                  },
     };
+    if (pascal_identifier_equals(base_name, "SizeInt") ||
+        pascal_identifier_equals(base_name, "NativeInt") ||
+        pascal_identifier_equals(base_name, "PtrInt"))
+    {
+        if (sizeof(void*) >= 8)
+        {
+            *low_out = (-9223372036854775807LL - 1);
+            *high_out = 9223372036854775807LL;
+        }
+        else
+        {
+            *low_out = -2147483648LL;
+            *high_out = 2147483647LL;
+        }
+        return 1;
+    }
+    if (pascal_identifier_equals(base_name, "SizeUInt") ||
+        pascal_identifier_equals(base_name, "NativeUInt") ||
+        pascal_identifier_equals(base_name, "PtrUInt"))
+    {
+        if (sizeof(void*) >= 8)
+        {
+            *low_out = 0LL;
+            *high_out = 9223372036854775807LL;
+        }
+        else
+        {
+            *low_out = 0LL;
+            *high_out = 4294967295LL;
+        }
+        return 1;
+    }
     for (size_t i = 0; i < sizeof(table) / sizeof(table[0]); ++i)
     {
         for (int j = 0; j < 3 && table[i].names[j] != NULL; ++j)

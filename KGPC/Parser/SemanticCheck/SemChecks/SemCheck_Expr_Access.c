@@ -265,7 +265,13 @@ int semcheck_arrayaccess(int *type_return,
     if (array_expr->type == EXPR_VAR_ID)
     {
         HashNode_t *array_node = NULL;
-        if (FindIdent(&array_node, symtab, array_expr->expr_data.id) == -1)
+        int found = FindIdent(&array_node, symtab, array_expr->expr_data.id);
+        int has_value_ident = (found != -1 && array_node != NULL &&
+            array_node->hash_type != HASHTYPE_TYPE &&
+            array_node->hash_type != HASHTYPE_FUNCTION &&
+            array_node->hash_type != HASHTYPE_PROCEDURE &&
+            array_node->hash_type != HASHTYPE_BUILTIN_PROCEDURE);
+        if (!has_value_ident)
         {
             int property_result = semcheck_try_indexed_property_getter(type_return, symtab,
                 expr, max_scope_lev, mutating);
@@ -947,6 +953,7 @@ int semcheck_funccall(int *type_return,
         return semcheck_builtin_typeinfo(type_return, symtab, expr, max_scope_lev);
 
     args_given = expr->expr_data.function_call_data.args_expr;
+    int injected_self = 0;
     if (id != NULL)
     {
         const char *qualifier = expr->expr_data.function_call_data.call_qualifier;
@@ -986,6 +993,64 @@ int semcheck_funccall(int *type_return,
     if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
         fprintf(stderr, "[SemCheck] semcheck_funccall: id='%s' expr=%p resolved_func=%p\n", 
             id != NULL ? id : "(null)", (void*)expr, (void*)expr->expr_data.function_call_data.resolved_func);
+    }
+    if (getenv("KGPC_DEBUG_CHECKOBS") != NULL && id != NULL &&
+        pascal_identifier_equals(id, "CheckObserving"))
+    {
+        int arg_count = 0;
+        for (ListNode_t *cur = expr->expr_data.function_call_data.args_expr;
+             cur != NULL; cur = cur->next)
+            arg_count++;
+        fprintf(stderr,
+            "[KGPC_DEBUG_CHECKOBS] pre-self: placeholder=%d was_unit_qualified=%d args=%d\n",
+            expr->expr_data.function_call_data.is_method_call_placeholder,
+            was_unit_qualified, arg_count);
+    }
+    if (getenv("KGPC_DEBUG_FORMAT") != NULL && id != NULL &&
+        pascal_identifier_equals(id, "Format"))
+    {
+        int arg_count = 0;
+        for (ListNode_t *cur = expr->expr_data.function_call_data.args_expr;
+             cur != NULL; cur = cur->next)
+            arg_count++;
+        fprintf(stderr,
+            "[KGPC_DEBUG_FORMAT] call=Format placeholder=%d placeholder_name=%s args=%d\n",
+            expr->expr_data.function_call_data.is_method_call_placeholder,
+            expr->expr_data.function_call_data.placeholder_method_name != NULL
+                ? expr->expr_data.function_call_data.placeholder_method_name : "(null)",
+            arg_count);
+        if (expr->expr_data.function_call_data.args_expr != NULL &&
+            expr->expr_data.function_call_data.args_expr->cur != NULL)
+        {
+            struct Expression *first = (struct Expression *)expr->expr_data.function_call_data.args_expr->cur;
+            const char *first_id = (first != NULL && first->type == EXPR_VAR_ID) ? first->expr_data.id : NULL;
+            fprintf(stderr,
+                "[KGPC_DEBUG_FORMAT] first_arg expr_type=%d id=%s\n",
+                first != NULL ? first->type : -1,
+                first_id != NULL ? first_id : "(null)");
+        }
+    }
+    if (getenv("KGPC_DEBUG_TRIM") != NULL && id != NULL &&
+        pascal_identifier_equals(id, "Trim"))
+    {
+        int arg_count = 0;
+        for (ListNode_t *cur = expr->expr_data.function_call_data.args_expr;
+             cur != NULL; cur = cur->next)
+            arg_count++;
+        fprintf(stderr,
+            "[KGPC_DEBUG_TRIM] call=Trim placeholder=%d args=%d\n",
+            expr->expr_data.function_call_data.is_method_call_placeholder,
+            arg_count);
+        if (expr->expr_data.function_call_data.args_expr != NULL &&
+            expr->expr_data.function_call_data.args_expr->cur != NULL)
+        {
+            struct Expression *first = (struct Expression *)expr->expr_data.function_call_data.args_expr->cur;
+            const char *first_id = (first != NULL && first->type == EXPR_VAR_ID) ? first->expr_data.id : NULL;
+            fprintf(stderr,
+                "[KGPC_DEBUG_TRIM] first_arg expr_type=%d id=%s\n",
+                first != NULL ? first->type : -1,
+                first_id != NULL ? first_id : "(null)");
+        }
     }
     if (getenv("KGPC_DEBUG_CALL_TYPES") != NULL && id != NULL &&
         pascal_identifier_equals(id, "IsDirectory"))
@@ -1292,13 +1357,73 @@ int semcheck_funccall(int *type_return,
         }
     }
 
+    if (getenv("KGPC_DEBUG_FORMAT") != NULL && id != NULL &&
+        pascal_identifier_equals(id, "Format"))
+    {
+        fprintf(stderr,
+            "[KGPC_DEBUG_FORMAT] pre-self-injection line=%d args_ptr=%p\n",
+            expr->line_num, (void *)args_given);
+        int idx = 0;
+        for (ListNode_t *cur = args_given; cur != NULL; cur = cur->next, idx++)
+        {
+            struct Expression *arg_expr = (struct Expression *)cur->cur;
+            const char *arg_id = (arg_expr != NULL && arg_expr->type == EXPR_VAR_ID) ? arg_expr->expr_data.id : NULL;
+            fprintf(stderr,
+                "[KGPC_DEBUG_FORMAT] pre args[%d]=node=%p expr=%p type=%d line=%d id=%s\n",
+                idx, (void *)cur, (void *)arg_expr,
+                arg_expr != NULL ? arg_expr->type : -1,
+                arg_expr != NULL ? arg_expr->line_num : -1,
+                arg_id != NULL ? arg_id : "(null)");
+        }
+    }
+
         /* If no explicit receiver was provided (not a method call placeholder), but Self is in scope
          * and defines this method, prepend Self so unqualified method calls resolve correctly. */
         if (!was_unit_qualified && id != NULL && !expr->expr_data.function_call_data.is_method_call_placeholder)
         {
+            HashNode_t *global_node = NULL;
+            if (FindIdent(&global_node, symtab, id) >= 0 && global_node != NULL &&
+                (global_node->hash_type == HASHTYPE_FUNCTION ||
+                 global_node->hash_type == HASHTYPE_PROCEDURE) &&
+                global_node->owner_class == NULL)
+            {
+                const char *current_owner = semcheck_get_current_method_owner();
+                if (current_owner != NULL)
+                {
+                    if (getenv("KGPC_DEBUG_CHECKOBS") != NULL && id != NULL &&
+                        pascal_identifier_equals(id, "CheckObserving"))
+                    {
+                        fprintf(stderr,
+                            "[KGPC_DEBUG_CHECKOBS] global present but in method owner=%s; continuing self lookup\n",
+                            current_owner);
+                    }
+                }
+                else
+                {
+                if (getenv("KGPC_DEBUG_CHECKOBS") != NULL && id != NULL &&
+                    pascal_identifier_equals(id, "CheckObserving"))
+                {
+                    fprintf(stderr,
+                        "[KGPC_DEBUG_CHECKOBS] skip_self_injection global_node=%p owner_class=%s method_name=%s owner_full=%s\n",
+                        (void *)global_node,
+                        global_node->owner_class != NULL ? global_node->owner_class : "(null)",
+                        global_node->method_name != NULL ? global_node->method_name : "(null)",
+                        global_node->owner_class_full != NULL ? global_node->owner_class_full : "(null)");
+                }
+                if (getenv("KGPC_DEBUG_TRIM") != NULL &&
+                    pascal_identifier_equals(id, "Trim"))
+                {
+                    fprintf(stderr,
+                        "[KGPC_DEBUG_TRIM] skipping Self injection due to global %s\n", id);
+                }
+                goto skip_self_injection;
+                }
+            }
             HashNode_t *self_node = NULL;
+            int self_found = 0;
             if (FindIdent(&self_node, symtab, "Self") == 0 && self_node != NULL)
             {
+                self_found = 1;
                 struct RecordType *self_record = get_record_type_from_node(self_node);
                 int self_is_helper = 0;
                 if (self_record == NULL)
@@ -1516,6 +1641,16 @@ int semcheck_funccall(int *type_return,
                             self_record->type_id ? self_record->type_id : "(null)",
                             id ? id : "(null)", (void*)method_node, expects_self);
                     }
+                    if (getenv("KGPC_DEBUG_CHECKOBS") != NULL && id != NULL &&
+                        pascal_identifier_equals(id, "CheckObserving"))
+                    {
+                        fprintf(stderr,
+                            "[KGPC_DEBUG_CHECKOBS] self_found=%d self_record=%s args_count=%d expects_self=%d method_node=%p placeholder=%d\n",
+                            self_found,
+                            self_record != NULL && self_record->type_id != NULL ? self_record->type_id : "(null)",
+                            args_count, expects_self, (void *)method_node,
+                            expr->expr_data.function_call_data.is_method_call_placeholder);
+                    }
 
                     if (method_node != NULL)
                     {
@@ -1566,11 +1701,87 @@ int semcheck_funccall(int *type_return,
                         }
                         if (expects_self && !already_has_self)
                         {
-                            struct Expression *self_expr = mk_varid(expr->line_num, strdup("Self"));
+                            const char *self_arg_name = "Self";
+                            if (!self_found && self_record != NULL &&
+                                record_type_is_class(self_record) &&
+                                !self_record->is_type_helper &&
+                                self_record->type_id != NULL)
+                            {
+                                self_arg_name = self_record->type_id;
+                            }
+                            struct Expression *self_expr = mk_varid(expr->line_num, strdup(self_arg_name));
+                            if (getenv("KGPC_DEBUG_CHECKOBS") != NULL && id != NULL &&
+                                pascal_identifier_equals(id, "CheckObserving"))
+                            {
+                                fprintf(stderr,
+                                    "[KGPC_DEBUG_CHECKOBS] injecting self arg name=%s self_record=%s self_node_type=%d\n",
+                                    self_arg_name,
+                                    self_record != NULL && self_record->type_id != NULL ? self_record->type_id : "(null)",
+                                    self_node != NULL && self_node->type != NULL ? self_node->type->kind : -1);
+                            }
+                            if (self_expr != NULL && self_record != NULL &&
+                                self_record->is_type_helper &&
+                                self_record->helper_base_type_id != NULL)
+                            {
+                                HashNode_t *base_node = semcheck_find_preferred_type_node(symtab,
+                                    self_record->helper_base_type_id);
+                                if (getenv("KGPC_DEBUG_FORMAT") != NULL && id != NULL &&
+                                    pascal_identifier_equals(id, "Format"))
+                                {
+                                    fprintf(stderr,
+                                        "[KGPC_DEBUG_FORMAT] helper base=%s node=%p type=%p\n",
+                                        self_record->helper_base_type_id != NULL ? self_record->helper_base_type_id : "(null)",
+                                        (void *)base_node,
+                                        base_node != NULL ? (void *)base_node->type : NULL);
+                                }
+                                if (base_node != NULL && base_node->type != NULL)
+                                    semcheck_expr_set_resolved_kgpc_type_shared(self_expr, base_node->type);
+                            }
+                            if (self_expr != NULL && self_record != NULL &&
+                                pascal_identifier_equals(self_arg_name, "Self"))
+                            {
+                                if (self_node != NULL && self_node->type != NULL)
+                                {
+                                    semcheck_expr_set_resolved_kgpc_type_shared(self_expr, self_node->type);
+                                }
+                                else
+                                {
+                                    KgpcType *self_record_type = create_record_type(self_record);
+                                    if (self_record_type != NULL)
+                                    {
+                                        semcheck_expr_set_resolved_kgpc_type_shared(self_expr, self_record_type);
+                                        destroy_kgpc_type(self_record_type);
+                                    }
+                                }
+                                if (getenv("KGPC_DEBUG_CHECKOBS") != NULL && id != NULL &&
+                                    pascal_identifier_equals(id, "CheckObserving"))
+                                {
+                                    fprintf(stderr,
+                                        "[KGPC_DEBUG_CHECKOBS] self arg resolved_type=%d\n",
+                                        self_expr->resolved_kgpc_type != NULL ? self_expr->resolved_kgpc_type->kind : -1);
+                                }
+                            }
                             ListNode_t *self_arg = CreateListNode(self_expr, LIST_EXPR);
                             self_arg->next = args_given;
                             expr->expr_data.function_call_data.args_expr = self_arg;
                             args_given = self_arg;
+                            injected_self = 1;
+                            if (getenv("KGPC_DEBUG_FORMAT") != NULL && id != NULL &&
+                                pascal_identifier_equals(id, "Format"))
+                            {
+                                fprintf(stderr,
+                                    "[KGPC_DEBUG_FORMAT] injected Self for method=%s owner=%s\n",
+                                    id,
+                                    method_owner_name != NULL ? method_owner_name : "(null)");
+                            }
+                            if (getenv("KGPC_DEBUG_TRIM") != NULL && id != NULL &&
+                                pascal_identifier_equals(id, "Trim"))
+                            {
+                                fprintf(stderr,
+                                    "[KGPC_DEBUG_TRIM] injected Self for method=%s owner=%s\n",
+                                    id,
+                                    method_owner_name != NULL ? method_owner_name : "(null)");
+                            }
                         }
                         if (!method_is_overloaded &&
                             expr->expr_data.function_call_data.resolved_func == NULL)
@@ -1645,6 +1856,15 @@ int semcheck_funccall(int *type_return,
                             }
                         }
                     }
+            }
+            else if (getenv("KGPC_DEBUG_CHECKOBS") != NULL && id != NULL &&
+                     pascal_identifier_equals(id, "CheckObserving"))
+            {
+                const char *owner = semcheck_get_current_method_owner();
+                fprintf(stderr,
+                    "[KGPC_DEBUG_CHECKOBS] self_not_found current_owner=%s placeholder=%d\n",
+                    owner != NULL ? owner : "(null)",
+                    expr->expr_data.function_call_data.is_method_call_placeholder);
             }
         }
     }
@@ -2611,13 +2831,70 @@ int semcheck_funccall(int *type_return,
 
                     if (!has_direct_match && has_self_match && !has_self_arg)
                     {
-                        struct Expression *self_expr = mk_varid(expr->line_num, strdup("Self"));
+                        HashNode_t *self_node = NULL;
+                        int self_found = (FindIdent(&self_node, symtab, "Self") == 0 && self_node != NULL);
+                        const char *self_arg_name = "Self";
+                        if (!self_found && record_for_mangling != NULL &&
+                            record_type_is_class(record_for_mangling) &&
+                            !record_for_mangling->is_type_helper &&
+                            record_for_mangling->type_id != NULL)
+                        {
+                            self_arg_name = record_for_mangling->type_id;
+                        }
+                        struct Expression *self_expr = mk_varid(expr->line_num, strdup(self_arg_name));
                         if (self_expr != NULL)
                         {
+                            if (record_for_mangling != NULL &&
+                                record_for_mangling->is_type_helper &&
+                                record_for_mangling->helper_base_type_id != NULL)
+                            {
+                                HashNode_t *base_node = semcheck_find_preferred_type_node(symtab,
+                                    record_for_mangling->helper_base_type_id);
+                                if (getenv("KGPC_DEBUG_FORMAT") != NULL && id != NULL &&
+                                    pascal_identifier_equals(id, "Format"))
+                                {
+                                    fprintf(stderr,
+                                        "[KGPC_DEBUG_FORMAT] helper base=%s node=%p type=%p\n",
+                                        record_for_mangling->helper_base_type_id != NULL ? record_for_mangling->helper_base_type_id : "(null)",
+                                        (void *)base_node,
+                                        base_node != NULL ? (void *)base_node->type : NULL);
+                                }
+                                if (base_node != NULL && base_node->type != NULL)
+                                    semcheck_expr_set_resolved_kgpc_type_shared(self_expr, base_node->type);
+                            }
+                            if (pascal_identifier_equals(self_arg_name, "Self"))
+                            {
+                                if (self_found && self_node != NULL && self_node->type != NULL)
+                                {
+                                    semcheck_expr_set_resolved_kgpc_type_shared(self_expr, self_node->type);
+                                }
+                                else if (record_for_mangling != NULL)
+                                {
+                                    KgpcType *self_record_type = create_record_type(record_for_mangling);
+                                    if (self_record_type != NULL)
+                                    {
+                                        semcheck_expr_set_resolved_kgpc_type_shared(self_expr, self_record_type);
+                                        destroy_kgpc_type(self_record_type);
+                                    }
+                                }
+                            }
                             ListNode_t *self_node = CreateListNode(self_expr, LIST_EXPR);
                             self_node->next = args_given;
                             args_given = self_node;
                             expr->expr_data.function_call_data.args_expr = args_given;
+                            injected_self = 1;
+                            if (getenv("KGPC_DEBUG_FORMAT") != NULL && id != NULL &&
+                                pascal_identifier_equals(id, "Format"))
+                            {
+                                fprintf(stderr,
+                                    "[KGPC_DEBUG_FORMAT] injected Self (overload match)\n");
+                            }
+                            if (getenv("KGPC_DEBUG_TRIM") != NULL && id != NULL &&
+                                pascal_identifier_equals(id, "Trim"))
+                            {
+                                fprintf(stderr,
+                                    "[KGPC_DEBUG_TRIM] injected Self (overload match)\n");
+                            }
                         }
                     }
 
@@ -2761,6 +3038,8 @@ int semcheck_funccall(int *type_return,
                     }
                 }
             }
+        skip_self_injection:
+            ;
         }
     }
 
@@ -4151,6 +4430,21 @@ method_call_resolved:
 
     if (best_match == NULL)
     {
+        if (getenv("KGPC_DEBUG_CHECKOBS") != NULL && id != NULL &&
+            pascal_identifier_equals(id, "CheckObserving"))
+        {
+            int idx = 0;
+            for (ListNode_t *cur = args_given; cur != NULL; cur = cur->next, idx++)
+            {
+                struct Expression *arg_expr = (struct Expression *)cur->cur;
+                KgpcType *arg_type = NULL;
+                semcheck_expr_with_type(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
+                int arg_tag = semcheck_tag_from_kgpc(arg_type);
+                fprintf(stderr, "[KGPC_DEBUG_CHECKOBS] arg[%d] type_tag=%d\n", idx, arg_tag);
+                if (arg_expr != NULL)
+                    semcheck_debug_expr_brief(arg_expr, "CheckObserving arg");
+            }
+        }
         double resolve_t0 = 0.0;
         if (FUNCCALL_TIMINGS_ENABLED())
             resolve_t0 = funccall_now_ms();
@@ -4538,7 +4832,8 @@ method_call_resolved:
          * patterns like:  with SomeList.LockList do Add(Self);
          * where Add is a method of the WITH target's class.
          * Also handles procedural fields: with ctx^ do Result := CompareFn(args) */
-        if (id != NULL && with_context_count > 0)
+        if (id != NULL && with_context_count > 0 &&
+            !expr->expr_data.function_call_data.is_method_call_placeholder)
         {
             struct Expression *with_expr = NULL;
             int wm = semcheck_with_try_resolve_method(id, symtab, &with_expr, expr->line_num);
@@ -4615,6 +4910,11 @@ method_call_resolved:
                     {
                         self_node->next = expr->expr_data.function_call_data.args_expr;
                         expr->expr_data.function_call_data.args_expr = self_node;
+                        expr->expr_data.function_call_data.is_method_call_placeholder = 1;
+                        if (expr->expr_data.function_call_data.placeholder_method_name != NULL)
+                            free(expr->expr_data.function_call_data.placeholder_method_name);
+                        expr->expr_data.function_call_data.placeholder_method_name =
+                            (id != NULL) ? strdup(id) : NULL;
                         /* Free overload list before retry */
                         DestroyList(overload_candidates);
                         overload_candidates = NULL;
@@ -5067,6 +5367,66 @@ skip_overload_resolution:
                 ++return_val;
             expr->expr_data.function_call_data.args_expr = args_given;
         }
+        if (injected_self && hash_return != NULL && hash_return->type != NULL &&
+            hash_return->type->kind == TYPE_KIND_PROCEDURE)
+        {
+            int resolved_expects_self = 0;
+            ListNode_t *params = hash_return->type->info.proc_info.params;
+            if (params != NULL)
+            {
+                Tree_t *first_param = (Tree_t *)params->cur;
+                if (first_param != NULL && first_param->type == TREE_VAR_DECL &&
+                    first_param->tree_data.var_decl_data.ids != NULL)
+                {
+                    const char *first_id = (const char *)first_param->tree_data.var_decl_data.ids->cur;
+                    if (first_id != NULL && pascal_identifier_equals(first_id, "Self"))
+                        resolved_expects_self = 1;
+                    if (getenv("KGPC_DEBUG_FORMAT") != NULL && id != NULL &&
+                        pascal_identifier_equals(id, "Format"))
+                    {
+                        fprintf(stderr,
+                            "[KGPC_DEBUG_FORMAT] resolved first_param=%s expects_self=%d\n",
+                            first_id != NULL ? first_id : "(null)",
+                            resolved_expects_self);
+                    }
+                }
+            }
+            if (!resolved_expects_self)
+            {
+                ListNode_t *first_arg_node = expr->expr_data.function_call_data.args_expr;
+                if (first_arg_node != NULL && first_arg_node->cur != NULL)
+                {
+                    struct Expression *first_arg = (struct Expression *)first_arg_node->cur;
+                    if (first_arg->type == EXPR_VAR_ID &&
+                        first_arg->expr_data.id != NULL &&
+                        pascal_identifier_equals(first_arg->expr_data.id, "Self"))
+                    {
+                        expr->expr_data.function_call_data.args_expr = first_arg_node->next;
+                        first_arg_node->next = NULL;
+                        destroy_expr(first_arg);
+                        free(first_arg_node);
+                        args_given = expr->expr_data.function_call_data.args_expr;
+                        if (getenv("KGPC_DEBUG_FORMAT") != NULL && id != NULL &&
+                            pascal_identifier_equals(id, "Format"))
+                        {
+                            fprintf(stderr,
+                                "[KGPC_DEBUG_FORMAT] removed injected Self for non-method resolution\n");
+                        }
+                    }
+                }
+            }
+        }
+        if (getenv("KGPC_DEBUG_FORMAT") != NULL && id != NULL &&
+            pascal_identifier_equals(id, "Format"))
+        {
+            const char *owner = hash_return != NULL ? hash_return->owner_class : NULL;
+            const char *hid = hash_return != NULL ? hash_return->id : NULL;
+            fprintf(stderr,
+                "[KGPC_DEBUG_FORMAT] resolved hash_return id=%s owner=%s mangled=%s\n",
+                hid != NULL ? hid : "(null)",
+                owner != NULL ? owner : "(null)",
+                (hash_return != NULL && hash_return->mangled_id != NULL) ? hash_return->mangled_id : "(null)");
+        }
 
         /***** THEN VERIFY ARGS INSIDE *****/
         cur_arg = 0;
@@ -5081,6 +5441,24 @@ skip_overload_resolution:
         if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
             fprintf(stderr, "[SemCheck] Constructor %s: args_given=%d, true_args=%d\n",
                 id, ListLength(args_given), ListLength(true_args));
+        }
+        if (getenv("KGPC_DEBUG_FORMAT") != NULL && id != NULL &&
+            pascal_identifier_equals(id, "Format"))
+        {
+            fprintf(stderr,
+                "[KGPC_DEBUG_FORMAT] args_given_ptr=%p args_to_validate_ptr=%p true_args_ptr=%p\n",
+                (void *)args_given, (void *)args_to_validate, (void *)true_args);
+            int idx = 0;
+            for (ListNode_t *cur = args_to_validate; cur != NULL; cur = cur->next, idx++)
+            {
+                struct Expression *arg_expr = (struct Expression *)cur->cur;
+                const char *arg_id = (arg_expr != NULL && arg_expr->type == EXPR_VAR_ID) ? arg_expr->expr_data.id : NULL;
+                fprintf(stderr,
+                    "[KGPC_DEBUG_FORMAT] args_to_validate[%d]=node=%p expr=%p type=%d id=%s\n",
+                    idx, (void *)cur, (void *)arg_expr,
+                    arg_expr != NULL ? arg_expr->type : -1,
+                    arg_id != NULL ? arg_id : "(null)");
+            }
         }
 
         int is_constructor_call = 0;
@@ -5248,16 +5626,13 @@ skip_overload_resolution:
                     }
                 }
             }
-            if (arg_decl->type == TREE_ARR_DECL)
+            if (semcheck_prepare_array_literal_argument(arg_decl, current_arg_expr,
+                    symtab, max_scope_lev, expr->line_num) != 0)
             {
-                if (semcheck_prepare_array_literal_argument(arg_decl, current_arg_expr,
-                        symtab, max_scope_lev, expr->line_num) != 0)
-                {
-                    ++return_val;
-                    true_args_to_validate = true_args_to_validate->next;
-                    args_to_validate = args_to_validate->next;
-                    continue;
-                }
+                ++return_val;
+                true_args_to_validate = true_args_to_validate->next;
+                args_to_validate = args_to_validate->next;
+                continue;
             }
             if (semcheck_prepare_record_constructor_argument(arg_decl, current_arg_expr,
                     symtab, max_scope_lev, expr->line_num) != 0)
@@ -5282,6 +5657,21 @@ skip_overload_resolution:
             arg_type = semcheck_tag_from_kgpc(arg_kgpc_type_call);
             if (named_arg_mismatch)
                 arg_type = UNKNOWN_TYPE;
+            if (getenv("KGPC_DEBUG_FORMAT") != NULL &&
+                id != NULL && pascal_identifier_equals(id, "Format"))
+            {
+                const char *kgpc_str = "<null>";
+                if (current_arg_expr != NULL && current_arg_expr->resolved_kgpc_type != NULL)
+                    kgpc_str = kgpc_type_to_string(current_arg_expr->resolved_kgpc_type);
+                fprintf(stderr,
+                    "[KGPC_DEBUG_FORMAT] arg=%d expr_type=%d arg_type=%d kgpc=%s\n",
+                    cur_arg,
+                    current_arg_expr != NULL ? current_arg_expr->type : -1,
+                    arg_type,
+                    kgpc_str);
+                if (current_arg_expr != NULL)
+                    semcheck_debug_expr_brief(current_arg_expr, "format arg");
+            }
             if (getenv("KGPC_DEBUG_CALL_TYPES") != NULL &&
                 id != NULL &&
                 (pascal_identifier_equals(id, "FileDateToDateTime") ||
@@ -5319,6 +5709,16 @@ skip_overload_resolution:
             while(true_arg_ids != NULL && args_to_validate != NULL)
             {
                 int expected_type = resolve_param_type(arg_decl, symtab);
+                if (getenv("KGPC_DEBUG_FORMAT") != NULL &&
+                    id != NULL && pascal_identifier_equals(id, "Format"))
+                {
+                    fprintf(stderr,
+                        "[KGPC_DEBUG_FORMAT] arg=%d expected_type=%d actual_type=%d expr_type=%d\n",
+                        cur_arg,
+                        expected_type,
+                        arg_type,
+                        current_arg_expr != NULL ? current_arg_expr->type : -1);
+                }
 
                 if (arg_decl->type == TREE_ARR_DECL && current_arg_expr != NULL &&
                     current_arg_expr->type == EXPR_ARRAY_LITERAL)
@@ -5480,6 +5880,13 @@ skip_overload_resolution:
                     
                     if (!type_compatible)
                     {
+                        if (getenv("KGPC_ASSERT_STRING_LITERAL_TYPED") != NULL &&
+                            current_arg_expr != NULL &&
+                            current_arg_expr->type == EXPR_STRING)
+                        {
+                            assert(arg_type != UNKNOWN_TYPE &&
+                                   "string literal should have a resolved type before call validation");
+                        }
                         if (getenv("KGPC_DEBUG_CALL_TYPES") != NULL &&
                             id != NULL &&
                             (pascal_identifier_equals(id, "FileDateToDateTime") ||

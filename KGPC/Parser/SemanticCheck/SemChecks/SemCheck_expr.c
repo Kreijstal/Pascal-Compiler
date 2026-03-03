@@ -1298,6 +1298,12 @@ int semcheck_expr_main(SymTab_t *symtab, struct Expression *expr,
      * (e.g., constructor Self placeholders with the class pointer type) */
     if (expr->type == EXPR_NIL && expr->resolved_kgpc_type != NULL)
         was_already_resolved = 1;
+    /* Preserve injected Self types when already set (e.g., helper method calls). */
+    if (expr->type == EXPR_VAR_ID &&
+        expr->expr_data.id != NULL &&
+        pascal_identifier_equals(expr->expr_data.id, "Self") &&
+        expr->resolved_kgpc_type != NULL)
+        was_already_resolved = 1;
     if (!was_already_resolved && expr->resolved_kgpc_type != NULL)
     {
         destroy_kgpc_type(expr->resolved_kgpc_type);

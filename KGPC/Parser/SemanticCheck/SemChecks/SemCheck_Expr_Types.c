@@ -2030,7 +2030,8 @@ int semcheck_recordaccess(int *type_return,
      * When the base expression is a unit name, resolve field_id directly
      * from the symbol table and transform this expression accordingly. */
     if (record_expr->type == EXPR_VAR_ID && record_expr->expr_data.id != NULL &&
-        semcheck_is_unit_name(record_expr->expr_data.id))
+        semcheck_is_unit_name(record_expr->expr_data.id) &&
+        !semcheck_has_value_ident(symtab, record_expr->expr_data.id))
     {
         if (getenv("KGPC_DEBUG_RECORD_ACCESS") != NULL)
         {
@@ -2514,6 +2515,21 @@ SKIP_SELF_FIELD_REWRITE:
         }
         else
         {
+            if (getenv("KGPC_DEBUG_RECORD_ACCESS") != NULL)
+            {
+                const char *rec_id = NULL;
+                if (record_expr != NULL && record_expr->type == EXPR_VAR_ID)
+                    rec_id = record_expr->expr_data.id;
+                fprintf(stderr,
+                    "[KGPC_DEBUG_RECORD_ACCESS] not-record: line=%d expr=%p record_expr=%p type=%d rec_id=%s record_type=%d field=%s\n",
+                    expr->line_num,
+                    (void *)expr,
+                    (void *)record_expr,
+                    record_expr != NULL ? record_expr->type : -1,
+                    rec_id != NULL ? rec_id : "(null)",
+                    record_type,
+                    field_id != NULL ? field_id : "(null)");
+            }
             semcheck_error_with_context("Error on line %d, field access requires a record value.\n\n", expr->line_num);
             *type_return = UNKNOWN_TYPE;
             return error_count + 1;
