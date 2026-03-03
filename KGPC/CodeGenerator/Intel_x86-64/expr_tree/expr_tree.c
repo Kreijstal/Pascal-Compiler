@@ -639,7 +639,7 @@ static ListNode_t *load_real_operand_into_xmm(CodeGenContext *ctx,
     int operand_is_real = operand_expr != NULL &&
         expr_has_type_tag(operand_expr, REAL_TYPE);
     int operand_is_longint = operand_expr != NULL &&
-        expr_has_type_tag(operand_expr, LONGINT_TYPE);
+        expr_uses_qword_kgpctype(operand_expr);
     int operand_is_integer_like =
         (operand_expr != NULL &&
          (expr_has_type_tag(operand_expr, LONGINT_TYPE) ||
@@ -662,8 +662,7 @@ static ListNode_t *load_real_operand_into_xmm(CodeGenContext *ctx,
     {
         operand_is_real = 0;
         operand_is_integer_like = 1;
-        operand_is_longint = expr_uses_qword_kgpctype(raw_operand_expr) ||
-            expr_has_type_tag(raw_operand_expr, LONGINT_TYPE);
+        operand_is_longint = expr_uses_qword_kgpctype(raw_operand_expr);
     }
 
     char buffer[192];
@@ -1758,7 +1757,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 
     expr = node->expr;
     assert(target_reg != NULL);
-    
+
     CODEGEN_DEBUG("DEBUG gencode_case0: expr->type=%d\n", expr->type);
 
     if (expr->type == EXPR_FUNCTION_CALL)
@@ -2571,7 +2570,6 @@ cleanup_constructor:
     }
     else if (expr->type == EXPR_ARRAY_ACCESS)
     {
-        fprintf(stderr, "DEBUG gencode_expr_tree: EXPR_ARRAY_ACCESS dispatch\n");
         return codegen_array_access(expr, inst_list, ctx, target_reg);
     }
     else if (expr->type == EXPR_RECORD_ACCESS)
@@ -4679,6 +4677,29 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                     const char *right64 = reg32_to_reg64(right_candidate, right_reg);
                     if (right64 != NULL)
                         cmp_right = right64;
+
+                    /* Sign/zero-extend 32-bit operands for 64-bit comparison.
+                     * When one side is qword (e.g. SizeInt/Int64) and the other
+                     * was computed as 32-bit (e.g. Integer literal), the upper
+                     * 32 bits of the register may not match the intended value
+                     * (e.g. negl produces 32-bit -1 = 0x00000000FFFFFFFF instead
+                     * of 64-bit -1 = 0xFFFFFFFFFFFFFFFF). */
+                    if (left_reg != NULL && !codegen_type_uses_qword(left_type) &&
+                        !(left_expr != NULL && expr_uses_qword_kgpctype(left_expr)))
+                    {
+                        if (codegen_type_is_signed(left_type))
+                            inst_list = codegen_sign_extend32_to64(inst_list, left_reg->bit_32, left_reg->bit_64);
+                        else
+                            inst_list = codegen_zero_extend32_to64(inst_list, left_reg->bit_32, left_reg->bit_32);
+                    }
+                    if (right_reg != NULL && !codegen_type_uses_qword(right_type) &&
+                        !(right_expr != NULL && expr_uses_qword_kgpctype(right_expr)))
+                    {
+                        if (codegen_type_is_signed(right_type))
+                            inst_list = codegen_sign_extend32_to64(inst_list, right_reg->bit_32, right_reg->bit_64);
+                        else
+                            inst_list = codegen_zero_extend32_to64(inst_list, right_reg->bit_32, right_reg->bit_32);
+                    }
                 }
                 else
                 {

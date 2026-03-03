@@ -1601,7 +1601,8 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
             goto cleanup;
         }
         if (inner != NULL &&
-            (target_type == RECORD_TYPE || target_type == FILE_TYPE || target_type == TEXT_TYPE || target_type == SHORTSTRING_TYPE))
+            (target_type == RECORD_TYPE || target_type == FILE_TYPE || target_type == TEXT_TYPE || target_type == SHORTSTRING_TYPE ||
+             target_type == POINTER_TYPE))
         {
             inst_list = codegen_address_for_expr(inner, inst_list, ctx, out_reg);
             goto cleanup;
@@ -5823,14 +5824,15 @@ static ListNode_t *codegen_builtin_incdec(struct Statement *stmt, ListNode_t *in
 
     if (target_expr != NULL && target_expr->type == EXPR_VAR_ID)
     {
-        StackNode_t *var_node = find_label(target_expr->expr_data.id);
+        int scope_depth = 0;
+        StackNode_t *var_node = find_label_with_depth(target_expr->expr_data.id, &scope_depth);
         if (var_node == NULL && ctx != NULL && ctx->symtab != NULL)
         {
             HashNode_t *target_node = NULL;
             if (FindIdent(&target_node, ctx->symtab, target_expr->expr_data.id) >= 0 &&
                 target_node != NULL && target_node->mangled_id != NULL)
             {
-                var_node = find_label(target_node->mangled_id);
+                var_node = find_label_with_depth(target_node->mangled_id, &scope_depth);
             }
         }
         char buffer[128];
@@ -5858,6 +5860,29 @@ static ListNode_t *codegen_builtin_incdec(struct Statement *stmt, ListNode_t *in
                     snprintf(buffer, sizeof(buffer), "\taddq\t%s, %s(%%rip)\n", increment_reg->bit_64, label);
                 else
                     snprintf(buffer, sizeof(buffer), "\taddl\t%s, %s(%%rip)\n", increment_reg->bit_32, label);
+            }
+            else if (scope_depth > 0)
+            {
+                codegen_begin_expression(ctx);
+                Register_t *frame_reg = codegen_acquire_static_link(ctx, &inst_list, scope_depth);
+                if (frame_reg != NULL)
+                {
+                    if (target_uses_qword)
+                        snprintf(buffer, sizeof(buffer), "\taddq\t%s, -%d(%s)\n", increment_reg->bit_64, var_node->offset, frame_reg->bit_64);
+                    else
+                        snprintf(buffer, sizeof(buffer), "\taddl\t%s, -%d(%s)\n", increment_reg->bit_32, var_node->offset, frame_reg->bit_64);
+                }
+                else
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Failed to acquire static link for inc/dec of %s.",
+                        target_expr->expr_data.id);
+                    if (target_uses_qword)
+                        snprintf(buffer, sizeof(buffer), "\taddq\t%s, -%d(%%rbp)\n", increment_reg->bit_64, var_node->offset);
+                    else
+                        snprintf(buffer, sizeof(buffer), "\taddl\t%s, -%d(%%rbp)\n", increment_reg->bit_32, var_node->offset);
+                }
+                codegen_end_expression(ctx);
             }
             else
             {
@@ -7113,18 +7138,6 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
     var_expr = stmt->stmt_data.var_assign_data.var;
     assign_expr = stmt->stmt_data.var_assign_data.expr;
 
-    if (assign_expr != NULL && assign_expr->type == EXPR_ARRAY_ACCESS)
-    {
-        struct Expression *abase = assign_expr->expr_data.array_access_data.array_expr;
-        fprintf(stderr, "DEBUG var_assign: RHS is ARRAY_ACCESS, base_type=%d tag=%d",
-            abase ? abase->type : -1, expr_get_type_tag(assign_expr));
-        if (abase && abase->type == EXPR_RECORD_ACCESS)
-            fprintf(stderr, " field=%s", abase->expr_data.record_access_data.field_id ? abase->expr_data.record_access_data.field_id : "?");
-        if (abase && abase->type == EXPR_VAR_ID)
-            fprintf(stderr, " id=%s", abase->expr_data.id ? abase->expr_data.id : "?");
-        fprintf(stderr, "\n");
-    }
-
     if (var_expr != NULL && var_expr->type == EXPR_TYPECAST &&
         var_expr->expr_data.typecast_data.expr != NULL)
     {
@@ -7178,13 +7191,6 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
     int dest_is_static_array = (var_expr->is_array_expr && !expr_is_dynamic_array(var_expr)) ||
         expr_is_static_array_like(var_expr, ctx);
     int src_is_static_array = expr_is_static_array_like(assign_expr, ctx);
-
-    if (assign_expr != NULL && assign_expr->type == EXPR_ARRAY_ACCESS) {
-        struct Expression *ab = assign_expr->expr_data.array_access_data.array_expr;
-        const char *bid = (ab && ab->type == EXPR_VAR_ID && ab->expr_data.id) ? ab->expr_data.id : "?";
-        fprintf(stderr, "DEBUG var_assign PATHS: id=%s dest_static=%d src_static=%d lhs_tag=%d\n",
-            bid, dest_is_static_array, src_is_static_array, expr_get_type_tag(var_expr));
-    }
 
     if (dest_is_static_array && src_is_static_array)
     {
@@ -7273,11 +7279,6 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
 
         
         Register_t *value_reg = NULL;
-        if (assign_expr != NULL && assign_expr->type == EXPR_ARRAY_ACCESS) {
-            struct Expression *ab = assign_expr->expr_data.array_access_data.array_expr;
-            fprintf(stderr, "DEBUG var_assign EXPR_VAR_ID path: RHS array_access base=%d id=%s\n",
-                ab ? ab->type : -1, (ab && ab->type == EXPR_VAR_ID && ab->expr_data.id) ? ab->expr_data.id : "?");
-        }
         inst_list = codegen_expr_with_result(assign_expr, inst_list, ctx, &value_reg);
 
         if (codegen_had_error(ctx) || value_reg == NULL)
@@ -7316,9 +7317,17 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         /* Handle string assignment to string variables */
         if (var_type == STRING_TYPE)
         {
-            /* If assigning a char to string, promote it first */
+            /* If assigning a char to string, promote it first.
+             * Also check for typecasts from char to string (e.g. AnsiString(char_value))
+             * where expr_get_type_tag returns STRING_TYPE but the actual value is a char. */
             int assign_type = expr_get_type_tag(assign_expr);
             if (assign_type == CHAR_TYPE)
+            {
+                inst_list = codegen_promote_char_reg_to_string(inst_list, value_reg);
+            }
+            else if (assign_expr != NULL && assign_expr->type == EXPR_TYPECAST &&
+                     assign_expr->expr_data.typecast_data.expr != NULL &&
+                     expr_get_type_tag(assign_expr->expr_data.typecast_data.expr) == CHAR_TYPE)
             {
                 inst_list = codegen_promote_char_reg_to_string(inst_list, value_reg);
             }

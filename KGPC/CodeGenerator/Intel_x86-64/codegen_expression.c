@@ -3733,11 +3733,6 @@ static ListNode_t *codegen_expr_tree_value(struct Expression *expr, ListNode_t *
     }
 
 
-    if (expr != NULL && expr->type == EXPR_ARRAY_ACCESS) {
-        struct Expression *ab = expr->expr_data.array_access_data.array_expr;
-        fprintf(stderr, "DEBUG expr_tree_value: calling gencode_expr_tree for ARRAY_ACCESS, base_type=%d id=%s\n",
-            ab ? ab->type : -1, (ab && ab->type == EXPR_VAR_ID && ab->expr_data.id) ? ab->expr_data.id : "?");
-    }
     inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, target_reg);
 
     free_expr_tree(expr_tree);
@@ -5681,27 +5676,22 @@ ListNode_t *codegen_array_access(struct Expression *expr, ListNode_t *inst_list,
     }
     int element_size = (int)element_size_ll;
 
+    /* Class/pointer-typed array elements are always pointer-sized (8 bytes).
+     * codegen_get_indexable_element_size may return the full class instance size
+     * when the base expression's resolved type is ^record (class type), but the
+     * array stores pointers, not inline instances. */
+    if (expr_has_type_tag(expr, POINTER_TYPE) && element_size > CODEGEN_POINTER_SIZE_BYTES)
+        element_size = CODEGEN_POINTER_SIZE_BYTES;
+
     /* For large elements, records (passed by address), and shortstrings,
-     * return the address itself rather than loading a value.
-     * Exception: class-typed elements are reference types (pointers), so
-     * the array stores an 8-byte pointer that must be loaded as a value. */
+     * return the address itself rather than loading a value. */
     {
         int is_record_element = expr_has_type_tag(expr, RECORD_TYPE);
-        int is_class_element = 0;
-        if (is_record_element)
-        {
-            struct RecordType *elem_rec = codegen_expr_record_type(expr,
-                ctx != NULL ? ctx->symtab : NULL);
-            if (elem_rec != NULL && record_type_is_class(elem_rec))
-                is_class_element = 1;
-        }
         int is_big = (element_size > CODEGEN_POINTER_SIZE_BYTES);
         int is_shortstr = codegen_expr_is_shortstring_value(expr);
         int is_shortstr2 = codegen_array_access_targets_shortstring(expr, ctx);
-        fprintf(stderr, "DEBUG codegen_array_access: elem_size=%d is_record=%d is_class=%d is_big=%d tag=%d\n",
-            element_size, is_record_element, is_class_element, is_big, expr_get_type_tag(expr));
         if (is_big ||
-            (is_record_element && !is_class_element) ||
+            is_record_element ||
             is_shortstr || is_shortstr2)
         {
             char buffer[100];
@@ -5718,12 +5708,6 @@ ListNode_t *codegen_array_access(struct Expression *expr, ListNode_t *inst_list,
     {
         /* 8-byte elements (including pointers, int64, etc.) need 64-bit load */
         snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_64);
-        {
-            struct Expression *abase = expr->expr_data.array_access_data.array_expr;
-            fprintf(stderr, "DEBUG codegen_array_access 8byte: base_type=%d tag=%d id=%s\n",
-                abase ? abase->type : -1, expr_get_type_tag(expr),
-                (abase && abase->type == EXPR_VAR_ID && abase->expr_data.id) ? abase->expr_data.id : "?");
-        }
         inst_list = add_inst(inst_list, buffer);
     }
     else
@@ -6521,6 +6505,31 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
     const char *right_name = use_qword
         ? right_reg->bit_64
         : register_name_for_expr(right_reg, right_expr);
+
+    /* Sign/zero-extend 32-bit operands for 64-bit comparison.
+     * When one side is qword and the other was computed as 32-bit,
+     * the upper 32 bits may not match the intended value (e.g. negl
+     * produces 32-bit -1 = 0x00000000FFFFFFFF instead of 64-bit -1). */
+    if (use_qword)
+    {
+        if (left_reg != NULL && !expression_uses_qword(left_expr))
+        {
+            int left_tag = (left_expr != NULL) ? expr_get_type_tag(left_expr) : UNKNOWN_TYPE;
+            if (codegen_type_is_signed(left_tag))
+                inst_list = codegen_sign_extend32_to64(inst_list, left_reg->bit_32, left_reg->bit_64);
+            else
+                inst_list = codegen_zero_extend32_to64(inst_list, left_reg->bit_32, left_reg->bit_32);
+        }
+        if (right_reg != NULL && !expression_uses_qword(right_expr))
+        {
+            int right_tag = (right_expr != NULL) ? expr_get_type_tag(right_expr) : UNKNOWN_TYPE;
+            if (codegen_type_is_signed(right_tag))
+                inst_list = codegen_sign_extend32_to64(inst_list, right_reg->bit_32, right_reg->bit_64);
+            else
+                inst_list = codegen_zero_extend32_to64(inst_list, right_reg->bit_32, right_reg->bit_32);
+        }
+    }
+
     snprintf(buffer, sizeof(buffer), "\tcmp%c\t%s, %s\n", use_qword ? 'q' : 'l', right_name, left_name);
     inst_list = add_inst(inst_list, buffer);
     free_reg(get_reg_stack(), right_reg);

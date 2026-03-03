@@ -5716,10 +5716,31 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     scan_ids = scan_ids->next;
                 }
             }
+            else if (scan_decl->type == TREE_ARR_DECL)
+            {
+                ListNode_t *scan_ids = scan_decl->tree_data.arr_decl_data.ids;
+                while(scan_ids != NULL)
+                {
+                    const char *param_reg = alloc_integer_arg_reg(1, &scan_gpr_index);
+                    if (param_reg != NULL)
+                    {
+                        char temp_name[64];
+                        snprintf(temp_name, sizeof(temp_name), "__presaved_%s__", (char *)scan_ids->cur);
+                        StackNode_t *presaved_slot = add_q_z(temp_name);
+                        if (presaved_slot != NULL)
+                        {
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                                param_reg, presaved_slot->offset);
+                            inst_list = add_inst(inst_list, buffer);
+                        }
+                    }
+                    scan_ids = scan_ids->next;
+                }
+            }
             args_scan = args_scan->next;
         }
     }
-    
+
     /* Reset for main processing pass */
     next_gpr_index = arg_start_index;
 
@@ -6120,7 +6141,32 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     if (arg_stack != NULL)
                         arg_stack->is_reference = 1;
                     Register_t *stack_value_reg = NULL;
-                    const char *value_source = arg_reg;
+                    const char *value_source = NULL;
+
+                    /* Check if we have a presaved slot from pre-pass */
+                    StackNode_t *presaved_slot = NULL;
+                    if (has_record_or_dynarray)
+                    {
+                        char presaved_name[64];
+                        snprintf(presaved_name, sizeof(presaved_name), "__presaved_%s__", (char *)arg_ids->cur);
+                        presaved_slot = find_label(presaved_name);
+                    }
+
+                    if (presaved_slot != NULL && arg_reg != NULL)
+                    {
+                        /* Load from presaved slot since register may be clobbered */
+                        stack_value_reg = get_free_reg(get_reg_stack(), &inst_list);
+                        if (stack_value_reg != NULL)
+                        {
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                                presaved_slot->offset, stack_value_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                            value_source = stack_value_reg->bit_64;
+                        }
+                    }
+
+                    if (value_source == NULL)
+                        value_source = arg_reg;
                     if (value_source == NULL)
                     {
                         stack_value_reg = get_free_reg(get_reg_stack(), &inst_list);
