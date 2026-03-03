@@ -253,17 +253,24 @@ int semcheck_relop(int *type_return,
             {
                 /* Check for operator overloading for record types first */
                 if ((type_first == RECORD_TYPE && type_second == RECORD_TYPE) ||
-                    (type_first == RECORD_TYPE && type_second == POINTER_TYPE))
+                    (type_first == RECORD_TYPE && type_second == POINTER_TYPE) ||
+                    (type_first == POINTER_TYPE && type_second == RECORD_TYPE))
                 {
                     struct Expression *record_expr = expr1;
                     struct Expression *other_expr = expr2;
                     const char *record_type_name = NULL;
                     const char *right_type_name = NULL;
 
+                    if (type_first == POINTER_TYPE && type_second == RECORD_TYPE)
+                    {
+                        record_expr = expr2;
+                        other_expr = expr1;
+                    }
+
                     if (type_first == RECORD_TYPE && type_second == RECORD_TYPE)
                     {
-                        record_type_name = get_expr_type_name(expr1, symtab);
-                        right_type_name = get_expr_type_name(expr2, symtab);
+                        record_type_name = get_expr_type_name(record_expr, symtab);
+                        right_type_name = get_expr_type_name(other_expr, symtab);
                         if (record_type_name == NULL || right_type_name == NULL ||
                             strcasecmp(record_type_name, right_type_name) != 0)
                             goto relop_fallback;
@@ -289,8 +296,8 @@ int semcheck_relop(int *type_return,
                             ListNode_t *operator_candidates = FindAllIdents(symtab, operator_method);
                             if (operator_candidates != NULL)
                             {
-                                KgpcType *left_arg_type = record_expr != NULL ? record_expr->resolved_kgpc_type : NULL;
-                                KgpcType *right_arg_type = other_expr != NULL ? other_expr->resolved_kgpc_type : NULL;
+                                KgpcType *left_arg_type = expr1 != NULL ? expr1->resolved_kgpc_type : NULL;
+                                KgpcType *right_arg_type = expr2 != NULL ? expr2->resolved_kgpc_type : NULL;
                                 HashNode_t *best_exact = NULL;
                                 int best_exact_score = -1;
                                 for (ListNode_t *cur = operator_candidates; cur != NULL; cur = cur->next)
@@ -355,10 +362,10 @@ int semcheck_relop(int *type_return,
                                 ListNode_t *args_given = NULL;
                                 if (operator_node == NULL)
                                 {
-                                    args_given = CreateListNode(record_expr, LIST_EXPR);
+                                    args_given = CreateListNode(expr1, LIST_EXPR);
                                     if (args_given != NULL)
                                     {
-                                        args_given->next = CreateListNode(other_expr, LIST_EXPR);
+                                        args_given->next = CreateListNode(expr2, LIST_EXPR);
                                         int resolve_status = semcheck_resolve_overload(
                                             &best_match,
                                             &best_rank,
@@ -414,8 +421,8 @@ int semcheck_relop(int *type_return,
                                         else
                                             expr->expr_data.function_call_data.mangled_id = strdup(operator_method);
                                         
-                                        ListNode_t *arg1 = CreateListNode(record_expr, LIST_EXPR);
-                                        ListNode_t *arg2 = CreateListNode(other_expr, LIST_EXPR);
+                                        ListNode_t *arg1 = CreateListNode(expr1, LIST_EXPR);
+                                        ListNode_t *arg2 = CreateListNode(expr2, LIST_EXPR);
                                         arg1->next = arg2;
                                         expr->expr_data.function_call_data.args_expr = arg1;
                                         
@@ -581,9 +588,74 @@ relop_fallback:
                 
                 int record_ok = (type_first == RECORD_TYPE && type_second == RECORD_TYPE);
                 int set_ok = (type_first == SET_TYPE && type_second == SET_TYPE);
+                int class_record_ok = 0;
+                if (!record_ok && expr1 != NULL && expr2 != NULL)
+                {
+                    KgpcType *kgpc1 = expr1->resolved_kgpc_type;
+                    KgpcType *kgpc2 = expr2->resolved_kgpc_type;
+                    if (kgpc1 != NULL && kgpc2 != NULL)
+                    {
+                        struct RecordType *rec1 = NULL;
+                        struct RecordType *rec2 = NULL;
+                        int rec1_is_class = 0;
+                        int rec2_is_class = 0;
+
+                        if (kgpc1->kind == TYPE_KIND_RECORD)
+                        {
+                            rec1 = kgpc1->info.record_info;
+                            rec1_is_class = record_type_is_class(rec1);
+                        }
+                        else if (kgpc1->kind == TYPE_KIND_POINTER &&
+                                 kgpc1->info.points_to != NULL &&
+                                 kgpc1->info.points_to->kind == TYPE_KIND_RECORD)
+                        {
+                            rec1 = kgpc1->info.points_to->info.record_info;
+                            rec1_is_class = record_type_is_class(rec1);
+                        }
+
+                        if (kgpc2->kind == TYPE_KIND_RECORD)
+                        {
+                            rec2 = kgpc2->info.record_info;
+                            rec2_is_class = record_type_is_class(rec2);
+                        }
+                        else if (kgpc2->kind == TYPE_KIND_POINTER &&
+                                 kgpc2->info.points_to != NULL &&
+                                 kgpc2->info.points_to->kind == TYPE_KIND_RECORD)
+                        {
+                            rec2 = kgpc2->info.points_to->info.record_info;
+                            rec2_is_class = record_type_is_class(rec2);
+                        }
+
+                        if (rec1 != NULL && rec2 != NULL && rec1_is_class != rec2_is_class)
+                        {
+                            struct RecordType *nonclass = rec1_is_class ? rec2 : rec1;
+                            if (nonclass != NULL && nonclass->fields == NULL &&
+                                nonclass->record_properties == NULL && !nonclass->is_type_helper)
+                            {
+                                class_record_ok = 1;
+                            }
+                        }
+                    }
+                }
+                int unknown_nil_ok = 0;
+                if (!numeric_ok && !boolean_ok && !string_ok && !char_ok && !pointer_ok &&
+                    !enum_ok && !string_pchar_ok && !dynarray_nil_ok && !pointer_nil_ok &&
+                    !record_ok && !set_ok && !class_record_ok &&
+                    (type_first == UNKNOWN_TYPE || type_second == UNKNOWN_TYPE) &&
+                    expr1 != NULL && expr2 != NULL)
+                {
+                    KgpcType *kgpc1 = expr1->resolved_kgpc_type;
+                    KgpcType *kgpc2 = expr2->resolved_kgpc_type;
+                    if (type_first == UNKNOWN_TYPE && kgpc2 != NULL &&
+                        kgpc2->kind == TYPE_KIND_POINTER && kgpc2->info.points_to == NULL)
+                        unknown_nil_ok = 1;
+                    else if (type_second == UNKNOWN_TYPE && kgpc1 != NULL &&
+                        kgpc1->kind == TYPE_KIND_POINTER && kgpc1->info.points_to == NULL)
+                        unknown_nil_ok = 1;
+                }
                 
                 if (!numeric_ok && !boolean_ok && !string_ok && !char_ok && !pointer_ok && !enum_ok && !string_pchar_ok && !dynarray_nil_ok && !pointer_nil_ok
-                    && !record_ok && !set_ok
+                    && !record_ok && !set_ok && !class_record_ok && !unknown_nil_ok
                     && type_first != VARIANT_TYPE && type_second != VARIANT_TYPE)
                 {
                     semcheck_error_with_context("Error on line %d, equality comparison requires matching numeric, boolean, string, character, or pointer types!\n\n",
@@ -1815,6 +1887,30 @@ int semcheck_varid(int *type_return,
                             pnode = pnode->next;
                         }
                     }
+                }
+            }
+        }
+        if (scope_return == -1)
+        {
+            HashNode_t *self_node = NULL;
+            if (FindIdent(&self_node, symtab, "Self") == 0 && self_node != NULL)
+            {
+                struct RecordType *self_record = get_record_type_from_node(self_node);
+                if (self_record == NULL)
+                {
+                    self_record = semcheck_resolve_helper_self_record(symtab,
+                        self_node, self_record);
+                }
+                if (self_record != NULL)
+                {
+                    int field_result = semcheck_try_self_field_access(type_return, symtab, expr,
+                        max_scope_lev, mutating, self_node, self_record, id);
+                    if (field_result >= 0)
+                        return field_result;
+                    int helper_result = semcheck_try_helper_member(type_return, symtab, expr,
+                        max_scope_lev, mutating, self_node, self_record, id);
+                    if (helper_result >= 0)
+                        return helper_result;
                 }
             }
         }

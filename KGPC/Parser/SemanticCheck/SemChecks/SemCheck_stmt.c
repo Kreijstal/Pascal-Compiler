@@ -3827,6 +3827,83 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                 }
             }
         }
+        if (record_type == NULL && var != NULL && var->resolved_kgpc_type != NULL)
+        {
+            const char *record_id = semcheck_record_type_id_from_kgpc(var->resolved_kgpc_type);
+            if (record_id != NULL)
+                record_type = semcheck_lookup_record_type(symtab, record_id);
+        }
+        if (record_type == NULL && var != NULL)
+        {
+            int lhs_owned = 0;
+            KgpcType *lhs_type = semcheck_resolve_expression_kgpc_type(
+                symtab, var, max_scope_lev, MUTATE, &lhs_owned);
+            if (lhs_type != NULL)
+            {
+                if (kgpc_type_is_record(lhs_type))
+                    record_type = kgpc_type_get_record(lhs_type);
+                else if (kgpc_type_is_pointer(lhs_type) && lhs_type->info.points_to != NULL &&
+                    kgpc_type_is_record(lhs_type->info.points_to))
+                    record_type = kgpc_type_get_record(lhs_type->info.points_to);
+                if (record_type == NULL)
+                {
+                    const char *record_id = semcheck_record_type_id_from_kgpc(lhs_type);
+                    if (record_id != NULL)
+                        record_type = semcheck_lookup_record_type(symtab, record_id);
+                }
+            }
+            if (lhs_owned && lhs_type != NULL)
+                destroy_kgpc_type(lhs_type);
+        }
+        if (record_type == NULL && var != NULL && var->type == EXPR_RECORD_ACCESS)
+        {
+            struct Expression *record_expr = var->expr_data.record_access_data.record_expr;
+            const char *field_id = var->expr_data.record_access_data.field_id;
+            int record_owned = 0;
+            KgpcType *record_expr_type = semcheck_resolve_expression_kgpc_type(
+                symtab, record_expr, max_scope_lev, MUTATE, &record_owned);
+            if (record_expr_type != NULL)
+            {
+                if (kgpc_type_is_pointer(record_expr_type) &&
+                    record_expr_type->info.points_to != NULL)
+                    record_expr_type = record_expr_type->info.points_to;
+                if (kgpc_type_is_record(record_expr_type) && field_id != NULL)
+                {
+                    struct RecordType *record_info = kgpc_type_get_record(record_expr_type);
+                    struct RecordField *field_desc = NULL;
+                    long long field_offset = 0;
+                    if (record_info != NULL &&
+                        resolve_record_field(symtab, record_info, field_id,
+                            &field_desc, &field_offset, stmt->line_num, 0) == 0 &&
+                        field_desc != NULL)
+                    {
+                        if (field_desc->nested_record != NULL)
+                        {
+                            record_type = field_desc->nested_record;
+                        }
+                        else if (field_desc->type_id != NULL)
+                        {
+                            record_type = semcheck_lookup_record_type(symtab, field_desc->type_id);
+                            if (record_type == NULL)
+                            {
+                                HashNode_t *alias_node = NULL;
+                                if (FindIdent(&alias_node, symtab, field_desc->type_id) >= 0 &&
+                                    alias_node != NULL)
+                                {
+                                    struct TypeAlias *alias = get_type_alias_from_node(alias_node);
+                                    if (alias != NULL && alias->target_type_id != NULL)
+                                    {
+                                        record_type = semcheck_lookup_record_type(symtab, alias->target_type_id);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if (record_owned && record_expr_type != NULL)
+                destroy_kgpc_type(record_expr_type);
+        }
         if (record_type != NULL)
         {
             /* Preserve inferred constructor target record explicitly so later

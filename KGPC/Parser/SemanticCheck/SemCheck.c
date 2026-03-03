@@ -38,6 +38,10 @@
 #include "../pascal_frontend.h"
 #include "../ParseTree/tree.h"
 #include "../ParseTree/tree_types.h"
+
+/* From SemCheck_Expr_Constructors.c */
+int semcheck_typecheck_record_constructor(struct Expression *expr, SymTab_t *symtab,
+    int max_scope_lev, struct RecordType *record_type, int line_num);
 #include "../ParseTree/KgpcType.h"
 #include "../ParseTree/type_tags.h"
 
@@ -9765,6 +9769,32 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
              * This is important for scoped enum literals like TEndian.Little
              * which need to have their resolved_kgpc_type set. */
             KgpcType *expr_type = NULL;
+            if (value_expr != NULL && value_expr->type == EXPR_RECORD_CONSTRUCTOR)
+            {
+                const char *decl_type_id = tree->tree_data.const_decl_data.type_id;
+                const TypeRef *decl_type_ref = tree->tree_data.const_decl_data.type_ref;
+                HashNode_t *type_node = NULL;
+                struct RecordType *record_type = NULL;
+                type_node = semcheck_find_preferred_type_node_with_ref(symtab, decl_type_ref, decl_type_id);
+                if (type_node != NULL && type_node->type != NULL)
+                {
+                    record_type = kgpc_type_get_record(type_node->type);
+                    if (record_type == NULL &&
+                        type_node->type->kind == TYPE_KIND_POINTER &&
+                        type_node->type->info.points_to != NULL)
+                    {
+                        record_type = kgpc_type_get_record(type_node->type->info.points_to);
+                    }
+                }
+                if (record_type == NULL && type_node != NULL)
+                {
+                    record_type = get_record_type_from_node(type_node);
+                }
+                if (record_type != NULL)
+                {
+                    semcheck_typecheck_record_constructor(value_expr, symtab, INT_MAX, record_type, tree->line_num);
+                }
+            }
             semcheck_expr_main(symtab, value_expr, INT_MAX, NO_MUTATE, &expr_type);
             
             if (evaluate_const_expr(symtab, value_expr, &value) != 0)
@@ -13000,7 +13030,34 @@ next_identifier:
                             {
                                 KgpcType *elem_type = kgpc_type_get_array_element_type_resolved(var_type, symtab);
                                 if (elem_type != NULL)
-                                    init_expr->array_element_type = semcheck_tag_from_kgpc(elem_type);
+                                {
+                                    int elem_tag = semcheck_tag_from_kgpc(elem_type);
+                                    if (init_expr->array_element_type == UNKNOWN_TYPE)
+                                        init_expr->array_element_type = elem_tag;
+                                    if (elem_type->kind == TYPE_KIND_RECORD)
+                                    {
+                                        struct RecordType *rec = kgpc_type_get_record(elem_type);
+                                        init_expr->array_element_record_type = rec;
+                                        if (init_expr->array_element_type_id == NULL &&
+                                            rec != NULL && rec->type_id != NULL)
+                                        {
+                                            init_expr->array_element_type_id = strdup(rec->type_id);
+                                        }
+                                    }
+                                    if (init_expr->array_element_type_id == NULL &&
+                                        elem_type->type_alias != NULL &&
+                                        elem_type->type_alias->target_type_id != NULL)
+                                    {
+                                        init_expr->array_element_type_id =
+                                            strdup(elem_type->type_alias->target_type_id);
+                                    }
+                                }
+                                if (init_expr->array_element_type_id == NULL &&
+                                    var_type->info.array_info.element_type_id != NULL)
+                                {
+                                    init_expr->array_element_type_id =
+                                        strdup(var_type->info.array_info.element_type_id);
+                                }
                             }
                         }
                         return_val += semcheck_expr_main(symtab, init_expr, INT_MAX, NO_MUTATE, &expr_type);
@@ -14058,6 +14115,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         HashNode_t *self_node = NULL;
         const char *owner_id = semcheck_get_current_method_owner();
         struct RecordType *owner_record = NULL;
+        int self_is_var_param = 0;
         if (owner_id != NULL)
         {
             HashNode_t *owner_node = semcheck_find_owner_record_type_node(symtab, owner_id);
@@ -14072,6 +14130,8 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
 
             if (owner_record->is_type_helper && owner_record->helper_base_type_id != NULL)
             {
+                self_is_var_param = semcheck_helper_self_is_var(symtab,
+                    owner_record->helper_base_type_id);
                 HashNode_t *type_node = semcheck_find_preferred_type_node(symtab,
                     owner_record->helper_base_type_id);
                 if (type_node != NULL && type_node->type != NULL)
@@ -14093,8 +14153,17 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                 if (owner_kgpc != NULL && record_type_is_class(owner_record))
                 {
                     KgpcType *ptr = create_pointer_type(owner_kgpc);
-                    kgpc_type_release(owner_kgpc);
-                    owner_kgpc = ptr;
+                    if (ptr != NULL)
+                    {
+                        kgpc_type_release(owner_kgpc);
+                        owner_kgpc = ptr;
+                    }
+                    self_is_var_param = 0;
+                }
+                else
+                {
+                    /* Non-class records pass Self by reference. */
+                    self_is_var_param = 1;
                 }
                 self_type = owner_kgpc;
             }
@@ -14105,6 +14174,8 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                 {
                     kgpc_type_retain(self_type);
                     PushVarOntoScope_Typed(symtab, "Self", self_type);
+                    if (FindIdent(&self_node, symtab, "Self") != -1 && self_node != NULL)
+                        self_node->is_var_parameter = self_is_var_param;
                 }
                 else if (self_node->type == NULL || !kgpc_type_equals(self_node->type, self_type))
                 {
@@ -14113,6 +14184,8 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                     kgpc_type_retain(self_type);
                     self_node->type = self_type;
                 }
+                if (self_node != NULL)
+                    self_node->is_var_parameter = self_is_var_param;
                 destroy_kgpc_type(self_type);
             }
         }

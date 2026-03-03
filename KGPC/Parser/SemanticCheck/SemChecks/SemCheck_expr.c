@@ -801,9 +801,22 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                                             semcheck_find_preferred_type_node(symtab, field->type_id);
                                         if (type_node != NULL)
                                         {
-                                            if (owns_type != NULL)
-                                                *owns_type = 0;
-                                            field_type = type_node->type;
+                                            if (type_node->type != NULL)
+                                            {
+                                                if (owns_type != NULL)
+                                                    *owns_type = 0;
+                                                field_type = type_node->type;
+                                            }
+                                            else
+                                            {
+                                                struct TypeAlias *alias = hashnode_get_type_alias(type_node);
+                                                if (alias != NULL)
+                                                {
+                                                    if (owns_type != NULL)
+                                                        *owns_type = 1;
+                                                    field_type = create_kgpc_type_from_type_alias(alias, symtab, 0);
+                                                }
+                                            }
                                         }
                                     }
                                     else if (field->proc_type != NULL)
@@ -836,6 +849,24 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                                         destroy_kgpc_type(record_type);
 
                                     /* Return the field type */
+                                    if (field_type == NULL &&
+                                        getenv("KGPC_DEBUG_RECORD_ACCESS") != NULL &&
+                                        (pascal_identifier_equals(field_name, "UC") ||
+                                         pascal_identifier_equals(field_name, "LC")))
+                                    {
+                                        char *type_ref_str = NULL;
+                                        if (field->type_ref != NULL && field->type_ref->name != NULL)
+                                            type_ref_str = qualified_ident_join(field->type_ref->name, ".");
+                                        fprintf(stderr,
+                                            "[KGPC] record access unresolved field=%s type=%d type_id=%s type_ref=%s nested_record=%p\n",
+                                            field_name,
+                                            field->type,
+                                            field->type_id != NULL ? field->type_id : "(null)",
+                                            type_ref_str != NULL ? type_ref_str : "(null)",
+                                            (void *)field->nested_record);
+                                        if (type_ref_str != NULL)
+                                            free(type_ref_str);
+                                    }
                                     return field_type;
                                 }
                             }
@@ -910,6 +941,40 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                         *owns_type = 0;
                     return type_node->type;
                 }
+            }
+
+            /* Resolve array access result from the array expression's KgpcType */
+            if (array_expr != NULL)
+            {
+                int array_type_owned = 0;
+                KgpcType *array_type = array_expr->resolved_kgpc_type;
+                if (array_type == NULL)
+                {
+                    array_type = semcheck_resolve_expression_kgpc_type(symtab, array_expr,
+                        max_scope_lev, mutating, &array_type_owned);
+                }
+
+                if (array_type != NULL && kgpc_type_is_pointer(array_type) &&
+                    array_type->info.points_to != NULL)
+                {
+                    array_type = array_type->info.points_to;
+                }
+
+                if (array_type != NULL && kgpc_type_is_array(array_type))
+                {
+                    KgpcType *elem_type = kgpc_type_get_array_element_type_resolved(array_type, symtab);
+                    if (elem_type != NULL)
+                    {
+                        if (owns_type != NULL)
+                            *owns_type = 0;
+                        if (array_type_owned)
+                            destroy_kgpc_type(array_type);
+                        return elem_type;
+                    }
+                }
+
+                if (array_type_owned && array_type != NULL)
+                    destroy_kgpc_type(array_type);
             }
 
             /* Handle pointer indexing result (e.g., p[i] where p: PPAnsiChar) */
@@ -1385,6 +1450,47 @@ int semcheck_expr_main(SymTab_t *symtab, struct Expression *expr,
             if (expr->array_element_type == UNKNOWN_TYPE &&
                 expr->array_element_type_id == NULL)
             {
+                /* Best-effort inference from literal elements when no expected type was provided. */
+                ListNode_t *cur = expr->expr_data.array_literal_data.elements;
+                while (cur != NULL)
+                {
+                    if (cur->type != LIST_EXPR || cur->cur == NULL)
+                    {
+                        cur = cur->next;
+                        continue;
+                    }
+                    struct Expression *elem_expr = (struct Expression *)cur->cur;
+                    KgpcType *elem_type = NULL;
+                    semcheck_expr_with_type(&elem_type, symtab, elem_expr, max_scope_lev, NO_MUTATE);
+                    int elem_tag = semcheck_tag_from_kgpc(elem_type);
+                    if (elem_tag == RECORD_TYPE && elem_expr->record_type != NULL)
+                    {
+                        expr->array_element_type = RECORD_TYPE;
+                        if (expr->array_element_type_id == NULL &&
+                            elem_expr->record_type->type_id != NULL)
+                        {
+                            expr->array_element_type_id = strdup(elem_expr->record_type->type_id);
+                        }
+                        break;
+                    }
+                    if (elem_tag != UNKNOWN_TYPE)
+                    {
+                        expr->array_element_type = elem_tag;
+                        break;
+                    }
+                    cur = cur->next;
+                }
+            }
+            if (expr->array_element_type == UNKNOWN_TYPE &&
+                expr->array_element_type_id == NULL)
+            {
+                if (getenv("KGPC_DEBUG_ARRAY_LITERAL") != NULL)
+                {
+                    fprintf(stderr,
+                        "[KGPC] array literal unresolved @ line %d: element_count=%d\n",
+                        expr->line_num,
+                        expr->expr_data.array_literal_data.element_count);
+                }
                 semcheck_error_with_context("Error on line %d, unable to infer type for array literal.\n",
                     expr->line_num);
                 *type_return = UNKNOWN_TYPE;

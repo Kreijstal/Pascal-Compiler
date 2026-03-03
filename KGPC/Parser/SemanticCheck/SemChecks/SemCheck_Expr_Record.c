@@ -55,6 +55,43 @@ struct RecordType *semcheck_lookup_parent_record(SymTab_t *symtab,
     return get_record_type_from_node(parent_node);
 }
 
+static struct RecordField *semcheck_find_field_in_members(ListNode_t *members,
+    const char *field_name, int include_hidden)
+{
+    if (members == NULL || field_name == NULL)
+        return NULL;
+
+    for (ListNode_t *cur = members; cur != NULL; cur = cur->next)
+    {
+        if (cur->type == LIST_RECORD_FIELD && cur->cur != NULL)
+        {
+            struct RecordField *field = (struct RecordField *)cur->cur;
+            if (field->name != NULL &&
+                (include_hidden || !record_field_is_hidden(field)) &&
+                pascal_identifier_equals(field->name, field_name))
+            {
+                return field;
+            }
+        }
+        else if (cur->type == LIST_VARIANT_PART && cur->cur != NULL)
+        {
+            struct VariantPart *variant = (struct VariantPart *)cur->cur;
+            for (ListNode_t *b = variant->branches; b != NULL; b = b->next)
+            {
+                if (b->type != LIST_VARIANT_BRANCH || b->cur == NULL)
+                    continue;
+                struct VariantBranch *branch = (struct VariantBranch *)b->cur;
+                struct RecordField *found =
+                    semcheck_find_field_in_members(branch->members, field_name, include_hidden);
+                if (found != NULL)
+                    return found;
+            }
+        }
+    }
+
+    return NULL;
+}
+
 struct ClassProperty *semcheck_find_class_property(SymTab_t *symtab,
     struct RecordType *record_info, const char *property_name,
     struct RecordType **owner_out)
@@ -128,22 +165,13 @@ static struct RecordField *semcheck_find_class_field_impl(SymTab_t *symtab,
     struct RecordType *current = record_info;
     while (current != NULL)
     {
-        ListNode_t *field_node = current->fields;
-        while (field_node != NULL)
+        struct RecordField *field = NULL;
+        field = semcheck_find_field_in_members(current->fields, field_name, include_hidden);
+        if (field != NULL)
         {
-            if (field_node->type == LIST_RECORD_FIELD && field_node->cur != NULL)
-            {
-                struct RecordField *field = (struct RecordField *)field_node->cur;
-                if (field->name != NULL &&
-                    (include_hidden || !record_field_is_hidden(field)) &&
-                    pascal_identifier_equals(field->name, field_name))
-                {
-                    if (owner_out != NULL)
-                        *owner_out = current;
-                    return field;
-                }
-            }
-            field_node = field_node->next;
+            if (owner_out != NULL)
+                *owner_out = current;
+            return field;
         }
         current = semcheck_lookup_parent_record(symtab, current);
     }

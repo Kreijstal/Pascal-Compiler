@@ -28,6 +28,7 @@
 #include "../../Parser/ParseTree/KgpcType.h"
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
 #include "../../Parser/SemanticCheck/SymTab/SymTab.h"
+#include "../../Parser/SemanticCheck/SemChecks/SemCheck_Expr_Internal.h"
 #include "../../identifier_utils.h"
 #include "../../format_arg.h"
 
@@ -37,13 +38,13 @@
 /* Helper functions for transitioning from legacy type fields to KgpcType */
 
 /* Helper function to check if a node is a record type */
-static inline int node_is_record_type(HashNode_t *node)
+static inline int codegen_node_is_record_type(HashNode_t *node)
 {
     return hashnode_is_record(node);
 }
 
 /* Helper function to get RecordType from HashNode */
-static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
+static inline struct RecordType* codegen_get_record_type_from_node(HashNode_t *node)
 {
     return hashnode_get_record_type(node);
 }
@@ -91,7 +92,7 @@ static struct RecordType *codegen_expr_record_type(const struct Expression *expr
         HashNode_t *var_node = NULL;
         if (FindIdent(&var_node, symtab, expr->expr_data.id) >= 0 && var_node != NULL)
         {
-            struct RecordType *rec = get_record_type_from_node(var_node);
+            struct RecordType *rec = codegen_get_record_type_from_node(var_node);
             if (rec != NULL)
                 return rec;
             if (var_node->type != NULL)
@@ -113,7 +114,7 @@ static struct RecordType *codegen_expr_record_type(const struct Expression *expr
             HashNode_t *type_node = NULL;
             if (FindIdent(&type_node, symtab, target_id) >= 0 && type_node != NULL)
             {
-                struct RecordType *rec = get_record_type_from_node(type_node);
+                struct RecordType *rec = codegen_get_record_type_from_node(type_node);
                 if (rec != NULL)
                     return rec;
                 if (type_node->type != NULL)
@@ -136,7 +137,7 @@ static struct RecordType *codegen_expr_record_type(const struct Expression *expr
             HashNode_t *type_node = NULL;
             if (FindIdent(&type_node, symtab, call_id) >= 0 && type_node != NULL)
             {
-                struct RecordType *rec = get_record_type_from_node(type_node);
+                struct RecordType *rec = codegen_get_record_type_from_node(type_node);
                 if (rec != NULL)
                     return rec;
                 if (type_node->type != NULL)
@@ -166,7 +167,7 @@ static struct RecordType *codegen_expr_record_type(const struct Expression *expr
     {
         HashNode_t *target_node = NULL;
         if (FindIdent(&target_node, symtab, expr->pointer_subtype_id) >= 0 && target_node != NULL)
-            return get_record_type_from_node(target_node);
+            return codegen_get_record_type_from_node(target_node);
     }
 
     if (expr->type == EXPR_VAR_ID && expr->expr_data.id != NULL && symtab != NULL)
@@ -174,7 +175,7 @@ static struct RecordType *codegen_expr_record_type(const struct Expression *expr
         HashNode_t *node = NULL;
         if (FindIdent(&node, symtab, expr->expr_data.id) >= 0 && node != NULL)
         {
-            struct RecordType *record = get_record_type_from_node(node);
+            struct RecordType *record = codegen_get_record_type_from_node(node);
             if (record != NULL)
                 return record;
             if (node->type != NULL && kgpc_type_is_pointer(node->type) &&
@@ -1650,7 +1651,7 @@ static ListNode_t *codegen_materialize_array_of_const(struct Expression *expr,
 }
 
 /* Helper function to get TypeAlias from HashNode */
-static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
+static inline struct TypeAlias* codegen_get_type_alias_from_node(HashNode_t *node)
 {
     return hashnode_get_type_alias(node);
 }
@@ -2616,7 +2617,7 @@ static int codegen_sizeof_array_node(CodeGenContext *ctx, HashNode_t *node,
     
     if (element_size <= 0)
     {
-        struct TypeAlias *alias = get_type_alias_from_node(node);
+        struct TypeAlias *alias = codegen_get_type_alias_from_node(node);
         if (alias != NULL && alias->is_array)
         {
             if (codegen_sizeof_type(ctx, alias->array_element_type,
@@ -2624,9 +2625,9 @@ static int codegen_sizeof_array_node(CodeGenContext *ctx, HashNode_t *node,
                     &element_size, depth + 1) != 0)
                 return 1;
         }
-        else if (node_is_record_type(node))
+        else if (codegen_node_is_record_type(node))
         {
-            struct RecordType *record_type = get_record_type_from_node(node);
+            struct RecordType *record_type = codegen_get_record_type_from_node(node);
             if (record_type != NULL && codegen_sizeof_record(ctx, record_type, &element_size,
                     depth + 1) != 0)
                 return 1;
@@ -3040,22 +3041,22 @@ static int codegen_sizeof_hashnode(CodeGenContext *ctx, HashNode_t *node,
 
     if (node->hash_type == HASHTYPE_TYPE)
     {
-        struct RecordType *record = get_record_type_from_node(node);
+        struct RecordType *record = codegen_get_record_type_from_node(node);
         if (record != NULL)
             return codegen_sizeof_record(ctx, record, size_out, depth + 1);
-        struct TypeAlias *alias = get_type_alias_from_node(node);
+        struct TypeAlias *alias = codegen_get_type_alias_from_node(node);
         if (alias != NULL)
             return codegen_sizeof_alias(ctx, alias, size_out, depth + 1);
     }
 
-    if (node_is_record_type(node))
+    if (codegen_node_is_record_type(node))
     {
-        struct RecordType *record_type = get_record_type_from_node(node);
+        struct RecordType *record_type = codegen_get_record_type_from_node(node);
         if (record_type != NULL)
             return codegen_sizeof_record(ctx, record_type, size_out, depth + 1);
     }
 
-    struct TypeAlias *alias = get_type_alias_from_node(node);
+    struct TypeAlias *alias = codegen_get_type_alias_from_node(node);
     if (alias != NULL)
         return codegen_sizeof_alias(ctx, alias, size_out, depth + 1);
 
@@ -3162,6 +3163,74 @@ int codegen_get_record_size(CodeGenContext *ctx, struct Expression *expr,
         }
     }
 
+    if (expr->type == EXPR_ARRAY_ACCESS)
+    {
+        struct RecordType *elem_record = expr->array_element_record_type;
+        if (elem_record == NULL && ctx != NULL && ctx->symtab != NULL &&
+            expr->array_element_type_id != NULL)
+        {
+            HashNode_t *type_node = NULL;
+            if (FindIdent(&type_node, ctx->symtab, expr->array_element_type_id) >= 0 && type_node != NULL)
+            {
+                elem_record = codegen_get_record_type_from_node(type_node);
+                if (elem_record == NULL && type_node->type != NULL &&
+                    kgpc_type_is_record(type_node->type))
+                {
+                    elem_record = kgpc_type_get_record(type_node->type);
+                }
+                if (elem_record == NULL)
+                {
+                    struct TypeAlias *alias = codegen_get_type_alias_from_node(type_node);
+                    if (alias != NULL)
+                    {
+                        if (alias->inline_record_type != NULL)
+                            elem_record = alias->inline_record_type;
+                        else if (alias->target_type_id != NULL)
+                        {
+                            HashNode_t *target_node = NULL;
+                            if (FindIdent(&target_node, ctx->symtab, alias->target_type_id) >= 0 &&
+                                target_node != NULL)
+                            {
+                                elem_record = codegen_get_record_type_from_node(target_node);
+                                if (elem_record == NULL && target_node->type != NULL &&
+                                    kgpc_type_is_record(target_node->type))
+                                {
+                                    elem_record = kgpc_type_get_record(target_node->type);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if (elem_record == NULL && ctx != NULL)
+        {
+            struct Expression *array_expr = expr->expr_data.array_access_data.array_expr;
+            struct RecordField *field = codegen_lookup_record_field_expr(array_expr, ctx);
+            if (field != NULL)
+            {
+                if (field->array_element_record != NULL)
+                    elem_record = field->array_element_record;
+                else if (field->array_element_type_id != NULL && ctx->symtab != NULL)
+                {
+                    HashNode_t *field_node = NULL;
+                    if (FindIdent(&field_node, ctx->symtab, field->array_element_type_id) >= 0 &&
+                        field_node != NULL)
+                    {
+                        elem_record = codegen_get_record_type_from_node(field_node);
+                        if (elem_record == NULL && field_node->type != NULL &&
+                            kgpc_type_is_record(field_node->type))
+                        {
+                            elem_record = kgpc_type_get_record(field_node->type);
+                        }
+                    }
+                }
+            }
+        }
+        if (elem_record != NULL)
+            return codegen_sizeof_record(ctx, elem_record, size_out, 0);
+    }
+
     if (expr->type == EXPR_TYPECAST && expr->expr_data.typecast_data.expr != NULL)
         return codegen_get_record_size(ctx, expr->expr_data.typecast_data.expr, size_out);
 
@@ -3199,7 +3268,7 @@ int codegen_sizeof_pointer_target(CodeGenContext *ctx, struct Expression *pointe
     {
         HashNode_t *node = NULL;
         if (FindIdent(&node, ctx->symtab, type_id) >= 0 && node != NULL)
-            record_type = get_record_type_from_node(node);
+            record_type = codegen_get_record_type_from_node(node);
     }
 
     if (record_type == NULL && subtype == RECORD_TYPE && type_id == NULL)
@@ -3318,7 +3387,7 @@ static struct RecordField *codegen_find_unique_record_field(SymTab_t *symtab,
                     HashNode_t *node = (HashNode_t *)node_list->cur;
                     if (node != NULL && node->hash_type == HASHTYPE_TYPE)
                     {
-                        struct RecordType *record = get_record_type_from_node(node);
+                        struct RecordType *record = codegen_get_record_type_from_node(node);
                         if (record != NULL)
                         {
                             struct RecordField *field = codegen_lookup_record_field(record, field_id);
@@ -3471,9 +3540,28 @@ static long long codegen_record_field_effective_size(struct Expression *expr, Co
         return expr_effective_size_bytes(expr);
 
     struct RecordField *field = codegen_lookup_record_field_expr(expr, ctx);
+    if (field == NULL && expr->expr_data.record_access_data.field_id != NULL &&
+        expr->expr_data.record_access_data.record_expr != NULL &&
+        ctx != NULL && ctx->symtab != NULL)
+    {
+        struct RecordType *record = codegen_expr_record_type(
+            expr->expr_data.record_access_data.record_expr, ctx->symtab);
+        if (record != NULL)
+            field = semcheck_find_class_field_including_hidden(ctx->symtab, record,
+                expr->expr_data.record_access_data.field_id, NULL);
+    }
     long long field_size = 0;
     if (field != NULL && !field->is_array)
     {
+        if (expr->resolved_kgpc_type != NULL &&
+            expr->resolved_kgpc_type->kind == TYPE_KIND_PRIMITIVE &&
+            expr->resolved_kgpc_type->info.primitive_type_tag == REAL_TYPE)
+        {
+            long long resolved_size = kgpc_type_sizeof(expr->resolved_kgpc_type);
+            if (resolved_size > 0)
+                return resolved_size;
+        }
+
         if (field->type == REAL_TYPE && field->type_id != NULL)
         {
             if (pascal_identifier_equals(field->type_id, "Single"))
@@ -5360,7 +5448,7 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
                         }
                         if (!shortstring_index)
                         {
-                            struct TypeAlias *alias = get_type_alias_from_node(type_node);
+                            struct TypeAlias *alias = codegen_get_type_alias_from_node(type_node);
                             if (alias != NULL && alias->is_pointer)
                             {
                                 if (alias->pointer_type == SHORTSTRING_TYPE)
