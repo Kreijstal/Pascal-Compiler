@@ -313,9 +313,10 @@ int semcheck_is_unit_name(const char *name)
             return 1;
         cur = cur->next;
     }
-    /* Only treat arbitrary loaded unit names as unit qualifiers in program context.
-     * Inside a unit, prefer local identifiers over unrelated unit names. */
-    if (g_semcheck_current_unit_index == 0 && unit_registry_contains(name))
+    /* Treat any loaded unit name as a valid qualifier.  The call site
+     * (semcheck_recordaccess) already checks semcheck_has_value_ident()
+     * so local identifiers are preferred over unit names automatically. */
+    if (unit_registry_contains(name))
         return 1;
     return 0;
 }

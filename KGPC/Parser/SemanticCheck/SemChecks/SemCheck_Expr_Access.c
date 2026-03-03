@@ -2597,171 +2597,171 @@ int semcheck_funccall(int *type_return,
     }
 
 
-    if (id != NULL && pascal_identifier_equals(id, "Sqrt"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Sqrt"))
         return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
             "Sqrt", "kgpc_sqrt", REAL_TYPE);
 
-    if (id != NULL && pascal_identifier_equals(id, "Sin"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Sin"))
         return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
             "Sin", "kgpc_sin", REAL_TYPE);
 
-    if (id != NULL && pascal_identifier_equals(id, "Csc"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Csc"))
         return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
             "Csc", "kgpc_csc", REAL_TYPE);
 
-    if (id != NULL && pascal_identifier_equals(id, "Sinh"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Sinh"))
         return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
             "Sinh", "kgpc_sinh", REAL_TYPE);
 
-    if (id != NULL && pascal_identifier_equals(id, "Csch"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Csch"))
         return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
             "Csch", "kgpc_csch", REAL_TYPE);
 
-    if (id != NULL && pascal_identifier_equals(id, "Cos"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Cos"))
         return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
             "Cos", "kgpc_cos", REAL_TYPE);
 
-    if (id != NULL && pascal_identifier_equals(id, "Sec"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Sec"))
         return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
             "Sec", "kgpc_sec", REAL_TYPE);
 
-    if (id != NULL && pascal_identifier_equals(id, "Cosh"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Cosh"))
         return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
             "Cosh", "kgpc_cosh", REAL_TYPE);
 
-    if (id != NULL && pascal_identifier_equals(id, "Sech"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Sech"))
         return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
             "Sech", "kgpc_sech", REAL_TYPE);
 
-    if (id != NULL && pascal_identifier_equals(id, "Tan"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Tan"))
         return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
             "Tan", "kgpc_tan", REAL_TYPE);
 
-    if (id != NULL && pascal_identifier_equals(id, "Cot"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Cot"))
         return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
             "Cot", "kgpc_cot", REAL_TYPE);
 
-    if (id != NULL && pascal_identifier_equals(id, "Tanh"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Tanh"))
         return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
             "Tanh", "kgpc_tanh", REAL_TYPE);
 
-    if (id != NULL && pascal_identifier_equals(id, "Coth"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Coth"))
         return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
             "Coth", "kgpc_coth", REAL_TYPE);
 
-    if (id != NULL && pascal_identifier_equals(id, "ArcTan"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "ArcTan"))
         return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
             "ArcTan", "kgpc_arctan", REAL_TYPE);
 
-    if (id != NULL && pascal_identifier_equals(id, "ArcCot"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "ArcCot"))
         return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
             "ArcCot", "kgpc_arccot", REAL_TYPE);
 
-    if (id != NULL && pascal_identifier_equals(id, "ArcTan2"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "ArcTan2"))
         return semcheck_builtin_arctan2(type_return, symtab, expr, max_scope_lev);
 
-    if (id != NULL && pascal_identifier_equals(id, "Hypot"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Hypot"))
         return semcheck_builtin_hypot(type_return, symtab, expr, max_scope_lev);
 
-    if (id != NULL && pascal_identifier_equals(id, "ArcSin"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "ArcSin"))
         return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
             "ArcSin", "kgpc_arcsin", REAL_TYPE);
 
-    if (id != NULL && pascal_identifier_equals(id, "ArcCos"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "ArcCos"))
         return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
             "ArcCos", "kgpc_arccos", REAL_TYPE);
 
-    if (id != NULL && pascal_identifier_equals(id, "ArcCosh"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "ArcCosh"))
         return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
             "ArcCosh", "kgpc_arccosh", REAL_TYPE);
 
-    if (id != NULL && pascal_identifier_equals(id, "ArcSech"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "ArcSech"))
         return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
             "ArcSech", "kgpc_arcsech", REAL_TYPE);
 
-    if (id != NULL && pascal_identifier_equals(id, "ArcCsch"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "ArcCsch"))
         return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
             "ArcCsch", "kgpc_arccsch", REAL_TYPE);
 
-    if (id != NULL && pascal_identifier_equals(id, "ArcCoth"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "ArcCoth"))
         return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
             "ArcCoth", "kgpc_arccoth", REAL_TYPE);
 
-    if (id != NULL && pascal_identifier_equals(id, "ArcSinh"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "ArcSinh"))
         return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
             "ArcSinh", "kgpc_arcsinh", REAL_TYPE);
 
-    if (id != NULL && pascal_identifier_equals(id, "ArcTanh"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "ArcTanh"))
         return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
             "ArcTanh", "kgpc_arctanh", REAL_TYPE);
 
-    if (id != NULL && pascal_identifier_equals(id, "DegToRad"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "DegToRad"))
         return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
             "DegToRad", "kgpc_deg_to_rad", REAL_TYPE);
 
-    if (id != NULL && pascal_identifier_equals(id, "RadToDeg"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "RadToDeg"))
         return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
             "RadToDeg", "kgpc_rad_to_deg", REAL_TYPE);
 
-    if (id != NULL && pascal_identifier_equals(id, "DegToGrad"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "DegToGrad"))
         return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
             "DegToGrad", "kgpc_deg_to_grad", REAL_TYPE);
 
-    if (id != NULL && pascal_identifier_equals(id, "GradToDeg"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "GradToDeg"))
         return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
             "GradToDeg", "kgpc_grad_to_deg", REAL_TYPE);
 
-    if (id != NULL && pascal_identifier_equals(id, "GradToRad"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "GradToRad"))
         return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
             "GradToRad", "kgpc_grad_to_rad", REAL_TYPE);
 
-    if (id != NULL && pascal_identifier_equals(id, "RadToGrad"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "RadToGrad"))
         return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
             "RadToGrad", "kgpc_rad_to_grad", REAL_TYPE);
 
-    if (id != NULL && pascal_identifier_equals(id, "CycleToRad"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "CycleToRad"))
         return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
             "CycleToRad", "kgpc_cycle_to_rad", REAL_TYPE);
 
-    if (id != NULL && pascal_identifier_equals(id, "RadToCycle"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "RadToCycle"))
         return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
             "RadToCycle", "kgpc_rad_to_cycle", REAL_TYPE);
 
-    if (id != NULL && pascal_identifier_equals(id, "Ln"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Ln"))
         return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
             "Ln", "kgpc_ln", REAL_TYPE);
 
-    if (id != NULL && pascal_identifier_equals(id, "LogN"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "LogN"))
         return semcheck_builtin_logn(type_return, symtab, expr, max_scope_lev);
 
-    if (id != NULL && pascal_identifier_equals(id, "Exp"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Exp"))
         return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
             "Exp", "kgpc_exp", REAL_TYPE);
 
-    if (id != NULL && pascal_identifier_equals(id, "Round"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Round"))
         return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
             "Round", "kgpc_round", LONGINT_TYPE);
 
-    if (id != NULL && pascal_identifier_equals(id, "Trunc"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Trunc"))
         return semcheck_builtin_trunc(type_return, symtab, expr, max_scope_lev);
 
-    if (id != NULL && pascal_identifier_equals(id, "Int"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Int"))
         return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
             "Int", "kgpc_int", LONGINT_TYPE);
 
-    if (id != NULL && pascal_identifier_equals(id, "Frac"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Frac"))
         return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
             "Frac", "kgpc_frac", REAL_TYPE);
 
-    if (id != NULL && pascal_identifier_equals(id, "Ceil"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Ceil"))
         return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
             "Ceil", "kgpc_ceil", LONGINT_TYPE);
 
-    if (id != NULL && pascal_identifier_equals(id, "Floor"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Floor"))
         return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
             "Floor", "kgpc_floor", LONGINT_TYPE);
 
-    if (id != NULL && pascal_identifier_equals(id, "UpCase"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "UpCase"))
     {
         ListNode_t *args = expr->expr_data.function_call_data.args_expr;
         if (args != NULL && args->next == NULL)
@@ -2781,21 +2781,21 @@ int semcheck_funccall(int *type_return,
         }
     }
 
-    if (id != NULL && pascal_identifier_equals(id, "Odd"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Odd"))
         return semcheck_builtin_odd(type_return, symtab, expr, max_scope_lev);
 
-    if (id != NULL && pascal_identifier_equals(id, "Sqr"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Sqr"))
         return semcheck_builtin_sqr(type_return, symtab, expr, max_scope_lev);
 
-    if (id != NULL && pascal_identifier_equals(id, "Power"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Power"))
         return semcheck_builtin_power(type_return, symtab, expr, max_scope_lev);
 
     /* Random is resolved through normal function lookup (system.p or FPC RTL) */
     
-    if (id != NULL && pascal_identifier_equals(id, "RandomRange"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "RandomRange"))
         return semcheck_builtin_randomrange(type_return, symtab, expr, max_scope_lev);
 
-    if (id != NULL && pascal_identifier_equals(id, "Aligned"))
+    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Aligned"))
         return semcheck_builtin_aligned(type_return, symtab, expr, max_scope_lev);
 
     /***** FIRST VERIFY FUNCTION IDENTIFIER *****/
