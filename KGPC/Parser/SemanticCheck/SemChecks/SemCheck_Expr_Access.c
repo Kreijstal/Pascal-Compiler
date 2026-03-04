@@ -3358,8 +3358,7 @@ int semcheck_funccall(int *type_return,
                 const char *method_name = (expr->expr_data.function_call_data.placeholder_method_name != NULL)
                     ? expr->expr_data.function_call_data.placeholder_method_name : id;
                 if (method_name != NULL &&
-                    ((strncasecmp(method_name, "Create", 6) == 0 &&
-                      (method_name[6] == '\0' || (method_name[6] >= '0' && method_name[6] <= '9'))) ||
+                    (strncasecmp(method_name, "Create", 6) == 0 ||
                      strcasecmp(method_name, "Destroy") == 0))
                 {
                     /* Defer constructor/destructor handling to the specialized path below. */
@@ -3654,8 +3653,7 @@ int semcheck_funccall(int *type_return,
                     const char *method_name = (expr->expr_data.function_call_data.placeholder_method_name != NULL)
                         ? expr->expr_data.function_call_data.placeholder_method_name : id;
                     if (method_name != NULL &&
-                        ((strncasecmp(method_name, "Create", 6) == 0 &&
-                          (method_name[6] == '\0' || (method_name[6] >= '0' && method_name[6] <= '9'))) ||
+                        (strncasecmp(method_name, "Create", 6) == 0 ||
                          strcasecmp(method_name, "Destroy") == 0))
                     {
                         /* Defer constructor/destructor handling to the specialized path below. */
@@ -3838,9 +3836,7 @@ int semcheck_funccall(int *type_return,
     }
     
     if (id != NULL &&
-        ((strncasecmp(id, "Create", 6) == 0 &&
-          (id[6] == '\0' || (id[6] >= '0' && id[6] <= '9'))) ||
-         strcasecmp(id, "Destroy") == 0 ||
+        (strncasecmp(id, "Create", 6) == 0 || strcasecmp(id, "Destroy") == 0 ||
          is_potential_static_method_call) &&
         args_given != NULL) {
         struct Expression *first_arg = (struct Expression *)args_given->cur;
@@ -4166,9 +4162,20 @@ int semcheck_funccall(int *type_return,
                     method_name = expr->expr_data.function_call_data.placeholder_method_name;
                 if (method_name == NULL)
                     method_name = id;
-                if (strncasecmp(method_name, "Create", 6) == 0 &&
-                    (method_name[6] == '\0' || (method_name[6] >= '0' && method_name[6] <= '9')) &&
-                    owner_type != NULL) {
+                /* Verify the method was actually declared as a constructor
+                 * (using the 'constructor' keyword), not just a function whose
+                 * name happens to start with "Create" (e.g. CreateDriver). */
+                int method_is_declared_constructor = 0;
+                if (strncasecmp(method_name, "Create", 6) == 0 && record_info != NULL)
+                {
+                    struct MethodTemplate *tmpl =
+                        from_cparser_get_method_template(record_info, method_name);
+                    if (tmpl != NULL && tmpl->kind == METHOD_TEMPLATE_CONSTRUCTOR)
+                        method_is_declared_constructor = 1;
+                    else if (tmpl == NULL)
+                        method_is_declared_constructor = 1; /* inherited ctor without template */
+                }
+                if (method_is_declared_constructor && owner_type != NULL) {
                     if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                         fprintf(stderr, "[SemCheck] semcheck_funccall: Setting up return type for constructor %s\n", method_name);
                     }
@@ -5399,11 +5406,25 @@ skip_overload_resolution:
         if (expr->resolved_kgpc_type == NULL &&
             hash_return->method_name != NULL &&
             strncasecmp(hash_return->method_name, "Create", 6) == 0 &&
-            (hash_return->method_name[6] == '\0' || (hash_return->method_name[6] >= '0' && hash_return->method_name[6] <= '9')) &&
             hash_return->owner_class != NULL)
         {
+            /* Only force the return type to the owner class if the method was
+             * actually declared as a constructor (METHOD_TEMPLATE_CONSTRUCTOR).
+             * Functions like CreateDriver that merely start with "Create" must
+             * use their declared return type. */
+            int is_declared_ctor = 0;
             struct RecordType *ctor_owner = semcheck_lookup_record_type(symtab, hash_return->owner_class);
-            if (ctor_owner != NULL && record_type_is_class(ctor_owner) && !ctor_owner->is_type_helper)
+            if (ctor_owner != NULL)
+            {
+                struct MethodTemplate *tmpl =
+                    from_cparser_get_method_template(ctor_owner, hash_return->method_name);
+                if (tmpl != NULL && tmpl->kind == METHOD_TEMPLATE_CONSTRUCTOR)
+                    is_declared_ctor = 1;
+                else if (tmpl == NULL)
+                    is_declared_ctor = 1; /* inherited ctor without template */
+            }
+            if (is_declared_ctor && ctor_owner != NULL &&
+                record_type_is_class(ctor_owner) && !ctor_owner->is_type_helper)
             {
                 KgpcType *record_kgpc = create_record_type(ctor_owner);
                 if (record_kgpc != NULL)
@@ -5532,10 +5553,13 @@ skip_overload_resolution:
                         ctor_method = hash_return->method_name;
                     else
                         ctor_method = expr->expr_data.function_call_data.id;
-                    if (ctor_method != NULL && strncasecmp(ctor_method, "Create", 6) == 0 &&
-                        (ctor_method[6] == '\0' || (ctor_method[6] >= '0' && ctor_method[6] <= '9')))
+                    if (ctor_method != NULL && strncasecmp(ctor_method, "Create", 6) == 0)
                     {
-                        if (expr->resolved_kgpc_type != NULL &&
+                        /* Only skip override if the method is a declared constructor,
+                         * not a regular function that starts with "Create". */
+                        int is_real_ctor = expr->expr_data.function_call_data.is_constructor_call;
+                        if (is_real_ctor &&
+                            expr->resolved_kgpc_type != NULL &&
                             expr->resolved_kgpc_type->kind == TYPE_KIND_POINTER)
                         {
                             skip_override_for_ctor = 1;

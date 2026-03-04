@@ -6770,6 +6770,15 @@ static void annotate_method_template(struct MethodTemplate *method_template, ast
         return;
 
     method_template->kind = METHOD_TEMPLATE_UNKNOWN;
+
+    /* Check the node type for constructor/destructor declarations.
+     * The parser uses PASCAL_T_CONSTRUCTOR_DECL / PASCAL_T_DESTRUCTOR_DECL
+     * for methods declared with the 'constructor' / 'destructor' keyword,
+     * so the kind must be set from the node type, not from child sym_names. */
+    if (method_ast->typ == PASCAL_T_CONSTRUCTOR_DECL)
+        method_template->kind = METHOD_TEMPLATE_CONSTRUCTOR;
+    else if (method_ast->typ == PASCAL_T_DESTRUCTOR_DECL)
+        method_template->kind = METHOD_TEMPLATE_DESTRUCTOR;
     
     /* First pass: check ALL children for "class" keyword before the method name.
      * The parser produces an IDENTIFIER child with sym->name="class" when
