@@ -10201,6 +10201,8 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
                     struct MethodTemplate *template = (struct MethodTemplate *)tmpl_cur->cur;
                     if (template != NULL)
                     {
+                        if (template->is_class_method)
+                            template->is_static = 1;
                         {
                             int param_count = from_cparser_count_params_ast(template->params_ast);
                             char *param_sig = param_type_signature_from_params_ast(template->params_ast);

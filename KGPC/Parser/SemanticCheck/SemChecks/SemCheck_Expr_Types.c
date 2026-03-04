@@ -13,6 +13,7 @@
 */
 
 #include "SemCheck_Expr_Internal.h"
+#include "unit_registry.h"
 
 int semcheck_resolve_scoped_enum_literal(SymTab_t *symtab, const char *type_name,
     const char *literal_name, long long *out_value);
@@ -1800,6 +1801,19 @@ int semcheck_recordaccess(int *type_return,
         
         /* Check if the "unit name" identifier exists in symbol table */
         int find_result = FindIdent(&unit_check, symtab, unit_id);
+        if (!unit_is_qualifier && find_result == -1 && unit_registry_contains(unit_id))
+        {
+            unit_is_qualifier = 1;
+            if (getenv("KGPC_DEBUG_RECORD_ACCESS") != NULL)
+            {
+                fprintf(stderr,
+                    "[KGPC_DEBUG_RECORD_ACCESS] unit-qualifier registry fallback: unit=%s field=%s\n",
+                    unit_id != NULL ? unit_id : "(null)",
+                    field_id != NULL ? field_id : "(null)");
+            }
+            if (getenv("KGPC_ASSERT_UNIT_QUALIFIER") != NULL)
+                assert(find_result == -1 && "unit-qualifier registry fallback requires unresolved name");
+        }
         if (unit_is_qualifier && find_result == -1)
         {
             if (getenv("KGPC_DEBUG_RECORD_ACCESS") != NULL)
