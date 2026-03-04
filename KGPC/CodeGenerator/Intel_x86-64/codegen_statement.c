@@ -8942,8 +8942,9 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         addr_reg = NULL;
         
         /* 4. Pass arguments as usual */
-        inst_list = codegen_pass_arguments(call_args, inst_list, ctx, call_kgpc_type, 
-            unmangled_name, 0, NULL);
+        const char *proc_name_hint = (unmangled_name != NULL) ? unmangled_name : proc_name;
+        inst_list = codegen_pass_arguments(call_args, inst_list, ctx, call_kgpc_type,
+            proc_name_hint, 0, NULL);
         
         /* 5. Zero out %eax for varargs ABI compatibility */
         inst_list = codegen_vect_reg(inst_list, 0);
@@ -9055,8 +9056,9 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         
         /* When passing static link, shift arguments by 1 register position */
         int arg_start_index = should_pass_static_link ? 1 : 0;
-        inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, call_kgpc_type, 
-            unmangled_name, arg_start_index, NULL);
+        const char *proc_name_hint = (unmangled_name != NULL) ? unmangled_name : proc_name;
+        inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, call_kgpc_type,
+            proc_name_hint, arg_start_index, NULL);
 
         if (should_pass_static_link)
         {

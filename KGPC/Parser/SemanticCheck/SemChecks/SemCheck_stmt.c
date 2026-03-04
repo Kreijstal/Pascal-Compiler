@@ -1567,7 +1567,8 @@ static int try_resolve_builtin_procedure(SymTab_t *symtab,
     HashNode_t *existing = NULL;
     int force_builtin = pascal_identifier_equals(expected_name, "Assign") ||
                         pascal_identifier_equals(expected_name, "Val") ||
-                        pascal_identifier_equals(expected_name, "Str");
+                        pascal_identifier_equals(expected_name, "Str") ||
+                        pascal_identifier_equals(expected_name, "SetCodePage");
     if (!force_builtin &&
         FindIdent(&existing, symtab, proc_id) != -1 && existing != NULL &&
         existing->hash_type != HASHTYPE_BUILTIN_PROCEDURE)
@@ -2842,7 +2843,7 @@ static int semcheck_builtin_reallocmem(SymTab_t *symtab, struct Statement *stmt,
 
 static int semcheck_builtin_setcodepage(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
-    return semcheck_builtin_untyped_call(symtab, stmt, max_scope_lev, 0);
+    return semcheck_builtin_untyped_call(symtab, stmt, max_scope_lev, 1);
 }
 
 static int semcheck_builtin_new(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)

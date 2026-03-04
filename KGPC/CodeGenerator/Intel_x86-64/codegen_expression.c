@@ -7202,6 +7202,19 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 (formal_arg_decl->tree_data.var_decl_data.is_var_param ||
                  formal_arg_decl->tree_data.var_decl_data.is_untyped_param);
         }
+        if (!is_var_param && arg_num == 0)
+        {
+            if (procedure_name != NULL &&
+                pascal_identifier_equals(procedure_name, "SetCodePage"))
+            {
+                is_var_param = 1;
+            }
+            if (!is_var_param && procedure_name != NULL &&
+                strncasecmp(procedure_name, "setcodepage", 11) == 0)
+            {
+                is_var_param = 1;
+            }
+        }
         if (is_self_param && codegen_self_param_is_class(formal_arg_decl, ctx))
             is_var_param = 0;
         int is_array_param = (formal_arg_decl != NULL && formal_arg_decl->type == TREE_ARR_DECL);
@@ -7239,9 +7252,27 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         int expected_type = codegen_param_expected_type(formal_arg_decl, ctx->symtab);
         if (expected_type == UNKNOWN_TYPE && procedure_name != NULL)
             expected_type = codegen_expected_type_for_builtin(procedure_name);
+        const char *call_id = NULL;
+        if (call_expr != NULL && call_expr->type == EXPR_FUNCTION_CALL)
+            call_id = call_expr->expr_data.function_call_data.id;
         const char *call_mangled = NULL;
         if (call_expr != NULL && call_expr->type == EXPR_FUNCTION_CALL)
             call_mangled = call_expr->expr_data.function_call_data.mangled_id;
+        if (!is_var_param && arg_num == 0 && call_id != NULL &&
+            pascal_identifier_equals(call_id, "SetCodePage"))
+        {
+            is_var_param = 1;
+        }
+        if (!is_var_param && arg_num == 0 && call_id != NULL &&
+            strncasecmp(call_id, "setcodepage", 11) == 0)
+        {
+            is_var_param = 1;
+        }
+        if (!is_var_param && arg_num == 0 && call_mangled != NULL &&
+            strncasecmp(call_mangled, "setcodepage", 11) == 0)
+        {
+            is_var_param = 1;
+        }
         if ((procedure_name != NULL && strcmp(procedure_name, "kgpc_trunc_currency") == 0) ||
             (call_mangled != NULL && strcmp(call_mangled, "kgpc_trunc_currency") == 0))
             expected_type = INT64_TYPE;

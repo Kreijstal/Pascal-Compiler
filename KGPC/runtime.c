@@ -2344,6 +2344,93 @@ static size_t kgpc_string_known_length(const char *value)
     return strlen(value);
 }
 
+void kgpc_string_assign_take(char **target, char *value);
+
+/* FPC RTL helper for codepage conversion (provided by compiled RTL when present). */
+extern char *FPC_ANSISTR_TO_ANSISTR(const char *s, int32_t cp);
+
+/* Robust SetCodePage wrapper: accepts either a var RawByteString (by-ref)
+ * or a raw string pointer (by-value) to avoid crashes when call sites
+ * accidentally pass the value. */
+void setcodepage_rbs_i_b(void *s_arg, int32_t codepage, int32_t convert)
+{
+    if (s_arg == NULL)
+        return;
+
+    char *str = NULL;
+    int by_value = 0;
+
+    /* If s_arg itself looks like a managed string, treat it as by-value. */
+    if (kgpc_string_is_managed((char *)s_arg))
+    {
+        str = (char *)s_arg;
+        by_value = 1;
+    }
+    else
+    {
+        char **s_ptr = (char **)s_arg;
+        str = (s_ptr != NULL) ? *s_ptr : NULL;
+    }
+
+    if (str == NULL)
+        return;
+    if (kgpc_string_known_length(str) == 0)
+        return;
+
+    if (!convert || by_value)
+    {
+        KgpcStringHeader *hdr = kgpc_string_header(str);
+        if (hdr != NULL)
+            hdr->codepage = (uint16_t)codepage;
+        return;
+    }
+
+    /* Convert (by-ref only): delegate to RTL conversion helper. */
+    char *converted = FPC_ANSISTR_TO_ANSISTR(str, codepage);
+    if (converted == NULL)
+        return;
+    kgpc_string_assign_take((char **)s_arg, converted);
+}
+
+/* FPC RTL compatibility: some bootstrap constants use WideChar literals
+ * in PAnsiChar contexts, which KGPC currently lowers via the
+ * widechar__op_assign_olevariant_wc symbol. Provide a real conversion
+ * by returning a stable, null-terminated single-byte string. */
+static char *kgpc_cached_widechar_pchar(uint16_t value)
+{
+    static char *cache[256] = {0};
+    static char *fallback = NULL;
+
+    if (value < 256)
+    {
+        if (cache[value] == NULL)
+        {
+            char *buf = (char *)malloc(2);
+            if (buf == NULL)
+                return kgpc_alloc_empty_string();
+            buf[0] = (char)value;
+            buf[1] = '\0';
+            cache[value] = buf;
+        }
+        return cache[value];
+    }
+
+    if (fallback == NULL)
+    {
+        fallback = (char *)malloc(2);
+        if (fallback == NULL)
+            return kgpc_alloc_empty_string();
+        fallback[0] = '?';
+        fallback[1] = '\0';
+    }
+    return fallback;
+}
+
+char *widechar__op_assign_olevariant_wc(uint16_t value)
+{
+    return kgpc_cached_widechar_pchar(value);
+}
+
 static char *kgpc_string_alloc_with_length(size_t length)
 {
     size_t total = sizeof(KgpcStringHeader) + length + 1;
@@ -6985,4 +7072,3 @@ void kgpc_init_widestringmanager(void)
     widestringmanager[23] = (void *)kgpc_stub_compare_wide;         /* CompareUnicode */
     widestringmanager[24] = (void *)kgpc_default_get_standard_codepage;
 }
-

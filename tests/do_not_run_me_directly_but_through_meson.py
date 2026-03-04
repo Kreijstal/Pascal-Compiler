@@ -3231,13 +3231,13 @@ def _discover_and_add_fpc_rtl_tests():
                 try:
                     compiler_output = run_compiler(input_file, asm_file, flags=FPC_RTL_FLAGS)
                 except subprocess.CalledProcessError:
-                    self.skipTest(f"FPC RTL compilation failed for {test_base_name}")
+                    self.fail(f"FPC RTL compilation failed for {test_base_name}")
                     return
 
                 try:
                     self.compile_executable(asm_file, executable_file)
                 except Exception:
-                    self.skipTest(f"FPC RTL linking failed for {test_base_name}")
+                    self.fail(f"FPC RTL linking failed for {test_base_name}")
                     return
 
                 stdin_input = None
