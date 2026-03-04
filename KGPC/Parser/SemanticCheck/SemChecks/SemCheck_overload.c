@@ -2180,6 +2180,13 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                         quality.int_promo_rank = semcheck_integer_promotion_rank(
                             arg_tag, arg_kgpc, formal_tag, formal_kgpc, is_integer_literal);
                     }
+                    /* When an integer argument matches an enum formal, penalize
+                     * so that real integer formals (SizeInt, Int64, etc.) are
+                     * preferred over enum formals in overload resolution. */
+                    else if (is_integer_type(arg_tag) && formal_tag == ENUM_TYPE)
+                    {
+                        quality.int_promo_rank = 10;
+                    }
                     /* For char types, prefer smaller formal type (AnsiChar over WideChar) */
                     if (arg_tag == CHAR_TYPE && formal_tag == CHAR_TYPE)
                     {

@@ -811,6 +811,7 @@ int semcheck_funccall(int *type_return,
     HashNode_t *hash_return;
     Tree_t *arg_decl;
     int was_unit_qualified = 0;
+    char *unit_qualifier_name = NULL;
     assert(symtab != NULL);
     assert(expr != NULL);
     assert(expr->type == EXPR_FUNCTION_CALL);
@@ -1187,6 +1188,8 @@ int semcheck_funccall(int *type_return,
             {
                 /* Unit-qualified call; qualifier is already stripped from id. */
                 was_unit_qualified = 1;
+                if (unit_qualifier_name == NULL)
+                    unit_qualifier_name = strdup(qualifier);
             }
 
             free(expr->expr_data.function_call_data.call_qualifier);
@@ -1412,6 +1415,8 @@ int semcheck_funccall(int *type_return,
                     ListNode_t *func_candidates = FindAllIdents(symtab, real_func_name);
                     if (func_candidates != NULL)
                     {
+                        if (unit_qualifier_name == NULL && first_arg->expr_data.id != NULL)
+                            unit_qualifier_name = strdup(first_arg->expr_data.id);
                         ListNode_t *remaining_args = args_given->next;
                         destroy_expr(first_arg);
                         args_given->cur = NULL;
@@ -1536,6 +1541,8 @@ int semcheck_funccall(int *type_return,
                     fprintf(stderr, "[SemCheck] funccall unit-qual strip: receiver=%s id=%s\n",
                         first_arg->expr_data.id, id != NULL ? id : "(null)");
                 }
+                if (unit_qualifier_name == NULL && first_arg->expr_data.id != NULL)
+                    unit_qualifier_name = strdup(first_arg->expr_data.id);
                 ListNode_t *remaining_args = args_given->next;
                 destroy_expr(first_arg);
                 args_given->cur = NULL;
@@ -4175,6 +4182,55 @@ int semcheck_funccall(int *type_return,
     if (id != NULL) {
         overload_candidates = FindAllIdents(symtab, id);
     }
+    /* When the call was unit-qualified (e.g. System.Foo), filter candidates to
+     * only those belonging to the specified unit.  This prevents a same-named
+     * symbol in the current unit from shadowing the intended unit's version.
+     * Fall back to unfiltered results if filtering would leave no candidates. */
+    if (was_unit_qualified && unit_qualifier_name != NULL && overload_candidates != NULL)
+    {
+        ListNode_t *filtered = NULL;
+        for (ListNode_t *cn = overload_candidates; cn != NULL; cn = cn->next)
+        {
+            HashNode_t *hn = (HashNode_t *)cn->cur;
+            if (hn == NULL) continue;
+            int match = 0;
+            /* Check source_unit_index on the hash node (set for types/vars) */
+            if (hn->source_unit_index != 0)
+            {
+                const char *src_name = unit_registry_get(hn->source_unit_index);
+                if (src_name != NULL && pascal_identifier_equals(src_name, unit_qualifier_name))
+                    match = 1;
+            }
+            /* For function/procedure nodes, check the AST definition's source_unit_index */
+            if (!match && hn->type != NULL && hn->type->kind == TYPE_KIND_PROCEDURE &&
+                hn->type->info.proc_info.definition != NULL)
+            {
+                int def_unit_idx =
+                    hn->type->info.proc_info.definition->tree_data.subprogram_data.source_unit_index;
+                if (def_unit_idx != 0)
+                {
+                    const char *src_name = unit_registry_get(def_unit_idx);
+                    if (src_name != NULL && pascal_identifier_equals(src_name, unit_qualifier_name))
+                        match = 1;
+                }
+            }
+            if (match)
+            {
+                ListNode_t *new_node = CreateListNode(hn, LIST_UNSPECIFIED);
+                if (filtered == NULL)
+                    filtered = new_node;
+                else
+                    PushListNodeBack(filtered, new_node);
+            }
+        }
+        if (filtered != NULL)
+        {
+            destroy_list(overload_candidates);
+            overload_candidates = filtered;
+        }
+        free(unit_qualifier_name);
+        unit_qualifier_name = NULL;
+    }
     if (id != NULL && args_given != NULL)
     {
         struct Expression *first_arg = (struct Expression *)args_given->cur;
@@ -6166,6 +6222,8 @@ funccall_cleanup:
         DestroyList(overload_candidates);
     if (mangled_name != NULL)
         free(mangled_name);
+    if (unit_qualifier_name != NULL)
+        free(unit_qualifier_name);
     return final_status;
 }
 

@@ -2074,6 +2074,17 @@ int expr_is_char_set_ctx(const struct Expression *expr, CodeGenContext *ctx)
                     element->lower->expr_data.string != NULL &&
                     strlen(element->lower->expr_data.string) == 1)
                     return 1;
+                /* Integer elements > 31 can't fit in a 32-bit register set;
+                   route to memory-based 32-byte set (e.g. [97..122] for 'a'..'z') */
+                if (element->lower->type == EXPR_INUM &&
+                    element->lower->expr_data.i_num > 31)
+                    return 1;
+            }
+            if (element->upper != NULL)
+            {
+                if (element->upper->type == EXPR_INUM &&
+                    element->upper->expr_data.i_num > 31)
+                    return 1;
             }
             node = node->next;
         }
