@@ -6870,7 +6870,7 @@ proccall_parent_resolve_done:
             if (buf_pos < (int)sizeof(arg_types_buf) - 1)
                 arg_types_buf[buf_pos++] = ')';
             arg_types_buf[buf_pos] = '\0';
-            
+
             /* Now build a string showing available overloads */
             char overloads_buf[2048] = "";
             int ovl_pos = 0;
@@ -6932,7 +6932,7 @@ proccall_parent_resolve_done:
                     }
                 }
             }
-            
+
             if (overloads_buf[0] != '\0')
             {
                 semcheck_error_with_context(

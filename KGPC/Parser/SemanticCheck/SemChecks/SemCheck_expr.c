@@ -1292,8 +1292,9 @@ int semcheck_expr_main(SymTab_t *symtab, struct Expression *expr,
      * - Procedural variable calls which may be re-evaluated during name mangling
      * - EXPR_NIL placeholders used for constructor Self arguments (already typed) */
     int was_already_resolved = (expr->type == EXPR_FUNCTION_CALL &&
-                                expr->expr_data.function_call_data.is_procedural_var_call &&
-                                expr->resolved_kgpc_type != NULL);
+                                expr->resolved_kgpc_type != NULL &&
+                                (expr->expr_data.function_call_data.is_procedural_var_call ||
+                                 expr->expr_data.function_call_data.is_constructor_call));
     /* Also preserve resolved_kgpc_type for NIL expressions that already have a type
      * (e.g., constructor Self placeholders with the class pointer type) */
     if (expr->type == EXPR_NIL && expr->resolved_kgpc_type != NULL)

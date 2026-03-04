@@ -1453,37 +1453,8 @@ int semcheck_recordaccess(int *type_return,
         *type_return = UNKNOWN_TYPE;
         return 1;
     }
-    if (getenv("KGPC_DEBUG_RECORD_ACCESS") != NULL)
-    {
-        const char *rec_id = NULL;
-        if (record_expr->type == EXPR_VAR_ID)
-            rec_id = record_expr->expr_data.id;
-        fprintf(stderr,
-            "[KGPC_DEBUG_RECORD_ACCESS] enter: expr=%p record_expr=%p type=%d field=%s rec_id=%s\n",
-            (void *)expr,
-            (void *)record_expr,
-            record_expr->type,
-            field_id != NULL ? field_id : "(null)",
-            rec_id != NULL ? rec_id : "(null)");
-    }
     if (record_expr->type == EXPR_VAR_ID)
         assert(record_expr->expr_data.id != NULL);
-    if (getenv("KGPC_DEBUG_RECORD_ACCESS") != NULL && record_expr->type == EXPR_VAR_ID)
-    {
-        const char *rec_id = record_expr->expr_data.id;
-        HashNode_t *rec_node = NULL;
-        int rec_index = -1;
-        if (rec_id != NULL)
-            rec_index = FindIdent(&rec_node, symtab, rec_id);
-        fprintf(stderr,
-            "[KGPC_DEBUG_RECORD_ACCESS] record_expr id=%s is_unit=%d has_value=%d find_ident=%d node=%p type=%d\n",
-            rec_id != NULL ? rec_id : "(null)",
-            rec_id != NULL ? semcheck_is_unit_name(rec_id) : 0,
-            rec_id != NULL ? semcheck_has_value_ident(symtab, rec_id) : 0,
-            rec_index,
-            (void *)rec_node,
-            rec_node != NULL ? rec_node->hash_type : -1);
-    }
 
     if (record_expr->type == EXPR_FUNCTION_CALL)
     {
@@ -2023,7 +1994,6 @@ int semcheck_recordaccess(int *type_return,
             }
         }
     }
-
     /* Enum member access in const expressions: resolve TEnum.Value even if TEnum
      * isn't found as a value in the current scope. */
     if (!mutating && record_expr->type == EXPR_VAR_ID && record_expr->expr_data.id != NULL)
@@ -2550,11 +2520,6 @@ SKIP_SELF_FIELD_REWRITE:
         }
     }
 
-    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
-        fprintf(stderr, "[SemCheck] semcheck_recordaccess: record_info=%p, is_class=%d\n",
-            record_info,
-            record_info ? record_type_is_class(record_info) : -1);
-    }
 
     if (record_info == NULL)
     {
@@ -3055,7 +3020,6 @@ SKIP_SELF_FIELD_REWRITE:
                         !record_info->is_type_helper &&
                         method_name != NULL &&
                         strncasecmp(method_name, "Create", 6) == 0);
-
                     /* Re-run semantic checking as a function call */
                     semcheck_expr_set_resolved_type(expr, UNKNOWN_TYPE);
                     int funccall_result = semcheck_funccall(type_return, symtab, expr, max_scope_lev, mutating);
@@ -3065,6 +3029,7 @@ SKIP_SELF_FIELD_REWRITE:
                      * return TResolveReferenceVisitor, not TObject). */
                     if (is_constructor_call)
                     {
+                        expr->expr_data.function_call_data.is_constructor_call = 1;
                         KgpcType *record_kgpc = create_record_type(record_info);
                         if (record_kgpc != NULL)
                         {

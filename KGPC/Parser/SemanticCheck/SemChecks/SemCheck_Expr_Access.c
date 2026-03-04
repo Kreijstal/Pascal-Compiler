@@ -4093,6 +4093,7 @@ int semcheck_funccall(int *type_return,
                     if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                         fprintf(stderr, "[SemCheck] semcheck_funccall: Setting up return type for constructor %s\n", method_name);
                     }
+                    expr->expr_data.function_call_data.is_constructor_call = 1;
                     
                     /* Return type is the static class reference used at the call site,
                      * even if the constructor is inherited from a base class. */
