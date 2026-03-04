@@ -1,4 +1,5 @@
 program arcsin_arccos_function;
+uses Math;
 var
   r: real;
 begin

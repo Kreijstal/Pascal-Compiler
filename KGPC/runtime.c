@@ -2782,6 +2782,40 @@ long long kgpc_dynarray_compute_high(const void *descriptor_ptr, long long lower
     return lower_bound + length - 1;
 }
 
+char **kgpc_array_string_to_ppchar(const void *descriptor_ptr, long long reserve_entries)
+{
+    if (descriptor_ptr == NULL)
+        return NULL;
+
+    const kgpc_dynarray_descriptor_t *descriptor =
+        (const kgpc_dynarray_descriptor_t *)descriptor_ptr;
+
+    long long length = descriptor->length;
+    if (length <= 0)
+        return NULL;
+
+    char **data = (char **)descriptor->data;
+
+    /* Allocate: reserve_entries + length + 1 (null terminator) */
+    long long total = reserve_entries + length + 1;
+    char **result = (char **)malloc(total * sizeof(char *));
+    if (result == NULL)
+        return NULL;
+
+    /* Fill reserved slots with NULL */
+    for (long long i = 0; i < reserve_entries; i++)
+        result[i] = NULL;
+
+    /* Copy string pointers from the dynamic array */
+    for (long long i = 0; i < length; i++)
+        result[reserve_entries + i] = data[i];
+
+    /* Null-terminate */
+    result[reserve_entries + length] = NULL;
+
+    return result;
+}
+
 /* Copy a string literal to a char array (fixed-size buffer)
  * Fills the entire array. If the string is shorter, pads with nulls.
  * If the string is longer, truncates to fit.
@@ -6132,6 +6166,20 @@ long long kgpc_int(double value)
     return kgpc_trunc(value);
 }
 
+/* kgpc_int_real: Int() intrinsic returning the integer part as a double.
+   Used by FPC RTL [internproc:fpc_in_int_real]. */
+double kgpc_int_real(double value)
+{
+    return (double)kgpc_trunc(value);
+}
+
+/* kgpc_pi: Pi() intrinsic returning the mathematical constant.
+   Used by FPC RTL [internproc:fpc_in_pi_real]. */
+double kgpc_pi(void)
+{
+    return 3.14159265358979323846;
+}
+
 double kgpc_frac(double value)
 {
     return value - (double)kgpc_trunc(value);
@@ -6547,10 +6595,26 @@ long long FPC_INTERLOCKEDCOMPAREEXCHANGE64(long long *target, long long new_val,
 /* interlockedexchangeadd_li_li and interlockedcompareexchange64_i64_i64_i64
    are now emitted from Pascal source.  Only the FPC_* aliases above are needed. */
 
-/* lo_li: [internproc] Lo() function — returns low word of a LongInt */
-long lo_li(long value)
+/* Lo/Hi for Word/Integer — [internproc] fpc_in_lo_Word / fpc_in_hi_Word */
+uint8_t lo_w(uint16_t value)
 {
-    return value & 0xFFFFFFFF;
+    return (uint8_t)value;
+}
+
+uint8_t hi_w(uint16_t value)
+{
+    return (uint8_t)(value >> 8);
+}
+
+/* Lo/Hi for LongInt/DWord — [internproc] fpc_in_lo_long / fpc_in_hi_long */
+uint16_t lo_li(int32_t value)
+{
+    return (uint16_t)value;
+}
+
+uint16_t hi_li(int32_t value)
+{
+    return (uint16_t)((uint32_t)value >> 16);
 }
 
 /* Lo/Hi for Int64/QWord — [internproc] fpc_in_lo_qword / fpc_in_hi_qword */
@@ -6572,6 +6636,40 @@ uint32_t lo_qw(uint64_t value)
 uint32_t hi_qw(uint64_t value)
 {
     return (uint32_t)(value >> 32);
+}
+
+/* Set operations for 256-bit sets (set of Char / set of AnsiChar).
+   Each set is 32 bytes = 4 x uint64. */
+void kgpc_set_union_256(void *dest, const void *a, const void *b)
+{
+    const uint64_t *sa = (const uint64_t *)a, *sb = (const uint64_t *)b;
+    uint64_t *d = (uint64_t *)dest;
+    d[0] = sa[0] | sb[0]; d[1] = sa[1] | sb[1];
+    d[2] = sa[2] | sb[2]; d[3] = sa[3] | sb[3];
+}
+
+void kgpc_set_intersect_256(void *dest, const void *a, const void *b)
+{
+    const uint64_t *sa = (const uint64_t *)a, *sb = (const uint64_t *)b;
+    uint64_t *d = (uint64_t *)dest;
+    d[0] = sa[0] & sb[0]; d[1] = sa[1] & sb[1];
+    d[2] = sa[2] & sb[2]; d[3] = sa[3] & sb[3];
+}
+
+void kgpc_set_diff_256(void *dest, const void *a, const void *b)
+{
+    const uint64_t *sa = (const uint64_t *)a, *sb = (const uint64_t *)b;
+    uint64_t *d = (uint64_t *)dest;
+    d[0] = sa[0] & ~sb[0]; d[1] = sa[1] & ~sb[1];
+    d[2] = sa[2] & ~sb[2]; d[3] = sa[3] & ~sb[3];
+}
+
+void kgpc_set_symdiff_256(void *dest, const void *a, const void *b)
+{
+    const uint64_t *sa = (const uint64_t *)a, *sb = (const uint64_t *)b;
+    uint64_t *d = (uint64_t *)dest;
+    d[0] = sa[0] ^ sb[0]; d[1] = sa[1] ^ sb[1];
+    d[2] = sa[2] ^ sb[2]; d[3] = sa[3] ^ sb[3];
 }
 
 /* _haltproc: asm-only startup procedure from si_prc.inc / si_c.inc.

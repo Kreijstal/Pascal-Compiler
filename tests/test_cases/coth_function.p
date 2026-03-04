@@ -1,4 +1,5 @@
 program coth_function;
+uses Math;
 var
   r: real;
 begin

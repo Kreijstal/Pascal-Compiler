@@ -3818,15 +3818,45 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     //     NULL
     // );
 
-    // Header-only declaration parsers - these match procedure/function with forward/external/assembler directive and NO body
+    // [internproc:value]; bracket directive (header-only, no body)
+    combinator_t* prog_internproc_directive = seq(new_combinator(), PASCAL_T_NONE,
+        token(match("[")),
+        multi(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("internproc")),
+            token(keyword_ci("internconst")),
+            token(keyword_ci("compilerproc")),
+            NULL
+        ),
+        optional(seq(new_combinator(), PASCAL_T_NONE,
+            token(match(":")),
+            multi(new_combinator(), PASCAL_T_NONE,
+                token(pascal_string(PASCAL_T_STRING)),
+                token(cident(PASCAL_T_IDENTIFIER)),
+                NULL
+            ),
+            NULL
+        )),
+        token(match("]")),
+        token(match(";")),
+        NULL
+    );
+
+    // A header-only directive is either a standard keyword directive or a bracket [internproc] directive
+    combinator_t* headeronly_or_bracket_directive = multi(new_combinator(), PASCAL_T_NONE,
+        routine_directive,
+        prog_internproc_directive,
+        NULL
+    );
+
+    // Header-only declaration parsers - these match procedure/function with forward/external/[internproc] directive and NO body
     combinator_t* headeronly_procedure = seq(new_combinator(), PASCAL_T_PROCEDURE_DECL,
         optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),        // optional class keyword
         token(keyword_ci("procedure")),               // procedure keyword
         token(cident(PASCAL_T_IDENTIFIER)),          // procedure name
         optional(create_simple_param_list()),         // optional parameter list
         token(match(";")),                           // semicolon after signature
-        routine_directive,                           // forward/external/assembler directive with arguments
-        many(routine_directive),                     // additional directives (overload, etc.)
+        headeronly_or_bracket_directive,              // forward/external/[internproc] directive
+        many(headeronly_or_bracket_directive),        // additional directives (overload, etc.)
         NULL
     );
 
@@ -3838,15 +3868,15 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         token(match(":")),                           // colon before return type
         token(pascal_qualified_identifier(PASCAL_T_RETURN_TYPE)), // return type (allow unit-qualified)
         token(match(";")),                           // semicolon after signature
-        routine_directive,                           // forward/external/assembler directive with arguments
-        many(routine_directive),                     // additional directives (overload, etc.)
+        headeronly_or_bracket_directive,              // forward/external/[internproc] directive
+        many(headeronly_or_bracket_directive),        // additional directives (overload, etc.)
         NULL
     );
 
     // Working function parser: function name [(params)] : return_type ; [directives] body ;
     // Does NOT support forward (that's handled by forward_function)
     combinator_t* working_function_param_list = create_simple_param_list();
-    // Guard: implementation must not start if there's a forward/external directive
+    // Guard: implementation must not start if there's a forward/external/[internproc] directive
     // in the upcoming directive sequence (not just the immediate next token)
     // This handles cases like: function foo: Integer; cdecl; external libc;
     // Note: assembler is NOT included here - assembler functions have asm...end bodies
@@ -3856,21 +3886,48 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         token(keyword_ci("weakexternal")),
         NULL
     );
-    
-    // Check if there's a sequence of directives containing a no-body directive
-    // Pattern: [directive; directive; ...] no_body_directive
-    combinator_t* has_no_body_directive = seq(new_combinator(), PASCAL_T_NONE,
-        many(seq(new_combinator(), PASCAL_T_NONE,
-            pnot(peek(no_body_directive)),  // Not a no-body directive
-            directive_keyword,
-            directive_argument,
-            token(match(";")),
+
+    // Bracket [internproc/internconst/compilerproc] also means no body
+    combinator_t* bracket_no_body = seq(new_combinator(), PASCAL_T_NONE,
+        token(match("[")),
+        multi(new_combinator(), PASCAL_T_NONE,
+            peek(token(keyword_ci("internproc"))),
+            peek(token(keyword_ci("internconst"))),
+            peek(token(keyword_ci("compilerproc"))),
             NULL
-        )),
-        peek(no_body_directive),  // Ends with a no-body directive
+        ),
         NULL
     );
-    
+
+    // Check if there's a sequence of directives containing a no-body directive
+    // Pattern: [directive; directive; ...] no_body_directive
+    // OR: [directive; directive; ...] [internproc:...]
+    combinator_t* has_no_body_directive = multi(new_combinator(), PASCAL_T_NONE,
+        seq(new_combinator(), PASCAL_T_NONE,
+            many(seq(new_combinator(), PASCAL_T_NONE,
+                pnot(peek(no_body_directive)),  // Not a no-body directive
+                directive_keyword,
+                directive_argument,
+                token(match(";")),
+                NULL
+            )),
+            peek(no_body_directive),  // Ends with a no-body directive
+            NULL
+        ),
+        seq(new_combinator(), PASCAL_T_NONE,
+            many(seq(new_combinator(), PASCAL_T_NONE,
+                pnot(peek(bracket_no_body)),  // Not a bracket no-body directive
+                directive_keyword,
+                directive_argument,
+                token(match(";")),
+                NULL
+            )),
+            peek(bracket_no_body),  // Ends with [internproc/...]
+            NULL
+        ),
+        NULL
+    );
+
     combinator_t* forbid_no_body = pnot(has_no_body_directive);
 
     // Generic type parameter list for program-level functions (e.g., <T, U>)

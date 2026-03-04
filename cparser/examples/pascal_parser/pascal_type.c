@@ -2386,10 +2386,10 @@ static ParseResult object_type_fn(input_t* in, void* args, char* parser_name) {
     // Method declarations (procedure/function headers in object definition)
     combinator_t* method_directive = seq(new_combinator(), PASCAL_T_METHOD_DIRECTIVE,
         multi(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("virtual")),
-            token(keyword_ci("override")),
-            token(keyword_ci("static")),
-            token(keyword_ci("inline")),
+            token(create_keyword_parser("virtual", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("override", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("static", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("inline", PASCAL_T_IDENTIFIER)),
             NULL
         ),
         optional(token(match(";"))),

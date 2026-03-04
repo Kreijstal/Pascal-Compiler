@@ -1,4 +1,5 @@
 program arcsinh_function;
+uses Math;
 var
   r: real;
 begin

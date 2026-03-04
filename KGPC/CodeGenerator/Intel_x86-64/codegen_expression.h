@@ -89,6 +89,8 @@ int expr_is_char_set(const struct Expression *expr);
 int expr_is_char_set_ctx(const struct Expression *expr, CodeGenContext *ctx);
 ListNode_t *codegen_set_literal(struct Expression *expr, ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t **out_reg, int force_char_set);
+ListNode_t *codegen_char_set_address(struct Expression *expr, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t **out_reg);
 
 int codegen_sizeof_type_reference(CodeGenContext *ctx, int type_tag, const char *type_id,
     struct RecordType *record_type, long long *size_out);

@@ -2876,28 +2876,6 @@ static int semcheck_builtin_setcodepage(SymTab_t *symtab, struct Statement *stmt
     return semcheck_builtin_untyped_call(symtab, stmt, max_scope_lev, 0);
 }
 
-static int semcheck_builtin_interlockedexchangeadd(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
-{
-    if (stmt == NULL)
-        return 0;
-
-    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
-    if (args == NULL || args->next == NULL || args->next->next != NULL)
-    {
-        semcheck_error_with_context("Error on line %d, InterlockedExchangeAdd expects exactly two arguments.\n", stmt->line_num);
-        return 1;
-    }
-
-    int return_val = 0;
-    struct Expression *target_expr = (struct Expression *)args->cur;
-    struct Expression *value_expr = (struct Expression *)args->next->cur;
-    int target_type = UNKNOWN_TYPE;
-    int value_type = UNKNOWN_TYPE;
-    return_val += semcheck_stmt_expr_tag(&target_type, symtab, target_expr, max_scope_lev, NO_MUTATE);
-    return_val += semcheck_stmt_expr_tag(&value_type, symtab, value_expr, max_scope_lev, NO_MUTATE);
-    return return_val;
-}
-
 static int semcheck_builtin_new(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
     int return_val = 0;
@@ -5451,12 +5429,6 @@ skip_type_receiver_rewrite:
     handled_builtin = 0;
     return_val += try_resolve_builtin_procedure(symtab, stmt, "SetCodePage",
         semcheck_builtin_setcodepage, max_scope_lev, &handled_builtin);
-    if (handled_builtin)
-        return return_val;
-
-    handled_builtin = 0;
-    return_val += try_resolve_builtin_procedure(symtab, stmt, "InterlockedExchangeAdd",
-        semcheck_builtin_interlockedexchangeadd, max_scope_lev, &handled_builtin);
     if (handled_builtin)
         return return_val;
 

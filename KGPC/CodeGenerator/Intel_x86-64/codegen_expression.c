@@ -4560,7 +4560,7 @@ static Register_t *codegen_clone_register_if_rcx(ListNode_t **inst_list, CodeGen
     return replacement;
 }
 
-static ListNode_t *codegen_char_set_address(struct Expression *expr, ListNode_t *inst_list,
+ListNode_t *codegen_char_set_address(struct Expression *expr, ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t **out_reg)
 {
     if (expr == NULL || out_reg == NULL)
@@ -4568,9 +4568,129 @@ static ListNode_t *codegen_char_set_address(struct Expression *expr, ListNode_t 
 
     Register_t *addr_reg = NULL;
     if (codegen_expr_is_addressable(expr))
+    {
         inst_list = codegen_address_for_expr(expr, inst_list, ctx, &addr_reg);
+    }
+    else if ((expr->type == EXPR_ADDOP || expr->type == EXPR_MULOP) &&
+             expr_has_type_tag(expr, SET_TYPE))
+    {
+        /* Set binary operation on char sets: the standard expr tree path only
+           handles 4-byte sets.  Recursively materialise 32-byte operand
+           addresses and call the appropriate runtime helper. */
+        struct Expression *left_op = NULL;
+        struct Expression *right_op = NULL;
+        const char *runtime_func = NULL;
+
+        if (expr->type == EXPR_ADDOP)
+        {
+            int op = expr->expr_data.addop_data.addop_type;
+            left_op  = expr->expr_data.addop_data.left_expr;
+            right_op = expr->expr_data.addop_data.right_term;
+            if (op == PLUS)       runtime_func = "kgpc_set_union_256";
+            else if (op == MINUS) runtime_func = "kgpc_set_diff_256";
+        }
+        else /* EXPR_MULOP */
+        {
+            int op = expr->expr_data.mulop_data.mulop_type;
+            left_op  = expr->expr_data.mulop_data.left_term;
+            right_op = expr->expr_data.mulop_data.right_factor;
+            if (op == STAR)       runtime_func = "kgpc_set_intersect_256";
+            else if (op == XOR)   runtime_func = "kgpc_set_symdiff_256";
+        }
+
+        if (runtime_func != NULL && left_op != NULL && right_op != NULL)
+        {
+            /* Allocate 32-byte temp on stack for the result */
+            StackNode_t *temp = codegen_alloc_temp_bytes("cset_binop", 32);
+            if (temp == NULL)
+            {
+                *out_reg = NULL;
+                return inst_list;
+            }
+
+            /* Get addresses of both operands (recursive for nested ops) */
+            Register_t *left_reg = NULL;
+            inst_list = codegen_char_set_address(left_op, inst_list, ctx, &left_reg);
+            if (codegen_had_error(ctx) || left_reg == NULL)
+            {
+                if (left_reg != NULL) free_reg(get_reg_stack(), left_reg);
+                *out_reg = NULL;
+                return inst_list;
+            }
+
+            Register_t *right_reg = NULL;
+            inst_list = codegen_char_set_address(right_op, inst_list, ctx, &right_reg);
+            if (codegen_had_error(ctx) || right_reg == NULL)
+            {
+                if (right_reg != NULL) free_reg(get_reg_stack(), right_reg);
+                free_reg(get_reg_stack(), left_reg);
+                *out_reg = NULL;
+                return inst_list;
+            }
+
+            /* Spill left/right to stack since the call clobbers argument regs */
+            StackNode_t *left_spill  = codegen_alloc_temp_bytes("cset_lspill", 8);
+            StackNode_t *right_spill = codegen_alloc_temp_bytes("cset_rspill", 8);
+            char buffer[128];
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                left_reg->bit_64, left_spill->offset);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                right_reg->bit_64, right_spill->offset);
+            inst_list = add_inst(inst_list, buffer);
+            free_reg(get_reg_stack(), left_reg);
+            free_reg(get_reg_stack(), right_reg);
+
+            /* Set up call: runtime_func(dest, left, right) */
+            addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                temp->offset, addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+
+            if (codegen_target_is_windows())
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rdx\n", left_spill->offset);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%r8\n", right_spill->offset);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rsi\n", left_spill->offset);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rdx\n", right_spill->offset);
+                inst_list = add_inst(inst_list, buffer);
+            }
+
+            inst_list = codegen_vect_reg(inst_list, 0);
+            inst_list = codegen_call_with_shadow_space(inst_list, runtime_func);
+            free_arg_regs();
+
+            /* addr_reg now points to the temp buffer with the 32-byte result.
+               Reload it in case the call clobbered it. */
+            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                temp->offset, addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else
+        {
+            /* Unknown set op — fall back to value-based codegen */
+            inst_list = codegen_set_expr(expr, inst_list, ctx, &addr_reg);
+        }
+    }
+    else if (expr->type == EXPR_SET)
+    {
+        /* Force char set mode for set literals in a char set context */
+        inst_list = codegen_set_literal(expr, inst_list, ctx, &addr_reg, 1);
+    }
     else
+    {
         inst_list = codegen_set_expr(expr, inst_list, ctx, &addr_reg);
+    }
 
     if (codegen_had_error(ctx) || addr_reg == NULL)
     {

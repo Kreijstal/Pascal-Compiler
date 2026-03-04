@@ -943,10 +943,6 @@ int semcheck_funccall(int *type_return,
             return semcheck_builtin_lowhigh(type_return, symtab, expr, max_scope_lev, 1);
         if (pascal_identifier_equals(id, "Default"))
             return semcheck_builtin_default(type_return, symtab, expr, max_scope_lev);
-        if (pascal_identifier_equals(id, "Odd"))
-            return semcheck_builtin_odd(type_return, symtab, expr, max_scope_lev);
-        if (pascal_identifier_equals(id, "Sqr"))
-            return semcheck_builtin_sqr(type_return, symtab, expr, max_scope_lev);
         if (pascal_identifier_equals(id, "Power"))
             return semcheck_builtin_power(type_return, symtab, expr, max_scope_lev);
         if (pascal_identifier_equals(id, "Random"))
@@ -955,12 +951,65 @@ int semcheck_funccall(int *type_return,
             return semcheck_builtin_randomrange(type_return, symtab, expr, max_scope_lev);
         if (pascal_identifier_equals(id, "Aligned"))
             return semcheck_builtin_aligned(type_return, symtab, expr, max_scope_lev);
-        if (pascal_identifier_equals(id, "Ln"))
-            return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
-                "Ln", "kgpc_ln", REAL_TYPE);
-        if (pascal_identifier_equals(id, "Exp"))
-            return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
-                "Exp", "kgpc_exp", REAL_TYPE);
+        if (pascal_identifier_equals(id, "ArrayStringToPPchar"))
+        {
+            ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+            if (args == NULL || args->next == NULL || args->next->next != NULL)
+            {
+                semcheck_error_with_context("Error on line %d, ArrayStringToPPchar expects exactly two arguments.\n",
+                    expr->line_num);
+                *type_return = UNKNOWN_TYPE;
+                return 1;
+            }
+
+            int error_count = 0;
+            struct Expression *arr_expr = (struct Expression *)args->cur;
+            struct Expression *reserve_expr = (struct Expression *)args->next->cur;
+            KgpcType *arr_kgpc_type = NULL;
+            KgpcType *reserve_kgpc_type = NULL;
+            error_count += semcheck_expr_with_type(&arr_kgpc_type, symtab, arr_expr, max_scope_lev, NO_MUTATE);
+            error_count += semcheck_expr_with_type(&reserve_kgpc_type, symtab, reserve_expr, max_scope_lev, NO_MUTATE);
+            if (error_count != 0)
+            {
+                *type_return = UNKNOWN_TYPE;
+                return error_count;
+            }
+
+            /* Rewrite to runtime call */
+            if (expr->expr_data.function_call_data.id != NULL)
+                free(expr->expr_data.function_call_data.id);
+            expr->expr_data.function_call_data.id = strdup("kgpc_array_string_to_ppchar");
+
+            if (expr->expr_data.function_call_data.mangled_id != NULL)
+                free(expr->expr_data.function_call_data.mangled_id);
+            expr->expr_data.function_call_data.mangled_id = strdup("kgpc_array_string_to_ppchar");
+
+            expr->expr_data.function_call_data.arg0_is_dynarray_descriptor = 1;
+            expr->expr_data.function_call_data.is_call_info_valid = 1;
+            expr->expr_data.function_call_data.call_hash_type = HASHTYPE_FUNCTION;
+
+            *type_return = POINTER_TYPE;
+            semcheck_expr_set_resolved_type(expr, POINTER_TYPE);
+            return 0;
+        }
+    }
+
+    /* Trunc with Currency argument needs special handling — Currency is Int64 internally,
+       not a double, so it must call kgpc_trunc_currency instead of kgpc_trunc.
+       Must intercept before normal overload resolution (which would coerce Currency to Real). */
+    if (id != NULL && pascal_identifier_equals(id, "Trunc") &&
+        !expr->expr_data.function_call_data.is_method_call_placeholder)
+    {
+        ListNode_t *trunc_args = expr->expr_data.function_call_data.args_expr;
+        if (trunc_args != NULL && trunc_args->next == NULL)
+        {
+            struct Expression *trunc_arg = (struct Expression *)trunc_args->cur;
+            KgpcType *trunc_arg_type = NULL;
+            int trunc_err = semcheck_expr_with_type(&trunc_arg_type, symtab, trunc_arg, max_scope_lev, NO_MUTATE);
+            if (trunc_err == 0 && trunc_arg_type != NULL &&
+                semcheck_is_currency_kgpc_type(trunc_arg_type))
+                return semcheck_builtin_trunc(type_return, symtab, expr, max_scope_lev);
+        }
     }
 
     /* If the function call was already resolved (e.g., transformed from RECORD_ACCESS
@@ -1412,6 +1461,25 @@ int semcheck_funccall(int *type_return,
                 if (FindIdent(&first_node, symtab, first_arg->expr_data.id) == -1 ||
                     first_node == NULL)
                 {
+                    /* Before applying the lowercase heuristic, check if this
+                     * identifier is actually a field of Self.  Inside a method
+                     * body, class fields like 'fcount' are not top-level symbols
+                     * and would be wrongly stripped as unit qualifiers. */
+                    int looks_like_self_field = 0;
+                    HashNode_t *self_node = NULL;
+                    if (FindIdent(&self_node, symtab, "Self") != -1 && self_node != NULL)
+                    {
+                        struct RecordType *self_record = get_record_type_from_node(self_node);
+                        if (self_record != NULL &&
+                            semcheck_find_class_field_including_hidden(symtab, self_record,
+                                first_arg->expr_data.id, NULL) != NULL)
+                        {
+                            looks_like_self_field = 1;
+                        }
+                    }
+
+                    if (!looks_like_self_field)
+                    {
                     /* Keep unresolved unit-style qualifiers (typically lowercase) working,
                      * but avoid stripping member-style names like Size/TopLeft. */
                     int looks_like_unit = 1;
@@ -1433,6 +1501,7 @@ int semcheck_funccall(int *type_return,
                     }
                     if (looks_like_unit)
                         can_strip = 1;
+                    }
                 }
                 else if (first_node->hash_type == HASHTYPE_TYPE)
                 {
@@ -1539,6 +1608,22 @@ int semcheck_funccall(int *type_return,
                 const char *current_owner = semcheck_get_current_method_owner();
                 if (current_owner != NULL)
                 {
+                    /* Inside a type helper method, if the first explicit arg is
+                     * literally "Self", the caller wants the standalone function
+                     * (e.g. Format(Self, Args) in syshelps.inc).  Skip Self
+                     * injection so the standalone overload matches. */
+                    struct RecordType *owner_rec = semcheck_lookup_record_type(symtab, current_owner);
+                    if (owner_rec != NULL && owner_rec->is_type_helper)
+                    {
+                        struct Expression *first_arg_expr = (args_given != NULL) ?
+                            (struct Expression *)args_given->cur : NULL;
+                        int first_is_self = (first_arg_expr != NULL &&
+                            first_arg_expr->type == EXPR_VAR_ID &&
+                            first_arg_expr->expr_data.id != NULL &&
+                            pascal_identifier_equals(first_arg_expr->expr_data.id, "Self"));
+                        if (first_is_self)
+                            goto skip_self_injection;
+                    }
                     if (getenv("KGPC_DEBUG_CHECKOBS") != NULL && id != NULL &&
                         pascal_identifier_equals(id, "CheckObserving"))
                     {
@@ -1638,17 +1723,43 @@ int semcheck_funccall(int *type_return,
                         {
                             /* Check if this might be a typecast like TSingleRec(Self).
                              * If the identifier is a type, fall through to typecast handling.
-                             * If it's a function (like Length), continue to method lookup
-                             * and eventually to builtin function handling. */
+                             * If it's a function/procedure that exists as a standalone
+                             * (owner_class == NULL), the caller is explicitly passing Self
+                             * (e.g. Format(Self, Args) in syshelps.inc) - skip Self
+                             * injection so the standalone overload matches. */
                             HashNode_t *id_node = NULL;
                             int find_result = FindIdent(&id_node, symtab, id);
-                            if (find_result >= 0 &&
-                                id_node != NULL && id_node->hash_type == HASHTYPE_TYPE)
+                            if (find_result >= 0 && id_node != NULL)
                             {
-                                /* This is a typecast like TSingleRec(Self), fall through to typecast handling */
+                                if (id_node->hash_type == HASHTYPE_TYPE)
+                                {
+                                    /* This is a typecast like TSingleRec(Self), fall through */
+                                }
+                                else if (id_node->hash_type == HASHTYPE_FUNCTION ||
+                                         id_node->hash_type == HASHTYPE_PROCEDURE)
+                                {
+                                    /* Check if ANY overload is a standalone function */
+                                    ListNode_t *all_idents = FindAllIdents(symtab, id);
+                                    ListNode_t *cur_ident = all_idents;
+                                    int has_standalone = 0;
+                                    while (cur_ident != NULL)
+                                    {
+                                        HashNode_t *cand = (HashNode_t *)cur_ident->cur;
+                                        if (cand != NULL && cand->owner_class == NULL &&
+                                            (cand->hash_type == HASHTYPE_FUNCTION ||
+                                             cand->hash_type == HASHTYPE_PROCEDURE))
+                                        {
+                                            has_standalone = 1;
+                                            break;
+                                        }
+                                        cur_ident = cur_ident->next;
+                                    }
+                                    if (all_idents != NULL)
+                                        DestroyList(all_idents);
+                                    if (has_standalone)
+                                        goto skip_self_injection;
+                                }
                             }
-                            /* Note: Don't return early for function calls like Length(Self).
-                             * Let the code continue to method lookup and builtin handling. */
                         }
                     }
                     /* First, try to find the method in Self's class.
@@ -2404,72 +2515,6 @@ int semcheck_funccall(int *type_return,
     if (id != NULL && pascal_identifier_equals(id, "AllocMem"))
         return semcheck_builtin_allocmem(type_return, symtab, expr, max_scope_lev);
 
-    if (id != NULL && pascal_identifier_equals(id, "ToSingleByteFileSystemEncodedFileName"))
-    {
-        ListNode_t *args = expr->expr_data.function_call_data.args_expr;
-        if (args == NULL || args->next != NULL)
-        {
-            semcheck_error_with_context("Error on line %d, ToSingleByteFileSystemEncodedFileName expects exactly one argument.\n",
-                expr->line_num);
-            *type_return = UNKNOWN_TYPE;
-            return 1;
-        }
-
-        int error_count = 0;
-        struct Expression *arg_expr = (struct Expression *)args->cur;
-        int arg_type = UNKNOWN_TYPE;
-        KgpcType *arg_kgpc_type = NULL;
-        error_count += semcheck_expr_with_type(&arg_kgpc_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
-        arg_type = semcheck_tag_from_kgpc(arg_kgpc_type);
-        (void)arg_type; /* Used for validation only */
-        if (error_count != 0)
-        {
-            *type_return = UNKNOWN_TYPE;
-            return error_count;
-        }
-
-        semcheck_reset_function_call_cache(expr);
-        *type_return = STRING_TYPE;
-        semcheck_expr_set_resolved_type(expr, STRING_TYPE);
-        return 0;
-    }
-
-    if (id != NULL && pascal_identifier_equals(id, "ArrayStringToPPchar"))
-    {
-        ListNode_t *args = expr->expr_data.function_call_data.args_expr;
-        if (args == NULL || args->next == NULL || args->next->next != NULL)
-        {
-            semcheck_error_with_context("Error on line %d, ArrayStringToPPchar expects exactly two arguments.\n",
-                expr->line_num);
-            *type_return = UNKNOWN_TYPE;
-            return 1;
-        }
-
-        int error_count = 0;
-        struct Expression *arr_expr = (struct Expression *)args->cur;
-        struct Expression *reserve_expr = (struct Expression *)args->next->cur;
-        int arr_type = UNKNOWN_TYPE;
-        int reserve_type = UNKNOWN_TYPE;
-        KgpcType *arr_kgpc_type = NULL;
-        KgpcType *reserve_kgpc_type = NULL;
-        error_count += semcheck_expr_with_type(&arr_kgpc_type, symtab, arr_expr, max_scope_lev, NO_MUTATE);
-        error_count += semcheck_expr_with_type(&reserve_kgpc_type, symtab, reserve_expr, max_scope_lev, NO_MUTATE);
-        arr_type = semcheck_tag_from_kgpc(arr_kgpc_type);
-        reserve_type = semcheck_tag_from_kgpc(reserve_kgpc_type);
-        (void)arr_type; /* Used for validation only */
-        (void)reserve_type; /* Used for validation only */
-        if (error_count != 0)
-        {
-            *type_return = UNKNOWN_TYPE;
-            return error_count;
-        }
-
-        semcheck_reset_function_call_cache(expr);
-        *type_return = POINTER_TYPE;
-        semcheck_expr_set_resolved_type(expr, POINTER_TYPE);
-        return 0;
-    }
-
     int allow_builtins = !expr->expr_data.function_call_data.is_method_call_placeholder;
     if (getenv("KGPC_DEBUG_EOF") != NULL && id != NULL &&
         pascal_identifier_equals(id, "EOF"))
@@ -2523,10 +2568,6 @@ int semcheck_funccall(int *type_return,
 
     if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Default"))
         return semcheck_builtin_default(type_return, symtab, expr, max_scope_lev);
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Odd"))
-        return semcheck_builtin_odd(type_return, symtab, expr, max_scope_lev);
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Sqr"))
-        return semcheck_builtin_sqr(type_return, symtab, expr, max_scope_lev);
     if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Power"))
         return semcheck_builtin_power(type_return, symtab, expr, max_scope_lev);
     if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Random"))
@@ -2548,9 +2589,6 @@ int semcheck_funccall(int *type_return,
 
     if (id != NULL && pascal_identifier_equals(id, "Assigned"))
         return semcheck_builtin_assigned(type_return, symtab, expr, max_scope_lev);
-
-    if (id != NULL && pascal_identifier_equals(id, "Abs"))
-        return semcheck_builtin_abs(type_return, symtab, expr, max_scope_lev);
 
     if (id != NULL && pascal_identifier_equals(id, "UpperCase"))
     {
@@ -2597,170 +2635,6 @@ int semcheck_funccall(int *type_return,
     }
 
 
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Sqrt"))
-        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
-            "Sqrt", "kgpc_sqrt", REAL_TYPE);
-
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Sin"))
-        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
-            "Sin", "kgpc_sin", REAL_TYPE);
-
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Csc"))
-        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
-            "Csc", "kgpc_csc", REAL_TYPE);
-
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Sinh"))
-        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
-            "Sinh", "kgpc_sinh", REAL_TYPE);
-
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Csch"))
-        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
-            "Csch", "kgpc_csch", REAL_TYPE);
-
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Cos"))
-        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
-            "Cos", "kgpc_cos", REAL_TYPE);
-
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Sec"))
-        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
-            "Sec", "kgpc_sec", REAL_TYPE);
-
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Cosh"))
-        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
-            "Cosh", "kgpc_cosh", REAL_TYPE);
-
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Sech"))
-        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
-            "Sech", "kgpc_sech", REAL_TYPE);
-
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Tan"))
-        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
-            "Tan", "kgpc_tan", REAL_TYPE);
-
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Cot"))
-        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
-            "Cot", "kgpc_cot", REAL_TYPE);
-
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Tanh"))
-        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
-            "Tanh", "kgpc_tanh", REAL_TYPE);
-
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Coth"))
-        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
-            "Coth", "kgpc_coth", REAL_TYPE);
-
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "ArcTan"))
-        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
-            "ArcTan", "kgpc_arctan", REAL_TYPE);
-
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "ArcCot"))
-        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
-            "ArcCot", "kgpc_arccot", REAL_TYPE);
-
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "ArcTan2"))
-        return semcheck_builtin_arctan2(type_return, symtab, expr, max_scope_lev);
-
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Hypot"))
-        return semcheck_builtin_hypot(type_return, symtab, expr, max_scope_lev);
-
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "ArcSin"))
-        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
-            "ArcSin", "kgpc_arcsin", REAL_TYPE);
-
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "ArcCos"))
-        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
-            "ArcCos", "kgpc_arccos", REAL_TYPE);
-
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "ArcCosh"))
-        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
-            "ArcCosh", "kgpc_arccosh", REAL_TYPE);
-
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "ArcSech"))
-        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
-            "ArcSech", "kgpc_arcsech", REAL_TYPE);
-
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "ArcCsch"))
-        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
-            "ArcCsch", "kgpc_arccsch", REAL_TYPE);
-
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "ArcCoth"))
-        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
-            "ArcCoth", "kgpc_arccoth", REAL_TYPE);
-
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "ArcSinh"))
-        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
-            "ArcSinh", "kgpc_arcsinh", REAL_TYPE);
-
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "ArcTanh"))
-        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
-            "ArcTanh", "kgpc_arctanh", REAL_TYPE);
-
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "DegToRad"))
-        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
-            "DegToRad", "kgpc_deg_to_rad", REAL_TYPE);
-
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "RadToDeg"))
-        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
-            "RadToDeg", "kgpc_rad_to_deg", REAL_TYPE);
-
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "DegToGrad"))
-        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
-            "DegToGrad", "kgpc_deg_to_grad", REAL_TYPE);
-
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "GradToDeg"))
-        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
-            "GradToDeg", "kgpc_grad_to_deg", REAL_TYPE);
-
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "GradToRad"))
-        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
-            "GradToRad", "kgpc_grad_to_rad", REAL_TYPE);
-
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "RadToGrad"))
-        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
-            "RadToGrad", "kgpc_rad_to_grad", REAL_TYPE);
-
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "CycleToRad"))
-        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
-            "CycleToRad", "kgpc_cycle_to_rad", REAL_TYPE);
-
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "RadToCycle"))
-        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
-            "RadToCycle", "kgpc_rad_to_cycle", REAL_TYPE);
-
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Ln"))
-        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
-            "Ln", "kgpc_ln", REAL_TYPE);
-
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "LogN"))
-        return semcheck_builtin_logn(type_return, symtab, expr, max_scope_lev);
-
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Exp"))
-        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
-            "Exp", "kgpc_exp", REAL_TYPE);
-
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Round"))
-        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
-            "Round", "kgpc_round", LONGINT_TYPE);
-
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Trunc"))
-        return semcheck_builtin_trunc(type_return, symtab, expr, max_scope_lev);
-
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Int"))
-        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
-            "Int", "kgpc_int", LONGINT_TYPE);
-
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Frac"))
-        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
-            "Frac", "kgpc_frac", REAL_TYPE);
-
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Ceil"))
-        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
-            "Ceil", "kgpc_ceil", LONGINT_TYPE);
-
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Floor"))
-        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
-            "Floor", "kgpc_floor", LONGINT_TYPE);
-
     if (allow_builtins && id != NULL && pascal_identifier_equals(id, "UpCase"))
     {
         ListNode_t *args = expr->expr_data.function_call_data.args_expr;
@@ -2781,17 +2655,11 @@ int semcheck_funccall(int *type_return,
         }
     }
 
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Odd"))
-        return semcheck_builtin_odd(type_return, symtab, expr, max_scope_lev);
-
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Sqr"))
-        return semcheck_builtin_sqr(type_return, symtab, expr, max_scope_lev);
-
     if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Power"))
         return semcheck_builtin_power(type_return, symtab, expr, max_scope_lev);
 
     /* Random is resolved through normal function lookup (system.p or FPC RTL) */
-    
+
     if (allow_builtins && id != NULL && pascal_identifier_equals(id, "RandomRange"))
         return semcheck_builtin_randomrange(type_return, symtab, expr, max_scope_lev);
 
@@ -2997,6 +2865,54 @@ int semcheck_funccall(int *type_return,
                     }
                     if (created_temp_list)
                         DestroyList(candidate_list);
+
+                    /* Inside a type helper, if a standalone function that takes
+                     * array-of-const matches the given arg count, prefer it
+                     * over injecting Self.  E.g. Format('...', [...]) inside
+                     * TUnicodeStringHelper.Join should call standalone Format. */
+                    if (!has_direct_match && has_self_match &&
+                        record_for_mangling != NULL && record_for_mangling->is_type_helper)
+                    {
+                        ListNode_t *standalone_candidates = FindAllIdents(symtab, id);
+                        for (ListNode_t *sc = standalone_candidates; sc != NULL; sc = sc->next)
+                        {
+                            HashNode_t *sc_node = (HashNode_t *)sc->cur;
+                            if (sc_node != NULL && sc_node->owner_class == NULL &&
+                                (sc_node->hash_type == HASHTYPE_FUNCTION ||
+                                 sc_node->hash_type == HASHTYPE_PROCEDURE) &&
+                                sc_node->type != NULL)
+                            {
+                                /* Check if this standalone has an array-of-const param */
+                                ListNode_t *sc_params = kgpc_type_get_procedure_params(sc_node->type);
+                                int has_aoc = sc_node->is_varargs;
+                                if (!has_aoc)
+                                {
+                                    for (ListNode_t *p = sc_params; p != NULL; p = p->next)
+                                    {
+                                        Tree_t *pdecl = (Tree_t *)p->cur;
+                                        if (pdecl != NULL && pdecl->type == TREE_ARR_DECL &&
+                                            pdecl->tree_data.arr_decl_data.type == ARRAY_OF_CONST_TYPE)
+                                        {
+                                            has_aoc = 1;
+                                            break;
+                                        }
+                                    }
+                                }
+                                if (has_aoc)
+                                {
+                                    int sc_total = semcheck_count_total_params(sc_params);
+                                    int sc_req = semcheck_count_required_params(sc_params);
+                                    if (given_count >= sc_req && given_count <= sc_total)
+                                    {
+                                        has_direct_match = 1;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        if (standalone_candidates != NULL)
+                            DestroyList(standalone_candidates);
+                    }
 
                     if (!has_direct_match && has_self_match && !has_self_arg)
                     {

@@ -145,6 +145,7 @@ FPC_RTL_FLAGS = [
     "-I" + os.path.join(FPC_RTL_DIR, "unix"),
     "-I" + os.path.join(FPC_RTL_DIR, "x86_64"),
     "-I" + os.path.join(FPC_RTL_DIR, "objpas", "sysutils"),
+    "-I" + os.path.join(FPC_RTL_DIR, "objpas", "classes"),
     "-Fu" + os.path.join(FPC_RTL_DIR, "objpas"),
     "-Fu" + os.path.join(FPC_RTL_DIR, "inc"),
     "-Fu" + os.path.join(FPC_RTL_DIR, "linux"),

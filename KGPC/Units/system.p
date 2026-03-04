@@ -503,6 +503,30 @@ var
   Example: UpCase('a') returns 'A'
 }
 
+{ Math intrinsics — declared with external name to map to runtime functions }
+{ Pi is injected as a builtin constant by the semantic checker }
+
+function Sqrt(x: Real): Real; cdecl; external name 'kgpc_sqrt';
+function Sin(x: Real): Real; cdecl; external name 'kgpc_sin';
+function Cos(x: Real): Real; cdecl; external name 'kgpc_cos';
+function ArcTan(x: Real): Real; cdecl; external name 'kgpc_arctan';
+function Ln(x: Real): Real; cdecl; external name 'kgpc_ln';
+function Exp(x: Real): Real; cdecl; external name 'kgpc_exp';
+function Frac(x: Real): Real; cdecl; external name 'kgpc_frac';
+function Int(x: Real): Real; cdecl; external name 'kgpc_int_real';
+function Round(x: Real): Int64; cdecl; external name 'kgpc_round';
+function Trunc(x: Real): Int64; cdecl; external name 'kgpc_trunc';
+
+function Abs(x: LongInt): LongInt; cdecl; external name 'kgpc_abs_int';
+function Abs(x: Int64): Int64; cdecl; external name 'kgpc_abs_longint';
+function Abs(x: Real): Real; cdecl; external name 'kgpc_abs_real';
+
+function Sqr(x: LongInt): LongInt; cdecl; external name 'kgpc_sqr_int64';
+function Sqr(x: Int64): Int64; cdecl; external name 'kgpc_sqr_int64';
+function Sqr(x: Real): Real; cdecl; external name 'kgpc_sqr_real';
+
+function Odd(x: Int64): Boolean; cdecl; external name 'kgpc_is_odd';
+
 function Random: Real; cdecl; external name 'kgpc_random_real';
 function Random(upper: LongInt): LongInt; cdecl; external name 'kgpc_random_int';
 function Random(upper: Int64): Int64; cdecl; external name 'kgpc_random_int64';
@@ -877,10 +901,6 @@ begin
     ToSingleByteFileSystemEncodedFileName := S;
 end;
 
-function ArrayStringToPPchar(const S: array of RawByteString; reserveentries: LongInt): PPAnsiChar;
-begin
-    ArrayStringToPPchar := nil;
-end;
 
 procedure MkDir(path: string);
 begin

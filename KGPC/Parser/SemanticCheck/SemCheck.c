@@ -10763,7 +10763,6 @@ void semcheck_add_builtins(SymTab_t *symtab)
         static const SimpleBuiltinFunc simple_funcs[] = {
             {"Length",       LONGINT_TYPE},
             {"GetMem",       POINTER_TYPE},
-            {"ToSingleByteFileSystemEncodedFileName", STRING_TYPE},
             {"ArrayStringToPPchar", POINTER_TYPE},
             {"Copy",         STRING_TYPE},
             {"Concat",       STRING_TYPE},
@@ -10783,28 +10782,6 @@ void semcheck_add_builtins(SymTab_t *symtab)
         for (size_t i = 0; i < sizeof(simple_funcs) / sizeof(simple_funcs[0]); ++i)
             register_simple_builtin_func(symtab, simple_funcs[i].name, simple_funcs[i].return_tag);
     }
-    {
-        const char *interlocked_name = "InterlockedExchangeAdd";
-        static const int interlocked_types[] = {INT_TYPE, LONGINT_TYPE, INT64_TYPE, POINTER_TYPE};
-        for (size_t i = 0; i < sizeof(interlocked_types) / sizeof(interlocked_types[0]); ++i)
-        {
-            int t = interlocked_types[i];
-            ListNode_t *param_target = semcheck_create_builtin_param_var("Target", t);
-            ListNode_t *param_value = semcheck_create_builtin_param("Source", t);
-            ListNode_t *params = ConcatList(param_target, param_value);
-            KgpcType *return_type = create_primitive_type(t);
-            KgpcType *interlocked_type = create_procedure_type(params, return_type);
-            if (interlocked_type != NULL)
-            {
-                AddBuiltinFunction_Typed(symtab, (char *)interlocked_name, interlocked_type);
-                destroy_kgpc_type(interlocked_type);
-            }
-            if (params != NULL)
-                DestroyList(params);
-            destroy_kgpc_type(return_type);
-        }
-    }
-
     /* Standard I/O file variables - stdin, stdout, stderr */
     /* These are Text file variables that can be passed to Write/WriteLn/Read/ReadLn */
     {

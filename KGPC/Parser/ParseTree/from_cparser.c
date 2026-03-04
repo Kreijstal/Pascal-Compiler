@@ -15113,6 +15113,44 @@ static int extract_generic_type_params(ast_t *type_param_list, char ***out_param
     return count;
 }
 
+/* Map FPC [internproc:fpc_in_XXX] intrinsic names to KGPC runtime function names.
+   Returns a strdup'd name or NULL if no mapping exists. */
+static char *map_internproc_to_runtime(const char *fpc_name)
+{
+    if (fpc_name == NULL) return NULL;
+    static const struct { const char *fpc; const char *kgpc; } table[] = {
+        /* Math real intrinsics (ValReal = Double on x86_64) */
+        {"fpc_in_trunc_real",  "kgpc_trunc"},
+        {"fpc_in_round_real",  "kgpc_round"},
+        {"fpc_in_sqrt_real",   "kgpc_sqrt"},
+        {"fpc_in_abs_real",    "kgpc_abs_real"},
+        {"fpc_in_sin_real",    "kgpc_sin"},
+        {"fpc_in_cos_real",    "kgpc_cos"},
+        {"fpc_in_arctan_real", "kgpc_arctan"},
+        {"fpc_in_ln_real",     "kgpc_ln"},
+        {"fpc_in_exp_real",    "kgpc_exp"},
+        {"fpc_in_frac_real",   "kgpc_frac"},
+        {"fpc_in_int_real",    "kgpc_int_real"},
+        {"fpc_in_pi_real",     "kgpc_pi"},
+        {"fpc_in_sqr_real",    "kgpc_sqr_real"},
+        /* Lo/Hi intrinsics */
+        {"fpc_in_lo_Word",     "lo_w"},
+        {"fpc_in_lo_long",     "lo_li"},
+        {"fpc_in_lo_qword",    "lo_qw"},
+        {"fpc_in_hi_Word",     "hi_w"},
+        {"fpc_in_hi_long",     "hi_li"},
+        {"fpc_in_hi_qword",    "hi_qw"},
+        /* Integer Abs */
+        {"fpc_in_abs_long",    "kgpc_abs_int"},
+        {NULL, NULL}
+    };
+    for (int i = 0; table[i].fpc != NULL; i++) {
+        if (strcasecmp(fpc_name, table[i].fpc) == 0)
+            return strdup(table[i].kgpc);
+    }
+    return NULL;
+}
+
 static char *extract_external_name_from_node(ast_t *node)
 {
     if (node == NULL || node->child == NULL)
@@ -15266,6 +15304,32 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
                         /* Skip the string node so the outer loop doesn't revisit it */
                         if (val == cur->next)
                             cur = cur->next;
+                    }
+                } else if (strcasecmp(self_sym, "internproc") == 0 ||
+                           strcasecmp(self_sym, "compilerproc") == 0) {
+                    is_external = 1;
+                    /* The internproc value (e.g. fpc_in_trunc_real) is the next sibling */
+                    ast_t *val = cur->next;
+                    if (val != NULL && val->typ == PASCAL_T_IDENTIFIER &&
+                        val->sym != NULL && val->sym->name != NULL) {
+                        char *mapped = map_internproc_to_runtime(val->sym->name);
+                        if (mapped != NULL) {
+                            if (external_alias != NULL)
+                                free(external_alias);
+                            external_alias = mapped;
+                        }
+                        cur = cur->next;  /* Skip the value node */
+                    }
+                } else {
+                    /* Fallback: if the identifier itself is an internproc value
+                       (e.g. fpc_in_trunc_real), the "internproc" keyword was
+                       consumed by the parser and only the value survived. */
+                    char *mapped = map_internproc_to_runtime(self_sym);
+                    if (mapped != NULL) {
+                        is_external = 1;
+                        if (external_alias != NULL)
+                            free(external_alias);
+                        external_alias = mapped;
                     }
                 }
                 free(self_sym);
@@ -15553,6 +15617,32 @@ static Tree_t *convert_function(ast_t *func_node) {
                         /* Skip the string node so the outer loop doesn't revisit it */
                         if (val == cur->next)
                             cur = cur->next;
+                    }
+                } else if (strcasecmp(self_sym, "internproc") == 0 ||
+                           strcasecmp(self_sym, "compilerproc") == 0) {
+                    is_external = 1;
+                    /* The internproc value (e.g. fpc_in_trunc_real) is the next sibling */
+                    ast_t *val = cur->next;
+                    if (val != NULL && val->typ == PASCAL_T_IDENTIFIER &&
+                        val->sym != NULL && val->sym->name != NULL) {
+                        char *mapped = map_internproc_to_runtime(val->sym->name);
+                        if (mapped != NULL) {
+                            if (external_alias != NULL)
+                                free(external_alias);
+                            external_alias = mapped;
+                        }
+                        cur = cur->next;  /* Skip the value node */
+                    }
+                } else {
+                    /* Fallback: if the identifier itself is an internproc value
+                       (e.g. fpc_in_trunc_real), the "internproc" keyword was
+                       consumed by the parser and only the value survived. */
+                    char *mapped = map_internproc_to_runtime(self_sym);
+                    if (mapped != NULL) {
+                        is_external = 1;
+                        if (external_alias != NULL)
+                            free(external_alias);
+                        external_alias = mapped;
                     }
                 }
                 free(self_sym);

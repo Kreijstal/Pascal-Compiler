@@ -112,12 +112,17 @@ ListNode_t *codegen_emit_const_set_rodata(HashNode_t *node, ListNode_t *inst_lis
         pos += (size_t)snprintf(rodata + pos, sizeof(rodata) - pos, "%s\n%s:\n",
             readonly_section, label);
 
-        for (int i = 0; i < node->const_set_size; ++i)
+        /* Always emit 32 bytes (max set size = 256 bits) so that char-set
+           copies (which read 32 bytes) never touch uninitialized rodata. */
+        int emit_size = (node->const_set_size < 32) ? 32 : node->const_set_size;
+        for (int i = 0; i < emit_size; ++i)
         {
             if (pos + 24 >= sizeof(rodata))
                 break;
+            unsigned val = (i < node->const_set_size)
+                ? (unsigned)node->const_set_value[i] : 0u;
             pos += (size_t)snprintf(rodata + pos, sizeof(rodata) - pos, "\t.byte %u\n",
-                (unsigned)node->const_set_value[i]);
+                val);
         }
 
         if (pos + 16 < sizeof(rodata))
@@ -3325,6 +3330,90 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
             free_reg(get_reg_stack(), dest_reg);
             free_arg_regs();
             return inst_list;
+        }
+
+        /* Handle character set binary operations (union, intersection, difference).
+         * For 32-byte sets (set of Char), the standard binary codegen only operates
+         * on 4 bytes. Use runtime helpers that operate on all 32 bytes. */
+        if (dest_is_char_set &&
+            (src_expr->type == EXPR_ADDOP || src_expr->type == EXPR_MULOP))
+        {
+            const char *runtime_func = NULL;
+            struct Expression *left_op = NULL;
+            struct Expression *right_op = NULL;
+
+            if (src_expr->type == EXPR_ADDOP)
+            {
+                int op = src_expr->expr_data.addop_data.addop_type;
+                left_op = src_expr->expr_data.addop_data.left_expr;
+                right_op = src_expr->expr_data.addop_data.right_term;
+                if (op == PLUS)
+                    runtime_func = "kgpc_set_union_256";
+                else if (op == MINUS)
+                    runtime_func = "kgpc_set_diff_256";
+            }
+            else /* EXPR_MULOP */
+            {
+                int op = src_expr->expr_data.mulop_data.mulop_type;
+                left_op = src_expr->expr_data.mulop_data.left_term;
+                right_op = src_expr->expr_data.mulop_data.right_factor;
+                if (op == STAR)
+                    runtime_func = "kgpc_set_intersect_256";
+            }
+
+            if (runtime_func != NULL && left_op != NULL && right_op != NULL)
+            {
+                /* Get addresses of both operands */
+                Register_t *left_reg = NULL;
+                Register_t *right_reg = NULL;
+
+                inst_list = codegen_char_set_address(left_op, inst_list, ctx, &left_reg);
+                if (codegen_had_error(ctx) || left_reg == NULL)
+                {
+                    if (left_reg != NULL) free_reg(get_reg_stack(), left_reg);
+                    free_reg(get_reg_stack(), dest_reg);
+                    return inst_list;
+                }
+
+                inst_list = codegen_char_set_address(right_op, inst_list, ctx, &right_reg);
+                if (codegen_had_error(ctx) || right_reg == NULL)
+                {
+                    if (right_reg != NULL) free_reg(get_reg_stack(), right_reg);
+                    free_reg(get_reg_stack(), left_reg);
+                    free_reg(get_reg_stack(), dest_reg);
+                    return inst_list;
+                }
+
+                /* Call runtime_func(dest, left, right) */
+                char buffer[128];
+                if (codegen_target_is_windows())
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", dest_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", left_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r8\n", right_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+                else
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", dest_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", left_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", right_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+
+                inst_list = codegen_vect_reg(inst_list, 0);
+                inst_list = codegen_call_with_shadow_space(inst_list, runtime_func);
+
+                free_reg(get_reg_stack(), right_reg);
+                free_reg(get_reg_stack(), left_reg);
+                free_reg(get_reg_stack(), dest_reg);
+                free_arg_regs();
+                return inst_list;
+            }
         }
 
         /* Handle string literal assigned to ShortString (record-like) destination.
