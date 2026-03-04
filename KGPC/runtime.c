@@ -3810,6 +3810,30 @@ int64_t kgpc_char_array_compare_array(const char *lhs, size_t lhs_len,
     return 0;
 }
 
+void kgpc_string_assign_from_shortstring(char **target, const char *ss)
+{
+    if (target == NULL)
+        return;
+    char *existing = *target;
+    if (existing != NULL)
+        kgpc_string_release(existing);
+    if (ss == NULL)
+    {
+        *target = kgpc_alloc_empty_string();
+        return;
+    }
+    unsigned char len = (unsigned char)ss[0];
+    char *copy = kgpc_string_alloc_with_length(len);
+    if (copy == NULL)
+    {
+        *target = kgpc_alloc_empty_string();
+        return;
+    }
+    if (len > 0)
+        memcpy(copy, ss + 1, len);
+    *target = copy;
+}
+
 char *kgpc_strpas(const char *p)
 {
     if (p == NULL)
@@ -3821,7 +3845,9 @@ char *kgpc_strpas_len(const char *p, int64_t length)
 {
     if (p == NULL || length <= 0)
         return kgpc_alloc_empty_string();
-    return kgpc_string_duplicate_length(p, (size_t)length);
+    /* Truncate at first NUL, like a C-string — StrPas copies until NUL */
+    size_t actual = strnlen(p, (size_t)length);
+    return kgpc_string_duplicate_length(p, actual);
 }
 
 int64_t kgpc_string_pos_ca(unsigned char ch, const char *value)

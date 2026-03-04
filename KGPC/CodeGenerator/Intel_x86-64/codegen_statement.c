@@ -1739,6 +1739,80 @@ static ListNode_t *codegen_call_mpint_assign(ListNode_t *inst_list, Register_t *
     return inst_list;
 }
 
+/* Call a 2-arg runtime function: func(addr_reg, value_reg)
+ * addr_reg → first arg (char**), value_reg → second arg (const char*) */
+static ListNode_t *codegen_call_string_assign_func(ListNode_t *inst_list, CodeGenContext *ctx,
+    Register_t *addr_reg, Register_t *value_reg, const char *func_name)
+{
+    if (inst_list == NULL || ctx == NULL || addr_reg == NULL || value_reg == NULL)
+        return inst_list;
+
+    char buffer[256];
+    if (codegen_target_is_windows())
+    {
+        int value_in_rcx = (value_reg->reg_id == REG_RCX);
+        int addr_in_rdx = (addr_reg->reg_id == REG_RDX);
+
+        if (value_in_rcx && addr_in_rdx)
+            inst_list = add_inst(inst_list, "\txchgq\t%rcx, %rdx\n");
+        else if (value_in_rcx)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else if (addr_in_rdx)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+    }
+    else
+    {
+        int value_in_rdi = (value_reg->reg_id == REG_RDI);
+        int addr_in_rsi = (addr_reg->reg_id == REG_RSI);
+
+        if (value_in_rdi && addr_in_rsi)
+            inst_list = add_inst(inst_list, "\txchgq\t%rdi, %rsi\n");
+        else if (value_in_rdi)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", value_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else if (addr_in_rsi)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", value_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", value_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+    }
+
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = codegen_call_with_shadow_space(inst_list, func_name);
+    free_arg_regs();
+    return inst_list;
+}
+
 static ListNode_t *codegen_call_string_assign(ListNode_t *inst_list, CodeGenContext *ctx,
     Register_t *addr_reg, Register_t *value_reg)
 {
@@ -7563,7 +7637,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             {
                 inst_list = codegen_promote_char_reg_to_string(inst_list, value_reg);
             }
-            
+
             Register_t *addr_reg = NULL;
             inst_list = codegen_address_for_expr(var_expr, inst_list, ctx, &addr_reg);
             if (codegen_had_error(ctx) || addr_reg == NULL)
@@ -7574,7 +7648,13 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                 return inst_list;
             }
 
-            inst_list = codegen_call_string_assign(inst_list, ctx, addr_reg, value_reg);
+            /* When the RHS is a ShortString (e.g. from strpas/StrPas), use a dedicated
+             * conversion function that strips the length byte and builds a proper AnsiString. */
+            if (assign_type == SHORTSTRING_TYPE)
+                inst_list = codegen_call_string_assign_func(inst_list, ctx, addr_reg, value_reg,
+                    "kgpc_string_assign_from_shortstring");
+            else
+                inst_list = codegen_call_string_assign(inst_list, ctx, addr_reg, value_reg);
             free_reg(get_reg_stack(), value_reg);
             free_reg(get_reg_stack(), addr_reg);
             return inst_list;
