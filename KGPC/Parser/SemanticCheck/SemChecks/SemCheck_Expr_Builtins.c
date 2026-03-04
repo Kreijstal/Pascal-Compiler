@@ -2119,6 +2119,16 @@ int semcheck_builtin_default(int *type_return, SymTab_t *symtab,
             expr->resolved_kgpc_type = create_primitive_type(ENUM_TYPE);
             *type_return = ENUM_TYPE;
             return 0;
+        case VARIANT_TYPE:
+            /* Variant default is Unassigned (VType=0, all bytes zero).
+             * Lower to integer 0 with Variant resolved type so codegen
+             * emits a zero-filled 16-byte slot. */
+            expr->type = EXPR_INUM;
+            expr->expr_data.i_num = 0;
+            semcheck_expr_set_resolved_type(expr, VARIANT_TYPE);
+            expr->resolved_kgpc_type = create_primitive_type(VARIANT_TYPE);
+            *type_return = VARIANT_TYPE;
+            return 0;
         default:
             semcheck_error_with_context("Error on line %d, Default for this type is unsupported in this context.\n",
                 expr->line_num);

@@ -13774,6 +13774,37 @@ next_identifier:
                                 }
                             }
 
+                            /* Allow string literal initializer for PAnsiChar / PChar
+                             * pointer-to-char types.  The variable's KgpcType is
+                             * TYPE_KIND_POINTER with a CHAR_TYPE subtarget, e.g.:
+                             *   const signature: PAnsiChar = 'TPF0'; */
+                            if (!compatible &&
+                                (expr_tag == STRING_TYPE || expr_tag == SHORTSTRING_TYPE))
+                            {
+                                int var_is_pchar = 0;
+                                if (var_node != NULL && var_node->type != NULL &&
+                                    kgpc_type_is_pointer(var_node->type))
+                                {
+                                    int sub_tag = kgpc_type_get_pointer_subtype_tag(var_node->type);
+                                    if (sub_tag == CHAR_TYPE)
+                                        var_is_pchar = 1;
+                                }
+                                /* Also check by type_id (PAnsiChar, PChar, PWideChar) */
+                                if (!var_is_pchar)
+                                {
+                                    const char *tid = tree->tree_data.var_decl_data.type_id;
+                                    if (tid != NULL &&
+                                        (strcasecmp(tid, "PAnsiChar") == 0 ||
+                                         strcasecmp(tid, "PChar") == 0 ||
+                                         strcasecmp(tid, "PWideChar") == 0))
+                                    {
+                                        var_is_pchar = 1;
+                                    }
+                                }
+                                if (var_is_pchar)
+                                    compatible = 1;
+                            }
+
                             if (!compatible && current_var_type == HASHVAR_RECORD &&
                                 (expr_tag == STRING_TYPE || expr_tag == SHORTSTRING_TYPE))
                             {

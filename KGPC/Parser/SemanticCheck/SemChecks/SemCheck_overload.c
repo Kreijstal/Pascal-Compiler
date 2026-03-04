@@ -2496,6 +2496,13 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                         best_missing = missing_args;
                         num_best = 1;
                     }
+                    else if (best_penalty < cand_penalty)
+                    {
+                        /* Best has strictly lower aggregate penalty: resolve
+                         * the ambiguity in favour of best. */
+                        num_best = 1;
+                        free(qualities);
+                    }
                     else
                     {
                         free(qualities);
