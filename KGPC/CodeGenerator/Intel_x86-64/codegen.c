@@ -5819,14 +5819,29 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
     {
         args_scan = args;
         int scan_gpr_index = arg_start_index;
+        int scan_sse_index = 0;
         while(args_scan != NULL)
         {
             Tree_t *scan_decl = (Tree_t *)args_scan->cur;
             if (scan_decl->type == TREE_VAR_DECL)
             {
+                int scan_type = scan_decl->tree_data.var_decl_data.type;
+                int scan_is_var = scan_decl->tree_data.var_decl_data.is_var_param;
                 ListNode_t *scan_ids = scan_decl->tree_data.var_decl_data.ids;
                 while(scan_ids != NULL)
                 {
+                    /* Float (REAL_TYPE) parameters that are not passed by reference
+                     * use SSE/XMM registers, NOT integer registers. Skip integer
+                     * register allocation for them so subsequent integer params
+                     * get the correct registers. SSE regs are not clobbered by
+                     * kgpc_move calls, so no presave slot is needed. */
+                    if (!scan_is_var && scan_type == REAL_TYPE)
+                    {
+                        if (scan_sse_index < kgpc_max_sse_arg_regs())
+                            scan_sse_index++;
+                        scan_ids = scan_ids->next;
+                        continue;
+                    }
                     const char *param_reg = alloc_integer_arg_reg(1, &scan_gpr_index);
                     if (param_reg != NULL)
                     {
