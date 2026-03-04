@@ -7195,9 +7195,13 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             is_self_param = 1;
         }
 
-        int is_var_param = (formal_arg_decl != NULL &&
-            (formal_arg_decl->tree_data.var_decl_data.is_var_param ||
-             formal_arg_decl->tree_data.var_decl_data.is_untyped_param));
+        int is_var_param = 0;
+        if (formal_arg_decl != NULL && formal_arg_decl->type == TREE_VAR_DECL)
+        {
+            is_var_param =
+                (formal_arg_decl->tree_data.var_decl_data.is_var_param ||
+                 formal_arg_decl->tree_data.var_decl_data.is_untyped_param);
+        }
         if (is_self_param && codegen_self_param_is_class(formal_arg_decl, ctx))
             is_var_param = 0;
         int is_array_param = (formal_arg_decl != NULL && formal_arg_decl->type == TREE_ARR_DECL);
@@ -7349,6 +7353,14 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             }
         }
 
+        if (is_array_arg && arg_expr != NULL && arg_expr->type == EXPR_STRING &&
+            expected_type == POINTER_TYPE &&
+            !is_array_param && !formal_is_open_array && !formal_is_dynarray)
+        {
+            /* String literals passed to pointer parameters (e.g. setlocale(..., ''))
+             * are by-value pointer arguments, not by-ref static array arguments. */
+            is_array_arg = 0;
+        }
         int is_pointer_like = (is_var_param || is_array_param || is_array_arg || formal_is_dynarray);
         if (is_self_param && expected_type == REAL_TYPE)
             is_pointer_like = 0;

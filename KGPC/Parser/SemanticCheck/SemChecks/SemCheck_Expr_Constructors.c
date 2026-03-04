@@ -280,6 +280,12 @@ int semcheck_typecheck_array_literal(struct Expression *expr, SymTab_t *symtab,
             {
                 compatible = 1;
             }
+            else if (is_string_type(expected_type) && is_string_type(element_type))
+            {
+                /* FPC accepts shortstring/rawbytestring/ansistring elements in
+                 * open-array string contexts (e.g. array of RawByteString). */
+                compatible = 1;
+            }
             else if (expected_type == STRING_TYPE && element_type == CHAR_TYPE)
             {
                 compatible = 1;

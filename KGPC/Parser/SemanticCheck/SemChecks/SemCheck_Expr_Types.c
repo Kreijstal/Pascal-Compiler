@@ -1785,17 +1785,15 @@ int semcheck_recordaccess(int *type_return,
             if (getenv("KGPC_ASSERT_UNIT_QUALIFIER") != NULL)
                 assert(find_result == -1 && "unit-qualifier registry fallback requires unresolved name");
         }
-        if (unit_is_qualifier && find_result == -1)
+        if (unit_is_qualifier)
         {
             if (getenv("KGPC_DEBUG_RECORD_ACCESS") != NULL)
             {
                 fprintf(stderr,
-                    "[KGPC_DEBUG_RECORD_ACCESS] unit-qualifier fallback: unit=%s field=%s\n",
+                    "[KGPC_DEBUG_RECORD_ACCESS] unit-qualifier resolve: unit=%s field=%s\n",
                     unit_id != NULL ? unit_id : "(null)",
                     field_id != NULL ? field_id : "(null)");
             }
-            if (getenv("KGPC_ASSERT_UNIT_QUALIFIER") != NULL)
-                assert(unit_is_qualifier && "unit-qualifier fallback should only run for unit names");
             /* Identifier not found - might be a unit qualifier.
              * Try to look up the field_id directly as it may be an exported constant/var.
              * When qualifier is "System", prefer the builtin (non-unit-imported) entry
@@ -1890,6 +1888,27 @@ int semcheck_recordaccess(int *type_return,
                     expr->type = EXPR_VAR_ID;
                     expr->expr_data.id = field_copy;
                     return semcheck_varid(type_return, symtab, expr, max_scope_lev, mutating);
+                }
+                else if (field_node->hash_type == HASHTYPE_FUNCTION_RETURN)
+                {
+                    /* Unit.QualifiedName may resolve to the function-return helper
+                     * symbol first; force a zero-arg function call in expression
+                     * context so identifiers like System.GetLoadErrorStr are read
+                     * as function values, not record-field-like accesses. */
+                    char *field_copy = strdup(field_id);
+                    if (field_copy == NULL)
+                    {
+                        *type_return = UNKNOWN_TYPE;
+                        return 1;
+                    }
+                    expr->type = EXPR_FUNCTION_CALL;
+                    memset(&expr->expr_data.function_call_data, 0,
+                        sizeof(expr->expr_data.function_call_data));
+                    expr->expr_data.function_call_data.id = field_copy;
+                    expr->expr_data.function_call_data.args_expr = NULL;
+                    expr->expr_data.function_call_data.mangled_id = NULL;
+                    semcheck_reset_function_call_cache(expr);
+                    return semcheck_funccall(type_return, symtab, expr, max_scope_lev, mutating);
                 }
             }
             else
@@ -2050,6 +2069,30 @@ int semcheck_recordaccess(int *type_return,
                 "[KGPC_DEBUG_RECORD_ACCESS] unit-name no symbol: id=%s field=%s\n",
                 record_expr->expr_data.id,
                 field_id != NULL ? field_id : "(null)");
+        }
+
+        /* Fallback for qualified zero-arg function access like
+         * UnitName.FuncName used without parentheses in expression context. */
+        if (field_id != NULL)
+        {
+            char *field_copy = strdup(field_id);
+            if (field_copy == NULL)
+            {
+                *type_return = UNKNOWN_TYPE;
+                return 1;
+            }
+            destroy_expr(record_expr);
+            free(expr->expr_data.record_access_data.field_id);
+            expr->expr_data.record_access_data.record_expr = NULL;
+            expr->expr_data.record_access_data.field_id = NULL;
+            expr->type = EXPR_FUNCTION_CALL;
+            memset(&expr->expr_data.function_call_data, 0,
+                sizeof(expr->expr_data.function_call_data));
+            expr->expr_data.function_call_data.id = field_copy;
+            expr->expr_data.function_call_data.args_expr = NULL;
+            expr->expr_data.function_call_data.mangled_id = NULL;
+            semcheck_reset_function_call_cache(expr);
+            return semcheck_funccall(type_return, symtab, expr, max_scope_lev, mutating);
         }
     }
 

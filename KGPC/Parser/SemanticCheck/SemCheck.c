@@ -13625,6 +13625,17 @@ next_identifier:
                                 }
                             }
 
+                            /* In {$H-} mode string literals resolve as ShortString.
+                             * Allow typed initializers between String and ShortString. */
+                            if (!compatible)
+                            {
+                                if ((current_var_type == HASHVAR_PCHAR && inferred_var_type == HASHVAR_SHORTSTRING) ||
+                                    (current_var_type == HASHVAR_SHORTSTRING && inferred_var_type == HASHVAR_PCHAR))
+                                {
+                                    compatible = 1;
+                                }
+                            }
+
                             if (!compatible && current_var_type == HASHVAR_PCHAR && expr_tag == CHAR_TYPE)
                             {
                                 compatible = 1;
