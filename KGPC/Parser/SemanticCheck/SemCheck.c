@@ -13537,6 +13537,12 @@ next_identifier:
                                 if (tree->tree_data.var_decl_data.type_id == NULL)
                                     tree->tree_data.var_decl_data.type_id = strdup("string");
                                 break;
+                            case SHORTSTRING_TYPE:
+                                inferred_var_type = HASHVAR_SHORTSTRING;
+                                normalized_type = SHORTSTRING_TYPE;
+                                if (tree->tree_data.var_decl_data.type_id == NULL)
+                                    tree->tree_data.var_decl_data.type_id = strdup("shortstring");
+                                break;
                             case SET_TYPE:
                                 inferred_var_type = HASHVAR_SET;
                                 normalized_type = SET_TYPE;
@@ -13624,7 +13630,8 @@ next_identifier:
                                 compatible = 1;
                             }
                             /* Allow string literal initializer for array of char or shortstring-like arrays */
-                            if (!compatible && current_var_type == HASHVAR_ARRAY && expr_tag == STRING_TYPE)
+                            if (!compatible && current_var_type == HASHVAR_ARRAY &&
+                                (expr_tag == STRING_TYPE || expr_tag == SHORTSTRING_TYPE))
                             {
                                 KgpcType *var_type = (var_node != NULL) ? var_node->type : NULL;
                                 if (var_type != NULL && var_type->kind == TYPE_KIND_ARRAY &&
@@ -13715,7 +13722,8 @@ next_identifier:
                                 }
                             }
 
-                            if (!compatible && current_var_type == HASHVAR_RECORD && expr_tag == STRING_TYPE)
+                            if (!compatible && current_var_type == HASHVAR_RECORD &&
+                                (expr_tag == STRING_TYPE || expr_tag == SHORTSTRING_TYPE))
                             {
                                 const char *record_id = NULL;
                                 if (var_node->type != NULL)
