@@ -2039,6 +2039,38 @@ static void add_class_vars_to_method_scope_impl(SymTab_t *symtab,
         return;
     }
 
+    /* Operator methods (class operator ...), especially on records, should
+     * not have owner fields injected into local scope. Their parameters often
+     * intentionally reuse field names (e.g. "a"), and injected fields would
+     * shadow those parameters. */
+    if (method_name != NULL)
+    {
+        if (strstr(method_name, "op_") != NULL ||
+            strcmp(method_name, ":=") == 0 ||
+            strcmp(method_name, "+") == 0 ||
+            strcmp(method_name, "-") == 0 ||
+            strcmp(method_name, "*") == 0 ||
+            strcmp(method_name, "/") == 0 ||
+            strcmp(method_name, "=") == 0 ||
+            strcmp(method_name, "<>") == 0 ||
+            strcmp(method_name, "<") == 0 ||
+            strcmp(method_name, ">") == 0 ||
+            strcmp(method_name, "<=") == 0 ||
+            strcmp(method_name, ">=") == 0 ||
+            strcasecmp(method_name, "Implicit") == 0 ||
+            strcasecmp(method_name, "Explicit") == 0 ||
+            strcasecmp(method_name, "Equal") == 0 ||
+            strcasecmp(method_name, "NotEqual") == 0 ||
+            strcasecmp(method_name, "GreaterThan") == 0 ||
+            strcasecmp(method_name, "GreaterThanOrEqual") == 0 ||
+            strcasecmp(method_name, "LessThan") == 0 ||
+            strcasecmp(method_name, "LessThanOrEqual") == 0)
+        {
+            free(class_name);
+            return;
+        }
+    }
+
     /* Only add class fields for static methods. Non-static methods
      * access fields via Self which is handled differently. */
     int is_static = from_cparser_is_method_static(class_name, method_name);
@@ -8526,9 +8558,6 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                     {
                                         KgpcType *return_type = NULL;
                                         char *return_type_id = NULL;
-                                        int is_function_template = (tmpl->kind == METHOD_TEMPLATE_FUNCTION ||
-                                            tmpl->kind == METHOD_TEMPLATE_CONSTRUCTOR ||
-                                            tmpl->has_return_type);
                                         ast_t *return_type_node = tmpl->return_type_ast;
                                         if (return_type_node == NULL && tmpl->method_ast != NULL)
                                         {
@@ -8544,6 +8573,10 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                                 }
                                             }
                                         }
+                                        int is_function_template = (tmpl->kind == METHOD_TEMPLATE_FUNCTION ||
+                                            tmpl->kind == METHOD_TEMPLATE_CONSTRUCTOR ||
+                                            tmpl->has_return_type ||
+                                            return_type_node != NULL);
 
                                         if (return_type_node != NULL)
                                         {
@@ -8650,7 +8683,8 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                     {
                                         int is_function_template = (tmpl->kind == METHOD_TEMPLATE_FUNCTION ||
                                             tmpl->kind == METHOD_TEMPLATE_CONSTRUCTOR ||
-                                            tmpl->has_return_type);
+                                            tmpl->has_return_type ||
+                                            tmpl->return_type_ast != NULL);
                                         if (is_function_template && existing != NULL &&
                                             existing->hash_type == HASHTYPE_PROCEDURE)
                                             existing->hash_type = HASHTYPE_FUNCTION;
@@ -9365,6 +9399,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                     existing_type->type->kind == TYPE_KIND_RECORD);
                 if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS &&
                     existing_is_record &&
+                    existing_type->defined_in_unit &&
                     existing_type->source_unit_index != 0 &&
                     tree->tree_data.type_decl_data.source_unit_index != 0)
                     already_predeclared = 0;
@@ -10017,6 +10052,48 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                 if (record_type != NULL)
                 {
                     semcheck_typecheck_record_constructor(value_expr, symtab, INT_MAX, record_type, tree->line_num);
+                }
+            }
+            if (value_expr != NULL && value_expr->type == EXPR_ARRAY_LITERAL &&
+                value_expr->array_element_type == UNKNOWN_TYPE &&
+                value_expr->array_element_type_id == NULL)
+            {
+                const char *decl_type_id = tree->tree_data.const_decl_data.type_id;
+                const TypeRef *decl_type_ref = tree->tree_data.const_decl_data.type_ref;
+                HashNode_t *type_node = semcheck_find_preferred_type_node_with_ref(
+                    symtab, decl_type_ref, decl_type_id);
+                KgpcType *decl_type = (type_node != NULL) ? type_node->type : NULL;
+                if (decl_type != NULL && kgpc_type_is_array(decl_type))
+                {
+                    KgpcType *elem_type = kgpc_type_get_array_element_type_resolved(decl_type, symtab);
+                    if (elem_type != NULL)
+                    {
+                        value_expr->array_element_type = semcheck_tag_from_kgpc(elem_type);
+                        if (elem_type->kind == TYPE_KIND_RECORD &&
+                            elem_type->info.record_info != NULL)
+                        {
+                            value_expr->array_element_record_type = elem_type->info.record_info;
+                            if (value_expr->array_element_type_id == NULL &&
+                                elem_type->info.record_info->type_id != NULL)
+                            {
+                                value_expr->array_element_type_id =
+                                    strdup(elem_type->info.record_info->type_id);
+                            }
+                        }
+                        if (value_expr->array_element_type_id == NULL &&
+                            elem_type->type_alias != NULL &&
+                            elem_type->type_alias->target_type_id != NULL)
+                        {
+                            value_expr->array_element_type_id =
+                                strdup(elem_type->type_alias->target_type_id);
+                        }
+                    }
+                    if (value_expr->array_element_type_id == NULL &&
+                        decl_type->info.array_info.element_type_id != NULL)
+                    {
+                        value_expr->array_element_type_id =
+                            strdup(decl_type->info.array_info.element_type_id);
+                    }
                 }
             }
             semcheck_expr_main(symtab, value_expr, INT_MAX, NO_MUTATE, &expr_type);

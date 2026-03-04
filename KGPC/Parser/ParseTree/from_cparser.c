@@ -293,19 +293,6 @@ static inline bool is_safe_to_continue(VisitedSet *visited, ast_t *node) {
     return true;
 }
 
-static bool ast_chain_contains(ast_t *head, ast_t *target, int max_steps) {
-    if (head == NULL || target == NULL || max_steps <= 0) {
-        return false;
-    }
-    int steps = 0;
-    for (ast_t *cur = head; cur != NULL && steps < max_steps; cur = cur->next, steps++) {
-        if (cur == target) {
-            return true;
-        }
-    }
-    return false;
-}
-
 typedef struct {
     int is_array;
     int is_array_of_const;
@@ -1607,6 +1594,30 @@ ListNode_t *from_cparser_find_classes_with_method(const char *method_name, int *
 
 static int typed_const_counter = 0;
 
+static int is_operator_token_name(const char *name)
+{
+    if (name == NULL)
+        return 0;
+    return (strcmp(name, "+") == 0 || strcmp(name, "-") == 0 ||
+            strcmp(name, "*") == 0 || strcmp(name, "/") == 0 ||
+            strcmp(name, "=") == 0 || strcmp(name, "<>") == 0 ||
+            strcmp(name, "<") == 0 || strcmp(name, ">") == 0 ||
+            strcmp(name, "<=") == 0 || strcmp(name, ">=") == 0 ||
+            strcmp(name, "**") == 0 || strcmp(name, ":=") == 0 ||
+            strcasecmp(name, "div") == 0 || strcasecmp(name, "mod") == 0 ||
+            strcasecmp(name, "and") == 0 || strcasecmp(name, "or") == 0 ||
+            strcasecmp(name, "not") == 0 || strcasecmp(name, "xor") == 0 ||
+            strcasecmp(name, "shl") == 0 || strcasecmp(name, "shr") == 0 ||
+            strcasecmp(name, "in") == 0 || strcasecmp(name, "is") == 0 ||
+            strcasecmp(name, "as") == 0 ||
+            strcasecmp(name, "Implicit") == 0 || strcasecmp(name, "Explicit") == 0 ||
+            strcasecmp(name, "Equal") == 0 || strcasecmp(name, "NotEqual") == 0 ||
+            strcasecmp(name, "GreaterThan") == 0 ||
+            strcasecmp(name, "GreaterThanOrEqual") == 0 ||
+            strcasecmp(name, "LessThan") == 0 ||
+            strcasecmp(name, "LessThanOrEqual") == 0);
+}
+
 /* Encode operator symbols into valid identifier names for assembly */
 static char *encode_operator_name(const char *op_name) {
     if (op_name == NULL)
@@ -1635,7 +1646,19 @@ static char *encode_operator_name(const char *op_name) {
     if (strcmp(op_name, "in") == 0 || strcmp(op_name, "IN") == 0) return strdup("op_in");
     if (strcmp(op_name, "is") == 0 || strcmp(op_name, "IS") == 0) return strdup("op_is");
     if (strcmp(op_name, "as") == 0 || strcmp(op_name, "AS") == 0) return strdup("op_as");
+    if (strcasecmp(op_name, "Equal") == 0) return strdup("op_eq");
+    if (strcasecmp(op_name, "NotEqual") == 0) return strdup("op_ne");
+    if (strcasecmp(op_name, "GreaterThan") == 0) return strdup("op_gt");
+    if (strcasecmp(op_name, "GreaterThanOrEqual") == 0) return strdup("op_ge");
+    if (strcasecmp(op_name, "LessThan") == 0) return strdup("op_lt");
+    if (strcasecmp(op_name, "LessThanOrEqual") == 0) return strdup("op_le");
+    if (strcasecmp(op_name, "Add") == 0) return strdup("op_add");
+    if (strcasecmp(op_name, "Subtract") == 0) return strdup("op_sub");
+    if (strcasecmp(op_name, "Multiply") == 0) return strdup("op_mul");
+    if (strcasecmp(op_name, "Divide") == 0) return strdup("op_div");
     if (strcmp(op_name, ":=") == 0) return strdup("op_assign");
+    /* FPC class operator Implicit is assignment-style conversion. */
+    if (strcasecmp(op_name, "Implicit") == 0) return strdup("op_assign");
     
     /* For other operators or named operators, use the name as-is */
     return strdup(op_name);
@@ -1665,6 +1688,48 @@ static char *mangle_method_name(const char *class_name, const char *method_name)
     snprintf(result, total, "%s__%s", class_name, encoded_method);
     free(encoded_method);
     return result;
+}
+
+/* Method mangling without operator alias encoding.
+ * Use this for ordinary method declarations/implementations so names like Add
+ * are preserved as methods instead of being treated as operators. */
+static char *mangle_method_name_raw(const char *class_name, const char *method_name) {
+    if (method_name == NULL)
+        return NULL;
+    if (class_name == NULL || class_name[0] == '\0')
+        return strdup(method_name);
+
+    size_t class_len = strlen(class_name);
+    size_t method_len = strlen(method_name);
+    size_t total = class_len + 2 + method_len + 1;
+    char *result = (char *)malloc(total);
+    if (result == NULL)
+        return NULL;
+    snprintf(result, total, "%s__%s", class_name, method_name);
+    return result;
+}
+
+static char *method_param_type_suffix(Tree_t *param_decl)
+{
+    if (param_decl == NULL)
+        return NULL;
+
+    if (param_decl->type == TREE_VAR_DECL)
+    {
+        if (param_decl->tree_data.var_decl_data.type_ref != NULL)
+            return type_ref_render_mangled(param_decl->tree_data.var_decl_data.type_ref);
+        if (param_decl->tree_data.var_decl_data.type_id != NULL)
+            return strdup(param_decl->tree_data.var_decl_data.type_id);
+    }
+    else if (param_decl->type == TREE_ARR_DECL)
+    {
+        if (param_decl->tree_data.arr_decl_data.type_ref != NULL)
+            return type_ref_render_mangled(param_decl->tree_data.arr_decl_data.type_ref);
+        if (param_decl->tree_data.arr_decl_data.type_id != NULL)
+            return strdup(param_decl->tree_data.arr_decl_data.type_id);
+    }
+
+    return NULL;
 }
 
 /* Get method information for a class */
@@ -6739,7 +6804,6 @@ static void annotate_method_template(struct MethodTemplate *method_template, ast
         {
             case PASCAL_T_IDENTIFIER:
                 if (method_template->return_type_ast == NULL &&
-                    method_template->params_ast != NULL &&
                     sym_name != NULL &&
                     method_template->name != NULL &&
                     strcasecmp(sym_name, method_template->name) != 0 &&
@@ -14402,12 +14466,15 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     ast_t *cur = method_node->child;
     /* Skip optional keyword identifiers like "class" or "generic" that appear
      * before the qualified identifier (e.g., "class function THost.SeedSum"). */
+    int method_decl_uses_operator_keyword = 0;
     while (cur != NULL) {
         ast_t *skip_node = unwrap_pascal_node(cur);
         if (skip_node == NULL) skip_node = cur;
         if (skip_node->typ == PASCAL_T_IDENTIFIER &&
             skip_node->sym != NULL && skip_node->sym->name != NULL &&
             is_method_decl_keyword(skip_node->sym->name)) {
+            if (strcasecmp(skip_node->sym->name, "operator") == 0)
+                method_decl_uses_operator_keyword = 1;
             cur = cur->next;
             continue;
         }
@@ -14429,12 +14496,14 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
      * This is detected by checking if the first identifier is a known operator symbol */
     if (qualified != NULL && qualified->typ == PASCAL_T_IDENTIFIER) {
         char *potential_op = dup_symbol(qualified);
+        int is_operator_symbol = (potential_op != NULL && is_operator_token_name(potential_op));
+        int should_parse_standalone_operator = method_decl_uses_operator_keyword || is_operator_symbol;
         /* Check if this is an operator symbol (encoded to op_xxx means it's an operator) */
-        char *encoded_op = (potential_op != NULL) ? encode_operator_name(potential_op) : NULL;
-        int is_operator_symbol = (encoded_op != NULL && strcmp(potential_op, encoded_op) != 0);
+        char *encoded_op = (potential_op != NULL && should_parse_standalone_operator)
+            ? encode_operator_name(potential_op) : NULL;
         free(potential_op);
 
-        if (is_operator_symbol) {
+        if (should_parse_standalone_operator) {
             /* This is a standalone operator - qualified is the operator symbol directly */
             if (getenv("KGPC_DEBUG_OPERATOR") != NULL) {
                 fprintf(stderr, "[Operator] Detected operator symbol: encoded=%s\n", encoded_op);
@@ -14716,6 +14785,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     int is_class_method_impl = from_cparser_is_method_class_method(effective_class, method_name);
     int method_param_count = count_params_in_method_impl(method_node);
     char *method_param_sig = param_type_signature_from_method_impl(method_node);
+    int method_declares_operator = method_decl_uses_operator_keyword;
     if (method_node != NULL && method_name != NULL)
     {
         struct MethodTemplate impl_template = {0};
@@ -14746,7 +14816,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     const char *mangle_owner = effective_class;
     if (effective_class_full != NULL && effective_class_full != effective_class)
         mangle_owner = effective_class_full;
-    char *proc_name = mangle_method_name(mangle_owner, method_name);
+    char *proc_name = mangle_method_name_raw(mangle_owner, method_name);
     if (proc_name == NULL) {
         free(class_name);
         free(method_name);
@@ -14756,10 +14826,17 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         return NULL;
     }
     
-    /* Check if this is a class operator (static method) by checking the method name */
+    /* Check if this is a class operator.
+     * Named operators like Add/Subtract must come from "operator" declarations,
+     * otherwise normal methods (e.g. TList.Add) are misclassified. */
     int is_class_operator = 0;
-    if (method_name != NULL) {
-        /* Class operators have operator symbols as names */
+    if (method_declares_operator)
+    {
+        is_class_operator = 1;
+    }
+    else if (method_name != NULL)
+    {
+        /* Fallback only for symbolic operators to keep legacy parser cases working. */
         if (strcmp(method_name, "+") == 0 || strcmp(method_name, "-") == 0 ||
             strcmp(method_name, "*") == 0 || strcmp(method_name, "/") == 0 ||
             strcmp(method_name, "=") == 0 || strcmp(method_name, "<>") == 0 ||
@@ -14771,7 +14848,13 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
             strcasecmp(method_name, "not") == 0 || strcasecmp(method_name, "xor") == 0 ||
             strcasecmp(method_name, "shl") == 0 || strcasecmp(method_name, "shr") == 0 ||
             strcasecmp(method_name, "in") == 0 || strcasecmp(method_name, "is") == 0 ||
-            strcasecmp(method_name, "as") == 0 || strcmp(method_name, ":=") == 0) {
+            strcasecmp(method_name, "as") == 0 || strcmp(method_name, ":=") == 0 ||
+            strcasecmp(method_name, "Implicit") == 0 || strcasecmp(method_name, "Explicit") == 0 ||
+            strcasecmp(method_name, "Equal") == 0 || strcasecmp(method_name, "NotEqual") == 0 ||
+            strcasecmp(method_name, "GreaterThan") == 0 ||
+            strcasecmp(method_name, "GreaterThanOrEqual") == 0 ||
+            strcasecmp(method_name, "LessThan") == 0 ||
+            strcasecmp(method_name, "LessThanOrEqual") == 0) {
             is_class_operator = 1;
         }
     }
@@ -14959,6 +15042,54 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
 
     ListNode_t *params = list_builder_finish(&params_builder);
     ListNode_t *label_decls = list_builder_finish(&label_builder);
+
+    if (is_class_operator && method_name != NULL && mangle_owner != NULL)
+    {
+        char *encoded_method = encode_operator_name(method_name);
+        char *param_suffix = NULL;
+        char *ret_suffix = NULL;
+        if (params != NULL && params->cur != NULL)
+            param_suffix = method_param_type_suffix((Tree_t *)params->cur);
+        if (return_type_ref != NULL)
+            ret_suffix = type_ref_render_mangled(return_type_ref);
+        if (ret_suffix == NULL && return_type_id != NULL)
+            ret_suffix = strdup(return_type_id);
+
+        if (encoded_method != NULL && (param_suffix != NULL || ret_suffix != NULL))
+        {
+            size_t name_len = strlen(mangle_owner) + strlen(encoded_method) + 3;
+            if (param_suffix != NULL)
+                name_len += strlen(param_suffix) + 1;
+            if (ret_suffix != NULL)
+                name_len += strlen(ret_suffix) + 1;
+            char *disambiguated = (char *)malloc(name_len);
+            if (disambiguated != NULL)
+            {
+                int written = snprintf(disambiguated, name_len, "%s__%s", mangle_owner, encoded_method);
+                if (written > 0 && (size_t)written < name_len)
+                {
+                    size_t used = (size_t)written;
+                    if (param_suffix != NULL)
+                    {
+                        snprintf(disambiguated + used, name_len - used, "_%s", param_suffix);
+                        used = strlen(disambiguated);
+                    }
+                    if (ret_suffix != NULL)
+                        snprintf(disambiguated + used, name_len - used, "_%s", ret_suffix);
+                    free(proc_name);
+                    proc_name = disambiguated;
+                }
+                else
+                {
+                    free(disambiguated);
+                }
+            }
+        }
+
+        free(encoded_method);
+        free(param_suffix);
+        free(ret_suffix);
+    }
     
     Tree_t *tree;
     if (has_return_type) {
@@ -14988,7 +15119,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
          * E.g., for TManager.TState.Init, mangled_id = "TManager.TState__Init" */
         if (effective_class_full != NULL && effective_class_full != effective_class)
         {
-            char *full_mangled = mangle_method_name(effective_class_full, method_name);
+            char *full_mangled = mangle_method_name_raw(effective_class_full, method_name);
             tree->tree_data.subprogram_data.mangled_id = full_mangled != NULL ? full_mangled : strdup(proc_name);
         }
         else
@@ -16257,13 +16388,12 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
             }
             /* Check for circular reference */
                     if (!is_safe_to_continue(visited_if, section)) {
-                        fprintf(stderr, "ERROR: Circular reference detected in interface sections, stopping traversal\n");
-                        break;
+                        section = section->next;
+                        continue;
                     }
                     
-                    ast_t *node = unwrap_pascal_node(section);
-                    for (ast_t *node_cursor = node; node_cursor != NULL;
-                         node_cursor = (section->typ == PASCAL_T_NONE) ? node_cursor->next : NULL) {
+                    ast_t *node_cursor = unwrap_pascal_node(section);
+                    if (node_cursor != NULL) {
                         if (getenv("KGPC_DEBUG_PROPERTY") != NULL) {
                             fprintf(stderr, "[KGPC] interface node typ=%d (%s)\n",
                                 node_cursor->typ, pascal_tag_to_string(node_cursor->typ));
@@ -16368,8 +16498,8 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                 while (definition != NULL && definition != ast_nil) {
                     /* Check for circular reference */
                     if (!is_safe_to_continue(visited_impl, definition)) {
-                        fprintf(stderr, "ERROR: Circular reference detected in implementation sections, stopping traversal\n");
-                        break;
+                        definition = definition->next;
+                        continue;
                     }
 
                     if (getenv("KGPC_DEBUG_IMPL_NONE") != NULL &&
@@ -16380,15 +16510,8 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                         fprintf(stderr, "[KGPC] impl NONE at line=%d: %.120s\n",
                             definition->line, definition->sym->name);
                     }
-                    ast_t *node = unwrap_pascal_node(definition);
-                    bool iterate_child_chain = (definition->typ == PASCAL_T_NONE);
-                    if (iterate_child_chain && definition->child != NULL && definition->next != NULL) {
-                        if (ast_chain_contains(definition->child, definition->next, 100000)) {
-                            iterate_child_chain = false;
-                        }
-                    }
-                    for (ast_t *node_cursor = node; node_cursor != NULL;
-                         node_cursor = iterate_child_chain ? node_cursor->next : NULL) {
+                    ast_t *node_cursor = unwrap_pascal_node(definition);
+                    if (node_cursor != NULL) {
                         if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
                             fprintf(stderr, "[KGPC] implementation section node typ=%d\n", node_cursor->typ);
                         }
