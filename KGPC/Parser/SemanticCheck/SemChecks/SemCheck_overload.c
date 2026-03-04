@@ -2225,14 +2225,25 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                     {
                         quality.int_promo_rank = 10;
                     }
-                    /* For char types, prefer smaller formal type (AnsiChar over WideChar) */
+                    /* For char types, prefer smaller formal type (AnsiChar over WideChar).
+                     * kgpc_type_equals(AnsiChar, WideChar) returns true (same CHAR_TYPE tag),
+                     * so without this fix, AnsiChar→WideChar would get MATCH_EXACT (kind=0).
+                     * We detect WideChar formals and upgrade kind to MATCH_PROMOTION. */
                     if (arg_tag == CHAR_TYPE && formal_tag == CHAR_TYPE)
                     {
                         long long formal_size = formal_kgpc != NULL ? kgpc_type_sizeof(formal_kgpc) : 1;
-                        if (formal_size <= 1)
-                            quality.char_promo_rank = 0;  /* AnsiChar: best */
-                        else
-                            quality.char_promo_rank = 1;  /* WideChar: worse */
+                        int is_wide = (formal_size > 1);
+                        /* Also check by name: WideChar type alias may not carry size in formal params */
+                        if (!is_wide)
+                        {
+                            const char *fid = semcheck_get_param_type_id(formal_decl);
+                            if (fid != NULL && (pascal_identifier_equals(fid, "WideChar") ||
+                                                pascal_identifier_equals(fid, "UnicodeChar")))
+                                is_wide = 1;
+                        }
+                        if (is_wide && quality.kind == MATCH_EXACT)
+                            quality.kind = MATCH_PROMOTION;
+                        quality.char_promo_rank = is_wide ? 1 : 0;
                     }
                     if (arg_expr != NULL)
                     {
@@ -2317,9 +2328,10 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                 candidate->id ? candidate->id : "<null>",
                 candidate->mangled_id ? candidate->mangled_id : "<null>");
             for (int qi = 0; qi < given_count; qi++)
-                fprintf(stderr, " (%d,%d,%d,%d,%d)", (int)qualities[qi].kind,
+                fprintf(stderr, " (%d,%d,%d,%d,%d,%d)", (int)qualities[qi].kind,
                     qualities[qi].exact_type_id, qualities[qi].exact_pointer_subtype,
-                    qualities[qi].exact_array_elem, qualities[qi].int_promo_rank);
+                    qualities[qi].exact_array_elem, qualities[qi].int_promo_rank,
+                    qualities[qi].char_promo_rank);
             fprintf(stderr, " missing=%d\n", missing_args);
         }
         if (num_best == 0)
