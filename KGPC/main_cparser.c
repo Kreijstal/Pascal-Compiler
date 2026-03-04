@@ -1475,19 +1475,22 @@ int main(int argc, char **argv)
                 clear_prelude_subprograms(prelude_tree);
             }
 
-            /* Merge prelude types into unit for FPC compatibility (SizeInt, PAnsiChar, etc.) */
+            /* Skip merging prelude types/consts/vars when compiling the System unit itself,
+             * since System defines its own core types and constants. */
+            int is_system_unit = pascal_identifier_equals(user_tree->tree_data.unit_data.unit_id, "System");
+
+            /* Merge prelude types into unit for FPC compatibility (SizeInt, PAnsiChar, etc.).
+             * For System itself, keep prelude types unmarked so real System declarations
+             * take precedence while still providing missing core aliases (e.g. Currency). */
             ListNode_t *prelude_types = get_prelude_type_decls(prelude_tree);
             if (prelude_types != NULL)
             {
-                mark_unit_type_decls(prelude_types, 1, unit_registry_add("System"));
+                if (!is_system_unit)
+                    mark_unit_type_decls(prelude_types, 1, unit_registry_add("System"));
                 user_tree->tree_data.unit_data.interface_type_decls =
                     ConcatList(prelude_types, user_tree->tree_data.unit_data.interface_type_decls);
                 clear_prelude_type_decls(prelude_tree);
             }
-
-            /* Skip merging prelude constants/vars when compiling the System unit itself,
-             * since System defines its own DirectorySeparator, IsLibrary, etc. */
-            int is_system_unit = pascal_identifier_equals(user_tree->tree_data.unit_data.unit_id, "System");
 
             /* Merge prelude constants into unit for FPC compatibility (fmClosed, fmInput, etc.) */
             ListNode_t *prelude_consts = get_prelude_const_decls(prelude_tree);

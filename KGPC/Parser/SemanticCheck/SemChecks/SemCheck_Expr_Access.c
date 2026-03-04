@@ -460,6 +460,11 @@ int semcheck_arrayaccess(int *type_return,
          * CHAR_TYPE at the semantic analysis level; character width differences
          * are handled later during code generation. */
         element_type = CHAR_TYPE;
+        if (base_kgpc_type != NULL && kgpc_type_is_wide_string(base_kgpc_type))
+        {
+            if (expr->array_element_type_id == NULL)
+                expr->array_element_type_id = strdup("WideChar");
+        }
     }
     else if (base_is_pointer)
     {

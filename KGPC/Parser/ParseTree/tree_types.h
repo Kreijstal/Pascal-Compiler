@@ -43,6 +43,7 @@ struct TypeAlias
     char *array_element_type_id;
     struct TypeRef *array_element_type_ref;
     int is_shortstring;
+    int is_wide_string;
     int is_open_array;
     ListNode_t *array_dimensions;
     int is_pointer;

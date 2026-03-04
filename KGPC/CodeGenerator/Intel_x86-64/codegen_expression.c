@@ -2129,6 +2129,21 @@ long long expr_get_array_element_size(const struct Expression *expr, CodeGenCont
 
     if (expr->array_element_type != UNKNOWN_TYPE)
     {
+        if (expr->array_element_type == CHAR_TYPE && ctx != NULL && ctx->symtab != NULL &&
+            expr->array_element_type_id != NULL)
+        {
+            HashNode_t *type_node = NULL;
+            if (FindIdent(&type_node, ctx->symtab, expr->array_element_type_id) >= 0 &&
+                type_node != NULL && type_node->type != NULL)
+            {
+                long long node_size = kgpc_type_sizeof(type_node->type);
+                if (node_size > 0 &&
+                    node_size != codegen_sizeof_type_tag(expr->array_element_type))
+                {
+                    return node_size;
+                }
+            }
+        }
         long long tag_size = codegen_sizeof_type_tag(expr->array_element_type);
         if (tag_size > 0)
             return tag_size;
@@ -5109,7 +5124,35 @@ static int codegen_get_indexable_element_size(struct Expression *array_expr,
 
     if (base_is_string)
     {
-        *out_size = 1;
+        long long string_elem_size = 1;
+        if (record_field_type != NULL && kgpc_type_is_wide_string(record_field_type))
+        {
+            string_elem_size = 2;
+        }
+        else
+        {
+            KgpcType *base_type = expr_get_kgpc_type(array_expr);
+            if (base_type != NULL && kgpc_type_is_wide_string(base_type))
+                string_elem_size = 2;
+            else if (ctx != NULL && ctx->symtab != NULL && array_expr->type == EXPR_VAR_ID &&
+                     array_expr->expr_data.id != NULL)
+            {
+                HashNode_t *var_node = NULL;
+                if (FindIdent(&var_node, ctx->symtab, array_expr->expr_data.id) >= 0 &&
+                    var_node != NULL && var_node->type != NULL &&
+                    kgpc_type_is_wide_string(var_node->type))
+                {
+                    string_elem_size = 2;
+                }
+            }
+        }
+        *out_size = string_elem_size;
+        return 1;
+    }
+
+    if (base_is_array && array_expr->array_element_size > 0)
+    {
+        *out_size = array_expr->array_element_size;
         return 1;
     }
 
@@ -5170,6 +5213,32 @@ static int codegen_get_indexable_element_size(struct Expression *array_expr,
     }
 
     element_size_ll = expr_get_array_element_size(array_expr, ctx);
+    if (element_size_ll > 0 && ctx != NULL && ctx->symtab != NULL)
+    {
+        if (array_expr->array_element_type_id != NULL)
+        {
+            HashNode_t *type_node = NULL;
+            if (FindIdent(&type_node, ctx->symtab, array_expr->array_element_type_id) >= 0 &&
+                type_node != NULL && type_node->type != NULL)
+            {
+                long long node_size = kgpc_type_sizeof(type_node->type);
+                if (node_size > element_size_ll)
+                    element_size_ll = node_size;
+            }
+        }
+        if (array_expr->type == EXPR_VAR_ID && array_expr->expr_data.id != NULL)
+        {
+            HashNode_t *array_node = NULL;
+            if (FindIdent(&array_node, ctx->symtab, array_expr->expr_data.id) == 0 &&
+                array_node != NULL && array_node->type != NULL &&
+                kgpc_type_is_array(array_node->type))
+            {
+                long long node_elem = kgpc_type_get_array_element_size(array_node->type);
+                if (node_elem > element_size_ll)
+                    element_size_ll = node_elem;
+            }
+        }
+    }
     if (element_size_ll <= 0 && ctx != NULL && ctx->symtab != NULL &&
         array_expr->type == EXPR_VAR_ID && array_expr->expr_data.id != NULL)
     {
@@ -5521,6 +5590,8 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
     {
         array_is_open_array = 1;
     }
+    if (array_expr->array_is_dynamic)
+        array_is_open_array = 1;
     else if (array_expr->resolved_kgpc_type != NULL &&
         array_expr->resolved_kgpc_type->kind == TYPE_KIND_ARRAY_OF_CONST)
     {
@@ -5536,7 +5607,8 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
 
     KgpcArrayDimensionInfo info;
     int has_info = 0;
-    if (base_is_array && array_type != NULL && kgpc_type_get_array_dimension_info(array_type, ctx->symtab, &info) == 0)
+    if (base_is_array && array_type != NULL && !array_is_open_array &&
+        kgpc_type_get_array_dimension_info(array_type, ctx->symtab, &info) == 0)
     {
         has_info = 1;
     }

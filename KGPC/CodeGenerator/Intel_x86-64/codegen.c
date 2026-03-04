@@ -745,6 +745,12 @@ static inline int get_var_storage_size(HashNode_t *node)
                 case INT64_TYPE:
                     return 8;
                 case REAL_TYPE:
+                {
+                    long long size = kgpc_type_sizeof(node->type);
+                    if (size > 0)
+                        return (int)size;
+                    return 8;
+                }
                 case STRING_TYPE:  /* PCHAR */
                 case POINTER_TYPE:
                 case PROCEDURE:

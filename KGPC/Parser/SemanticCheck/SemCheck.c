@@ -2740,7 +2740,24 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symt
             if (node->source_unit_index != 0)
             {
                 const char *unit_name = unit_registry_get(node->source_unit_index);
-                if (unit_name != NULL && !semcheck_is_unit_name(unit_name))
+                int allowed = (unit_name == NULL) ? 1 : semcheck_is_unit_name(unit_name);
+                if (getenv("KGPC_DEBUG_MISSING_TYPE") != NULL && lookup_id != NULL)
+                {
+                    if (pascal_identifier_equals(lookup_id, "TFloatFormatProfile") ||
+                        pascal_identifier_equals(lookup_id, "TFloatSpecial") ||
+                        pascal_identifier_equals(lookup_id, "TDIY_FP_Power_of_10") ||
+                        pascal_identifier_equals(lookup_id, "pshortstring") ||
+                        pascal_identifier_equals(lookup_id, "T"))
+                    {
+                        fprintf(stderr,
+                            "[MISSING_TYPE] candidate id=%s src_unit=%d(%s) allowed=%d\n",
+                            node->id ? node->id : "<null>",
+                            node->source_unit_index,
+                            unit_name ? unit_name : "<null>",
+                            allowed);
+                    }
+                }
+                if (unit_name != NULL && !allowed)
                 {
                     cur = cur->next;
                     continue;
@@ -5771,6 +5788,30 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                         kgpc_type_set_type_alias(alias_info->kgpc_type, alias_info);
                     }
 
+                    /* Predeclare the enum type itself so consts can reference it
+                     * before full type processing (e.g., array[TEnum] in consts). */
+                    if (tree->tree_data.type_decl_data.id != NULL)
+                    {
+                        HashNode_t *existing_type = NULL;
+                        int scope_level = FindIdent(&existing_type, symtab,
+                            tree->tree_data.type_decl_data.id);
+                        if (!(scope_level == 0 && existing_type != NULL))
+                        {
+                            PushTypeOntoScope_Typed(symtab,
+                                tree->tree_data.type_decl_data.id, alias_info->kgpc_type);
+                            HashNode_t *node = NULL;
+                            if (FindIdent(&node, symtab, tree->tree_data.type_decl_data.id) != -1 &&
+                                node != NULL)
+                            {
+                                mark_hashnode_unit_info(symtab, node,
+                                    tree->tree_data.type_decl_data.defined_in_unit,
+                                    tree->tree_data.type_decl_data.unit_is_public);
+                                mark_hashnode_source_unit(node,
+                                    tree->tree_data.type_decl_data.source_unit_index);
+                            }
+                        }
+                    }
+
                     /* Scoped enums expose values only through qualified lookup (TEnum.Value),
                      * so do not inject their literals as global constants in this scope. */
                     if (alias_info->kgpc_type != NULL && !alias_info->enum_is_scoped)
@@ -6013,6 +6054,13 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                 /* Check if already declared (e.g., from a previous pass or builtin) */
                 HashNode_t *existing = NULL;
                 int scope_level = FindIdent(&existing, symtab, type_id);
+                if (getenv("KGPC_DEBUG_TFLOAT") != NULL && type_id != NULL &&
+                    pascal_identifier_equals(type_id, "TFloatFormatProfile"))
+                {
+                    fprintf(stderr, "[TFLOAT] predeclare existing scope=%d node=%p kind=%d\n",
+                        scope_level, (void *)existing,
+                        tree->tree_data.type_decl_data.kind);
+                }
                 if (scope_level == 0 && existing != NULL)
                 {
                     /* If the existing symbol is a non-record alias and we are now defining
@@ -6059,9 +6107,67 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             /* Release creator's reference */
                             destroy_kgpc_type(kgpc_type);
                         }
-                        cur = cur->next;
-                        continue;
+                    cur = cur->next;
+                    continue;
+                }
+
+                /* Predeclare record/class/interface types so consts can reference them
+                 * before full semantic type processing. */
+                if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD)
+                {
+                    struct RecordType *record_info = tree->tree_data.type_decl_data.info.record;
+                    if (getenv("KGPC_DEBUG_TFLOAT") != NULL && type_id != NULL &&
+                        pascal_identifier_equals(type_id, "TFloatFormatProfile"))
+                    {
+                        fprintf(stderr,
+                            "[TFLOAT] predeclare record_info=%p is_class=%d is_interface=%d\n",
+                            (void *)record_info,
+                            record_info ? record_info->is_class : 0,
+                            record_info ? record_info->is_interface : 0);
                     }
+                    if (record_info != NULL)
+                    {
+                        if (record_info->type_id == NULL)
+                            record_info->type_id = strdup(type_id);
+
+                        KgpcType *kgpc_type = create_record_type(record_info);
+                        if (record_type_is_class(record_info) || record_info->is_interface)
+                        {
+                            KgpcType *ptr = create_pointer_type(kgpc_type);
+                            destroy_kgpc_type(kgpc_type);
+                            kgpc_type = ptr;
+                        }
+
+                        if (kgpc_type != NULL)
+                        {
+                            if (tree->tree_data.type_decl_data.kgpc_type == NULL)
+                            {
+                                tree->tree_data.type_decl_data.kgpc_type = kgpc_type;
+                                kgpc_type_retain(kgpc_type);
+                            }
+
+                            PushTypeOntoScope_Typed(symtab, (char *)type_id, kgpc_type);
+                            HashNode_t *node = NULL;
+                            if (FindIdent(&node, symtab, type_id) != -1 && node != NULL)
+                            {
+                                mark_hashnode_unit_info(symtab, node,
+                                    tree->tree_data.type_decl_data.defined_in_unit,
+                                    tree->tree_data.type_decl_data.unit_is_public);
+                                mark_hashnode_source_unit(node,
+                                    tree->tree_data.type_decl_data.source_unit_index);
+                            }
+                            if (getenv("KGPC_DEBUG_TFLOAT") != NULL && type_id != NULL &&
+                                pascal_identifier_equals(type_id, "TFloatFormatProfile"))
+                            {
+                                fprintf(stderr, "[TFLOAT] predeclared node=%p type=%p\n",
+                                    (void *)node, node ? (void *)node->type : NULL);
+                            }
+                            destroy_kgpc_type(kgpc_type);
+                        }
+                    }
+                    cur = cur->next;
+                    continue;
+                }
 
                     /* If we already have a type alias without range/enum metadata and are now
                      * declaring a range/enum, replace the alias so Low/High work in consts.
@@ -8197,6 +8303,28 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
         assert(cur->type == LIST_TREE);
         tree = (Tree_t *)cur->cur;
         assert(tree->type == TREE_TYPE_DECL);
+
+        const char *debug_pss = getenv("KGPC_DEBUG_PSHORTSTRING");
+        if (debug_pss != NULL &&
+            tree->tree_data.type_decl_data.id != NULL &&
+            pascal_identifier_equals(tree->tree_data.type_decl_data.id, "PShortString"))
+        {
+            struct TypeAlias *a = &tree->tree_data.type_decl_data.info.alias;
+            fprintf(stderr,
+                "[PShortString] decl kind=%d is_pointer=%d pointer_type_id=%s target=%s\n",
+                tree->tree_data.type_decl_data.kind,
+                a->is_pointer,
+                a->pointer_type_id ? a->pointer_type_id : "<null>",
+                a->target_type_id ? a->target_type_id : "<null>");
+        }
+        if (getenv("KGPC_DEBUG_TFLOAT") != NULL &&
+            tree->tree_data.type_decl_data.id != NULL &&
+            pascal_identifier_equals(tree->tree_data.type_decl_data.id, "TFloatFormatProfile"))
+        {
+            fprintf(stderr, "[TFLOAT] semcheck_type_decls kind=%d defined_in_unit=%d\n",
+                tree->tree_data.type_decl_data.kind,
+                tree->tree_data.type_decl_data.defined_in_unit);
+        }
 #ifdef DEBUG
         fprintf(stderr, "DEBUG: semcheck_type_decls processing type: %s kind=%d\n",
             tree->tree_data.type_decl_data.id ? tree->tree_data.type_decl_data.id : "<null>",
@@ -9188,6 +9316,20 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
         int scope_level = FindIdent(&existing_type, symtab, tree->tree_data.type_decl_data.id);
         int already_predeclared = (scope_level == 0 && existing_type != NULL &&
                                    existing_type->hash_type == HASHTYPE_TYPE);
+        if (debug_pss != NULL &&
+            tree->tree_data.type_decl_data.id != NULL &&
+            pascal_identifier_equals(tree->tree_data.type_decl_data.id, "PShortString"))
+        {
+            fprintf(stderr, "[PShortString] predeclared=%d scope=%d existing_type=%p\n",
+                already_predeclared, scope_level, (void *)existing_type);
+            if (existing_type != NULL)
+            {
+                fprintf(stderr,
+                    "[PShortString] existing defined_in_unit=%d unit_is_public=%d source_unit_index=%d\n",
+                    existing_type->defined_in_unit, existing_type->unit_is_public,
+                    existing_type->source_unit_index);
+            }
+        }
 
         /* If existing type is from a different source than the current declaration,
          * find the correct predeclared entry from the same source. With cross-unit
@@ -9249,6 +9391,12 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
         }
         if (skip_type_tree)
         {
+            if (debug_pss != NULL &&
+                tree->tree_data.type_decl_data.id != NULL &&
+                pascal_identifier_equals(tree->tree_data.type_decl_data.id, "PShortString"))
+            {
+                fprintf(stderr, "[PShortString] skip_type_tree=1\n");
+            }
             /* Clean up kgpc_type ownership before skipping */
             if (tree->tree_data.type_decl_data.kgpc_type != NULL)
             {
@@ -9272,6 +9420,15 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
         }
         else if (already_predeclared)
         {
+            if (debug_pss != NULL &&
+                tree->tree_data.type_decl_data.id != NULL &&
+                pascal_identifier_equals(tree->tree_data.type_decl_data.id, "PShortString"))
+            {
+                fprintf(stderr,
+                    "[PShortString] already_predeclared kgpc_type=%p existing_type->type=%p\n",
+                    (void *)kgpc_type,
+                    existing_type ? (void *)existing_type->type : NULL);
+            }
             mark_hashnode_source_unit(existing_type, tree->tree_data.type_decl_data.source_unit_index);
 
             /* Type was already registered by predeclare_types().
@@ -9288,6 +9445,13 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 if (existing_type->type != NULL)
                     kgpc_type_release(existing_type->type);
                 existing_type->type = kgpc_type;
+                if (debug_pss != NULL &&
+                    tree->tree_data.type_decl_data.id != NULL &&
+                    pascal_identifier_equals(tree->tree_data.type_decl_data.id, "PShortString"))
+                {
+                    fprintf(stderr, "[PShortString] updated existing pointer type=%p\n",
+                        (void *)existing_type->type);
+                }
             }
 
             if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS && alias_info != NULL && 
@@ -9413,6 +9577,13 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                     tree->tree_data.type_decl_data.id, (void*)kgpc_type, kgpc_type ? kgpc_type->kind : -1);
             }
             func_return = PushTypeOntoScope_Typed(symtab, tree->tree_data.type_decl_data.id, kgpc_type);
+            if (debug_pss != NULL &&
+                tree->tree_data.type_decl_data.id != NULL &&
+                pascal_identifier_equals(tree->tree_data.type_decl_data.id, "PShortString"))
+            {
+                fprintf(stderr, "[PShortString] PushTypeOntoScope_Typed result=%d kgpc_type=%p\n",
+                    func_return, (void *)kgpc_type);
+            }
             if (func_return == 0)
             {
                 /* Hash table retained its own reference. Release the tree/creator reference. */
@@ -9425,6 +9596,12 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
         /* Fall back to legacy API for types we can't convert yet */
         func_return = PushTypeOntoScope(symtab, tree->tree_data.type_decl_data.id, var_type,
             record_info, alias_info);
+        if (debug_pss != NULL &&
+            tree->tree_data.type_decl_data.id != NULL &&
+            pascal_identifier_equals(tree->tree_data.type_decl_data.id, "PShortString"))
+        {
+            fprintf(stderr, "[PShortString] PushTypeOntoScope (legacy) result=%d\n", func_return);
+        }
         }
 
         /* Note: Enum literals are declared in predeclare_enum_literals() during first pass.
@@ -10354,7 +10531,8 @@ static void add_builtin_from_vartype(SymTab_t *symtab, const char *name, enum Va
 }
 
 /* Add a string type with explicit type alias to preserve type identity for mangling */
-static void add_builtin_string_type_with_alias(SymTab_t *symtab, const char *name, enum VarType vt)
+static void add_builtin_string_type_with_alias(SymTab_t *symtab, const char *name,
+    enum VarType vt, int is_wide_string)
 {
     KgpcType *t = kgpc_type_from_var_type(vt);
     assert(t != NULL && "Failed to create builtin type");
@@ -10364,8 +10542,28 @@ static void add_builtin_string_type_with_alias(SymTab_t *symtab, const char *nam
     alias.base_type = STRING_TYPE;
     alias.target_type_id = (char *)name;  /* Will be duplicated by copy_type_alias */
     alias.alias_name = (char *)name;      /* Will be duplicated by copy_type_alias */
+    alias.is_wide_string = is_wide_string;
     kgpc_type_set_type_alias(t, &alias);
     
+    add_builtin_type_owned(symtab, name, t);
+}
+
+static void add_builtin_shortstring_type(SymTab_t *symtab, const char *name)
+{
+    if (symtab == NULL || name == NULL)
+        return;
+
+    KgpcType *t = create_primitive_type(SHORTSTRING_TYPE);
+    if (t == NULL)
+        return;
+
+    struct TypeAlias alias = {0};
+    alias.base_type = SHORTSTRING_TYPE;
+    alias.target_type_id = (char *)name;  /* Will be duplicated by copy_type_alias */
+    alias.alias_name = (char *)name;      /* Will be duplicated by copy_type_alias */
+    alias.is_shortstring = 1;
+    kgpc_type_set_type_alias(t, &alias);
+
     add_builtin_type_owned(symtab, name, t);
 }
 
@@ -10621,9 +10819,10 @@ void semcheck_add_builtins(SymTab_t *symtab)
     add_builtin_from_vartype(symtab, "String", HASHVAR_PCHAR);
     add_builtin_from_vartype(symtab, "OpenString", HASHVAR_PCHAR);
     add_builtin_from_vartype(symtab, "AnsiString", HASHVAR_PCHAR);
-    add_builtin_string_type_with_alias(symtab, "RawByteString", HASHVAR_PCHAR);
-    add_builtin_string_type_with_alias(symtab, "UnicodeString", HASHVAR_PCHAR);
-    add_builtin_from_vartype(symtab, "WideString", HASHVAR_PCHAR);
+    add_builtin_shortstring_type(symtab, "ShortString");
+    add_builtin_string_type_with_alias(symtab, "RawByteString", HASHVAR_PCHAR, 0);
+    add_builtin_string_type_with_alias(symtab, "UnicodeString", HASHVAR_PCHAR, 1);
+    add_builtin_string_type_with_alias(symtab, "WideString", HASHVAR_PCHAR, 1);
     if (!stdlib_loaded_flag())
     {
         add_builtin_type_owned(symtab, "PAnsiString",
@@ -11676,6 +11875,50 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
         }
         if (tree->type == TREE_VAR_DECL && decl_type_id != NULL)
         {
+            if (getenv("KGPC_DEBUG_PSHORTSTRING") != NULL &&
+                pascal_identifier_equals(decl_type_id, "pshortstring"))
+            {
+                int count = 0;
+                ListNode_t *matches = FindAllIdents(symtab, decl_type_id);
+                for (ListNode_t *m = matches; m != NULL; m = m->next)
+                {
+                    HashNode_t *n = (HashNode_t *)m->cur;
+                    if (n != NULL && n->hash_type == HASHTYPE_TYPE)
+                    {
+                        fprintf(stderr,
+                            "[PShortString] lookup match id=%s type=%p defined_in_unit=%d source_unit_index=%d\n",
+                            n->id ? n->id : "<null>", (void *)n->type,
+                            n->defined_in_unit, n->source_unit_index);
+                        count++;
+                    }
+                }
+                if (matches != NULL)
+                    DestroyList(matches);
+                fprintf(stderr, "[PShortString] lookup total matches=%d\n", count);
+            }
+            if (getenv("KGPC_DEBUG_TFLOAT") != NULL &&
+                (pascal_identifier_equals(decl_type_id, "TFloatFormatProfile") ||
+                 pascal_identifier_equals(decl_type_id, "TReal_Type")))
+            {
+                int count = 0;
+                ListNode_t *matches = FindAllIdents(symtab, decl_type_id);
+                for (ListNode_t *m = matches; m != NULL; m = m->next)
+                {
+                    HashNode_t *n = (HashNode_t *)m->cur;
+                    if (n != NULL && n->hash_type == HASHTYPE_TYPE)
+                    {
+                        fprintf(stderr,
+                            "[TFLOAT] lookup match id=%s type=%p defined_in_unit=%d source_unit_index=%d\n",
+                            n->id ? n->id : "<null>", (void *)n->type,
+                            n->defined_in_unit, n->source_unit_index);
+                        count++;
+                    }
+                }
+                if (matches != NULL)
+                    DestroyList(matches);
+                fprintf(stderr, "[TFLOAT] lookup total matches=%d for %s\n",
+                    count, decl_type_id);
+            }
             if (tree->tree_data.var_decl_data.defined_in_unit)
             {
                 /* Imported declarations must stay bound to imported symbols.
@@ -12637,9 +12880,47 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
 
                 /* If type_id is specified, resolve it to get the element type */
                 const TypeRef *element_type_ref = tree->tree_data.arr_decl_data.type_ref;
+                if (getenv("KGPC_DEBUG_TZINFO") != NULL &&
+                    ids != NULL && ids->cur != NULL &&
+                    (pascal_identifier_equals((const char *)ids->cur, "CurrentTZinfo") ||
+                     pascal_identifier_equals((const char *)ids->cur, "CurrentTzinfoEx")))
+                {
+                    fprintf(stderr,
+                        "[KGPC_DEBUG_TZINFO] arr=%s type_id=%s type_ref_base=%s\n",
+                        (const char *)ids->cur,
+                        tree->tree_data.arr_decl_data.type_id ? tree->tree_data.arr_decl_data.type_id : "(null)",
+                        element_type_ref ? type_ref_base_name(element_type_ref) : "(null)");
+                }
                 if (!is_array_of_const &&
                     (tree->tree_data.arr_decl_data.type_id != NULL || element_type_ref != NULL))
                 {
+                    if (getenv("KGPC_DEBUG_TFLOAT") != NULL)
+                    {
+                        const char *arr_type_id = tree->tree_data.arr_decl_data.type_id;
+                        if (arr_type_id == NULL && element_type_ref != NULL)
+                            arr_type_id = type_ref_base_name(element_type_ref);
+                        if (arr_type_id != NULL &&
+                            pascal_identifier_equals(arr_type_id, "TFloatFormatProfile"))
+                        {
+                            int count = 0;
+                            ListNode_t *matches = FindAllIdents(symtab, arr_type_id);
+                            for (ListNode_t *m = matches; m != NULL; m = m->next)
+                            {
+                                HashNode_t *n = (HashNode_t *)m->cur;
+                                if (n != NULL && n->hash_type == HASHTYPE_TYPE)
+                                {
+                                    fprintf(stderr,
+                                        "[TFLOAT] array elem match id=%s type=%p defined_in_unit=%d source_unit_index=%d\n",
+                                        n->id ? n->id : "<null>", (void *)n->type,
+                                        n->defined_in_unit, n->source_unit_index);
+                                    count++;
+                                }
+                            }
+                            if (matches != NULL)
+                                DestroyList(matches);
+                            fprintf(stderr, "[TFLOAT] array elem total matches=%d\n", count);
+                        }
+                    }
                     HashNode_t *element_type_node = NULL;
                     element_type_node = semcheck_find_preferred_type_node_with_ref(symtab,
                         element_type_ref, tree->tree_data.arr_decl_data.type_id);
@@ -12660,6 +12941,43 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                                 element_type_ref, tree->tree_data.arr_decl_data.type_id);
                         }
                     }
+                    if (element_type_node == NULL)
+                    {
+                        const char *fallback_id = tree->tree_data.arr_decl_data.type_id;
+                        if (fallback_id == NULL && element_type_ref != NULL)
+                            fallback_id = type_ref_base_name(element_type_ref);
+                        if (fallback_id != NULL)
+                        {
+                            ListNode_t *matches = FindAllIdents(symtab, fallback_id);
+                            for (ListNode_t *m = matches; m != NULL; m = m->next)
+                            {
+                                HashNode_t *n = (HashNode_t *)m->cur;
+                                if (n != NULL && n->hash_type == HASHTYPE_TYPE)
+                                {
+                                    element_type_node = n;
+                                    break;
+                                }
+                            }
+                            if (matches != NULL)
+                                DestroyList(matches);
+                        }
+                    }
+                    if (getenv("KGPC_DEBUG_MISSING_TYPE") != NULL)
+                    {
+                        const char *check_id = tree->tree_data.arr_decl_data.type_id;
+                        if (check_id == NULL && element_type_ref != NULL)
+                            check_id = type_ref_base_name(element_type_ref);
+                        if (check_id != NULL &&
+                            (pascal_identifier_equals(check_id, "TFloatFormatProfile") ||
+                             pascal_identifier_equals(check_id, "TFloatSpecial") ||
+                             pascal_identifier_equals(check_id, "TDIY_FP_Power_of_10") ||
+                             pascal_identifier_equals(check_id, "pshortstring") ||
+                             pascal_identifier_equals(check_id, "T")))
+                        {
+                            fprintf(stderr, "[MISSING_TYPE] element_type_node=%p for %s line=%d\n",
+                                (void *)element_type_node, check_id, tree->line_num);
+                        }
+                    }
                     if (element_type_node != NULL)
                     {
                         /* Use the KgpcType from the resolved type node */
@@ -12678,6 +12996,17 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             }
                         }
                     }
+                    if (getenv("KGPC_DEBUG_TZINFO") != NULL &&
+                        ids != NULL && ids->cur != NULL &&
+                        (pascal_identifier_equals((const char *)ids->cur, "CurrentTZinfo") ||
+                         pascal_identifier_equals((const char *)ids->cur, "CurrentTzinfoEx")))
+                    {
+                        fprintf(stderr,
+                            "[KGPC_DEBUG_TZINFO] element_type_node=%p type=%p type_id=%s\n",
+                            (void *)element_type_node,
+                            element_type_node ? (void *)element_type_node->type : NULL,
+                            tree->tree_data.arr_decl_data.type_id ? tree->tree_data.arr_decl_data.type_id : "(null)");
+                    }
                     else
                     {
                         /* Fallback: check for builtin types not in symbol table */
@@ -12691,9 +13020,46 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         }
                         else
                         {
-                            semcheck_error_with_context("Error on line %d: undefined type %s\n",
-                                tree->line_num, tree->tree_data.arr_decl_data.type_id);
-                            return_val++;
+                            const char *missing_id = tree->tree_data.arr_decl_data.type_id;
+                            if (missing_id == NULL && element_type_ref != NULL)
+                                missing_id = type_ref_base_name(element_type_ref);
+                            if (getenv("KGPC_DEBUG_MISSING_TYPE") != NULL)
+                            {
+                                fprintf(stderr, "[MISSING_TYPE] array elem unresolved id=%s line=%d\n",
+                                    missing_id ? missing_id : "<null>", tree->line_num);
+                            }
+                            if (missing_id != NULL)
+                            {
+                                ListNode_t *matches = FindAllIdents(symtab, missing_id);
+                                for (ListNode_t *m = matches; m != NULL; m = m->next)
+                                {
+                                    HashNode_t *n = (HashNode_t *)m->cur;
+                                    if (n != NULL && n->hash_type == HASHTYPE_TYPE)
+                                    {
+                                        if (getenv("KGPC_DEBUG_MISSING_TYPE") != NULL)
+                                        {
+                                            fprintf(stderr,
+                                                "[MISSING_TYPE]   match id=%s type=%p defined_in_unit=%d source_unit_index=%d\n",
+                                                n->id ? n->id : "<null>", (void *)n->type,
+                                                n->defined_in_unit, n->source_unit_index);
+                                        }
+                                        if (n->type != NULL)
+                                        {
+                                            element_type = n->type;
+                                            element_type_borrowed = 1;
+                                            break;
+                                        }
+                                    }
+                                }
+                                if (matches != NULL)
+                                    DestroyList(matches);
+                            }
+                            if (element_type == NULL)
+                            {
+                                semcheck_error_with_context("Error on line %d: undefined type %s\n",
+                                    tree->line_num, tree->tree_data.arr_decl_data.type_id);
+                                return_val++;
+                            }
                         }
                     }
                 }

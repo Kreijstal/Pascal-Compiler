@@ -241,6 +241,18 @@ KgpcType* create_kgpc_type_from_type_alias(struct TypeAlias *alias, struct SymTa
     
     KgpcType *result = NULL;
 
+    if (getenv("KGPC_DEBUG_PSHORTSTRING") != NULL &&
+        alias->alias_name != NULL &&
+        pascal_identifier_equals(alias->alias_name, "PShortString"))
+    {
+        fprintf(stderr,
+            "[PShortString] alias create: is_pointer=%d pointer_type_id=%s pointer_type_tag=%d target=%s\n",
+            alias->is_pointer,
+            alias->pointer_type_id ? alias->pointer_type_id : "<null>",
+            alias->pointer_type,
+            alias->target_type_id ? alias->target_type_id : "<null>");
+    }
+
     /* Treat WideChar/UnicodeChar aliases as 2-byte CHAR_TYPE, even if declared as Word. */
     if (alias->alias_name != NULL &&
         (pascal_identifier_equals(alias->alias_name, "WideChar") ||
@@ -278,8 +290,25 @@ KgpcType* create_kgpc_type_from_type_alias(struct TypeAlias *alias, struct SymTa
         const char *deferred_element_id = NULL;
 
         if (element_type_tag != UNKNOWN_TYPE) {
-            /* Direct primitive type tag */
-            element_type = create_primitive_type(element_type_tag);
+            /* Prefer resolving via type reference to preserve aliased sizes (e.g., WideChar). */
+            if ((alias->array_element_type_ref != NULL || alias->array_element_type_id != NULL) &&
+                symtab != NULL)
+            {
+                HashNode_t *element_node = NULL;
+                if (alias->array_element_type_ref != NULL)
+                    element_node = kgpc_find_type_node_ref_with_unit_flag(symtab,
+                        alias->array_element_type_ref, defined_in_unit);
+                if (element_node == NULL && alias->array_element_type_id != NULL)
+                    element_node = kgpc_find_type_node_with_unit_flag(symtab,
+                        alias->array_element_type_id, defined_in_unit);
+                if (element_node != NULL && element_node->type != NULL)
+                {
+                    element_type = element_node->type;
+                    kgpc_type_retain(element_type);
+                }
+            }
+            if (element_type == NULL)
+                element_type = create_primitive_type(element_type_tag);
         } else if ((alias->array_element_type_ref != NULL || alias->array_element_type_id != NULL) &&
             symtab != NULL) {
             /* Type reference - try to resolve it */
@@ -975,10 +1004,11 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
         return 1;
     }
 
-    /* Special case: Allow char to be assigned to string */
+    /* Special case: Allow char to be assigned to string/shortstring */
     /* This is a common Pascal idiom: var s: string; begin s := 'a'; end; */
     if (lhs_type->kind == TYPE_KIND_PRIMITIVE &&
-        lhs_type->info.primitive_type_tag == STRING_TYPE &&
+        (lhs_type->info.primitive_type_tag == STRING_TYPE ||
+         lhs_type->info.primitive_type_tag == SHORTSTRING_TYPE) &&
         rhs_type->kind == TYPE_KIND_PRIMITIVE &&
         rhs_type->info.primitive_type_tag == CHAR_TYPE)
     {
@@ -2019,6 +2049,15 @@ int kgpc_type_is_string(const KgpcType *type)
     return 0;
 }
 
+int kgpc_type_is_wide_string(const KgpcType *type)
+{
+    if (type == NULL)
+        return 0;
+    if (type->type_alias != NULL && type->type_alias->is_wide_string)
+        return 1;
+    return 0;
+}
+
 int kgpc_type_is_shortstring(const KgpcType *type)
 {
     if (type == NULL)
@@ -2490,6 +2529,7 @@ static struct TypeAlias* copy_type_alias(const struct TypeAlias *src)
     dst->array_end = src->array_end;
     dst->array_element_type = src->array_element_type;
     dst->is_shortstring = src->is_shortstring;
+    dst->is_wide_string = src->is_wide_string;
     dst->is_open_array = src->is_open_array;
     dst->is_pointer = src->is_pointer;
     dst->pointer_type = src->pointer_type;
