@@ -452,139 +452,160 @@ static int semcheck_type_is_recordish(KgpcType *type)
     return semcheck_tag_from_kgpc(type) == RECORD_TYPE;
 }
 
-static int semcheck_find_operator_symbol(HashNode_t **operator_node,
-    SymTab_t *symtab, const char *operator_method)
+static int semcheck_record_assign_operator_score(SymTab_t *symtab, HashNode_t *cand,
+    KgpcType *target_type, KgpcType *source_type, int *score_out, KgpcType **return_type_out)
 {
-    if (operator_node == NULL || symtab == NULL || operator_method == NULL)
+    if (symtab == NULL || cand == NULL || cand->type == NULL ||
+        target_type == NULL || source_type == NULL || score_out == NULL)
+    {
         return 0;
-    *operator_node = NULL;
+    }
+    if (!kgpc_type_is_procedure(cand->type))
+        return 0;
 
-    if (FindIdent(operator_node, symtab, operator_method) == 0 &&
-        *operator_node != NULL && (*operator_node)->type != NULL &&
-        kgpc_type_is_procedure((*operator_node)->type))
+    ListNode_t *params = kgpc_type_get_procedure_params(cand->type);
+    if (params == NULL || params->cur == NULL || params->next != NULL)
+        return 0;
+
+    Tree_t *param_decl = (Tree_t *)params->cur;
+    int param_owned = 0;
+    KgpcType *param_type = resolve_type_from_vardecl(param_decl, symtab, &param_owned);
+    if (param_type == NULL)
+        return 0;
+
+    int arg_rank = kgpc_type_conversion_rank(source_type, param_type);
+    if (arg_rank < 0 && are_types_compatible_for_assignment(param_type, source_type, symtab))
+        arg_rank = 4;
+
+    KgpcType *ret_type = kgpc_type_get_return_type(cand->type);
+    int ret_rank = (ret_type != NULL) ? kgpc_type_conversion_rank(ret_type, target_type) : -1;
+    if (ret_rank < 0 && ret_type != NULL &&
+        are_types_compatible_for_assignment(target_type, ret_type, symtab))
+    {
+        ret_rank = 4;
+    }
+
+    if (param_owned && param_type != NULL)
+        destroy_kgpc_type(param_type);
+
+    if (arg_rank < 0 || ret_rank < 0 || ret_type == NULL)
+        return 0;
+
+    *score_out = arg_rank * 8 + ret_rank * 2;
+    if (return_type_out != NULL)
+        *return_type_out = ret_type;
+    return 1;
+}
+
+static void semcheck_record_assign_consider_candidate(SymTab_t *symtab, HashNode_t *cand,
+    KgpcType *target_type, KgpcType *source_type,
+    HashNode_t **best_node, KgpcType **best_return_type, int *best_score)
+{
+    int cand_score = 0;
+    KgpcType *cand_return = NULL;
+    if (!semcheck_record_assign_operator_score(symtab, cand, target_type, source_type,
+            &cand_score, &cand_return))
+    {
+        return;
+    }
+
+    if (*best_node == NULL || cand_score < *best_score)
+    {
+        *best_node = cand;
+        *best_return_type = cand_return;
+        *best_score = cand_score;
+    }
+}
+
+static void semcheck_record_assign_consider_id(SymTab_t *symtab, const char *id,
+    KgpcType *target_type, KgpcType *source_type,
+    HashNode_t **best_node, KgpcType **best_return_type, int *best_score)
+{
+    if (symtab == NULL || id == NULL)
+        return;
+    ListNode_t *candidates = FindAllIdents(symtab, id);
+    for (ListNode_t *cur = candidates; cur != NULL; cur = cur->next)
+    {
+        semcheck_record_assign_consider_candidate(symtab, (HashNode_t *)cur->cur,
+            target_type, source_type, best_node, best_return_type, best_score);
+    }
+    DestroyList(candidates);
+}
+
+static int semcheck_symbol_is_assign_operator(HashNode_t *cand)
+{
+    if (cand == NULL)
+        return 0;
+    if (cand->id != NULL &&
+        (pascal_identifier_equals(cand->id, ":=") ||
+         pascal_identifier_equals(cand->id, "op_assign")))
     {
         return 1;
     }
-
-    if (FindIdentByPrefix(operator_node, symtab, operator_method) == 0 &&
-        *operator_node != NULL && (*operator_node)->type != NULL &&
-        kgpc_type_is_procedure((*operator_node)->type))
+    if (cand->mangled_id != NULL)
     {
-        return 1;
+        char *mangled_lower = pascal_identifier_lower_dup(cand->mangled_id);
+        int is_assign = (mangled_lower != NULL &&
+            strstr(mangled_lower, "__op_assign") != NULL);
+        free(mangled_lower);
+        return is_assign;
     }
-
-    /* Assignment operators are frequently keyed by id=':=' with mangled_id
-     * carrying the owner/op name. Fall back to mangled prefix matching. */
-    char *needle = pascal_identifier_lower_dup(operator_method);
-    if (needle == NULL)
-        return 0;
-    const char *operator_ids[] = {":=", "op_assign"};
-    for (size_t i = 0; i < sizeof(operator_ids) / sizeof(operator_ids[0]); ++i)
-    {
-        ListNode_t *candidates = FindAllIdents(symtab, operator_ids[i]);
-        for (ListNode_t *cur = candidates; cur != NULL; cur = cur->next)
-        {
-            HashNode_t *cand = (HashNode_t *)cur->cur;
-            if (cand == NULL || cand->type == NULL || !kgpc_type_is_procedure(cand->type) ||
-                cand->mangled_id == NULL)
-            {
-                continue;
-            }
-            char *mangled = pascal_identifier_lower_dup(cand->mangled_id);
-            if (mangled == NULL)
-                continue;
-            int prefix_match = strstr(mangled, needle) != NULL;
-            free(mangled);
-            if (prefix_match)
-            {
-                *operator_node = cand;
-                DestroyList(candidates);
-                free(needle);
-                return 1;
-            }
-        }
-        DestroyList(candidates);
-    }
-    free(needle);
-
     return 0;
 }
 
 static HashNode_t *semcheck_find_record_assign_operator_candidate(SymTab_t *symtab,
-    const char *target_type_id, const char *source_type_id)
+    const char *target_type_id, const char *source_type_id,
+    KgpcType *target_type, KgpcType *source_type, KgpcType **return_type_out)
 {
-    if (symtab == NULL || target_type_id == NULL || source_type_id == NULL)
-        return NULL;
-
-    char target_id[256];
-    char source_id[256];
-    char target_op_id[256];
-    char source_op_id[256];
-    snprintf(target_id, sizeof(target_id), "%s.:=", target_type_id);
-    snprintf(source_id, sizeof(source_id), "%s.:=", source_type_id);
-    snprintf(target_op_id, sizeof(target_op_id), "%s__op_assign", target_type_id);
-    snprintf(source_op_id, sizeof(source_op_id), "%s__op_assign", source_type_id);
-    const char *operator_ids[] = {":=", "op_assign", target_id, source_id, target_op_id, source_op_id};
-
-    size_t target_prefix_len = strlen(target_type_id) + strlen("__op_assign") + 1;
-    size_t source_prefix_len = strlen(source_type_id) + strlen("__op_assign") + 1;
-    char *target_prefix = (char *)malloc(target_prefix_len);
-    char *source_prefix = (char *)malloc(source_prefix_len);
-    if (target_prefix == NULL || source_prefix == NULL)
+    if (symtab == NULL || target_type == NULL || source_type == NULL)
     {
-        free(target_prefix);
-        free(source_prefix);
         return NULL;
     }
-    snprintf(target_prefix, target_prefix_len, "%s__op_assign", target_type_id);
-    snprintf(source_prefix, source_prefix_len, "%s__op_assign", source_type_id);
-    for (char *p = target_prefix; *p != '\0'; ++p)
-        *p = (char)tolower((unsigned char)*p);
-    for (char *p = source_prefix; *p != '\0'; ++p)
-        *p = (char)tolower((unsigned char)*p);
 
-    HashNode_t *fallback_match = NULL;
-    for (size_t i = 0; i < sizeof(operator_ids) / sizeof(operator_ids[0]); ++i)
+    HashNode_t *best_node = NULL;
+    KgpcType *best_return_type = NULL;
+    int best_score = INT_MAX;
+
+    semcheck_record_assign_consider_id(symtab, ":=", target_type, source_type,
+        &best_node, &best_return_type, &best_score);
+    semcheck_record_assign_consider_id(symtab, "op_assign", target_type, source_type,
+        &best_node, &best_return_type, &best_score);
+    if (target_type_id != NULL)
     {
-        ListNode_t *candidates = FindAllIdents(symtab, operator_ids[i]);
-        for (ListNode_t *cur = candidates; cur != NULL; cur = cur->next)
-        {
-            HashNode_t *cand = (HashNode_t *)cur->cur;
-            if (cand == NULL || cand->type == NULL || !kgpc_type_is_procedure(cand->type) ||
-                cand->mangled_id == NULL)
-            {
-                continue;
-            }
-            char *mangled = pascal_identifier_lower_dup(cand->mangled_id);
-            if (mangled == NULL)
-                continue;
-            int target_match = strstr(mangled, target_prefix) != NULL;
-            int source_match = strstr(mangled, source_prefix) != NULL;
-            free(mangled);
-            if (target_match)
-            {
-                DestroyList(candidates);
-                free(target_prefix);
-                free(source_prefix);
-                return cand;
-            }
-            if (fallback_match == NULL && source_match)
-            {
-                fallback_match = cand;
-            }
-        }
-        DestroyList(candidates);
+        char target_id[256];
+        char target_op_id[256];
+        snprintf(target_id, sizeof(target_id), "%s.:=", target_type_id);
+        snprintf(target_op_id, sizeof(target_op_id), "%s__op_assign", target_type_id);
+        semcheck_record_assign_consider_id(symtab, target_id, target_type, source_type,
+            &best_node, &best_return_type, &best_score);
+        semcheck_record_assign_consider_id(symtab, target_op_id, target_type, source_type,
+            &best_node, &best_return_type, &best_score);
+    }
+    if (source_type_id != NULL)
+    {
+        char source_id[256];
+        char source_op_id[256];
+        snprintf(source_id, sizeof(source_id), "%s.:=", source_type_id);
+        snprintf(source_op_id, sizeof(source_op_id), "%s__op_assign", source_type_id);
+        semcheck_record_assign_consider_id(symtab, source_id, target_type, source_type,
+            &best_node, &best_return_type, &best_score);
+        semcheck_record_assign_consider_id(symtab, source_op_id, target_type, source_type,
+            &best_node, &best_return_type, &best_score);
+    }
+    if (target_type_id != NULL && source_type_id != NULL)
+    {
+        char target_specific_id[320];
+        char source_specific_id[320];
+        snprintf(target_specific_id, sizeof(target_specific_id), "%s__op_assign_%s",
+            target_type_id, source_type_id);
+        snprintf(source_specific_id, sizeof(source_specific_id), "%s__op_assign_%s",
+            source_type_id, target_type_id);
+        semcheck_record_assign_consider_id(symtab, target_specific_id, target_type, source_type,
+            &best_node, &best_return_type, &best_score);
+        semcheck_record_assign_consider_id(symtab, source_specific_id, target_type, source_type,
+            &best_node, &best_return_type, &best_score);
     }
 
-    if (fallback_match != NULL)
-    {
-        free(target_prefix);
-        free(source_prefix);
-        return fallback_match;
-    }
-
-    /* Last-resort lookup: scan visible scopes by mangled_id. */
-    HashNode_t *scan_fallback = NULL;
     ListNode_t *scope = symtab->stack_head;
     while (scope != NULL)
     {
@@ -596,32 +617,17 @@ static HashNode_t *semcheck_find_record_assign_operator_candidate(SymTab_t *symt
                 for (ListNode_t *cur = table->table[i]; cur != NULL; cur = cur->next)
                 {
                     HashNode_t *cand = (HashNode_t *)cur->cur;
-                    if (cand == NULL || cand->mangled_id == NULL || cand->type == NULL ||
-                        !kgpc_type_is_procedure(cand->type))
-                    {
+                    if (!semcheck_symbol_is_assign_operator(cand))
                         continue;
-                    }
-                    char *mangled = pascal_identifier_lower_dup(cand->mangled_id);
-                    if (mangled == NULL)
-                        continue;
-                    int target_match = strstr(mangled, target_prefix) != NULL;
-                    int source_match = strstr(mangled, source_prefix) != NULL;
-                    free(mangled);
-                    if (target_match)
-                    {
-                        free(target_prefix);
-                        free(source_prefix);
-                        return cand;
-                    }
-                    if (scan_fallback == NULL && source_match)
-                        scan_fallback = cand;
+                    semcheck_record_assign_consider_candidate(symtab, cand, target_type,
+                        source_type, &best_node, &best_return_type, &best_score);
                 }
             }
         }
         scope = scope->next;
     }
 
-    if (scan_fallback == NULL && symtab->builtins != NULL)
+    if (symtab->builtins != NULL)
     {
         HashTable_t *table = symtab->builtins;
         for (int i = 0; i < TABLE_SIZE; ++i)
@@ -629,30 +635,17 @@ static HashNode_t *semcheck_find_record_assign_operator_candidate(SymTab_t *symt
             for (ListNode_t *cur = table->table[i]; cur != NULL; cur = cur->next)
             {
                 HashNode_t *cand = (HashNode_t *)cur->cur;
-                if (cand == NULL || cand->mangled_id == NULL || cand->type == NULL ||
-                    !kgpc_type_is_procedure(cand->type))
-                {
+                if (!semcheck_symbol_is_assign_operator(cand))
                     continue;
-                }
-                char *mangled = pascal_identifier_lower_dup(cand->mangled_id);
-                if (mangled == NULL)
-                    continue;
-                int source_match = strstr(mangled, source_prefix) != NULL;
-                free(mangled);
-                if (source_match)
-                {
-                    scan_fallback = cand;
-                    break;
-                }
+                semcheck_record_assign_consider_candidate(symtab, cand, target_type,
+                    source_type, &best_node, &best_return_type, &best_score);
             }
-            if (scan_fallback != NULL)
-                break;
         }
     }
 
-    free(target_prefix);
-    free(source_prefix);
-    return scan_fallback;
+    if (best_node != NULL && return_type_out != NULL)
+        *return_type_out = best_return_type;
+    return best_node;
 }
 
 static int semcheck_try_record_conversion_expression(SymTab_t *symtab,
@@ -669,76 +662,32 @@ static int semcheck_try_record_conversion_expression(SymTab_t *symtab,
         (target_type->kind == TYPE_KIND_PRIMITIVE &&
             target_type->info.primitive_type_tag == POINTER_TYPE);
     int target_is_record = semcheck_type_is_recordish(target_type);
-    if ((!target_is_pointer && !target_is_record) || !semcheck_type_is_recordish(*source_type))
+    int source_is_record = semcheck_type_is_recordish(*source_type);
+    if (!target_is_pointer && !target_is_record && !source_is_record)
         return 0;
 
     struct Expression *source_expr = *expr_slot;
     const char *source_type_id = semcheck_record_type_id_from_expr(symtab, source_expr, *source_type);
     const char *target_type_id = semcheck_record_type_id_from_expr(symtab, target_expr, target_type);
-    if (source_type_id == NULL || target_type_id == NULL)
-        return 0;
-
-    /* Class operator := is represented as *__op_assign in the symbol table. */
-    const char *op_suffix = "op_assign";
-    size_t name_len = strlen(target_type_id) + strlen(op_suffix) + strlen(source_type_id) + 4;
-    char *operator_method = (char *)malloc(name_len);
-    if (operator_method == NULL)
-        return 0;
 
     HashNode_t *operator_node = NULL;
-    int found_operator = 0;
-    snprintf(operator_method, name_len, "%s__%s_%s", target_type_id, op_suffix, source_type_id);
-    if (semcheck_find_operator_symbol(&operator_node, symtab, operator_method))
-        found_operator = 1;
-
-    if (!found_operator)
-    {
-        snprintf(operator_method, name_len, "%s__%s", target_type_id, op_suffix);
-        if (semcheck_find_operator_symbol(&operator_node, symtab, operator_method))
-            found_operator = 1;
-    }
-
-    if (!found_operator)
-    {
-        snprintf(operator_method, name_len, "%s__%s_%s", source_type_id, op_suffix, target_type_id);
-        if (semcheck_find_operator_symbol(&operator_node, symtab, operator_method))
-            found_operator = 1;
-    }
-
-    if (!found_operator)
-    {
-        snprintf(operator_method, name_len, "%s__%s", source_type_id, op_suffix);
-        if (semcheck_find_operator_symbol(&operator_node, symtab, operator_method))
-            found_operator = 1;
-    }
-
-    if (!found_operator)
-    {
-        operator_node = semcheck_find_record_assign_operator_candidate(symtab,
-            target_type_id, source_type_id);
-        if (operator_node != NULL)
-            found_operator = 1;
-    }
-
-    if (!found_operator)
-    {
-        free(operator_method);
+    KgpcType *return_type = NULL;
+    operator_node = semcheck_find_record_assign_operator_candidate(symtab,
+        target_type_id, source_type_id, target_type, *source_type, &return_type);
+    if (operator_node == NULL || return_type == NULL)
         return 0;
-    }
-
-    KgpcType *return_type = kgpc_type_get_return_type(operator_node->type);
-    if (return_type == NULL || !are_types_compatible_for_assignment(target_type, return_type, symtab))
-    {
-        free(operator_method);
+    if (!are_types_compatible_for_assignment(target_type, return_type, symtab))
         return 0;
-    }
 
-    struct Expression *call_expr = mk_functioncall(source_expr->line_num, strdup(operator_method), NULL);
+    const char *call_id = operator_node->mangled_id != NULL
+        ? operator_node->mangled_id
+        : (operator_node->id != NULL ? operator_node->id : "op_assign");
+    struct Expression *call_expr = mk_functioncall(source_expr->line_num, strdup(call_id), NULL);
     call_expr->expr_data.function_call_data.args_expr = CreateListNode(source_expr, LIST_EXPR);
     if (operator_node->mangled_id != NULL)
         call_expr->expr_data.function_call_data.mangled_id = strdup(operator_node->mangled_id);
     else
-        call_expr->expr_data.function_call_data.mangled_id = strdup(operator_method);
+        call_expr->expr_data.function_call_data.mangled_id = strdup(call_id);
     call_expr->expr_data.function_call_data.resolved_func = operator_node;
     call_expr->expr_data.function_call_data.call_hash_type = HASHTYPE_FUNCTION;
     call_expr->expr_data.function_call_data.call_kgpc_type = operator_node->type;
@@ -756,8 +705,6 @@ static int semcheck_try_record_conversion_expression(SymTab_t *symtab,
     *source_type = return_type;
     if (source_owned != NULL)
         *source_owned = 0;
-
-    free(operator_method);
     return 1;
 }
 
@@ -1419,6 +1366,28 @@ static int semcheck_expr_is_widechar(SymTab_t *symtab, struct Expression *expr)
             struct TypeAlias *alias = get_type_alias_from_node(node);
             if (semcheck_alias_is_widechar(alias))
                 return 1;
+        }
+    }
+
+    return 0;
+}
+
+/* Check if expression is an integer constant representable as single-byte Char (0..255). */
+static int semcheck_expr_is_char_ordinal_const(SymTab_t *symtab, struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+
+    if (expr->type == EXPR_INUM)
+        return (expr->expr_data.i_num >= 0 && expr->expr_data.i_num <= 255);
+
+    if (expr->type == EXPR_VAR_ID && symtab != NULL && expr->expr_data.id != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindIdent(&node, symtab, expr->expr_data.id) >= 0 && node != NULL &&
+            (node->hash_type == HASHTYPE_CONST || node->is_typed_const))
+        {
+            return (node->const_int_value >= 0 && node->const_int_value <= 255);
         }
     }
 
@@ -3907,6 +3876,49 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                 expr->resolved_kgpc_type = create_record_type(record_type);
         }
     }
+    if (expr != NULL && expr->type == EXPR_ARRAY_LITERAL &&
+        expr->array_element_type == UNKNOWN_TYPE &&
+        expr->array_element_type_id == NULL &&
+        var != NULL && var->resolved_kgpc_type != NULL)
+    {
+        KgpcType *lhs_type = var->resolved_kgpc_type;
+        if (kgpc_type_is_pointer(lhs_type) && lhs_type->info.points_to != NULL &&
+            kgpc_type_is_array(lhs_type->info.points_to))
+        {
+            lhs_type = lhs_type->info.points_to;
+        }
+        if (kgpc_type_is_array(lhs_type))
+        {
+            KgpcType *lhs_elem = kgpc_type_get_array_element_type_resolved(lhs_type, symtab);
+            if (lhs_elem != NULL)
+            {
+                int elem_tag = semcheck_tag_from_kgpc(lhs_elem);
+                if (expr->array_element_type == UNKNOWN_TYPE)
+                    expr->array_element_type = elem_tag;
+                if (lhs_elem->kind == TYPE_KIND_RECORD &&
+                    lhs_elem->info.record_info != NULL)
+                {
+                    expr->array_element_record_type = lhs_elem->info.record_info;
+                    if (expr->array_element_type_id == NULL &&
+                        lhs_elem->info.record_info->type_id != NULL)
+                    {
+                        expr->array_element_type_id = strdup(lhs_elem->info.record_info->type_id);
+                    }
+                }
+                if (expr->array_element_type_id == NULL &&
+                    lhs_elem->type_alias != NULL &&
+                    lhs_elem->type_alias->target_type_id != NULL)
+                {
+                    expr->array_element_type_id = strdup(lhs_elem->type_alias->target_type_id);
+                }
+            }
+            if (expr->array_element_type_id == NULL &&
+                lhs_type->info.array_info.element_type_id != NULL)
+            {
+                expr->array_element_type_id = strdup(lhs_type->info.array_info.element_type_id);
+            }
+        }
+    }
     if (SEMSTMT_TIMINGS_ENABLED()) {
         double t0 = semstmt_now_ms();
         int before_rhs = return_val;
@@ -4181,6 +4193,30 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             }
             if (allow_char_literal)
                 goto assignment_types_ok;
+
+            /* Allow assigning Char ordinal constants to Char targets (FPC-compatible). */
+            if (lhs_kgpctype->kind == TYPE_KIND_PRIMITIVE &&
+                lhs_kgpctype->info.primitive_type_tag == CHAR_TYPE &&
+                rhs_kgpctype->kind == TYPE_KIND_PRIMITIVE &&
+                is_integer_type(rhs_kgpctype->info.primitive_type_tag) &&
+                semcheck_expr_is_char_ordinal_const(symtab, expr))
+            {
+                semcheck_expr_set_resolved_type(expr, CHAR_TYPE);
+                goto assignment_types_ok;
+            }
+
+            /* Allow assigning Char / Char ordinal constants to String targets. */
+            if (lhs_kgpctype->kind == TYPE_KIND_PRIMITIVE &&
+                lhs_kgpctype->info.primitive_type_tag == STRING_TYPE &&
+                rhs_kgpctype->kind == TYPE_KIND_PRIMITIVE &&
+                (rhs_kgpctype->info.primitive_type_tag == CHAR_TYPE ||
+                 (is_integer_type(rhs_kgpctype->info.primitive_type_tag) &&
+                  semcheck_expr_is_char_ordinal_const(symtab, expr))))
+            {
+                if (rhs_kgpctype->info.primitive_type_tag != CHAR_TYPE)
+                    semcheck_expr_set_resolved_type(expr, CHAR_TYPE);
+                goto assignment_types_ok;
+            }
 
             /* Allow assigning string literals to PChar/PAnsiChar.
              * In Pascal, string literals can be implicitly converted to PChar. */

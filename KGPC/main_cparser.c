@@ -1013,6 +1013,50 @@ static ListNode_t *merge_unit_type_decls_before_locals(ListNode_t *head, ListNod
     return head;
 }
 
+/* Detach and return only public interface subprogram declarations from a unit subprogram list.
+ * Non-public implementation subprogram nodes remain in *list for the caller to dispose with the unit tree. */
+static ListNode_t *extract_public_unit_subprograms(ListNode_t **list)
+{
+    if (list == NULL || *list == NULL)
+        return NULL;
+
+    ListNode_t *public_head = NULL;
+    ListNode_t **public_tail = &public_head;
+    ListNode_t *prev = NULL;
+    ListNode_t *cur = *list;
+    while (cur != NULL)
+    {
+        ListNode_t *next = cur->next;
+        int take = 0;
+        if (cur->type == LIST_TREE && cur->cur != NULL)
+        {
+            Tree_t *sub = (Tree_t *)cur->cur;
+            if (sub->type == TREE_SUBPROGRAM &&
+                sub->tree_data.subprogram_data.unit_is_public)
+            {
+                take = 1;
+            }
+        }
+
+        if (take)
+        {
+            if (prev != NULL)
+                prev->next = next;
+            else
+                *list = next;
+            cur->next = NULL;
+            *public_tail = cur;
+            public_tail = &cur->next;
+        }
+        else
+        {
+            prev = cur;
+        }
+        cur = next;
+    }
+    return public_head;
+}
+
 /* Merges a loaded unit's declarations into the target tree.
  * The target can be either a TREE_PROGRAM_TYPE or TREE_UNIT. */
 static void merge_unit_into_target(Tree_t *target, Tree_t *unit_tree)
@@ -1084,41 +1128,52 @@ static void merge_unit_into_target(Tree_t *target, Tree_t *unit_tree)
     *var_list = ConcatList(*var_list, unit_tree->tree_data.unit_data.interface_var_decls);
     unit_tree->tree_data.unit_data.interface_var_decls = NULL;
 
-    mark_unit_type_decls(unit_tree->tree_data.unit_data.implementation_type_decls, 0, unit_idx);
-    if (getenv("KGPC_DEBUG_TFPG") != NULL) {
-        ListNode_t *dbg = unit_tree->tree_data.unit_data.implementation_type_decls;
-        while (dbg != NULL) {
-            if (dbg->type == LIST_TREE) {
-                Tree_t *decl = (Tree_t *)dbg->cur;
-                if (decl != NULL && decl->type == TREE_TYPE_DECL &&
-                    decl->tree_data.type_decl_data.id != NULL)
-                {
-                    fprintf(stderr, "[KGPC] merging impl type %s from unit %s\n",
-                            decl->tree_data.type_decl_data.id,
-                            unit_tree->tree_data.unit_data.unit_id != NULL ?
-                                unit_tree->tree_data.unit_data.unit_id : "<unknown>");
+    if (target->type == TREE_PROGRAM_TYPE)
+    {
+        mark_unit_type_decls(unit_tree->tree_data.unit_data.implementation_type_decls, 0, unit_idx);
+        if (getenv("KGPC_DEBUG_TFPG") != NULL) {
+            ListNode_t *dbg = unit_tree->tree_data.unit_data.implementation_type_decls;
+            while (dbg != NULL) {
+                if (dbg->type == LIST_TREE) {
+                    Tree_t *decl = (Tree_t *)dbg->cur;
+                    if (decl != NULL && decl->type == TREE_TYPE_DECL &&
+                        decl->tree_data.type_decl_data.id != NULL)
+                    {
+                        fprintf(stderr, "[KGPC] merging impl type %s from unit %s\n",
+                                decl->tree_data.type_decl_data.id,
+                                unit_tree->tree_data.unit_data.unit_id != NULL ?
+                                    unit_tree->tree_data.unit_data.unit_id : "<unknown>");
+                    }
                 }
+                dbg = dbg->next;
             }
-            dbg = dbg->next;
         }
+        /* Append implementation types to keep dependencies ahead of targets. */
+        *type_list = merge_unit_type_decls_before_locals(*type_list,
+            unit_tree->tree_data.unit_data.implementation_type_decls);
+        unit_tree->tree_data.unit_data.implementation_type_decls = NULL;
+
+        mark_unit_const_decls(unit_tree->tree_data.unit_data.implementation_const_decls, 0);
+        /* Append implementation constants to keep dependencies ahead of targets. */
+        *const_list = ConcatList(*const_list, unit_tree->tree_data.unit_data.implementation_const_decls);
+        unit_tree->tree_data.unit_data.implementation_const_decls = NULL;
+
+        mark_unit_var_decls(unit_tree->tree_data.unit_data.implementation_var_decls, 0);
+        *var_list = ConcatList(*var_list, unit_tree->tree_data.unit_data.implementation_var_decls);
+        unit_tree->tree_data.unit_data.implementation_var_decls = NULL;
+
+        mark_unit_subprograms(unit_tree->tree_data.unit_data.subprograms, unit_idx);
+        *sub_list = ConcatList(*sub_list, unit_tree->tree_data.unit_data.subprograms);
+        unit_tree->tree_data.unit_data.subprograms = NULL;
     }
-    /* Append implementation types to keep dependencies ahead of targets. */
-    *type_list = merge_unit_type_decls_before_locals(*type_list,
-        unit_tree->tree_data.unit_data.implementation_type_decls);
-    unit_tree->tree_data.unit_data.implementation_type_decls = NULL;
-
-    mark_unit_const_decls(unit_tree->tree_data.unit_data.implementation_const_decls, 0);
-    /* Append implementation constants to keep dependencies ahead of targets. */
-    *const_list = ConcatList(*const_list, unit_tree->tree_data.unit_data.implementation_const_decls);
-    unit_tree->tree_data.unit_data.implementation_const_decls = NULL;
-
-    mark_unit_var_decls(unit_tree->tree_data.unit_data.implementation_var_decls, 0);
-    *var_list = ConcatList(*var_list, unit_tree->tree_data.unit_data.implementation_var_decls);
-    unit_tree->tree_data.unit_data.implementation_var_decls = NULL;
-
-    mark_unit_subprograms(unit_tree->tree_data.unit_data.subprograms, unit_idx);
-    *sub_list = ConcatList(*sub_list, unit_tree->tree_data.unit_data.subprograms);
-    unit_tree->tree_data.unit_data.subprograms = NULL;
+    else
+    {
+        /* When compiling a unit, only interface declarations from used units are visible.
+         * Keep implementation declarations private to their original unit tree. */
+        mark_unit_subprograms(unit_tree->tree_data.unit_data.subprograms, unit_idx);
+        ListNode_t *public_subs = extract_public_unit_subprograms(&unit_tree->tree_data.unit_data.subprograms);
+        *sub_list = ConcatList(*sub_list, public_subs);
+    }
 
     /* Only programs accumulate initialization/finalization */
     if (target->type == TREE_PROGRAM_TYPE) {
