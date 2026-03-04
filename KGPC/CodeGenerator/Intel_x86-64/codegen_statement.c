@@ -4545,13 +4545,14 @@ static ListNode_t *codegen_builtin_setlength(struct Statement *stmt, ListNode_t 
         return inst_list;
     }
 
-    StackNode_t *array_node = find_label((char *)array_id);
+    int setlength_scope_depth = 0;
+    StackNode_t *array_node = find_label_with_depth((char *)array_id, &setlength_scope_depth);
 
     /* If "Result" not found, try the current function name (function return variable) */
     if (array_node == NULL && pascal_identifier_equals(array_id, "Result") &&
         ctx != NULL && ctx->current_subprogram_id != NULL)
     {
-        array_node = find_label((char *)ctx->current_subprogram_id);
+        array_node = find_label_with_depth((char *)ctx->current_subprogram_id, &setlength_scope_depth);
     }
 
     int is_field_array = 0;
@@ -4697,6 +4698,30 @@ static ListNode_t *codegen_builtin_setlength(struct Statement *stmt, ListNode_t 
             array_node->static_label : array_node->label;
         snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
             label, descriptor_reg->bit_64);
+    }
+    else if (setlength_scope_depth > 0)
+    {
+        /* Non-local variable: access via static link */
+        Register_t *frame_reg = codegen_acquire_static_link(ctx, &inst_list, setlength_scope_depth);
+        if (frame_reg == NULL)
+        {
+            codegen_report_error(ctx,
+                "ERROR: Failed to acquire static link for SetLength variable %s.", array_id);
+            free_reg(get_reg_stack(), descriptor_reg);
+            free_reg(get_reg_stack(), length_reg);
+            free_arg_regs();
+            return inst_list;
+        }
+        if (array_node->is_reference)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%s), %s\n",
+                array_node->offset, frame_reg->bit_64, descriptor_reg->bit_64);
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%s), %s\n",
+                array_node->offset, frame_reg->bit_64, descriptor_reg->bit_64);
+        }
     }
     else
     {
