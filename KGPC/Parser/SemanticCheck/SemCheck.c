@@ -6107,67 +6107,9 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             /* Release creator's reference */
                             destroy_kgpc_type(kgpc_type);
                         }
-                    cur = cur->next;
-                    continue;
-                }
-
-                /* Predeclare record/class/interface types so consts can reference them
-                 * before full semantic type processing. */
-                if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD)
-                {
-                    struct RecordType *record_info = tree->tree_data.type_decl_data.info.record;
-                    if (getenv("KGPC_DEBUG_TFLOAT") != NULL && type_id != NULL &&
-                        pascal_identifier_equals(type_id, "TFloatFormatProfile"))
-                    {
-                        fprintf(stderr,
-                            "[TFLOAT] predeclare record_info=%p is_class=%d is_interface=%d\n",
-                            (void *)record_info,
-                            record_info ? record_info->is_class : 0,
-                            record_info ? record_info->is_interface : 0);
+                        cur = cur->next;
+                        continue;
                     }
-                    if (record_info != NULL)
-                    {
-                        if (record_info->type_id == NULL)
-                            record_info->type_id = strdup(type_id);
-
-                        KgpcType *kgpc_type = create_record_type(record_info);
-                        if (record_type_is_class(record_info) || record_info->is_interface)
-                        {
-                            KgpcType *ptr = create_pointer_type(kgpc_type);
-                            destroy_kgpc_type(kgpc_type);
-                            kgpc_type = ptr;
-                        }
-
-                        if (kgpc_type != NULL)
-                        {
-                            if (tree->tree_data.type_decl_data.kgpc_type == NULL)
-                            {
-                                tree->tree_data.type_decl_data.kgpc_type = kgpc_type;
-                                kgpc_type_retain(kgpc_type);
-                            }
-
-                            PushTypeOntoScope_Typed(symtab, (char *)type_id, kgpc_type);
-                            HashNode_t *node = NULL;
-                            if (FindIdent(&node, symtab, type_id) != -1 && node != NULL)
-                            {
-                                mark_hashnode_unit_info(symtab, node,
-                                    tree->tree_data.type_decl_data.defined_in_unit,
-                                    tree->tree_data.type_decl_data.unit_is_public);
-                                mark_hashnode_source_unit(node,
-                                    tree->tree_data.type_decl_data.source_unit_index);
-                            }
-                            if (getenv("KGPC_DEBUG_TFLOAT") != NULL && type_id != NULL &&
-                                pascal_identifier_equals(type_id, "TFloatFormatProfile"))
-                            {
-                                fprintf(stderr, "[TFLOAT] predeclared node=%p type=%p\n",
-                                    (void *)node, node ? (void *)node->type : NULL);
-                            }
-                            destroy_kgpc_type(kgpc_type);
-                        }
-                    }
-                    cur = cur->next;
-                    continue;
-                }
 
                     /* If we already have a type alias without range/enum metadata and are now
                      * declaring a range/enum, replace the alias so Low/High work in consts.
