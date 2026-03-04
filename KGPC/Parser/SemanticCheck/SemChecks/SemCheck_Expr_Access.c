@@ -4168,12 +4168,21 @@ int semcheck_funccall(int *type_return,
                 int method_is_declared_constructor = 0;
                 if (strncasecmp(method_name, "Create", 6) == 0 && record_info != NULL)
                 {
-                    struct MethodTemplate *tmpl =
-                        from_cparser_get_method_template(record_info, method_name);
-                    if (tmpl != NULL && tmpl->kind == METHOD_TEMPLATE_CONSTRUCTOR)
-                        method_is_declared_constructor = 1;
-                    else if (tmpl == NULL)
-                        method_is_declared_constructor = 1; /* inherited ctor without template */
+                    /* Walk up the class hierarchy looking for a template
+                     * that classifies this method as a constructor. */
+                    struct RecordType *search = record_info;
+                    while (search != NULL)
+                    {
+                        struct MethodTemplate *tmpl =
+                            from_cparser_get_method_template(search, method_name);
+                        if (tmpl != NULL)
+                        {
+                            if (tmpl->kind == METHOD_TEMPLATE_CONSTRUCTOR)
+                                method_is_declared_constructor = 1;
+                            break; /* found a template — use its classification */
+                        }
+                        search = semcheck_lookup_parent_record(symtab, search);
+                    }
                 }
                 if (method_is_declared_constructor && owner_type != NULL) {
                     if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
@@ -5416,12 +5425,19 @@ skip_overload_resolution:
             struct RecordType *ctor_owner = semcheck_lookup_record_type(symtab, hash_return->owner_class);
             if (ctor_owner != NULL)
             {
-                struct MethodTemplate *tmpl =
-                    from_cparser_get_method_template(ctor_owner, hash_return->method_name);
-                if (tmpl != NULL && tmpl->kind == METHOD_TEMPLATE_CONSTRUCTOR)
-                    is_declared_ctor = 1;
-                else if (tmpl == NULL)
-                    is_declared_ctor = 1; /* inherited ctor without template */
+                struct RecordType *search = ctor_owner;
+                while (search != NULL)
+                {
+                    struct MethodTemplate *tmpl =
+                        from_cparser_get_method_template(search, hash_return->method_name);
+                    if (tmpl != NULL)
+                    {
+                        if (tmpl->kind == METHOD_TEMPLATE_CONSTRUCTOR)
+                            is_declared_ctor = 1;
+                        break;
+                    }
+                    search = semcheck_lookup_parent_record(symtab, search);
+                }
             }
             if (is_declared_ctor && ctor_owner != NULL &&
                 record_type_is_class(ctor_owner) && !ctor_owner->is_type_helper)
