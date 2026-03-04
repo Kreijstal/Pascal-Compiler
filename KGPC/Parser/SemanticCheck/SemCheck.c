@@ -2548,6 +2548,38 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symt
     }
 
     int prefer_unit_defined = semcheck_is_explicit_unit_qualified_type_ref(type_ref);
+    int qualified_unit_index = 0;
+    char *qualified_unit_name = NULL;
+    if (type_ref != NULL && type_ref->name != NULL && type_ref->name->count > 1)
+    {
+        size_t qlen = 0;
+        for (int i = 0; i < type_ref->name->count - 1; ++i)
+        {
+            const char *seg = type_ref->name->segments[i];
+            if (seg != NULL)
+                qlen += strlen(seg);
+            if (i + 1 < type_ref->name->count - 1)
+                qlen += 1;
+        }
+        if (qlen > 0)
+        {
+            qualified_unit_name = (char *)malloc(qlen + 1);
+            if (qualified_unit_name != NULL)
+            {
+                qualified_unit_name[0] = '\0';
+                for (int i = 0; i < type_ref->name->count - 1; ++i)
+                {
+                    const char *seg = type_ref->name->segments[i];
+                    if (seg != NULL)
+                        strcat(qualified_unit_name, seg);
+                    if (i + 1 < type_ref->name->count - 1)
+                        strcat(qualified_unit_name, ".");
+                }
+                if (unit_registry_contains(qualified_unit_name))
+                    qualified_unit_index = unit_registry_add(qualified_unit_name);
+            }
+        }
+    }
     ListNode_t *matches = FindAllIdents(symtab, lookup_id);
     if (matches == NULL && type_ref != NULL && type_ref->name != NULL &&
         type_ref->name->count > 1)
@@ -2717,6 +2749,7 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symt
                     symtab, NULL, qualified_name, 1, override_unit_index);
                 if (qualified != NULL)
                 {
+                    free(qualified_unit_name);
                     if (rendered != NULL)
                         free(rendered);
                     return qualified;
@@ -2737,6 +2770,13 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symt
         HashNode_t *node = (HashNode_t *)cur->cur;
         if (node != NULL && node->hash_type == HASHTYPE_TYPE)
         {
+            if (qualified_unit_index > 0 &&
+                node->source_unit_index > 0 &&
+                node->source_unit_index != qualified_unit_index)
+            {
+                cur = cur->next;
+                continue;
+            }
             if (node->source_unit_index != 0)
             {
                 const char *unit_name = unit_registry_get(node->source_unit_index);
@@ -2854,6 +2894,7 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symt
     }
     if (matches != NULL)
         DestroyList(matches);
+    free(qualified_unit_name);
     if (rendered != NULL)
         free(rendered);
     return best;

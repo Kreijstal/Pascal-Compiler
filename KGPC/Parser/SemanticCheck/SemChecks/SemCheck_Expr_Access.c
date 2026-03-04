@@ -3461,7 +3461,10 @@ int semcheck_funccall(int *type_return,
                             cand_cur = cand_cur->next;
                         }
 
-                        /* Only strip receiver for true type-qualified static calls (TypeName.Method). */
+                        /* Strip type receiver for type-qualified method calls when the selected
+                         * overload set has no implicit Self parameter. This covers static/class
+                         * methods like TRect.Union(L, R) where the type qualifier is not a
+                         * runtime argument. */
                         int first_arg_is_type_ident = 0;
                         if (first_arg != NULL && first_arg->type == EXPR_VAR_ID &&
                             first_arg->expr_data.id != NULL)
@@ -3474,8 +3477,40 @@ int semcheck_funccall(int *type_return,
                                 first_arg_is_type_ident = 1;
                             }
                         }
-                        if (!any_has_self && is_static && first_arg_is_type_ident) {
-                            /* For static methods, remove the first argument (the type identifier) */
+                        if (first_arg_is_type_ident && method_candidates != NULL)
+                        {
+                            ListNode_t *filtered_candidates = NULL;
+                            ListNode_t *filtered_tail = NULL;
+                            for (ListNode_t *cand_cur2 = method_candidates; cand_cur2 != NULL; cand_cur2 = cand_cur2->next)
+                            {
+                                HashNode_t *cand = (HashNode_t *)cand_cur2->cur;
+                                if (cand == NULL || cand->type == NULL)
+                                    continue;
+                                ListNode_t *cand_params = kgpc_type_get_procedure_params(cand->type);
+                                Tree_t *cand_first = cand_params != NULL ? (Tree_t *)cand_params->cur : NULL;
+                                const char *cand_first_name = NULL;
+                                if (cand_first != NULL && cand_first->type == TREE_VAR_DECL &&
+                                    cand_first->tree_data.var_decl_data.ids != NULL)
+                                    cand_first_name = (const char *)cand_first->tree_data.var_decl_data.ids->cur;
+                                if (cand_first_name != NULL && pascal_identifier_equals(cand_first_name, "Self"))
+                                    continue;
+                                ListNode_t *n = CreateListNode(cand, LIST_UNSPECIFIED);
+                                if (n == NULL)
+                                    continue;
+                                if (filtered_candidates == NULL)
+                                    filtered_candidates = n;
+                                else
+                                    filtered_tail->next = n;
+                                filtered_tail = n;
+                            }
+                            if (filtered_candidates != NULL)
+                            {
+                                method_candidates = filtered_candidates;
+                                any_has_self = 0;
+                            }
+                        }
+                        if (!any_has_self && first_arg_is_type_ident) {
+                            /* Remove the first argument (the type identifier). */
                             ListNode_t *old_head = args_given;
                             expr->expr_data.function_call_data.args_expr = old_head->next;
                             old_head->next = NULL;  /* Detach to prevent dangling reference */
@@ -3625,7 +3660,6 @@ int semcheck_funccall(int *type_return,
                     }
                     else
                     {
-                        int is_static = from_cparser_is_method_static(record_info->type_id, method_name);
                         /* Use owner_out to get the actual owner where the method was found (may be parent helper) */
                         struct RecordType *actual_method_owner = NULL;
                         HashNode_t *method_node = semcheck_find_class_method(symtab, record_info, method_name, &actual_method_owner);
@@ -3685,7 +3719,7 @@ int semcheck_funccall(int *type_return,
                                 cand_cur = cand_cur->next;
                             }
 
-                            /* Only strip receiver for true type-qualified static calls (TypeName.Method). */
+                            /* Strip type receiver when overloads have no implicit Self parameter. */
                             int first_arg_is_type_ident = 0;
                             if (first_arg != NULL && first_arg->type == EXPR_VAR_ID &&
                                 first_arg->expr_data.id != NULL)
@@ -3698,7 +3732,39 @@ int semcheck_funccall(int *type_return,
                                     first_arg_is_type_ident = 1;
                                 }
                             }
-                            if (!any_has_self && is_static && first_arg_is_type_ident) {
+                            if (first_arg_is_type_ident && method_candidates != NULL)
+                            {
+                                ListNode_t *filtered_candidates = NULL;
+                                ListNode_t *filtered_tail = NULL;
+                                for (ListNode_t *cand_cur2 = method_candidates; cand_cur2 != NULL; cand_cur2 = cand_cur2->next)
+                                {
+                                    HashNode_t *cand = (HashNode_t *)cand_cur2->cur;
+                                    if (cand == NULL || cand->type == NULL)
+                                        continue;
+                                    ListNode_t *cand_params = kgpc_type_get_procedure_params(cand->type);
+                                    Tree_t *cand_first = cand_params != NULL ? (Tree_t *)cand_params->cur : NULL;
+                                    const char *cand_first_name = NULL;
+                                    if (cand_first != NULL && cand_first->type == TREE_VAR_DECL &&
+                                        cand_first->tree_data.var_decl_data.ids != NULL)
+                                        cand_first_name = (const char *)cand_first->tree_data.var_decl_data.ids->cur;
+                                    if (cand_first_name != NULL && pascal_identifier_equals(cand_first_name, "Self"))
+                                        continue;
+                                    ListNode_t *n = CreateListNode(cand, LIST_UNSPECIFIED);
+                                    if (n == NULL)
+                                        continue;
+                                    if (filtered_candidates == NULL)
+                                        filtered_candidates = n;
+                                    else
+                                        filtered_tail->next = n;
+                                    filtered_tail = n;
+                                }
+                                if (filtered_candidates != NULL)
+                                {
+                                    method_candidates = filtered_candidates;
+                                    any_has_self = 0;
+                                }
+                            }
+                            if (!any_has_self && first_arg_is_type_ident) {
                                 ListNode_t *old_head = args_given;
                                 expr->expr_data.function_call_data.args_expr = old_head->next;
                                 old_head->next = NULL;

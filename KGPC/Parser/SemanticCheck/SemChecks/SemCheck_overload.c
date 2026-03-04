@@ -1608,6 +1608,7 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
         int total_params = semcheck_count_total_params(candidate_args);
         int required_params = semcheck_count_required_params(candidate_args);
         int allow_implicit_leading_self = 0;
+        int allow_implicit_leading_type_qualifier = 0;
 
         if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
             fprintf(stderr, "[SemCheck] semcheck_resolve_overload: candidate %s args=%d required=%d given=%d\n",
@@ -1635,6 +1636,28 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
             {
                 allow_implicit_leading_self = 1;
             }
+
+            if (!allow_implicit_leading_self &&
+                first_actual != NULL && first_actual->type == EXPR_VAR_ID &&
+                first_actual->expr_data.id != NULL &&
+                given_count == total_params + 1)
+            {
+                int candidate_is_owner_method = 0;
+                if (candidate->owner_class != NULL &&
+                    pascal_identifier_equals(candidate->owner_class, first_actual->expr_data.id))
+                    candidate_is_owner_method = 1;
+                else if (candidate->mangled_id != NULL)
+                {
+                    size_t owner_len = strlen(first_actual->expr_data.id);
+                    if (strncasecmp(candidate->mangled_id, first_actual->expr_data.id, owner_len) == 0 &&
+                        candidate->mangled_id[owner_len] == '_' &&
+                        candidate->mangled_id[owner_len + 1] == '_')
+                        candidate_is_owner_method = 1;
+                }
+                if (candidate_is_owner_method &&
+                    !(first_formal_name != NULL && pascal_identifier_equals(first_formal_name, "Self")))
+                    allow_implicit_leading_type_qualifier = 1;
+            }
         }
 
         int arity_matches = ((given_count >= required_params && given_count <= total_params) ||
@@ -1647,6 +1670,14 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
             int adj_total = total_params - 1;
             int adj_required = required_params > 0 ? required_params - 1 : 0;
             if (given_count >= adj_required && given_count <= adj_total)
+                arity_matches = 1;
+        }
+        if (!arity_matches && allow_implicit_leading_type_qualifier)
+        {
+            int adj_total = total_params;
+            int adj_required = required_params;
+            int given_effective = given_count - 1;
+            if (given_effective >= adj_required && given_effective <= adj_total)
                 arity_matches = 1;
         }
         if (!arity_matches)
@@ -1666,6 +1697,13 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
             formal_args = formal_args->next;
         ListNode_t *call_args = args_given;
         int arg_index = 0;
+        if (allow_implicit_leading_type_qualifier && call_args != NULL)
+        {
+            if (qualities != NULL && given_count > 0)
+                qualities[0] = semcheck_make_quality(MATCH_EXACT);
+            arg_index = 1;
+            call_args = call_args->next;
+        }
 
         while (formal_args != NULL && call_args != NULL)
         {
