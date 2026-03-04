@@ -10656,7 +10656,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
     add_builtin_type_owned(symtab, "ValReal", create_primitive_type_with_size(REAL_TYPE, 8));
     add_builtin_type_owned(symtab, "Single", create_primitive_type_with_size(REAL_TYPE, 4));
     add_builtin_type_owned(symtab, "Double", create_primitive_type_with_size(REAL_TYPE, 8));
-    add_builtin_type_owned(symtab, "Extended", create_primitive_type_with_size(REAL_TYPE, 8));
+    add_builtin_type_owned(symtab, "Extended", create_primitive_type_with_size(REAL_TYPE, 16));
 
     /* Variant and OleVariant (COM interop) - treated as opaque 16-byte types.
      * VARIANT_TYPE auto-coerces to/from any value type at the semantic level. */

@@ -2635,7 +2635,10 @@ int semcheck_funccall(int *type_return,
     }
 
 
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "UpCase"))
+    /* UpCase(char) is always handled as a builtin (not gated by allow_builtins)
+     * to avoid selecting the UnicodeChar overload which calls through
+     * widestringmanager (uninitialized on Linux without cwstring). */
+    if (id != NULL && pascal_identifier_equals(id, "UpCase"))
     {
         ListNode_t *args = expr->expr_data.function_call_data.args_expr;
         if (args != NULL && args->next == NULL)

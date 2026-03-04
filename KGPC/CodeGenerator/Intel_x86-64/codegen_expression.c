@@ -4398,14 +4398,56 @@ ListNode_t *codegen_set_literal(struct Expression *expr, ListNode_t *inst_list,
             free_reg(get_reg_stack(), bit_reg);
             free_reg(get_reg_stack(), value_reg);
             
-            /* TODO: Handle ranges (element->upper != NULL) */
+            /* Handle ranges (element->upper != NULL): set bits from lower+1 to upper
+               (lower bit was already set by btsl above). */
             if (element->upper != NULL)
             {
-                codegen_report_error(ctx, "ERROR: Character set ranges not yet implemented.");
-                free_reg(get_reg_stack(), addr_reg);
-                if (out_reg != NULL)
-                    *out_reg = NULL;
-                return inst_list;
+                Register_t *upper_reg = NULL;
+                inst_list = codegen_expr_tree_value(element->upper, inst_list, ctx, &upper_reg);
+                if (codegen_had_error(ctx) || upper_reg == NULL)
+                {
+                    if (upper_reg != NULL)
+                        free_reg(get_reg_stack(), upper_reg);
+                    free_reg(get_reg_stack(), addr_reg);
+                    if (out_reg != NULL)
+                        *out_reg = NULL;
+                    return inst_list;
+                }
+                /* Get a register for the loop counter, re-evaluate lower */
+                Register_t *loop_reg = NULL;
+                inst_list = codegen_expr_tree_value(element->lower, inst_list, ctx, &loop_reg);
+                if (codegen_had_error(ctx) || loop_reg == NULL)
+                {
+                    if (loop_reg != NULL)
+                        free_reg(get_reg_stack(), loop_reg);
+                    free_reg(get_reg_stack(), upper_reg);
+                    free_reg(get_reg_stack(), addr_reg);
+                    if (out_reg != NULL)
+                        *out_reg = NULL;
+                    return inst_list;
+                }
+                /* Start from lower+1 (lower already set above) */
+                snprintf(buffer, sizeof(buffer), "\tincl\t%s\n", loop_reg->bit_32);
+                inst_list = add_inst(inst_list, buffer);
+                /* Loop: while loop_reg <= upper_reg, btsl and increment */
+                int range_label = ++ctx->label_counter;
+                int end_label = ++ctx->label_counter;
+                snprintf(buffer, sizeof(buffer), ".L%d:\n", range_label);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tcmpl\t%s, %s\n", upper_reg->bit_32, loop_reg->bit_32);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tjg\t.L%d\n", end_label);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tbtsl\t%s, (%s)\n", loop_reg->bit_32, addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tincl\t%s\n", loop_reg->bit_32);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tjmp\t.L%d\n", range_label);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), ".L%d:\n", end_label);
+                inst_list = add_inst(inst_list, buffer);
+                free_reg(get_reg_stack(), loop_reg);
+                free_reg(get_reg_stack(), upper_reg);
             }
         }
         

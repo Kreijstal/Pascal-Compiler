@@ -191,6 +191,10 @@ static enum VarType GetVarTypeFromTypeNode(HashNode_t* type_node) {
             return HASHVAR_SHORTSTRING;
         if (type_node->type->kind == TYPE_KIND_PRIMITIVE) {
             int tag = kgpc_type_get_primitive_tag(type_node->type);
+            /* Distinguish WideChar/UnicodeChar (2 bytes) from AnsiChar (1 byte) */
+            if (tag == CHAR_TYPE && type_node->type->type_alias != NULL &&
+                type_node->type->type_alias->storage_size > 1)
+                return HASHVAR_WIDECHAR;
             return ConvertParserTypeToVarType(tag);
         } else if (type_node->type->kind == TYPE_KIND_POINTER) {
             return HASHVAR_POINTER;
@@ -214,11 +218,14 @@ static enum VarType MapBuiltinTypeNameToVarType(const char *type_name) {
     // Character types
     if (strcasecmp(type_name, "Char") == 0 || strcasecmp(type_name, "AnsiChar") == 0)
         return HASHVAR_CHAR;
+    if (strcasecmp(type_name, "WideChar") == 0 || strcasecmp(type_name, "UnicodeChar") == 0)
+        return HASHVAR_WIDECHAR;
     
     // String types
-    if (strcasecmp(type_name, "String") == 0 || strcasecmp(type_name, "AnsiString") == 0 ||
-        strcasecmp(type_name, "WideString") == 0)
+    if (strcasecmp(type_name, "String") == 0 || strcasecmp(type_name, "AnsiString") == 0)
         return HASHVAR_PCHAR;
+    if (strcasecmp(type_name, "WideString") == 0)
+        return HASHVAR_UNICODESTRING;  /* WideString mangles like UnicodeString (both are wide) */
     if (strcasecmp(type_name, "ShortString") == 0)
         return HASHVAR_SHORTSTRING;
     if (strcasecmp(type_name, "RawByteString") == 0)
@@ -603,6 +610,7 @@ static char* MangleNameFromTypeList(const char* original_name, ListNode_t* type_
                 case HASHVAR_SHORTSTRING: type_suffix = "_ass"; break; /* array of ShortString */
                 case HASHVAR_BOOLEAN: type_suffix = "_ab"; break;   /* array of Boolean */
                 case HASHVAR_CHAR:    type_suffix = "_ac"; break;   /* array of Char */
+                case HASHVAR_WIDECHAR: type_suffix = "_awc"; break; /* array of WideChar */
                 case HASHVAR_POINTER: type_suffix = "_ap"; break;   /* array of Pointer */
                 case HASHVAR_RECORD:  type_suffix = "_au"; break;   /* array of Record */
                 default:              type_suffix = "_a"; break;    /* array of unknown */
@@ -631,6 +639,7 @@ static char* MangleNameFromTypeList(const char* original_name, ListNode_t* type_
                 case HASHVAR_PWIDECHAR: type_suffix = "_pw"; break; // For PWideChar
                 case HASHVAR_BOOLEAN: type_suffix = "_b"; break;
                 case HASHVAR_CHAR:    type_suffix = "_c"; break;
+                case HASHVAR_WIDECHAR: type_suffix = "_wc"; break;
                 case HASHVAR_POINTER: type_suffix = "_p"; break;
                 case HASHVAR_SET:     type_suffix = "_set"; break;
                 case HASHVAR_ENUM:    type_suffix = "_e"; break;
@@ -694,6 +703,11 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
             semcheck_expr_main(symtab, arg_expr, max_scope_lev, NO_MUTATE, &arg_type);
             int type_tag = arg_type != NULL ? semcheck_tag_from_kgpc(arg_type) : UNKNOWN_TYPE;
             resolved_type = ConvertParserTypeToVarType(type_tag);
+            /* Distinguish WideChar/UnicodeChar (2 bytes) from AnsiChar (1 byte) */
+            if (resolved_type == HASHVAR_CHAR && arg_type != NULL &&
+                arg_type->kind == TYPE_KIND_PRIMITIVE &&
+                arg_type->type_alias != NULL && arg_type->type_alias->storage_size > 1)
+                resolved_type = HASHVAR_WIDECHAR;
             if (arg_expr != NULL && arg_expr->resolved_kgpc_type != NULL)
             {
                 KgpcType *kgpc_type = arg_expr->resolved_kgpc_type;
