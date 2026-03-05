@@ -2623,11 +2623,10 @@ int semcheck_funccall(int *type_return,
         return 0;
     }
 
-    /* AllocMem: allocates memory and zero-initializes it, returns a Pointer */
-    if (id != NULL && pascal_identifier_equals(id, "AllocMem"))
-        return semcheck_builtin_allocmem(type_return, symtab, expr, max_scope_lev);
+    int allow_builtins =
+        !expr->expr_data.function_call_data.is_method_call_placeholder &&
+        expr->expr_data.function_call_data.call_qualifier == NULL;
 
-    int allow_builtins = !expr->expr_data.function_call_data.is_method_call_placeholder;
     if (getenv("KGPC_DEBUG_EOF") != NULL && id != NULL &&
         pascal_identifier_equals(id, "EOF"))
     {
@@ -5182,7 +5181,10 @@ method_call_resolved:
     }
     else if (num_best_matches == 0)
     {
-        if (id != NULL && pascal_identifier_equals(id, "AllocMem"))
+        if (id != NULL &&
+            pascal_identifier_equals(id, "AllocMem") &&
+            !expr->expr_data.function_call_data.is_method_call_placeholder &&
+            expr->expr_data.function_call_data.call_qualifier == NULL)
             return semcheck_builtin_allocmem(type_return, symtab, expr, max_scope_lev);
 
         /* WITH context fallback: if the function call couldn't be resolved in

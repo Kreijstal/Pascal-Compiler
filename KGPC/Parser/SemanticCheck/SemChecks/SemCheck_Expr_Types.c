@@ -14,6 +14,7 @@
 
 #include "SemCheck_Expr_Internal.h"
 #include "unit_registry.h"
+#include "../../ErrVars.h"
 
 int semcheck_resolve_scoped_enum_literal(SymTab_t *symtab, const char *type_name,
     const char *literal_name, long long *out_value);
@@ -119,6 +120,34 @@ static int semcheck_has_value_ident(SymTab_t *symtab, const char *id)
     }
 
     return 0;
+}
+
+static HashNode_t *semcheck_find_any_proc_symbol(SymTab_t *symtab, const char *id)
+{
+    if (symtab == NULL || id == NULL)
+        return NULL;
+
+    for (ListNode_t *cur_scope = symtab->stack_head; cur_scope != NULL; cur_scope = cur_scope->next)
+    {
+        HashTable_t *table = (HashTable_t *)cur_scope->cur;
+        ListNode_t *matches = FindAllIdentsInTable(table, id);
+        if (matches != NULL)
+        {
+            for (ListNode_t *cur = matches; cur != NULL; cur = cur->next)
+            {
+                HashNode_t *node = (HashNode_t *)cur->cur;
+                if (node != NULL &&
+                    (node->hash_type == HASHTYPE_FUNCTION || node->hash_type == HASHTYPE_PROCEDURE))
+                {
+                    DestroyList(matches);
+                    return node;
+                }
+            }
+            DestroyList(matches);
+        }
+    }
+
+    return NULL;
 }
 
 int semcheck_typecast(int *type_return,
@@ -2550,6 +2579,49 @@ SKIP_SELF_FIELD_REWRITE:
         }
         else
         {
+            if (record_expr->type == EXPR_VAR_ID &&
+                record_expr->expr_data.id != NULL)
+            {
+                HashNode_t *type_node =
+                    semcheck_find_preferred_type_node(symtab, record_expr->expr_data.id);
+                if (type_node == NULL)
+                {
+                    const char *owner_full = semcheck_get_current_subprogram_owner_class_full();
+                    const char *owner_outer = semcheck_get_current_subprogram_owner_class_outer();
+                    if (owner_full == NULL)
+                        owner_full = semcheck_get_current_method_owner();
+                    type_node = semcheck_find_type_node_in_owner_chain(symtab,
+                        record_expr->expr_data.id, owner_full, owner_outer);
+                }
+                if ((type_node == NULL || type_node->hash_type != HASHTYPE_TYPE))
+                {
+                    HashNode_t *fallback_node = NULL;
+                    if (FindIdent(&fallback_node, symtab, record_expr->expr_data.id) == 0 &&
+                        fallback_node != NULL && fallback_node->hash_type == HASHTYPE_TYPE)
+                        type_node = fallback_node;
+                }
+                if (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+                {
+                    struct RecordType *type_record = get_record_type_from_node(type_node);
+                    if (type_record != NULL)
+                    {
+                        record_type = RECORD_TYPE;
+                        record_info = type_record;
+                        if (record_kgpc_type == NULL || !kgpc_type_is_record(record_kgpc_type))
+                        {
+                            if (record_kgpc_type != NULL)
+                                kgpc_type_release(record_kgpc_type);
+                            record_kgpc_type = create_record_type(type_record);
+                        }
+                    }
+                }
+            }
+            if (record_info != NULL)
+            {
+                /* Type-qualified record member access (e.g. SizeOf(TRec.Field)). */
+            }
+            else
+            {
             if (getenv("KGPC_DEBUG_RECORD_ACCESS") != NULL)
             {
                 const char *rec_id = NULL;
@@ -2568,6 +2640,7 @@ SKIP_SELF_FIELD_REWRITE:
             semcheck_error_with_context("Error on line %d, field access requires a record value.\n\n", expr->line_num);
             *type_return = UNKNOWN_TYPE;
             return error_count + 1;
+            }
         }
     }
 
@@ -4722,6 +4795,176 @@ static HashNode_t *find_implicit_self_method(SymTab_t *symtab, const char *name)
     return NULL;
 }
 
+static int semcheck_is_ident_char_ascii(char c)
+{
+    return (c == '_') ||
+        (c >= '0' && c <= '9') ||
+        (c >= 'A' && c <= 'Z') ||
+        (c >= 'a' && c <= 'z');
+}
+
+static char *semcheck_mangle_specialized_type_text(const char *type_text)
+{
+    if (type_text == NULL)
+        return NULL;
+    const char *lt = strchr(type_text, '<');
+    if (lt == NULL)
+        return strdup(type_text);
+
+    const char *gt = strrchr(type_text, '>');
+    if (gt == NULL || gt <= lt)
+        return strdup(type_text);
+
+    size_t base_len = (size_t)(lt - type_text);
+    char *base = (char *)malloc(base_len + 1);
+    if (base == NULL)
+        return NULL;
+    memcpy(base, type_text, base_len);
+    base[base_len] = '\0';
+
+    char args_buf[256];
+    size_t args_len = 0;
+    int depth = 0;
+    for (const char *p = lt + 1; p < gt; ++p)
+    {
+        char ch = *p;
+        if (ch == '<')
+        {
+            depth++;
+            continue;
+        }
+        if (ch == '>')
+        {
+            if (depth > 0)
+                depth--;
+            continue;
+        }
+        if (depth == 0 && ch == ',')
+            ch = '$';
+        if (depth == 0 && ch == ' ')
+            continue;
+        if (args_len + 1 < sizeof(args_buf))
+            args_buf[args_len++] = ch;
+    }
+    args_buf[args_len] = '\0';
+
+    size_t out_len = strlen(base) + 1 + args_len;
+    char *out = (char *)malloc(out_len + 1);
+    if (out == NULL)
+    {
+        free(base);
+        return NULL;
+    }
+    snprintf(out, out_len + 1, "%s$%s", base, args_buf);
+    free(base);
+    return out;
+}
+
+static size_t semcheck_find_specialize_span_start(const char *buffer, size_t length, size_t index)
+{
+    size_t end = index;
+    while (end < length && buffer[end] != '\n' && buffer[end] != '\r' && buffer[end] != ';')
+        end++;
+
+    for (size_t i = index; i < end; ++i)
+    {
+        if (buffer[i] == '@')
+            return i;
+    }
+
+    const char *kw = "specialize";
+    size_t kw_len = strlen(kw);
+    for (size_t i = index; i + kw_len <= end; ++i)
+    {
+        if (strncasecmp(buffer + i, kw, kw_len) == 0)
+            return i;
+    }
+
+    return index;
+}
+
+static int semcheck_parse_specialize_addr_target(const char *buffer, size_t length, int index,
+    char **type_out, char **method_out)
+{
+    if (type_out != NULL) *type_out = NULL;
+    if (method_out != NULL) *method_out = NULL;
+    if (buffer == NULL || length == 0 || index < 0 || (size_t)index >= length)
+        return 0;
+
+    size_t i = semcheck_find_specialize_span_start(buffer, length, (size_t)index);
+    if (i < length && buffer[i] == '@')
+        i++;
+    while (i < length && (buffer[i] == ' ' || buffer[i] == '\t'))
+        i++;
+    const char *kw = "specialize";
+    size_t kw_len = strlen(kw);
+    if (i + kw_len < length && strncasecmp(buffer + i, kw, kw_len) == 0)
+    {
+        i += kw_len;
+        while (i < length && (buffer[i] == ' ' || buffer[i] == '\t'))
+            i++;
+    }
+
+    size_t type_start = i;
+    int angle_depth = 0;
+    while (i < length)
+    {
+        char ch = buffer[i];
+        if (ch == '<')
+            angle_depth++;
+        else if (ch == '>')
+        {
+            if (angle_depth > 0)
+                angle_depth--;
+        }
+        else if (ch == '.' && angle_depth == 0)
+            break;
+        else if (ch == '\n' || ch == ';' || ch == '\r')
+            return 0;
+        i++;
+    }
+    if (i >= length || buffer[i] != '.' || i <= type_start)
+        return 0;
+
+    size_t type_len = i - type_start;
+    char *type_raw = (char *)malloc(type_len + 1);
+    if (type_raw == NULL)
+        return 0;
+    memcpy(type_raw, buffer + type_start, type_len);
+    type_raw[type_len] = '\0';
+
+    i++; /* skip '.' */
+    size_t method_start = i;
+    while (i < length && semcheck_is_ident_char_ascii(buffer[i]))
+        i++;
+    if (i <= method_start)
+    {
+        free(type_raw);
+        return 0;
+    }
+    size_t method_len = i - method_start;
+    char *method = (char *)malloc(method_len + 1);
+    if (method == NULL)
+    {
+        free(type_raw);
+        return 0;
+    }
+    memcpy(method, buffer + method_start, method_len);
+    method[method_len] = '\0';
+
+    char *type_mangled = semcheck_mangle_specialized_type_text(type_raw);
+    free(type_raw);
+    if (type_mangled == NULL)
+    {
+        free(method);
+        return 0;
+    }
+
+    if (type_out != NULL) *type_out = type_mangled; else free(type_mangled);
+    if (method_out != NULL) *method_out = method; else free(method);
+    return 1;
+}
+
 int semcheck_addressof(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating)
 {
@@ -4746,6 +4989,105 @@ int semcheck_addressof(int *type_return,
     int error_count = 0;
     int inner_type = UNKNOWN_TYPE;
     int treated_as_proc_ref = 0;
+    HashNode_t *resolved_proc_symbol = NULL;
+    int dbg_specialize_addr = getenv("KGPC_DEBUG_ADDR_SPECIALIZE") != NULL;
+
+    if (dbg_specialize_addr && expr->line_num == 256)
+    {
+        fprintf(stderr, "[ADDR-SPECIALIZE] line=%d source_index=%d inner_type=%d inner_id=%s\n",
+            expr->line_num, expr->source_index, inner->type,
+            (inner->type == EXPR_VAR_ID && inner->expr_data.id != NULL) ? inner->expr_data.id : "(n/a)");
+    }
+
+    if (inner->type == EXPR_VAR_ID &&
+        inner->expr_data.id != NULL &&
+        pascal_identifier_equals(inner->expr_data.id, "specialize") &&
+        expr->source_index >= 0 &&
+        preprocessed_source != NULL && preprocessed_length > 0)
+    {
+        char *type_id = NULL;
+        char *method_id = NULL;
+        int parsed_target = semcheck_parse_specialize_addr_target(preprocessed_source, preprocessed_length,
+                expr->source_index, &type_id, &method_id);
+        if (dbg_specialize_addr)
+            fprintf(stderr, "[ADDR-SPECIALIZE] line=%d source_index=%d parsed=%d type=%s method=%s\n",
+                expr->line_num, expr->source_index, parsed_target,
+                type_id != NULL ? type_id : "(null)",
+                method_id != NULL ? method_id : "(null)");
+        if (dbg_specialize_addr && !parsed_target && expr->source_index >= 0 &&
+            (size_t)expr->source_index < preprocessed_length)
+        {
+            size_t start = (size_t)expr->source_index;
+            size_t end = start + 120;
+            if (end > preprocessed_length)
+                end = preprocessed_length;
+            fprintf(stderr, "[ADDR-SPECIALIZE] source-slice: %.*s\n",
+                (int)(end - start), preprocessed_source + start);
+        }
+        if (parsed_target)
+        {
+            char *resolved_type = type_id;
+            const char *owner = semcheck_get_current_method_owner();
+            if (resolved_type != NULL)
+            {
+                HashNode_t *type_node = NULL;
+                if (FindIdent(&type_node, symtab, resolved_type) < 0 && owner != NULL)
+                {
+                    size_t qlen = strlen(owner) + 1 + strlen(resolved_type);
+                    char *qualified = (char *)malloc(qlen + 1);
+                    if (qualified != NULL)
+                    {
+                        snprintf(qualified, qlen + 1, "%s.%s", owner, resolved_type);
+                        if (FindIdent(&type_node, symtab, qualified) >= 0)
+                        {
+                            if (dbg_specialize_addr)
+                                fprintf(stderr, "[ADDR-SPECIALIZE] qualified type resolved: %s\n", qualified);
+                            free(resolved_type);
+                            resolved_type = qualified;
+                        }
+                        else
+                        {
+                            free(qualified);
+                        }
+                    }
+                }
+            }
+
+            if (resolved_type != NULL && method_id != NULL)
+            {
+                char *base_id = strdup(resolved_type);
+                struct Expression *base = mk_varid(expr->line_num, base_id);
+                if (base != NULL)
+                {
+                    struct Expression *access = mk_recordaccess(expr->line_num, base, method_id);
+                    if (access != NULL)
+                    {
+                        if (dbg_specialize_addr)
+                            fprintf(stderr, "[ADDR-SPECIALIZE] rewritten to record access: %s.%s\n",
+                                resolved_type, method_id);
+                        expr->expr_data.addr_data.expr = access;
+                        destroy_expr(inner);
+                        inner = access;
+                        method_id = NULL;
+                    }
+                    else
+                    {
+                        destroy_expr(base);
+                    }
+                }
+                else if (base_id != NULL)
+                {
+                    free(base_id);
+                }
+            }
+            if (type_id != NULL && type_id != resolved_type)
+                free(type_id);
+            if (resolved_type != NULL)
+                free(resolved_type);
+            if (method_id != NULL)
+                free(method_id);
+        }
+    }
 
     /* If operand is a bare function/procedure identifier, don't auto-convert to a call */
     if (inner->type == EXPR_VAR_ID && inner->expr_data.id != NULL)
@@ -4760,6 +5102,7 @@ int semcheck_addressof(int *type_return,
         {
             inner_type = PROCEDURE;
             treated_as_proc_ref = 1;
+            resolved_proc_symbol = inner_symbol;
         }
         /* Fallback: bare method name inside a method body (e.g. @ReadData
          * where ReadData is a method of the current class). */
@@ -4790,6 +5133,7 @@ int semcheck_addressof(int *type_return,
                  * Skip overload resolution - we just want the function's address. */
                 inner_type = PROCEDURE;
                 treated_as_proc_ref = 1;
+                resolved_proc_symbol = inner_symbol;
             }
             /* Fallback: bare method name auto-converted to call inside a method body */
             if (!treated_as_proc_ref &&
@@ -4810,18 +5154,51 @@ int semcheck_addressof(int *type_return,
         struct Expression *record_expr = inner->expr_data.record_access_data.record_expr;
         if (record_expr != NULL)
         {
-            /* Resolve the base expression to get its record type */
-            KgpcType *record_kgpc = NULL;
-            semcheck_expr_with_type(&record_kgpc, symtab, record_expr, max_scope_lev, NO_MUTATE);
-            int record_tag = semcheck_tag_from_kgpc(record_kgpc);
             struct RecordType *rec_info = NULL;
-            if (record_tag == RECORD_TYPE && record_kgpc != NULL && kgpc_type_is_record(record_kgpc))
-                rec_info = kgpc_type_get_record(record_kgpc);
-            else if (record_tag == POINTER_TYPE && record_kgpc != NULL &&
-                     kgpc_type_is_pointer(record_kgpc) &&
-                     record_kgpc->info.points_to != NULL &&
-                     kgpc_type_is_record(record_kgpc->info.points_to))
-                rec_info = kgpc_type_get_record(record_kgpc->info.points_to);
+            int skip_record_expr_semcheck = 0;
+
+            if (record_expr->type == EXPR_VAR_ID && record_expr->expr_data.id != NULL)
+            {
+                HashNode_t *owner_node = NULL;
+                if (FindIdent(&owner_node, symtab, record_expr->expr_data.id) >= 0 &&
+                    owner_node != NULL &&
+                    owner_node->hash_type == HASHTYPE_TYPE &&
+                    owner_node->type != NULL)
+                {
+                    KgpcType *owner_type = owner_node->type;
+                    if (kgpc_type_is_record(owner_type))
+                        rec_info = kgpc_type_get_record(owner_type);
+                    else if (kgpc_type_is_pointer(owner_type) &&
+                             owner_type->info.points_to != NULL &&
+                             kgpc_type_is_record(owner_type->info.points_to))
+                        rec_info = kgpc_type_get_record(owner_type->info.points_to);
+                }
+                else if (dbg_specialize_addr)
+                {
+                    fprintf(stderr, "[ADDR-SPECIALIZE] owner type not found for %s\n",
+                        record_expr->expr_data.id);
+                    skip_record_expr_semcheck = 1;
+                }
+                else
+                {
+                    skip_record_expr_semcheck = 1;
+                }
+            }
+
+            /* Resolve the base expression to get its record type */
+            if (rec_info == NULL && !skip_record_expr_semcheck)
+            {
+                KgpcType *record_kgpc = NULL;
+                semcheck_expr_with_type(&record_kgpc, symtab, record_expr, max_scope_lev, NO_MUTATE);
+                int record_tag = semcheck_tag_from_kgpc(record_kgpc);
+                if (record_tag == RECORD_TYPE && record_kgpc != NULL && kgpc_type_is_record(record_kgpc))
+                    rec_info = kgpc_type_get_record(record_kgpc);
+                else if (record_tag == POINTER_TYPE && record_kgpc != NULL &&
+                         kgpc_type_is_pointer(record_kgpc) &&
+                         record_kgpc->info.points_to != NULL &&
+                         kgpc_type_is_record(record_kgpc->info.points_to))
+                    rec_info = kgpc_type_get_record(record_kgpc->info.points_to);
+            }
 
             if (rec_info != NULL)
             {
@@ -4830,8 +5207,42 @@ int semcheck_addressof(int *type_return,
                     (method_node->hash_type == HASHTYPE_FUNCTION ||
                      method_node->hash_type == HASHTYPE_PROCEDURE))
                 {
+                    if (dbg_specialize_addr)
+                        fprintf(stderr, "[ADDR-SPECIALIZE] method resolved on type receiver: %s\n", field_id);
                     inner_type = PROCEDURE;
                     treated_as_proc_ref = 1;
+                    resolved_proc_symbol = method_node;
+                }
+                else if (dbg_specialize_addr)
+                {
+                    fprintf(stderr, "[ADDR-SPECIALIZE] method not found on type receiver: %s\n", field_id);
+                }
+            }
+            else if (field_id != NULL)
+            {
+                HashNode_t *fallback_symbol = semcheck_find_any_proc_symbol(symtab, field_id);
+                if (fallback_symbol == NULL)
+                {
+                    size_t len = strlen(field_id);
+                    char *prefixed = (char *)malloc(len + 3);
+                    if (prefixed != NULL)
+                    {
+                        snprintf(prefixed, len + 3, "__%s", field_id);
+                        fallback_symbol = semcheck_find_any_proc_symbol(symtab, prefixed);
+                        free(prefixed);
+                    }
+                }
+                if (fallback_symbol != NULL)
+                {
+                    if (dbg_specialize_addr)
+                        fprintf(stderr, "[ADDR-SPECIALIZE] fallback proc symbol resolved by name: %s\n", field_id);
+                    inner_type = PROCEDURE;
+                    treated_as_proc_ref = 1;
+                    resolved_proc_symbol = fallback_symbol;
+                }
+                else if (dbg_specialize_addr)
+                {
+                    fprintf(stderr, "[ADDR-SPECIALIZE] fallback proc symbol not found: %s\n", field_id);
                 }
             }
         }
@@ -5035,11 +5446,18 @@ int semcheck_addressof(int *type_return,
                 HashNode_t *method_node = find_implicit_self_method(symtab, proc_id);
                 if (method_node != NULL &&
                     method_node->type != NULL && method_node->type->kind == TYPE_KIND_PROCEDURE)
-                {
-                    proc_type = method_node->type;
-                    proc_type_owned = 0;
-                }
+            {
+                proc_type = method_node->type;
+                proc_type_owned = 0;
             }
+        }
+        else if (resolved_proc_symbol != NULL &&
+                 resolved_proc_symbol->type != NULL &&
+                 resolved_proc_symbol->type->kind == TYPE_KIND_PROCEDURE)
+        {
+            proc_type = resolved_proc_symbol->type;
+            proc_type_owned = 0;
+        }
         }
         
         if (proc_type != NULL)
@@ -5083,6 +5501,7 @@ int semcheck_addressof(int *type_return,
                 {
                     expr->resolved_kgpc_type = create_pointer_type(NULL);
                 }
+                converted_to_proc_addr = 1;
             }
         }
         else if (inner->type == EXPR_FUNCTION_CALL && inner->expr_data.function_call_data.args_expr == NULL)
@@ -5121,6 +5540,7 @@ int semcheck_addressof(int *type_return,
                     {
                         expr->resolved_kgpc_type = create_pointer_type(NULL);
                     }
+                    converted_to_proc_addr = 1;
                 }
             }
         }
@@ -5167,14 +5587,37 @@ int semcheck_addressof(int *type_return,
                     {
                         expr->resolved_kgpc_type = create_pointer_type(NULL);
                     }
+                    converted_to_proc_addr = 1;
                 }
             }
+        }
+        else if (resolved_proc_symbol != NULL &&
+                 (resolved_proc_symbol->hash_type == HASHTYPE_FUNCTION ||
+                  resolved_proc_symbol->hash_type == HASHTYPE_PROCEDURE))
+        {
+            expr->expr_data.addr_data.expr = NULL;
+            destroy_expr(inner);
+            expr->type = EXPR_ADDR_OF_PROC;
+            expr->expr_data.addr_of_proc_data.proc_mangled_id =
+                resolved_proc_symbol->mangled_id ? strdup(resolved_proc_symbol->mangled_id) : NULL;
+            expr->expr_data.addr_of_proc_data.proc_id =
+                resolved_proc_symbol->id ? strdup(resolved_proc_symbol->id) : NULL;
+            if (resolved_proc_symbol->type != NULL)
+            {
+                kgpc_type_retain(resolved_proc_symbol->type);
+                expr->resolved_kgpc_type = create_pointer_type(resolved_proc_symbol->type);
+            }
+            else
+            {
+                expr->resolved_kgpc_type = create_pointer_type(NULL);
+            }
+            converted_to_proc_addr = 1;
         }
     }
     /* For other types, we could add more conversions here */
     
     /* Create the pointer type */
-    if (pointed_to_type != NULL) {
+    if (pointed_to_type != NULL && expr->type != EXPR_ADDR_OF_PROC) {
         if (expr->resolved_kgpc_type != NULL) {
             destroy_kgpc_type(expr->resolved_kgpc_type);
         }

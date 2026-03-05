@@ -12424,9 +12424,75 @@ static struct Expression *convert_factor(ast_t *expr_node) {
             qualified_ident_free(qid);
         return expr;
     }
+    case PASCAL_T_CONSTRUCTED_TYPE:
+    {
+        char *base_name = NULL;
+        ListNode_t *type_args = NULL;
+        if (extract_constructed_type_info(expr_node, &base_name, &type_args))
+        {
+            char *specialized_name = mangle_specialized_name_from_list(base_name, type_args);
+            if (specialized_name == NULL && base_name != NULL)
+                specialized_name = strdup(base_name);
+            if (type_args != NULL)
+                destroy_list(type_args);
+            if (base_name != NULL)
+                free(base_name);
+            if (specialized_name != NULL)
+                return mk_varid(expr_node->line, specialized_name);
+        }
+        return NULL;
+    }
     case PASCAL_T_FUNC_CALL: {
         ast_t *child = expr_node->child;
         char *id = NULL;
+        if (getenv("KGPC_DEBUG_SPECIALIZE_CALLS") != NULL)
+        {
+            fprintf(stderr, "[KGPC_DEBUG_SPECIALIZE_CALLS] FUNC_CALL line=%d child_typ=%d(%s)\n",
+                expr_node->line,
+                child != NULL ? child->typ : -1,
+                child != NULL ? pascal_tag_to_string(child->typ) : "<null>");
+            if (child != NULL && child->sym != NULL && child->sym->name != NULL)
+            {
+                fprintf(stderr, "[KGPC_DEBUG_SPECIALIZE_CALLS]   child sym=%s\n",
+                    child->sym->name);
+            }
+            if (child != NULL && child->child != NULL)
+            {
+                fprintf(stderr, "[KGPC_DEBUG_SPECIALIZE_CALLS]   child->child typ=%d(%s) sym=%s\n",
+                    child->child->typ,
+                    pascal_tag_to_string(child->child->typ),
+                    (child->child->sym != NULL && child->child->sym->name != NULL)
+                        ? child->child->sym->name : "<null>");
+            }
+        }
+        if (child != NULL && child->typ == PASCAL_T_MEMBER_ACCESS)
+        {
+            struct Expression *callee = convert_expression(child);
+            ListNode_t *args = convert_expression_list(child->next);
+            if (callee != NULL && callee->type == EXPR_RECORD_ACCESS &&
+                callee->expr_data.record_access_data.record_expr != NULL &&
+                callee->expr_data.record_access_data.field_id != NULL)
+            {
+                struct Expression *base_expr =
+                    callee->expr_data.record_access_data.record_expr;
+                char *method_id = strdup(callee->expr_data.record_access_data.field_id);
+                callee->expr_data.record_access_data.record_expr = NULL;
+                destroy_expr(callee);
+                if (base_expr != NULL)
+                    args = PushListNodeFront(args, CreateListNode(base_expr, LIST_EXPR));
+                struct Expression *call_expr = mk_functioncall(expr_node->line, method_id, args);
+                if (call_expr != NULL)
+                {
+                    call_expr->expr_data.function_call_data.is_method_call_placeholder = 1;
+                    call_expr->expr_data.function_call_data.placeholder_method_name =
+                        method_id != NULL ? strdup(method_id) : NULL;
+                }
+                return call_expr;
+            }
+            if (callee != NULL)
+                destroy_expr(callee);
+            return mk_functioncall(expr_node->line, NULL, args);
+        }
         if (child != NULL) {
             if (child->typ == PASCAL_T_IDENTIFIER) {
                 const char *name = ast_symbol_name(child);
@@ -12598,6 +12664,8 @@ static struct Expression *convert_expression(ast_t *expr_node) {
     case PASCAL_T_CHAR_CODE:
     case PASCAL_T_BOOLEAN:
     case PASCAL_T_IDENTIFIER:
+    case PASCAL_T_QUALIFIED_IDENTIFIER:
+    case PASCAL_T_CONSTRUCTED_TYPE:
     case PASCAL_T_FUNC_CALL:
     case PASCAL_T_ARRAY_ACCESS:
     case PASCAL_T_SET:
@@ -13017,9 +13085,49 @@ tuple_cleanup:
         return tc_expr;
     }
     case PASCAL_T_DEREF:
-        return mk_pointer_deref(expr_node->line, convert_expression(expr_node->child));
+    {
+        struct Expression *result = mk_pointer_deref(expr_node->line, convert_expression(expr_node->child));
+        return set_expr_source_index(result, expr_node);
+    }
     case PASCAL_T_ADDR:
-        return mk_addressof(expr_node->line, convert_expression(expr_node->child));
+        if (getenv("KGPC_DEBUG_SPECIALIZE_CALLS") != NULL &&
+            expr_node != NULL && expr_node->line == 256)
+        {
+            ast_t *child = expr_node->child;
+            fprintf(stderr,
+                "[KGPC_DEBUG_SPECIALIZE_CALLS] ADDR line=256 child=%d(%s:%s) child_child=%d(%s)\n",
+                child != NULL ? child->typ : -1,
+                child != NULL ? pascal_tag_to_string(child->typ) : "<null>",
+                (child != NULL && child->sym != NULL && child->sym->name != NULL)
+                    ? child->sym->name : "<null>",
+                (child != NULL && child->child != NULL) ? child->child->typ : -1,
+                (child != NULL && child->child != NULL)
+                    ? pascal_tag_to_string(child->child->typ) : "<null>");
+            for (ast_t *it = expr_node->next; it != NULL; it = it->next)
+            {
+                fprintf(stderr,
+                    "[KGPC_DEBUG_SPECIALIZE_CALLS]   ADDR expr.next typ=%d(%s:%s) child=%d(%s)\n",
+                    it->typ,
+                    pascal_tag_to_string(it->typ),
+                    (it->sym != NULL && it->sym->name != NULL) ? it->sym->name : "<null>",
+                    it->child != NULL ? it->child->typ : -1,
+                    it->child != NULL ? pascal_tag_to_string(it->child->typ) : "<null>");
+            }
+            for (ast_t *it = child != NULL ? child->next : NULL; it != NULL; it = it->next)
+            {
+                fprintf(stderr,
+                    "[KGPC_DEBUG_SPECIALIZE_CALLS]   ADDR sibling typ=%d(%s:%s) child=%d(%s)\n",
+                    it->typ,
+                    pascal_tag_to_string(it->typ),
+                    (it->sym != NULL && it->sym->name != NULL) ? it->sym->name : "<null>",
+                    it->child != NULL ? it->child->typ : -1,
+                    it->child != NULL ? pascal_tag_to_string(it->child->typ) : "<null>");
+            }
+        }
+    {
+        struct Expression *result = mk_addressof(expr_node->line, convert_expression(expr_node->child));
+        return set_expr_source_index(result, expr_node);
+    }
     case PASCAL_T_ANONYMOUS_FUNCTION:
     {
         /* Anonymous function: params -> return_type -> body 
@@ -13330,6 +13438,66 @@ static struct Expression *convert_member_access(ast_t *node) {
     ast_t *base_node = node->child;
     ast_t *field_node = (base_node != NULL) ? base_node->next : NULL;
     ast_t *args_node = (field_node != NULL) ? field_node->next : NULL;
+    if (getenv("KGPC_DEBUG_SPECIALIZE_CALLS") != NULL &&
+        node != NULL && (node->line == 255 || node->line == 256))
+    {
+        fprintf(stderr,
+            "[KGPC_DEBUG_SPECIALIZE_CALLS] MEMBER_ACCESS line=%d base=%d(%s:%s) field=%d(%s:%s) args=%d(%s:%s)\n",
+            node->line,
+            base_node != NULL ? base_node->typ : -1,
+            base_node != NULL ? pascal_tag_to_string(base_node->typ) : "<null>",
+            (base_node != NULL && base_node->sym != NULL && base_node->sym->name != NULL)
+                ? base_node->sym->name : "<null>",
+            field_node != NULL ? field_node->typ : -1,
+            field_node != NULL ? pascal_tag_to_string(field_node->typ) : "<null>",
+            (field_node != NULL && field_node->sym != NULL && field_node->sym->name != NULL)
+                ? field_node->sym->name : "<null>",
+            args_node != NULL ? args_node->typ : -1,
+            args_node != NULL ? pascal_tag_to_string(args_node->typ) : "<null>",
+            (args_node != NULL && args_node->sym != NULL && args_node->sym->name != NULL)
+                ? args_node->sym->name : "<null>");
+        for (ast_t *it = field_node != NULL ? field_node->child : NULL; it != NULL; it = it->next)
+        {
+            fprintf(stderr,
+                "[KGPC_DEBUG_SPECIALIZE_CALLS]   field.child typ=%d(%s:%s) grandchild=%d(%s)\n",
+                it->typ,
+                pascal_tag_to_string(it->typ),
+                (it->sym != NULL && it->sym->name != NULL) ? it->sym->name : "<null>",
+                it->child != NULL ? it->child->typ : -1,
+                it->child != NULL ? pascal_tag_to_string(it->child->typ) : "<null>");
+        }
+    }
+    if (getenv("KGPC_DEBUG_SPECIALIZE_CALLS") != NULL)
+    {
+        const char *field_sym = (field_node != NULL && field_node->sym != NULL &&
+                                 field_node->sym->name != NULL)
+            ? field_node->sym->name : "<null>";
+        fprintf(stderr,
+            "[KGPC_DEBUG_SPECIALIZE_CALLS] MEMBER_ACCESS base=%d(%s) field=%d(%s:%s) args=%d(%s)\n",
+            base_node != NULL ? base_node->typ : -1,
+            base_node != NULL ? pascal_tag_to_string(base_node->typ) : "<null>",
+            field_node != NULL ? field_node->typ : -1,
+            field_node != NULL ? pascal_tag_to_string(field_node->typ) : "<null>",
+            field_sym,
+            args_node != NULL ? args_node->typ : -1,
+            args_node != NULL ? pascal_tag_to_string(args_node->typ) : "<null>");
+        if (field_node != NULL && field_node->typ == PASCAL_T_FUNC_CALL && field_node->child != NULL)
+        {
+            ast_t *fc = field_node->child;
+            const char *fc_sym = (fc->sym != NULL && fc->sym->name != NULL) ? fc->sym->name : "<null>";
+            fprintf(stderr,
+                "[KGPC_DEBUG_SPECIALIZE_CALLS]   MEMBER_ACCESS func child=%d(%s:%s)\n",
+                fc->typ, pascal_tag_to_string(fc->typ), fc_sym);
+            if (fc->child != NULL)
+            {
+                const char *fc2_sym = (fc->child->sym != NULL && fc->child->sym->name != NULL)
+                    ? fc->child->sym->name : "<null>";
+                fprintf(stderr,
+                    "[KGPC_DEBUG_SPECIALIZE_CALLS]   MEMBER_ACCESS func child->child=%d(%s:%s)\n",
+                    fc->child->typ, pascal_tag_to_string(fc->child->typ), fc2_sym);
+            }
+        }
+    }
 
     if (getenv("KGPC_DEBUG_BODY") != NULL) {
         fprintf(stderr, "[KGPC] convert_member_access: base=%d field=%d args=%d\n",
@@ -13425,8 +13593,58 @@ static struct Expression *convert_member_access_chain(int line,
         ast_t *method_id_node = unwrapped->child;
         ast_t *args_node = (method_id_node != NULL) ? method_id_node->next : NULL;
         
-        if (method_id_node != NULL && method_id_node->typ == PASCAL_T_IDENTIFIER) {
-            char *method_id = dup_symbol(method_id_node);
+        char *method_id = NULL;
+        char *placeholder_name = NULL;
+        if (method_id_node != NULL) {
+            ast_t *method_unwrapped = unwrap_pascal_node(method_id_node);
+            if (method_unwrapped == NULL)
+                method_unwrapped = method_id_node;
+            if (getenv("KGPC_DEBUG_SPECIALIZE_CALLS") != NULL &&
+                method_unwrapped != NULL &&
+                method_unwrapped->typ == PASCAL_T_IDENTIFIER &&
+                method_unwrapped->sym != NULL &&
+                method_unwrapped->sym->name != NULL &&
+                strcasecmp(method_unwrapped->sym->name, "specialize") == 0)
+            {
+                fprintf(stderr,
+                    "[KGPC_DEBUG_SPECIALIZE_CALLS] METHOD specialize-shape line=%d base_expr_type=%d args_node=%d(%s)\n",
+                    line,
+                    base_expr != NULL ? base_expr->type : -1,
+                    args_node != NULL ? args_node->typ : -1,
+                    args_node != NULL ? pascal_tag_to_string(args_node->typ) : "<null>");
+                for (ast_t *dbg = args_node, *it = dbg; it != NULL; it = it->next)
+                {
+                    const char *sym = (it->sym != NULL && it->sym->name != NULL) ? it->sym->name : "<null>";
+                    fprintf(stderr,
+                        "[KGPC_DEBUG_SPECIALIZE_CALLS]   method-arg node typ=%d(%s) sym=%s child=%d(%s)\n",
+                        it->typ, pascal_tag_to_string(it->typ), sym,
+                        it->child != NULL ? it->child->typ : -1,
+                        it->child != NULL ? pascal_tag_to_string(it->child->typ) : "<null>");
+                }
+            }
+            if (method_unwrapped->typ == PASCAL_T_IDENTIFIER) {
+                method_id = dup_symbol(method_unwrapped);
+                if (method_id != NULL)
+                    placeholder_name = strdup(method_id);
+            } else if (method_unwrapped->typ == PASCAL_T_CONSTRUCTED_TYPE) {
+                char *base_name = NULL;
+                ListNode_t *type_args = NULL;
+                if (extract_constructed_type_info(method_unwrapped, &base_name, &type_args)) {
+                    if (base_name != NULL) {
+                        method_id = mangle_specialized_name_from_list(base_name, type_args);
+                        if (method_id == NULL)
+                            method_id = strdup(base_name);
+                        placeholder_name = strdup(base_name);
+                    }
+                }
+                if (base_name != NULL)
+                    free(base_name);
+                if (type_args != NULL)
+                    destroy_list(type_args);
+            }
+        }
+
+        if (method_id != NULL) {
             
             /* Convert args - handle both ARG_LIST and direct siblings */
             ListNode_t *args_list = NULL;
@@ -13494,10 +13712,14 @@ static struct Expression *convert_member_access_chain(int line,
             call_expr->expr_data.function_call_data.resolved_func = NULL;
             call_expr->resolved_kgpc_type = NULL;
             call_expr->expr_data.function_call_data.is_method_call_placeholder = 1;
-            call_expr->expr_data.function_call_data.placeholder_method_name = strdup(method_id);
+            call_expr->expr_data.function_call_data.placeholder_method_name =
+                (placeholder_name != NULL) ? placeholder_name : strdup(method_id);
+            placeholder_name = NULL;
 
             return call_expr;
         }
+        if (placeholder_name != NULL)
+            free(placeholder_name);
     }
 
     /* Check if field_node has ARG_LIST as sibling (method call) */
@@ -13553,6 +13775,82 @@ static struct Expression *convert_member_access_chain(int line,
     int node_line = (unwrapped->line != 0) ? unwrapped->line : line;
 
     switch (unwrapped->typ) {
+    case PASCAL_T_TYPECAST: {
+        /* Static/generic class method syntax may be encoded as a TYPECAST
+         * in the member field position:
+         *   TMarshal.specialize FixArray<T>(Arr)
+         * => MEMBER_ACCESS(base=TMarshal, field=TYPECAST(CONSTRUCTED_TYPE(FixArray<T>), Arr))
+         */
+        ast_t *cast_type_node = unwrapped->child;
+        ast_t *cast_value_node = (cast_type_node != NULL) ? cast_type_node->next : NULL;
+        ast_t *cast_type = unwrap_pascal_node(cast_type_node);
+        if (cast_type == NULL)
+            cast_type = cast_type_node;
+
+        char *method_id = NULL;
+        char *placeholder_name = NULL;
+        if (cast_type != NULL && cast_type->typ == PASCAL_T_IDENTIFIER) {
+            method_id = dup_symbol(cast_type);
+            if (method_id != NULL)
+                placeholder_name = strdup(method_id);
+        } else if (cast_type != NULL && cast_type->typ == PASCAL_T_CONSTRUCTED_TYPE) {
+            char *base_name = NULL;
+            ListNode_t *type_args = NULL;
+            if (extract_constructed_type_info(cast_type, &base_name, &type_args)) {
+                if (base_name != NULL) {
+                    method_id = mangle_specialized_name_from_list(base_name, type_args);
+                    if (method_id == NULL)
+                        method_id = strdup(base_name);
+                    placeholder_name = strdup(base_name);
+                }
+            }
+            if (base_name != NULL)
+                free(base_name);
+            if (type_args != NULL)
+                destroy_list(type_args);
+        }
+
+        if (method_id == NULL) {
+            destroy_expr(base_expr);
+            return NULL;
+        }
+
+        ListNode_t *args_list = NULL;
+        ListNode_t *tail = NULL;
+        if (cast_value_node != NULL && cast_value_node->typ == PASCAL_T_ARG_LIST) {
+            for (ast_t *arg = cast_value_node->child; arg != NULL; arg = arg->next) {
+                struct Expression *arg_expr = convert_expression(arg);
+                if (arg_expr == NULL)
+                    continue;
+                ListNode_t *new_node = CreateListNode(arg_expr, LIST_EXPR);
+                if (new_node == NULL)
+                    continue;
+                if (args_list == NULL) {
+                    args_list = new_node;
+                    tail = new_node;
+                } else {
+                    tail->next = new_node;
+                    tail = new_node;
+                }
+            }
+        } else if (cast_value_node != NULL) {
+            struct Expression *arg_expr = convert_expression(cast_value_node);
+            if (arg_expr != NULL)
+                args_list = CreateListNode(arg_expr, LIST_EXPR);
+        }
+
+        args_list = PushListNodeFront(args_list, CreateListNode(base_expr, LIST_EXPR));
+        struct Expression *call_expr = mk_functioncall(line, method_id, args_list);
+        if (call_expr != NULL) {
+            call_expr->expr_data.function_call_data.is_method_call_placeholder = 1;
+            call_expr->expr_data.function_call_data.placeholder_method_name =
+                (placeholder_name != NULL) ? placeholder_name : strdup(method_id);
+            placeholder_name = NULL;
+        }
+        if (placeholder_name != NULL)
+            free(placeholder_name);
+        return call_expr;
+    }
     case PASCAL_T_IDENTIFIER: {
         char *field_id = dup_symbol(unwrapped);
         if (field_id == NULL) {
@@ -13663,6 +13961,54 @@ static struct Statement *convert_assignment(ast_t *assign_node) {
 
     struct Expression *left = convert_expression(lhs);
     struct Expression *right = convert_expression(rhs);
+    if (getenv("KGPC_DEBUG_SPECIALIZE_CALLS") != NULL && right == NULL)
+    {
+        ast_t *u_rhs = unwrap_pascal_node(rhs);
+        ast_t *dbg_rhs = (u_rhs != NULL) ? u_rhs : rhs;
+        fprintf(stderr,
+            "[KGPC_DEBUG_SPECIALIZE_CALLS] ASSIGN rhs-convert-null line=%d lhs_typ=%d rhs_typ=%d(%s) rhs_sym=%s rhs_child_typ=%d(%s)\n",
+            assign_node != NULL ? assign_node->line : -1,
+            lhs != NULL ? lhs->typ : -1,
+            dbg_rhs != NULL ? dbg_rhs->typ : -1,
+            dbg_rhs != NULL ? pascal_tag_to_string(dbg_rhs->typ) : "<null>",
+            (dbg_rhs != NULL && dbg_rhs->sym != NULL && dbg_rhs->sym->name != NULL)
+                ? dbg_rhs->sym->name : "<null>",
+            (dbg_rhs != NULL && dbg_rhs->child != NULL) ? dbg_rhs->child->typ : -1,
+            (dbg_rhs != NULL && dbg_rhs->child != NULL)
+                ? pascal_tag_to_string(dbg_rhs->child->typ) : "<null>");
+    }
+    if (getenv("KGPC_DEBUG_SPECIALIZE_CALLS") != NULL &&
+        assign_node != NULL && assign_node->line == 256)
+    {
+        ast_t *u_rhs = unwrap_pascal_node(rhs);
+        ast_t *dbg_rhs = (u_rhs != NULL) ? u_rhs : rhs;
+        fprintf(stderr,
+            "[KGPC_DEBUG_SPECIALIZE_CALLS] ASSIGN line=256 rhs=%d(%s:%s)\n",
+            dbg_rhs != NULL ? dbg_rhs->typ : -1,
+            dbg_rhs != NULL ? pascal_tag_to_string(dbg_rhs->typ) : "<null>",
+            (dbg_rhs != NULL && dbg_rhs->sym != NULL && dbg_rhs->sym->name != NULL)
+                ? dbg_rhs->sym->name : "<null>");
+        for (ast_t *it = rhs != NULL ? rhs->next : NULL; it != NULL; it = it->next)
+        {
+            fprintf(stderr,
+                "[KGPC_DEBUG_SPECIALIZE_CALLS]   ASSIGN raw rhs.next typ=%d(%s:%s) child=%d(%s)\n",
+                it->typ,
+                pascal_tag_to_string(it->typ),
+                (it->sym != NULL && it->sym->name != NULL) ? it->sym->name : "<null>",
+                it->child != NULL ? it->child->typ : -1,
+                it->child != NULL ? pascal_tag_to_string(it->child->typ) : "<null>");
+        }
+        for (ast_t *it = dbg_rhs != NULL ? dbg_rhs->next : NULL; it != NULL; it = it->next)
+        {
+            fprintf(stderr,
+                "[KGPC_DEBUG_SPECIALIZE_CALLS]   ASSIGN rhs.next typ=%d(%s:%s) child=%d(%s)\n",
+                it->typ,
+                pascal_tag_to_string(it->typ),
+                (it->sym != NULL && it->sym->name != NULL) ? it->sym->name : "<null>",
+                it->child != NULL ? it->child->typ : -1,
+                it->child != NULL ? pascal_tag_to_string(it->child->typ) : "<null>");
+        }
+    }
     struct Statement *stmt = mk_varassign(assign_node->line, assign_node->col, left, right);
     if (stmt != NULL) {
         stmt->source_index = assign_node->index;

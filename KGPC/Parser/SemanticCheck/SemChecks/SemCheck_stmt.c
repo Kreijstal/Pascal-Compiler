@@ -4440,6 +4440,19 @@ assignment_types_ok:
 
         if (!types_compatible)
         {
+            if (getenv("KGPC_DEBUG_ASSIGN") != NULL)
+            {
+                fprintf(stderr,
+                    "[KGPC_DEBUG_ASSIGN] legacy mismatch line=%d col=%d lhs_type=%d rhs_type=%d lhs_expr_type=%d rhs_expr_type=%d\n",
+                    stmt->line_num,
+                    stmt->col_num,
+                    type_first,
+                    type_second,
+                    var != NULL ? var->type : -1,
+                    expr != NULL ? expr->type : -1);
+                semcheck_debug_expr_brief(var, "legacy assign lhs");
+                semcheck_debug_expr_brief(expr, "legacy assign rhs");
+            }
             const char *lhs_name = "<expression>";
             if (var != NULL && var->type == EXPR_VAR_ID)
                 lhs_name = var->expr_data.id;

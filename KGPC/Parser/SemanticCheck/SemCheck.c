@@ -7526,7 +7526,11 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
         
         while (cur != NULL)
         {
-            assert(cur->type == LIST_RECORD_FIELD);
+            if (cur->type != LIST_RECORD_FIELD || cur->cur == NULL)
+            {
+                cur = cur->next;
+                continue;
+            }
             struct RecordField *original_field = (struct RecordField *)cur->cur;
             
             /* Clone the field */

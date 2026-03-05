@@ -2083,6 +2083,7 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                     !(arg_tag == UNKNOWN_TYPE && arg_kgpc == NULL))
                 {
                     int allow_string_to_char_array = 0;
+                    int allow_pointer_backed_array = 0;
                     if (is_string_type(arg_tag) || arg_tag == CHAR_TYPE)
                     {
                         /* Check if formal element type is Char */
@@ -2095,7 +2096,16 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                         if (elem_tag == CHAR_TYPE)
                             allow_string_to_char_array = 1;
                     }
-                    if (!allow_string_to_char_array)
+                    /* Generic/dynamic array values can flow through as pointer-typed
+                     * expressions (notably with specialize TArray<T> aliases).  Do not
+                     * reject these before quality classification. */
+                    if (!allow_string_to_char_array &&
+                        (arg_tag == POINTER_TYPE ||
+                         (arg_kgpc != NULL && arg_kgpc->kind == TYPE_KIND_POINTER)))
+                    {
+                        allow_pointer_backed_array = 1;
+                    }
+                    if (!allow_string_to_char_array && !allow_pointer_backed_array)
                     {
                         candidate_valid = 0;
                         if (owns_formal && formal_kgpc != NULL)
