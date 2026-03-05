@@ -25,9 +25,87 @@
 #include "../../Parser/ParseTree/tree_types.h"
 #include "../../Parser/ParseTree/type_tags.h"
 #include "../../Parser/ParseTree/KgpcType.h"
+#include "../../Parser/ParseTree/ident_ref.h"
 #include "../../Parser/ParseTree/from_cparser.h"
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
 #include "../../Parser/SemanticCheck/SemChecks/SemCheck_expr.h"
+
+static char *codegen_append_param_sig(char *sig, const char *type_str)
+{
+    const char *part = (type_str != NULL) ? type_str : "<unknown>";
+    size_t part_len = strlen(part);
+    if (sig == NULL)
+    {
+        char *out = (char *)malloc(part_len + 1);
+        if (out == NULL)
+            return NULL;
+        memcpy(out, part, part_len + 1);
+        return out;
+    }
+    size_t sig_len = strlen(sig);
+    char *out = (char *)realloc(sig, sig_len + 1 + part_len + 1);
+    if (out == NULL)
+    {
+        free(sig);
+        return NULL;
+    }
+    out[sig_len] = ',';
+    memcpy(out + sig_len + 1, part, part_len + 1);
+    return out;
+}
+
+static char *codegen_param_sig_from_params(ListNode_t *params, int skip_first_param)
+{
+    if (params == NULL)
+        return NULL;
+
+    char *sig = NULL;
+    ListNode_t *cur = params;
+    int skipped = 0;
+    while (cur != NULL)
+    {
+        Tree_t *param = (Tree_t *)cur->cur;
+        cur = cur->next;
+        if (skip_first_param && !skipped)
+        {
+            skipped = 1;
+            continue;
+        }
+        if (param == NULL)
+            continue;
+
+        char *type_str = NULL;
+        int name_count = 1;
+        if (param->type == TREE_VAR_DECL)
+        {
+            if (param->tree_data.var_decl_data.type_ref != NULL)
+                type_str = type_ref_render_mangled(param->tree_data.var_decl_data.type_ref);
+            else if (param->tree_data.var_decl_data.type_id != NULL)
+                type_str = strdup(param->tree_data.var_decl_data.type_id);
+            if (param->tree_data.var_decl_data.ids != NULL)
+                name_count = ListLength(param->tree_data.var_decl_data.ids);
+        }
+        else if (param->type == TREE_ARR_DECL)
+        {
+            if (param->tree_data.arr_decl_data.type_ref != NULL)
+                type_str = type_ref_render_mangled(param->tree_data.arr_decl_data.type_ref);
+            else if (param->tree_data.arr_decl_data.type_id != NULL)
+                type_str = strdup(param->tree_data.arr_decl_data.type_id);
+            if (param->tree_data.arr_decl_data.ids != NULL)
+                name_count = ListLength(param->tree_data.arr_decl_data.ids);
+        }
+
+        if (name_count <= 0)
+            name_count = 1;
+        for (int i = 0; i < name_count; i++)
+            sig = codegen_append_param_sig(sig, type_str);
+
+        if (type_str != NULL)
+            free(type_str);
+    }
+
+    return sig;
+}
 #include "../../identifier_utils.h"
 
 int codegen_tag_from_kgpc(const KgpcType *type)
@@ -2681,10 +2759,153 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                     func_sym->type->kind == TYPE_KIND_PROCEDURE &&
                     func_sym->type->info.proc_info.definition != NULL) {
                     full_mangled = func_sym->mangled_id;
+                } else if (class_label != NULL && method->name != NULL) {
+                    /* Fallback: resolve by base name + param count for overloaded methods. */
+                    const char *base_owner = class_label;
+                    size_t owner_len = strlen(base_owner);
+                    if (method->mangled_name != NULL) {
+                        const char *sep = strstr(method->mangled_name, "__");
+                        if (sep != NULL && sep != method->mangled_name) {
+                            base_owner = method->mangled_name;
+                            owner_len = (size_t)(sep - method->mangled_name);
+                        }
+                    }
+                    size_t base_len = owner_len + 2 + strlen(method->name) + 1;
+                    char *base_name = (char *)malloc(base_len);
+                    if (base_name != NULL) {
+                        snprintf(base_name, base_len, "%.*s__%s",
+                            (int)owner_len, base_owner, method->name);
+                        ListNode_t *matches = FindAllIdents(symtab, base_name);
+                        HashNode_t *candidate = NULL;
+                        HashNode_t *def_candidate = NULL;
+                        const char *def_candidate_mangled = NULL;
+                        const char *unique_mangled = NULL;
+                        int unique_ok = 1;
+                        int match_count = 0;
+                        int def_match_count = 0;
+                        if (getenv("KGPC_DEBUG_VMT") != NULL &&
+                            strcmp(class_label, "TUnicodeEncoding") == 0 &&
+                            (strcmp(method->name, "GetByteCount") == 0 ||
+                             strcmp(method->name, "GetAnsiString") == 0))
+                        {
+                            fprintf(stderr,
+                                "[KGPC VMT] fallback search %s matches=%s\n",
+                                base_name, matches != NULL ? "yes" : "no");
+                        }
+                        for (ListNode_t *m = matches; m != NULL; m = m->next) {
+                            HashNode_t *cand = (HashNode_t *)m->cur;
+                            if (cand == NULL || cand->type == NULL ||
+                                cand->type->kind != TYPE_KIND_PROCEDURE)
+                                continue;
+                            char *cand_sig = NULL;
+                            if (method->param_sig != NULL) {
+                                cand_sig = codegen_param_sig_from_params(
+                                    cand->type->info.proc_info.params, 1);
+                                if (cand_sig == NULL || strcmp(cand_sig, method->param_sig) != 0) {
+                                    if (cand_sig != NULL)
+                                        free(cand_sig);
+                                    continue;
+                                }
+                            }
+                            if (getenv("KGPC_DEBUG_VMT") != NULL &&
+                                strcmp(class_label, "TUnicodeEncoding") == 0 &&
+                                (strcmp(method->name, "GetByteCount") == 0 ||
+                                 strcmp(method->name, "GetAnsiString") == 0))
+                            {
+                                const char *def_mangled = NULL;
+                                if (cand->type != NULL &&
+                                    cand->type->kind == TYPE_KIND_PROCEDURE &&
+                                    cand->type->info.proc_info.definition != NULL)
+                                {
+                                    Tree_t *def = cand->type->info.proc_info.definition;
+                                    def_mangled = def->tree_data.subprogram_data.mangled_id;
+                                }
+                                fprintf(stderr,
+                                    "[KGPC VMT] cand id=%s mangled=%s sig=%s has_def=%d def_mangled=%s\n",
+                                    cand->id != NULL ? cand->id : "<null>",
+                                    cand->mangled_id != NULL ? cand->mangled_id : "<null>",
+                                    cand_sig != NULL ? cand_sig : "<null>",
+                                    (cand->type->info.proc_info.definition != NULL) ? 1 : 0,
+                                    def_mangled != NULL ? def_mangled : "<null>");
+                            }
+                            int count = ListLength(cand->type->info.proc_info.params);
+                            if (count > 0)
+                                count -= 1; /* drop implicit Self */
+                            if (method->param_count >= 0) {
+                                if (count != method->param_count)
+                                {
+                                    if (cand_sig != NULL)
+                                        free(cand_sig);
+                                    continue;
+                                }
+                            }
+                            match_count++;
+                            candidate = cand;
+                            const char *cand_mangled = cand->mangled_id;
+                            if (cand->type != NULL &&
+                                cand->type->kind == TYPE_KIND_PROCEDURE &&
+                                cand->type->info.proc_info.definition != NULL)
+                            {
+                                Tree_t *def = cand->type->info.proc_info.definition;
+                                if (def != NULL &&
+                                    def->tree_data.subprogram_data.mangled_id != NULL)
+                                    cand_mangled = def->tree_data.subprogram_data.mangled_id;
+                                def_match_count++;
+                                def_candidate = cand;
+                                def_candidate_mangled = cand_mangled;
+                            }
+                            if (cand_mangled != NULL) {
+                                if (unique_mangled == NULL)
+                                    unique_mangled = cand_mangled;
+                                else if (strcmp(unique_mangled, cand_mangled) != 0)
+                                    unique_ok = 0;
+                            } else {
+                                unique_ok = 0;
+                            }
+                            if (cand_sig != NULL)
+                                free(cand_sig);
+                        }
+                        if (getenv("KGPC_DEBUG_VMT") != NULL &&
+                            strcmp(class_label, "TUnicodeEncoding") == 0 &&
+                            (strcmp(method->name, "GetByteCount") == 0 ||
+                             strcmp(method->name, "GetAnsiString") == 0))
+                        {
+                            fprintf(stderr,
+                                "[KGPC VMT] fallback count=%d def_count=%d unique_ok=%d unique=%s candidate=%s def_candidate=%s\n",
+                                match_count, def_match_count, unique_ok,
+                                unique_mangled != NULL ? unique_mangled : "<null>",
+                                candidate != NULL && candidate->mangled_id != NULL ? candidate->mangled_id : "<null>",
+                                def_candidate != NULL && def_candidate->mangled_id != NULL ? def_candidate->mangled_id : "<null>");
+                        }
+                        if (unique_ok && unique_mangled != NULL && def_match_count > 0) {
+                            full_mangled = unique_mangled;
+                        } else if (def_match_count == 1 && def_candidate_mangled != NULL) {
+                            full_mangled = def_candidate_mangled;
+                        } else if (match_count == 1 && candidate != NULL &&
+                            candidate->mangled_id != NULL &&
+                            candidate->type != NULL &&
+                            candidate->type->kind == TYPE_KIND_PROCEDURE &&
+                            candidate->type->info.proc_info.definition != NULL) {
+                            full_mangled = candidate->mangled_id;
+                        }
+                        if (matches != NULL)
+                            DestroyList(matches);
+                        free(base_name);
+                    }
                 }
                 if (full_mangled != NULL) {
                     fprintf(ctx->output_file, "\t.quad\t%s\n", full_mangled);
                 } else {
+                    if (getenv("KGPC_DEBUG_VMT") != NULL) {
+                        fprintf(stderr,
+                            "[KGPC VMT] abstract slot for %s (lookup=%s, found=%s, has_def=%d)\n",
+                            method->name != NULL ? method->name : "<null>",
+                            method->mangled_name != NULL ? method->mangled_name : "<null>",
+                            func_sym != NULL ? "yes" : "no",
+                            (func_sym != NULL && func_sym->type != NULL &&
+                             func_sym->type->kind == TYPE_KIND_PROCEDURE &&
+                             func_sym->type->info.proc_info.definition != NULL) ? 1 : 0);
+                    }
                     /* Abstract method or no definition - emit reference to runtime error handler */
                     fprintf(ctx->output_file, "\t.quad\t__kgpc_abstract_method_error\n");
                 }
@@ -4891,6 +5112,35 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
             codegen_report_error(ctx,
                 "ERROR: Unable to determine size for array return value of %s.", func->id);
             record_return_size = 0;
+        }
+    }
+
+    /* Resolve dynamic array return types that were not found via func_node,
+     * especially for class methods returning aliased dynamic arrays
+     * (e.g. TUnicodeCharArray). */
+    if (!returns_dynamic_array && func->return_type_id != NULL && symtab != NULL)
+    {
+        HashNode_t *return_type_node = NULL;
+        FindIdent(&return_type_node, symtab, func->return_type_id);
+        if (return_type_node != NULL)
+        {
+            KgpcType *return_type = return_type_node->type;
+            if (return_type == NULL)
+            {
+                struct TypeAlias *alias = hashnode_get_type_alias(return_type_node);
+                if (alias != NULL)
+                    return_type = create_kgpc_type_from_type_alias(alias, symtab, 0);
+            }
+            if (return_type != NULL && return_type->kind == TYPE_KIND_ARRAY &&
+                kgpc_type_is_dynamic_array(return_type))
+            {
+                returns_dynamic_array = 1;
+                dynamic_array_element_size =
+                    codegen_dynamic_array_element_size_from_type(ctx, return_type);
+                dynamic_array_descriptor_size =
+                    codegen_dynamic_array_descriptor_bytes(dynamic_array_element_size);
+                dynamic_array_lower_bound = return_type->info.array_info.start_index;
+            }
         }
     }
 

@@ -2169,8 +2169,24 @@ int semcheck_funccall(int *type_return,
                         if (expects_self)
                         {
                             const char *class_name = self_record->type_id;
+                            int method_param_count = -1;
+                            if (method_node != NULL && method_node->type != NULL &&
+                                method_node->type->kind == TYPE_KIND_PROCEDURE)
+                            {
+                                method_param_count = ListLength(method_node->type->info.proc_info.params);
+                                if (method_node->owner_class != NULL &&
+                                    !from_cparser_is_method_static(method_node->owner_class,
+                                        method_node->method_name != NULL ? method_node->method_name : id))
+                                {
+                                    if (method_param_count > 0)
+                                        method_param_count -= 1;
+                                    else
+                                        method_param_count = 0;
+                                }
+                            }
                             if (class_name != NULL &&
-                                from_cparser_is_method_virtual(class_name, id) &&
+                                from_cparser_is_method_virtual_with_signature(class_name, id,
+                                    method_param_count, NULL) &&
                                 !from_cparser_is_method_static(class_name, id))
                             {
                                 expr->expr_data.function_call_data.is_virtual_call = 1;
@@ -2185,6 +2201,12 @@ int semcheck_funccall(int *type_return,
                                             (info->is_virtual || info->is_override) &&
                                             strcasecmp(info->name, id) == 0)
                                         {
+                                            if (method_param_count >= 0 && info->param_count >= 0 &&
+                                                method_param_count != info->param_count)
+                                            {
+                                                method_entry = method_entry->next;
+                                                continue;
+                                            }
                                             vmt_index = info->vmt_index;
                                             break;
                                         }
@@ -5003,10 +5025,27 @@ method_call_resolved:
          * that weren't detected by the early Self-injection check. Only applies to
          * methods without a body (abstract) and not class/static methods (which use
          * single-indirection VMT dispatch that codegen doesn't support yet). */
+        int best_match_param_count = -1;
+        if (best_match->type != NULL && best_match->type->kind == TYPE_KIND_PROCEDURE)
+        {
+            best_match_param_count = ListLength(best_match->type->info.proc_info.params);
+            if (best_match->owner_class != NULL &&
+                !from_cparser_is_method_static(best_match->owner_class,
+                    best_match->method_name))
+            {
+                if (best_match_param_count > 0)
+                    best_match_param_count -= 1;
+                else
+                    best_match_param_count = 0;
+            }
+        }
         if (best_match->owner_class != NULL && best_match->method_name != NULL &&
             !expr->expr_data.function_call_data.is_virtual_call &&
             !from_cparser_is_method_static(best_match->owner_class, best_match->method_name) &&
-            from_cparser_is_method_virtual(best_match->owner_class, best_match->method_name))
+            from_cparser_is_method_virtual_with_signature(best_match->owner_class,
+                best_match->method_name,
+                best_match_param_count,
+                NULL))
         {
             /* Check if the method has no body (abstract) */
             int has_body = 0;
@@ -5030,6 +5069,9 @@ method_call_resolved:
                             (mi->is_virtual || mi->is_override) &&
                             strcasecmp(mi->name, best_match->method_name) == 0)
                         {
+                            if (best_match_param_count >= 0 && mi->param_count >= 0 &&
+                                best_match_param_count != mi->param_count)
+                                continue;
                             expr->expr_data.function_call_data.is_virtual_call = 1;
                             expr->expr_data.function_call_data.vmt_index = mi->vmt_index;
                             if (expr->expr_data.function_call_data.self_class_name == NULL)

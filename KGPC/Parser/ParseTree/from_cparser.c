@@ -1369,8 +1369,10 @@ static void register_class_method_ex(const char *class_name, const char *method_
     class_method_bindings = node;
     
     if (getenv("KGPC_DEBUG_CLASS_METHODS") != NULL) {
-        fprintf(stderr, "[KGPC] Registered method %s.%s (virtual=%d, override=%d, static=%d, class_method=%d)\n",
-            class_name, method_name, is_virtual, is_override, is_static, is_class_method);
+        fprintf(stderr,
+            "[KGPC] Registered method %s.%s (virtual=%d, override=%d, static=%d, class_method=%d, params=%d, sig=%s)\n",
+            class_name, method_name, is_virtual, is_override, is_static, is_class_method,
+            param_count, param_sig != NULL ? param_sig : "<null>");
     }
 }
 
@@ -1544,6 +1546,44 @@ int from_cparser_is_method_virtual(const char *class_name, const char *method_na
         }
         cur = cur->next;
     }
+    return 0;
+}
+
+int from_cparser_is_method_virtual_with_signature(const char *class_name, const char *method_name,
+    int param_count, const char *param_sig)
+{
+    if (class_name == NULL || method_name == NULL)
+        return 0;
+
+    if (param_sig == NULL && param_count < 0)
+        return from_cparser_is_method_virtual(class_name, method_name);
+
+    int has_match = 0;
+    int has_virtual = 0;
+    ListNode_t *cur = class_method_bindings;
+    while (cur != NULL) {
+        ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
+        if (binding != NULL && binding->class_name != NULL && binding->method_name != NULL &&
+            strcasecmp(binding->class_name, class_name) == 0 &&
+            strcasecmp(binding->method_name, method_name) == 0)
+        {
+            int matches = 0;
+            if (param_sig != NULL && binding->param_sig != NULL) {
+                if (strcmp(binding->param_sig, param_sig) == 0)
+                    matches = 1;
+            } else if (param_count >= 0 && binding->param_count == param_count) {
+                matches = 1;
+            }
+            if (matches) {
+                has_match = 1;
+                if (binding->is_virtual || binding->is_override)
+                    has_virtual = 1;
+            }
+        }
+        cur = cur->next;
+    }
+    if (has_match)
+        return has_virtual;
     return 0;
 }
 

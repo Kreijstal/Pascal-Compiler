@@ -130,6 +130,8 @@ struct MethodInfo
     int is_virtual;           /* 1 if declared virtual */
     int is_override;          /* 1 if declared override */
     int vmt_index;            /* Index in VMT (-1 if not virtual) */
+    int param_count;          /* Parameter count (excluding implicit Self) */
+    char *param_sig;          /* Optional parameter signature string */
 };
 
 enum MethodTemplateKind

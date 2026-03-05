@@ -1933,7 +1933,15 @@ void kgpc_write_unsigned(KGPCTextRec *file, int width, uint64_t value)
     kgpc_flush_text_output_stream(dest);
 }
 
+typedef struct KgpcStringHeader KgpcStringHeader;
 static size_t kgpc_string_known_length(const char *value);
+static KgpcStringHeader *kgpc_string_header(const char *value);
+static void kgpc_string_set_insert(const void *value);
+static void kgpc_string_release(char *value);
+static void kgpc_default_unicode2ansi_move(const uint16_t *source, char **dest, int32_t cp, int64_t len);
+extern void *widestringmanager[25];
+extern int32_t DefaultSystemCodePage __attribute__((weak));
+int64_t kgpc_widechar_length(const uint16_t *value);
 
 void kgpc_write_string(KGPCTextRec *file, int width, const char *value)
 {
@@ -2729,6 +2737,94 @@ void kgpc_setstring(char **target, const char *buffer, int64_t length)
     if (current != NULL)
         kgpc_string_release(current);
     *target = result;
+}
+
+static int64_t kgpc_unicode_known_length(const uint16_t *value)
+{
+    if (value == NULL)
+        return 0;
+    KgpcStringHeader *hdr = kgpc_string_header((const char *)value);
+    if (hdr != NULL)
+        return hdr->length;
+    return kgpc_widechar_length(value);
+}
+
+static uint16_t *kgpc_alloc_empty_unicodestring(void)
+{
+    static struct {
+        KgpcStringHeader header;
+        uint16_t data[1];
+    } empty = { { 1200, 2, -1, 0 }, { 0 } };
+    return empty.data;
+}
+
+void kgpc_setstring_unicode(uint16_t **target, const uint16_t *buffer, int64_t length)
+{
+    if (target == NULL)
+        return;
+
+    if (buffer == NULL || length <= 0)
+    {
+        uint16_t *empty = kgpc_alloc_empty_unicodestring();
+        uint16_t *current = *target;
+        if (current != NULL)
+            kgpc_string_release((char *)current);
+        *target = empty;
+        return;
+    }
+
+    size_t data_bytes = (size_t)length * 2 + 2;
+    KgpcStringHeader *hdr = (KgpcStringHeader *)malloc(sizeof(KgpcStringHeader) + data_bytes);
+    if (hdr == NULL)
+    {
+        fprintf(stderr, "KGPC runtime: failed to allocate UnicodeString (%zu bytes).\n", data_bytes);
+        exit(EXIT_FAILURE);
+    }
+    hdr->codepage = 1200;       /* UTF-16LE */
+    hdr->elementsize = 2;       /* UnicodeChar = 2 bytes */
+    hdr->refcount = 1;
+    hdr->length = length;
+    uint16_t *data = (uint16_t *)(hdr + 1);
+    memcpy(data, buffer, (size_t)length * 2);
+    data[length] = 0;
+
+    kgpc_string_set_insert((char *)data);
+
+    uint16_t *current = *target;
+    if (current != NULL)
+        kgpc_string_release((char *)current);
+    *target = data;
+}
+
+void kgpc_write_unicodestring(KGPCTextRec *file, int width, const uint16_t *value)
+{
+    FILE *dest = kgpc_text_output_stream(file);
+    if (dest == NULL)
+        return;
+
+    if (value == NULL)
+        value = kgpc_alloc_empty_unicodestring();
+    if (width > 1024 || width < -1024)
+        width = 0;
+
+    int64_t len = kgpc_unicode_known_length(value);
+    if (len <= 0 && width <= 0)
+        return;
+
+    char *ansi = NULL;
+    typedef void (*Unicode2AnsiProc)(const uint16_t *, char **, int32_t, int64_t);
+    Unicode2AnsiProc conv = (Unicode2AnsiProc)widestringmanager[19];
+    int32_t cp = DefaultSystemCodePage;
+    if (conv != NULL)
+        conv(value, &ansi, cp, len);
+    else
+        kgpc_default_unicode2ansi_move(value, &ansi, cp, len);
+
+    kgpc_write_string(file, width, ansi);
+
+    if (ansi != NULL)
+        kgpc_string_release(ansi);
+    kgpc_flush_text_output_stream(dest);
 }
 
 void kgpc_string_delete(char **target, int64_t index, int64_t count)
@@ -6879,14 +6975,8 @@ static void kgpc_default_ansi2unicode_move(const char *source,
     int32_t cp, uint16_t **dest, int64_t len)
 {
     /* Free existing value */
-    if (*dest != NULL) {
-        KgpcStringHeader *old = (KgpcStringHeader *)((char *)*dest - sizeof(KgpcStringHeader));
-        if (old->refcount > 0) {
-            old->refcount--;
-            if (old->refcount == 0)
-                free(old);
-        }
-    }
+    if (*dest != NULL)
+        kgpc_string_release((char *)*dest);
 
     if (len <= 0) {
         *dest = NULL;
@@ -6908,6 +6998,7 @@ static void kgpc_default_ansi2unicode_move(const char *source,
     for (int64_t i = 0; i < len; i++)
         data[i] = (uint16_t)(unsigned char)source[i];
     data[len] = 0;  /* null terminator */
+    kgpc_string_set_insert((char *)data);
     *dest = data;
 }
 

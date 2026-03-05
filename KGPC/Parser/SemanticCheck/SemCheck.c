@@ -7655,6 +7655,7 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
 }
 
 /* Build Virtual Method Table for a class */
+static char *semcheck_param_sig_from_params(ListNode_t *params, int skip_first_param);
 static int build_class_vmt(SymTab_t *symtab, struct RecordType *record_info, 
                             const char *class_name, int line_num) {
     if (record_info == NULL || class_name == NULL)
@@ -7690,6 +7691,8 @@ if (record_info->parent_class_name != NULL) {
                             cloned->is_virtual = parent_method->is_virtual;
                             cloned->is_override = 0;  /* Parent's methods aren't overrides in child */
                             cloned->vmt_index = parent_method->vmt_index;
+                            cloned->param_count = parent_method->param_count;
+                            cloned->param_sig = parent_method->param_sig ? strdup(parent_method->param_sig) : NULL;
                             
                             ListNode_t *node = (ListNode_t *)malloc(sizeof(ListNode_t));
                             if (node != NULL) {
@@ -7702,6 +7705,7 @@ if (record_info->parent_class_name != NULL) {
                             } else {
                                 free(cloned->name);
                                 free(cloned->mangled_name);
+                                free(cloned->param_sig);
                                 free(cloned);
                             }
                         }
@@ -7717,30 +7721,136 @@ if (record_info->parent_class_name != NULL) {
     while (cur_method != NULL) {
         ClassMethodBinding *binding = (ClassMethodBinding *)cur_method->cur;
         if (binding != NULL && binding->method_name != NULL) {
-            /* Build mangled name: ClassName__MethodName */
+            /* Resolve the full mangled name for this method overload when possible. */
             size_t class_len = strlen(class_name);
             size_t method_len = strlen(binding->method_name);
-            char *mangled = (char *)malloc(class_len + 2 + method_len + 1);
-            if (mangled != NULL) {
-                snprintf(mangled, class_len + 2 + method_len + 1, "%s__%s", 
+            char *base_name = (char *)malloc(class_len + 2 + method_len + 1);
+            if (base_name != NULL) {
+                snprintf(base_name, class_len + 2 + method_len + 1, "%s__%s",
                          class_name, binding->method_name);
             }
+            char *mangled = NULL;
+            if (base_name != NULL && symtab != NULL)
+            {
+                ListNode_t *matches = FindAllIdents(symtab, base_name);
+                HashNode_t *best = NULL;
+                if (binding->param_sig != NULL)
+                {
+                    for (ListNode_t *m = matches; m != NULL; m = m->next)
+                    {
+                        HashNode_t *cand = (HashNode_t *)m->cur;
+                        if (cand == NULL || cand->type == NULL ||
+                            cand->type->kind != TYPE_KIND_PROCEDURE)
+                            continue;
+                        int skip_self = (!binding->is_static);
+                        char *sig = semcheck_param_sig_from_params(
+                            cand->type->info.proc_info.params, skip_self);
+                        if (getenv("KGPC_DEBUG_VMT") != NULL &&
+                            class_name != NULL && binding->method_name != NULL &&
+                            strcasecmp(class_name, "TEncoding") == 0 &&
+                            strcasecmp(binding->method_name, "GetAnsiString") == 0)
+                        {
+                            fprintf(stderr,
+                                "[KGPC VMT] %s.%s binding sig=%s cand=%s sig=%s\n",
+                                class_name, binding->method_name,
+                                binding->param_sig,
+                                cand->mangled_id != NULL ? cand->mangled_id : "<null>",
+                                sig != NULL ? sig : "<null>");
+                        }
+                        if (sig != NULL && strcmp(sig, binding->param_sig) == 0)
+                        {
+                            best = cand;
+                            free(sig);
+                            break;
+                        }
+                        if (sig != NULL)
+                            free(sig);
+                    }
+                }
+                if (best == NULL && binding->param_count >= 0)
+                {
+                    int match_count = 0;
+                    HashNode_t *last_match = NULL;
+                    for (ListNode_t *m = matches; m != NULL; m = m->next)
+                    {
+                        HashNode_t *cand = (HashNode_t *)m->cur;
+                        if (cand == NULL || cand->type == NULL ||
+                            cand->type->kind != TYPE_KIND_PROCEDURE)
+                            continue;
+                        int count = ListLength(cand->type->info.proc_info.params);
+                        if (!binding->is_static && count > 0)
+                            count -= 1; /* drop implicit Self */
+                        if (count == binding->param_count)
+                        {
+                            match_count++;
+                            last_match = cand;
+                        }
+                    }
+                    if (match_count == 1)
+                        best = last_match;
+                }
+                if (best != NULL && best->mangled_id != NULL)
+                    mangled = strdup(best->mangled_id);
+                DestroyList(matches);
+            }
+            if (mangled == NULL && base_name != NULL)
+                mangled = strdup(base_name);
+            if (base_name != NULL)
+                free(base_name);
             
             /* Check if this method overrides a parent method */
             int is_actual_override = 0;
             if (binding->is_virtual || binding->is_override) {
-                /* Check if a method with this name exists in the parent VMT */
+                /* Check if a method with this name/signature exists in the parent VMT */
                 ListNode_t *vmt_entry = vmt;
                 while (vmt_entry != NULL) {
                     struct MethodInfo *info = (struct MethodInfo *)vmt_entry->cur;
                     if (info != NULL && info->name != NULL &&
                         strcasecmp(info->name, binding->method_name) == 0) {
+                        int signature_matches = 0;
+                        if (binding->param_sig != NULL && info->param_sig != NULL) {
+                            if (strcmp(binding->param_sig, info->param_sig) == 0)
+                                signature_matches = 1;
+                        } else if (binding->param_count >= 0 && info->param_count >= 0) {
+                            if (binding->param_count == info->param_count)
+                                signature_matches = 1;
+                        } else {
+                            signature_matches = 1;
+                        }
+                        if (getenv("KGPC_DEBUG_VMT") != NULL &&
+                            class_name != NULL && binding->method_name != NULL &&
+                            strcasecmp(class_name, "TUnicodeEncoding") == 0)
+                        {
+                            fprintf(stderr,
+                                "[KGPC VMT] override check %s.%s bind_sig=%s info_sig=%s match=%d\n",
+                                class_name, binding->method_name,
+                                binding->param_sig != NULL ? binding->param_sig : "<null>",
+                                info->param_sig != NULL ? info->param_sig : "<null>",
+                                signature_matches);
+                        }
+                        if (!signature_matches) {
+                            vmt_entry = vmt_entry->next;
+                            continue;
+                        }
                         /* Method exists in parent - this is an override */
                         is_actual_override = 1;
                         /* Replace with derived class's version */
                         free(info->mangled_name);
                         info->mangled_name = mangled ? strdup(mangled) : NULL;
                         info->is_override = 1;
+                        if (info->param_count < 0 && binding->param_count >= 0)
+                            info->param_count = binding->param_count;
+                        if (info->param_sig == NULL && binding->param_sig != NULL)
+                            info->param_sig = strdup(binding->param_sig);
+                        if (getenv("KGPC_DEBUG_VMT") != NULL &&
+                            class_name != NULL && binding->method_name != NULL &&
+                            strcasecmp(class_name, "TUnicodeEncoding") == 0)
+                        {
+                            fprintf(stderr,
+                                "[KGPC VMT] override set %s.%s mangled=%s\n",
+                                class_name, binding->method_name,
+                                info->mangled_name != NULL ? info->mangled_name : "<null>");
+                        }
                         break;
                     }
                     vmt_entry = vmt_entry->next;
@@ -7762,6 +7872,8 @@ if (record_info->parent_class_name != NULL) {
                     new_method->mangled_name = mangled ? strdup(mangled) : NULL;
                     new_method->is_virtual = 1;
                     new_method->is_override = 0;
+                    new_method->param_count = binding->param_count;
+                    new_method->param_sig = binding->param_sig ? strdup(binding->param_sig) : NULL;
                     /* FPC VMT has 12 metadata slots (96 bytes) before virtual methods:
                      * vInstanceSize, vInstanceSize2, vParentRef, vClassName,
                      * vDynamicTable, vMethodTable, vFieldTable, vTypeInfo,
@@ -7788,6 +7900,7 @@ if (record_info->parent_class_name != NULL) {
                     } else {
                         free(new_method->name);
                         free(new_method->mangled_name);
+                        free(new_method->param_sig);
                         free(new_method);
                     }
                 }
@@ -7868,6 +7981,83 @@ static int semcheck_try_resolve_enum_literal_by_base(SymTab_t *symtab, const cha
     if (matches != NULL)
         DestroyList(matches);
     return 0;
+}
+
+static char *semcheck_append_param_sig(char *sig, const char *type_str)
+{
+    const char *part = (type_str != NULL) ? type_str : "<unknown>";
+    size_t part_len = strlen(part);
+    if (sig == NULL)
+    {
+        char *out = (char *)malloc(part_len + 1);
+        if (out == NULL)
+            return NULL;
+        memcpy(out, part, part_len + 1);
+        return out;
+    }
+    size_t sig_len = strlen(sig);
+    char *out = (char *)realloc(sig, sig_len + 1 + part_len + 1);
+    if (out == NULL)
+    {
+        free(sig);
+        return NULL;
+    }
+    out[sig_len] = ',';
+    memcpy(out + sig_len + 1, part, part_len + 1);
+    return out;
+}
+
+static char *semcheck_param_sig_from_params(ListNode_t *params, int skip_first_param)
+{
+    if (params == NULL)
+        return NULL;
+
+    char *sig = NULL;
+    ListNode_t *cur = params;
+    int skipped = 0;
+    while (cur != NULL)
+    {
+        Tree_t *param = (Tree_t *)cur->cur;
+        cur = cur->next;
+        if (skip_first_param && !skipped)
+        {
+            skipped = 1;
+            continue;
+        }
+        if (param == NULL)
+            continue;
+
+        char *type_str = NULL;
+        int name_count = 1;
+        if (param->type == TREE_VAR_DECL)
+        {
+            if (param->tree_data.var_decl_data.type_ref != NULL)
+                type_str = type_ref_render_mangled(param->tree_data.var_decl_data.type_ref);
+            else if (param->tree_data.var_decl_data.type_id != NULL)
+                type_str = strdup(param->tree_data.var_decl_data.type_id);
+            if (param->tree_data.var_decl_data.ids != NULL)
+                name_count = ListLength(param->tree_data.var_decl_data.ids);
+        }
+        else if (param->type == TREE_ARR_DECL)
+        {
+            if (param->tree_data.arr_decl_data.type_ref != NULL)
+                type_str = type_ref_render_mangled(param->tree_data.arr_decl_data.type_ref);
+            else if (param->tree_data.arr_decl_data.type_id != NULL)
+                type_str = strdup(param->tree_data.arr_decl_data.type_id);
+            if (param->tree_data.arr_decl_data.ids != NULL)
+                name_count = ListLength(param->tree_data.arr_decl_data.ids);
+        }
+
+        if (name_count <= 0)
+            name_count = 1;
+        for (int i = 0; i < name_count; i++)
+            sig = semcheck_append_param_sig(sig, type_str);
+
+        if (type_str != NULL)
+            free(type_str);
+    }
+
+    return sig;
 }
 
 int semcheck_resolve_scoped_enum_literal(SymTab_t *symtab, const char *type_name,
@@ -8937,6 +9127,19 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 alias_info = &tree->tree_data.type_decl_data.info.alias;
                 if (alias_info->alias_name == NULL && tree->tree_data.type_decl_data.id != NULL)
                     alias_info->alias_name = strdup(tree->tree_data.type_decl_data.id);
+
+                if (alias_info->alias_name != NULL &&
+                    (pascal_identifier_equals(alias_info->alias_name, "UnicodeString") ||
+                     pascal_identifier_equals(alias_info->alias_name, "WideString")))
+                {
+                    alias_info->is_wide_string = 1;
+                }
+                else if (alias_info->target_type_id != NULL &&
+                         (pascal_identifier_equals(alias_info->target_type_id, "UnicodeString") ||
+                          pascal_identifier_equals(alias_info->target_type_id, "WideString")))
+                {
+                    alias_info->is_wide_string = 1;
+                }
                 
                 alias_info->is_char_alias = semcheck_alias_should_be_char_like(
                     tree->tree_data.type_decl_data.id, alias_info->target_type_id) &&

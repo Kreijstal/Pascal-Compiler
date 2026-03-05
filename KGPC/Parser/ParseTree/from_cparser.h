@@ -57,6 +57,8 @@ int from_cparser_is_type_helper(const char *helper_id);
  * Returns 1 if virtual or override, 0 otherwise.
  */
 int from_cparser_is_method_virtual(const char *class_name, const char *method_name);
+int from_cparser_is_method_virtual_with_signature(const char *class_name, const char *method_name,
+    int param_count, const char *param_sig);
 
 void from_cparser_enable_pending_specializations(void);
 void from_cparser_disable_pending_specializations(void);

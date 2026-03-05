@@ -5206,8 +5206,27 @@ skip_type_receiver_rewrite:
                 /* Check if this is a virtual/abstract method call that needs VMT dispatch.
                  * Only for instance methods (not class/static methods), since class methods
                  * use a different VMT dispatch convention (single indirection). */
+                int method_param_count = -1;
+                if (method_node != NULL && method_node->type != NULL &&
+                    method_node->type->kind == TYPE_KIND_PROCEDURE)
+                {
+                    method_param_count = ListLength(method_node->type->info.proc_info.params);
+                    if (method_node->owner_class != NULL &&
+                        !from_cparser_is_method_static(method_node->owner_class,
+                            method_node->method_name != NULL ? method_node->method_name : bare_method_name))
+                    {
+                        if (method_param_count > 0)
+                            method_param_count -= 1;
+                        else
+                            method_param_count = 0;
+                    }
+                }
                 if (self_record->type_id != NULL && bare_method_name != NULL &&
-                    from_cparser_is_method_virtual(self_record->type_id, bare_method_name) &&
+                    from_cparser_is_method_virtual_with_signature(
+                        self_record->type_id,
+                        bare_method_name,
+                        method_param_count,
+                        NULL) &&
                     !from_cparser_is_method_static(self_record->type_id, bare_method_name))
                 {
                     stmt->stmt_data.procedure_call_data.is_virtual_call = 1;
@@ -5222,6 +5241,12 @@ skip_type_receiver_rewrite:
                                 (info->is_virtual || info->is_override) &&
                                 strcasecmp(info->name, bare_method_name) == 0)
                             {
+                                if (method_param_count >= 0 && info->param_count >= 0 &&
+                                    method_param_count != info->param_count)
+                                {
+                                    method_entry = method_entry->next;
+                                    continue;
+                                }
                                 vmt_index = info->vmt_index;
                                 break;
                             }
@@ -6684,12 +6709,28 @@ proccall_parent_resolve_done:
          * that weren't detected by the early Self-injection check. Only applies to
          * methods without a body (abstract) and not class/static methods (which use
          * single-indirection VMT dispatch that codegen doesn't support yet). */
+        int resolved_param_count = -1;
+        if (resolved_proc->type != NULL && resolved_proc->type->kind == TYPE_KIND_PROCEDURE)
+        {
+            resolved_param_count = ListLength(resolved_proc->type->info.proc_info.params);
+            if (resolved_proc->owner_class != NULL &&
+                !from_cparser_is_method_static(resolved_proc->owner_class,
+                    resolved_proc->method_name))
+            {
+                if (resolved_param_count > 0)
+                    resolved_param_count -= 1;
+                else
+                    resolved_param_count = 0;
+            }
+        }
         if (resolved_proc->owner_class != NULL && resolved_proc->method_name != NULL &&
             !stmt->stmt_data.procedure_call_data.is_virtual_call &&
             !from_cparser_is_method_static(resolved_proc->owner_class,
                 resolved_proc->method_name) &&
-            from_cparser_is_method_virtual(resolved_proc->owner_class,
-                resolved_proc->method_name))
+            from_cparser_is_method_virtual_with_signature(resolved_proc->owner_class,
+                resolved_proc->method_name,
+                resolved_param_count,
+                NULL))
         {
             int has_body = 0;
             if (resolved_proc->type != NULL && resolved_proc->type->kind == TYPE_KIND_PROCEDURE)
@@ -6712,6 +6753,9 @@ proccall_parent_resolve_done:
                             (mi->is_virtual || mi->is_override) &&
                             strcasecmp(mi->name, resolved_proc->method_name) == 0)
                         {
+                            if (resolved_param_count >= 0 && mi->param_count >= 0 &&
+                                resolved_param_count != mi->param_count)
+                                continue;
                             stmt->stmt_data.procedure_call_data.is_virtual_call = 1;
                             stmt->stmt_data.procedure_call_data.vmt_index = mi->vmt_index;
                             if (stmt->stmt_data.procedure_call_data.self_class_name == NULL)

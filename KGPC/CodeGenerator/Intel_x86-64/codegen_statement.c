@@ -5132,6 +5132,24 @@ static ListNode_t *codegen_builtin_setstring(struct Statement *stmt, ListNode_t 
         return inst_list;
     }
 
+    /* If buffer is a typecast of a dynamic array to a pointer (e.g. PUnicodeChar(Chars)),
+     * load the data pointer from the dynarray descriptor. */
+    int buffer_needs_dynarray_data = 0;
+    if (buffer_expr != NULL && buffer_expr->type == EXPR_TYPECAST &&
+        buffer_expr->expr_data.typecast_data.expr != NULL)
+    {
+        struct Expression *inner = buffer_expr->expr_data.typecast_data.expr;
+        KgpcType *inner_type = expr_get_kgpc_type(inner);
+        if (inner_type != NULL && kgpc_type_is_dynamic_array(inner_type))
+            buffer_needs_dynarray_data = 1;
+    }
+    if (buffer_needs_dynarray_data)
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
+                 buffer_reg->bit_64, buffer_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
     /* Spill buffer_reg */
     StackNode_t *buffer_slot = codegen_alloc_temp_slot("setstring_buf");
     if (buffer_slot == NULL)
@@ -5160,6 +5178,36 @@ static ListNode_t *codegen_builtin_setstring(struct Statement *stmt, ListNode_t 
         inst_list = codegen_sign_extend32_to64(inst_list, length_reg->bit_32, length_reg->bit_64);
 
     const char *call_target = "kgpc_setstring";
+    if (target_expr != NULL && target_expr->resolved_kgpc_type == NULL &&
+        target_expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL)
+    {
+        HashNode_t *sym_node = NULL;
+        if (FindIdent(&sym_node, ctx->symtab, target_expr->expr_data.id) >= 0 &&
+            sym_node != NULL && sym_node->type != NULL)
+        {
+            target_expr->resolved_kgpc_type = sym_node->type;
+        }
+    }
+    if (target_expr != NULL && target_expr->resolved_kgpc_type != NULL)
+    {
+        int is_wide = kgpc_type_is_wide_string(target_expr->resolved_kgpc_type);
+        if (!is_wide && target_expr->resolved_kgpc_type->type_alias != NULL)
+        {
+            const char *alias_name = target_expr->resolved_kgpc_type->type_alias->alias_name;
+            const char *target_name = target_expr->resolved_kgpc_type->type_alias->target_type_id;
+            if ((alias_name != NULL &&
+                 (pascal_identifier_equals(alias_name, "UnicodeString") ||
+                  pascal_identifier_equals(alias_name, "WideString"))) ||
+                (target_name != NULL &&
+                 (pascal_identifier_equals(target_name, "UnicodeString") ||
+                  pascal_identifier_equals(target_name, "WideString"))))
+            {
+                is_wide = 1;
+            }
+        }
+        if (is_wide)
+            call_target = "kgpc_setstring_unicode";
+    }
     const char *mangled = stmt->stmt_data.procedure_call_data.mangled_id;
     if (mangled != NULL && strcmp(mangled, "kgpc_shortstring_setstring") == 0)
         call_target = "kgpc_shortstring_setstring";
@@ -6521,6 +6569,26 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
         {
             treat_as_string = 1;
         }
+
+        int expr_is_wide_string = 0;
+        if (expr != NULL && expr->resolved_kgpc_type != NULL)
+        {
+            expr_is_wide_string = kgpc_type_is_wide_string(expr->resolved_kgpc_type);
+            if (!expr_is_wide_string && expr->resolved_kgpc_type->type_alias != NULL)
+            {
+                const char *alias_name = expr->resolved_kgpc_type->type_alias->alias_name;
+                const char *target_name = expr->resolved_kgpc_type->type_alias->target_type_id;
+                if ((alias_name != NULL &&
+                     (pascal_identifier_equals(alias_name, "UnicodeString") ||
+                      pascal_identifier_equals(alias_name, "WideString"))) ||
+                    (target_name != NULL &&
+                     (pascal_identifier_equals(target_name, "UnicodeString") ||
+                      pascal_identifier_equals(target_name, "WideString"))))
+                {
+                    expr_is_wide_string = 1;
+                }
+            }
+        }
         
         /* Also treat PAnsiChar (pointer to char) as string */
         if (expr != NULL && expr->resolved_kgpc_type != NULL && 
@@ -6810,7 +6878,7 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
             }
             else
             {
-                call_target = "kgpc_write_string";
+                call_target = expr_is_wide_string ? "kgpc_write_unicodestring" : "kgpc_write_string";
             }
         }
         else if (expr_type == BOOL)
