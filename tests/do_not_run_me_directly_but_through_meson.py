@@ -1049,6 +1049,17 @@ class TestCompiler(unittest.TestCase):
                 run_compiler(dummy_src, dummy_asm, flags=FPC_RTL_FLAGS)
                 print("--- FPC RTL AST cache warmed ---", file=sys.stderr)
                 sys.stderr.flush()
+                # Also try to warm SysUtils/Classes/Math caches (may fail
+                # due to unsupported constructs, but AST caches are still
+                # written for successfully parsed units).
+                with open(dummy_src, "w") as f:
+                    f.write("program _warmup2; uses SysUtils, Classes, Math; begin end.\n")
+                try:
+                    run_compiler(dummy_src, dummy_asm, flags=FPC_RTL_FLAGS)
+                    print("--- FPC RTL extended cache warmed ---", file=sys.stderr)
+                except Exception:
+                    print("--- FPC RTL extended cache partially warmed ---", file=sys.stderr)
+                sys.stderr.flush()
             except Exception as e:
                 print(f"--- FPC RTL cache warm-up failed: {e} ---", file=sys.stderr)
                 sys.stderr.flush()
