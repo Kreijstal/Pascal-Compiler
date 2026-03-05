@@ -644,6 +644,13 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
         
         case EXPR_RECORD_ACCESS:
         {
+            if (expr->resolved_kgpc_type != NULL)
+            {
+                if (owns_type != NULL)
+                    *owns_type = 0;
+                return expr->resolved_kgpc_type;
+            }
+
             /* For record field access, we need to resolve the type of the record,
              * then look up the field's type within that record.
              */
