@@ -181,6 +181,29 @@ static int are_primitive_tags_compatible(int tag_a, int tag_b)
     return 0;
 }
 
+static int semcheck_is_widechar_like_type(KgpcType *type)
+{
+    if (type == NULL || !kgpc_type_is_char(type))
+        return 0;
+
+    struct TypeAlias *alias = kgpc_type_get_type_alias(type);
+    if (alias != NULL)
+    {
+        if ((alias->alias_name != NULL &&
+             (pascal_identifier_equals(alias->alias_name, "WideChar") ||
+              pascal_identifier_equals(alias->alias_name, "UnicodeChar"))) ||
+            (alias->target_type_id != NULL &&
+             (pascal_identifier_equals(alias->target_type_id, "WideChar") ||
+              pascal_identifier_equals(alias->target_type_id, "UnicodeChar"))))
+        {
+            return 1;
+        }
+    }
+
+    /* WideChar/UnicodeChar are 2-byte CHAR_TYPE in KGPC. */
+    return kgpc_type_sizeof(type) == 2;
+}
+
 int semcheck_candidates_share_signature(SymTab_t *symtab, HashNode_t *a, HashNode_t *b)
 {
     if (a == NULL || b == NULL || a->type == NULL || b->type == NULL)
@@ -1033,6 +1056,25 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
              * integer types in value parameter contexts. */
             if (is_integer_type(actual_sub) && is_integer_type(formal_sub))
                 return semcheck_make_quality(MATCH_CONVERSION);
+            /* Accept char/integer pointee conversions as implicit pointer
+             * conversions (needed by RTL helpers using char/word aliases). */
+            if ((is_integer_type(actual_sub) || actual_sub == CHAR_TYPE) &&
+                (is_integer_type(formal_sub) || formal_sub == CHAR_TYPE))
+            {
+                return semcheck_make_quality(MATCH_CONVERSION);
+            }
+            /* Also allow WideChar/UnicodeChar pointers to match word-like
+             * integer pointers (used by RTL Unicode map helpers). */
+            if (actual_kgpc->info.points_to != NULL && formal_kgpc->info.points_to != NULL)
+            {
+                int actual_is_widechar = semcheck_is_widechar_like_type(actual_kgpc->info.points_to);
+                int formal_is_widechar = semcheck_is_widechar_like_type(formal_kgpc->info.points_to);
+                if ((actual_is_widechar && is_integer_type(formal_sub)) ||
+                    (formal_is_widechar && is_integer_type(actual_sub)))
+                {
+                    return semcheck_make_quality(MATCH_CONVERSION);
+                }
+            }
             /* Also try kgpc_type_conversion_rank on the pointed-to types */
             if (actual_kgpc->info.points_to != NULL && formal_kgpc->info.points_to != NULL)
             {

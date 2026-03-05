@@ -34,6 +34,14 @@ static char *g_ast_cache_dir = NULL;
 static bool g_objfpc_mode_detected = false;
 static bool g_default_shortstring = false;
 
+static bool is_fpc_rtl_source_path(const char *path)
+{
+    if (path == NULL)
+        return false;
+    return strstr(path, "/fpc-src/rtl/") != NULL ||
+           strncmp(path, "fpc-src/rtl/", 12) == 0;
+}
+
 /* Check if source buffer contains {$MODE objfpc} directive */
 static bool detect_objfpc_mode(const char *buffer, size_t length)
 {
@@ -702,6 +710,18 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
             char detail[128];
             snprintf(detail, sizeof(detail), "unable to define default symbol '%s'", default_symbols[i]);
             report_preprocessor_error(error_out, path, detail);
+            pascal_preprocessor_free(preprocessor);
+            free(buffer);
+            return false;
+        }
+    }
+
+    if (is_fpc_rtl_source_path(path))
+    {
+        if (!pascal_preprocessor_define(preprocessor, "FPC_WIDESTRING_EQUAL_UNICODESTRING"))
+        {
+            report_preprocessor_error(error_out, path,
+                "unable to define FPC_WIDESTRING_EQUAL_UNICODESTRING for FPC RTL source");
             pascal_preprocessor_free(preprocessor);
             free(buffer);
             return false;

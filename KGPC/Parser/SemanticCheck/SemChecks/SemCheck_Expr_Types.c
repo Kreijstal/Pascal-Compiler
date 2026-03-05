@@ -4927,6 +4927,24 @@ int semcheck_addressof(int *type_return,
     const char *type_id = NULL;
     if (inner_type == POINTER_TYPE && inner->pointer_subtype_id != NULL)
         type_id = inner->pointer_subtype_id;
+    else if (inner_type == CHAR_TYPE)
+    {
+        /* Preserve character subtype identity for @string[index] cases,
+         * especially WideString/UnicodeString element addresses. */
+        if (inner->array_element_type_id != NULL)
+            type_id = inner->array_element_type_id;
+        else if (inner->resolved_kgpc_type != NULL)
+        {
+            struct TypeAlias *inner_alias = kgpc_type_get_type_alias(inner->resolved_kgpc_type);
+            if (inner_alias != NULL)
+            {
+                if (inner_alias->alias_name != NULL)
+                    type_id = inner_alias->alias_name;
+                else if (inner_alias->target_type_id != NULL)
+                    type_id = inner_alias->target_type_id;
+            }
+        }
+    }
 
     struct RecordType *record_info = NULL;
     if (inner->resolved_kgpc_type != NULL)
@@ -4953,7 +4971,14 @@ int semcheck_addressof(int *type_return,
     } else if (inner_type == REAL_TYPE) {
         pointed_to_type = create_primitive_type(REAL_TYPE);
     } else if (inner_type == CHAR_TYPE) {
-        pointed_to_type = create_primitive_type(CHAR_TYPE);
+        /* Keep resolved char subtype (e.g. WideChar) rather than collapsing to
+         * plain Char; overload resolution depends on this metadata. */
+        if (inner->resolved_kgpc_type != NULL && kgpc_type_is_char(inner->resolved_kgpc_type)) {
+            pointed_to_type = inner->resolved_kgpc_type;
+            kgpc_type_retain(pointed_to_type);
+        } else {
+            pointed_to_type = create_primitive_type(CHAR_TYPE);
+        }
     } else if (inner_type == STRING_TYPE) {
         pointed_to_type = create_primitive_type(STRING_TYPE);
     } else if (inner_type == RECORD_TYPE && record_info != NULL) {

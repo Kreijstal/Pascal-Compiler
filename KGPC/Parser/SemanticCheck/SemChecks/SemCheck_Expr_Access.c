@@ -517,6 +517,7 @@ int semcheck_arrayaccess(int *type_return,
         {
             if (expr->array_element_type_id == NULL)
                 expr->array_element_type_id = strdup("WideChar");
+            expr->array_element_size = 2;
         }
     }
     else if (base_is_pointer)
@@ -796,7 +797,31 @@ int semcheck_arrayaccess(int *type_return,
                 res_type = create_record_type(fallback_record);
         }
         if (res_type == NULL)
-            res_type = create_primitive_type(element_type);
+        {
+            int is_wide_char_elem = (element_type == CHAR_TYPE &&
+                expr->array_element_type_id != NULL &&
+                (pascal_identifier_equals(expr->array_element_type_id, "WideChar") ||
+                 pascal_identifier_equals(expr->array_element_type_id, "UnicodeChar")));
+            if (is_wide_char_elem)
+            {
+                res_type = create_primitive_type_with_size(CHAR_TYPE, 2);
+                if (res_type != NULL)
+                {
+                    HashNode_t *wide_node = NULL;
+                    if (FindIdent(&wide_node, symtab, "WideChar") >= 0 &&
+                        wide_node != NULL)
+                    {
+                        struct TypeAlias *wide_alias = get_type_alias_from_node(wide_node);
+                        if (wide_alias != NULL)
+                            kgpc_type_set_type_alias(res_type, wide_alias);
+                    }
+                }
+            }
+            else
+            {
+                res_type = create_primitive_type(element_type);
+            }
+        }
     }
 
     if (expr->resolved_kgpc_type != NULL)

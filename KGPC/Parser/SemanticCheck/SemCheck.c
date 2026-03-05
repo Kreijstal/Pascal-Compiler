@@ -4777,14 +4777,27 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
             switch (target_type)
             {
                 case CHAR_TYPE:
-                    if (inner_value < 0 || inner_value > 255)
+                {
+                    int is_wide_char = 0;
+                    if (id != NULL &&
+                        (strcasecmp(id, "WideChar") == 0 ||
+                         strcasecmp(id, "UnicodeChar") == 0))
                     {
-                        fprintf(stderr, "Error: typecast value %lld out of range for Char.\n",
-                            inner_value);
+                        is_wide_char = 1;
+                    }
+                    long long max_char_value = is_wide_char ? 65535LL : 255LL;
+                    if (inner_value < 0 || inner_value > max_char_value)
+                    {
+                        fprintf(stderr, "Error: typecast value %lld out of range for %s.\n",
+                            inner_value, is_wide_char ? "WideChar" : "Char");
                         return 1;
                     }
-                    *out_value = (unsigned char)inner_value;
+                    if (is_wide_char)
+                        *out_value = (uint16_t)inner_value;
+                    else
+                        *out_value = (unsigned char)inner_value;
                     return 0;
+                }
                 case BOOL:
                     *out_value = (inner_value != 0);
                     return 0;

@@ -644,6 +644,50 @@ relop_fallback:
                         kgpc1->kind == TYPE_KIND_POINTER && kgpc1->info.points_to == NULL)
                         unknown_nil_ok = 1;
                 }
+
+                /* Fallback for record/scalar equality where only implicit casts are
+                 * available at this point (e.g. TUInt24Rec overload bodies in FPC RTL).
+                 * Try to cast the record operand to the scalar operand type and re-check. */
+                if (!numeric_ok && !boolean_ok && !string_ok && !char_ok && !pointer_ok &&
+                    !enum_ok && !string_pchar_ok && !dynarray_nil_ok && !pointer_nil_ok &&
+                    !record_ok && !set_ok && !class_record_ok && !unknown_nil_ok &&
+                    expr1 != NULL && expr2 != NULL)
+                {
+                    if (type_first == RECORD_TYPE && type_second != UNKNOWN_TYPE &&
+                        type_second != RECORD_TYPE)
+                    {
+                        const char *target_name = get_expr_type_name(expr2, symtab);
+                        if (target_name == NULL || target_name[0] == '\0')
+                            target_name = semcheck_type_tag_name(type_second);
+                        if (target_name != NULL && strcmp(target_name, "unknown") != 0)
+                        {
+                            struct Expression *cast_expr = mk_typecast(expr1->line_num,
+                                type_second, strdup(target_name), expr1);
+                            if (cast_expr != NULL)
+                            {
+                                expr->expr_data.relop_data.left = cast_expr;
+                                return semcheck_relop(type_return, symtab, expr, max_scope_lev, mutating);
+                            }
+                        }
+                    }
+                    else if (type_second == RECORD_TYPE && type_first != UNKNOWN_TYPE &&
+                        type_first != RECORD_TYPE)
+                    {
+                        const char *target_name = get_expr_type_name(expr1, symtab);
+                        if (target_name == NULL || target_name[0] == '\0')
+                            target_name = semcheck_type_tag_name(type_first);
+                        if (target_name != NULL && strcmp(target_name, "unknown") != 0)
+                        {
+                            struct Expression *cast_expr = mk_typecast(expr2->line_num,
+                                type_first, strdup(target_name), expr2);
+                            if (cast_expr != NULL)
+                            {
+                                expr->expr_data.relop_data.right = cast_expr;
+                                return semcheck_relop(type_return, symtab, expr, max_scope_lev, mutating);
+                            }
+                        }
+                    }
+                }
                 
                 if (!numeric_ok && !boolean_ok && !string_ok && !char_ok && !pointer_ok && !enum_ok && !string_pchar_ok && !dynarray_nil_ok && !pointer_nil_ok
                     && !record_ok && !set_ok && !class_record_ok && !unknown_nil_ok

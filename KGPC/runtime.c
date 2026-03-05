@@ -2707,6 +2707,42 @@ void kgpc_string_setlength(char **target, int64_t new_length)
     *target = resized;
 }
 
+void kgpc_unicodestring_setlength(uint16_t **target, int64_t new_length)
+{
+    if (target == NULL)
+        return;
+
+    if (new_length <= 0)
+    {
+        if (*target != NULL)
+            kgpc_string_release((char *)*target);
+        *target = NULL;
+        return;
+    }
+
+    size_t data_bytes = (size_t)new_length * 2 + 2;
+    KgpcStringHeader *hdr = (KgpcStringHeader *)malloc(sizeof(KgpcStringHeader) + data_bytes);
+    if (hdr == NULL)
+    {
+        fprintf(stderr, "KGPC runtime: failed to resize unicode string to %lld chars.\n",
+            (long long)new_length);
+        exit(EXIT_FAILURE);
+    }
+
+    hdr->codepage = 1200;
+    hdr->elementsize = 2;
+    hdr->refcount = 1;
+    hdr->length = new_length;
+
+    uint16_t *data = (uint16_t *)(hdr + 1);
+    memset(data, 0, data_bytes);
+    kgpc_string_set_insert((char *)data);
+
+    if (*target != NULL)
+        kgpc_string_release((char *)*target);
+    *target = data;
+}
+
 void kgpc_setstring(char **target, const char *buffer, int64_t length)
 {
     if (target == NULL)
@@ -2806,6 +2842,19 @@ void kgpc_write_unicodestring(KGPCTextRec *file, int width, const uint16_t *valu
         value = kgpc_alloc_empty_unicodestring();
     if (width > 1024 || width < -1024)
         width = 0;
+
+    /* KGPC may still carry "unicode" values in single-byte managed-string
+     * storage (elementsize=1). In that case, print through string writer
+     * instead of interpreting bytes as UTF-16 code units. */
+    {
+        KgpcStringHeader *hdr = kgpc_string_header((const char *)value);
+        if (hdr != NULL && hdr->elementsize == 1)
+        {
+            kgpc_write_string(file, width, (const char *)value);
+            kgpc_flush_text_output_stream(dest);
+            return;
+        }
+    }
 
     int64_t len = kgpc_unicode_known_length(value);
     if (len <= 0 && width <= 0)
@@ -3796,9 +3845,62 @@ char *kgpc_string_concat(const char *lhs, const char *rhs)
     if (rhs == NULL)
         rhs = "";
 
+    KgpcStringHeader *lhs_hdr = kgpc_string_header(lhs);
+    KgpcStringHeader *rhs_hdr = kgpc_string_header(rhs);
+    int lhs_elem = (lhs_hdr != NULL && lhs_hdr->elementsize == 2) ? 2 : 1;
+    int rhs_elem = (rhs_hdr != NULL && rhs_hdr->elementsize == 2) ? 2 : 1;
+
     size_t lhs_len = kgpc_string_known_length(lhs);
     size_t rhs_len = kgpc_string_known_length(rhs);
     size_t total = lhs_len + rhs_len;
+
+    if (lhs_elem == 2 || rhs_elem == 2)
+    {
+        size_t data_bytes = total * 2 + 2;
+        KgpcStringHeader *hdr = (KgpcStringHeader *)malloc(sizeof(KgpcStringHeader) + data_bytes);
+        if (hdr == NULL)
+            return kgpc_alloc_empty_string();
+
+        hdr->codepage = 1200;
+        hdr->elementsize = 2;
+        hdr->refcount = 1;
+        hdr->length = (int64_t)total;
+
+        uint16_t *out = (uint16_t *)(hdr + 1);
+        size_t pos = 0;
+
+        if (lhs_len > 0)
+        {
+            if (lhs_elem == 2)
+            {
+                memcpy(out, lhs, lhs_len * 2);
+                pos += lhs_len;
+            }
+            else
+            {
+                for (size_t i = 0; i < lhs_len; ++i)
+                    out[pos++] = (uint16_t)(unsigned char)lhs[i];
+            }
+        }
+
+        if (rhs_len > 0)
+        {
+            if (rhs_elem == 2)
+            {
+                memcpy(out + pos, rhs, rhs_len * 2);
+                pos += rhs_len;
+            }
+            else
+            {
+                for (size_t i = 0; i < rhs_len; ++i)
+                    out[pos++] = (uint16_t)(unsigned char)rhs[i];
+            }
+        }
+
+        out[total] = 0;
+        kgpc_string_set_insert((char *)out);
+        return (char *)out;
+    }
 
     char *result = kgpc_string_alloc_with_length(total);
     if (result == NULL)

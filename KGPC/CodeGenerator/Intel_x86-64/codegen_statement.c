@@ -5205,6 +5205,31 @@ static ListNode_t *codegen_builtin_setstring(struct Statement *stmt, ListNode_t 
                 is_wide = 1;
             }
         }
+        if (!is_wide && target_expr->type == EXPR_VAR_ID &&
+            target_expr->expr_data.id != NULL &&
+            pascal_identifier_equals(target_expr->expr_data.id, "Result") &&
+            ctx != NULL && ctx->symtab != NULL)
+        {
+            const char *sub_id = ctx->current_subprogram_mangled;
+            if (sub_id == NULL || sub_id[0] == '\0')
+                sub_id = ctx->current_subprogram_id;
+            if (sub_id != NULL)
+            {
+                HashNode_t *sub_node = NULL;
+                if (FindIdent(&sub_node, ctx->symtab, sub_id) >= 0 &&
+                    sub_node != NULL && sub_node->type != NULL &&
+                    kgpc_type_is_procedure(sub_node->type))
+                {
+                    const char *ret_id = sub_node->type->info.proc_info.return_type_id;
+                    if (ret_id != NULL &&
+                        (pascal_identifier_equals(ret_id, "WideString") ||
+                         pascal_identifier_equals(ret_id, "UnicodeString")))
+                    {
+                        is_wide = 1;
+                    }
+                }
+            }
+        }
         if (is_wide)
             call_target = "kgpc_setstring_unicode";
     }
