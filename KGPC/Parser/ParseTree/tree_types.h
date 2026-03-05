@@ -650,6 +650,7 @@ struct Expression
     int array_is_dynamic;
     struct RecordType *array_element_record_type;
     int is_default_initializer;
+    int is_specialize_addr_target;
 };
 
 struct SetElement

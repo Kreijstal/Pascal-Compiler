@@ -5069,6 +5069,7 @@ int semcheck_addressof(int *type_return,
                         expr->expr_data.addr_data.expr = access;
                         destroy_expr(inner);
                         inner = access;
+                        inner->is_specialize_addr_target = 1;
                         method_id = NULL;
                         inner_type = PROCEDURE;
                         treated_as_proc_ref = 1;
@@ -5253,7 +5254,7 @@ int semcheck_addressof(int *type_return,
                 if (fallback_symbol == NULL &&
                     record_expr->type == EXPR_VAR_ID &&
                     record_expr->expr_data.id != NULL &&
-                    strchr(record_expr->expr_data.id, '$') != NULL)
+                    inner->is_specialize_addr_target)
                 {
                     inner_type = PROCEDURE;
                     treated_as_proc_ref = 1;
@@ -5661,7 +5662,7 @@ int semcheck_addressof(int *type_return,
             if (record_expr == NULL ||
                 record_expr->type != EXPR_VAR_ID ||
                 record_expr->expr_data.id == NULL ||
-                strchr(record_expr->expr_data.id, '$') == NULL)
+                !inner->is_specialize_addr_target)
             {
                 converted_to_proc_addr = 0;
             }

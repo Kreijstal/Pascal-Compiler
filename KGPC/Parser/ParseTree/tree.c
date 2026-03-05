@@ -2903,6 +2903,7 @@ static void init_expression(struct Expression *expr, int line_num, enum ExprType
     expr->array_element_size = 0;
     expr->array_is_dynamic = 0;
     expr->array_element_record_type = NULL;
+    expr->is_specialize_addr_target = 0;
     expr->expr_data.array_literal_data.elements = NULL;
     expr->expr_data.array_literal_data.element_count = 0;
     expr->expr_data.array_literal_data.elements_semchecked = 0;
