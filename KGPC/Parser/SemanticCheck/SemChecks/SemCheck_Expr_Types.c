@@ -153,8 +153,16 @@ int semcheck_typecast(int *type_return,
             return 1;
         }
         expr->expr_data.typecast_data.target_type = inner_type;
-        semcheck_expr_set_resolved_type(expr, inner_type);
-        *type_return = inner_type;
+        if (inner_kgpc_type != NULL)
+        {
+            semcheck_expr_set_resolved_kgpc_type_shared(expr, inner_kgpc_type);
+            *type_return = semcheck_tag_from_kgpc(inner_kgpc_type);
+        }
+        else
+        {
+            semcheck_expr_set_resolved_type(expr, inner_type);
+            *type_return = inner_type;
+        }
         return error_count;
     }
 
@@ -2574,6 +2582,11 @@ SKIP_SELF_FIELD_REWRITE:
 
     if (record_expr->type == EXPR_VAR_ID && record_expr->expr_data.id != NULL)
     {
+        if (semcheck_has_value_ident(symtab, record_expr->expr_data.id))
+        {
+            /* Local/parameter identifiers must shadow implicit Self field access. */
+            goto SKIP_SELF_REWRITE;
+        }
         HashNode_t *self_node = NULL;
         if (FindIdent(&self_node, symtab, "Self") == 0 && self_node != NULL)
         {

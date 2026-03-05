@@ -9483,6 +9483,11 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                                       inline_record);
     array_decl->tree_data.arr_decl_data.type_ref =
         type_ref_from_element_info(type_info, type_info->element_type_id);
+    if (type_info->element_kgpc_type != NULL)
+    {
+        array_decl->tree_data.arr_decl_data.element_kgpc_type = type_info->element_kgpc_type;
+        kgpc_type_retain(array_decl->tree_data.arr_decl_data.element_kgpc_type);
+    }
     type_info->element_type_id = NULL;
 
     if (type_info->array_dimensions != NULL) {

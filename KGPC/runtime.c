@@ -2346,9 +2346,6 @@ static size_t kgpc_string_known_length(const char *value)
 
 void kgpc_string_assign_take(char **target, char *value);
 
-/* FPC RTL helper for codepage conversion (provided by compiled RTL when present). */
-extern char *FPC_ANSISTR_TO_ANSISTR(const char *s, int32_t cp);
-
 /* Robust SetCodePage wrapper: accepts either a var RawByteString (by-ref)
  * or a raw string pointer (by-value) to avoid crashes when call sites
  * accidentally pass the value. */
@@ -2385,11 +2382,18 @@ void setcodepage_rbs_i_b(void *s_arg, int32_t codepage, int32_t convert)
         return;
     }
 
-    /* Convert (by-ref only): delegate to RTL conversion helper. */
-    char *converted = FPC_ANSISTR_TO_ANSISTR(str, codepage);
-    if (converted == NULL)
-        return;
-    kgpc_string_assign_take((char **)s_arg, converted);
+    /* Portable fallback conversion path: keep bytes unchanged and
+     * update codepage metadata. This matches FPC behavior for raw
+     * byte strings when no concrete conversion backend is linked. */
+    KgpcStringHeader *hdr = kgpc_string_header(str);
+    if (hdr != NULL)
+        hdr->codepage = (uint16_t)codepage;
+}
+
+/* 2-arg SetCodePage overload: Convert defaults to True in FPC. */
+void setcodepage_rbs_i(void *s_arg, int32_t codepage)
+{
+    setcodepage_rbs_i_b(s_arg, codepage, 1);
 }
 
 /* FPC RTL compatibility: some bootstrap constants use WideChar literals

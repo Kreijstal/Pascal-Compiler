@@ -3326,7 +3326,15 @@ static ListNode_t *collect_typed_const_decls_filtered(SymTab_t *symtab, ListNode
                 }
                 else if (type_tag == UNKNOWN_TYPE)
                 {
-                    allow = 0;
+                    if (tree->type == TREE_ARR_DECL &&
+                        tree->tree_data.arr_decl_data.element_kgpc_type != NULL)
+                    {
+                        allow = 1;
+                    }
+                    else
+                    {
+                        allow = 0;
+                    }
                 }
 
                 if (getenv("KGPC_DEBUG_SEMCHECK") != NULL && tree->tree_data.var_decl_data.ids != NULL)
@@ -13002,6 +13010,13 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 int element_type_borrowed = 0;  /* Track if borrowed from symbol table */
                 int is_array_of_const = (tree->tree_data.arr_decl_data.type == ARRAY_OF_CONST_TYPE);
 
+                if (!is_array_of_const &&
+                    tree->tree_data.arr_decl_data.element_kgpc_type != NULL)
+                {
+                    element_type = tree->tree_data.arr_decl_data.element_kgpc_type;
+                    element_type_borrowed = 1;
+                }
+
                 /* If type_id is specified, resolve it to get the element type */
                 const TypeRef *element_type_ref = tree->tree_data.arr_decl_data.type_ref;
                 if (getenv("KGPC_DEBUG_TZINFO") != NULL &&
@@ -13015,7 +13030,8 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         tree->tree_data.arr_decl_data.type_id ? tree->tree_data.arr_decl_data.type_id : "(null)",
                         element_type_ref ? type_ref_base_name(element_type_ref) : "(null)");
                 }
-                if (!is_array_of_const &&
+                if (element_type == NULL &&
+                    !is_array_of_const &&
                     (tree->tree_data.arr_decl_data.type_id != NULL || element_type_ref != NULL))
                 {
                     if (getenv("KGPC_DEBUG_TFLOAT") != NULL)

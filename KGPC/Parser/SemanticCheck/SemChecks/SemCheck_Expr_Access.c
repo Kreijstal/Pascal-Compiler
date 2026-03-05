@@ -262,6 +262,59 @@ int semcheck_arrayaccess(int *type_return,
         return 1;
     }
 
+    /* Normalize parser shape for expressions like:
+     *   not ACollation^.Backwards[i]
+     * cparser can produce ARRAY_ACCESS(RECORD_ACCESS(NOT(base), field), index),
+     * but semantic checking expects NOT to wrap the whole indexed expression.
+     */
+    if (array_expr->type == EXPR_RECORD_ACCESS &&
+        array_expr->expr_data.record_access_data.record_expr != NULL)
+    {
+        struct Expression *record_base = array_expr->expr_data.record_access_data.record_expr;
+        if (record_base->type == EXPR_RELOP &&
+            record_base->expr_data.relop_data.type == NOT &&
+            record_base->expr_data.relop_data.right == NULL &&
+            record_base->expr_data.relop_data.left != NULL &&
+            array_expr->expr_data.record_access_data.field_id != NULL)
+        {
+            struct Expression *inner_record = record_base->expr_data.relop_data.left;
+            record_base->expr_data.relop_data.left = NULL;
+
+            struct Expression *field_access = mk_recordaccess(array_expr->line_num,
+                inner_record, strdup(array_expr->expr_data.record_access_data.field_id));
+            if (field_access == NULL)
+            {
+                semcheck_error_with_context("Error on line %d: failed to normalize NOT over indexed field access.\n",
+                    expr->line_num);
+                *type_return = UNKNOWN_TYPE;
+                return 1;
+            }
+
+            struct Expression *indexed_expr = (struct Expression *)calloc(1, sizeof(struct Expression));
+            if (indexed_expr == NULL)
+            {
+                semcheck_error_with_context("Error on line %d: failed to allocate normalized indexed expression.\n",
+                    expr->line_num);
+                destroy_expr(field_access);
+                *type_return = UNKNOWN_TYPE;
+                return 1;
+            }
+            *indexed_expr = *expr;
+            indexed_expr->expr_data.array_access_data.array_expr = field_access;
+
+            destroy_expr(array_expr);
+
+            expr->type = EXPR_RELOP;
+            memset(&expr->expr_data.relop_data, 0, sizeof(expr->expr_data.relop_data));
+            expr->expr_data.relop_data.type = NOT;
+            expr->expr_data.relop_data.left = indexed_expr;
+            expr->expr_data.relop_data.right = NULL;
+            semcheck_expr_set_resolved_type(expr, UNKNOWN_TYPE);
+
+            return semcheck_relop(type_return, symtab, expr, max_scope_lev, mutating);
+        }
+    }
+
     if (array_expr->type == EXPR_VAR_ID)
     {
         HashNode_t *array_node = NULL;
