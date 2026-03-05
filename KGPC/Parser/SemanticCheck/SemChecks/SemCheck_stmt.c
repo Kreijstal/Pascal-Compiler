@@ -4492,6 +4492,18 @@ static int semcheck_try_module_property_assignment(SymTab_t *symtab,
     if (prop_name == NULL)
         return -1;
 
+    /* WITH-context fields must be resolved as assignments on the active record,
+     * not rewritten as module-property setter calls. */
+    if (with_context_count > 0)
+    {
+        struct Expression *with_expr = NULL;
+        int with_status = semcheck_with_try_resolve(prop_name, symtab, &with_expr, stmt->line_num);
+        if (with_expr != NULL)
+            destroy_expr(with_expr);
+        if (with_status == 0)
+            return -1;
+    }
+
     ListNode_t *matches = FindAllIdents(symtab, prop_name);
     HashNode_t *setter = NULL;
     int has_storage_symbol = 0;
