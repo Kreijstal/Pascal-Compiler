@@ -1082,6 +1082,31 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
                 if (rank >= 0)
                     return semcheck_make_quality(MATCH_CONVERSION);
             }
+            /* "class of T" compatibility: when a class type name (^record)
+             * is passed where a class reference (^^record = class of T)
+             * is expected, allow it as a conversion.  The formal's pointee
+             * is itself a pointer-to-record (the class instance type). */
+            if (actual_sub == RECORD_TYPE && formal_sub == POINTER_TYPE &&
+                actual_kgpc->info.points_to != NULL &&
+                formal_kgpc->info.points_to != NULL &&
+                formal_kgpc->info.points_to->kind == TYPE_KIND_POINTER &&
+                formal_kgpc->info.points_to->info.points_to != NULL &&
+                formal_kgpc->info.points_to->info.points_to->kind == TYPE_KIND_RECORD)
+            {
+                /* Check if the actual class is compatible with the formal's
+                 * base class (the record inside the class reference). */
+                KgpcType *actual_inner = actual_kgpc->info.points_to;
+                KgpcType *formal_inner = formal_kgpc->info.points_to->info.points_to;
+                if (actual_inner->kind == TYPE_KIND_RECORD &&
+                    formal_inner->kind == TYPE_KIND_RECORD)
+                {
+                    if (actual_inner->info.record_info == formal_inner->info.record_info ||
+                        are_types_compatible_for_assignment(formal_inner, actual_inner, symtab))
+                    {
+                        return semcheck_make_quality(MATCH_CONVERSION);
+                    }
+                }
+            }
             return semcheck_make_quality(MATCH_INCOMPATIBLE);
         }
         if (actual_sub != UNKNOWN_TYPE || formal_sub != UNKNOWN_TYPE)

@@ -10407,6 +10407,7 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
             type_info.element_type_ref = NULL;
         }
         alias->is_pointer = type_info.is_pointer;
+        alias->is_class_reference = type_info.is_class_reference;
         alias->pointer_type = type_info.pointer_type;
         if (type_info.pointer_type_id != NULL) {
             alias->pointer_type_id = type_info.pointer_type_id;

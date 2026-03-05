@@ -47,6 +47,7 @@ struct TypeAlias
     int is_open_array;
     ListNode_t *array_dimensions;
     int is_pointer;
+    int is_class_reference;  /* 1 if declared as "class of T" */
     int pointer_type;
     char *pointer_type_id;
     struct TypeRef *pointer_type_ref;

@@ -5011,27 +5011,11 @@ skip_type_receiver_rewrite:
                 if (FindIdent(&self_node, symtab, "Self") != -1 && self_node != NULL)
                 {
                     struct RecordType *self_record = semcheck_stmt_get_record_type_from_node(self_node);
-                    if (self_record != NULL)
+                    if (self_record != NULL &&
+                        semcheck_find_class_field_including_hidden(symtab, self_record,
+                            potential_unit_name, NULL) != NULL)
                     {
-                        if (semcheck_find_class_field_including_hidden(symtab, self_record,
-                                potential_unit_name, NULL) != NULL)
-                        {
-                            looks_like_self_field = 1;
-                        }
-                        /* Also check if it's a property of the current class */
-                        if (!looks_like_self_field &&
-                            semcheck_find_class_property(symtab, self_record,
-                                potential_unit_name, NULL) != NULL)
-                        {
-                            looks_like_self_field = 1;
-                        }
-                        /* Also check if it's a method of the current class */
-                        if (!looks_like_self_field &&
-                            semcheck_find_class_method(symtab, self_record,
-                                potential_unit_name, NULL) != NULL)
-                        {
-                            looks_like_self_field = 1;
-                        }
+                        looks_like_self_field = 1;
                     }
                 }
 

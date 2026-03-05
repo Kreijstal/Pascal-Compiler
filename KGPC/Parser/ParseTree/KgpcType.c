@@ -2549,6 +2549,7 @@ static struct TypeAlias* copy_type_alias(const struct TypeAlias *src)
     dst->is_wide_string = src->is_wide_string;
     dst->is_open_array = src->is_open_array;
     dst->is_pointer = src->is_pointer;
+    dst->is_class_reference = src->is_class_reference;
     dst->pointer_type = src->pointer_type;
     dst->is_set = src->is_set;
     dst->set_element_type = src->set_element_type;
