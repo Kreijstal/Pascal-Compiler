@@ -5777,6 +5777,8 @@ skip_type_receiver_rewrite:
                                           (is_integer_type(formal_type) && actual_type == REAL_TYPE) ||
                                           (formal_type == VARIANT_TYPE) ||
                                           (actual_type == VARIANT_TYPE) ||
+                                          (formal_type == BUILTIN_ANY_TYPE) ||
+                                          (actual_type == BUILTIN_ANY_TYPE) ||
                                           (formal_type == RECORD_TYPE) ||
                                           (actual_type == RECORD_TYPE) ||
                                           (formal_type == STRING_TYPE && actual_type == CHAR_TYPE) ||

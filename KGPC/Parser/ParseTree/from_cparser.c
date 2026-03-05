@@ -12656,6 +12656,11 @@ static struct Expression *convert_expression(ast_t *expr_node) {
     if (expr_node == NULL || expr_node == ast_nil)
         return NULL;
 
+    /* PASCAL_T_NONE nodes are empty/placeholder nodes from the parser
+     * (e.g., optional clauses that were absent).  Treat as NULL silently. */
+    if (expr_node->typ == PASCAL_T_NONE)
+        return NULL;
+
     struct Expression *result = NULL;
     switch (expr_node->typ) {
     case PASCAL_T_INTEGER:
