@@ -2003,7 +2003,13 @@ long long kgpc_type_sizeof(KgpcType *type)
         {
             struct RecordType *record = type->info.record_info;
             if (record != NULL && record->has_cached_size)
-                return record->cached_size;
+            {
+                long long cached = record->cached_size;
+                if (cached > INT32_MAX && cached <= UINT32_MAX)
+                    cached = (long long)(int32_t)(uint32_t)cached;
+                if (cached > 0 && cached <= (1LL << 26))
+                    return cached;
+            }
             return -1;
         }
         

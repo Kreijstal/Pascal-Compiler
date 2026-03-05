@@ -99,8 +99,25 @@ runtime_sources = ['runtime.c']
 if not host_machine.system().startswith('windows')
   runtime_sources += 'runtime_unix.c'
 endif
+runtime_sources += [
+  'runtime_setcodepage_i.c',
+  'runtime_setcodepage_ib.c',
+  'runtime_fpopen.c',
+  'runtime_fpopen_i_i_i.c',
+  'runtime_fpclose.c',
+  'runtime_fpclose_i.c',
+  'runtime_fpread.c',
+  'runtime_fpwrite.c',
+  'runtime_fpgetcwd.c',
+  'runtime_fplseek.c',
+  'runtime_fpc_pchar_to_shortstr.c',
+  'runtime_fpc_interlocked_aliases.c',
+  'runtime_widechar_assign_olevariant.c',
+  'runtime_fpc_rtl_compat.S',
+  'runtime_fpc_thread_symbols.S',
+]
 runtime_deps = []
-runtime_c_args = ['-O2']
+runtime_c_args = ['-O2', '-DKGPC_RUNTIME_NO_COMPILER_STUBS=1']
 
 if gmp_dep.found()
   runtime_sources += ['runtime_gmp.c']

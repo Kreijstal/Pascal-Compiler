@@ -169,6 +169,14 @@ int resolve_type_identifier_ref(int *out_type, SymTab_t *symtab,
     
     if (type_node == NULL)
     {
+        if (type_id != NULL &&
+            type_id[0] >= 'A' && type_id[0] <= 'Z' &&
+            type_id[1] == '\0')
+        {
+            /* Generic placeholder type (e.g., T/U) - treat as opaque pointer. */
+            *out_type = POINTER_TYPE;
+            return 0;
+        }
         if (type_ref != NULL && type_ref->num_generic_args > 0)
         {
             *out_type = POINTER_TYPE;

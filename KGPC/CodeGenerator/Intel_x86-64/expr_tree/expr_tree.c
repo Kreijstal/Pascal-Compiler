@@ -63,6 +63,50 @@ static void codegen_enum_typeinfo_label(const char *type_id, char *buffer, size_
 #define CODEGEN_POINTER_SIZE_BYTES 8
 #endif
 
+static struct RecordType *codegen_lookup_record_type_for_class(SymTab_t *symtab, const char *class_name)
+{
+    if (symtab == NULL || class_name == NULL)
+        return NULL;
+
+    HashNode_t *node = NULL;
+    if (FindIdent(&node, symtab, (char *)class_name) < 0 || node == NULL || node->type == NULL)
+        return NULL;
+
+    if (node->type->kind == TYPE_KIND_RECORD)
+        return node->type->info.record_info;
+
+    if (node->type->kind == TYPE_KIND_POINTER &&
+        node->type->info.points_to != NULL &&
+        node->type->info.points_to->kind == TYPE_KIND_RECORD)
+        return node->type->info.points_to->info.record_info;
+
+    return NULL;
+}
+
+static int codegen_lookup_virtual_vmt_index(SymTab_t *symtab,
+    const char *class_name, const char *method_name, int param_count)
+{
+    struct RecordType *record = codegen_lookup_record_type_for_class(symtab, class_name);
+    if (record == NULL || record->methods == NULL || method_name == NULL)
+        return -1;
+
+    for (ListNode_t *me = record->methods; me != NULL; me = me->next)
+    {
+        struct MethodInfo *mi = (struct MethodInfo *)me->cur;
+        if (mi == NULL || mi->name == NULL)
+            continue;
+        if (!(mi->is_virtual || mi->is_override) || mi->vmt_index < 0)
+            continue;
+        if (strcasecmp(mi->name, method_name) != 0)
+            continue;
+        if (param_count >= 0 && mi->param_count >= 0 && mi->param_count != param_count)
+            continue;
+        return mi->vmt_index;
+    }
+
+    return -1;
+}
+
 static ListNode_t *codegen_builtin_dynarray_length(struct Expression *expr,
     ListNode_t *inst_list, CodeGenContext *ctx, Register_t *target_reg)
 {
@@ -979,6 +1023,10 @@ expr_node_t *build_expr_tree(struct Expression *expr)
         case EXPR_TYPEINFO:
         case EXPR_ANONYMOUS_FUNCTION:
         case EXPR_ANONYMOUS_PROCEDURE:
+        case EXPR_ARRAY_LITERAL:
+        case EXPR_RECORD_CONSTRUCTOR:
+        case EXPR_IS:
+        case EXPR_AS:
             new_node->left_expr = NULL;
             new_node->right_expr = NULL;
             break;
@@ -1744,6 +1792,27 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 
     CODEGEN_DEBUG("DEBUG gencode_case0: expr->type=%d\n", expr->type);
 
+    if (expr->type == EXPR_IS || expr->type == EXPR_AS ||
+        expr->type == EXPR_ARRAY_LITERAL || expr->type == EXPR_RECORD_CONSTRUCTOR)
+    {
+        Register_t *value_reg = NULL;
+        inst_list = codegen_expr_with_result(expr, inst_list, ctx, &value_reg);
+        if (value_reg == NULL)
+            return inst_list;
+
+        if (value_reg != target_reg)
+        {
+            if (codegen_type_uses_qword(expr_get_type_tag(expr)))
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", value_reg->bit_64, target_reg->bit_64);
+            else
+                snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", value_reg->bit_32, target_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+            free_reg(get_reg_stack(), value_reg);
+        }
+
+        return inst_list;
+    }
+
     if (expr->type == EXPR_FUNCTION_CALL)
     {
         const char *func_mangled_name = expr->expr_data.function_call_data.mangled_id;
@@ -1955,14 +2024,39 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         {
             struct RecordType *class_record = NULL;
             int ctor_type_receiver = 0;
+            int ctor_self_receiver = 0;
 
             /* Allocate constructor instances for constructor-call forms where the
-             * first argument is either a type receiver (TClass.Create) or a
-             * semcheck-injected Self placeholder with resolved class pointer type. */
+             * first argument is a type receiver (TClass.Create). For inherited/self
+             * constructor chaining, reuse current Self instead of allocating. */
             ListNode_t *first_arg = expr->expr_data.function_call_data.args_expr;
             if (first_arg != NULL && first_arg->cur != NULL)
             {
                 struct Expression *class_expr = (struct Expression *)first_arg->cur;
+                if (class_expr != NULL && class_expr->type == EXPR_VAR_ID &&
+                    class_expr->expr_data.id != NULL &&
+                    pascal_identifier_equals(class_expr->expr_data.id, "Self"))
+                {
+                    StackNode_t *self_slot = find_label("Self");
+                    if (self_slot != NULL)
+                    {
+                        constructor_instance_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+                        if (constructor_instance_reg != NULL)
+                        {
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                                self_slot->offset, constructor_instance_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                            constructor_instance_slot = add_l_t("ctor_instance");
+                            if (constructor_instance_slot != NULL)
+                            {
+                                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                                    constructor_instance_reg->bit_64, constructor_instance_slot->offset);
+                                inst_list = add_inst(inst_list, buffer);
+                            }
+                            ctor_self_receiver = 1;
+                        }
+                    }
+                }
                 if (class_expr != NULL && class_expr->resolved_kgpc_type != NULL)
                 {
                     KgpcType *class_type = class_expr->resolved_kgpc_type;
@@ -2031,7 +2125,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 }
             }
             
-            if (ctor_type_receiver && class_record != NULL &&
+            if (!ctor_self_receiver && ctor_type_receiver && class_record != NULL &&
                 record_type_is_class(class_record))
             {
                 /* Get the size of the class instance */
@@ -2331,59 +2425,105 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         else if (expr->expr_data.function_call_data.is_virtual_call &&
                  expr->expr_data.function_call_data.vmt_index >= 0)
         {
-            /* Virtual method call - dispatch through VMT.
-             * Self is in the first argument register AFTER the SRET pointer (if any):
-             *   - No SRET: Self at arg reg 0 (%rdi / %rcx)
-             *   - With SRET: Self at arg reg 1 (%rsi / %rdx)
-             * The instance has the VMT pointer at offset 0.
-             * For class methods, Self already IS the VMT pointer (dereferenced earlier). */
+            int emit_virtual_call = 1;
             int vmt_index = expr->expr_data.function_call_data.vmt_index;
-            int self_arg_index = has_record_return ? 1 : 0;
-            const char *self_reg = current_arg_reg64(self_arg_index);
-            /* For class method calls, Self is already the VMT pointer.
-             * Dereference instance to get VMT, then replace Self with VMT. */
-            if (expr->expr_data.function_call_data.is_class_method_call)
+
+            if (ctx != NULL && ctx->symtab != NULL &&
+                expr->expr_data.function_call_data.call_kgpc_type != NULL &&
+                expr->expr_data.function_call_data.call_kgpc_type->kind == TYPE_KIND_PROCEDURE)
             {
-                snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", self_reg, self_reg);
-                inst_list = add_inst(inst_list, buffer);
+                Tree_t *def = expr->expr_data.function_call_data.call_kgpc_type->info.proc_info.definition;
+                if (def != NULL)
+                {
+                    const char *owner_class = def->tree_data.subprogram_data.owner_class;
+                    const char *method_name = def->tree_data.subprogram_data.method_name;
+                    if (owner_class != NULL && method_name != NULL)
+                    {
+                        int param_count = ListLength(
+                            expr->expr_data.function_call_data.call_kgpc_type->info.proc_info.params);
+                        if (!def->tree_data.subprogram_data.is_static_method && param_count > 0)
+                            param_count -= 1;
+                        int confirmed = codegen_lookup_virtual_vmt_index(ctx->symtab,
+                            owner_class, method_name, param_count);
+                        if (getenv("KGPC_DEBUG_VCALL_GUARD") != NULL)
+                        {
+                            fprintf(stderr, "[vcall-guard] owner=%s method=%s params=%d sem_vmt=%d confirmed=%d\n",
+                                owner_class, method_name, param_count,
+                                expr->expr_data.function_call_data.vmt_index, confirmed);
+                        }
+                        if (confirmed < 0)
+                            emit_virtual_call = 0;
+                        else
+                            vmt_index = confirmed;
+                    }
+                }
             }
-            /* Copy Self (or VMT for class methods) to r11 */
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r11\n", self_reg);
-            inst_list = add_inst(inst_list, buffer);
-            /* Get VMT pointer (at offset 0 of instance).
-             * For class methods, Self IS the VMT, so this reads typeinfo (not VMT). */
-            if (!expr->expr_data.function_call_data.is_class_method_call)
+
+            if (emit_virtual_call)
             {
-                snprintf(buffer, sizeof(buffer), "\tmovq\t(%%r11), %%r11\n");
+                /* Virtual method call - dispatch through VMT.
+                 * Self is in the first argument register AFTER the SRET pointer (if any):
+                 *   - No SRET: Self at arg reg 0 (%rdi / %rcx)
+                 *   - With SRET: Self at arg reg 1 (%rsi / %rdx)
+                 * The instance has the VMT pointer at offset 0.
+                 * For class methods, Self already IS the VMT pointer (dereferenced earlier). */
+                int self_arg_index = has_record_return ? 1 : 0;
+                const char *self_reg = current_arg_reg64(self_arg_index);
+                if (expr->expr_data.function_call_data.is_class_method_call)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", self_reg, self_reg);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r11\n", self_reg);
                 inst_list = add_inst(inst_list, buffer);
+                if (!expr->expr_data.function_call_data.is_class_method_call)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t(%%r11), %%r11\n");
+                    inst_list = add_inst(inst_list, buffer);
+                }
+                int vmt_offset = vmt_index * 8;
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%d(%%r11), %%r11\n", vmt_offset);
+                inst_list = add_inst(inst_list, buffer);
+                CallerSaveState caller_state;
+                regstack_caller_save(get_reg_stack(), &inst_list, &caller_state);
+                snprintf(buffer, sizeof(buffer), "\tcall\t*%%r11\n");
+                inst_list = add_inst(inst_list, buffer);
+                regstack_caller_restore(get_reg_stack(), &inst_list, &caller_state);
             }
-            /* VMT layout: [12 metadata slots (0-88), method1 at 96, method2 at 104, ...] */
-            int vmt_offset = vmt_index * 8;
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%d(%%r11), %%r11\n", vmt_offset);
-            inst_list = add_inst(inst_list, buffer);
-            /* Call through the VMT entry */
-            CallerSaveState caller_state;
-            regstack_caller_save(get_reg_stack(), &inst_list, &caller_state);
-            snprintf(buffer, sizeof(buffer), "\tcall\t*%%r11\n");
-            inst_list = add_inst(inst_list, buffer);
-            regstack_caller_restore(get_reg_stack(), &inst_list, &caller_state);
+            else
+            {
+                HashNode_t *resolved_func = expr->expr_data.function_call_data.resolved_func;
+                const char *call_target = expr->expr_data.function_call_data.mangled_id;
+                if (call_target == NULL || call_target[0] == '\0')
+                {
+                    if (resolved_func != NULL && resolved_func->mangled_id != NULL)
+                        call_target = resolved_func->mangled_id;
+                    else if (expr->expr_data.function_call_data.id != NULL)
+                        call_target = expr->expr_data.function_call_data.id;
+                }
+                if (call_target != NULL)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", call_target);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+            }
         }
         else
         {
             /* Normal function call */
+            HashNode_t *resolved_func = expr->expr_data.function_call_data.resolved_func;
             const char *call_target = expr->expr_data.function_call_data.mangled_id;
             if (call_target == NULL || call_target[0] == '\0')
             {
-                HashNode_t *resolved = expr->expr_data.function_call_data.resolved_func;
-                if (resolved != NULL && resolved->mangled_id != NULL &&
-                    resolved->mangled_id[0] != '\0')
+                if (resolved_func != NULL && resolved_func->mangled_id != NULL &&
+                    resolved_func->mangled_id[0] != '\0')
                 {
-                    call_target = resolved->mangled_id;
+                    call_target = resolved_func->mangled_id;
                 }
-                else if (resolved != NULL && resolved->type != NULL &&
-                         resolved->type->kind == TYPE_KIND_PROCEDURE)
+                else if (resolved_func != NULL && resolved_func->type != NULL &&
+                         resolved_func->type->kind == TYPE_KIND_PROCEDURE)
                 {
-                    Tree_t *def = resolved->type->info.proc_info.definition;
+                    Tree_t *def = resolved_func->type->info.proc_info.definition;
                     if (def != NULL)
                     {
                         const char *alias = def->tree_data.subprogram_data.cname_override;
@@ -2489,20 +2629,70 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             
             if (call_target != NULL)
             {
-                /* For class method calls on instances (non-virtual path),
-                 * dereference Self to get VMT pointer before the call. */
-                if (expr->expr_data.function_call_data.is_class_method_call)
+                int emitted_virtual_fallback = 0;
+                if (!expr->expr_data.function_call_data.is_virtual_call &&
+                    resolved_func != NULL && resolved_func->owner_class != NULL &&
+                    resolved_func->method_name != NULL &&
+                    !from_cparser_is_method_static(resolved_func->owner_class,
+                        resolved_func->method_name))
                 {
-                    int self_arg_index = has_record_return ? 1 : 0;
-                    const char *self_reg = current_arg_reg64(self_arg_index);
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", self_reg, self_reg);
-                    inst_list = add_inst(inst_list, buffer);
+                    int param_count = -1;
+                    if (resolved_func->type != NULL &&
+                        resolved_func->type->kind == TYPE_KIND_PROCEDURE)
+                    {
+                        param_count = ListLength(resolved_func->type->info.proc_info.params);
+                        if (param_count > 0)
+                            param_count -= 1; /* skip implicit Self */
+                    }
+
+                    if (from_cparser_is_method_virtual_with_signature(
+                            resolved_func->owner_class,
+                            resolved_func->method_name,
+                            param_count,
+                            NULL))
+                    {
+                        int vmt_index = codegen_lookup_virtual_vmt_index(
+                            ctx != NULL ? ctx->symtab : NULL,
+                            resolved_func->owner_class,
+                            resolved_func->method_name,
+                            param_count);
+                        if (vmt_index >= 0)
+                        {
+                            int self_arg_index = has_record_return ? 1 : 0;
+                            const char *self_reg = current_arg_reg64(self_arg_index);
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r11\n", self_reg);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t(%%r11), %%r11\n");
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%d(%%r11), %%r11\n", vmt_index * 8);
+                            inst_list = add_inst(inst_list, buffer);
+                            CallerSaveState caller_state;
+                            regstack_caller_save(get_reg_stack(), &inst_list, &caller_state);
+                            snprintf(buffer, sizeof(buffer), "\tcall\t*%%r11\n");
+                            inst_list = add_inst(inst_list, buffer);
+                            regstack_caller_restore(get_reg_stack(), &inst_list, &caller_state);
+                            emitted_virtual_fallback = 1;
+                        }
+                    }
                 }
-                CallerSaveState caller_state;
-                regstack_caller_save(get_reg_stack(), &inst_list, &caller_state);
-                snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", call_target);
-                inst_list = add_inst(inst_list, buffer);
-                regstack_caller_restore(get_reg_stack(), &inst_list, &caller_state);
+
+                if (!emitted_virtual_fallback)
+                {
+                    /* For class method calls on instances (non-virtual path),
+                     * dereference Self to get VMT pointer before the call. */
+                    if (expr->expr_data.function_call_data.is_class_method_call)
+                    {
+                        int self_arg_index = has_record_return ? 1 : 0;
+                        const char *self_reg = current_arg_reg64(self_arg_index);
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", self_reg, self_reg);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
+                    CallerSaveState caller_state;
+                    regstack_caller_save(get_reg_stack(), &inst_list, &caller_state);
+                    snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", call_target);
+                    inst_list = add_inst(inst_list, buffer);
+                    regstack_caller_restore(get_reg_stack(), &inst_list, &caller_state);
+                }
             }
             else
             {
@@ -3833,19 +4023,25 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                     {
                         /* int + ptr: add int to ptr, result goes to left */
                         snprintf(buffer, sizeof(buffer), "\taddq\t%s, %s\n", ptr_reg, left64);
+                        inst_list = add_inst(inst_list, buffer);
                     }
                     else
                     {
-                        /* ptr + int: add int to ptr */
-                        snprintf(buffer, sizeof(buffer), "\taddq\t%s, %s\n", int_reg, left64);
+                        /* ptr + int: add int to ptr; handle large immediates safely */
+                        int err = 0;
+                        inst_list = emit_alu_op_with_large_imm(inst_list, ctx, "add", 'q', int_reg, left64, &err);
+                        if (err)
+                            break;
                     }
                 }
                 else /* MINUS */
                 {
-                    /* ptr - int: subtract int from ptr */
-                    snprintf(buffer, sizeof(buffer), "\tsubq\t%s, %s\n", int_reg, left64);
+                    /* ptr - int: subtract int from ptr; handle large immediates safely */
+                    int err = 0;
+                    inst_list = emit_alu_op_with_large_imm(inst_list, ctx, "sub", 'q', int_reg, left64, &err);
+                    if (err)
+                        break;
                 }
-                inst_list = add_inst(inst_list, buffer);
                 break;
             }
             {

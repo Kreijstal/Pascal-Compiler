@@ -124,7 +124,51 @@ int64_t kgpc_current_exception = 0;
 static __thread int kgpc_ioresult = 0;
 static int kgpc_threading_used = 0;
 
+#ifndef _WIN32
+extern unsigned char CurrentTM[];
+extern unsigned char NoThreadManager[];
+extern void *LazyInitThreadingProcList;
+
+static int kgpc_fpc_tm_initialized = 0;
+
+static void kgpc_try_init_fpc_nothread_manager(void)
+{
+    const size_t event_create_off = 0xe0u;
+    void **current_slots = (void **)CurrentTM;
+    void **no_thread_slots = (void **)NoThreadManager;
+    size_t event_create_idx = event_create_off / sizeof(void *);
+
+    if (kgpc_fpc_tm_initialized)
+        return;
+
+    if (current_slots[event_create_idx] != NULL) {
+        kgpc_fpc_tm_initialized = 1;
+        return;
+    }
+
+    if (no_thread_slots[event_create_idx] == NULL)
+        return;
+
+    size_t tm_size = 0;
+    if ((void *)&LazyInitThreadingProcList > (void *)CurrentTM)
+        tm_size = (size_t)((unsigned char *)&LazyInitThreadingProcList - CurrentTM);
+
+    if (tm_size == 0 || tm_size > 4096)
+        tm_size = 0x110u;
+
+    memcpy(CurrentTM, NoThreadManager, tm_size);
+    kgpc_fpc_tm_initialized = 1;
+}
+
+__attribute__((constructor))
+static void kgpc_runtime_ctor_init_fpc_thread_manager(void)
+{
+    kgpc_try_init_fpc_nothread_manager();
+}
+#endif
+
 /* ────────── setjmp/longjmp exception frame stack ────────── */
+
 
 typedef struct kgpc_except_frame {
     jmp_buf buf;
@@ -283,6 +327,9 @@ typedef struct KGPCFilePrivate
     KGPCBinaryType element_type;
     size_t element_size;
 } KGPCFilePrivate;
+
+/* FPC RTL expects MODE_OPEN as a global constant for file permissions (0666). */
+int32_t MODE_OPEN = 0666;
 
 #define KGPC_FILE_PRIVATE_MAGIC 0x4B475046u
 #define KGPC_FILE_PRIVATE_MAGIC_INV (~KGPC_FILE_PRIVATE_MAGIC)
@@ -511,6 +558,15 @@ void kgpc_tfile_assign(KGPCFileRec *file, const char *path)
     file->mode = KGPC_FM_CLOSED;
     kgpc_copy_name(file->name, sizeof(file->name), path);
 }
+
+/* Compiler-generated file stubs conflict with runtime copies. */
+#ifndef KGPC_RUNTIME_NO_COMPILER_STUBS
+/* FPC RTL assigns: Assign(file, 'path') -> assign_f_s */
+void assign_f_s(KGPCFileRec *file, const char *path)
+{
+    kgpc_tfile_assign(file, path);
+}
+#endif
 
 void kgpc_tfile_configure(KGPCFileRec *file, size_t element_size, int element_tag)
 {
@@ -1939,8 +1995,8 @@ static KgpcStringHeader *kgpc_string_header(const char *value);
 static void kgpc_string_set_insert(const void *value);
 static void kgpc_string_release(char *value);
 static void kgpc_default_unicode2ansi_move(const uint16_t *source, char **dest, int32_t cp, int64_t len);
-extern void *widestringmanager[25];
-extern int32_t DefaultSystemCodePage __attribute__((weak));
+void *kgpc_widestringmanager[25];
+extern int32_t DefaultSystemCodePage;
 int64_t kgpc_widechar_length(const uint16_t *value);
 
 void kgpc_write_string(KGPCTextRec *file, int width, const char *value)
@@ -2354,6 +2410,7 @@ static size_t kgpc_string_known_length(const char *value)
 
 void kgpc_string_assign_take(char **target, char *value);
 
+#ifndef KGPC_RUNTIME_NO_COMPILER_STUBS
 /* Robust SetCodePage wrapper: accepts either a var RawByteString (by-ref)
  * or a raw string pointer (by-value) to avoid crashes when call sites
  * accidentally pass the value. */
@@ -2379,6 +2436,13 @@ void setcodepage_rbs_i_b(void *s_arg, int32_t codepage, int32_t convert)
 
     if (str == NULL)
         return;
+
+    /* RawByteString must be managed in KGPC runtime representation.
+     * If a non-managed pointer arrives here, treat it as an unsupported
+     * call shape and return safely instead of probing arbitrary memory. */
+    if (!kgpc_string_is_managed(str))
+        return;
+
     if (kgpc_string_known_length(str) == 0)
         return;
 
@@ -2403,6 +2467,7 @@ void setcodepage_rbs_i(void *s_arg, int32_t codepage)
 {
     setcodepage_rbs_i_b(s_arg, codepage, 1);
 }
+#endif
 
 /* FPC RTL compatibility: some bootstrap constants use WideChar literals
  * in PAnsiChar contexts, which KGPC currently lowers via the
@@ -2438,10 +2503,12 @@ static char *kgpc_cached_widechar_pchar(uint16_t value)
     return fallback;
 }
 
+#ifndef KGPC_RUNTIME_NO_COMPILER_STUBS
 char *widechar__op_assign_olevariant_wc(uint16_t value)
 {
     return kgpc_cached_widechar_pchar(value);
 }
+#endif
 
 static char *kgpc_string_alloc_with_length(size_t length)
 {
@@ -2600,6 +2667,9 @@ char *kgpc_windows_get_domainname_string(void)
 
 void kgpc_string_assign(char **target, const char *value)
 {
+#ifndef _WIN32
+    kgpc_try_init_fpc_nothread_manager();
+#endif
     if (target == NULL)
         return;
 
@@ -2629,6 +2699,9 @@ void kgpc_string_assign(char **target, const char *value)
 
 void kgpc_string_assign_take(char **target, char *value)
 {
+#ifndef _WIN32
+    kgpc_try_init_fpc_nothread_manager();
+#endif
     if (target == NULL)
     {
         if (value != NULL)
@@ -2862,7 +2935,7 @@ void kgpc_write_unicodestring(KGPCTextRec *file, int width, const uint16_t *valu
 
     char *ansi = NULL;
     typedef void (*Unicode2AnsiProc)(const uint16_t *, char **, int32_t, int64_t);
-    Unicode2AnsiProc conv = (Unicode2AnsiProc)widestringmanager[19];
+    Unicode2AnsiProc conv = (Unicode2AnsiProc)kgpc_widestringmanager[19];
     int32_t cp = DefaultSystemCodePage;
     if (conv != NULL)
         conv(value, &ansi, cp, len);
@@ -3189,6 +3262,7 @@ char *kgpc_shortstring_to_string(const char *value)
 /* FPC_PCHAR_TO_SHORTSTR: Convert a null-terminated C string (PAnsiChar)
  * to a ShortString (length-prefixed, max 255 chars).
  * Used by FPC's system unit for pchar-to-shortstring conversions. */
+#ifndef KGPC_RUNTIME_NO_COMPILER_STUBS
 void FPC_PCHAR_TO_SHORTSTR(char *res, const char *p)
 {
     if (res == NULL)
@@ -3205,6 +3279,7 @@ void FPC_PCHAR_TO_SHORTSTR(char *res, const char *p)
     if (len > 0)
         memcpy(res + 1, p, len);
 }
+#endif
 
 int64_t kgpc_shortstring_length(const char *value)
 {
@@ -3520,6 +3595,53 @@ int kgpc_text_eoln_default(void)
     return kgpc_text_eoln(NULL);
 }
 
+/* Compiler-emitted stubs conflict with runtime copies; allow disabling in
+ * the runtime library build while keeping internal kgpc_text_* helpers. */
+#ifndef KGPC_RUNTIME_NO_COMPILER_STUBS
+/* FPC RTL assigns: Assign(text, 'path') -> assign_t_s */
+void assign_t_s(KGPCTextRec *file, const char *path)
+{
+    kgpc_text_assign(file, path);
+}
+
+/* FPC RTL assigns: Assign(text, AnsiChar) -> assign_t_c */
+void assign_t_c(KGPCTextRec *file, unsigned char c)
+{
+    char buffer[2];
+    buffer[0] = (char)c;
+    buffer[1] = '\0';
+    kgpc_text_assign(file, buffer);
+}
+
+/* FPC RTL text I/O wrappers (override RTL stubs). */
+void rewrite_t(KGPCTextRec *file)
+{
+    kgpc_text_rewrite(file);
+}
+
+void reset_t(KGPCTextRec *file)
+{
+    kgpc_text_reset(file);
+}
+
+void append_t(KGPCTextRec *file)
+{
+    kgpc_text_append(file);
+}
+
+void close_t(KGPCTextRec *file)
+{
+    kgpc_text_close(file);
+}
+
+void flush_t(KGPCTextRec *file)
+{
+    FILE *stream = kgpc_text_output_stream(file);
+    if (stream != NULL)
+        fflush(stream);
+}
+#endif
+
 void kgpc_text_readln_into(KGPCTextRec *file, char **target)
 {
     if (target == NULL)
@@ -3696,14 +3818,15 @@ void kgpc_reallocmem(void **target, size_t new_size)
     *target = resized;
 }
 
+#ifndef KGPC_RUNTIME_NO_COMPILER_STUBS
 /* =====================================================================
  * FPC RTL heap-manager overrides.
  *
  * When compiling against the FPC RTL (--no-stdlib), the FPC system unit
- * emits its own HeapInc allocator with weak SysGetMem/SysFreeMem/etc.
- * symbols.  HeapInc requires InitHeap() to be called first, which KGPC
- * does not do.  Instead we provide strong symbols that forward straight
- * to libc, so the linker picks these over the weak HeapInc versions.
+ * emits its own HeapInc allocator with SysGetMem/SysFreeMem/etc. symbols.
+ * HeapInc requires InitHeap() to be called first, which KGPC does not do.
+ * Instead we provide strong symbols that forward straight to libc, so the
+ * linker picks these over the HeapInc versions.
  *
  * FPC ABI: SysGetMem(size: PtrInt): Pointer
  *          SysFreeMem(p: Pointer): PtrInt  (returns 0 on success)
@@ -3837,6 +3960,7 @@ intptr_t sysmemsize_p(void *p)
     (void)p;
     return -1;
 }
+#endif
 
 char *kgpc_string_concat(const char *lhs, const char *rhs)
 {
@@ -4819,7 +4943,7 @@ int64_t bsrqword_i64(uint64_t value)
     return (int64_t)(63u - (uint64_t)__builtin_clzll(value));
 }
 
-int64_t bsfqword_i64(uint64_t value)
+static int64_t bsfqword_i64(uint64_t value)
 {
     if (value == 0)
         return -1;
@@ -6088,7 +6212,7 @@ int kgpc_free_library(uintptr_t handle)
  * definition is present. MSVC/LLD handle this fine; MinGW’s ld does not,
  * so we also emit strong fallback symbols (see below) to satisfy MinGW. */
 /* Default implementations that can be adopted via COFF alternatename so
- * user-emitted stubs override when present, while ELF uses weak aliases. */
+ * user-emitted stubs override when present. */
 uintptr_t kgpc_default_LoadLibrary_s(const char *path)
 {
     return kgpc_load_library(path);
@@ -6460,9 +6584,8 @@ long long kgpc_round(double value)
 
 long long kgpc_trunc(double value)
 {
-    if (value >= 0.0)
-        return (long long)floor(value);
-    return (long long)ceil(value);
+    /* Cast truncates toward zero in C, matching Pascal Trunc semantics. */
+    return (long long)value;
 }
 
 /* Trunc for Currency type - Currency stores values scaled by 10000.
@@ -6702,6 +6825,7 @@ void kgpc_sincos_bits(int64_t angle_bits, double *sin_out, double *cos_out)
 }
 
 /* BaseUnix wrapper functions */
+#ifndef KGPC_RUNTIME_NO_COMPILER_STUBS
 #ifndef _WIN32
 int fpOpen(const char *path, int flags)
 {
@@ -6830,11 +6954,14 @@ off_t fplSeek(int fd, off_t offset, int whence)
     return (off_t)_lseeki64(fd, (__int64)offset, whence);
 }
 #endif
+#endif
 
+#ifndef KGPC_RUNTIME_NO_COMPILER_STUBS
 void Halt(int64_t code)
 {
     exit((int)code);
 }
+#endif
 
 /* Called when an abstract method is invoked - should never happen in correct code */
 void __kgpc_abstract_method_error(void)
@@ -6897,6 +7024,7 @@ long atomicexchange_i_i(long *target, long new_val)
     return __atomic_exchange_n(target, new_val, __ATOMIC_SEQ_CST);
 }
 
+#ifndef KGPC_RUNTIME_NO_COMPILER_STUBS
 long FPC_INTERLOCKEDEXCHANGEADD(long *target, long value)
 {
     return __sync_fetch_and_add(target, value);
@@ -6906,6 +7034,7 @@ long long FPC_INTERLOCKEDCOMPAREEXCHANGE64(long long *target, long long new_val,
 {
     return __sync_val_compare_and_swap(target, comparand, new_val);
 }
+#endif
 
 /* interlockedexchangeadd_li_li and interlockedcompareexchange64_i64_i64_i64
    are now emitted from Pascal source.  Only the FPC_* aliases above are needed. */
@@ -7040,11 +7169,7 @@ int atomiccmpexchange_i_i_i(int *target, int new_val, int comparand)
  *   [24] GetStandardCodePageProc
  * ===================================================================== */
 
-/* The widestringmanager global — declared in the generated assembly as BSS.
- * Weak definition (not extern) so it works on both Linux and MinGW:
- * if codegen emits a widestringmanager symbol, the linker picks that one;
- * otherwise this zero-initialized fallback is used. */
-void *widestringmanager[25] __attribute__((weak)) = {0};
+/* Internal unicode-string manager callback table used by the runtime. */
 
 /* Default: convert wide/unicode chars to ansi by truncating to low byte.
    Signature: procedure(source:punicodechar; var dest:RawByteString;
@@ -7053,16 +7178,16 @@ void *widestringmanager[25] __attribute__((weak)) = {0};
 static void kgpc_default_unicode2ansi_move(const uint16_t *source,
     char **dest, int32_t cp, int64_t len)
 {
+    const char *bytes = (const char *)source;
     kgpc_string_setlength(dest, len);
     if (*dest == NULL || len <= 0)
         return;
-    /* Set codepage in the header */
+
     KgpcStringHeader *hdr = kgpc_string_header(*dest);
     if (hdr != NULL)
         hdr->codepage = (uint16_t)cp;
-    char *p = *dest;
-    for (int64_t i = 0; i < len; i++)
-        p[i] = (source[i] < 256) ? (char)source[i] : '?';
+
+    memcpy(*dest, bytes, (size_t)len);
 }
 
 /* Default: convert ansi chars to unicode by zero-extending.
@@ -7076,32 +7201,20 @@ static void kgpc_default_unicode2ansi_move(const uint16_t *source,
 static void kgpc_default_ansi2unicode_move(const char *source,
     int32_t cp, uint16_t **dest, int64_t len)
 {
-    /* Free existing value */
-    if (*dest != NULL)
-        kgpc_string_release((char *)*dest);
-
-    if (len <= 0) {
-        *dest = NULL;
+    char **target = (char **)dest;
+    kgpc_string_setlength(target, len);
+    if (*target == NULL || len <= 0)
         return;
-    }
 
-    /* Allocate: header + len*2 bytes + 2 byte null terminator */
-    size_t data_bytes = (size_t)len * 2 + 2;
-    KgpcStringHeader *hdr = (KgpcStringHeader *)malloc(sizeof(KgpcStringHeader) + data_bytes);
-    if (hdr == NULL) {
-        *dest = NULL;
-        return;
+    memcpy(*target, source, (size_t)len);
+
+    KgpcStringHeader *hdr = kgpc_string_header(*target);
+    if (hdr != NULL)
+    {
+        (void)cp;
+        hdr->codepage = 1200;
+        hdr->elementsize = 1;
     }
-    hdr->codepage = 1200;       /* UTF-16LE */
-    hdr->elementsize = 2;       /* UnicodeChar = 2 bytes */
-    hdr->refcount = 1;
-    hdr->length = len;
-    uint16_t *data = (uint16_t *)(hdr + 1);
-    for (int64_t i = 0; i < len; i++)
-        data[i] = (uint16_t)(unsigned char)source[i];
-    data[len] = 0;  /* null terminator */
-    kgpc_string_set_insert((char *)data);
-    *dest = data;
 }
 
 /* Default Wide2Ansi — same as Unicode2Ansi for our purposes */
@@ -7228,8 +7341,8 @@ static int64_t kgpc_default_codepoint_length(const char *str, int64_t maxlookahe
 static void kgpc_stub_thread_noop(void) {}
 
 /* GetStandardCodePage: return 0 (system default) */
-extern int32_t DefaultSystemCodePage __attribute__((weak));
-extern int32_t DefaultFileSystemCodePage __attribute__((weak));
+extern int32_t DefaultSystemCodePage;
+extern int32_t DefaultFileSystemCodePage;
 static int32_t kgpc_default_get_standard_codepage(int32_t stdcp)
 {
     if (stdcp != 2)  /* scpFileSystemSingleByte = 2 */
@@ -7241,31 +7354,37 @@ static int32_t kgpc_default_get_standard_codepage(int32_t stdcp)
    Called from kgpc_init_args before the program body runs. */
 void kgpc_init_widestringmanager(void)
 {
-    /* With a weak definition, the address is always valid — init unconditionally. */
+    /* Always initialize when the symbol is present. */
 
-    widestringmanager[0]  = (void *)kgpc_default_wide2ansi_move;
-    widestringmanager[1]  = (void *)kgpc_default_ansi2wide_move;
-    widestringmanager[2]  = (void *)kgpc_stub_widecase;             /* UpperWide */
-    widestringmanager[3]  = (void *)kgpc_stub_widecase;             /* LowerWide */
-    widestringmanager[4]  = (void *)kgpc_stub_compare_wide;         /* CompareWide */
-    widestringmanager[5]  = (void *)kgpc_default_charlength_pchar;
-    widestringmanager[6]  = (void *)kgpc_default_codepoint_length;
-    widestringmanager[7]  = (void *)kgpc_default_upper_ansistring;
-    widestringmanager[8]  = (void *)kgpc_default_lower_ansistring;
-    widestringmanager[9]  = (void *)kgpc_default_comparestr_ansistring;
-    widestringmanager[10] = (void *)kgpc_default_comparetext_ansistring;
-    widestringmanager[11] = (void *)kgpc_default_strcomp;
-    widestringmanager[12] = (void *)kgpc_default_stricomp;
-    widestringmanager[13] = (void *)kgpc_default_strlcomp;
-    widestringmanager[14] = (void *)kgpc_default_strlicomp;
-    widestringmanager[15] = (void *)kgpc_default_strlower;
-    widestringmanager[16] = (void *)kgpc_default_strupper;
-    widestringmanager[17] = (void *)kgpc_stub_thread_noop;          /* ThreadInit */
-    widestringmanager[18] = (void *)kgpc_stub_thread_noop;          /* ThreadFini */
-    widestringmanager[19] = (void *)kgpc_default_unicode2ansi_move;
-    widestringmanager[20] = (void *)kgpc_default_ansi2unicode_move;
-    widestringmanager[21] = (void *)kgpc_stub_widecase;             /* UpperUnicode */
-    widestringmanager[22] = (void *)kgpc_stub_widecase;             /* LowerUnicode */
-    widestringmanager[23] = (void *)kgpc_stub_compare_wide;         /* CompareUnicode */
-    widestringmanager[24] = (void *)kgpc_default_get_standard_codepage;
+    kgpc_widestringmanager[0]  = (void *)kgpc_default_wide2ansi_move;
+    kgpc_widestringmanager[1]  = (void *)kgpc_default_ansi2wide_move;
+    kgpc_widestringmanager[2]  = (void *)kgpc_stub_widecase;             /* UpperWide */
+    kgpc_widestringmanager[3]  = (void *)kgpc_stub_widecase;             /* LowerWide */
+    kgpc_widestringmanager[4]  = (void *)kgpc_stub_compare_wide;         /* CompareWide */
+    kgpc_widestringmanager[5]  = (void *)kgpc_default_charlength_pchar;
+    kgpc_widestringmanager[6]  = (void *)kgpc_default_codepoint_length;
+    kgpc_widestringmanager[7]  = (void *)kgpc_default_upper_ansistring;
+    kgpc_widestringmanager[8]  = (void *)kgpc_default_lower_ansistring;
+    kgpc_widestringmanager[9]  = (void *)kgpc_default_comparestr_ansistring;
+    kgpc_widestringmanager[10] = (void *)kgpc_default_comparetext_ansistring;
+    kgpc_widestringmanager[11] = (void *)kgpc_default_strcomp;
+    kgpc_widestringmanager[12] = (void *)kgpc_default_stricomp;
+    kgpc_widestringmanager[13] = (void *)kgpc_default_strlcomp;
+    kgpc_widestringmanager[14] = (void *)kgpc_default_strlicomp;
+    kgpc_widestringmanager[15] = (void *)kgpc_default_strlower;
+    kgpc_widestringmanager[16] = (void *)kgpc_default_strupper;
+    kgpc_widestringmanager[17] = (void *)kgpc_stub_thread_noop;          /* ThreadInit */
+    kgpc_widestringmanager[18] = (void *)kgpc_stub_thread_noop;          /* ThreadFini */
+    kgpc_widestringmanager[19] = (void *)kgpc_default_unicode2ansi_move;
+    kgpc_widestringmanager[20] = (void *)kgpc_default_ansi2unicode_move;
+    kgpc_widestringmanager[21] = (void *)kgpc_stub_widecase;             /* UpperUnicode */
+    kgpc_widestringmanager[22] = (void *)kgpc_stub_widecase;             /* LowerUnicode */
+    kgpc_widestringmanager[23] = (void *)kgpc_stub_compare_wide;         /* CompareUnicode */
+    kgpc_widestringmanager[24] = (void *)kgpc_default_get_standard_codepage;
+}
+
+
+void kgpc_unfix_noop(void *ptr)
+{
+    (void)ptr;
 }
