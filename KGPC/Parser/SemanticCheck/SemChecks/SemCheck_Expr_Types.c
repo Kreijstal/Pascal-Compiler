@@ -5177,14 +5177,23 @@ int semcheck_addressof(int *type_return,
                              kgpc_type_is_record(owner_type->info.points_to))
                         rec_info = kgpc_type_get_record(owner_type->info.points_to);
                 }
-                else if (dbg_specialize_addr)
+                else if (owner_node != NULL &&
+                         (owner_node->hash_type == HASHTYPE_VAR ||
+                          owner_node->hash_type == HASHTYPE_ARRAY ||
+                          owner_node->hash_type == HASHTYPE_CONST))
                 {
-                    fprintf(stderr, "[ADDR-SPECIALIZE] owner type not found for %s\n",
-                        record_expr->expr_data.id);
-                    skip_record_expr_semcheck = 1;
+                    /* This is a regular variable/parameter, not a type.
+                     * Let semcheck_expr_with_type resolve its record type below. */
                 }
                 else
                 {
+                    /* Unresolvable type name or unknown identifier — skip
+                     * semcheck to avoid misleading error messages. */
+                    if (dbg_specialize_addr)
+                    {
+                        fprintf(stderr, "[ADDR-SPECIALIZE] owner type not found for %s\n",
+                            record_expr->expr_data.id);
+                    }
                     skip_record_expr_semcheck = 1;
                 }
             }
@@ -5250,14 +5259,22 @@ int semcheck_addressof(int *type_return,
                 }
 
                 /* Keep @TypeLike.Method on the procedure-reference path even if
-                 * symbol lookup is deferred/unavailable in this pass. */
+                 * symbol lookup is deferred/unavailable in this pass.
+                 * Only do this for type identifiers or truly unknown names,
+                 * NOT for regular variables (which should take the data-address path). */
                 if (fallback_symbol == NULL &&
                     record_expr->type == EXPR_VAR_ID &&
                     record_expr->expr_data.id != NULL &&
                     inner->is_specialize_addr_target)
                 {
-                    inner_type = PROCEDURE;
-                    treated_as_proc_ref = 1;
+                    HashNode_t *check_node = NULL;
+                    int check_found = FindIdent(&check_node, symtab, record_expr->expr_data.id);
+                    if (check_found < 0 || check_node == NULL ||
+                        check_node->hash_type == HASHTYPE_TYPE)
+                    {
+                        inner_type = PROCEDURE;
+                        treated_as_proc_ref = 1;
+                    }
                 }
             }
         }
