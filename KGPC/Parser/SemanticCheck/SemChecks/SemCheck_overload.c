@@ -702,6 +702,31 @@ static int semcheck_resolve_arg_kgpc_type(struct Expression *arg_expr,
     if (arg_expr == NULL)
         return UNKNOWN_TYPE;
 
+    if (arg_expr->type == EXPR_FUNCTION_CALL &&
+        arg_expr->expr_data.function_call_data.args_expr == NULL &&
+        arg_expr->expr_data.function_call_data.id != NULL)
+    {
+        HashNode_t *type_node = semcheck_find_preferred_type_node(symtab,
+            arg_expr->expr_data.function_call_data.id);
+        if (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE &&
+            type_node->type != NULL)
+        {
+            KgpcType *resolved = type_node->type;
+            struct RecordType *type_record = get_record_type_from_node(type_node);
+            if (type_record != NULL && type_record->is_interface)
+            {
+                HashNode_t *tguid_node = semcheck_find_type_node_with_kgpc_type(symtab, "TGUID");
+                if (tguid_node != NULL && tguid_node->type != NULL)
+                    resolved = tguid_node->type;
+            }
+            if (arg_type_out != NULL)
+                *arg_type_out = resolved;
+            if (owns_type_out != NULL)
+                *owns_type_out = 0;
+            return semcheck_tag_from_kgpc(resolved);
+        }
+    }
+
     int arg_tag = UNKNOWN_TYPE;
     KgpcType *arg_kgpc_type = NULL;
     semcheck_expr_with_type(&arg_kgpc_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);

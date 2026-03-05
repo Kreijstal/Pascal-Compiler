@@ -834,6 +834,65 @@ int semcheck_arrayaccess(int *type_return,
 }
 
 /* Helper to resolve the actual type tag from a TREE_VAR_DECL parameter declaration */
+static int semcheck_decl_is_untyped_param(Tree_t *decl)
+{
+    if (decl == NULL || decl->type != TREE_VAR_DECL)
+        return 0;
+
+    if (decl->tree_data.var_decl_data.is_untyped_param)
+        return 1;
+
+    /* Some parsed untyped var/out params are represented as POINTER_TYPE
+     * with no explicit type id (e.g. "out Intf"). Treat them as untyped. */
+    if (decl->tree_data.var_decl_data.is_var_param &&
+        decl->tree_data.var_decl_data.type == POINTER_TYPE &&
+        decl->tree_data.var_decl_data.type_id == NULL)
+        return 1;
+
+    return 0;
+}
+
+static int semcheck_call_has_noarg_identifier_calls(ListNode_t *args)
+{
+    for (ListNode_t *cur = args; cur != NULL; cur = cur->next)
+    {
+        struct Expression *arg = (struct Expression *)cur->cur;
+        if (arg != NULL &&
+            arg->type == EXPR_FUNCTION_CALL &&
+            arg->expr_data.function_call_data.args_expr == NULL &&
+            arg->expr_data.function_call_data.id != NULL)
+        {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int semcheck_detach_unary_not_from_receiver(struct Expression *receiver_expr)
+{
+    if (receiver_expr == NULL)
+        return 0;
+
+    if (receiver_expr->type == EXPR_RECORD_ACCESS &&
+        receiver_expr->expr_data.record_access_data.record_expr != NULL)
+    {
+        struct Expression *base = receiver_expr->expr_data.record_access_data.record_expr;
+        if (base->type == EXPR_RELOP &&
+            base->expr_data.relop_data.type == NOT &&
+            base->expr_data.relop_data.right == NULL &&
+            base->expr_data.relop_data.left != NULL)
+        {
+            struct Expression *inner = base->expr_data.relop_data.left;
+            base->expr_data.relop_data.left = NULL;
+            receiver_expr->expr_data.record_access_data.record_expr = inner;
+            destroy_expr(base);
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
 int resolve_param_type(Tree_t *decl, SymTab_t *symtab)
 {
     assert(decl != NULL);
@@ -844,6 +903,8 @@ int resolve_param_type(Tree_t *decl, SymTab_t *symtab)
 
     if (decl->type == TREE_VAR_DECL)
     {
+        if (semcheck_decl_is_untyped_param(decl))
+            return BUILTIN_ANY_TYPE;
         type_tag = decl->tree_data.var_decl_data.type;
         type_id = decl->tree_data.var_decl_data.type_id;
     }
@@ -898,6 +959,57 @@ int semcheck_funccall(int *type_return,
     final_status = 0;
     id = expr->expr_data.function_call_data.id;
     args_given = expr->expr_data.function_call_data.args_expr;
+
+    /* Parse recovery: Supports(intf, IInterfaceType, ref) can be parsed as
+     * Supports(intf, IInterfaceType(ref)) due no-parens call rules.
+     * Rewrite the second argument back into a type identifier and restore the
+     * third argument when the shape is unambiguous. */
+    if (id != NULL && pascal_identifier_equals(id, "supports") &&
+        args_given != NULL && args_given->next != NULL && args_given->next->next == NULL)
+    {
+        struct Expression *arg2 = (struct Expression *)args_given->next->cur;
+        if (arg2 != NULL &&
+            arg2->type == EXPR_FUNCTION_CALL &&
+            arg2->expr_data.function_call_data.id != NULL &&
+            arg2->expr_data.function_call_data.args_expr != NULL &&
+            arg2->expr_data.function_call_data.args_expr->next == NULL)
+        {
+            HashNode_t *type_node = semcheck_find_preferred_type_node(symtab,
+                arg2->expr_data.function_call_data.id);
+            if (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+            {
+                ListNode_t *captured_arg_node = arg2->expr_data.function_call_data.args_expr;
+                struct Expression *captured_arg = (struct Expression *)captured_arg_node->cur;
+                captured_arg_node->cur = NULL;
+                free(captured_arg_node);
+                arg2->expr_data.function_call_data.args_expr = NULL;
+
+                if (arg2->expr_data.function_call_data.mangled_id != NULL)
+                    free(arg2->expr_data.function_call_data.mangled_id);
+                if (arg2->expr_data.function_call_data.placeholder_method_name != NULL)
+                    free(arg2->expr_data.function_call_data.placeholder_method_name);
+                if (arg2->expr_data.function_call_data.call_qualifier != NULL)
+                    free(arg2->expr_data.function_call_data.call_qualifier);
+                if (arg2->expr_data.function_call_data.call_kgpc_type != NULL)
+                    destroy_kgpc_type(arg2->expr_data.function_call_data.call_kgpc_type);
+                arg2->expr_data.function_call_data.mangled_id = NULL;
+                arg2->expr_data.function_call_data.placeholder_method_name = NULL;
+                arg2->expr_data.function_call_data.call_qualifier = NULL;
+                arg2->expr_data.function_call_data.call_kgpc_type = NULL;
+
+                char *type_id = arg2->expr_data.function_call_data.id;
+                arg2->type = EXPR_VAR_ID;
+                arg2->expr_data.id = type_id;
+
+                ListNode_t *third_node = CreateListNode(captured_arg, LIST_EXPR);
+                if (third_node != NULL)
+                {
+                    args_given->next->next = third_node;
+                    expr->expr_data.function_call_data.args_expr = args_given;
+                }
+            }
+        }
+    }
     if (getenv("KGPC_DEBUG_EOF") != NULL && id != NULL &&
         pascal_identifier_equals(id, "EOF"))
     {
@@ -1363,6 +1475,7 @@ int semcheck_funccall(int *type_return,
         args_given != NULL && args_given->cur != NULL)
     {
         struct Expression *first_arg = (struct Expression *)args_given->cur;
+        int normalize_not_receiver = 0;
         if (first_arg->type == EXPR_RELOP &&
             first_arg->expr_data.relop_data.type == NOT &&
             first_arg->expr_data.relop_data.right == NULL &&
@@ -1372,7 +1485,15 @@ int semcheck_funccall(int *type_return,
             first_arg->expr_data.relop_data.left = NULL;
             args_given->cur = receiver;
             destroy_expr(first_arg);
+            normalize_not_receiver = 1;
+        }
+        else if (semcheck_detach_unary_not_from_receiver(first_arg))
+        {
+            normalize_not_receiver = 1;
+        }
 
+        if (normalize_not_receiver)
+        {
             struct Expression *call_expr = (struct Expression *)calloc(1, sizeof(struct Expression));
             if (call_expr == NULL)
             {
@@ -3357,7 +3478,6 @@ int semcheck_funccall(int *type_return,
         semcheck_expr_with_type(&first_arg_kgpc_type, symtab, first_arg, max_scope_lev, NO_MUTATE);
         first_arg_type_tag = semcheck_tag_from_kgpc(first_arg_kgpc_type);
         (void)first_arg_type_tag; /* Variable is used for potential debugging */
-
         if (first_arg != NULL && first_arg->type == EXPR_RECORD_ACCESS &&
             (first_arg->resolved_kgpc_type == NULL || first_arg->record_type == NULL))
         {
@@ -3395,7 +3515,6 @@ int semcheck_funccall(int *type_return,
                     record_info = owner_type->info.points_to->info.record_info;
                 }
             }
-
             /* For "class of T" (metaclass) types, the pointer's pointee may not
              * have been resolved to TYPE_KIND_RECORD at AST conversion time.
              * Try multiple strategies to find the record type:
@@ -4763,6 +4882,14 @@ method_call_resolved:
             best_match = NULL;
             num_best_matches = 0;
         }
+        if (best_match != NULL && semcheck_call_has_noarg_identifier_calls(args_given))
+        {
+            /* Calls containing bare no-arg identifier calls may represent type
+             * references (e.g. Supports(..., IInterfaceType, ...)); skip mangled
+             * fast-path and let full overload resolution classify arguments. */
+            best_match = NULL;
+            num_best_matches = 0;
+        }
     }
 
     if (best_match == NULL)
@@ -6038,9 +6165,60 @@ skip_overload_resolution:
             }
 
             KgpcType *arg_kgpc_type_call = NULL;
-            return_val += semcheck_expr_with_type(&arg_kgpc_type_call,
-                symtab, current_arg_expr, max_scope_lev, arg_mutating);
-            arg_type = semcheck_tag_from_kgpc(arg_kgpc_type_call);
+            int handled_as_type_ref = 0;
+            if (current_arg_expr != NULL &&
+                current_arg_expr->type == EXPR_FUNCTION_CALL &&
+                current_arg_expr->expr_data.function_call_data.args_expr == NULL &&
+                current_arg_expr->expr_data.function_call_data.id != NULL)
+            {
+                const char *type_id = current_arg_expr->expr_data.function_call_data.id;
+                HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, type_id);
+                if (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+                {
+                    /* FPC behavior: interface type identifiers in expression context
+                     * are treated as TGUID references (used by Supports(..., IIntf, ...)). */
+                    struct RecordType *type_record = get_record_type_from_node(type_node);
+                    if (type_record != NULL && type_record->is_interface)
+                    {
+                        HashNode_t *tguid_node = semcheck_find_type_node_with_kgpc_type(symtab, "TGUID");
+                        if (tguid_node != NULL && tguid_node->type != NULL)
+                        {
+                            semcheck_expr_set_resolved_kgpc_type_shared(current_arg_expr, tguid_node->type);
+                            arg_kgpc_type_call = current_arg_expr->resolved_kgpc_type;
+                            arg_type = semcheck_tag_from_kgpc(arg_kgpc_type_call);
+                            handled_as_type_ref = 1;
+                        }
+                    }
+
+                    if (!handled_as_type_ref && type_node->type != NULL)
+                    {
+                        semcheck_expr_set_resolved_kgpc_type_shared(current_arg_expr, type_node->type);
+                        arg_kgpc_type_call = current_arg_expr->resolved_kgpc_type;
+                        arg_type = semcheck_tag_from_kgpc(arg_kgpc_type_call);
+                        handled_as_type_ref = 1;
+                    }
+                }
+            }
+            if (!handled_as_type_ref)
+            {
+                return_val += semcheck_expr_with_type(&arg_kgpc_type_call,
+                    symtab, current_arg_expr, max_scope_lev, arg_mutating);
+                arg_type = semcheck_tag_from_kgpc(arg_kgpc_type_call);
+            }
+            if (arg_type == UNKNOWN_TYPE &&
+                current_arg_expr != NULL &&
+                current_arg_expr->type == EXPR_VAR_ID &&
+                current_arg_expr->expr_data.id != NULL)
+            {
+                HashNode_t *type_node = NULL;
+                if (FindIdent(&type_node, symtab, current_arg_expr->expr_data.id) == 0 &&
+                    type_node != NULL && type_node->hash_type == HASHTYPE_TYPE &&
+                    type_node->type != NULL)
+                {
+                    semcheck_expr_set_resolved_kgpc_type_shared(current_arg_expr, type_node->type);
+                    arg_type = semcheck_tag_from_kgpc(type_node->type);
+                }
+            }
             if (named_arg_mismatch)
                 arg_type = UNKNOWN_TYPE;
             if (getenv("KGPC_DEBUG_FORMAT") != NULL &&
@@ -6094,6 +6272,7 @@ skip_overload_resolution:
 
             while(true_arg_ids != NULL && args_to_validate != NULL)
             {
+                int param_is_untyped = semcheck_decl_is_untyped_param(arg_decl);
                 int expected_type = resolve_param_type(arg_decl, symtab);
                 if (getenv("KGPC_DEBUG_FORMAT") != NULL &&
                     id != NULL && pascal_identifier_equals(id, "Format"))
@@ -6111,7 +6290,7 @@ skip_overload_resolution:
                 {
                     arg_type = expected_type;
                 }
-                if (expected_type == UNKNOWN_TYPE || expected_type == BUILTIN_ANY_TYPE)
+                if (param_is_untyped || expected_type == UNKNOWN_TYPE || expected_type == BUILTIN_ANY_TYPE)
                 {
                     /* Untyped parameters accept any argument type. */
                     /* No validation needed. */
@@ -6257,6 +6436,16 @@ skip_overload_resolution:
                         {
                             type_compatible = 1;
                         }
+                    }
+                    if (!type_compatible &&
+                        id != NULL && pascal_identifier_equals(id, "supports") &&
+                        expected_type == POINTER_TYPE &&
+                        arg_type == UNKNOWN_TYPE &&
+                        cur_arg == 2)
+                    {
+                        /* Keep Supports() second-argument handling permissive for
+                         * interface-type identifiers until parser typing is normalized. */
+                        type_compatible = 1;
                     }
 
                     if (owns_arg_kgpc && arg_kgpc != NULL)

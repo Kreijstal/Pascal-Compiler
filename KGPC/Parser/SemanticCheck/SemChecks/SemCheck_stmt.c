@@ -5006,7 +5006,7 @@ skip_type_receiver_rewrite:
             if (!is_unit_qualifier &&
                 FindIdent(&unit_check, symtab, potential_unit_name) == -1)
             {
-                int looks_like_self_field = 0;
+                int looks_like_self_member = 0;
                 HashNode_t *self_node = NULL;
                 if (FindIdent(&self_node, symtab, "Self") != -1 && self_node != NULL)
                 {
@@ -5015,11 +5015,23 @@ skip_type_receiver_rewrite:
                         semcheck_find_class_field_including_hidden(symtab, self_record,
                             potential_unit_name, NULL) != NULL)
                     {
-                        looks_like_self_field = 1;
+                        looks_like_self_member = 1;
+                    }
+                    if (!looks_like_self_member &&
+                        semcheck_find_class_property(symtab, self_record,
+                            potential_unit_name, NULL) != NULL)
+                    {
+                        looks_like_self_member = 1;
+                    }
+                    if (!looks_like_self_member &&
+                        semcheck_find_class_method(symtab, self_record,
+                            potential_unit_name, NULL) != NULL)
+                    {
+                        looks_like_self_member = 1;
                     }
                 }
 
-                if (!looks_like_self_field)
+                if (!looks_like_self_member)
                     is_unit_qualifier = 1;
             }
 
@@ -7100,6 +7112,53 @@ proccall_parent_resolve_done:
     }
     else
     {
+        if (with_context_count > 0 &&
+            proc_id != NULL &&
+            sym_return != NULL &&
+            sym_return->owner_class == NULL &&
+            !stmt->stmt_data.procedure_call_data.is_method_call_placeholder)
+        {
+            int try_with_override = 0;
+            if (sym_return->type != NULL && sym_return->type->kind == TYPE_KIND_PROCEDURE)
+            {
+                ListNode_t *params = kgpc_type_get_procedure_params(sym_return->type);
+                if (params != NULL && params->cur != NULL)
+                {
+                    Tree_t *first_decl = (Tree_t *)params->cur;
+                    const char *first_type_id = NULL;
+                    if (first_decl != NULL && first_decl->type == TREE_VAR_DECL)
+                        first_type_id = first_decl->tree_data.var_decl_data.type_id;
+                    else if (first_decl != NULL && first_decl->type == TREE_ARR_DECL)
+                        first_type_id = first_decl->tree_data.arr_decl_data.type_id;
+                    if (first_type_id != NULL &&
+                        strlen(first_type_id) == 1 &&
+                        first_type_id[0] >= 'A' && first_type_id[0] <= 'Z')
+                    {
+                        try_with_override = 1;
+                    }
+                }
+            }
+            if (try_with_override)
+            {
+                struct Expression *with_expr = NULL;
+                int wm = semcheck_with_try_resolve_method(proc_id, symtab, &with_expr, stmt->line_num);
+                if (wm == 0 && with_expr != NULL)
+                {
+                    ListNode_t *self_node = CreateListNode(with_expr, LIST_EXPR);
+                    if (self_node != NULL)
+                    {
+                        self_node->next = stmt->stmt_data.procedure_call_data.expr_args;
+                        stmt->stmt_data.procedure_call_data.expr_args = self_node;
+                        stmt->stmt_data.procedure_call_data.is_method_call_placeholder = 1;
+                        if (stmt->stmt_data.procedure_call_data.placeholder_method_name == NULL)
+                            stmt->stmt_data.procedure_call_data.placeholder_method_name = strdup(proc_id);
+                        return semcheck_proccall(symtab, stmt, max_scope_lev);
+                    }
+                    destroy_expr(with_expr);
+                }
+            }
+        }
+
         sym_return->referenced += 1; /* Moved here: only access if sym_return is valid */
 
         if (sym_return->type != NULL && sym_return->type->kind == TYPE_KIND_PROCEDURE)

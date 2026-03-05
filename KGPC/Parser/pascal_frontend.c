@@ -99,6 +99,92 @@ static bool detect_objfpc_mode(const char *buffer, size_t length)
     return false;
 }
 
+/* cparser currently rejects some qualified identifiers when horizontal
+ * whitespace appears around the dot separator (e.g. "unit .Type").
+ * Normalize IDENT [ \t]* '.' [ \t]* IDENT -> IDENT.IDENT while preserving
+ * newlines so source line mapping remains stable. */
+static char *normalize_dotted_identifier_spacing(const char *buffer, size_t length, size_t *out_length)
+{
+    if (buffer == NULL)
+        return NULL;
+
+    char *out = (char *)malloc(length + 1);
+    if (out == NULL)
+        return NULL;
+
+    size_t i = 0;
+    size_t j = 0;
+    int in_asm_block = 0;
+    while (i < length)
+    {
+        if ((isalpha((unsigned char)buffer[i]) || buffer[i] == '_'))
+        {
+            size_t word_start = i;
+            while (i < length && (isalnum((unsigned char)buffer[i]) || buffer[i] == '_'))
+                i++;
+            size_t word_len = i - word_start;
+
+            if (!in_asm_block && word_len == 3 &&
+                (buffer[word_start] == 'a' || buffer[word_start] == 'A') &&
+                (buffer[word_start + 1] == 's' || buffer[word_start + 1] == 'S') &&
+                (buffer[word_start + 2] == 'm' || buffer[word_start + 2] == 'M'))
+            {
+                in_asm_block = 1;
+            }
+            else if (in_asm_block && word_len == 3 &&
+                     (buffer[word_start] == 'e' || buffer[word_start] == 'E') &&
+                     (buffer[word_start + 1] == 'n' || buffer[word_start + 1] == 'N') &&
+                     (buffer[word_start + 2] == 'd' || buffer[word_start + 2] == 'D'))
+            {
+                size_t look = i;
+                while (look < length && (buffer[look] == ' ' || buffer[look] == '\t'))
+                    look++;
+                if (look < length && buffer[look] == ';')
+                    in_asm_block = 0;
+            }
+
+            memcpy(out + j, buffer + word_start, word_len);
+            j += word_len;
+
+            if (in_asm_block)
+                continue;
+
+            size_t ws_start = i;
+            while (i < length && (buffer[i] == ' ' || buffer[i] == '\t'))
+                i++;
+
+            if (i < length && buffer[i] == '.')
+            {
+                size_t after_dot = i + 1;
+                while (after_dot < length && (buffer[after_dot] == ' ' || buffer[after_dot] == '\t'))
+                    after_dot++;
+
+                if (after_dot < length &&
+                    (isalpha((unsigned char)buffer[after_dot]) || buffer[after_dot] == '_'))
+                {
+                    out[j++] = '.';
+                    i = after_dot;
+                    continue;
+                }
+            }
+
+            if (ws_start < i)
+            {
+                memcpy(out + j, buffer + ws_start, i - ws_start);
+                j += (i - ws_start);
+            }
+            continue;
+        }
+
+        out[j++] = buffer[i++];
+    }
+
+    out[j] = '\0';
+    if (out_length != NULL)
+        *out_length = j;
+    return out;
+}
+
 static int detect_shortstring_default(const char *buffer, size_t length, bool *out_shortstring)
 {
     if (buffer == NULL || length == 0 || out_shortstring == NULL)
@@ -917,6 +1003,17 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
     free(buffer);
     buffer = preprocessed_buffer;
     length = preprocessed_length;
+
+    {
+        size_t normalized_len = 0;
+        char *normalized = normalize_dotted_identifier_spacing(buffer, length, &normalized_len);
+        if (normalized != NULL)
+        {
+            free(buffer);
+            buffer = normalized;
+            length = normalized_len;
+        }
+    }
 
     if (length >= 3)
     {

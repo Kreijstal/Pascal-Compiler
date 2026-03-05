@@ -3133,7 +3133,6 @@ SKIP_SELF_FIELD_REWRITE:
                         ListNode_t *arg_node = CreateListNode(receiver, LIST_EXPR);
                         expr->expr_data.function_call_data.args_expr = arg_node;
                     }
-
                     /* Check if this is a constructor call (Create) on a class type.
                      * After semcheck_funccall resolves the inherited constructor,
                      * we need to override the return type to be the calling class,
@@ -4990,7 +4989,6 @@ int semcheck_addressof(int *type_return,
     int inner_type = UNKNOWN_TYPE;
     int treated_as_proc_ref = 0;
     HashNode_t *resolved_proc_symbol = NULL;
-    int dbg_addr_proc = getenv("KGPC_DEBUG_ADDR_PROC") != NULL;
     int dbg_specialize_addr = getenv("KGPC_DEBUG_ADDR_SPECIALIZE") != NULL;
 
     if (dbg_specialize_addr && expr->line_num == 256)
@@ -4999,7 +4997,6 @@ int semcheck_addressof(int *type_return,
             expr->line_num, expr->source_index, inner->type,
             (inner->type == EXPR_VAR_ID && inner->expr_data.id != NULL) ? inner->expr_data.id : "(n/a)");
     }
-
     if (inner->type == EXPR_VAR_ID &&
         inner->expr_data.id != NULL &&
         pascal_identifier_equals(inner->expr_data.id, "specialize") &&
@@ -5148,6 +5145,120 @@ int semcheck_addressof(int *type_return,
             }
         }
     }
+    else if (inner->type == EXPR_FUNCTION_CALL &&
+             inner->expr_data.function_call_data.args_expr != NULL &&
+             (inner->expr_data.function_call_data.is_method_call_placeholder ||
+              inner->expr_data.function_call_data.placeholder_method_name != NULL))
+    {
+        const char *method_id = inner->expr_data.function_call_data.placeholder_method_name;
+        if (method_id == NULL)
+            method_id = inner->expr_data.function_call_data.id;
+
+        ListNode_t *arg0 = inner->expr_data.function_call_data.args_expr;
+        struct Expression *receiver_expr =
+            (arg0 != NULL && arg0->type == LIST_EXPR) ? (struct Expression *)arg0->cur : NULL;
+        struct RecordType *rec_info = NULL;
+
+        if (receiver_expr != NULL)
+        {
+            if (receiver_expr->type == EXPR_VAR_ID && receiver_expr->expr_data.id != NULL)
+            {
+                HashNode_t *owner_node = NULL;
+                if (FindIdent(&owner_node, symtab, receiver_expr->expr_data.id) >= 0 &&
+                    owner_node != NULL &&
+                    owner_node->hash_type == HASHTYPE_TYPE &&
+                    owner_node->type != NULL)
+                {
+                    KgpcType *owner_type = owner_node->type;
+                    if (kgpc_type_is_record(owner_type))
+                        rec_info = kgpc_type_get_record(owner_type);
+                    else if (kgpc_type_is_pointer(owner_type) &&
+                             owner_type->info.points_to != NULL &&
+                             kgpc_type_is_record(owner_type->info.points_to))
+                        rec_info = kgpc_type_get_record(owner_type->info.points_to);
+                }
+            }
+
+            if (rec_info == NULL)
+            {
+                KgpcType *receiver_type = NULL;
+                semcheck_expr_with_type(&receiver_type, symtab, receiver_expr, max_scope_lev, NO_MUTATE);
+                if (receiver_type != NULL)
+                {
+                    if (kgpc_type_is_record(receiver_type))
+                        rec_info = kgpc_type_get_record(receiver_type);
+                    else if (kgpc_type_is_pointer(receiver_type) &&
+                             receiver_type->info.points_to != NULL &&
+                             kgpc_type_is_record(receiver_type->info.points_to))
+                        rec_info = kgpc_type_get_record(receiver_type->info.points_to);
+                }
+            }
+        }
+
+        if (method_id != NULL)
+        {
+            HashNode_t *method_node = NULL;
+            if (rec_info != NULL)
+                method_node = semcheck_find_class_method(symtab, rec_info, method_id, NULL);
+
+            if (method_node == NULL)
+            {
+                const char *owner = semcheck_get_current_method_owner();
+                if (owner != NULL)
+                {
+                    size_t mlen = strlen(owner) + 2 + strlen(method_id);
+                    char *mangled_base = (char *)malloc(mlen + 1);
+                    if (mangled_base != NULL)
+                    {
+                        snprintf(mangled_base, mlen + 1, "%s__%s", owner, method_id);
+                        ListNode_t *matches = FindAllIdents(symtab, mangled_base);
+                        if (matches != NULL)
+                        {
+                            for (ListNode_t *cur = matches; cur != NULL; cur = cur->next)
+                            {
+                                HashNode_t *candidate = (HashNode_t *)cur->cur;
+                                if (candidate != NULL &&
+                                    (candidate->hash_type == HASHTYPE_FUNCTION ||
+                                     candidate->hash_type == HASHTYPE_PROCEDURE))
+                                {
+                                    method_node = candidate;
+                                    break;
+                                }
+                            }
+                            DestroyList(matches);
+                        }
+                        free(mangled_base);
+                    }
+                }
+            }
+
+            if (method_node == NULL)
+            {
+                method_node = semcheck_find_any_proc_symbol(symtab, method_id);
+            }
+
+            if (method_node == NULL)
+            {
+                size_t len = strlen(method_id);
+                char *prefixed = (char *)malloc(len + 3);
+                if (prefixed != NULL)
+                {
+                    snprintf(prefixed, len + 3, "__%s", method_id);
+                    method_node = semcheck_find_any_proc_symbol(symtab, prefixed);
+                    free(prefixed);
+                }
+            }
+
+            if (method_node != NULL &&
+                (method_node->hash_type == HASHTYPE_FUNCTION ||
+                 method_node->hash_type == HASHTYPE_PROCEDURE))
+            {
+                inner_type = PROCEDURE;
+                treated_as_proc_ref = 1;
+                resolved_proc_symbol = method_node;
+            }
+        }
+    }
     /* Handle @obj.Method - address of a method through record access.
      * The inner expression is EXPR_RECORD_ACCESS where the field is a method name.
      * We need to detect this before semcheck converts it to a function call. */
@@ -5181,9 +5292,8 @@ int semcheck_addressof(int *type_return,
                 {
                     fprintf(stderr, "[ADDR-SPECIALIZE] owner type not found for %s\n",
                         record_expr->expr_data.id);
-                    skip_record_expr_semcheck = 1;
                 }
-                else
+                if (inner->is_specialize_addr_target)
                 {
                     skip_record_expr_semcheck = 1;
                 }
@@ -5225,6 +5335,59 @@ int semcheck_addressof(int *type_return,
             else if (field_id != NULL)
             {
                 HashNode_t *fallback_symbol = semcheck_find_any_proc_symbol(symtab, field_id);
+                if (fallback_symbol == NULL &&
+                    record_expr != NULL &&
+                    record_expr->type == EXPR_VAR_ID &&
+                    record_expr->expr_data.id != NULL &&
+                    pascal_identifier_equals(record_expr->expr_data.id, "Self"))
+                {
+                    const char *owner = semcheck_get_current_method_owner();
+                    if (owner != NULL)
+                    {
+                        size_t mlen = strlen(owner) + 2 + strlen(field_id);
+                        char *mangled_base = (char *)malloc(mlen + 1);
+                        if (mangled_base != NULL)
+                        {
+                            snprintf(mangled_base, mlen + 1, "%s__%s", owner, field_id);
+                            ListNode_t *matches = FindAllIdents(symtab, mangled_base);
+                            if (matches != NULL)
+                            {
+                                HashNode_t *owner_match = NULL;
+                                HashNode_t *first_proc = NULL;
+                                for (ListNode_t *cur = matches; cur != NULL; cur = cur->next)
+                                {
+                                    HashNode_t *candidate = (HashNode_t *)cur->cur;
+                                    if (candidate == NULL ||
+                                        (candidate->hash_type != HASHTYPE_FUNCTION &&
+                                         candidate->hash_type != HASHTYPE_PROCEDURE) ||
+                                        candidate->type == NULL)
+                                        continue;
+                                    if (first_proc == NULL)
+                                        first_proc = candidate;
+
+                                    ListNode_t *params = kgpc_type_get_procedure_params(candidate->type);
+                                    if (params == NULL || params->cur == NULL)
+                                        continue;
+                                    Tree_t *first_decl = (Tree_t *)params->cur;
+                                    const char *first_type_id = NULL;
+                                    if (first_decl->type == TREE_VAR_DECL)
+                                        first_type_id = first_decl->tree_data.var_decl_data.type_id;
+                                    else if (first_decl->type == TREE_ARR_DECL)
+                                        first_type_id = first_decl->tree_data.arr_decl_data.type_id;
+                                    if (first_type_id != NULL &&
+                                        pascal_identifier_equals(first_type_id, owner))
+                                    {
+                                        owner_match = candidate;
+                                        break;
+                                    }
+                                }
+                                fallback_symbol = (owner_match != NULL) ? owner_match : first_proc;
+                                DestroyList(matches);
+                            }
+                            free(mangled_base);
+                        }
+                    }
+                }
                 if (fallback_symbol == NULL)
                 {
                     size_t len = strlen(field_id);
@@ -5481,20 +5644,6 @@ int semcheck_addressof(int *type_return,
                 kgpc_type_retain(proc_type);
             pointed_to_type = proc_type;
         }
-        if (dbg_addr_proc && (expr->line_num == 256 || expr->line_num == 267 || expr->line_num == 278))
-        {
-            fprintf(stderr,
-                "[ADDR-PROC] line=%d inner_expr_type=%d resolved_proc=%s sym_type_kind=%d proc_type=%p proc_type_kind=%d\n",
-                expr->line_num,
-                inner != NULL ? inner->type : -1,
-                (resolved_proc_symbol != NULL && resolved_proc_symbol->id != NULL)
-                    ? resolved_proc_symbol->id : "(null)",
-                (resolved_proc_symbol != NULL && resolved_proc_symbol->type != NULL)
-                    ? resolved_proc_symbol->type->kind : -1,
-                (void *)proc_type,
-                proc_type != NULL ? proc_type->kind : -1);
-        }
-
         /* Handle both EXPR_VAR_ID (for procedures) and EXPR_FUNCTION_CALL (for functions that were auto-converted) */
         if (inner->type == EXPR_VAR_ID)
         {
@@ -5714,12 +5863,6 @@ int semcheck_addressof(int *type_return,
             }
             converted_to_proc_addr = 1;
             }
-        }
-        else if (dbg_addr_proc && (expr->line_num == 256 || expr->line_num == 267 || expr->line_num == 278))
-        {
-            fprintf(stderr,
-                "[ADDR-PROC] line=%d no direct EXPR_ADDR_OF_PROC conversion path\n",
-                expr->line_num);
         }
     }
     /* For other types, we could add more conversions here */
