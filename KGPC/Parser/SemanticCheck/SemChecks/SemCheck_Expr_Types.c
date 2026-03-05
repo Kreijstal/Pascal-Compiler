@@ -5252,7 +5252,8 @@ int semcheck_addressof(int *type_return,
                  * symbol lookup is deferred/unavailable in this pass. */
                 if (fallback_symbol == NULL &&
                     record_expr->type == EXPR_VAR_ID &&
-                    record_expr->expr_data.id != NULL)
+                    record_expr->expr_data.id != NULL &&
+                    strchr(record_expr->expr_data.id, '$') != NULL)
                 {
                     inner_type = PROCEDURE;
                     treated_as_proc_ref = 1;
@@ -5656,6 +5657,16 @@ int semcheck_addressof(int *type_return,
                  inner->expr_data.record_access_data.field_id != NULL)
         {
             const char *field_id = inner->expr_data.record_access_data.field_id;
+            struct Expression *record_expr = inner->expr_data.record_access_data.record_expr;
+            if (record_expr == NULL ||
+                record_expr->type != EXPR_VAR_ID ||
+                record_expr->expr_data.id == NULL ||
+                strchr(record_expr->expr_data.id, '$') == NULL)
+            {
+                converted_to_proc_addr = 0;
+            }
+            else
+            {
             size_t nlen = strlen(field_id) + 2;
             char *synth_name = (char *)malloc(nlen + 1);
             if (synth_name != NULL)
@@ -5701,6 +5712,7 @@ int semcheck_addressof(int *type_return,
                     destroy_kgpc_type(generic_proc);
             }
             converted_to_proc_addr = 1;
+            }
         }
         else if (dbg_addr_proc && (expr->line_num == 256 || expr->line_num == 267 || expr->line_num == 278))
         {
