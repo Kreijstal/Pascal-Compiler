@@ -7048,6 +7048,30 @@ proccall_parent_resolve_done:
             }
             else
             {
+                if (proc_id != NULL && proc_id[0] == '_' && proc_id[1] == '_')
+                {
+                    HashNode_t *synth_node = NULL;
+                    if (FindIdent(&synth_node, symtab, proc_id) < 0)
+                    {
+                        KgpcType *synth_type = create_procedure_type(NULL, NULL);
+                        if (synth_type != NULL)
+                        {
+                            char *id_dup = strdup(proc_id);
+                            char *mangled_dup = strdup(proc_id);
+                            if (id_dup != NULL && mangled_dup != NULL)
+                                (void)PushProcedureOntoScope_Typed(symtab, id_dup, mangled_dup, synth_type);
+                            else
+                            {
+                                free(id_dup);
+                                free(mangled_dup);
+                            }
+                            destroy_kgpc_type(synth_type);
+                        }
+                    }
+                    DestroyList(overload_candidates);
+                    free(mangled_name);
+                    return return_val;
+                }
                 /* No overloads found - procedure is not declared */
                 semcheck_error_with_context(
                     "Error on line %d, procedure %s%s is not declared.\n",

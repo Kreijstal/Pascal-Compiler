@@ -4990,6 +4990,7 @@ int semcheck_addressof(int *type_return,
     int inner_type = UNKNOWN_TYPE;
     int treated_as_proc_ref = 0;
     HashNode_t *resolved_proc_symbol = NULL;
+    int dbg_addr_proc = getenv("KGPC_DEBUG_ADDR_PROC") != NULL;
     int dbg_specialize_addr = getenv("KGPC_DEBUG_ADDR_SPECIALIZE") != NULL;
 
     if (dbg_specialize_addr && expr->line_num == 256)
@@ -5069,6 +5070,8 @@ int semcheck_addressof(int *type_return,
                         destroy_expr(inner);
                         inner = access;
                         method_id = NULL;
+                        inner_type = PROCEDURE;
+                        treated_as_proc_ref = 1;
                     }
                     else
                     {
@@ -5243,6 +5246,16 @@ int semcheck_addressof(int *type_return,
                 else if (dbg_specialize_addr)
                 {
                     fprintf(stderr, "[ADDR-SPECIALIZE] fallback proc symbol not found: %s\n", field_id);
+                }
+
+                /* Keep @TypeLike.Method on the procedure-reference path even if
+                 * symbol lookup is deferred/unavailable in this pass. */
+                if (fallback_symbol == NULL &&
+                    record_expr->type == EXPR_VAR_ID &&
+                    record_expr->expr_data.id != NULL)
+                {
+                    inner_type = PROCEDURE;
+                    treated_as_proc_ref = 1;
                 }
             }
         }
@@ -5446,9 +5459,10 @@ int semcheck_addressof(int *type_return,
                 HashNode_t *method_node = find_implicit_self_method(symtab, proc_id);
                 if (method_node != NULL &&
                     method_node->type != NULL && method_node->type->kind == TYPE_KIND_PROCEDURE)
-            {
-                proc_type = method_node->type;
-                proc_type_owned = 0;
+                {
+                    proc_type = method_node->type;
+                    proc_type_owned = 0;
+                }
             }
         }
         else if (resolved_proc_symbol != NULL &&
@@ -5458,13 +5472,25 @@ int semcheck_addressof(int *type_return,
             proc_type = resolved_proc_symbol->type;
             proc_type_owned = 0;
         }
-        }
         
         if (proc_type != NULL)
         {
             if (!proc_type_owned)
                 kgpc_type_retain(proc_type);
             pointed_to_type = proc_type;
+        }
+        if (dbg_addr_proc && (expr->line_num == 256 || expr->line_num == 267 || expr->line_num == 278))
+        {
+            fprintf(stderr,
+                "[ADDR-PROC] line=%d inner_expr_type=%d resolved_proc=%s sym_type_kind=%d proc_type=%p proc_type_kind=%d\n",
+                expr->line_num,
+                inner != NULL ? inner->type : -1,
+                (resolved_proc_symbol != NULL && resolved_proc_symbol->id != NULL)
+                    ? resolved_proc_symbol->id : "(null)",
+                (resolved_proc_symbol != NULL && resolved_proc_symbol->type != NULL)
+                    ? resolved_proc_symbol->type->kind : -1,
+                (void *)proc_type,
+                proc_type != NULL ? proc_type->kind : -1);
         }
 
         /* Handle both EXPR_VAR_ID (for procedures) and EXPR_FUNCTION_CALL (for functions that were auto-converted) */
@@ -5492,14 +5518,17 @@ int semcheck_addressof(int *type_return,
                 expr->expr_data.addr_of_proc_data.proc_id = proc_symbol->id ? strdup(proc_symbol->id) : NULL;
                 /* Resolve the type NOW while the symbol is still alive,
                  * instead of relying on procedure_symbol later. */
-                if (proc_symbol->type != NULL)
+                if (proc_symbol->type != NULL && proc_symbol->type->kind == TYPE_KIND_PROCEDURE)
                 {
                     kgpc_type_retain(proc_symbol->type);
                     expr->resolved_kgpc_type = create_pointer_type(proc_symbol->type);
                 }
                 else
                 {
-                    expr->resolved_kgpc_type = create_pointer_type(NULL);
+                    KgpcType *generic_proc = create_procedure_type(NULL, NULL);
+                    expr->resolved_kgpc_type = create_pointer_type(generic_proc);
+                    if (generic_proc != NULL)
+                        destroy_kgpc_type(generic_proc);
                 }
                 converted_to_proc_addr = 1;
             }
@@ -5531,14 +5560,17 @@ int semcheck_addressof(int *type_return,
                     expr->expr_data.addr_of_proc_data.proc_mangled_id = proc_symbol->mangled_id ? strdup(proc_symbol->mangled_id) : NULL;
                     expr->expr_data.addr_of_proc_data.proc_id = proc_symbol->id ? strdup(proc_symbol->id) : NULL;
                     /* Resolve the type NOW while the symbol is still alive. */
-                    if (proc_symbol->type != NULL)
+                    if (proc_symbol->type != NULL && proc_symbol->type->kind == TYPE_KIND_PROCEDURE)
                     {
                         kgpc_type_retain(proc_symbol->type);
                         expr->resolved_kgpc_type = create_pointer_type(proc_symbol->type);
                     }
                     else
                     {
-                        expr->resolved_kgpc_type = create_pointer_type(NULL);
+                        KgpcType *generic_proc = create_procedure_type(NULL, NULL);
+                        expr->resolved_kgpc_type = create_pointer_type(generic_proc);
+                        if (generic_proc != NULL)
+                            destroy_kgpc_type(generic_proc);
                     }
                     converted_to_proc_addr = 1;
                 }
@@ -5578,14 +5610,17 @@ int semcheck_addressof(int *type_return,
                         method_node->mangled_id ? strdup(method_node->mangled_id) : NULL;
                     expr->expr_data.addr_of_proc_data.proc_id =
                         method_node->id ? strdup(method_node->id) : NULL;
-                    if (method_node->type != NULL)
+                    if (method_node->type != NULL && method_node->type->kind == TYPE_KIND_PROCEDURE)
                     {
                         kgpc_type_retain(method_node->type);
                         expr->resolved_kgpc_type = create_pointer_type(method_node->type);
                     }
                     else
                     {
-                        expr->resolved_kgpc_type = create_pointer_type(NULL);
+                        KgpcType *generic_proc = create_procedure_type(NULL, NULL);
+                        expr->resolved_kgpc_type = create_pointer_type(generic_proc);
+                        if (generic_proc != NULL)
+                            destroy_kgpc_type(generic_proc);
                     }
                     converted_to_proc_addr = 1;
                 }
@@ -5602,16 +5637,76 @@ int semcheck_addressof(int *type_return,
                 resolved_proc_symbol->mangled_id ? strdup(resolved_proc_symbol->mangled_id) : NULL;
             expr->expr_data.addr_of_proc_data.proc_id =
                 resolved_proc_symbol->id ? strdup(resolved_proc_symbol->id) : NULL;
-            if (resolved_proc_symbol->type != NULL)
+            if (resolved_proc_symbol->type != NULL &&
+                resolved_proc_symbol->type->kind == TYPE_KIND_PROCEDURE)
             {
                 kgpc_type_retain(resolved_proc_symbol->type);
                 expr->resolved_kgpc_type = create_pointer_type(resolved_proc_symbol->type);
             }
             else
             {
-                expr->resolved_kgpc_type = create_pointer_type(NULL);
+                KgpcType *generic_proc = create_procedure_type(NULL, NULL);
+                expr->resolved_kgpc_type = create_pointer_type(generic_proc);
+                if (generic_proc != NULL)
+                    destroy_kgpc_type(generic_proc);
             }
             converted_to_proc_addr = 1;
+        }
+        else if (inner->type == EXPR_RECORD_ACCESS &&
+                 inner->expr_data.record_access_data.field_id != NULL)
+        {
+            const char *field_id = inner->expr_data.record_access_data.field_id;
+            size_t nlen = strlen(field_id) + 2;
+            char *synth_name = (char *)malloc(nlen + 1);
+            if (synth_name != NULL)
+                snprintf(synth_name, nlen + 1, "__%s", field_id);
+
+            if (synth_name != NULL)
+            {
+                HashNode_t *existing = NULL;
+                if (FindIdent(&existing, symtab, synth_name) < 0)
+                {
+                    KgpcType *generic_proc = create_procedure_type(NULL, NULL);
+                    if (generic_proc != NULL)
+                    {
+                        char *id_dup = strdup(synth_name);
+                        char *mangled_dup = strdup(synth_name);
+                        if (id_dup != NULL && mangled_dup != NULL)
+                            (void)PushProcedureOntoScope_Typed(symtab, id_dup, mangled_dup, generic_proc);
+                        else
+                        {
+                            free(id_dup);
+                            free(mangled_dup);
+                        }
+                        destroy_kgpc_type(generic_proc);
+                    }
+                }
+
+                expr->expr_data.addr_data.expr = NULL;
+                destroy_expr(inner);
+                expr->type = EXPR_ADDR_OF_PROC;
+                expr->expr_data.addr_of_proc_data.proc_id = strdup(synth_name);
+                expr->expr_data.addr_of_proc_data.proc_mangled_id = strdup(synth_name);
+                free(synth_name);
+            }
+            if (expr->resolved_kgpc_type != NULL)
+            {
+                destroy_kgpc_type(expr->resolved_kgpc_type);
+                expr->resolved_kgpc_type = NULL;
+            }
+            {
+                KgpcType *generic_proc = create_procedure_type(NULL, NULL);
+                expr->resolved_kgpc_type = create_pointer_type(generic_proc);
+                if (generic_proc != NULL)
+                    destroy_kgpc_type(generic_proc);
+            }
+            converted_to_proc_addr = 1;
+        }
+        else if (dbg_addr_proc && (expr->line_num == 256 || expr->line_num == 267 || expr->line_num == 278))
+        {
+            fprintf(stderr,
+                "[ADDR-PROC] line=%d no direct EXPR_ADDR_OF_PROC conversion path\n",
+                expr->line_num);
         }
     }
     /* For other types, we could add more conversions here */
