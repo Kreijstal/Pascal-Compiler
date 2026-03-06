@@ -13096,41 +13096,137 @@ tuple_cleanup:
         return set_expr_source_index(result, expr_node);
     }
     case PASCAL_T_ADDR:
-        if (getenv("KGPC_DEBUG_SPECIALIZE_CALLS") != NULL &&
-            expr_node != NULL && expr_node->line == 256)
+    {
+        /* Resolve @specialize Type<T>.Method at conversion time while
+         * preprocessed_source still points to the correct unit's buffer.
+         * Once units are merged into the program tree the source indices
+         * become invalid for the main program's buffer, so the semcheck
+         * fallback (which re-parses source text) would fail. */
+        ast_t *child = expr_node->child;
+        if (child != NULL && child->sym != NULL && child->sym->name != NULL &&
+            strcasecmp(child->sym->name, "specialize") == 0 &&
+            preprocessed_source != NULL && preprocessed_length > 0 &&
+            expr_node->index >= 0 && (size_t)expr_node->index < preprocessed_length)
         {
-            ast_t *child = expr_node->child;
-            fprintf(stderr,
-                "[KGPC_DEBUG_SPECIALIZE_CALLS] ADDR line=256 child=%d(%s:%s) child_child=%d(%s)\n",
-                child != NULL ? child->typ : -1,
-                child != NULL ? pascal_tag_to_string(child->typ) : "<null>",
-                (child != NULL && child->sym != NULL && child->sym->name != NULL)
-                    ? child->sym->name : "<null>",
-                (child != NULL && child->child != NULL) ? child->child->typ : -1,
-                (child != NULL && child->child != NULL)
-                    ? pascal_tag_to_string(child->child->typ) : "<null>");
-            for (ast_t *it = expr_node->next; it != NULL; it = it->next)
+            size_t idx = (size_t)expr_node->index;
+            /* Scan forward to find '@' on this line */
+            size_t line_end = idx;
+            while (line_end < preprocessed_length &&
+                   preprocessed_source[line_end] != '\n' &&
+                   preprocessed_source[line_end] != '\r' &&
+                   preprocessed_source[line_end] != ';')
+                line_end++;
+
+            size_t at_pos = idx;
+            for (size_t s = idx; s < line_end; ++s)
             {
-                fprintf(stderr,
-                    "[KGPC_DEBUG_SPECIALIZE_CALLS]   ADDR expr.next typ=%d(%s:%s) child=%d(%s)\n",
-                    it->typ,
-                    pascal_tag_to_string(it->typ),
-                    (it->sym != NULL && it->sym->name != NULL) ? it->sym->name : "<null>",
-                    it->child != NULL ? it->child->typ : -1,
-                    it->child != NULL ? pascal_tag_to_string(it->child->typ) : "<null>");
+                if (preprocessed_source[s] == '@') { at_pos = s; break; }
             }
-            for (ast_t *it = child != NULL ? child->next : NULL; it != NULL; it = it->next)
+            size_t i = at_pos;
+            if (i < line_end && preprocessed_source[i] == '@')
+                i++;
+            while (i < line_end && (preprocessed_source[i] == ' ' || preprocessed_source[i] == '\t'))
+                i++;
+            /* Skip optional 'specialize' keyword */
+            const char *kw = "specialize";
+            size_t kw_len = 10;
+            if (i + kw_len <= line_end && strncasecmp(preprocessed_source + i, kw, kw_len) == 0)
             {
-                fprintf(stderr,
-                    "[KGPC_DEBUG_SPECIALIZE_CALLS]   ADDR sibling typ=%d(%s:%s) child=%d(%s)\n",
-                    it->typ,
-                    pascal_tag_to_string(it->typ),
-                    (it->sym != NULL && it->sym->name != NULL) ? it->sym->name : "<null>",
-                    it->child != NULL ? it->child->typ : -1,
-                    it->child != NULL ? pascal_tag_to_string(it->child->typ) : "<null>");
+                i += kw_len;
+                while (i < line_end && (preprocessed_source[i] == ' ' || preprocessed_source[i] == '\t'))
+                    i++;
+            }
+            /* Parse type name including angle brackets: Type<T> */
+            size_t type_start = i;
+            int angle_depth = 0;
+            while (i < line_end)
+            {
+                char ch = preprocessed_source[i];
+                if (ch == '<') angle_depth++;
+                else if (ch == '>') { if (angle_depth > 0) angle_depth--; }
+                else if (ch == '.' && angle_depth == 0) break;
+                else if (ch == '\n' || ch == ';' || ch == '\r') break;
+                i++;
+            }
+            if (i < line_end && preprocessed_source[i] == '.' && i > type_start)
+            {
+                /* Extract type name */
+                size_t type_len = i - type_start;
+                char *type_raw = (char *)malloc(type_len + 1);
+                if (type_raw != NULL)
+                {
+                    memcpy(type_raw, preprocessed_source + type_start, type_len);
+                    type_raw[type_len] = '\0';
+                    i++; /* skip '.' */
+                    /* Parse method name */
+                    size_t method_start = i;
+                    while (i < line_end && (isalnum((unsigned char)preprocessed_source[i]) || preprocessed_source[i] == '_'))
+                        i++;
+                    if (i > method_start)
+                    {
+                        size_t method_len = i - method_start;
+                        char *method_id = (char *)malloc(method_len + 1);
+                        if (method_id != NULL)
+                        {
+                            memcpy(method_id, preprocessed_source + method_start, method_len);
+                            method_id[method_len] = '\0';
+                            /* Mangle generic type: Type<T> -> Type$T */
+                            char *lt = strchr(type_raw, '<');
+                            char *mangled = NULL;
+                            if (lt != NULL)
+                            {
+                                char *gt = strrchr(type_raw, '>');
+                                if (gt != NULL && gt > lt)
+                                {
+                                    size_t base_len = (size_t)(lt - type_raw);
+                                    char args_buf[256];
+                                    size_t args_len = 0;
+                                    int adepth = 0;
+                                    for (const char *p = lt + 1; p < gt; ++p)
+                                    {
+                                        char ac = *p;
+                                        if (ac == '<') { adepth++; continue; }
+                                        if (ac == '>') { if (adepth > 0) adepth--; continue; }
+                                        if (adepth == 0 && ac == ',') ac = '$';
+                                        if (adepth == 0 && ac == ' ') continue;
+                                        if (args_len + 1 < sizeof(args_buf))
+                                            args_buf[args_len++] = ac;
+                                    }
+                                    args_buf[args_len] = '\0';
+                                    size_t out_len = base_len + 1 + args_len;
+                                    mangled = (char *)malloc(out_len + 1);
+                                    if (mangled != NULL)
+                                        snprintf(mangled, out_len + 1, "%.*s$%s", (int)base_len, type_raw, args_buf);
+                                }
+                            }
+                            if (mangled == NULL)
+                                mangled = strdup(type_raw);
+
+                            if (mangled != NULL)
+                            {
+                                /* Rewrite: @(specialize) -> @(MangledType.Method) */
+                                struct Expression *base_expr = mk_varid(expr_node->line, mangled);
+                                struct Expression *access = mk_recordaccess(expr_node->line, base_expr, method_id);
+                                if (access != NULL)
+                                {
+                                    access->is_specialize_addr_target = 1;
+                                    struct Expression *result = mk_addressof(expr_node->line, access);
+                                    free(type_raw);
+                                    return set_expr_source_index(result, expr_node);
+                                }
+                                /* access creation failed; fall through */
+                                destroy_expr(base_expr);
+                            }
+                            else
+                            {
+                                free(method_id);
+                            }
+                        }
+                    }
+                    free(type_raw);
+                }
             }
         }
-    {
         struct Expression *result = mk_addressof(expr_node->line, convert_expression(expr_node->child));
         return set_expr_source_index(result, expr_node);
     }
