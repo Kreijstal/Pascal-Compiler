@@ -219,7 +219,6 @@ static ParseResult pascal_qualified_identifier_fn(input_t* in, void* args, char*
     InputState state;
     save_input_state(in, &state);
 
-    int start_pos = in->start;
     char c = read1(in);
     unsigned char uc = (unsigned char)c;
 
@@ -228,42 +227,73 @@ static ParseResult pascal_qualified_identifier_fn(input_t* in, void* args, char*
         return make_failure_v2(in, parser_name, strdup("Expected identifier"), NULL);
     }
 
+    /* Build the normalized identifier text (without whitespace around dots)
+     * in a dynamic buffer.  This handles "unit . Type" -> "unit.Type". */
+    size_t buf_cap = 64;
+    size_t buf_len = 0;
+    char *buf = (char *)safe_malloc(buf_cap);
+
+    #define QID_APPEND(ch) do { \
+        if (buf_len + 1 >= buf_cap) { \
+            buf_cap *= 2; \
+            buf = (char *)realloc(buf, buf_cap); \
+        } \
+        buf[buf_len++] = (ch); \
+    } while (0)
+
     while (true) {
+        InputState after_segment;
         while (c != EOF) {
             uc = (unsigned char)c;
             if (isalnum(uc) || c == '_' || uc >= 0x80) {
+                QID_APPEND(c);
+                save_input_state(in, &after_segment);
                 c = read1(in);
                 continue;
             }
             break;
         }
 
+        /* after_segment now holds the position right after the last
+         * identifier character (before 'c' was read). */
+
+        /* Skip optional horizontal whitespace before potential dot. */
+        while (c == ' ' || c == '\t') {
+            c = read1(in);
+        }
+
         if (c == '.') {
             char next = read1(in);
-            unsigned char unext = (unsigned char)next;
-            if (!(next == '_' || isalpha(unext) || unext >= 0x80)) {
-                restore_input_state(in, &state);
-                return make_failure_v2(in, parser_name, strdup("Expected identifier segment after '.'"), NULL);
+            /* Skip optional horizontal whitespace after dot. */
+            while (next == ' ' || next == '\t') {
+                next = read1(in);
             }
+            unsigned char unext = (unsigned char)next;
+            if (next != '_' && !isalpha(unext) && !(unext >= 0x80)) {
+                /* Not a qualified identifier continuation — the dot is not part
+                 * of this identifier.  Backtrack to just after the last complete
+                 * identifier segment. */
+                restore_input_state(in, &after_segment);
+                break;
+            }
+            QID_APPEND('.');
             c = next;
             continue;
         }
 
+        /* Not a dot — backtrack to just after the last identifier segment. */
+        restore_input_state(in, &after_segment);
         break;
     }
 
-    if (c != EOF) {
-        in->start--;
-    }
+    #undef QID_APPEND
 
-    int len = in->start - start_pos;
-    char* text = (char*)safe_malloc(len + 1);
-    snprintf(text, len + 1, "%.*s", len, in->buffer + start_pos);
+    buf[buf_len] = '\0';
 
     ast_t* ast = new_ast();
     ast->typ = pargs->tag;
-    ast->sym = sym_lookup(text);
-    free(text);
+    ast->sym = sym_lookup(buf);
+    free(buf);
     ast->child = NULL;
     ast->next = NULL;
     set_ast_position(ast, in);
