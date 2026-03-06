@@ -222,7 +222,7 @@ static ParseResult pascal_qualified_identifier_fn(input_t* in, void* args, char*
     char c = read1(in);
     unsigned char uc = (unsigned char)c;
 
-    if (!(c == '_' || isalpha(uc) || uc >= 0x80)) {
+    if (c == EOF || !(c == '_' || isalpha(uc) || uc >= 0x80)) {
         restore_input_state(in, &state);
         return make_failure_v2(in, parser_name, strdup("Expected identifier"), NULL);
     }
@@ -271,7 +271,7 @@ static ParseResult pascal_qualified_identifier_fn(input_t* in, void* args, char*
                 next = read1(in);
             }
             unsigned char unext = (unsigned char)next;
-            if (next != '_' && !isalpha(unext) && !(unext >= 0x80)) {
+            if (next == EOF || (next != '_' && !isalpha(unext) && !(unext >= 0x80))) {
                 /* Not a qualified identifier continuation — the dot is not part
                  * of this identifier.  Backtrack to just after the last complete
                  * identifier segment. */
