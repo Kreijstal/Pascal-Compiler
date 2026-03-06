@@ -1508,26 +1508,6 @@ static int semcheck_compare_match_quality(int arg_count,
     return 0;
 }
 
-static int semcheck_quality_penalty_sum(int arg_count, const MatchQuality *q)
-{
-    if (q == NULL || arg_count <= 0)
-        return 0;
-
-    int total = 0;
-    for (int i = 0; i < arg_count; ++i)
-    {
-        int p = 0;
-        p += q[i].kind * 100;
-        p += q[i].int_promo_rank * 10;
-        p += q[i].char_promo_rank * 10;
-        p -= q[i].exact_type_id ? 3 : 0;
-        p -= q[i].exact_pointer_subtype ? 2 : 0;
-        p -= q[i].exact_array_elem ? 1 : 0;
-        total += p;
-    }
-    return total;
-}
-
 /* Compute class inheritance depth from a KgpcType that points to a class record.
  * Returns 0 if not a class, or the depth (TObject=1, TBits=2 if TBits inherits TObject, etc.) */
 static int semcheck_class_depth(KgpcType *type, SymTab_t *symtab)
@@ -2583,32 +2563,7 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                 else
                 {
                     num_best++;
-                    /* Mixed partial-order tie: choose lower aggregate penalty
-                     * before declaring true ambiguity. This helps pick the
-                     * more specific candidate in bootstrap overload sets where
-                     * alias/pointer exactness and promotions otherwise produce
-                     * non-dominating vectors. */
-                    int cand_penalty = semcheck_quality_penalty_sum(given_count, qualities);
-                    int best_penalty = semcheck_quality_penalty_sum(given_count, best_qualities);
-                    if (cand_penalty < best_penalty)
-                    {
-                        free(best_qualities);
-                        best_match = candidate;
-                        best_qualities = qualities;
-                        best_missing = missing_args;
-                        num_best = 1;
-                    }
-                    else if (best_penalty < cand_penalty)
-                    {
-                        /* Best has strictly lower aggregate penalty: resolve
-                         * the ambiguity in favour of best. */
-                        num_best = 1;
-                        free(qualities);
-                    }
-                    else
-                    {
-                        free(qualities);
-                    }
+                    free(qualities);
                 }
             }
         }
